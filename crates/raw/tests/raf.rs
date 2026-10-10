@@ -1,5 +1,5 @@
-//! Synthetic Fujifilm RAF files: every sample storage, X-Trans and Bayer
-//! layouts, metadata, and the unsupported variants.
+//! Synthetic Fujifilm RAF files: every sample storage (including the lossless
+//! compression), X-Trans and Bayer layouts, metadata, and the unsupported variants.
 
 use photocraft_raw::testgen::{RafPacking, RafSpec, XTRANS, mosaic_cfa, scene};
 use photocraft_raw::*;
@@ -20,7 +20,14 @@ fn xtrans(packing: RafPacking, bits: u32) -> RafSpec {
 
 #[test]
 fn every_storage_decodes_exactly() {
-    for (packing, bits) in [(RafPacking::U16 { le: true }, 14), (RafPacking::U16 { le: false }, 16), (RafPacking::Lsb12, 12), (RafPacking::Words14, 14)] {
+    for (packing, bits) in [
+        (RafPacking::U16 { le: true }, 14),
+        (RafPacking::U16 { le: false }, 16),
+        (RafPacking::Lsb12, 12),
+        (RafPacking::Words14, 14),
+        (RafPacking::Compressed, 14),
+        (RafPacking::Compressed, 16),
+    ] {
         let spec = xtrans(packing, bits);
         let b = spec.build();
         assert_eq!(identify(&b), Some(RawFormat::Raf));
@@ -99,11 +106,30 @@ fn bayer_layouts() {
 }
 
 #[test]
+fn compressed_bayer_decodes_exactly_and_develops() {
+    let (w, h) = (24, 12);
+    for bits in [14u32, 16] {
+        let white = ((1u32 << bits) - 1) as u16;
+        let data = mosaic_cfa(&scene(w, h), w, &RGGB, 2, 64, white);
+        let spec = RafSpec { bits, packing: RafPacking::Compressed, black: vec![64; 4], ..RafSpec::new(w, h, data, RGGB.to_vec()) };
+        let b = spec.build();
+        let s = decode(&b, &Limits::default()).unwrap_or_else(|e| panic!("{bits} bits: {e}"));
+        assert_eq!(s.data, spec.data, "{bits} bits");
+        assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), RGGB);
+        let d = develop(&b, &DevelopOptions::default()).unwrap();
+        assert_eq!((d.width, d.height), (24, 12));
+    }
+}
+
+#[test]
 fn unsupported_variants_report_and_keep_the_preview() {
+    // The lossy variant of the compression (stream version 0) is reported as such.
     let mut spec = xtrans(RafPacking::Compressed, 14);
-    let b = spec.build();
+    let mut b = spec.build();
+    let at = b.windows(4).position(|w| w == b"IS\x01\x10").expect("compressed stream header");
+    b[at + 2] = 0;
     match decode(&b, &Limits::default()) {
-        Err(RawError::Unsupported(m)) => assert!(m.contains("compressed"), "{m}"),
+        Err(RawError::Unsupported(m)) => assert!(m.contains("lossy"), "{m}"),
         other => panic!("expected unsupported, got {other:?}"),
     }
     let p = embedded_preview(&b).unwrap();

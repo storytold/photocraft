@@ -45,6 +45,15 @@ Implemented only from public specifications, papers and observation of files:
   by observation of sample files (bit packing, page layout, sample justification; for RAF the
   three sample storages and the reversed order of the X-Trans / Bayer layout records, each
   verified by developing with every candidate phase against the camera's preview).
+* Fujifilm lossless compressed RAF: Fabian Tamp's published description of the scheme
+  (<https://capnfabs.net/posts/fuji-raf-compression-algorithm/>: independent vertical blocks,
+  six-row lines collated into colour vectors coded in interleaved pairs, a gradient-adaptive
+  predictor, unary + fixed-length residual codes whose length follows 81 gradient buckets, a
+  41-zero escape), with the header, vector layout, predictors, thresholds, initial statistics,
+  border handling, escape payload and 16-bit scaling established by observation of sample files
+  (`src/rafc.rs` documents them). A lossless decoder is self-checking: a wrong detail
+  desynchronises the stream within a few samples, and the right one consumes every block to its
+  padding, which is how each detail was fixed.
 * Demosaicing: Malvar, He & Cutler (ICASSP 2004); Hirakawa & Parks, "Adaptive
   homogeneity-directed demosaicing" (IEEE TIP 2005); for X-Trans and other non-Bayer CFAs,
   gradient-weighted green interpolation (Lu & Tan, "Color filter array demosaicking: new method
@@ -69,7 +78,8 @@ camera colour tables were copied.
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
 | Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
-| Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
+| Fujifilm RAF, lossless compressed (the `IS` strips of X-Trans III–V bodies such as the X-T2/X-T3/X-T30/X-T4/X-S10 and of the GFX cameras, 14- and 16-bit, X-Trans and Bayer) | Decoded (`src/rafc.rs`): per-block adaptive-Golomb streams, verified bit-exact (every block consumed to its padding) on an X-T30 file and the CC0 raw.pixls.us X-T30, GFX 50S and GFX 100 (16-bit) samples |
+| Fujifilm lossy compressed RAF (stream version 0), early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported; preview fallback |
 | CR3 | Recognised, unsupported (preview fallback where a preview is found) |
 | X-Trans and other periodic non-Bayer CFAs (up to 16×16) | Demosaiced by one pattern-agnostic edge-directed method, whatever `Demosaic` is chosen |
 

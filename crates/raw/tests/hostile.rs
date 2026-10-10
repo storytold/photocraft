@@ -71,6 +71,12 @@ fn samples() -> Vec<Vec<u8>> {
     }
     let bayer = RafSpec { packing: RafPacking::Words14, exposure_bias: Some((-100, 100)), ..RafSpec::new(w, h, cfa.clone(), vec![0, 1, 1, 2]) };
     out.push(bayer.build());
+    // Fujifilm's lossless compression, X-Trans and Bayer.
+    let xt14 = mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 1024, 16383);
+    out.push(
+        RafSpec { packing: RafPacking::Compressed, black: vec![1024; 36], crop: Some([1, 2, 10, 20]), ..RafSpec::new(w, h, xt14, XTRANS.to_vec()) }.build(),
+    );
+    out.push(RafSpec { packing: RafPacking::Compressed, black: vec![64; 4], ..RafSpec::new(w, h, cfa.clone(), vec![0, 1, 1, 2]) }.build());
     out
 }
 

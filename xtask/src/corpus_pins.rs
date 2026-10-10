@@ -253,4 +253,7 @@ pub const PIXLS_FILES: &[(&str, &str)] = &[
     ("Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
     ("Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
     ("Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
+    // Fujifilm lossless compressed RAF: X-Trans (X-T30) and Bayer (GFX 50S).
+    ("Fujifilm/X-T30/DSCF0066.RAF", "DSCF0066.RAF"),
+    ("Fujifilm/GFX%2050S/20170525_0037TEST.RAF", "20170525_0037TEST.RAF"),
 ];
