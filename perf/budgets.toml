@@ -358,7 +358,10 @@ id = "P30"
 title = "Liquify 800 px brush on 3500×2200 at full resolution"
 issue = 211
 target = "≤ 1 ms per update"
-not_measurable = "the Liquify proxy is capped at 1600 px and the stroke path lives in the UI tool"
+bench = "perf_scenarios"
+row = "Liquify 800 px brush on 3500x2200 at full resolution"
+budget_ms = 1
+enforce = false # visible source-resolution rendering is measurable; target remains aspirational
 
 [[scenario]]
 id = "P31"

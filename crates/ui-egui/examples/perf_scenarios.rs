@@ -16,7 +16,11 @@
 use std::time::Instant;
 
 use eframe::egui_wgpu::RenderState;
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_engine::Session;
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use photocraft_testkit::perf::{RssSampler, report, row, write_report};
 use photocraft_ui_egui::gpu_canvas::GpuCanvas;
 use serde_json::{Value, json};
@@ -823,6 +827,7 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Err(e) => b.errors.push((names[0].into(), e)),
         }
     }
+    liquify_preview_scenario(b);
     let cmyk = "brush dab on A4 300 ppi CMYK + refresh";
     if b.wanted(cmyk) {
         let (w, h) = sz.a4;
@@ -842,4 +847,75 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Ok(ms(t) + b.refresh(s, false)?)
         });
     }
+}
+
+/// A source-resolution Liquify brush update on the visible part of a 3500×2200 layer.
+/// Reports the old whole-document proxy cost alongside the full-resolution cropped update.
+fn liquify_preview_scenario(b: &mut Bench) {
+    let name = "Liquify 800 px brush on 3500x2200 at full resolution";
+    if !b.wanted(name) {
+        return;
+    }
+    let canvas = Rect::new(0, 0, 3500, 2200);
+    let view = Rect::new(1150, 700, 2350, 1500);
+    let source = Surface::with_default(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true), &[0.32, 0.48, 0.64, 1.0]);
+    let proxy = ProxyImage::new(&source, canvas, 1600);
+    let mut low_out = vec![[0u8; 4]; proxy.w * proxy.h];
+    let (vw, vh) = (view.width() as usize, view.height() as usize);
+    let mut full_out = vec![[0u8; 4]; vw * vh];
+    let mut source_scratch = Vec::new();
+    let mut stroke = LiquifyStroke::new(LiquifyTool::ForwardWarp, 800.0);
+    stroke.density = 100.0;
+    stroke.points = vec![vec![1470.0, 1100.0, 1.0], vec![1530.0, 1100.0, 1.0]];
+    let base = LiquifyField::new(canvas, auto_cell(canvas));
+    let update = |field: &mut LiquifyField, out: &mut [[u8; 4]], scratch: &mut Vec<[f32; 4]>, full_res: bool| -> Res<f64> {
+        let t = Instant::now();
+        let dirty = field.stroke_segment(&stroke, [1470.0, 1100.0, 1.0], [1530.0, 1100.0, 1.0]);
+        let ok = if full_res {
+            ProxyImage::render_full_resolution(&source, field, view, dirty, out, scratch)
+        } else {
+            proxy.render(field, proxy.proxy_rect(dirty), out);
+            true
+        };
+        if !ok {
+            return Err("full-resolution preview could not allocate or render its visible region".into());
+        }
+        Ok(ms(t))
+    };
+
+    // Warm both paths, then compare identical field updates. The old renderer shades a downsampled
+    // proxy; the new one produces one source pixel per preview texel at 100% zoom.
+    let mut warm_low = base.clone();
+    let _ = update(&mut warm_low, &mut low_out, &mut source_scratch, false);
+    let mut warm_full = base.clone();
+    let warm = update(&mut warm_full, &mut full_out, &mut source_scratch, true);
+    if let Err(e) = warm {
+        return b.errors.push((name.into(), e));
+    }
+
+    let mut low_samples = Vec::new();
+    let mut samples = Vec::new();
+    b.current = Some(name.into());
+    b.sampler.reset();
+    for _ in 0..b.reps.clamp(1, 5) {
+        let mut field = base.clone();
+        match update(&mut field, &mut low_out, &mut source_scratch, false) {
+            Ok(t) => low_samples.push(t),
+            Err(e) => return b.errors.push((name.into(), e)),
+        }
+        let mut field = base.clone();
+        match update(&mut field, &mut full_out, &mut source_scratch, true) {
+            Ok(t) => samples.push(t),
+            Err(e) => return b.errors.push((name.into(), e)),
+        }
+    }
+    let low_sorted = {
+        let mut v = low_samples.clone();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    if let Some(median) = low_sorted.get(low_sorted.len() / 2) {
+        println!("  existing 1600 px proxy update p50 {median:.2} ms (lower-resolution output)");
+    }
+    b.record(name, &Session::new(), &samples, Ok(()));
 }
