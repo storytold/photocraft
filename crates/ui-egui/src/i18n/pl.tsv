@@ -1663,6 +1663,7 @@
 	Quick Selection Tool	Narzędzie Szybkie zaznaczanie
 	Radial	Promienisty
 	Rasterize Layer	Rasteryzuj warstwę
+	Rasterize Layers	Rasteryzuj warstwy
 	Ratio	Proporcje
 	Recent	Ostatnie
 	Rectangle Tool	Narzędzie Prostokąt
@@ -3340,6 +3341,9 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
+
+	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 wyłącza ten próg; grupy SVG zagnieżdżone głębiej niż 100 poziomów są zawsze rasteryzowane.
 	Rule of Thirds	Zasada trójpodziału
 	Golden Ratio	Złoty podział
 	Golden Spiral	Złota spirala

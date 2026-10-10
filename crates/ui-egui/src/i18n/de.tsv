@@ -1661,6 +1661,7 @@
 	Quick Selection Tool	Schnellauswahl-Werkzeug
 	Radial	Radial
 	Rasterize Layer	Ebene rasterisieren
+	Rasterize Layers	Ebenen rasterisieren
 	Ratio	Verhältnis
 	Recent	Zuletzt
 	Rectangle Tool	Rechteck-Werkzeug
@@ -2355,6 +2356,9 @@ fontWeight	Italic	Kursiv
 	Color to Alpha…	Farbe zu Alpha…
 	Transparency Threshold	Transparenz-Schwellenwert
 	Opacity Threshold	Deckkraft-Schwellenwert
+
+	Rasterize svg groups deeper than	SVG-Gruppen ab dieser Tiefe rastern
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schaltet diese Schwelle aus; SVG-Gruppen, die tiefer als 100 Ebenen verschachtelt sind, werden immer gerastert.
 	Rule of Thirds	Drittel-Regel
 	Triangle	Dreieck
 	Golden Ratio	Goldener Schnitt

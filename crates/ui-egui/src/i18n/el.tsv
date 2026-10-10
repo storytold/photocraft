@@ -459,6 +459,7 @@
 	Rename Layer	Μετονομασία επιπέδου
 	Convert to Smart Object	Μετατροπή σε έξυπνο αντικείμενο
 	Rasterize Layer	Μετατροπή επιπέδου σε εικονοστοιχεία
+	Rasterize Layers	Μετατροπή επιπέδων σε εικονοστοιχεία
 	Lock Transparent Pixels	Κλείδωμα διαφανών εικονοστοιχείων
 	Lock Image Pixels	Κλείδωμα εικονοστοιχείων εικόνας
 	Lock Position	Κλείδωμα θέσης
@@ -3427,6 +3428,9 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+
+	Rasterize svg groups deeper than	Ραστεροποίηση ομάδων SVG πέρα από αυτό το βάθος
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	Το 0 απενεργοποιεί αυτό το όριο· ομάδες SVG με ένθεση βαθύτερη από 100 επίπεδα ραστεροποιούνται πάντα.
 	Rule of Thirds	Κανόνας των τρίτων
 	Golden Ratio	Χρυσή τομή
 	Golden Spiral	Χρυσή σπείρα

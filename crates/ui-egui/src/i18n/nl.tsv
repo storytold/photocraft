@@ -1653,6 +1653,7 @@
 	Quick Selection Tool	Snelle selectie
 	Radial	Radiaal
 	Rasterize Layer	Laag rasteren
+	Rasterize Layers	Lagen rasteren
 	Ratio	Verhouding
 	Recent	Recent
 	Rectangle Tool	Rechthoekgereedschap
@@ -3502,6 +3503,9 @@ cameraRaw	Whites	Witten
 	Dual Axis	Dubbele as
 	Diagonal	Diagonaal
 	Transform Symmetry	Symmetrie transformeren
+
+	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schakelt deze drempel uit; SVG-groepen die dieper dan 100 niveaus zijn genest, worden altijd gerasterd.
 	Rule of Thirds	Regel van derden
 	Golden Ratio	Gulden snede
 	Golden Spiral	Gulden spiraal

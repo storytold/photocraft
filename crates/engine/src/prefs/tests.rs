@@ -362,6 +362,19 @@ fn choice_and_range_tables_cover_enum_fields() {
 }
 
 #[test]
+fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
+    let mut s = session();
+    let pref = "fileHandling.rasterizeSvgGroupsDeeperThan";
+    assert_eq!(s.execute("prefs.get", json!({"path": pref})).unwrap(), json!(photocraft_doc::MAX_GROUP_DEPTH));
+    s.execute("prefs.set", json!({"path": pref, "value": 4})).unwrap();
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 4);
+    s.execute("prefs.set", json!({"path": pref, "value": 0})).unwrap();
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "zero disables the preference threshold");
+    assert!(s.execute("prefs.set", json!({"path": pref, "value": photocraft_doc::MAX_GROUP_DEPTH + 1})).is_err());
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "out-of-range preferences leave the valid value unchanged");
+}
+
+#[test]
 fn right_click_with_painting_tools_pref() {
     let mut s = session();
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::BrushPicker, "Photoshop: the Brush Preset picker");

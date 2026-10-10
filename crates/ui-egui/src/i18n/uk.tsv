@@ -2717,6 +2717,7 @@ fontWeight	Italic	Курсивний
 	Pro (Medium Gray)	Профі (середньосіра)
 	Radial	Радіальний
 	Rasterize Layer	Растеризувати шар
+	Rasterize Layers	Растеризувати шари
 	Ratio	Пропорції
 	Reds	Червоні тони
 	Reflected	Відбитий
@@ -3427,6 +3428,9 @@ cameraRaw	Masking	Маскування
 	Dual Axis	Подвійна вісь
 	Diagonal	Діагональна
 	Transform Symmetry	Трансформувати симетрію
+
+	Rasterize svg groups deeper than	Растеризувати групи SVG глибше цього рівня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 вимикає цей поріг; групи SVG із вкладеністю понад 100 рівнів завжди растеризуються.
 	Rule of Thirds	Правило третин
 	Golden Ratio	Золотий перетин
 	Golden Spiral	Золота спіраль

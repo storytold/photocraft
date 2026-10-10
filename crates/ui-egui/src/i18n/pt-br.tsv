@@ -1643,6 +1643,7 @@
 	Quick Selection Tool	Ferramenta Seleção rápida
 	Radial	Radial
 	Rasterize Layer	Rasterizar camada
+	Rasterize Layers	Rasterizar camadas
 	Ratio	Proporção
 	Recent	Recentes
 	Rectangle Tool	Ferramenta Retângulo
@@ -2745,6 +2746,9 @@ fontWeight	Italic	Itálico
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desativa este limite; grupos SVG aninhados em mais de 100 níveis são sempre rasterizados.
 	Rule of Thirds	Regra dos terços
 	Triangle	Triângulo
 	Golden Ratio	Proporção áurea

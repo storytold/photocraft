@@ -1640,6 +1640,7 @@
 	Quick Selection Tool	빠른 선택 도구
 	Radial	방사형
 	Rasterize Layer	레이어 래스터화
+	Rasterize Layers	레이어 래스터화
 	Ratio	비율
 	Recent	최근 항목
 	Rectangle Tool	사각형 도구
@@ -2896,6 +2897,9 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+
+	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
 	Rule of Thirds	삼등분 법칙
 	Golden Ratio	황금 비율
 	Golden Spiral	황금 나선

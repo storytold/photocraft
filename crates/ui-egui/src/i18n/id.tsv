@@ -1638,6 +1638,7 @@
 	Quick Selection Tool	Alat Quick Selection
 	Radial	Radial
 	Rasterize Layer	Rasterisasi Layer
+	Rasterize Layers	Rasterisasi Layer
 	Ratio	Rasio
 	Recent	Terbaru
 	Rectangle Tool	Alat Rectangle
@@ -2724,6 +2725,9 @@ fontWeight	Italic	Miring
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
+
+	Rasterize svg groups deeper than	Rasterisasi grup SVG yang lebih dalam dari ini
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 menonaktifkan ambang ini; grup SVG yang bersarang lebih dari 100 tingkat selalu dirasterisasi.
 	Rule of Thirds	Aturan Sepertiga
 	Triangle	Segitiga
 	Golden Ratio	Rasio Emas

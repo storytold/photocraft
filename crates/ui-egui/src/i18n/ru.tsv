@@ -164,6 +164,8 @@
 	Rasterize	Растрировать
 	Rasterize Type	Растрировать текст
 	Rasterize Shape	Растрировать фигуру
+	Rasterize Layer	Растрировать слой
+	Rasterize Layers	Растрировать слои
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
@@ -2589,6 +2591,9 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+
+	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.
 	Rule of Thirds	Правило третей
 	Triangle	Треугольник
 	Golden Ratio	Золотое сечение
