@@ -44,6 +44,10 @@ pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 4] = [
 /// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
 const MAX_BUNDLED_FONT_BYTES: u64 = 16 << 20;
 
+/// A fallback face handed to the UI shell is bounded like the files it registers; larger system
+/// fonts (PingFang is 78 MB) are skipped rather than copied for the UI font stack.
+const MAX_FALLBACK_FACE_BYTES: u64 = 128 << 20;
+
 /// Inflate a bundled font. Data that doesn't inflate gives no font (empty bytes, which every
 /// consumer skips), never a panic; `bundled_fonts_inflate_to_their_files` keeps it from happening.
 fn inflate_font(deflated: &[u8]) -> Vec<u8> {
@@ -322,6 +326,39 @@ impl FontDb {
             .collect();
         self.face_cache.insert(family.to_string(), faces.clone());
         faces
+    }
+
+    /// Family, bytes and collection face index of the first installed fallback face (in the Type
+    /// tool's fallback order) that has a glyph for `c`. The UI shell registers it as a lazy UI
+    /// fallback font, so a Layer name in a script the bundled UI fonts lack (Thai, Arabic, …)
+    /// draws instead of a missing-glyph box. `None` for ASCII or when nothing installed covers it.
+    ///
+    /// Bounded by [`MAX_FALLBACK_FACE_BYTES`]; malformed data yields no face, never a panic.
+    pub fn fallback_face_for(&mut self, c: char) -> Option<(String, Vec<u8>, u32)> {
+        if c.is_ascii() {
+            return None;
+        }
+        for name in self.fallbacks.clone() {
+            let Some(info) = self.fcx.collection.family_by_name(&name) else {
+                continue;
+            };
+            for font in info.fonts() {
+                let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
+                    continue;
+                };
+                let bytes: &[u8] = blob.as_ref();
+                if bytes.len() as u64 > MAX_FALLBACK_FACE_BYTES {
+                    continue;
+                }
+                let Ok(face) = skrifa::FontRef::from_index(bytes, font.index()) else {
+                    continue;
+                };
+                if face.charmap().map(c).is_some_and(|g| g.to_u32() != 0) {
+                    return Some((name.clone(), bytes.to_vec(), font.index()));
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a menu style to its actual metadata instead of guessing from its spelling.
@@ -628,6 +665,16 @@ mod tests {
         let mut files = Vec::new();
         super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
         assert!(files.is_empty());
+    }
+
+    /// Bundled fonts only: ASCII is never looked up, and a script with no installed font yields
+    /// nothing (the UI fallback stays lazy), never a panic.
+    #[test]
+    fn fallback_face_is_none_without_installed_fonts() {
+        let mut db = super::FontDb::new();
+        assert!(db.fallback_face_for('a').is_none());
+        assert!(db.fallback_face_for('ก').is_none());
+        assert!(db.fallback_face_for('\u{0627}').is_none());
     }
 }
 
