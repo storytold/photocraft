@@ -2718,5 +2718,9 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+
+	Color stops	Цветовые точки
+
+	Opacity stops	Точки непрозрачности
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
