@@ -270,40 +270,50 @@ fn options_bar_hover_previews_on_canvas_without_committing() {
     use photocraft_doc::LayerContent;
     use serde_json::json;
 
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
-    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-    app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
-    let layer = app.session.active().unwrap().active_layer.unwrap();
-    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            crate::type_font_preview::follow_hover(app, ui.ctx());
-            ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
-        },
-        app,
-    );
-    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    struct PreviewApp {
+        app: PhotocraftApp,
+    }
+
+    impl eframe::App for PreviewApp {
+        fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            crate::type_font_preview::follow_hover(&mut self.app, ctx);
+        }
+
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            ui.horizontal(|ui| crate::type_tool::options_bar(&mut self.app, ui));
+        }
+    }
+
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        PreviewApp { app: PhotocraftApp::new(photocraft_engine::Session::new(), Services::default()) }
+    });
+    h.state_mut().app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    h.state_mut().app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+    let layer = h.state().app.session.active().unwrap().active_layer.unwrap();
+    h.state_mut().app.ui.tool = crate::state::Tool::Type;
     h.run_steps(3);
     h.query_all_by_role(Role::ComboBox).next().unwrap().click();
     h.run();
     h.get_by_role(Role::TextInput).type_text("JetBrains Mono");
     h.run();
     h.get_by_label("JetBrains Mono").hover();
-    h.run_steps(3);
+    h.run();
 
-    let (preview, _) = crate::canvas::display_doc(h.state_mut(), 0);
+    let (preview, _) = crate::canvas::display_doc(&mut h.state_mut().app, 0);
     let LayerContent::Text(preview_text) = &preview.layer(layer).unwrap().content else {
         panic!("type layer");
     };
     assert_eq!(preview_text.char_runs()[0].style.font_family, "JetBrains Mono");
-    let LayerContent::Text(original_text) = &h.state().session.active().unwrap().doc.layer(layer).unwrap().content else {
+    let LayerContent::Text(original_text) = &h.state().app.session.active().unwrap().doc.layer(layer).unwrap().content else {
         panic!("type layer");
     };
     assert_eq!(original_text.char_runs()[0].style.font_family, "Inter");
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), 2, "hover adds no history entry");
+    assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), 2, "hover adds no history entry");
 
     h.get_by_role(Role::TextInput).hover();
-    h.run_steps(3);
-    let (restored, key) = crate::canvas::display_doc(h.state_mut(), 0);
+    h.run();
+    let (restored, key) = crate::canvas::display_doc(&mut h.state_mut().app, 0);
     let LayerContent::Text(restored_text) = &restored.layer(layer).unwrap().content else {
         panic!("type layer");
     };
@@ -311,26 +321,26 @@ fn options_bar_hover_previews_on_canvas_without_committing() {
     assert_eq!(key, 0, "leaving the font row restores committed canvas content");
 
     h.get_by_label("JetBrains Mono").hover();
-    h.run_steps(3);
+    h.run();
     h.get_by_label("JetBrains Mono").click();
-    h.run_steps(3);
-    let (committed, key) = crate::canvas::display_doc(h.state_mut(), 0);
+    h.run();
+    let (committed, key) = crate::canvas::display_doc(&mut h.state_mut().app, 0);
     let LayerContent::Text(committed_text) = &committed.layer(layer).unwrap().content else {
         panic!("type layer");
     };
     assert_eq!(committed_text.char_runs()[0].style.font_family, "JetBrains Mono");
     assert_eq!(key, 0, "selection replaces the preview with committed content");
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), 3, "selection adds one history step");
+    assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), 3, "selection adds one history step");
     let committed_font = |app: &PhotocraftApp| {
         let LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(layer).unwrap().content else {
             panic!("type layer");
         };
         text.char_runs()[0].style.font_family.clone()
     };
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(committed_font(h.state()), "Inter");
-    h.state_mut().run("edit.redo", json!({})).unwrap();
-    assert_eq!(committed_font(h.state()), "JetBrains Mono");
+    h.state_mut().app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(committed_font(&h.state().app), "Inter");
+    h.state_mut().app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(committed_font(&h.state().app), "JetBrains Mono");
 }
 
 #[test]
