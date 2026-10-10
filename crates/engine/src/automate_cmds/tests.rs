@@ -131,6 +131,43 @@ fn statistics_makes_a_stack_mode_smart_object() {
 }
 
 #[test]
+fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
+    // Like Photoshop, Load Files into Stack › Create Smart Object (Statistics without alignment) and
+    // Statistics with alignment embed one layer per file, bottom to top, with no wrapper group.
+    let dir = tmp("stack-top");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 96, "height": 72, "background": "#606060"})).unwrap();
+    s.edit("texture", |doc, active| {
+        let surf = doc.layer_mut(active.ok_or(EngineError::NoDocument)?).and_then(Layer::surface_mut).ok_or(EngineError::NoDocument)?;
+        for k in 0..40 {
+            let (x, y, v) = ((k * 37) % 88, (k * 23) % 66, (k % 7) as f32 / 6.0);
+            surf.fill_rect(photocraft_geom::Rect::new(x, y, x + 3 + k % 5, y + 2 + k % 4), &[v, 1.0 - v, 0.5, 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    let source = photocraft_compose::flatten(&s.active().unwrap().doc);
+    let files: Vec<String> = (0..3)
+        .map(|i| {
+            let path = format!("{dir}/img{i}.png");
+            crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
+            path
+        })
+        .collect();
+    for align in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.scripts.statistics", json!({"mode": "median", "input": files, "align": align})).unwrap();
+        let d = &s.active().unwrap().doc;
+        let LayerContent::Smart(so) = &d.layers[0].content else { panic!("not a smart object") };
+        let photocraft_doc::SmartSource::Embedded { file_name, bytes } = &so.source else { panic!("not embedded") };
+        let inner = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
+        let names: Vec<&str> = inner.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["img0.png", "img1.png", "img2.png"], "align {align}");
+        assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
+    }
+}
+
+#[test]
 fn contact_sheet_places_thumbnails_with_captions() {
     let dir = tmp("contact");
     images(&dir, 5, 60, 30);
@@ -161,4 +198,33 @@ fn contact_sheet_places_thumbnails_with_captions() {
         let d = &s.documents()[r["documents"][0].as_u64().unwrap() as usize].doc;
         assert_eq!(d.layers.len(), 1);
     }
+}
+
+#[test]
+fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("nested-failure");
+    images(&dir, 1, 8, 4);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.actions.list.push(Action { name: "Rotate".into(), steps: vec![("image.imageRotation.90cw".into(), json!({}))] });
+    s.actions.list.push(Action { name: "Bad".into(), steps: vec![("layer.delete".into(), json!({"layer": 999_999}))] });
+    // A script stops at the failed call and reports it.
+    let r = s.execute("file.scripts.browse", json!({"steps": [["actions.play", {"action": "Bad"}], ["image.imageRotation.90cw", {}]]})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["results"].as_array().unwrap().len(), 1);
+    // Batch plays called actions, and a failure inside one is a file error, not a saved result.
+    let batch = |s: &mut Session, action: &str| {
+        let p = json!({"steps": [["actions.play", {"action": action}]], "input": dir.clone(), "output": format!("{dir}/{action}"), "format": "png"});
+        s.execute("file.automate.batch", p).unwrap()
+    };
+    let r = batch(&mut s, "Rotate");
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let r = batch(&mut s, "Bad");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
+    // An action that batches itself stops as a recursive call instead of overflowing the stack.
+    let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
+    s.actions.list.push(Action { name: "Loop".into(), steps: vec![("file.automate.batch".into(), inner)] });
+    batch(&mut s, "Loop");
 }

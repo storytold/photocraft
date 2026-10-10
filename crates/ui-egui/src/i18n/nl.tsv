@@ -28,6 +28,11 @@
 	New from Clipboard	Nieuw vanaf klembord
 	Open…	Openen…
 	Open As…	Openen als…
+	Open EXR Parts…	EXR-delen openen…
+	Add beauty precomp from the AOVs	Schoonheidsvoorcompositie toevoegen vanuit de AOV's
+	Both	Beide
+	Left	Links
+	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
 	Close	Sluiten
@@ -77,6 +82,8 @@
 	Import	Importeren
 	Browse…	Bladeren…
 	Reveal in Finder	Weergeven in Finder
+	Show in Explorer	Weergeven in Verkenner
+	Show in Folder	Weergeven in map
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
 	Print One Copy	Eén exemplaar afdrukken
@@ -798,7 +805,6 @@
 	Blending Options	Overvloeiopties
 	Blue	Blauw
 	Blue, Red, Yellow	Blauw, rood, geel
-	Both	Beide
 	Both Axes	Beide assen
 	Bottom	Onder
 	Brightness	Helderheid
@@ -1120,7 +1126,6 @@
 	Leading	Interlinie
 	Leading (set to the font size × auto-leading when Auto)	Interlinie (bij Automatisch: lettergrootte × automatische interlinie)
 	Leave as is (don't color manage)	Ongewijzigd laten (geen kleurbeheer)
-	Left	Links
 	Left align text	Tekst links uitlijnen
 	Length:	Lengte:
 	Level	Niveau
@@ -1292,6 +1297,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Neem ● een reeks bewerkingen op en speel deze ▶ af op elk document.
 	Red	Rood
 	Redefine style by current selection	Stijl opnieuw definiëren op basis van huidige selectie
+	Refine	Verfijnen
 	Reflected Gradient	Gespiegeld verloop
 	Registration Marks	Pastekens
 	Regular	Normaal
@@ -1329,7 +1335,6 @@
 	Restore All	Alles herstellen
 	Restore Defaults	Standaardwaarden herstellen
 	Restrictive (Web)	Beperkt (web)
-	Right	Rechts
 	Right align text	Tekst rechts uitlijnen
 	Rigid	Star
 	Rotate:	Roteren:
@@ -1614,6 +1619,7 @@
 	Mobile	Mobiel
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
+	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -2170,6 +2176,10 @@
 	Show Vectorscope	Vectorscoop tonen
 	Tone Histogram	Toonhistogram
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -2240,6 +2250,7 @@
 	Knockout	Uitsparing
 	Apply At Canvas Bounds	Toepassen op canvasgrenzen
 	Color Picker (Text Color)	Kleurkiezer (tekstkleur)
+	Color Picker ({name})	Kleurkiezer ({name})
 	Color Picker (Fill Color)	Kleurkiezer (vulkleur)
 	Fill color	Vulkleur
 	Color Picker (Stroke Color)	Kleurkiezer (lijnkleur)
@@ -3585,3 +3596,9 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+	Use Classic Mode	Klassieke modus gebruiken
+	Auto Center Preview	Voorvertoning automatisch centreren
+	Next Document	Volgend document
+	Previous Document	Vorig document
+	W x H x Resolution	B x H x Resolutie
+	Front Image	Voorste afbeelding

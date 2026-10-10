@@ -551,3 +551,60 @@ fn command_i_inverts_the_targeted_mask() {
     let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
     assert_eq!(mask.sample_channel(10, 10, 0), 0.0, "reveal all → hide all");
 }
+
+/// #2420: Selecting a layer mask in the Layers panel toggles the color swatches
+/// to the mask's colors (white/black by default), and deselecting toggles back.
+#[test]
+fn selecting_mask_thumbnail_toggles_swatches_to_mask_colors_and_back() {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    let (mut s, masked, _) = dotted();
+    s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+
+    // Initial state: layer pixels targeted, red foreground, blue background.
+    assert!(!h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 1. Click mask thumbnail in Layers panel -> targets mask, swatches toggle to mask colors.
+    let r_mask = mask_rect(&h, masked, MaskKind::Pixel);
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target, "mask thumbnail clicked: mask is targeted");
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 2. Click layer thumbnail -> deselects mask, swatches toggle back to pixel colors.
+    let r_layer = layer_thumb_center(&h, masked);
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert!(!h.state().ui.mask_target, "layer thumbnail clicked: pixels are targeted");
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 3. Click mask thumbnail again -> swatches toggle back to mask colors.
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 4. Changing mask colors preserves them when switching away and back.
+    h.state_mut().run("tools.setColors", json!({"foreground": "#808080"})).unwrap();
+    let grey = h.state().session.tools.foreground;
+    assert_eq!(grey, [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED, "pixel colors restored");
+
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, grey, "mask colors restored");
+
+    // 5. Creating a new adjustment layer targets its mask and toggles to mask colors.
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(h.state().ui.mask_target, "new adjustment layer targets its mask");
+    assert_eq!(h.state().session.tools.foreground, grey);
+}

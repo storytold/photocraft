@@ -107,7 +107,14 @@ fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
         match s.execute(id, params.clone()) {
-            Ok(r) => results.push(json!({"command": id, "result": r})),
+            // A called action reports a failed step inside an `Ok`; it stops the script too.
+            Ok(r) => match crate::actions_cmds::nested_failure(id, &r) {
+                Some(error) => {
+                    results.push(json!({"command": id, "result": r, "error": error}));
+                    break;
+                }
+                None => results.push(json!({"command": id, "result": r})),
+            },
             Err(e) => {
                 results.push(json!({"command": id, "error": e.to_string()}));
                 break;
@@ -379,9 +386,8 @@ fn statistics(s: &mut Session, p: &Value) -> Result<Value> {
         s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
         let name = s.active().map(|d| d.doc.name.clone()).unwrap_or_default();
         s.edit("Convert to Smart Object", |doc, active| {
-            let children = std::mem::take(&mut doc.layers);
-            let group = Layer::new(name.clone(), LayerContent::Group(photocraft_doc::Group { children, expanded: true, artboard: None }));
-            let smart = crate::smart_cmds::layer_to_smart(doc, &group)?;
+            let layers = std::mem::take(&mut doc.layers);
+            let smart = crate::smart_cmds::layers_to_smart(doc, &name, layers)?;
             *active = Some(smart.id);
             doc.layers = vec![smart];
             Ok(())
