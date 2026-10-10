@@ -122,35 +122,7 @@ pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit:
 pub(crate) fn cut(s: &mut Session, id: LayerId, k: usize) -> Result<Value> {
     let r = copy(s)?.ok_or_else(|| EngineError::Other("no colour channel is targeted".into()))?;
     let bg = s.tools.background;
-    s.edit("Cut Pixels", |doc, _| {
-        let canvas = doc.bounds();
-        let sel = doc.selection.clone();
-        let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        let fmt = surf.format();
-        let n = fmt.channels();
-        if k >= n {
-            return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
-        }
-        if area.is_empty() {
-            return Ok(());
-        }
-        // The background colour in the layer's colour model, so `k` picks the right component.
-        let mut enc = [0.0f32; 8];
-        photocraft_raster::from_rgba_into(&fmt, [bg[0], bg[1], bg[2], 1.0], &mut enc);
-        let v = enc.get(k).copied().unwrap_or(0.0);
-        let cover = sel.map(|m| (m.read_region(area), m.format().channels().max(1)));
-        let mut px = surf.read_region(area);
-        for (i, p) in px.chunks_exact_mut(n).enumerate() {
-            let w = cover.as_ref().map_or(1.0, |(m, mk)| m.get(i * mk).copied().unwrap_or(0.0));
-            if let Some(c) = p.get_mut(k) {
-                *c += (v - *c) * w.clamp(0.0, 1.0);
-            }
-        }
-        surf.write_region(area, &px);
-        surf.prune();
-        Ok(())
-    })?;
+    s.edit("Cut Pixels", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, k, bg))?;
     Ok(r)
 }
 
