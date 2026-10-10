@@ -813,6 +813,9 @@
 	Bend:	Ohyb:
 	Bicubic	Bikubická
 	Bicubic (smooth gradients)	Bikubická (plynulé přechody)
+	Automatic	Automaticky
+	Bicubic Smoother (enlargement)	Bikubická hladší (zvětšení)
+	Bicubic Sharper (reduction)	Bikubická ostřejší (zmenšení)
 	Bilinear	Bilineární
 	Black	Černá
 	Black & White	Černobílá

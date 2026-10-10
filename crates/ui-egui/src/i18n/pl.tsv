@@ -800,6 +800,9 @@
 	Bend:	Zgięcie:
 	Bicubic	Dwusześcienna
 	Bicubic (smooth gradients)	Dwusześcienna (gładkie gradienty)
+	Automatic	Automatycznie
+	Bicubic Smoother (enlargement)	Dwusześcienna wygładzona (powiększanie)
+	Bicubic Sharper (reduction)	Dwusześcienna wyostrzona (zmniejszanie)
 	Bilinear	Dwuliniowa
 	Black	Czarny
 	Black & White	Czerń i biel

@@ -782,6 +782,9 @@
 	Bend:	Lengkung:
 	Bicubic	Bicubic
 	Bicubic (smooth gradients)	Bicubic (gradien halus)
+	Automatic	Otomatis
+	Bicubic Smoother (enlargement)	Bicubic lebih halus (pembesaran)
+	Bicubic Sharper (reduction)	Bicubic lebih tajam (pengecilan)
 	Bilinear	Bilinear
 	Black	Hitam
 	Black & White	Hitam & Putih

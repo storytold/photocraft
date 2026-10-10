@@ -798,6 +798,9 @@
 	Bend:	Curvatura:
 	Bicubic	Bicúbica
 	Bicubic (smooth gradients)	Bicúbica (degradados suaves)
+	Automatic	Automático
+	Bicubic Smoother (enlargement)	Bicúbica más suavizada (ampliación)
+	Bicubic Sharper (reduction)	Bicúbica más enfocada (reducción)
 	Bilinear	Bilineal
 	Black	Negro
 	Black & White	Blanco y negro

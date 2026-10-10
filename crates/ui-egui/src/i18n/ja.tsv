@@ -803,6 +803,9 @@
 	Bend:	曲げ:
 	Bicubic	バイキュービック
 	Bicubic (smooth gradients)	バイキュービック(滑らかな階調)
+	Automatic	自動
+	Bicubic Smoother (enlargement)	バイキュービック法 - 滑らか(拡大)
+	Bicubic Sharper (reduction)	バイキュービック法 - シャープ(縮小)
 	Bilinear	バイリニア
 	Black	黒
 	Black & White	白黒

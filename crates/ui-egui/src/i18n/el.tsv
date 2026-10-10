@@ -2003,6 +2003,8 @@
 	Bend:	Καμπυλότητα:
 	Bicubic	Δικυβικό
 	Bicubic (smooth gradients)	Δικυβική (ομαλές διαβαθμίσεις)
+	Bicubic Smoother (enlargement)	Δικυβική πιο ομαλή (μεγέθυνση)
+	Bicubic Sharper (reduction)	Δικυβική πιο ευκρινής (σμίκρυνση)
 	Bilinear	Διγραμμική
 	Black Point Compensation	Αντιστάθμιση μαύρου σημείου
 	Black, White	Μαύρο, λευκό

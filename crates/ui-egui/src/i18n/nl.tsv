@@ -788,6 +788,8 @@
 	Bend:	Buiging:
 	Bicubic	Bicubisch
 	Bicubic (smooth gradients)	Bicubisch (vloeiende verlopen)
+	Bicubic Smoother (enlargement)	Bicubisch vloeiender (vergroten)
+	Bicubic Sharper (reduction)	Bicubisch scherper (verkleinen)
 	Bilinear	Bilineair
 	Black	Zwart
 	Black & White	Zwart-wit

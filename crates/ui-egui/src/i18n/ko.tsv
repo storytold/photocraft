@@ -777,6 +777,9 @@
 	Bend:	구부림:
 	Bicubic	쌍입방
 	Bicubic (smooth gradients)	쌍입방(부드러운 그레이디언트)
+	Automatic	자동
+	Bicubic Smoother (enlargement)	쌍입방 더 부드럽게(확대)
+	Bicubic Sharper (reduction)	쌍입방 더 선명하게(축소)
 	Bilinear	쌍선형
 	Black	검정
 	Black & White	흑백

@@ -804,6 +804,9 @@
 	Bend:	彎曲：
 	Bicubic	雙三次
 	Bicubic (smooth gradients)	雙三次 (平滑漸層)
+	Automatic	自動
+	Bicubic Smoother (enlargement)	雙三次 (較平滑) (放大)
+	Bicubic Sharper (reduction)	雙三次 (較銳利) (縮小)
 	Bilinear	雙線性
 	Black	黑色
 	Black & White	黑白

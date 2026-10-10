@@ -1902,6 +1902,9 @@
 	Baseline	Базова лінія
 	Bicubic	Бікубічна
 	Bicubic (smooth gradients)	Бікубічна (плавні градієнти)
+	Automatic	Автоматично
+	Bicubic Smoother (enlargement)	Бікубічна, гладкіша (збільшення)
+	Bicubic Sharper (reduction)	Бікубічна, чіткіша (зменшення)
 	Bilinear	Білінійна
 	Black, White	Чорний, білий
 	Blue, Red, Yellow	Синій, червоний, жовтий

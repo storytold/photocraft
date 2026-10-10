@@ -788,6 +788,9 @@
 	Bend:	Courbure :
 	Bicubic	Bicubique
 	Bicubic (smooth gradients)	Bicubique (dégradés lisses)
+	Automatic	Automatique
+	Bicubic Smoother (enlargement)	Bicubique plus lisse (agrandissement)
+	Bicubic Sharper (reduction)	Bicubique plus net (réduction)
 	Bilinear	Bilinéaire
 	Black	Noir
 	Black & White	Noir et blanc
