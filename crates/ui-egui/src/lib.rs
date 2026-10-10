@@ -165,6 +165,7 @@ pub mod transform_tool;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
+pub mod update_check;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
@@ -252,6 +253,8 @@ pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
+/// Hand an update to the host application's native updater, which fetches and installs it.
+pub type InstallUpdateFn = Box<dyn FnMut() -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
@@ -335,6 +338,9 @@ pub struct Services {
     pub encode_png: Option<EncodePngFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
     pub open_url: Option<OpenUrlFn>,
+    /// Install an application update with the host's native updater (macOS: Sparkle), where the
+    /// build supplies one. Update discovery stays in `update_check`; this is the installer.
+    pub install_update: Option<InstallUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame.
     pub inbox: Option<Inbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
@@ -456,6 +462,7 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
+    pub(crate) update_rx: Option<Receiver<(bool, update_check::UpdateCheckOutcome)>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
     queued_screenshots: Vec<(u64, f64, u32)>,
@@ -700,6 +707,7 @@ impl PhotocraftApp {
             hist_job: None,
             gpu: None,
             started: None,
+            update_rx: None,
             perf: Default::default(),
             prefs_rt: Default::default(),
             discard: None,
@@ -1352,6 +1360,7 @@ impl eframe::App for PhotocraftApp {
         self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
         monitor_status::poll(self, ctx);
+        update_check::poll(self, ctx);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
         // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:

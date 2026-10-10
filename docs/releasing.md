@@ -103,6 +103,28 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   them it only checks signature integrity and warns, like `package.sh`. Run it locally after a
   build: `packaging/macos/verify.sh --arch aarch64`.
 
+- **In-app updates:** one flow for every platform: PhotoCraft asks GitHub's release API at
+  startup (at most once a day, Preferences › General › Automatically Check for Updates at
+  Startup) and on *Help ▸ Check for Updates…*, and the prompt shows the release notes. On macOS the
+  prompt's *Install Update* hands off to Sparkle, which downloads the signed update in the
+  background and replaces the app when PhotoCraft quits, so an open editing session is not
+  interrupted; Sparkle opens its own native update window for that. Windows and Linux get the
+  release's installer download (MSI or AppImage), and package-managed installs are pointed at
+  their package manager. There is no scheduled polling or resident updater process: Sparkle starts
+  its helper only while downloading or installing, and `SUEnableAutomaticChecks` stays off so the
+  app's own preference decides when anything is checked. To enable updates in release builds, create a
+  Sparkle EdDSA key pair on a maintainer-controlled Mac with the pinned Sparkle `generate_keys`
+  tool. Store the exported private key as the `SPARKLE_EDDSA_PRIVATE_KEY` Actions secret and the
+  matching base64 public key as the `SPARKLE_PUBLIC_KEY` Actions variable in the `release`
+  environment. The workflow signs `appcast.xml` with the private key and uploads it with the DMG.
+  When either value is missing, the build disables in-app updates and emits a warning. Never
+  commit or share the private key.
+
+  The optional desktop `macos-updater` feature links Sparkle; ordinary macOS development and CI
+  builds leave it disabled and use installer downloads. `packaging/macos/package.sh` enables
+  `heif,macos-updater`, downloads and verifies the pinned framework, and includes its complete
+  distribution license and third-party notices in `Contents/Resources/Licenses/Sparkle.txt`.
+
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization.
 That's enough to check the bundle and the DMG on your own Mac:
 

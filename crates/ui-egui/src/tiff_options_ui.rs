@@ -19,6 +19,11 @@ pub struct Prompt {
     pub dont_ask_again: bool,
 }
 
+#[cfg(test)]
+pub(crate) fn parked_for_tests() -> Prompt {
+    Prompt { doc: photocraft_doc::DocId(0), path: "unsaved.tif".into(), discard_layers: false, dont_ask_again: false }
+}
+
 /// `true` when `path` is a TIFF name (`.tif` / `.tiff`).
 pub fn is_tiff_path(path: &str) -> bool {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);

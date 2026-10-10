@@ -2491,6 +2491,23 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+	Check for Updates	Verifica aggiornamenti
+	Check for Updates…	Verifica aggiornamenti…
+	Checking for updates…	Verifica degli aggiornamenti…
+	Download Update	Scarica aggiornamento
+	View Downloads	Visualizza download
+	Software Updates	Aggiornamenti software
+	Automatically Check for Updates at Startup	Verifica automaticamente gli aggiornamenti all’avvio
+	You're up to date	La versione è aggiornata
+	What's new in this release:	Novità di questa versione:
+	Open Release Page on GitHub	Apri la pagina della versione su GitHub
+	Web builds are always running the latest version.	La versione web usa sempre la versione più recente.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Le verifiche automatiche avvengono al massimo una volta al giorno. Gli aggiornamenti disponibili compaiono dopo aver chiuso le altre finestre di dialogo.
+	Download the update and save your work before installing the new version.	Scarica l’aggiornamento e salva il lavoro prima di installare la nuova versione.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Per le installazioni gestite da pacchetti, aggiorna PhotoCraft tramite il gestore dei pacchetti. Altri download sono nella pagina della versione.
+	Install Update	Installa aggiornamento
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft scarica l’aggiornamento in background e lo installa alla chiusura, senza interrompere la sessione. Salva prima il lavoro.
+	PhotoCraft will install the update when you quit.	PhotoCraft installerà l’aggiornamento alla chiusura.
 	Use Classic Mode	Usa modalità classica
 	Auto Center Preview	Centra anteprima automaticamente
 	Next Document	Documento successivo

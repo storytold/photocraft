@@ -336,6 +336,18 @@ fn main() -> eframe::Result {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
+            #[cfg(all(target_os = "macos", feature = "macos-updater"))]
+            {
+                // Sparkle is AppKit-bound and must stay on the main thread for the app's lifetime.
+                // Discovery and its timing stay with `update_check` (the startup preference and
+                // Help ▸ Check for Updates…), so Sparkle does not also check at launch: it is the
+                // installer the update prompt hands off to.
+                if let Some(updater) = initialize_macos_updater() {
+                    let updater = std::rc::Rc::new(updater);
+                    let updater_for_prompt = std::rc::Rc::clone(&updater);
+                    services.install_update = Some(Box::new(move || updater_for_prompt.check_for_updates().map_err(|error| error.to_string())));
+                }
+            }
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
@@ -429,6 +441,7 @@ fn main() -> eframe::Result {
                 {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
+                photocraft_ui_egui::update_check::check_periodic(app);
             });
             if let Some((port, token, _)) = control {
                 let rx = control_server::start(port, token, cc.egui_ctx.clone());
@@ -520,6 +533,27 @@ fn main() -> eframe::Result {
         }
     }
     result
+}
+
+/// Initialize Sparkle after eframe has created the native AppKit application, on its main thread.
+#[cfg(all(target_os = "macos", feature = "macos-updater"))]
+fn initialize_macos_updater() -> Option<sparkle_updater::SparkleUpdater> {
+    // Update signing is release-maintainer configuration; development bundles should not
+    // contact the release feed or expose a menu item that cannot verify an update.
+    if option_env!("PHOTOCRAFT_SPARKLE_PUBLIC_KEY").is_none_or(str::is_empty) {
+        return None;
+    }
+    let Some(main_thread) = sparkle_updater::MainThreadMarker::new() else {
+        log::warn!("couldn't initialize PhotoCraft updates outside the macOS main thread");
+        return None;
+    };
+    match sparkle_updater::SparkleUpdater::new(main_thread, sparkle_updater::UpdaterConfig::default()) {
+        Ok(updater) => updater,
+        Err(error) => {
+            log::warn!("couldn't initialize PhotoCraft updates: {error}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]

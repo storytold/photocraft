@@ -2848,6 +2848,23 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	Check for Updates	Verificar atualizações
+	Check for Updates…	Verificar atualizações…
+	Checking for updates…	Verificando atualizações…
+	Download Update	Baixar atualização
+	View Downloads	Ver downloads
+	Software Updates	Atualizações de software
+	Automatically Check for Updates at Startup	Verificar atualizações automaticamente ao iniciar
+	You're up to date	Você está atualizado
+	What's new in this release:	Novidades desta versão:
+	Open Release Page on GitHub	Abrir página da versão no GitHub
+	Web builds are always running the latest version.	A versão web sempre executa a versão mais recente.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	As verificações automáticas ocorrem no máximo uma vez por dia. As atualizações disponíveis aparecem após fechar as outras caixas de diálogo.
+	Download the update and save your work before installing the new version.	Baixe a atualização e salve seu trabalho antes de instalar a nova versão.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Para instalações gerenciadas por pacotes, atualize o PhotoCraft pelo gerenciador de pacotes. Outros downloads estão na página da versão.
+	Install Update	Instalar atualização
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	O PhotoCraft baixa a atualização em segundo plano e a instala ao encerrar, sem interromper seu trabalho. Salve seu trabalho primeiro.
+	PhotoCraft will install the update when you quit.	O PhotoCraft instalará a atualização ao encerrar.
 	Use Classic Mode	Usar modo clássico
 	Auto Center Preview	Centralizar visualização automaticamente
 	Next Document	Próximo documento

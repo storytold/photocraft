@@ -2422,6 +2422,23 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+	Check for Updates	Zkontrolovat aktualizace
+	Check for Updates…	Zkontrolovat aktualizace…
+	Checking for updates…	Kontrola aktualizací…
+	Download Update	Stáhnout aktualizaci
+	View Downloads	Zobrazit stažení
+	Software Updates	Aktualizace softwaru
+	Automatically Check for Updates at Startup	Automaticky kontrolovat aktualizace při spuštění
+	You're up to date	Máte aktuální verzi
+	What's new in this release:	Novinky v tomto vydání:
+	Open Release Page on GitHub	Otevřít stránku vydání na GitHubu
+	Web builds are always running the latest version.	Webová verze vždy používá nejnovější verzi.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatické kontroly probíhají nejvýše jednou denně. Dostupné aktualizace se zobrazí po zavření ostatních dialogů.
+	Download the update and save your work before installing the new version.	Stáhněte aktualizaci a před instalací nové verze uložte práci.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	U instalací spravovaných správci balíčků aktualizujte PhotoCraft pomocí správce balíčků. Další soubory jsou na stránce vydání.
+	Install Update	Instalovat aktualizaci
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft stáhne aktualizaci na pozadí a nainstaluje ji při ukončení, aby se práce nepřerušila. Nejdříve uložte práci.
+	PhotoCraft will install the update when you quit.	PhotoCraft nainstaluje aktualizaci při ukončení.
 	Use Classic Mode	Použít klasický režim
 	Auto Center Preview	Automaticky vystředit náhled
 	Next Document	Další dokument

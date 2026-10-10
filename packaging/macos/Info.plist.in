@@ -28,6 +28,16 @@
   <string>@VERSION@</string>
   <key>PhotoCraftBuildCommit</key>
   <string>@BUILD_SHA@</string>
+  <key>SUFeedURL</key>
+  <string>@SPARKLE_FEED_URL@</string>
+  <key>SUPublicEDKey</key>
+  <string>@SPARKLE_PUBLIC_KEY@</string>
+  <key>SUEnableAutomaticChecks</key>
+  <false/>
+  <key>SUAutomaticallyUpdate</key>
+  <false/>
+  <key>SUAllowsAutomaticUpdates</key>
+  <false/>
   <key>CFBundleIconFile</key>
   <string>PhotoCraft</string>
   <key>LSApplicationCategoryType</key>

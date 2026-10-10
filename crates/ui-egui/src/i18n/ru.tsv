@@ -2705,6 +2705,23 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+	Check for Updates	Проверить обновления
+	Check for Updates…	Проверить обновления…
+	Checking for updates…	Проверка обновлений…
+	Download Update	Скачать обновление
+	View Downloads	Просмотреть загрузки
+	Software Updates	Обновления программы
+	Automatically Check for Updates at Startup	Автоматически проверять обновления при запуске
+	You're up to date	Установлена последняя версия
+	What's new in this release:	Новое в этом выпуске:
+	Open Release Page on GitHub	Открыть страницу выпуска на GitHub
+	Web builds are always running the latest version.	Веб-версия всегда использует последнюю версию.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Автоматическая проверка выполняется не чаще одного раза в день. Доступные обновления появятся после закрытия других диалогов.
+	Download the update and save your work before installing the new version.	Скачайте обновление и сохраните работу перед установкой новой версии.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Если программа установлена через менеджер пакетов, обновите PhotoCraft с его помощью. Другие загрузки доступны на странице выпуска.
+	Install Update	Установить обновление
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft загружает обновление в фоновом режиме и устанавливает его при выходе, не прерывая работу. Сначала сохраните работу.
+	PhotoCraft will install the update when you quit.	PhotoCraft установит обновление при выходе.
 	Use Classic Mode	Использовать классический режим
 	Auto Center Preview	Автоматически центрировать просмотр
 	Next Document	Следующий документ

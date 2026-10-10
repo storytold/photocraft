@@ -2430,6 +2430,23 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Check for Updates	检查更新
+	Check for Updates…	检查更新…
+	Checking for updates…	正在检查更新…
+	Download Update	下载更新
+	View Downloads	查看下载
+	Software Updates	软件更新
+	Automatically Check for Updates at Startup	启动时自动检查更新
+	You're up to date	已是最新版本
+	What's new in this release:	此版本的新增内容：
+	Open Release Page on GitHub	在GitHub上打开发布页面
+	Web builds are always running the latest version.	网页版始终运行最新版本。
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	自动检查每天最多执行一次。关闭其他对话框后，将显示可用更新。
+	Download the update and save your work before installing the new version.	下载更新，并在安装新版本之前保存工作。
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	对于通过软件包管理器安装的版本，请使用软件包管理器更新PhotoCraft。其他下载位于发布页面。
+	Install Update	安装更新
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft 会在后台下载更新，并在退出时安装，不会打断您的工作。请先保存工作。
+	PhotoCraft will install the update when you quit.	PhotoCraft 将在退出时安装更新。
 	Use Classic Mode	使用经典模式
 	Auto Center Preview	自动居中预览
 	Next Document	下一个文档
