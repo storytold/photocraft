@@ -335,6 +335,18 @@ fn main() -> eframe::Result {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
+            #[cfg(target_os = "macos")]
+            {
+                // Sparkle is AppKit-bound and must stay on the main thread for the app's lifetime.
+                if let Some(updater) = initialize_macos_updater() {
+                    let updater = std::rc::Rc::new(updater);
+                    if let Err(error) = updater.check_for_updates_in_background() {
+                        log::warn!("couldn't check for PhotoCraft updates at launch: {error}");
+                    }
+                    let updater_for_menu = std::rc::Rc::clone(&updater);
+                    services.check_for_updates = Some(Box::new(move || updater_for_menu.check_for_updates().map_err(|error| error.to_string())));
+                }
+            }
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
@@ -517,6 +529,27 @@ fn main() -> eframe::Result {
         }
     }
     result
+}
+
+/// Initialize Sparkle after eframe has created the native AppKit application, on its main thread.
+#[cfg(target_os = "macos")]
+fn initialize_macos_updater() -> Option<sparkle_updater::SparkleUpdater> {
+    // Update signing is release-maintainer configuration; development bundles should not
+    // contact the release feed or expose a menu item that cannot verify an update.
+    if option_env!("PHOTOCRAFT_SPARKLE_PUBLIC_KEY").is_none_or(str::is_empty) {
+        return None;
+    }
+    let Some(main_thread) = sparkle_updater::MainThreadMarker::new() else {
+        log::warn!("couldn't initialize PhotoCraft updates outside the macOS main thread");
+        return None;
+    };
+    match sparkle_updater::SparkleUpdater::new(main_thread, sparkle_updater::UpdaterConfig::default()) {
+        Ok(updater) => updater,
+        Err(error) => {
+            log::warn!("couldn't initialize PhotoCraft updates: {error}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]

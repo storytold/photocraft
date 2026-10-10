@@ -61,6 +61,8 @@ muda = { version = "=0.21.1", default-features = false }
 # Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
 # Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
+# Native macOS updater (Sparkle 2). The release bundle supplies Sparkle.framework.
+sparkle-updater = "=0.1.0"
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]

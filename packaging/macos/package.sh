@@ -42,6 +42,29 @@ WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/PhotoCraft.app"
 DMG="$DIST/photocraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/photocraft-cli-$VERSION-macos-$ARCH.zip"
+SPARKLE_VERSION=2.9.6
+SPARKLE_SHA256=52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192
+SPARKLE_ROOT="$CARGO_TARGET_DIR/macos-deps/sparkle-$SPARKLE_VERSION"
+
+# Pin and verify the official Sparkle distribution. Its framework is linked into the app and
+# bundled below; release signing turns its embedded helpers into part of PhotoCraft's signature.
+if [ ! -d "$SPARKLE_ROOT/Sparkle.framework" ]; then
+  mkdir -p "$SPARKLE_ROOT"
+  archive="$CARGO_TARGET_DIR/macos-deps/Sparkle-$SPARKLE_VERSION.tar.xz"
+  mkdir -p "$(dirname "$archive")"
+  curl -fsSL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz" -o "$archive"
+  printf '%s  %s\n' "$SPARKLE_SHA256" "$archive" | shasum -a 256 -c -
+  tar -xf "$archive" -C "$SPARKLE_ROOT"
+  rm -f "$archive"
+fi
+export SPARKLE_FRAMEWORK_PATH="$SPARKLE_ROOT"
+export PHOTOCRAFT_SPARKLE_PUBLIC_KEY="${PHOTOCRAFT_SPARKLE_PUBLIC_KEY:-}"
+SPARKLE_AUTO_UPDATE=false
+if [ -n "$PHOTOCRAFT_SPARKLE_PUBLIC_KEY" ]; then
+  SPARKLE_AUTO_UPDATE=true
+else
+  warn "macOS: Sparkle update signing key is not configured; in-app updates are disabled"
+fi
 
 NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
@@ -103,6 +126,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$SPARKLE_ROOT/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
@@ -110,13 +135,24 @@ if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
 fi
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${PHOTOCRAFT_BUILD_SHA:-unknown}/g" \
+  -e "s|@SPARKLE_FEED_URL@|${PHOTOCRAFT_SPARKLE_FEED_URL:-https://github.com/storytold/photocraft/releases/latest/download/appcast.xml}|g" \
+  -e "s|@SPARKLE_PUBLIC_KEY@|${PHOTOCRAFT_SPARKLE_PUBLIC_KEY:-}|g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
+plutil -replace SUAutomaticallyUpdate -bool "$SPARKLE_AUTO_UPDATE" "$APP/Contents/Info.plist"
+plutil -replace SUAllowsAutomaticUpdates -bool "$SPARKLE_AUTO_UPDATE" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
+
+# Load Sparkle from the framework embedded in this app bundle.
+if ! otool -l "$APP/Contents/MacOS/PhotoCraft" | grep -Fq '@executable_path/../Frameworks'; then
+  install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/PhotoCraft"
+fi
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
+# Sparkle contains nested XPC services and helper apps; sign those with the same Developer ID.
+codesign --force --deep --sign "$IDENTITY" --options runtime "${ts[@]}" ${kc[@]+"${kc[@]}"} "$APP/Contents/Frameworks/Sparkle.framework"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
