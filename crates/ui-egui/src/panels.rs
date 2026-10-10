@@ -834,10 +834,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let b = &mut brush;
                 match app.ui.tool {
                     Tool::Brush | Tool::Eraser if t.pro => {
-                        brush_preset_chip(ui, b, &mut app.ui);
-                        crate::brush_picker::settings_toggle(app, ui);
+                        // A Block-mode Eraser has a fixed size, opacity and flow (Photoshop, #2770).
+                        let block = crate::eraser_ui::block_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!block, |ui| {
+                            brush_preset_chip(ui, b, &mut app.ui);
+                            crate::brush_picker::settings_toggle(app, ui);
+                        });
                         widgets::vline(ui, 22.0);
-                        // The Eraser has no blend mode: its Mode is Brush or Pencil (#2662).
+                        // The Eraser has no blend mode: its Mode is Brush, Pencil or Block (#2662).
                         if app.ui.tool == Tool::Eraser {
                             crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
                         } else {
@@ -848,12 +852,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 b.mode = mode;
                             }
                         }
-                        percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
-                        if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
-                            b.pressure_opacity = !b.pressure_opacity;
-                        }
-                        // A Pencil-mode Eraser is always full flow, without build-up (Photoshop).
-                        ui.add_enabled_ui(!crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
+                        ui.add_enabled_ui(!block, |ui| {
+                            percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
+                            if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
+                                b.pressure_opacity = !b.pressure_opacity;
+                            }
+                        });
+                        // A Pencil- or Block-mode Eraser is always full flow, without build-up (Photoshop).
+                        ui.add_enabled_ui(!block && !crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
                             percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
                             let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
                             if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
@@ -894,17 +900,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         brush_preset_chip(ui, b, &mut app.ui);
                         crate::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
-                        opt_label(ui, tl!("Size"));
-                        widgets::value_field(ui, &mut b.size, 1.0..=2500.0, "px", 76.0);
+                        // A Block-mode Eraser has a fixed size, opacity and flow (Photoshop, #2770).
+                        let block = crate::eraser_ui::block_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!block, |ui| {
+                            opt_label(ui, tl!("Size"));
+                            widgets::value_field(ui, &mut b.size, 1.0..=2500.0, "px", 76.0);
+                        });
                         widgets::vline(ui, 22.0);
                         if app.ui.tool == Tool::Eraser {
                             crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
                         }
                         // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-                        let pencil = crate::eraser_ui::pencil_mode(app, app.ui.tool);
-                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-                        percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0);
-                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
+                        let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
+                        ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0));
+                        ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
                         opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 66.0);
                         widgets::vline(ui, 22.0);
@@ -1658,7 +1668,8 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let v = app.ui.views[idx].clone();
     let canvas = app.last_canvas_rect;
     let point_zoom = (v.zoom / app.canvas_ppp()).max(1e-6);
-    let vw = canvas.width() / point_zoom * s;
+    // Pixel aspect correction shows fewer document columns across the same canvas width.
+    let vw = canvas.width() / point_zoom / app.ui.view.display_aspect() * s;
     let vh = canvas.height() / point_zoom * s;
     let c = pos2(rect.min.x + v.center[0] * s, rect.min.y + v.center[1] * s);
     let vr = Rect::from_center_size(c, vec2(vw, vh)).intersect(frame.shrink(1.0));
@@ -1742,12 +1753,14 @@ fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut s = hsva0.s * 100.0;
     let mut v = hsva0.v * 100.0;
     let hue = widgets::hue_stops();
-    let mut changed = widgets::slider_row(ui, tl!("Hue"), &mut h, 0.0..=360.0, "°", Some(&hue)).changed();
+    // Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the tracks are the plain ones.
+    let dynamic = app.session.prefs().interface.dynamic_color_sliders;
+    let mut changed = widgets::slider_row(ui, tl!("Hue"), &mut h, 0.0..=360.0, "°", dynamic.then_some(&hue)).changed();
     let sat_stops =
         [egui::ecolor::Hsva::new(hsva0.h, 0.0, hsva0.v.max(0.2), 1.0), egui::ecolor::Hsva::new(hsva0.h, 1.0, hsva0.v.max(0.2), 1.0)].map(Color32::from);
-    changed |= widgets::slider_row(ui, tl!("Saturation"), &mut s, 0.0..=100.0, "%", Some(&sat_stops)).changed();
+    changed |= widgets::slider_row(ui, tl!("Saturation"), &mut s, 0.0..=100.0, "%", dynamic.then_some(&sat_stops)).changed();
     let val_stops = [Color32::BLACK, Color32::from(egui::ecolor::Hsva::new(hsva0.h, hsva0.s, 1.0, 1.0))];
-    changed |= widgets::slider_row(ui, tl!("Brightness"), &mut v, 0.0..=100.0, "%", Some(&val_stops)).changed();
+    changed |= widgets::slider_row(ui, tl!("Brightness"), &mut v, 0.0..=100.0, "%", dynamic.then_some(&val_stops)).changed();
     let hsva = egui::ecolor::Hsva::new(h / 360.0, s / 100.0, v / 100.0, 1.0);
     // Only an edit counts: the h/s/v round trip isn't exact, so comparing values would rewrite
     // the foreground (and recolour selected type) every frame.

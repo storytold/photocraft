@@ -114,7 +114,7 @@ fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
 #[test]
 fn square_cursor_sits_on_the_pixel_grid() {
     let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(800.0, 600.0));
-    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false, rotation: 0.0 };
+    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false, rotation: 0.0, aspect: 1.0 };
     // 1 px at 800 %: the 8-point square of the pixel under the pointer.
     let r = pencil_cursor_rect(&xf, [10.3, 5.7], 1.0, 1.0);
     assert_eq!(r, Rect::from_two_pos(xf.to_screen(10.0, 5.0), xf.to_screen(11.0, 6.0)));
@@ -126,7 +126,14 @@ fn square_cursor_sits_on_the_pixel_grid() {
     assert_eq!(r, Rect::from_two_pos(xf.to_screen(9.0, 4.0), xf.to_screen(12.0, 7.0)));
     // At 2× and at an odd zoom the edges land on physical pixels.
     for (zoom, ppp) in [(3.3, 2.0), (0.5, 2.0), (1.0, 1.0), (13.7, 1.5)] {
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::new(0.3, 0.7), vec2(800.0, 600.0)), zoom, center: [50.2, 37.9], flip: true, rotation: 0.0 };
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::new(0.3, 0.7), vec2(800.0, 600.0)),
+            zoom,
+            center: [50.2, 37.9],
+            flip: true,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
         let r = pencil_cursor_rect(&xf, [20.4, 30.6], 5.0, ppp);
         for v in [r.min.x, r.min.y, r.max.x, r.max.y] {
             assert!((v * ppp - (v * ppp).round()).abs() < 1e-3, "zoom {zoom} ppp {ppp}: {v}");
@@ -174,6 +181,37 @@ fn the_eraser_in_pencil_mode_erases_aliased_pixels() {
         }
     }
     assert!(erased > 500, "{erased}");
+}
+
+#[test]
+fn the_eraser_in_block_mode_erases_a_16_screen_px_square() {
+    // #2770: a soft, small, half-opacity Eraser in Block mode still clears a hard square of
+    // 16 screen pixels: 16 document pixels at 100 %, 8 at 200 %.
+    for (zoom, n) in [(1.0, 16usize), (2.0, 8)] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 5, "hardness": 0.0, "opacity": 0.5, "flow": 0.3, "smoothing": {"amount": 0.0}}})).unwrap();
+        app.ui.tool_options.eraser_mode = "block".into();
+        app.ui.views[0].zoom = zoom;
+        drag(&mut app, &[(60.3, 40.6)], Modifiers::NONE);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["block"]), ("paint.pencil", &json!(true)));
+        let s = layer(&app).surface().unwrap().clone();
+        let (mut erased, mut x0, mut y0, mut x1, mut y1) = (0, i32::MAX, i32::MAX, 0, 0);
+        for y in 0..80 {
+            for x in 0..120 {
+                let a = s.rgba(x, y)[3];
+                assert!(a == 0.0 || a == 1.0, "partial alpha {a} at ({x},{y}), zoom {zoom}");
+                if a == 0.0 {
+                    erased += 1;
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        assert_eq!((erased, x1 - x0 + 1, y1 - y0 + 1), (n * n, n as i32, n as i32), "zoom {zoom}");
+    }
 }
 
 #[test]

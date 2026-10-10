@@ -492,6 +492,7 @@
 	Wand	Волшебная палочка
 	Eyedropper	Пипетка
 	Brush	Кисть
+	Block	Квадрат
 	Pencil	Карандаш
 	Eraser	Ластик
 	Clone Stamp	Штамп
@@ -646,6 +647,7 @@
 	Resolution:	Разрешение:
 	Resolution: {dpi} pixels/inch	Разрешение: {dpi} пикс./дюйм
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Pixels:	Пикселы:
 	Pixel Length:	Длина в пикселах:
 	Logical Length:	Логическая длина:
@@ -2715,3 +2717,5 @@ fontWeight	Italic	Курсив
 	Color stops	Цветовые точки
 
 	Opacity stops	Точки непрозрачности
+	Search settings…	Поиск настроек…
+	No matching settings	Нет подходящих настроек

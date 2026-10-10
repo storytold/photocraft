@@ -1511,6 +1511,7 @@
 	Blur Tool	Ferramenta Desfoque
 	Bold	Negrito
 	Brush	Pincel
+	Block	Bloco
 	Brush Pose	Pose do pincel
 	Brush Tip Shape	Forma da ponta do pincel
 	Brush Tool	Ferramenta Pincel
@@ -1723,6 +1724,7 @@
 	Scratch: {size}	Trabalho: {size}
 	Untagged {mode}	{mode} sem marcação
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Resolução: {dpi} pixels/polegada
 	Doc: {w} × {h} px	Doc: {w} × {h} px
 	Frame {current} / {total}	Quadro {current} / {total}
@@ -2857,3 +2859,5 @@ fontWeight	Italic	Itálico
 	Color stops	Pontos de cor
 
 	Opacity stops	Pontos de opacidade
+	Search settings…	Pesquisar configurações…
+	No matching settings	Nenhuma configuração encontrada

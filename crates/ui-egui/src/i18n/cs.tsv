@@ -1550,6 +1550,7 @@
 	Bold	Tučné
 	Brush	Štětec
 	Pencil	Tužka
+	Block	Blok
 	Brush Pose	Poloha štětce
 	Brush Tip Shape	Tvar hrotu štětce
 	Brush Tool	Nástroj štětec
@@ -1766,6 +1767,7 @@
 	Invalid {mode} profile	Neplatný profil {mode}
 	Unnamed {mode} profile	Bezejmenný profil {mode}
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Rozlišení: {dpi} pixelů/palec
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Frame {current} / {total}	Snímek {current} / {total}
@@ -2431,3 +2433,5 @@ fontWeight	Italic	Kurzíva
 	Color stops	Barevné zarážky
 
 	Opacity stops	Zarážky krytí
+	Search settings…	Hledat nastavení…
+	No matching settings	Žádná odpovídající nastavení

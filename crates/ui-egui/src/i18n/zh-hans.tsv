@@ -1545,6 +1545,7 @@
 	Bold	粗体
 	Brush	画笔
 	Pencil	铅笔
+	Block	块
 	Brush Pose	画笔姿态
 	Brush Tip Shape	画笔笔尖形状
 	Brush Tool	画笔工具
@@ -1762,6 +1763,7 @@
 	Invalid {mode} profile	无效的 {mode} 配置文件
 	Unnamed {mode} profile	未命名的 {mode} 配置文件
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	分辨率：{dpi} 像素/英寸
 	Doc: {w} × {h} px	文档：{w} × {h} px
 	Frame {current} / {total}	帧 {current} / {total}
@@ -2439,3 +2441,5 @@ fontWeight	Italic	斜体
 	Color stops	颜色色标
 
 	Opacity stops	不透明度色标
+	Search settings…	搜索设置…
+	No matching settings	没有匹配的设置

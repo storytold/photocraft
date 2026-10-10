@@ -59,10 +59,22 @@ pub fn pencil_mode(app: &PhotocraftApp, tool: Tool) -> bool {
     tool == Tool::Eraser && app.ui.tool_options.eraser_mode == "pencil"
 }
 
-/// The Eraser's Mode dropdown (Brush / Pencil). Returns whether it changed.
+/// Whether `tool` is the Eraser in Block mode: it erases a hard square of 16 screen pixels
+/// (`16 / zoom` document pixels) through `paint.pencil` (`"block": true`); Size, Hardness,
+/// Opacity and Flow don't apply (#2770).
+pub fn block_mode(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Eraser && app.ui.tool_options.eraser_mode == "block"
+}
+
+/// The Block's edge in document pixels at the current zoom (what the engine erases).
+pub fn block_size(app: &PhotocraftApp) -> f32 {
+    photocraft_engine::brush_cmds::block_size(f64::from(app.point_zoom()))
+}
+
+/// The Eraser's Mode dropdown (Brush / Pencil / Block). Returns whether it changed.
 pub fn mode_dropdown(ui: &mut egui::Ui, mode: &mut String) -> bool {
     opt(ui, tl!("Mode:"));
-    let modes = [("brush".to_string(), tl!("Brush")), ("pencil".to_string(), tl!("Pencil"))];
+    let modes = [("brush".to_string(), tl!("Brush")), ("pencil".to_string(), tl!("Pencil")), ("block".to_string(), tl!("Block"))];
     widgets::dropdown(ui, "eraser-mode", mode, &modes, 96.0)
 }
 

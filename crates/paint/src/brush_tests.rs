@@ -547,6 +547,23 @@ fn dual_brush_intersects() {
 }
 
 #[test]
+fn wet_edges_shape_the_stroke_not_each_dab() {
+    // #2088: Wet Edges darkens the rim of the whole stroke. Along the centre of a straight stroke
+    // of overlapping dabs the paint is even (no chain of per-dab rings), and the stroke's sides are
+    // darker than its centre.
+    let b = BrushSettings { size: 40.0, hardness: 0.8, wet_edges: true, ..brush() };
+    let s = paint(&b, &line(20.0, 220.0, 50.0), 240, 100);
+    let centre: Vec<f32> = (60..180).map(|x| s.rgba(x, 50)[3]).collect();
+    let (lo, hi) = centre.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &a| (lo.min(a), hi.max(a)));
+    assert!(hi - lo < 0.02, "centre line is even: {lo}..{hi}");
+    assert!(hi < 0.6, "wet interior is lighter: {hi}");
+    for x in [80, 120, 160] {
+        let side = s.rgba(x, 50 + 16)[3];
+        assert!(side > hi + 0.15, "the side at x={x} is darker than the centre: {side} vs {hi}");
+    }
+}
+
+#[test]
 fn wet_edges_and_noise() {
     let b = BrushSettings { size: 40.0, hardness: 0.0, wet_edges: true, ..brush() };
     let s = paint(&b, &line(20.0, 120.0, 50.0), 140, 100);

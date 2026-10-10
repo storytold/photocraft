@@ -60,6 +60,94 @@ fn literal_psd_tabs_shape_as_whitespace_without_shifting_text_offsets() {
     assert!(l.caret(2).0 > l.caret(1).0, "caret moves across the tab");
 }
 
+/// Pen position of the cluster starting at byte `at`.
+fn cluster_x(l: &crate::TextLayout, at: usize) -> f32 {
+    l.clusters.iter().find(|c| c.range.start == at).map(|c| c.x).unwrap()
+}
+
+/// #1881: a tab advances to Photoshop's next default tab stop (every 36 pt, from the anchor or
+/// the box's left edge), not one space width.
+#[test]
+fn tabs_advance_to_the_next_default_tab_stop() {
+    let mut e = TextEngine::new();
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let l = e.layout(&point("a\tb", 20.0), 72.0);
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef");
+    assert!(near(cluster_x(&l, 2), 36.0), "{}", cluster_x(&l, 2));
+    assert!(near(l.caret(2).0, 36.0), "the caret after the tab sits on the stop");
+    // Stops are in points: twice the pixels at 144 dpi.
+    let l = e.layout(&point("a\tb", 20.0), 144.0);
+    assert!(near(cluster_x(&l, 2), 72.0), "{}", cluster_x(&l, 2));
+    // Each tab moves to the following stop; text past a stop skips to the next one.
+    let l = e.layout(&point("a\t\tb", 20.0), 72.0);
+    assert!(near(cluster_x(&l, 3), 72.0), "{}", cluster_x(&l, 3));
+    let l = e.layout(&point("MMM\tb", 20.0), 72.0);
+    assert!(cluster_x(&l, 3) > 36.0);
+    assert!(near(cluster_x(&l, 4), 72.0), "{}", cluster_x(&l, 4));
+    // A tab at the start of a line goes to the first stop; the line extent includes it.
+    let l = e.layout(&point("\tb", 20.0), 72.0);
+    assert!(near(cluster_x(&l, 1), 36.0), "{}", cluster_x(&l, 1));
+    assert!(l.lines[0].x1 > 36.0);
+    // Paragraph text measures from the box's left edge.
+    let mut t = point("a\tb", 20.0);
+    t.shape = TextShape::Box { x: 10.0, y: 0.0, width: 300.0, height: 100.0 };
+    let l = e.layout(&t, 72.0);
+    assert!(near(cluster_x(&l, 2), 46.0), "{}", cluster_x(&l, 2));
+}
+
+/// The tab stays a tab in the document: PSD type round-trips it unchanged.
+#[test]
+fn psd_round_trips_tabs() {
+    for shape in [TextShape::Point, TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 100.0 }] {
+        let t = TextLayer { shape, ..point("Name\tValue\n\tIndented", 20.0) };
+        let back = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&t, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.text, t.text, "{shape:?}");
+    }
+}
+
+/// Expanded tabs never push paragraph text past the box's right edge.
+#[test]
+fn tabs_wrap_inside_the_box() {
+    let mut e = TextEngine::new();
+    let mut t = point("a\tb\tc\td\te\tf\tg", 20.0);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 100.0, height: 1000.0 };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() > 1, "{}", l.lines.len());
+    // Lines break at the real tab widths: "c" (stop 72 px) still fits, "d" (stop 108 px) wraps.
+    let line_of = |at: usize| l.clusters.iter().find(|c| c.range.start == at).map(|c| c.line).unwrap();
+    assert_eq!((line_of(4), line_of(6)), (0, 1));
+    assert!((cluster_x(&l, 6) - 0.0).abs() < 0.05, "a wrapped line starts at the box edge");
+    for c in &l.clusters {
+        let ch = &t.text[c.range.clone()];
+        if ch != "\t" {
+            assert!(c.x + c.advance <= 100.0 + 1e-3, "{ch:?} at {} overflows", c.x);
+        }
+    }
+}
+
+/// Right-aligned and centred point text keep their alignment around the expanded tab.
+#[test]
+fn tabs_keep_point_text_alignment() {
+    let mut e = TextEngine::new();
+    let r = e.layout(&with_para(point("a\tb", 20.0), ParagraphStyle { align: TextAlign::Right, ..Default::default() }), 72.0);
+    assert!(r.lines[0].x1.abs() < 0.05, "{:?}", r.lines[0]);
+    let b = r.clusters.iter().find(|c| c.range.start == 2).unwrap();
+    assert!((b.x + b.advance).abs() < 0.05, "b ends at the anchor: {b:?}");
+    assert!(r.lines[0].x0 < -36.0);
+    // Paragraph text: the line still ends at the box's right edge; a trailing tab is
+    // whitespace outside the line's extent.
+    for text in ["a\tb", "a\tb\t"] {
+        let t = with_para(
+            TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 }, ..point(text, 20.0) },
+            ParagraphStyle { align: TextAlign::Right, ..Default::default() },
+        );
+        let l = e.layout(&t, 72.0);
+        let b = l.clusters.iter().find(|c| c.range.start == 2).unwrap();
+        assert!((b.x + b.advance - 200.0).abs() < 0.5, "{text:?}: {b:?}");
+        assert!((l.lines[0].x1 - 200.0).abs() < 0.5, "{text:?}: {:?}", l.lines[0]);
+    }
+}
+
 #[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
