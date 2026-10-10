@@ -69,6 +69,12 @@ fn code_of(theme: Option<egui::Theme>) -> u8 {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn portal_startup<T>(subscribe: impl FnOnce(), read: impl FnOnce() -> T) -> T {
+    subscribe();
+    read()
+}
+
 /// Reads the colour scheme once, then follows the portal's `SettingChanged` signal. There is no
 /// polling: the worker sleeps in the signal iterator and wakes the UI only when the value changes.
 pub fn service() -> Option<photocraft_ui_egui::SystemThemeFn> {
@@ -86,11 +92,14 @@ pub fn service() -> Option<photocraft_ui_egui::SystemThemeFn> {
             .name("appearance-portal".into())
             .spawn(move || {
                 let proxy = portal_proxy();
-                let initial = proxy.as_ref().and_then(portal_theme).or_else(gtk_theme);
+                let mut signals = None;
+                let initial = portal_startup(
+                    || signals = proxy.as_ref().and_then(|proxy| proxy.receive_signal("SettingChanged").ok()),
+                    || proxy.as_ref().and_then(portal_theme).or_else(gtk_theme),
+                );
                 worker_value.store(code_of(initial), Ordering::Relaxed);
                 let _ = ready.send(());
-                let Some(proxy) = proxy else { return };
-                let Ok(signals) = proxy.receive_signal("SettingChanged") else { return };
+                let Some(signals) = signals else { return };
                 for message in signals {
                     let Ok((namespace, key, changed)) = message.body().deserialize::<(String, String, zbus::zvariant::OwnedValue)>() else {
                         continue;
@@ -124,6 +133,31 @@ pub fn service() -> Option<photocraft_ui_egui::SystemThemeFn> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn startup_keeps_changes_emitted_during_initial_read() {
+        use std::cell::Cell;
+
+        for (initial_value, changed_value) in [(2, 1), (1, 2), (2, 2)] {
+            let subscribed = Cell::new(false);
+            let mut portal_value = initial_value;
+            let mut pending_signal = None;
+            let initial = super::portal_startup(
+                || subscribed.set(true),
+                || {
+                    let initial = portal_value;
+                    portal_value = changed_value;
+                    if subscribed.get() && portal_value != initial {
+                        pending_signal = Some(portal_value);
+                    }
+                    initial
+                },
+            );
+            let cached = pending_signal.unwrap_or(initial);
+            assert_eq!(cached, changed_value, "portal changed during startup but cached {cached}");
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn portal_scheme_values() {
