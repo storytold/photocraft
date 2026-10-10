@@ -6,6 +6,31 @@ are included in this repository. The integration/performance checks below are su
 fixed 22-case evaluation. Its 20 labelled COCO targets are exploratory evidence, not a representative
 or held-out benchmark, a soft-alpha matting assessment, or evidence of a universal winner.
 
+## Review update: 2026-10-10
+
+Rebased on upstream 0.6.0 (`ab76c242a1225efc680dc88bd761cc202e1e29df`). The optional model
+workflow is manual-only (`workflow_dispatch`), with no push/PR triggers. The development guide
+now identifies the ONNX Runtime build-time download and offline limitation. The
+[export review rationale](local-models.md#why-these-community-exports) links exact official
+checkpoint trees and community metadata, explains why ONNX re-exports remain selected, and
+separates artifact identity from independently proven conversion equivalence.
+
+All 18 model labels now cover Dutch and Ukrainian and the other 14 complete catalogs, guarded
+by a runtime lookup regression. Existing catalog entries and all other contributors' credits
+are preserved. New entries are kept away from append locations to reduce future conflicts.
+The lockfile preserves all 728 existing upstream package versions; it adds only the optional
+backend entries. Model revisions/bytes and the historical benchmark remain unchanged.
+
+Fresh optional-native tests, lint, default builds, dependency layers, parity, scorecard,
+adversarial command tests and wasm checks are linked from [#1199](https://github.com/storytold/photocraft/pull/1199).
+Native engine tests passed 1,169 / 11 ignored; the final UI suite after the file-dialog update
+passed 1,721 / 10 ignored, with all integration tests green. Five-package all-target Clippy
+(`local-ml,heif`), the default build, layers, parity (628/628), scorecard, optional-feature
+adversarial commands, full L0–L6 wasm and optional engine/UI wasm all pass. Ignored tests
+are not counted as passes. An offscreen 1200×800 Preferences › Integrations capture was
+inspected: both explicit downloads are offered while both selected methods remain Classical.
+Historical screenshots below are not current 0.6.0 captures.
+
 ## Upstream integration check: 2026-10-09
 
 Integrated upstream `2515fa7cee624cf232c873ba283aa0359ec159d7`. The integration keeps the
