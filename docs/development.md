@@ -395,6 +395,27 @@ Input calls (`ui.key`, `ui.type`, `ui.click`) now reply only after the app has p
 so a following `ui.inspect` observes their effect.
 
 
+## Remove Tool quality
+
+`cargo run --release -p photocraft-engine --example remove_quality -- <dir> [out dir]` fills
+holes (discs and thin lines over background) in five photos with `photocraft_algo::remove` and
+prints, per hole, the PSNR against the original, `texture` (the fill's mean gradient over the
+original's: below 1 it is smoother than what it replaces) and `seam` (the same on the band along the
+hole's edge: above 1 the edge shows). With an out dir it writes original | hole | fill crops. The
+photos are public domain, not committed; download them at 1920 px wide into `<dir>` as:
+
+| File | Photo |
+|---|---|
+| `01.jpg` | [The Tetons and the Snake River](https://commons.wikimedia.org/wiki/File:Adams_The_Tetons_and_the_Snake_River.jpg), Ansel Adams, 1942 (U.S. National Archives) |
+| `02.jpg` | [Ansel Adams, National Archives 79-AAB-01](https://commons.wikimedia.org/wiki/File:Ansel_Adams_-_National_Archives_79-AAB-01.jpg) (U.S. National Archives) |
+| `03.jpg` | [Hiking at Crane Meadows National Wildlife Refuge](https://commons.wikimedia.org/wiki/File:Hiking_at_Crane_Meadows_National_Wildlife_Refuge_(49018614166).jpg) (USFWS) |
+| `04.jpg` | [Meadow Anemone, Lake Andes National Wildlife Refuge](https://commons.wikimedia.org/wiki/File:Meadow_Anemone_Lake_Andes_National_Wildlife_Refuge_South_Dakota_(53923253226).jpg) (USFWS) |
+| `06.jpg` | [Line5070, NOAA Photo Library](https://commons.wikimedia.org/wiki/File:Line5070_-_Flickr_-_NOAA_Photo_Library.jpg) (NOAA) |
+
+`https://commons.wikimedia.org/wiki/Special:FilePath/<file name>?width=1600` serves each at the
+size the cases were placed for (Commons rounds it to 1920). Timing on a 24 MP document through the
+command: `cargo run --release -p photocraft-engine --example remove_bench`.
+
 ## Test corpora
 
 Real files are our best oracles, but they are large binaries, so they never go into this

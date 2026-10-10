@@ -24,7 +24,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eyedropper, Tool::Ruler, Tool::Note, Tool::Count],
     ],
     &[
-        &[Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
+        &[Tool::Remove, Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
         &[Tool::Brush, Tool::Pencil, Tool::MixerBrush],
         &[Tool::CloneStamp, Tool::PatternStamp],
         &[Tool::HistoryBrush],
@@ -80,17 +80,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
-    // Two columns when the header chevron asks for them, or when one column doesn't fit.
-    let slots: usize = sections.iter().map(Vec::len).sum();
-    let double =
-        app.ui.panels.toolbar_double || toolbar_needs_double(slots, sections.len(), bx, t.pro, t.round_chips, ui.available_rect_before_wrap().height());
+    // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
+    let double = app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
     egui::Panel::left("toolbar").resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
         ui,
         |ui| {
             if t.pro {
-                let r = ui.max_rect();
-                ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
                 // Photoshop's toolbar header chevrons switch between one and two columns.
                 let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
                 icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
@@ -121,181 +117,186 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if ui.input(|i| i.pointer.any_pressed()) {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
             }
-            // Pro has no group dividers, so its two columns fill every row across groups.
-            let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
-            for (si, section) in sections.iter().enumerate() {
-                // Photoshop 2026 draws one uninterrupted column (no group dividers).
-                if si > 0 && !t.pro {
-                    ui.add_space(4.0);
-                    let (r, _) = ui.allocate_exact_size(vec2(if double { bx * 2.0 + 2.0 } else { bx }, 1.0), Sense::hover());
-                    ui.painter().line_segment([r.left_center() + vec2(8.0, 0.0), r.right_center() - vec2(8.0, 0.0)], Stroke::new(1.0, t.separator));
-                    ui.add_space(4.0);
-                }
-                let rows: Vec<&[(usize, Vec<Tool>)]> = if double { section.chunks(2).collect() } else { section.chunks(1).collect() };
-                for row in rows {
-                    ui.horizontal(|ui| {
-                        for (slot_index, slot) in row.iter() {
-                            let key = egui::Id::new(("tool-slot", *slot_index));
-                            let tool = slot_tool(ui, app.ui.tool, slot, key);
-                            let sel = slot.contains(&app.ui.tool);
-                            let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
-                            let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
-                            if slot.len() > 1 {
-                                let r = resp.rect;
-                                let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
-                                ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
-                            }
-                            if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
-                                app.ui.tool = tool;
-                            }
-                            // Double-clicking the Hand tool fits the image on screen (Photoshop).
-                            if resp.double_clicked() && tool == Tool::Hand {
-                                app.ui.tool = tool;
-                                // With no document open there is nothing to fit.
-                                let _ = app.run("view.fitOnScreen", json!({}));
-                            }
-                            // Right-click or long-press opens the flyout (Photoshop).
-                            let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
-                            if slot.len() > 1
-                                && let Some(seconds) = held_for
-                                && seconds < 0.35
-                            {
-                                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
-                            }
-                            let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
-                            if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
-                                ui.data_mut(|d| {
-                                    d.insert_temp(flyout_id, (key, resp.rect));
-                                    if long_press {
-                                        d.insert_temp(held_id, key);
-                                    }
-                                });
-                            }
-                            if slot.len() > 1 && long_press {
-                                ui.ctx().request_repaint();
-                            }
-                            if let Some((open_key, anchor)) = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id))
-                                && open_key == key
-                            {
-                                let area = egui::Area::new(key.with("flyout"))
-                                    .order(egui::Order::Foreground)
-                                    .fixed_pos(anchor.right_top() + vec2(6.0, 0.0))
-                                    .show(ui.ctx(), |ui| {
-                                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                            let label_w = slot
-                                                .iter()
-                                                .map(|it| {
-                                                    ui.painter().layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text).size().x
-                                                })
-                                                .fold(0.0f32, f32::max);
-                                            let fw = (label_w + 42.0 + 40.0).max(180.0);
-                                            for &item in slot.iter() {
-                                                let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
-                                                if ir.hovered() {
-                                                    ui.painter().rect_filled(r, 3.0, t.hover);
-                                                }
-                                                if item == tool {
-                                                    ui.painter().rect_filled(
-                                                        Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
-                                                        0.0,
+            egui::ScrollArea::vertical().id_salt("toolbar-columns").show(ui, |ui| {
+                // Pro has no group dividers, so its two columns fill every row across groups.
+                let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
+                for (si, section) in sections.iter().enumerate() {
+                    // Photoshop 2026 draws one uninterrupted column (no group dividers).
+                    if si > 0 && !t.pro {
+                        ui.add_space(4.0);
+                        let (r, _) = ui.allocate_exact_size(vec2(if double { bx * 2.0 + 2.0 } else { bx }, 1.0), Sense::hover());
+                        ui.painter().line_segment([r.left_center() + vec2(8.0, 0.0), r.right_center() - vec2(8.0, 0.0)], Stroke::new(1.0, t.separator));
+                        ui.add_space(4.0);
+                    }
+                    let rows: Vec<&[(usize, Vec<Tool>)]> = if double { section.chunks(2).collect() } else { section.chunks(1).collect() };
+                    for row in rows {
+                        ui.horizontal(|ui| {
+                            for (slot_index, slot) in row.iter() {
+                                let key = egui::Id::new(("tool-slot", *slot_index));
+                                let tool = slot_tool(ui, app.ui.tool, slot, key);
+                                let sel = slot.contains(&app.ui.tool);
+                                let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
+                                let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
+                                if slot.len() > 1 {
+                                    paint_toolbar_flyout_indicator(ui, &t, &resp);
+                                }
+                                if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
+                                    app.ui.tool = tool;
+                                }
+                                // Double-clicking the Hand tool fits the image on screen (Photoshop).
+                                if resp.double_clicked() && tool == Tool::Hand {
+                                    app.ui.tool = tool;
+                                    // With no document open there is nothing to fit.
+                                    let _ = app.run("view.fitOnScreen", json!({}));
+                                }
+                                // Right-click or long-press opens the flyout (Photoshop).
+                                let held_for =
+                                    resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+                                if slot.len() > 1
+                                    && let Some(seconds) = held_for
+                                    && seconds < 0.35
+                                {
+                                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
+                                }
+                                let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
+                                if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
+                                    ui.data_mut(|d| {
+                                        d.insert_temp(flyout_id, (key, resp.rect));
+                                        if long_press {
+                                            d.insert_temp(held_id, key);
+                                        }
+                                    });
+                                }
+                                if slot.len() > 1 && long_press {
+                                    ui.ctx().request_repaint();
+                                }
+                                if let Some((open_key, anchor)) = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id))
+                                    && open_key == key
+                                {
+                                    let area = egui::Area::new(key.with("flyout"))
+                                        .order(egui::Order::Foreground)
+                                        .fixed_pos(anchor.right_top() + vec2(6.0, 0.0))
+                                        .show(ui.ctx(), |ui| {
+                                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                                let label_w = slot
+                                                    .iter()
+                                                    .map(|it| {
+                                                        ui.painter()
+                                                            .layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text)
+                                                            .size()
+                                                            .x
+                                                    })
+                                                    .fold(0.0f32, f32::max);
+                                                let fw = (label_w + 42.0 + 40.0).max(180.0);
+                                                for &item in slot.iter() {
+                                                    let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+                                                    if ir.hovered() {
+                                                        ui.painter().rect_filled(r, 3.0, t.hover);
+                                                    }
+                                                    if item == tool {
+                                                        ui.painter().rect_filled(
+                                                            Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
+                                                            0.0,
+                                                            t.text,
+                                                        );
+                                                    }
+                                                    icons::paint(
+                                                        ui,
+                                                        Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
+                                                        icons::tool_icon(item),
+                                                        14.0,
+                                                        t.icon,
+                                                    );
+                                                    ui.painter().text(
+                                                        pos2(r.left() + 42.0, r.center().y),
+                                                        Align2::LEFT_CENTER,
+                                                        tl!(item.label()),
+                                                        egui::FontId::proportional(12.5),
                                                         t.text,
                                                     );
+                                                    if item.key() != '\0' {
+                                                        ui.painter().text(
+                                                            pos2(r.right() - 8.0, r.center().y),
+                                                            Align2::RIGHT_CENTER,
+                                                            item.key().to_string(),
+                                                            egui::FontId::proportional(12.0),
+                                                            t.text_dim,
+                                                        );
+                                                    }
+                                                    if ir.clicked() {
+                                                        app.ui.tool = item;
+                                                        ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                                    }
                                                 }
-                                                icons::paint(
-                                                    ui,
-                                                    Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
-                                                    icons::tool_icon(item),
-                                                    14.0,
-                                                    t.icon,
-                                                );
-                                                ui.painter().text(
-                                                    pos2(r.left() + 42.0, r.center().y),
-                                                    Align2::LEFT_CENTER,
-                                                    tl!(item.label()),
-                                                    egui::FontId::proportional(12.5),
-                                                    t.text,
-                                                );
-                                                if item.key() != '\0' {
-                                                    ui.painter().text(
-                                                        pos2(r.right() - 8.0, r.center().y),
-                                                        Align2::RIGHT_CENTER,
-                                                        item.key().to_string(),
-                                                        egui::FontId::proportional(12.0),
-                                                        t.text_dim,
-                                                    );
-                                                }
-                                                if ir.clicked() {
-                                                    app.ui.tool = item;
-                                                    ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                }
-                                            }
+                                            });
                                         });
-                                    });
-                                let held_release = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
-                                let clicked_outside = ui.input(|i| i.pointer.any_click()) && !held_release && !area.response.hovered() && !resp.hovered();
-                                if clicked_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                    let held_release = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
+                                    let clicked_outside = ui.input(|i| i.pointer.any_click()) && !held_release && !area.response.hovered() && !resp.hovered();
+                                    if clicked_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                        ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                    }
                                 }
                             }
+                        });
+                    }
+                }
+                let ctx = ui.ctx().clone();
+                if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
+                    let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                }
+                ui.add_space(if t.pro { 8.0 } else { 14.0 });
+                color_chips(app, ui, double);
+                if t.pro {
+                    ui.add_space(8.0);
+
+                    let layout = if double { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
+
+                    ui.with_layout(layout, |ui| {
+                        let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
+                        if icons::button(
+                            ui,
+                            "square-dashed",
+                            bx,
+                            quick_mask,
+                            if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
+                        )
+                        .clicked()
+                        {
+                            let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
                         }
+                        let sm = icons::button(ui, "app-window", bx, false, tl!("Change Screen Mode  (F)"));
+                        paint_toolbar_flyout_indicator(ui, &t, &sm);
+
+                        if sm.clicked() {
+                            let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
+                        }
+                        // Right-click (or long-press) lists the modes, like Photoshop's flyout.
+                        egui::Popup::context_menu(&sm).show(|ui| {
+                            ui.set_min_width(220.0);
+                            for (id, label) in [
+                                ("view.screenMode.standard", tl!("Standard Screen Mode")),
+                                ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
+                                ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
+                            ] {
+                                let on = crate::view_cmds::checked(app, id).unwrap_or(false);
+                                if ui.add(egui::Button::selectable(on, label)).clicked() {
+                                    let _ = crate::menus::invoke(app, &ctx, id, json!({}));
+                                    ui.close();
+                                }
+                            }
+                        });
                     });
                 }
-            }
-            let ctx = ui.ctx().clone();
-            if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
-            }
-            ui.add_space(if t.pro { 8.0 } else { 14.0 });
-            color_chips(app, ui, double);
-            if t.pro {
-                ui.add_space(8.0);
-                let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
-                if icons::button(
-                    ui,
-                    "square-dashed",
-                    bx,
-                    quick_mask,
-                    if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
-                )
-                .clicked()
-                {
-                    let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
-                }
-                let sm = icons::button(ui, "app-window", bx, false, tl!("Change Screen Mode  (F)"));
-                if sm.clicked() {
-                    let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
-                }
-                // Right-click (or long-press) lists the modes, like Photoshop's flyout.
-                egui::Popup::context_menu(&sm).show(|ui| {
-                    ui.set_min_width(220.0);
-                    for (id, label) in [
-                        ("view.screenMode.standard", tl!("Standard Screen Mode")),
-                        ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
-                        ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
-                    ] {
-                        let on = crate::view_cmds::checked(app, id).unwrap_or(false);
-                        if ui.add(egui::Button::selectable(on, label)).clicked() {
-                            let _ = crate::menus::invoke(app, &ctx, id, json!({}));
-                            ui.close();
-                        }
-                    }
-                });
-            }
+            });
         },
     );
 }
 
-/// Does the toolbar need two columns? Height of one column (header, tool slots, Edit Toolbar,
-/// colour chips, Quick Mask and Screen Mode) against the height the toolbar gets.
-pub fn toolbar_needs_double(slots: usize, sections: usize, bx: f32, pro: bool, studio: bool, avail_h: f32) -> bool {
-    let pitch = bx + 3.0;
-    let needed = if pro {
-        // margins + header + slots + "…" + gap + colour chips + gap + 2 buttons
-        16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + chips_height(true, false, false) + 8.0 + 2.0 * pitch
-    } else {
-        16.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + chips_height(false, studio, false)
-    };
-    needed > avail_h
+/// Paints a triangle on the bottom right corner of an icon button to indicate that a toolbar item has a submenu.
+pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: &egui::Response) {
+    let r = resp.rect;
+    let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
+    ui.painter().add(egui::Shape::convex_polygon(tri, tokens.text_faint, Stroke::NONE));
 }
 
 fn c32(c: [f32; 4]) -> Color32 {
@@ -777,9 +778,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .exact_size(if t.pro { 36.0 } else { 42.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::home_button(app, ui);
@@ -806,6 +804,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)) || tool == Tool::QuickSelection {
                     brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
                     crate::brush_picker::settings_toggle(app, ui);
+                    widgets::vline(ui, 22.0);
+                }
+                if tool == Tool::CloneStamp {
+                    let before = app.session.tools.brush.clone();
+                    let mut brush = before.clone();
+                    let width = if t.pro { 62.0 } else { 66.0 };
+                    percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
+                    percent_field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
+                    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                     widgets::vline(ui, 22.0);
                 }
                 if crate::eraser_ui::options_bar(app, ui, tool)
@@ -1009,7 +1016,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::checkbox(ui, &mut app.ui.tool_options.sample_all_layers, tl!("Sample All Layers"));
                         widgets::vline(ui, 22.0);
                         if widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                            let _ = app.run("select.subject", json!({}));
+                            let r = app.run("select.subject", json!({}));
+                            crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
                         }
                         if widgets::secondary_button(ui, tl!("Select and Mask…"), 0.0).clicked() {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
@@ -1315,8 +1323,6 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .exact_size(if t.pro { 24.0 } else { 30.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::status_bar_pro(app, ui);
@@ -1775,25 +1781,29 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // In a narrow panel with long translated labels, drop the "Lock:" text (the icons keep
             // their tooltips) rather than let the Fill label run over the lock icons.
             let gap = ui.spacing().item_spacing.x;
-            let icons_w = if t.pro { 5.0 * 20.0 } else { 22.0 + gap };
+            let icons_w = if t.pro { 5.0 * 20.0 + gap } else { 22.0 + gap };
             let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
             if fits {
                 label(ui, lock_label);
             }
             if t.pro {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                let lk = l.locks;
-                for (key, icon, tip, on) in [
-                    ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
-                    ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
-                    ("position", "move", tl!("Lock position"), lk.position),
-                    ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
-                    ("all", "lock", tl!("Lock all"), lk.all),
-                ] {
-                    if icons::button(ui, icon, 20.0, on, tip).clicked() {
-                        actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
+                // The lock icons touch, but only they: the Fill label keeps the same gap before its
+                // field as Opacity's, so both stack in one right-aligned column (#2085).
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let lk = l.locks;
+                    for (key, icon, tip, on) in [
+                        ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
+                        ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
+                        ("position", "move", tl!("Lock position"), lk.position),
+                        ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
+                        ("all", "lock", tl!("Lock all"), lk.all),
+                    ] {
+                        if icons::button(ui, icon, 20.0, on, tip).clicked() {
+                            actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
+                        }
                     }
-                }
+                });
             }
             if !t.pro {
                 let locked = l.locks.transparency || l.locks.position || l.locks.all;
@@ -1907,7 +1917,10 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         };
         let trash = icons::button(ui, "trash", 26.0, false, tl!(label));
         if trash.clicked() {
-            actions.push((delete.into(), json!({})));
+            // Like Photoshop, ⌥/Alt-click deletes without asking.
+            let confirm = delete == "layer.delete" && !ui.input(|i| i.modifiers.alt);
+            let params = if confirm { json!({"__trash": true}) } else { json!({}) };
+            actions.push((delete.into(), params));
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
         // A click follows the selected thumbnail; name that action for screen readers even
@@ -1924,22 +1937,20 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
         let adj = footer_menu_button(ui, "adjustment-layer", 26.0, tl!("Create new fill or adjustment layer"));
-        egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
+        // Opens on the press like Photoshop's: drag onto an item and release to choose it (#2071).
+        crate::press_menu::show(&adj, |ui, menu| {
             ui.set_min_width(190.0);
             for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
-                if ui.button(tl!(c.label).trim_end_matches('…')).clicked() {
+                if menu.item(ui, tl!(c.label).trim_end_matches('…')) {
                     actions.push((c.id.into(), json!({})));
-                    ui.close();
                 }
             }
             ui.separator();
-            if ui.button(tl!("Solid Color…")).clicked() {
+            if menu.item(ui, tl!("Solid Color…")) {
                 actions.push(("layer.newFillLayer.solidColor".into(), json!({})));
-                ui.close();
             }
-            if ui.button(tl!("Gradient…")).clicked() {
+            if menu.item(ui, tl!("Gradient…")) {
                 actions.push(("layer.newFillLayer.gradient".into(), json!({})));
-                ui.close();
             }
         });
         // Like Photoshop the button never replaces a mask (#2075): with a layer mask it adds a
@@ -1959,17 +1970,15 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             actions.push((cmd.into(), json!({})));
         }
         let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
-        egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {
+        crate::press_menu::show(&fx, |ui, menu| {
             ui.set_min_width(180.0);
-            if ui.button(tl!("Blending Options…")).clicked() {
+            if menu.item(ui, tl!("Blending Options…")) {
                 crate::layer_style::open(app, None);
-                ui.close();
             }
             ui.separator();
             for &(kind, label) in crate::layer_style::KINDS {
-                if ui.button(format!("{}…", tl!(label))).clicked() {
+                if menu.item(ui, format!("{}…", tl!(label))) {
                     crate::layer_style::open(app, Some(kind));
-                    ui.close();
                 }
             }
         });
@@ -2031,18 +2040,6 @@ fn footer_label(command: &str) -> &'static str {
     }
 }
 
-/// A secondary click opens a Layers footer popup, as in Photoshop; a primary click still toggles
-/// it (the `Popup::menu` default this replaces).
-fn footer_menu_right_click(response: &egui::Response) -> Option<egui::SetOpenCommand> {
-    if response.secondary_clicked() {
-        Some(egui::SetOpenCommand::Bool(true))
-    } else if response.clicked() {
-        Some(egui::SetOpenCommand::Toggle)
-    } else {
-        None
-    }
-}
-
 /// The small down-arrow makes it clear that the footer icon expands into a menu.
 fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
     let t = Tokens::get(ui.ctx());
@@ -2052,6 +2049,8 @@ fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
 
 fn footer_menu_button(ui: &mut egui::Ui, icon: &str, size: f32, tip: &str) -> egui::Response {
     let response = icons::button(ui, icon, size, false, tip);
+    // Named for screen readers (and tests) after its tooltip.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     footer_menu_arrow(ui, response.rect);
     response
 }
@@ -2068,6 +2067,7 @@ fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
     let g = ui.painter().layout_job(job);
     ui.painter().galley(r.center() - g.size() / 2.0, g, t.icon);
     footer_menu_arrow(ui, r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     resp.on_hover_text(tip)
 }
 
@@ -2328,6 +2328,13 @@ fn layer_row(
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
+        } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
+            if kind == crate::mask_thumbs_ui::MaskKind::Pixel {
+                actions.push(("ui.maskTarget".into(), json!(true)));
+            }
+            if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
+                actions.push((cmd.into(), val));
+            }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
                 LayerContent::Adjustment(_) | LayerContent::Fill(_) if on(thumb) => "layer.layerContentOptions",
@@ -2514,12 +2521,13 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(st) = app.session.active() else { return };
     let Some(id) = st.active_layer else { return };
-    let Some(layer) = st.doc.layer(id) else { return };
-    // The floating card appears for adjustment and fill layers (their controls live here).
-    if !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    let doc = st.doc.clone();
+    let Some(layer) = doc.layer(id) else { return };
+    // Pixel-mask controls also belong here when their thumbnail is targeted.
+    let mask_target = crate::mask_props_ui::targeted(app, layer);
+    if !mask_target && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
-    let layer = layer.clone();
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     let width = 320.0;
@@ -2578,10 +2586,12 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             // Per-layer ids, so text still being typed for one layer can't commit to the next.
             ui.push_id(id, |ui| {
-                if let LayerContent::Adjustment(adj) = &layer.content {
+                if mask_target {
+                    crate::mask_props_ui::properties(app, ui, layer);
+                } else if let LayerContent::Adjustment(adj) = &layer.content {
                     adjustment_controls(app, ui, id, adj);
                 } else {
-                    layer_controls(app, ui, &layer);
+                    layer_controls(app, ui, layer);
                 }
             });
         });
@@ -2653,6 +2663,14 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No properties"));
         return;
     };
+    let doc = st.doc.clone();
+    if let Some(layer) = st.active_layer.and_then(|id| doc.layer(id))
+        && crate::mask_props_ui::targeted(app, layer)
+    {
+        crate::props_layout::header(ui, layer);
+        crate::mask_props_ui::properties(app, ui, layer);
+        return;
+    }
     // Photoshop shows the Document properties when nothing or the Background layer is selected.
     if crate::doc_props_ui::shows_document(&st.doc, st.active_layer) {
         crate::doc_props_ui::properties(app, ui);
@@ -2660,7 +2678,6 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let Some(id) = st.active_layer else { return };
     // Borrowed from the document snapshot: cloning the layer every frame copied whole groups.
-    let doc = st.doc.clone();
     let Some(layer) = doc.layer(id) else { return };
     // Header: kind icon, layer name and kind (#155); sections below draw their own separators.
     crate::props_layout::header(ui, layer);
@@ -3693,6 +3710,8 @@ mod type_flyout_tests {
         let j = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).find(|slot| slot.contains(&Tool::SpotHealing)).expect("J group");
         assert!(j.contains(&Tool::RedEye), "{j:?}");
         assert_eq!(j.last(), Some(&Tool::RedEye));
+        // Remove leads the flyout, so the slot shows it until another J tool is picked.
+        assert_eq!(j.first(), Some(&Tool::Remove));
     }
 
     #[test]
@@ -4059,48 +4078,6 @@ mod layer_drag_edge_scroll_tests {
 }
 
 #[cfg(test)]
-mod footer_menu_tests {
-    use super::*;
-
-    // Exercise the actual egui pointer path, not just a mocked click flag.
-    #[test]
-    fn right_click_opens_footer_menu_and_primary_click_still_works() {
-        let ctx = egui::Context::default();
-        let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 100.0));
-        let pos = pos2(35.0, 20.0);
-        let frame = |events: Vec<egui::Event>| {
-            let mut opened = false;
-            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), events, ..Default::default() }, |ui| {
-                let response = ui.add_sized([100.0, 28.0], egui::Button::new("Footer menu"));
-                egui::Popup::menu(&response).open_memory(footer_menu_right_click(&response)).show(|ui| {
-                    opened = true;
-                    ui.label("Menu entry");
-                });
-            });
-            output.textures_delta.clear();
-            opened
-        };
-        frame(Vec::new());
-        frame(vec![
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE },
-        ]);
-        assert!(
-            frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }]),
-            "secondary release opens the popup"
-        );
-
-        // A primary click also remains supported by egui::Popup::menu.
-        frame(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
-        frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
-        assert!(
-            frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
-            "primary release still opens the popup"
-        );
-    }
-}
-
-#[cfg(test)]
 mod group_drag_selection_tests {
     use super::*;
 
@@ -4137,3 +4114,7 @@ mod group_drag_selection_tests {
         assert!((uv.width() - 0.25).abs() < 1e-3 && (uv.height() - 1.0).abs() < 1e-3, "{uv:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "mask_props_ui_tests.rs"]
+mod mask_properties_tests;

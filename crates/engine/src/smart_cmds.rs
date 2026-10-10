@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use photocraft_algo::resample::translate_surface;
 use photocraft_algo::transform::Homography;
 use photocraft_color::{BlendMode, PixelFormat};
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartObject, SmartSource};
+use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartContentsId, SmartObject, SmartSource};
 use photocraft_geom::{Affine, Rect, Size};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -33,12 +33,13 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, blend_from_str, layer_param};
 use crate::{EngineError, Result, Session};
 
-/// An open Edit Contents document and the smart object it updates when saved or closed.
+/// An open Edit Contents document and the shared contents it updates when saved or closed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SmartLink {
     pub child: DocId,
     pub parent: DocId,
     pub layer: LayerId,
+    pub contents_id: SmartContentsId,
     /// Actual file opened for an external linked source; absent for embedded PSD data.
     pub source_path: Option<std::path::PathBuf>,
     /// Bytes read when this editor opened (or last saved). Independent editors must not overwrite
@@ -737,6 +738,7 @@ fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         copy.name = doc.copy_name(&src.name);
         if let LayerContent::Smart(sm) = &mut copy.content {
             // Independent contents: resolve to embedded bytes and drop the shared PSD uuid.
+            sm.contents_id = SmartContentsId::fresh();
             if let Some((file_name, bytes)) = source_bytes(&doc.metadata, &sm.source) {
                 sm.source = SmartSource::Embedded { file_name, bytes };
             }
@@ -754,18 +756,36 @@ fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
     p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "pass `path`"))
 }
 
-/// Swaps a smart object's source, keeping its transform and filters, and re-renders.
+/// Instances sharing contents in this document, including those inside groups.
+fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
+    doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents_id).then_some(l.id)).collect()
+}
+
+/// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
 fn set_source(s: &mut Session, p: &Value, label: &str, keep_psd: bool, make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>) -> Result<Value> {
     let id = layer_param(s, p)?;
-    s.edit(label, |doc, _| {
-        let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-        smart_mut(doc, id)?.source = new;
-        if !keep_psd {
-            detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let new = make(&doc.metadata, &smart(doc, id)?.source)?;
+    set_shared_source(s, id, label, keep_psd, new)
+}
+
+// Keep the shared-instance transaction out of the per-command source-builder instantiations.
+fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
+    let (parent, contents_id) = s.edit(label, |doc, _| {
+        let contents_id = smart(doc, id)?.contents_id;
+        for instance in instances(doc, contents_id) {
+            smart_mut(doc, instance)?.source = new.clone();
+            if !keep_psd {
+                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
+            }
+            refresh_or_fail(doc, instance)?;
         }
-        refresh_or_fail(doc, id)?;
-        Ok(json!({"layer": id.0}))
-    })
+        Ok((doc.id, contents_id))
+    })?;
+    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
+    // document open, but the next Edit Contents opens the replacement source.
+    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    Ok(json!({"layer": id.0}))
 }
 
 fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
@@ -789,8 +809,10 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
+    let contents_id = smart(&st.doc, id)?.contents_id;
     // Already open for editing: switch to that document rather than opening another copy.
-    if let Some(index) = s.smart_links.iter().find(|l| l.parent == parent && l.layer == id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
+    if let Some(index) =
+        s.smart_links.iter().find(|l| l.parent == parent && l.contents_id == contents_id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
     {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
@@ -810,11 +832,11 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
     let source_hash = source.path.as_ref().map(|_| blake3::hash(&source.bytes));
-    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, source_path: source.path, source_hash });
+    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id, source_path: source.path, source_hash });
     Ok(json!({"document": index, "parentLayer": id.0}))
 }
 
-/// Writes an Edit Contents document back into its parent smart object (one undoable step in the
+/// Writes an Edit Contents document back into all its parent instances (one undoable step in the
 /// parent) and marks it saved. Returns false if `index` isn't an Edit Contents document.
 pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let Some(st) = s.docs.get(index) else { return Ok(false) };
@@ -826,8 +848,14 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     }
     let state = s.docs.get(parent).ok_or(EngineError::NoDocument)?;
     let doc = &state.doc;
-    let mut layer = doc.layer(link.layer).cloned().ok_or(EngineError::NoLayer(link.layer))?;
-    let original_source = smart(doc, link.layer)?.source.clone();
+    // Deleting the originating instance must not orphan the editor while a shared copy survives.
+    let instance_ids = instances(doc, link.contents_id);
+    let origin = if instance_ids.contains(&link.layer) {
+        link.layer
+    } else {
+        *instance_ids.first().ok_or_else(|| other("the smart object's instances were removed"))?
+    };
+    let original_source = smart(doc, origin)?.source.clone();
     let (file_name, bytes) = if let Some(path) = &link.source_path {
         // A moved/relinked parent must never redirect a child save to a different file.
         let SmartSource::Linked { path: stored } = &original_source else {
@@ -880,8 +908,11 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             }
         }
     } else {
-        layer = refreshed_layer(doc, layer, &file_name, &bytes, false)?;
-        updates.push((parent, vec![layer]));
+        let layers = instance_ids
+            .into_iter()
+            .map(|id| refreshed_layer(doc, doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?, &file_name, &bytes, false))
+            .collect::<Result<Vec<_>>>()?;
+        updates.push((parent, layers));
     }
     if let Some(path) = &link.source_path {
         // Rendering can be expensive: recheck immediately before the atomic replacement too.

@@ -111,6 +111,9 @@ pub struct Stylus {
     pub feed: StylusFeed,
     /// Preferences › Tools › Use Tablet Pressure: off, a pen paints like a mouse.
     pub use_pressure: bool,
+    /// Preferences › Tools › Pressure Curve (`None`: linear), with the points it was built from.
+    pressure_curve: Option<photocraft_engine::prefs::PressureCurve>,
+    curve_points: Vec<[f32; 2]>,
     /// The pen end last seen (`Some(true)` = eraser), for the eraser tool switch.
     end: Option<bool>,
     /// The tool to restore when the pen tip comes back after the eraser end switched tools.
@@ -142,6 +145,8 @@ impl Default for Stylus {
         Self {
             feed: StylusFeed::default(),
             use_pressure: true,
+            pressure_curve: None,
+            curve_points: Vec::new(),
             end: None,
             tool_before_eraser: None,
             touch: None,
@@ -198,7 +203,21 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        self.current.or_else(|| self.feed.get()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+        let s = self.current.or_else(|| self.feed.get()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
+        // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
+        Some(match &self.pressure_curve {
+            Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
+            None => s,
+        })
+    }
+
+    /// Preferences › Tools › Pressure Curve (rebuilt only when the points change).
+    pub fn set_pressure_curve(&mut self, points: &[[f32; 2]]) {
+        if self.curve_points != points {
+            self.curve_points = points.to_vec();
+            let c = photocraft_engine::prefs::PressureCurve::new(points);
+            self.pressure_curve = (!c.is_linear()).then_some(c);
+        }
     }
 
     /// Choose the pen sample for move `k` of the `n` pointer moves this frame delivered: the pen
@@ -378,6 +397,22 @@ mod tests {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
         s.clear_selection();
         assert_eq!(s.pressure(), 0.8, "back to the current sample");
+    }
+
+    #[test]
+    fn the_pressure_curve_reshapes_pen_pressure_but_not_the_mouse() {
+        let mut s = Stylus::default();
+        s.set_pressure_curve(&[[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]);
+        s.feed.set(Some(pen(0.3)));
+        s.update(&[]);
+        assert!((s.pressure() - 0.6).abs() < 1e-5, "{}", s.pressure());
+        s.set_pressure_curve(&[[0.0, 0.0], [1.0, 1.0]]);
+        assert!((s.pressure() - 0.3).abs() < 1e-6, "linear again");
+        // A mouse is full pressure whatever the curve.
+        let mut m = Stylus::default();
+        m.set_pressure_curve(&[[0.0, 0.0], [1.0, 0.2]]);
+        m.update(&[egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+        assert_eq!(m.pressure(), 1.0);
     }
 
     #[test]

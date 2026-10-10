@@ -1649,7 +1649,7 @@ mod tests {
         let written: Rc<RefCell<Vec<String>>> = Rc::default();
         let w = written.clone();
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, _b: &[u8]| {
+            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
                 Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
@@ -1691,7 +1691,7 @@ mod tests {
         let mut app = PhotocraftApp::new(
             photocraft_engine::Session::new(),
             crate::Services {
-                import: Some(Box::new(|name, _| {
+                import: Some(Box::new(|name, _, _max_svg_group_depth| {
                     Ok((
                         photocraft_doc::Document::new(
                             name,

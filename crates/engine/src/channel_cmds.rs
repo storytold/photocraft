@@ -579,6 +579,7 @@ fn routed(id: &str) -> bool {
                 | "paint.smudge"
                 | "paint.historyBrush"
                 | "paint.redEye"
+                | "paint.remove"
         )
 }
 

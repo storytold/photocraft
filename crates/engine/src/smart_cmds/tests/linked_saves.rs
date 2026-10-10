@@ -199,3 +199,24 @@ fn explicit_discard_closes_linked_or_embedded_contents_without_saveback() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[test]
+fn linked_contents_save_survives_deleting_the_originating_duplicate() {
+    let (mut s, path, original) = linked_session();
+    let duplicate = LayerId(s.execute("layer.duplicate", json!({"layer": original.0})).unwrap()["layer"].as_u64().unwrap());
+    let child = open_child(&mut s, 0, original);
+    s.set_active(0);
+    s.execute("layer.delete", json!({"layer": original.0})).unwrap();
+    let placement = smart(&s.active().unwrap().doc, duplicate).unwrap().transform;
+    s.set_active(child);
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+    s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+    assert!(!s.active().unwrap().is_dirty());
+    let saved = decode_source("poster.pcraft", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved.layers[0].opacity, 0.5);
+    let sm = smart(&s.documents()[0].doc, duplicate).unwrap();
+    assert_eq!(sm.transform, placement);
+    assert_eq!(sm.source, SmartSource::Linked { path: path.to_string_lossy().into_owned() });
+    assert!((sm.cache.as_ref().unwrap().rgba(-5, 6)[3] - 0.5).abs() < 0.01);
+    std::fs::remove_file(path).unwrap();
+}
