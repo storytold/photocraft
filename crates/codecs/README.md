@@ -69,12 +69,15 @@ the same.
 * **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `photocraft-heif` crate
   behind the non-default `heif` feature (official PhotoCraft builds enable it; distributors choose).
   Without it, HEIF is still detected and decoding returns `CodecError::Unsupported` ("HEIC/HEIF
-  support isn't included in this build"). iPhone and Mac photos decode with `heic-rs` (pure Rust, no `unsafe`):
-  single pictures and grid-tiled photos, 8 to 12 bits, auxiliary alpha, ICC, EXIF and XMP. The
+  support isn't included in this build"). iPhone, Mac and camera photos decode with
+  [`heic-decoder`](https://crates.io/crates/heic-decoder) (pure Rust, no `unsafe`,
+  bit-exact against the HEVC reference decoder): single pictures and grid-tiled photos, 8 to 12 bits,
+  4:2:0, 4:2:2, 4:4:4 and monochrome, auxiliary alpha, ICC, EXIF and XMP. The
   container's `irot`/`imir`/`clap` are applied and EXIF Orientation is rewritten to 1 (HEIF's EXIF
   tag only repeats the container's, and applying both would turn the photo twice). Grayscale
-  decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
-  4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
+  decodes to RGB. Image sequences open at their first sync frame; identity derivations decode.
+  Overlays, AVC and layered HEVC, and HEVC range-extension coding tools (RDPCM, cross-component
+  prediction…) return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
   needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated

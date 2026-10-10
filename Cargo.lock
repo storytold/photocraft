@@ -2321,12 +2321,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "heic-rs"
-version = "0.1.1"
+name = "heic-decoder"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adf9dde634bb6d5b718bacd01bef80192f2334306b2f785519a0136cca7b9618"
+checksum = "102c786cb378778a8f44f640382f52eea3142e01e9ce22e75b515844019c1c3c"
 dependencies = [
  "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4414,7 +4415,7 @@ dependencies = [
 name = "photocraft-heif"
 version = "0.6.0"
 dependencies = [
- "heic-rs",
+ "heic-decoder",
 ]
 
 [[package]]

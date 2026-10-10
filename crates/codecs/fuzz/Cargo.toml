@@ -16,7 +16,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 photocraft-codecs = { path = "..", features = ["heif"] }
 # Called directly too: the codec turns its panics into errors (see decode_heif.rs).
-heic-rs = "=0.1.1"
+heic-decoder = "=0.1.0"
 
 [profile.release]
 debug = 1

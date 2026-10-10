@@ -18,9 +18,12 @@ pub const PHOTOCRAFT_CORPUS_COMMIT: &str = "f5b1178cab15309e05b7b504545df3c701f6
 pub const PSD_TOOLS_COMMIT: &str = "96eb134c17b2c65edf4c4151c0f00b802ada86c2";
 /// https://github.com/Agamnentzar/ag-psd (MIT): `test/` (master, 2026-07-02).
 pub const AG_PSD_COMMIT: &str = "387049670cb89b88fb8fe1b7c01aeacf98dd2e3b";
-/// https://github.com/tbraun96/heic-rs (MIT OR Apache-2.0): `tests/fixtures` at the v0.1.1 tag, the
-/// version photocraft-heif pins (2026-09-12).
+/// https://github.com/tbraun96/heic-rs (MIT OR Apache-2.0): `tests/fixtures` at the v0.1.1 tag
+/// (2026-09-12): Apple-encoded files with Apple's decodes as references.
 pub const HEIC_RS_COMMIT: &str = "4f0d4df474c773dfc3b14fa80e7219be6898866e";
+/// https://github.com/Multipad-cyber/heic-decoder-rust (MIT OR Apache-2.0): `tests/fixtures` at the
+/// commit published as heic-decoder 0.1.0 (2026-10-09): original HM-encoded files with references.
+pub const HEIC_DECODER_COMMIT: &str = "e941ecbe405b34aef7e8afe97525af2ca683a8d9";
 /// https://github.com/bigcat88/pillow_heif (BSD-3-Clause): `tests/images` (master, 2026-09-25).
 pub const PILLOW_HEIF_COMMIT: &str = "b16be1196dfa465a342d68894696e685ca3655cb";
 /// https://github.com/AcademySoftwareFoundation/openexr (BSD-3-Clause): `src/test/bin/test_images`
@@ -114,8 +117,9 @@ pub const PSD_MIXED: PinnedCorpus = PinnedCorpus {
 
 /// `corpus/heif`: a few small HEIC/HEIF files for the `heif` feature's tests. heic-rs's
 /// checkerboards, RGB strips and a grid-tiled photo with EXIF and XMP (synthetic pixels encoded by
-/// macOS `sips`, each `.ref.png` Apple's own decode), and pillow-heif's 10-bit RGBA file with the
-/// 16-bit PNG it was encoded from. The manifest selects the files.
+/// macOS `sips`, each `.ref.png` Apple's own decode), pillow-heif's 10-bit RGBA file with the
+/// 16-bit PNG it was encoded from, and heic-decoder's colour-signalling, 12-bit and 4:4:4 files
+/// (each `-rgb8.bin` a float64 RGB reference computed from HM output). The manifest selects the files.
 pub const HEIF: PinnedCorpus = PinnedCorpus {
     name: "heif",
     dest: "heif",
@@ -128,6 +132,13 @@ pub const HEIF: PinnedCorpus = PinnedCorpus {
             extras: &[("LICENSE-MIT", "heic-rs/LICENSE-MIT"), ("LICENSE-APACHE", "heic-rs/LICENSE-APACHE")],
         },
         Upstream {
+            prefix: "heic-decoder/",
+            repo: "Multipad-cyber/heic-decoder-rust",
+            commit: HEIC_DECODER_COMMIT,
+            subdir: "tests/fixtures",
+            extras: &[("LICENSE-MIT", "heic-decoder/LICENSE-MIT"), ("LICENSE-APACHE", "heic-decoder/LICENSE-APACHE")],
+        },
+        Upstream {
             prefix: "pillow-heif/",
             repo: "bigcat88/pillow_heif",
             commit: PILLOW_HEIF_COMMIT,
@@ -136,12 +147,13 @@ pub const HEIF: PinnedCorpus = PinnedCorpus {
         },
     ],
     manifest: "xtask/heif-corpus.sha256",
-    exts: &["heic", "heif", "png"],
+    exts: &["heic", "heif", "png", "bin"],
     subset: true,
     sources_md: |c| {
         format!(
             "# HEIF test corpus\n\nSmall files selected from https://github.com/tbraun96/heic-rs/tree/{HEIC_RS_COMMIT}/tests/fixtures \
-             (`heic-rs/`, MIT OR Apache-2.0, Thomas Braun) and https://github.com/bigcat88/pillow_heif/tree/{PILLOW_HEIF_COMMIT}/tests/images \
+             (`heic-rs/`, MIT OR Apache-2.0, Thomas Braun), https://github.com/Multipad-cyber/heic-decoder-rust/tree/{HEIC_DECODER_COMMIT}/tests/fixtures \
+             (`heic-decoder/`, MIT OR Apache-2.0, heic-decoder contributors) and https://github.com/bigcat88/pillow_heif/tree/{PILLOW_HEIF_COMMIT}/tests/images \
              (`pillow-heif/`, BSD-3-Clause, Pillow-Heif contributors), unmodified; licences next to them. Selected by and sha256-verified \
              against `{}` by `cargo xtask corpus --heif`. Gitignored; never commit these files.\n",
             c.manifest

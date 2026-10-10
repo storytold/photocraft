@@ -1,6 +1,6 @@
 //! HEIF / HEIC (the iPhone and Mac photo format), read-only: see [`crate::ASYMMETRIC_EXCEPTIONS`].
 //!
-//! Decoding lives in the optional `photocraft-heif` crate (heic-rs, a pure-Rust HEVC
+//! Decoding lives in the optional `photocraft-heif` crate (heic-decoder, a pure-Rust HEVC
 //! still-picture decoder), enabled by this crate's `heif` feature. Without it, HEIF files are
 //! still detected and opening one is an [`CodecError::Unsupported`] error, never a panic.
 //!
@@ -77,13 +77,14 @@ mod tests {
     #[test]
     fn with_the_feature_heif_is_readable_and_errors_map() {
         assert!(crate::caps(F).read);
+        // A sequence brand with neither a still image (`meta`) nor a track (`moov`).
         let r = crate::decode(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc");
-        assert!(matches!(&r, Err(CodecError::Unsupported { format: Format::Heif, reason }) if reason.contains("sequence")), "{r:?}");
+        assert!(matches!(&r, Err(CodecError::Malformed { format: Format::Heif, message }) if message.contains("meta")), "{r:?}");
         assert!(matches!(crate::decode_as(F, b""), Err(CodecError::Malformed { .. } | CodecError::Unsupported { .. })));
     }
 
-    /// Found by the `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice out of range
-    /// (`boxes.rs:130`, "slice index starts at 24 but ends at 16"). It must be an error, not a crash.
+    /// Found by the `decode_heif` fuzz target: a malformed box made heic-rs 0.1.1, the previous
+    /// decoder, slice out of range. Kept as a regression input: it must be an error, not a crash.
     #[cfg(feature = "heif")]
     const HEIC_RS_BOX_PANIC: [u8; 72] = [
         0x00, 0x00, 0x00, 0x24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x69, 0x66, 0x31, 0x4d, 0x69, 0x50, 0x72, 0x6d,
@@ -93,7 +94,7 @@ mod tests {
 
     #[cfg(feature = "heif")]
     #[test]
-    fn a_heic_rs_panic_is_a_malformed_file_error() {
+    fn a_malformed_box_is_a_malformed_file_error() {
         assert_eq!(crate::detect(&HEIC_RS_BOX_PANIC), Some(Format::Heif));
         for opts in [crate::DecodeOptions::default(), crate::DecodeOptions { keep_orientation: true, ..Default::default() }] {
             let r = crate::decode_with(&HEIC_RS_BOX_PANIC, &opts);
