@@ -984,7 +984,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             // restores it (or the factory defaults before the first Make).
             let page_kind = sel_kind != BLENDING && entry(f, &selected).is_some();
             ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            // Wrap: translated labels (ru, de) can be wider than the page column.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min).with_main_wrap(true), |ui| {
                 ui.add_enabled_ui(page_kind, |ui| {
                     if crate::widgets::secondary_button(ui, tl!("Reset to Default"), 130.0).clicked()
                         && let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": sel_kind}))
