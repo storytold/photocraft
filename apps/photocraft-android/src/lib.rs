@@ -88,6 +88,7 @@ fn android_main(android_app: AndroidApp) {
             documents_dir,
             dialogs,
             picker: None,
+            touch_recovery: Default::default(),
         }))
     }));
 
@@ -104,9 +105,19 @@ struct AndroidShell {
     documents_dir: Option<PathBuf>,
     dialogs: PendingDialogs,
     picker: Option<picker::Picker>,
+    touch_recovery: photocraft_ui_egui::stylus::AndroidTouchRecovery,
 }
 
 impl eframe::App for AndroidShell {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Forward the editor's normal input processing: AndroidShell is an
+        // eframe::App wrapper, so it must not drop the inner app's hook.
+        <PhotocraftApp as eframe::App>::raw_input_hook(&mut self.app, ctx, raw);
+        // An Android touch cancellation only emits PointerGone in egui-winit.
+        // Synthesize the *missing release*, not a second normal touch stream.
+        self.touch_recovery.repair(raw);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.app.logic(ctx, frame);
     }
