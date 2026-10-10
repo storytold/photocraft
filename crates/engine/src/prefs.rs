@@ -914,6 +914,10 @@ pub struct Preferences {
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,
+    /// The Brush Preset picker's remembered view: which card parts show (name, stroke, tip) and
+    /// the footer slider's card scale, saved as the user changes them and restored at launch.
+    /// JSON owned by the shell.
+    pub brush_picker: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
 }

@@ -883,6 +883,10 @@ pub struct UiState {
     /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
     #[serde(default = "crate::brush_picker::list_state")]
     pub brush_picker_list: crate::brush_panel::BrushesPanelState,
+    /// The Brush Preset picker's content size, once its corner grip was dragged
+    /// ([`crate::brush_picker::DEFAULT_SIZE`] before that).
+    #[serde(default)]
+    pub brush_picker_size: Option<[f32; 2]>,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -1025,6 +1029,7 @@ impl Default for UiState {
             vector_mask_target: false,
             brush_picker: None,
             brush_picker_list: crate::brush_picker::list_state(),
+            brush_picker_size: None,
             layer_menu: None,
             canvas_tool_menu: None,
             brush_tool: Tool::Brush,

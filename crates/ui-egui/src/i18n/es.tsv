@@ -2010,8 +2010,9 @@
 	Brush Preset Options	Opciones de preajustes de pincel
 	Group name	Nombre del grupo
 	Brush name	Nombre del pincel
-	Grid view	Vista de cuadrícula
-	List view	Vista de lista
+	Brush Name	Nombre del pincel
+	Brush Stroke	Trazo de pincel
+	Brush Tip	Punta del pincel
 	Off: the speed of the pointer sets the spacing	Desactivado: la velocidad del puntero establece el espaciado
 	Tilt Scale	Escala de inclinación
 	Brush Projection	Proyección del pincel

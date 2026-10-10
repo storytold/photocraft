@@ -2069,8 +2069,9 @@ cameraRaw	Blending	混合
 	Brush Preset Options	画笔预设选项
 	Group name	组名称
 	Brush name	画笔名称
-	Grid view	网格视图
-	List view	列表视图
+	Brush Name	画笔名称
+	Brush Stroke	画笔描边
+	Brush Tip	画笔笔尖
 	Off: the speed of the pointer sets the spacing	关闭：由指针移动速度决定间距
 	Tilt Scale	倾斜缩放
 	Brush Projection	画笔投影
