@@ -227,7 +227,7 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 
 /// Pointer input for the Ruler, Count and Note tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    let tool = app.ui.tool;
+    let tool = app.active_tool();
     if !matches!(tool, Tool::Ruler | Tool::Count | Tool::Note) {
         return false;
     }

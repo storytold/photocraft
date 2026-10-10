@@ -930,6 +930,17 @@
 	Delete current channel	현재 채널 삭제
 	Delete current state	현재 상태 삭제
 	Delete effect layer	효과 레이어 삭제
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	레이어 ‘{name}’을(를) 삭제하시겠습니까?
+	Delete {count} layers? {names}	레이어 {count}개를 삭제하시겠습니까? {names}
+	Delete layer?	레이어를 삭제하시겠습니까?
+	The document is closed	문서가 닫혔습니다
+	The document or selected layers changed. Please request deletion again.	문서 또는 선택한 레이어가 변경되었습니다. 삭제를 다시 요청하세요.
+	Missing delete command	삭제 명령이 없습니다
+	Invalid delete command	잘못된 삭제 명령입니다
+	Layer deleted, but confirmation preference could not be saved: {error}	레이어가 삭제되었지만 확인 설정을 저장할 수 없습니다: {error}
+
 	Delete layer	레이어 삭제
 	Delete layer comp	레이어 구성 요소 삭제
 	Delete note	메모 삭제
@@ -1584,6 +1595,7 @@
 	Millimeters	밀리미터
 	Mobile	모바일
 	Move Tool	이동 도구
+	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -1628,6 +1640,7 @@
 	Quick Selection Tool	빠른 선택 도구
 	Radial	방사형
 	Rasterize Layer	레이어 래스터화
+	Rasterize Layers	레이어 래스터화
 	Ratio	비율
 	Recent	최근 항목
 	Rectangle Tool	사각형 도구
@@ -2884,6 +2897,9 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+
+	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
 	Rule of Thirds	삼등분 법칙
 	Golden Ratio	황금 비율
 	Golden Spiral	황금 나선
@@ -2923,6 +2939,8 @@ fontWeight	Italic	기울임
 	Create Ellipse	타원 만들기
 	Create Triangle	삼각형 만들기
 	Create Polygon	다각형 만들기
+	Pressure curve	필압 곡선
+	Click to add a point, right-click to remove	클릭하여 점 추가, 마우스 오른쪽 클릭으로 제거
 	Some brush presets could not be loaded	일부 브러시 사전 설정을 불러오지 못했습니다
 	Retry saving presets	사전 설정 저장 다시 시도
 	Brush preset changes are not saved: {error}	브러시 사전 설정 변경 내용이 저장되지 않았습니다: {error}
@@ -2935,3 +2953,7 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
+	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
+	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
+	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
