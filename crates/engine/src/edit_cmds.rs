@@ -116,7 +116,12 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     }
     out.try_write_region(area, &px).map_err(|e| EngineError::Other(format!("not enough memory while copying pixels ({e}); the document was not changed")))?;
     out.prune();
-    let bounds = out.content_bounds();
+    // A marquee (including Select All) defines the clipboard image's frame, even when
+    // its outer pixels are transparent. Trimming to content_bounds() here loses that
+    // transparent padding in the OS clipboard and shifts composites between apps (#2598).
+    // With no selection, Copy still uses the layer's tight content bounds.
+    let content = out.content_bounds();
+    let bounds = if content.is_empty() { Rect::EMPTY } else if sel.is_some() { area } else { content };
     Ok(Clip { surface: out, bounds })
 }
 
@@ -797,6 +802,51 @@ mod tests {
         s.execute("edit.paste", json!({"center": [70, 70]})).unwrap();
         assert_eq!(active_bounds(&s), Rect::new(60, 60, 80, 80));
         assert_eq!(s.active().unwrap().doc.layers.len(), 4);
+    }
+
+    #[test]
+    fn copying_a_selection_preserves_its_transparent_frame_for_other_apps() {
+        let mut s = session(); // 100x100, red content only at (10,10)-(50,30).
+        // Without a selection, Copy retains the original tight content behavior.
+        let plain = s.execute("edit.copy", json!({})).unwrap();
+        assert_eq!(plain["bounds"], json!([10, 10, 40, 20]));
+
+        // Select All is the user's explicit way to copy the original canvas footprint.
+        s.execute("select.all", json!({})).unwrap();
+        let full = s.execute("edit.copy", json!({})).unwrap();
+        assert_eq!(full["bounds"], json!([0, 0, 100, 100]));
+        let clip = s.clipboard.as_ref().unwrap();
+        assert_eq!(clip.bounds, Rect::new(0, 0, 100, 100));
+        assert_eq!(clip.surface.rgba(0, 0)[3], 0.0, "transparent corner stays transparent");
+        assert!(clip.surface.rgba(20, 20)[0] > 0.99, "original pixels survive");
+
+        // Exporting this clip to the OS clipboard reads the full 100x100 frame. New from
+        // Clipboard uses the same bounds and retains the content's relative position.
+        let created = s.execute("file.newFromClipboard", json!({})).unwrap();
+        assert_eq!((created["width"].as_u64(), created["height"].as_u64()), (Some(100), Some(100)));
+        let layer = s.active().unwrap().doc.layers.last().unwrap();
+        assert_eq!(layer.surface().unwrap().content_bounds(), Rect::new(10, 10, 50, 30));
+
+        // A smaller selection retains its own transparent padding, not the whole canvas.
+        s.set_active(0);
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 5, "y": 6, "width": 55, "height": 30})).unwrap();
+        let part = s.execute("edit.copy", json!({})).unwrap();
+        assert_eq!(part["bounds"], json!([5, 6, 55, 30]));
+        let clip = s.clipboard.as_ref().unwrap();
+        assert_eq!(clip.surface.rgba(5, 6)[3], 0.0);
+        assert!(clip.surface.rgba(20, 20)[0] > 0.99);
+    }
+
+    #[test]
+    fn copying_an_empty_selection_still_reports_no_pixels() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32, "background": "transparent"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        let result = s.execute("edit.copy", json!({}));
+        assert!(result.is_err(), "Select All cannot copy an entirely empty layer");
+        assert!(s.clipboard.is_none());
     }
 
     #[test]
