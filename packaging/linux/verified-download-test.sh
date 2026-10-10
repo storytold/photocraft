@@ -27,7 +27,7 @@ download_verified "file://$TMP/unavailable" "$cache" "$expected" true || fail "o
 chmod 644 "$cache"
 chmod() { return 1; }
 if err="$(download_verified "file://$TMP/unavailable" "$cache" "$expected" true 2>&1)"; then fail "unfixable cache was accepted"; fi
-case "$err" in *"verified asset is not executable and cannot be chmod'd"*) ;; *) fail "wrong cache error: $err" ;; esac
+case "$err" in *"verified asset is not executable and cannot be chmod'd: $cache"*) ;; *) fail "wrong cache error: $err" ;; esac
 unset -f chmod
 chmod 755 "$cache"
 
@@ -51,6 +51,8 @@ download_verified "file://$source_asset" "$fresh_runtime" "$expected" || fail "f
 cmp -s "$source_asset" "$fresh_runtime" || fail "fresh runtime differs from verified asset"
 [ -r "$fresh_runtime" ] || fail "fresh runtime is not readable"
 [ ! -x "$fresh_runtime" ] || fail "fresh runtime was made executable"
+mode="$(stat -c %a "$fresh_runtime" 2>/dev/null || stat -f %Lp "$fresh_runtime")"
+[ "$mode" = 644 ] || fail "fresh runtime mode is $mode, expected 644"
 
 # A corrupt cache is replaced only by bytes with the pinned digest.
 printf 'corrupt' >"$cache"
