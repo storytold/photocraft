@@ -154,6 +154,107 @@ fn layered_save_respects_explicit_jpeg_choices() {
     }
 }
 
+/// The paths the writer was given.
+type Written = Rc<RefCell<Vec<String>>>;
+/// The JPEG quality of each save, as the exporter was given it.
+type Qualities = Rc<RefCell<Vec<Option<u8>>>>;
+
+/// A flat image imported from `name`, as opened from `path`, in an app whose exporter records the
+/// JPEG quality of each save (#2223).
+fn flat_app(name: &str, path: &str) -> (PhotocraftApp, Open, Written, Qualities) {
+    let (mut app, open, written) = app();
+    let qualities: Qualities = Default::default();
+    let q = qualities.clone();
+    app.services.export = Some(Box::new(move |_: &photocraft_doc::Document, _: &str, s: &crate::ExportSettings| {
+        q.borrow_mut().push(s.jpeg_quality);
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, name, &Default::default()).unwrap().bytes;
+    let doc = photocraft_io::import(name, &bytes).unwrap().document;
+    app.session.add_document(doc, Some(path.to_string()));
+    // An edit, so there is something to save.
+    app.run("edit.fill", json!({"contents": "black"})).unwrap();
+    (app, open, written, qualities)
+}
+
+/// File › Save on a flat PNG that is still one plain layer writes over it, with no dialog, as
+/// Photoshop does (#2223).
+#[test]
+fn save_writes_a_flat_png_over_itself() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written, _) = flat_app("shot.PNG", "/pics/shot.PNG");
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no save dialog");
+    assert_eq!(*written.borrow(), ["/pics/shot.PNG"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/shot.PNG"));
+}
+
+/// File › Save on a flat JPEG that is still one plain layer asks the JPEG Options (quality) and
+/// then writes over it, as Photoshop does; Cancel writes nothing (#2223).
+#[test]
+fn save_asks_jpeg_options_then_writes_a_flat_jpeg_over_itself() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written, qualities) = flat_app("photo.jpg", "/pics/photo.jpg");
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no save dialog");
+    assert!(written.borrow().is_empty(), "nothing written before the options are answered");
+    let want = app.session.prefs().export.jpeg_quality.clamp(1, 100) as u8;
+    assert_eq!(crate::jpeg_options_ui::pending(&app).map(|p| p.quality), Some(want), "JPEG Options start at the export quality");
+    // Cancel: nothing is written and the prompt closes.
+    crate::jpeg_options_ui::finish(&mut app, &ctx, false);
+    assert!(crate::jpeg_options_ui::pending(&app).is_none());
+    assert!(written.borrow().is_empty());
+    // OK at another quality: written over the JPEG with that quality.
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    if let Some(p) = app.jpeg_options.as_mut() {
+        p.quality = 42;
+    }
+    crate::jpeg_options_ui::finish(&mut app, &ctx, true);
+    assert_eq!(*written.borrow(), ["/pics/photo.jpg"]);
+    assert_eq!(qualities.borrow().last().copied().flatten(), Some(42));
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/photo.jpg"));
+    // Once layers are added, Save asks where to save a PSD instead (#2234).
+    app.run("layer.new.layer", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(crate::jpeg_options_ui::pending(&app).is_none());
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/photo.psd"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// Checked in Photoshop: a JPEG whose Background became a normal layer still saves as a flat
+/// JPEG; once some pixels are deleted (transparency a JPEG can't keep), Save asks where to save,
+/// defaulting to PNG (#2223).
+#[test]
+fn a_jpeg_with_transparency_saves_as_png() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written, _) = flat_app("photo.jpg", "/pics/photo.jpg");
+    app.run("layer.new.layerFromBackground", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "a converted Background still saves flat");
+    assert!(crate::jpeg_options_ui::pending(&app).is_some(), "with the JPEG Options");
+    crate::jpeg_options_ui::finish(&mut app, &ctx, false);
+    // Delete some pixels: the lone layer is now partly transparent.
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+    app.run("edit.clear", json!({})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(crate::jpeg_options_ui::pending(&app).is_none());
+    assert!(
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/photo.png"),
+        "{:?}",
+        open.borrow().first().map(|(r, _)| r.clone())
+    );
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert!(written.borrow().is_empty());
+}
+
 /// The user answers the open dialog, from the dialog's own thread.
 fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
     let (_, reply) = open.borrow_mut().pop().expect("a dialog is open");

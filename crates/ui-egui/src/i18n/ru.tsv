@@ -2437,6 +2437,7 @@ cameraRaw	Roughness	Неровность
 	Structure:	Структура:
 	Content-Aware Move Tool	Перемещение с учётом содержимого
 	TIFF Options	Параметры TIFF
+	JPEG Options	Параметры JPEG
 	Including layers will increase file size.	Включение слоёв увеличит размер файла.
 	Discard Layers and Save a Copy	Удалить слои и сохранить копию
 	Don't show again	Больше не показывать

@@ -2140,6 +2140,7 @@ cameraRaw	Blending	混合
 	Structure:	結構：
 	Content-Aware Move Tool	內容感知移動工具
 	TIFF Options	TIFF 選項
+	JPEG Options	JPEG 選項
 	Including layers will increase file size.	包含圖層會增加檔案大小。
 	Discard Layers and Save a Copy	放棄圖層並儲存拷貝
 	Don't show again	不再顯示

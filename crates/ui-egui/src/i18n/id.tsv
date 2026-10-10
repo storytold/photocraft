@@ -2575,6 +2575,7 @@ cameraRaw	Blending	Pembauran
 	Structure:	Struktur:
 	Content-Aware Move Tool	Alat Content-Aware Move
 	TIFF Options	Opsi TIFF
+	JPEG Options	Opsi JPEG
 	Including layers will increase file size.	Menyertakan layer akan memperbesar ukuran file.
 	Discard Layers and Save a Copy	Buang Layer dan Simpan Salinan
 	Don't show again	Jangan tampilkan lagi

@@ -2591,6 +2591,7 @@ cameraRaw	Whites	Brancos
 	Structure:	Estrutura:
 	Content-Aware Move Tool	Ferramenta Mover com reconhecimento de conteúdo
 	TIFF Options	Opções de TIFF
+	JPEG Options	Opções de JPEG
 	Including layers will increase file size.	Incluir as camadas aumentará o tamanho do arquivo.
 	Discard Layers and Save a Copy	Descartar camadas e salvar uma cópia
 	Don't show again	Não mostrar novamente
