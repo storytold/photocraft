@@ -165,24 +165,47 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let bpp = num(f, "__bytesPerPixel").max(1.0);
     let resample = f.get("resample").and_then(Value::as_str).unwrap_or("bicubic").to_string();
     let resampling = resample != "none";
+    if !resampling {
+        // Without resampling the pixel count is fixed (`image.imageSize` keeps it): only the
+        // resolution changes, so the readouts and fields always show the current pixels.
+        f.insert("width".into(), json!(ow));
+        f.insert("height".into(), json!(oh));
+    }
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
     info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
-    let mut constrain = f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
+    // Photoshop keeps width and height linked while Resample is off.
+    let mut constrain = !resampling || f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
+    // With Resample off, a size in pixels or percent can't change (Photoshop disables those
+    // fields); a physical size (inches, cm…) changes the resolution instead.
+    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
+    let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
-        let c = dim_field(ui, f, "width", "__origW", "is-w");
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
-        let c = dim_field(ui, f, "height", "__origH", "is-h");
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
         unit_dropdown(ui, f, "is-unit-h");
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
+    if !resampling && (w_changed || h_changed) {
+        // The edited side's new pixel count at the current resolution gives its new physical size;
+        // keep the pixels and fit the resolution to that size instead.
+        let (key, orig) = if w_changed { ("width", ow) } else { ("height", oh) };
+        let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
+        let px = num(f, key);
+        if px > 0.0 && px.is_finite() {
+            f.insert("resolution".into(), json!((res * orig / px).clamp(1.0, 30000.0)));
+        }
+        f.insert("width".into(), json!(ow));
+        f.insert("height".into(), json!(oh));
+    }
     // `dim_field` allows negatives for Canvas Size's relative mode, but an image is at least
     // one pixel: clamp here so the preview shows the size `image.imageSize` will apply.
     for (key, changed) in [("width", w_changed), ("height", h_changed)] {
@@ -206,7 +229,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let chain = Rect::from_center_size(pos2(bracket.left() + 8.0, bracket.center().y), vec2(14.0, 14.0));
     ui.painter().rect_filled(chain, 2.0, if link.hovered() { t.hover } else { Color32::TRANSPARENT });
     crate::icons::paint(ui, chain, if constrain { "link" } else { "unlink" }, 11.0, col);
-    if link.on_hover_text(tl!("Constrain proportions")).clicked() {
+    if link.on_hover_text(tl!("Constrain proportions")).clicked() && resampling {
         constrain = !constrain;
         f.insert("__constrain".into(), json!(constrain));
     }
@@ -434,5 +457,74 @@ mod tests {
         assert_eq!((num(&f, "width"), num(&f, "height")), (1.0, 1.0), "{f:?}");
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(1, 1));
+    }
+
+    /// An Image Size dialog for a 100 x 50 px, 72 ppi document with Resample off, shown in `unit`.
+    fn resample_off_dialog(unit: &str) -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 50, "resolution": 72})).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.imageSize").unwrap();
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("resample".into(), json!("none"));
+        d.fields.insert("__unit".into(), json!(unit));
+        h.run_steps(3);
+        (h, id)
+    }
+
+    /// Types `text` into the Width field and leaves it with Tab.
+    fn type_width(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, text: &str) {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let width = h.query_all_by_role(Role::SpinButton).next().map(|n| n.rect()).expect("the Width field");
+        h.hover_at(width.center());
+        h.run_steps(1);
+        h.drag_at(width.center());
+        h.run_steps(1);
+        h.drop_at(width.center());
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+    }
+
+    fn fields(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> Map<String, Value> {
+        h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open")
+    }
+
+    /// #2393: with Resample off, a pixel Width can't be edited and the readouts keep showing the
+    /// pixels OK keeps (they showed "200 px × 50 px" and "39K (was 20K)").
+    #[test]
+    fn resample_off_keeps_pixel_dimensions_in_the_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let (mut h, id) = resample_off_dialog("px");
+        type_width(&mut h, "200");
+        let f = fields(&h);
+        assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (100.0, 50.0, 72.0), "{f:?}");
+        assert!(h.query_by_label("100 px × 50 px").is_some(), "the Dimensions line shows the kept pixels");
+        assert!(h.query_by_label_contains("20K (was 20K)").is_some(), "the Image Size estimate is unchanged");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(100, 50), 72.0));
+    }
+
+    /// With Resample off, a physical Width changes the resolution and keeps the pixels (Photoshop):
+    /// 100 px at 72 ppi is 1.39 in; 2 in wide is 50 ppi.
+    #[test]
+    fn resample_off_physical_width_changes_the_resolution() {
+        let (mut h, id) = resample_off_dialog("in");
+        type_width(&mut h, "2");
+        let f = fields(&h);
+        assert_eq!((num(&f, "width"), num(&f, "height")), (100.0, 50.0), "{f:?}");
+        assert!((num(&f, "resolution") - 50.0).abs() < 1e-3, "{f:?}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!(doc.size, photocraft_doc::Size::new(100, 50));
+        assert!((doc.resolution_dpi - 50.0).abs() < 1e-3, "{}", doc.resolution_dpi);
     }
 }
