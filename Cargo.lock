@@ -4293,6 +4293,7 @@ dependencies = [
  "png 0.18.1",
  "proptest",
  "rayon",
+ "serde_json",
  "thiserror 2.0.21",
  "tiff",
  "zune-core 0.5.3",

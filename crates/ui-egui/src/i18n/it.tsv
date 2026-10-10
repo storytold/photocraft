@@ -949,6 +949,17 @@
 	Delete current channel	Elimina canale corrente
 	Delete current state	Elimina stato corrente
 	Delete effect layer	Elimina livello effetto
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Eliminare il livello «{name}»?
+	Delete {count} layers? {names}	Eliminare {count} livelli? {names}
+	Delete layer?	Eliminare il livello?
+	The document is closed	Il documento è chiuso
+	The document or selected layers changed. Please request deletion again.	Il documento o i livelli selezionati sono cambiati. Richiedi nuovamente l’eliminazione.
+	Missing delete command	Comando di eliminazione mancante
+	Invalid delete command	Comando di eliminazione non valido
+	Layer deleted, but confirmation preference could not be saved: {error}	Il livello è stato eliminato, ma non è stato possibile salvare la preferenza di conferma: {error}
+
 	Delete layer	Elimina livello
 	Delete layer comp	Elimina composizione livelli
 	Delete note	Elimina nota
@@ -1296,6 +1307,7 @@
 	Remove All Pins	Rimuovi tutti i pin
 	Remove Background	Rimuovi sfondo
 	Remove Planes	Rimuovi piani
+	Remove Tool	Strumento Rimuovi
 	Remove stop	Rimuovi punto
 	Remove variable	Rimuovi variabile
 	Rename	Rinomina
@@ -1612,6 +1624,7 @@
 	Millimeters	Millimetri
 	Mobile	Mobile
 	Move Tool	Strumento Sposta
+	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
 	Multiply	Moltiplica
 	My Brushes	I miei pennelli
 	Neutrals	Neutri
@@ -1656,6 +1669,7 @@
 	Quick Selection Tool	Strumento Selezione rapida
 	Radial	Radiale
 	Rasterize Layer	Rasterizza livello
+	Rasterize Layers	Rasterizza livelli
 	Ratio	Proporzione
 	Recent	Recente
 	Rectangle Tool	Strumento Rettangolo
@@ -2379,6 +2393,9 @@ fontWeight	Italic	Corsivo
 	Color to Alpha…	Colore ad alfa…
 	Transparency Threshold	Soglia di trasparenza
 	Opacity Threshold	Soglia di opacità
+
+	Rasterize svg groups deeper than	Rasterizza i gruppi SVG oltre questa profondità
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 disattiva questa soglia; i gruppi SVG annidati oltre 100 livelli vengono sempre rasterizzati.
 	Rule of Thirds	Regola dei terzi
 	Triangle	Triangolo
 	Golden Ratio	Sezione aurea
@@ -2419,6 +2436,8 @@ fontWeight	Italic	Corsivo
 	Create Ellipse	Crea ellisse
 	Create Triangle	Crea triangolo
 	Create Polygon	Crea poligono
+	Pressure curve	Curva di pressione
+	Click to add a point, right-click to remove	Fai clic per aggiungere un punto, clic destro per rimuoverlo
 	Some brush presets could not be loaded	Impossibile caricare alcuni predefiniti pennello
 	Retry saving presets	Riprova a salvare i predefiniti
 	Brush preset changes are not saved: {error}	Le modifiche ai predefiniti pennello non sono salvate: {error}
@@ -2431,3 +2450,28 @@ fontWeight	Italic	Corsivo
 	XOR	XOR
 	Color Burn (Paint.NET)	Colore brucia (Paint.NET)
 	Color Dodge (Paint.NET)	Colore scherma (Paint.NET)
+	Stroke Options	Opzioni traccia
+	Solid	Continuo
+	Dashed	Tratteggiato
+	Dotted	Punteggiato
+	Alignment	Allineamento
+	Caps	Estremità
+	Butt / Flat	Piatto
+	Corners	Angoli
+	Miter	Spigolo
+	Round	Arrotondato
+	Bevel	Smusso
+	Miter limit	Limite spigolo
+	Dashed line	Linea tratteggiata
+	Dash	Tratto
+	Gap	Spazio
+	Dash / gap lengths × stroke width	Lunghezze tratto / spazio × larghezza traccia
+	Add pair	Aggiungi coppia
+	Remove pair	Rimuovi coppia
+	Dash offset	Scostamento tratteggio
+	Open paths use centered strokes	I tracciati aperti usano tracce centrate
+	Use finite lengths and a positive pattern total	Usa lunghezze finite e un totale del motivo positivo
+	No subject found — try Object Selection or the Lasso	Nessun soggetto trovato — prova Selezione oggetto o il Lazo
+	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
+	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
+	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto

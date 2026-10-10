@@ -459,6 +459,7 @@
 	Rename Layer	Μετονομασία επιπέδου
 	Convert to Smart Object	Μετατροπή σε έξυπνο αντικείμενο
 	Rasterize Layer	Μετατροπή επιπέδου σε εικονοστοιχεία
+	Rasterize Layers	Μετατροπή επιπέδων σε εικονοστοιχεία
 	Lock Transparent Pixels	Κλείδωμα διαφανών εικονοστοιχείων
 	Lock Image Pixels	Κλείδωμα εικονοστοιχείων εικόνας
 	Lock Position	Κλείδωμα θέσης
@@ -2188,6 +2189,17 @@
 	Delete Pins	Διαγραφή καρφιτσών
 	Delete Workspace	Διαγραφή χώρου εργασίας
 	Delete Workspace…	Διαγραφή χώρου εργασίας…
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Διαγραφή του επιπέδου «{name}»;
+	Delete {count} layers? {names}	Διαγραφή {count} επιπέδων; {names}
+	Delete layer?	Διαγραφή επιπέδου;
+	The document is closed	Το έγγραφο είναι κλειστό
+	The document or selected layers changed. Please request deletion again.	Το έγγραφο ή τα επιλεγμένα επίπεδα άλλαξαν. Ζητήστε ξανά τη διαγραφή.
+	Missing delete command	Λείπει η εντολή διαγραφής
+	Invalid delete command	Μη έγκυρη εντολή διαγραφής
+	Layer deleted, but confirmation preference could not be saved: {error}	Το επίπεδο διαγράφηκε, αλλά δεν ήταν δυνατή η αποθήκευση της προτίμησης επιβεβαίωσης: {error}
+
 	Delete layer	Διαγραφή επιπέδου
 	Density:	Πυκνότητα:
 	Depth	Βάθος
@@ -2784,6 +2796,7 @@
 	Remove All Pins	Αφαίρεση όλων των καρφιτσών
 	Remove Background	Αφαίρεση φόντου
 	Remove Planes	Αφαίρεση επιπέδων προοπτικής
+	Remove Tool	Αφαίρεση (Remove Tool)
 	Remove Warp Split	Αφαίρεση διαχωρισμού παραμόρφωσης
 	Remove stop	Αφαίρεση σημείου διαβάθμισης
 	Remove variable	Αφαίρεση μεταβλητής
@@ -3209,6 +3222,7 @@ cameraRaw	Yellow	Κίτρινο
 	Magic Eraser Tool	Μαγική γόμα (Magic Eraser Tool)
 	Magic Wand Tool	Μαγικό ραβδί (Magic Wand Tool)
 	Move Tool	Μετακίνηση (Move Tool)
+	Could not use the move tool because the layer is locked.	Δεν ήταν δυνατή η χρήση του εργαλείου Μετακίνηση, επειδή το επίπεδο είναι κλειδωμένο.
 	Note Tool	Σημείωση (Note Tool)
 	Object Selection Tool	Επιλογή αντικειμένου (Object Selection Tool)
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
@@ -3420,6 +3434,9 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+
+	Rasterize svg groups deeper than	Ραστεροποίηση ομάδων SVG πέρα από αυτό το βάθος
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	Το 0 απενεργοποιεί αυτό το όριο· ομάδες SVG με ένθεση βαθύτερη από 100 επίπεδα ραστεροποιούνται πάντα.
 	Rule of Thirds	Κανόνας των τρίτων
 	Golden Ratio	Χρυσή τομή
 	Golden Spiral	Χρυσή σπείρα
@@ -3460,6 +3477,8 @@ fontWeight	Thin	Πολύ λεπτά
 	Create Ellipse	Δημιουργία έλλειψης
 	Create Triangle	Δημιουργία τριγώνου
 	Create Polygon	Δημιουργία πολυγώνου
+	Pressure curve	Καμπύλη πίεσης
+	Click to add a point, right-click to remove	Κάντε κλικ για να προσθέσετε σημείο, δεξί κλικ για να το αφαιρέσετε
 	Some brush presets could not be loaded	Ορισμένες προεπιλογές πινέλων δεν ήταν δυνατό να φορτωθούν
 	Retry saving presets	Επανάληψη αποθήκευσης προεπιλογών
 	Brush preset changes are not saved: {error}	Οι αλλαγές στις προεπιλογές πινέλων δεν αποθηκεύτηκαν: {error}
@@ -3472,3 +3491,26 @@ fontWeight	Thin	Πολύ λεπτά
 	XOR	XOR
 	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
 	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+	Stroke Options	Επιλογές περιγράμματος
+	Solid	Συνεχές
+	Dashed	Διακεκομμένο
+	Dotted	Με τελείες
+	Caps	Άκρα
+	Butt / Flat	Επίπεδο
+	Miter	Οξεία
+	Round	Στρογγυλή
+	Bevel	Λοξή
+	Miter limit	Όριο οξείας γωνίας
+	Dashed line	Διακεκομμένη γραμμή
+	Dash	Παύλα
+	Gap	Κενό
+	Dash / gap lengths × stroke width	Μήκη παύλας / κενού × πλάτος περιγράμματος
+	Add pair	Προσθήκη ζεύγους
+	Remove pair	Αφαίρεση ζεύγους
+	Dash offset	Μετατόπιση παύλας
+	Open paths use centered strokes	Οι ανοικτές διαδρομές χρησιμοποιούν κεντραρισμένα περιγράμματα
+	Use finite lengths and a positive pattern total	Χρησιμοποιήστε πεπερασμένα μήκη και θετικό άθροισμα μοτίβου
+	No subject found — try Object Selection or the Lasso	Δεν βρέθηκε θέμα — δοκιμάστε την Επιλογή αντικειμένου ή το Λάσο
+	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
+	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
+	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο

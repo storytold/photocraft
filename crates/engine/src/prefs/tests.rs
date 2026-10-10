@@ -362,6 +362,19 @@ fn choice_and_range_tables_cover_enum_fields() {
 }
 
 #[test]
+fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
+    let mut s = session();
+    let pref = "fileHandling.rasterizeSvgGroupsDeeperThan";
+    assert_eq!(s.execute("prefs.get", json!({"path": pref})).unwrap(), json!(photocraft_doc::MAX_GROUP_DEPTH));
+    s.execute("prefs.set", json!({"path": pref, "value": 4})).unwrap();
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 4);
+    s.execute("prefs.set", json!({"path": pref, "value": 0})).unwrap();
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "zero disables the preference threshold");
+    assert!(s.execute("prefs.set", json!({"path": pref, "value": photocraft_doc::MAX_GROUP_DEPTH + 1})).is_err());
+    assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "out-of-range preferences leave the valid value unchanged");
+}
+
+#[test]
 fn right_click_with_painting_tools_pref() {
     let mut s = session();
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::BrushPicker, "Photoshop: the Brush Preset picker");
@@ -439,4 +452,72 @@ fn linux_only_preferences_show_only_on_linux() {
     assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
     assert!(!is_hidden("performance.gpuBackend"));
     assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
+}
+
+#[test]
+fn the_default_pressure_curve_is_linear() {
+    let c = PressureCurve::new(&Preferences::default().tools.pressure_curve);
+    assert!(c.is_linear());
+    for x in [0.0, 0.1, 0.37, 0.5, 0.99, 1.0] {
+        assert!((c.eval(x) - x).abs() < 1e-6, "{x}");
+    }
+}
+
+#[test]
+fn a_pressure_curve_is_monotone_and_passes_through_its_points() {
+    // A soft curve: light pressure already gives a lot.
+    let pts = [[0.0, 0.0], [0.25, 0.5], [0.6, 0.8], [1.0, 1.0]];
+    let c = PressureCurve::new(&pts);
+    for p in pts {
+        assert!((c.eval(p[0]) - p[1]).abs() < 1e-5, "{p:?}");
+    }
+    let ys: Vec<f32> = (0..=200).map(|i| c.eval(i as f32 / 200.0)).collect();
+    assert!(ys.windows(2).all(|w| w[1] >= w[0] - 1e-6), "firmer never gives less: {ys:?}");
+    assert!(ys.iter().all(|y| (0.0..=1.0).contains(y)));
+    // Flat outside the points: a floor and a ceiling.
+    let c = PressureCurve::new(&[[0.2, 0.3], [0.8, 0.9]]);
+    assert_eq!((c.eval(0.0), c.eval(0.1), c.eval(0.95), c.eval(1.0)), (0.3, 0.3, 0.9, 0.9));
+}
+
+#[test]
+fn a_hostile_pressure_curve_still_evaluates_monotone_within_range() {
+    let many: Vec<[f32; 2]> = (0..100).map(|i| [((i * 37) % 100) as f32 / 99.0, ((i * 53) % 100) as f32 / 99.0]).collect();
+    for pts in [
+        vec![],
+        vec![[0.5, 0.5]],
+        vec![[f32::NAN, 0.5], [f32::INFINITY, 1.0], [0.3, f32::NEG_INFINITY]],
+        vec![[2.0, -1.0], [-3.0, 5.0], [0.5, 0.2]],
+        vec![[0.9, 0.1], [0.1, 0.9]],
+        vec![[0.5, 0.2], [0.5, 0.7], [1.0, 1.0], [0.0, 0.0]],
+        many,
+    ] {
+        let c = PressureCurve::new(&pts);
+        let ys: Vec<f32> = (0..=100).map(|i| c.eval(i as f32 / 100.0)).collect();
+        assert!(ys.iter().all(|y| y.is_finite() && (0.0..=1.0).contains(y)), "{pts:?}");
+        assert!(ys.windows(2).all(|w| w[1] >= w[0] - 1e-6), "{pts:?}: {ys:?}");
+        for x in [f32::NAN, -1.0, 2.0, f32::INFINITY] {
+            assert!((0.0..=1.0).contains(&c.eval(x)), "{pts:?} at {x}");
+        }
+    }
+    // Two points at the same input: the later one's output wins.
+    let c = PressureCurve::new(&[[0.0, 0.0], [0.5, 0.2], [0.5, 0.7], [1.0, 1.0]]);
+    assert!((c.eval(0.5) - 0.7).abs() < 1e-6);
+}
+
+#[test]
+fn prefs_set_validates_the_pressure_curve() {
+    let mut p = Preferences::default();
+    p.set("tools.pressureCurve", serde_json::json!([[0.0, 0.1], [0.5, 0.7], [1.0, 1.0]])).unwrap();
+    assert_eq!(p.tools.pressure_curve, vec![[0.0, 0.1], [0.5, 0.7], [1.0, 1.0]]);
+    for bad in [
+        serde_json::json!("linear"),
+        serde_json::json!([[0.0, 0.0]]),
+        serde_json::json!([[0.0, 0.0], [1.5, 1.0]]),
+        serde_json::json!([[0.0, 0.0], [1.0]]),
+        serde_json::json!([[0.0, 0.0], ["a", 1.0]]),
+        serde_json::json!(vec![[0.5, 0.5]; 17]),
+    ] {
+        assert!(p.set("tools.pressureCurve", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(p.tools.pressure_curve, vec![[0.0, 0.1], [0.5, 0.7], [1.0, 1.0]], "a refused value changes nothing");
 }

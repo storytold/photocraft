@@ -15,6 +15,8 @@
 
 Edit → Preferences → Interface shows an Appearance Mode selector (Sync with system, Dark, Light) above separate light and dark theme cards with PhotoCraft editor previews and radio choices. Auto is opt-in and follows the operating system while the app is running. On Linux it reads the desktop portal once and then listens for its `SettingChanged` signal (no polling, and the UI repaints only when the value changes); `gsettings` runs at most once at start-up, by absolute path, when the portal gives no answer. A missing system appearance falls back to Dark. New installs keep Photoshop's default: Dark mode with Pro Medium (Studio Light is the saved light theme). Existing saved single-theme preferences migrate to a fixed Dark or Light mode with their chosen theme. The header appearance button cycles Auto → Light → Dark; its icon shows a monitor, moon or sun for the selected mode. Window → Theme and `ui.set {"theme":"classic"}` select a theme and fix the mode to its light or dark family.
 
+Window → Theme and macOS PhotoCraft → Appearance also offer Sync with system. Its checkmark follows the saved Auto mode rather than the displayed palette; choosing a manual theme selects its fixed appearance mode.
+
 The toolbar's foreground and background colour chips follow the `Tokens::round_chips` flag. Pro and Classic leave it off and draw Photoshop's overlapping squares with Default Colors and Switch Colors above them. Studio, Studio Light, Solarized Dark, Adwaita and Adwaita Dark (the Studio-layout themes) turn it on and draw large round chips with a curved Switch Colors arrow centred right under them, its heads touching the chips: stacked vertically in one tool column, with Default Colors at their top-right, and side by side in two tool columns, with Default Colors at the toolbar's left edge. Another non-Pro theme can opt in by setting the flag.
 
 ## Rules
@@ -185,3 +187,13 @@ panel width. Catalog coverage and actual shell language-switch tests enforce the
 
 Native CJK font fallback follows the selected UI script and resets its cache when switching
 languages; font delivery on the web remains separate work.
+
+## Arithmetic in numeric fields
+
+Click a numeric value and type an expression, then press Enter or move focus to finish.
+Numeric fields accept `+`, `-`, `*`, `/`, remainder `%`, powers `^` or `**`, parentheses,
+scientific notation, and `pi` / `tau`. For example, `1920/2` gives `960`, and `(30+15)*2`
+gives `90`. Shared value fields apply plain numbers live and arithmetic when editing
+finishes, preserving rounded/integer workflows. Field limits and integer rounding
+still apply; invalid expressions, division by zero, and non-finite results are rejected.
+Expressions are evaluated locally as arithmetic, never as scripts.

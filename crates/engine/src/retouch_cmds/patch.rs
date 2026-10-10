@@ -6,6 +6,16 @@
 //! takes the colour and lighting around the repaired area. A feathered selection blends the result
 //! in by its coverage. Only the targeted surface is read and written: in Normal mode the patch
 //! samples the current layer.
+//!
+//! With `contentAware` (Photoshop's Patch: Content-Aware) the selected area is filled from the
+//! dragged-to place content-aware, as the Content-Aware Move Tool lands its content
+//! ([`super::content_aware_move::land`]): the middle is copied, fitted to the selection's
+//! surroundings by `color` (0–10), and a band along the edge, set by `structure` (1–7), is
+//! re-synthesised. Measured on Photoshop 25.4 (a 60 px selection dragged 150 px onto a ring-shaped
+//! object): only the selection changes; Structure 3 to 7 give the same result; Color 0 keeps the
+//! copied level, higher values shift it towards the surroundings by up to about `0.04 · color`
+//! (3: 32 of 42 levels, 31 of 102; 10: 35 of 42, 95 of 102). It runs as a background job, like
+//! the move.
 
 use super::*;
 
@@ -202,6 +212,9 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
 }
 
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
+    if flag(p, "contentAware", false) {
+        return patch_content_aware(s, p);
+    }
     let plan = plan(s, p)?;
     let label = if plan.destination { "Patch (Destination)" } else { "Patch" };
     let dmg = run_stroke(s, label, plan.id, p, |pre, surf, _, lock| {
@@ -228,4 +241,62 @@ pub fn preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<
     let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, plan.id, p)?;
     let dmg = patch_surface(surf, sel, &plan, lock, step);
     Ok((doc, dmg))
+}
+
+/// Optional whole-number param in `lo..=hi`; absent or null gives `default`.
+fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
+    match p.get(k) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => match v.as_f64() {
+            Some(x) if x.is_finite() && (f64::from(lo)..=f64::from(hi)).contains(&x) => Ok(x.round() as u8),
+            _ => Err(bad(CMD, format!("`{k}` must be a number {lo}..{hi}"))),
+        },
+    }
+}
+
+/// Patch: Content-Aware. The selection is filled from the place it was dragged to (see the module
+/// docs), as a background job.
+fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
+    use super::content_aware_move::{Target, land, mask, read, window};
+    const LABEL: &str = "Patch (Content-Aware)";
+    let plan = plan(s, p)?;
+    let structure = level(p, "structure", 4, 1, 7)?;
+    let color = level(p, "color", 0, 0, 10)?;
+    let target = Target { id: plan.id, all_layers: flag(p, "sampleAllLayers", false) && targets_pixels(p) };
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = d.doc.clone();
+    let p = p.clone();
+    let (dx, dy) = plan.offset;
+    let (area, canvas) = (plan.area, plan.canvas);
+    crate::jobs::run(
+        s,
+        LABEL,
+        true,
+        {
+            let p = p.clone();
+            move |ctx| {
+                ctx.progress(0.0, LABEL);
+                let mut work = (*doc).clone();
+                let sel = doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+                let win = window(area, canvas);
+                let mut content = read(&mut work, target, &p, win.translate(dx, dy))?;
+                content.rect = win;
+                let selected = mask(sel, win);
+                let avoid = vec![false; selected.len()];
+                let damage = land(&mut work, target, &p, win, &selected, &content, &avoid, structure, color, (0.0, 1.0), ctx, LABEL)?;
+                let surf = crate::channel_cmds::target_surface(&mut work, target.id, &p)?.0.clone();
+                Ok((surf, damage))
+            }
+        },
+        move |s, (surf, damage)| {
+            s.edit(LABEL, |doc, _| {
+                *crate::channel_cmds::target_surface(doc, target.id, &p)?.0 = surf;
+                Ok(())
+            })?;
+            if let Some(st) = s.active_mut() {
+                st.last_damage = Some(damage);
+            }
+            Ok(json!({ "damage": damage_json(damage), "offset": [dx, dy], "contentAware": true }))
+        },
+    )
 }
