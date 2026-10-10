@@ -37,6 +37,10 @@ flate2 = { workspace = true }
 # Photoshop `.kys` shortcut sets (`edit.keyboardShortcuts` `importKys`); already in the tree
 # through photocraft-ui-egui and usvg.
 roxmltree = "0.20"
+semver = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { workspace = true }
 
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
