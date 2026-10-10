@@ -758,9 +758,9 @@ pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
     Some(turn([sx * std::f64::consts::FRAC_1_SQRT_2, sy * std::f64::consts::FRAC_1_SQRT_2], [0.0, 0.0], deg))
 }
 
-/// Photoshop's crop turn cursor at screen point `p`: a short arc with an arrowhead at each end,
-/// curving round the frame corner that lies in screen direction `toward` (an original drawing, no
-/// proprietary cursor asset).
+/// Photoshop's turn cursor (Crop, and Free Transform's rotate zone) at screen point `p`: a short
+/// arc with an arrowhead at each end, curving round the frame corner that lies in screen direction
+/// `toward` (an original drawing, no proprietary cursor asset).
 pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) {
     let len = toward.length();
     if !len.is_finite() || len < 1e-6 {

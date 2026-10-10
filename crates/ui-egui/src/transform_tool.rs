@@ -1504,6 +1504,34 @@ fn rotation_degrees(quad: [[f64; 2]; 4]) -> f64 {
     if dx.is_finite() && dy.is_finite() && dx.hypot(dy) > 1e-9 { dy.atan2(dx).to_degrees() } else { 0.0 }
 }
 
+/// Where the rotate cursor's arc bends at document point `p`, or `None` outside the rotate zone:
+/// just outside a corner, or anywhere while a rotate drag is on. It points into the box along the
+/// bisector of the nearest corner, so each corner gets its own arrow and they turn with the box.
+pub(crate) fn rotate_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
+    rotate_dir(app.ui.transform.as_ref()?, app.transform_preview.as_ref(), p, handle_tolerance(app))
+}
+
+fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], tol: f64) -> Option<[f64; 2]> {
+    if !(p[0].is_finite() && p[1].is_finite()) || t.warp.is_some() || t.mode == TransformMode::Distort {
+        return None;
+    }
+    let rotating = pv.is_some_and(|pv| pv.gesture.is_some_and(|g| g.hit == Hit::Outside));
+    if !rotating && !near_rotate_corner(t, p, tol) {
+        return None;
+    }
+    let dist = |q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+    let i = (0..4).min_by(|&a, &b| dist(t.quad[a]).total_cmp(&dist(t.quad[b])))?;
+    let unit = |to: [f64; 2]| {
+        let d = [to[0] - t.quad[i][0], to[1] - t.quad[i][1]];
+        let l = d[0].hypot(d[1]);
+        (l.is_finite() && l > 1e-9).then(|| [d[0] / l, d[1] / l])
+    };
+    let (a, b) = (unit(t.quad[(i + 1) % 4])?, unit(t.quad[(i + 3) % 4])?);
+    let s = [a[0] + b[0], a[1] + b[1]];
+    let l = s[0].hypot(s[1]);
+    (l.is_finite() && l > 1e-9).then(|| [s[0] / l, s[1] / l])
+}
+
 /// Cursor for hovering a document point while transforming. `quick_split` is Ctrl or Option,
 /// which arms a quick split while a warp is active.
 pub fn cursor(app: &PhotocraftApp, p: [f64; 2], quick_split: bool) -> Option<CursorIcon> {
@@ -1525,10 +1553,8 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], quick_split: bool) -> Option<Cur
     if !distort_allows(t.mode, h) {
         return Some(CursorIcon::Default);
     }
-    if (near_rotate_corner(t, p, tol) || app.transform_preview.as_ref().is_some_and(|pv| pv.gesture.is_some_and(|g| g.hit == Hit::Outside)))
-        && t.mode != TransformMode::Distort
-    {
-        // The overlay paints the rotating arrow and pointer marker, including during a drag.
+    if rotate_cursor_dir(app, p).is_some() {
+        // The overlay draws the curved rotate arrow (`rotate_cursor_dir`), also during the drag.
         return Some(CursorIcon::None);
     }
     Some(match h {
@@ -1608,13 +1634,70 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     painter.circle_stroke(c, 5.0, Stroke::new(0.5, Color32::BLACK));
     painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
     painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
-    let rotating = pv.gesture.is_some_and(|g| g.hit == Hit::Outside);
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
         let p = xf.to_doc(at);
         let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
-        if t.mode != TransformMode::Distort && (rotating || near_rotate_corner(t, p, tol)) {
-            draw_rotate_feedback(painter, at, rotating.then(|| rotation_degrees(t.quad)), xf.rect);
+        if let Some(k) = rotate_dir(t, Some(pv), p, tol) {
+            // Through the view, so the arc bends round the corner as it shows under a turned or
+            // flipped view.
+            let toward = xf.to_screen((p[0] + k[0] * 16.0) as f32, (p[1] + k[1] * 16.0) as f32) - at;
+            crate::crop_ui::draw_turn_cursor(painter.ctx(), at, toward);
         }
+        if let Some(r) = live_readout(app) {
+            draw_live_readout(painter.ctx(), at, r);
+        }
+    }
+}
+
+/// The value shown beside the pointer while the box is dragged, like Photoshop's Show
+/// Transformation Values: the box's angle while rotating, its scale while resizing, the offset
+/// while moving.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Readout {
+    /// Clockwise degrees in document space (`rotation_degrees`), whatever the view's turn or flip.
+    Angle(f64),
+    /// Width and height in percent of the original box.
+    Scale([f64; 2]),
+    /// Document pixels moved since the press.
+    Offset([f64; 2]),
+}
+
+/// The readout for the drag in progress, or `None` when nothing is dragged (or the drag is the
+/// reference point, a warp, or a distortion that has no single scale).
+pub(crate) fn live_readout(app: &PhotocraftApp) -> Option<Readout> {
+    let t = app.ui.transform.as_ref().filter(|t| t.warp.is_none())?;
+    let g = app.transform_preview.as_ref()?.gesture?;
+    match g.hit {
+        Hit::Outside => Some(Readout::Angle(rotation_degrees(t.quad))),
+        Hit::Inside => Some(Readout::Offset([t.quad[0][0] - g.quad0[0][0], t.quad[0][1] - g.quad0[0][1]])),
+        Hit::Corner(_) | Hit::Edge(_) if parallelogram(&t.quad) => {
+            let (w, h, _, _) = readout(t);
+            (w.is_finite() && h.is_finite()).then_some(Readout::Scale([w, h]))
+        }
+        Hit::Corner(_) | Hit::Edge(_) | Hit::Pivot => None,
+    }
+}
+
+/// True when `q` is still an affine image of the box (opposite sides parallel), so a W/H scale
+/// describes it; a distorted or perspective box has none.
+fn parallelogram(q: &[[f64; 2]; 4]) -> bool {
+    let scale = q.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
+    (0..2).all(|k| ((q[0][k] + q[2][k]) - (q[1][k] + q[3][k])).abs() <= scale * 1e-9)
+}
+
+/// [`live_readout`] as the rounded label beside the pointer (the marquee's and Crop's readout).
+fn draw_live_readout(ctx: &egui::Context, at: Pos2, r: Readout) {
+    // Round first so a hair below zero never reads "-0".
+    let fixed = |v: f64, places: i32| {
+        let k = 10f64.powi(places);
+        let v = (v * k).round() / k;
+        if v == 0.0 { 0.0 } else { v }
+    };
+    let id = "transform-readout";
+    match r {
+        Readout::Angle(a) => crate::canvas::draw_readout(ctx, id, at, ["Angle:"], [format!("{:.1}°", fixed(a, 1))]),
+        Readout::Scale([w, h]) => crate::canvas::draw_readout(ctx, id, at, ["W:", "H:"], [w, h].map(|v| format!("{:.1}%", fixed(v, 1)))),
+        Readout::Offset([dx, dy]) => crate::canvas::draw_readout(ctx, id, at, ["ΔX:", "ΔY:"], [dx, dy].map(|v| format!("{:.0} px", fixed(v, 0)))),
     }
 }
 
@@ -1670,29 +1753,6 @@ fn clip_to_canvas(mut mesh: egui::Mesh, size: [f32; 2], to_screen: impl Fn(Pos2)
         }
     }
     out
-}
-
-/// The transform's rotation handle is an arc, not the generic Alias pointer.
-fn draw_rotate_feedback(painter: &egui::Painter, at: Pos2, angle: Option<f64>, bounds: egui::Rect) {
-    let center = at + vec2(14.0, 11.0);
-    // Keep the visible cursor anchored to the actual pointer hotspot.
-    painter.circle_filled(at, 2.0, Color32::BLACK);
-    painter.circle_filled(at, 1.0, Color32::WHITE);
-    let points: Vec<Pos2> = (0..=18)
-        .map(|i| {
-            let rad = 0.5 + i as f32 * 4.6 / 18.0;
-            center + vec2(rad.cos(), rad.sin()) * 7.0
-        })
-        .collect();
-    painter.add(egui::Shape::line(points.clone(), Stroke::new(3.0, Color32::BLACK)));
-    painter.add(egui::Shape::line(points, Stroke::new(1.5, Color32::WHITE)));
-    let tip = center + vec2(4.1, -5.7);
-    painter.line_segment([tip, tip + vec2(-5.0, -1.0)], Stroke::new(2.0, Color32::WHITE));
-    painter.line_segment([tip, tip + vec2(-1.0, 5.0)], Stroke::new(2.0, Color32::WHITE));
-    if let Some(deg) = angle {
-        let pos = egui::pos2((at.x + 27.0).min(bounds.right() - 48.0).max(bounds.left()), (at.y - 14.0).max(bounds.top() + 17.0).min(bounds.bottom()));
-        painter.text(pos, egui::Align2::LEFT_BOTTOM, format!("{deg:.1}°"), egui::FontId::proportional(12.0), Color32::WHITE);
-    }
 }
 
 /// Warp preview (the moving pixels on a fine textured mesh) plus the control mesh. Patch
@@ -2980,6 +3040,58 @@ mod tests {
         // Free Transform from the menu switches the live box back.
         crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
         assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Free);
+    }
+
+    fn near2(a: Option<[f64; 2]>, b: [f64; 2]) -> bool {
+        a.is_some_and(|a| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9)
+    }
+
+    /// #1767: just outside a corner is the rotate zone: the OS pointer hides for the drawn curved
+    /// arrow, which bends round that corner.
+    #[test]
+    fn hovering_just_outside_a_corner_asks_for_the_rotate_cursor() {
+        let mut app = app_with_square(256, photocraft_geom::Rect::new(32, 32, 160, 160));
+        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        let tol = handle_tolerance(&app);
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let (tl, br) = ([32.0 - tol * 1.5, 32.0 - tol * 1.5], [160.0 + tol * 1.5, 160.0 + tol * 1.5]);
+        assert_eq!(cursor(&app, tl, false), Some(CursorIcon::None), "the arrow is drawn instead");
+        assert!(near2(rotate_cursor_dir(&app, tl), [h, h]), "{:?}", rotate_cursor_dir(&app, tl));
+        assert!(near2(rotate_cursor_dir(&app, br), [-h, -h]), "bends round the bottom-right corner");
+        assert_eq!(cursor(&app, [60.0, 60.0], false), Some(CursorIcon::Move));
+        assert_eq!(rotate_cursor_dir(&app, [60.0, 60.0]), None, "inside moves");
+        assert_eq!(rotate_cursor_dir(&app, [32.0, 32.0]), None, "the corner handle scales");
+        assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 32.0]), None);
+    }
+
+    /// #1767: the readout beside the pointer during a drag (Photoshop's transformation values):
+    /// the angle while rotating, W/H while scaling, ΔX/ΔY while moving; nothing otherwise.
+    #[test]
+    fn the_live_readout_follows_the_drag() {
+        let mut app = app_with_square(256, photocraft_geom::Rect::new(32, 32, 160, 160));
+        app.ui.extras.snap = false;
+        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        assert_eq!(live_readout(&app), None, "not dragging");
+        let ev = |app: &mut PhotocraftApp, e| crate::canvas::tool_event(app, e, egui::Modifiers::NONE);
+        // A quarter turn about the centre (96, 96): from right of the box to below it.
+        ev(&mut app, ToolEvent::Down { x: 220.0, y: 96.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 96.0, y: 220.0, pressure: 1.0 });
+        let Some(Readout::Angle(a)) = live_readout(&app) else { panic!("{:?}", live_readout(&app)) };
+        assert!((a - 90.0).abs() < 1e-6, "{a}");
+        ev(&mut app, ToolEvent::Up { x: 96.0, y: 220.0 });
+        assert_eq!(live_readout(&app), None, "released");
+        let mut app = app_with_square(256, photocraft_geom::Rect::new(32, 32, 160, 160));
+        app.ui.extras.snap = false;
+        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        ev(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 65.0, y: 57.0, pressure: 1.0 });
+        assert_eq!(live_readout(&app), Some(Readout::Offset([5.0, -3.0])));
+        ev(&mut app, ToolEvent::Up { x: 65.0, y: 57.0 });
+        // The right edge doubles the width (proportional by default: the height too).
+        ev(&mut app, ToolEvent::Down { x: 165.0, y: 93.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 293.0, y: 93.0, pressure: 1.0 });
+        let Some(Readout::Scale([w, h])) = live_readout(&app) else { panic!("{:?}", live_readout(&app)) };
+        assert!((w - 200.0).abs() < 1e-6 && (h - 200.0).abs() < 1e-6, "{w} {h}");
     }
 
     #[test]
