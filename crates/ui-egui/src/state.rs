@@ -980,6 +980,9 @@ pub struct UiState {
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
+    /// A keyboard shortcut set found at first launch, waiting for Import / Don't Import.
+    #[serde(default)]
+    pub kys_offer: Option<crate::kys_import::Offer>,
     /// Documents (ids) whose slow full refresh on the CPU compositor has had its notice.
     #[serde(default)]
     pub slow_refresh_noticed: Vec<u64>,
@@ -1052,6 +1055,7 @@ impl Default for UiState {
             status_error: false,
             notices: Vec::new(),
             gpu_fallback_notice: None,
+            kys_offer: None,
             slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),
             camera_raw_scope: Default::default(),

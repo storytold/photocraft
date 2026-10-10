@@ -1327,6 +1327,11 @@
 	{n} commands are not in PhotoCraft.	Příkazů, které v PhotoCraftu nejsou: {n}.
 	Keyboard shortcuts imported	Klávesové zkratky importovány
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Vaše sada klávesových zkratek {set} se zde používá: {n} zkratek se liší od výchozích. Zobrazí je Úpravy › Klávesové zkratky; Obnovit vše na výchozí to vrátí zpět.
+	Import keyboard shortcuts?	Importovat klávesové zkratky?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft na tomto počítači našel vaši sadu klávesových zkratek {set} z jiného editoru obrázků: {n} jejích zkratek se liší od zkratek PhotoCraftu. Importovat ji?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Úpravy › Klávesové zkratky › Obnovit vše na výchozí import vrátí zpět.
+	Don't Import	Neimportovat
+	The keyboard shortcut set was not imported: {error}	Sada klávesových zkratek nebyla importována: {error}
 	Reset Section	Obnovit sekci
 	Reset Transform	Obnovit transformaci
 	Reset to defaults	Obnovit výchozí

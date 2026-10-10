@@ -538,6 +538,11 @@
 	{n} commands are not in PhotoCraft.	Команд, которых нет в PhotoCraft: {n}.
 	Keyboard shortcuts imported	Сочетания клавиш импортированы
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Здесь используется ваш набор сочетаний клавиш {set}: сочетаний, отличных от стандартных: {n}. Их показывает Редактирование › Сочетания клавиш; «Сбросить всё к значениям по умолчанию» отменяет импорт.
+	Import keyboard shortcuts?	Импортировать сочетания клавиш?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft нашёл на этом компьютере ваш набор сочетаний клавиш {set} из другого графического редактора: сочетаний, отличных от PhotoCraft: {n}. Импортировать его?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Редактирование › Сочетания клавиш › «Сбросить всё к значениям по умолчанию» отменяет импорт.
+	Don't Import	Не импортировать
+	The keyboard shortcut set was not imported: {error}	Набор сочетаний клавиш не импортирован: {error}
 	Defaults restored.	Значения по умолчанию восстановлены.
 	Restore Defaults	Восстановить по умолчанию
 	Restore original size	Восстановить исходный размер

@@ -1311,6 +1311,11 @@
 	{n} commands are not in PhotoCraft.	{n} comandi non esistono in PhotoCraft.
 	Keyboard shortcuts imported	Scelte rapide da tastiera importate
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Il tuo set di scelte rapide da tastiera {set} è in uso qui: {n} scelte rapide differiscono dai valori predefiniti. Modifica › Scelte rapide da tastiera le mostra; Ripristina tutto ai valori predefiniti annulla l'importazione.
+	Import keyboard shortcuts?	Importare le scelte rapide da tastiera?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft ha trovato su questo computer il tuo set di scelte rapide da tastiera {set} di un altro editor di immagini: {n} delle sue scelte rapide differiscono da quelle di PhotoCraft. Importarlo?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Modifica › Scelte rapide da tastiera › Ripristina tutto ai valori predefiniti annulla un'importazione.
+	Don't Import	Non importare
+	The keyboard shortcut set was not imported: {error}	Il set di scelte rapide da tastiera non è stato importato: {error}
 	Reset Section	Reimposta sezione
 	Reset Transform	Reimposta trasformazione
 	Reset to defaults	Ripristina predefiniti

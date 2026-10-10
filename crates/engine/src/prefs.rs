@@ -1538,6 +1538,38 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
             _ => {}
         }
     }
+    // A Photoshop `.kys` set (`importKys`, its XML text) becomes `set` entries, matched by label
+    // (`crate::kys`); a key equal to the command's default restores the default, and keys given
+    // in `set` as well win over the file's.
+    let imported;
+    let mut import = None;
+    let p = match p.get("importKys") {
+        Some(xml) => {
+            let xml = xml.as_str().ok_or_else(|| bad(cmd, "`importKys` is the text of a .kys file"))?;
+            let set = crate::kys::parse(xml).map_err(|e| bad(cmd, e))?;
+            let plan = crate::kys::plan(crate::kys::command_candidates(), &set);
+            let mut merged = serde_json::Map::new();
+            for (id, sc) in &plan.set {
+                let default = crate::command_specs().iter().find(|c| c.id == id).and_then(|c| c.shortcut).and_then(normalize_shortcut);
+                merged.insert(id.clone(), if default.as_deref() == Some(sc.as_str()) { Value::Null } else { json!(sc) });
+            }
+            merged.extend(p.get("set").and_then(Value::as_object).cloned().unwrap_or_default());
+            import = Some(json!({
+                "name": set.name,
+                "imported": plan.set.len(),
+                "set": plan.set,
+                "unknown": plan.unknown,
+                "unreadable": plan.unreadable,
+                "alternates": plan.alternates,
+                "toolKeys": set.tool_keys,
+            }));
+            let mut next = p.clone();
+            next["set"] = Value::Object(merged);
+            imported = next;
+            &imported
+        }
+        None => p,
+    };
     if let Some(m) = p.get("set").and_then(Value::as_object) {
         let mut next = s.prefs().clone();
         for (id, v) in m {
@@ -1585,7 +1617,11 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let bindings: Vec<(&str, &str)> = bindable().filter_map(|(id, def)| Some((id, prefs.shortcut(id, def)?))).collect();
     let conflicts: Vec<Value> = conflicts(bindings).into_iter().map(|(sc, ids)| json!({"shortcut": sc, "commands": ids})).collect();
-    Ok(json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts}))
+    let mut out = json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts});
+    if let Some(import) = import {
+        out["import"] = import;
+    }
+    Ok(out)
 }
 
 /// Edit › Menus: hide/show items and give them colours.
@@ -1710,7 +1746,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false}"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"?}"##,
             keyboard_shortcuts,
             true
         ),
