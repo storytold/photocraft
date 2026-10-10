@@ -582,3 +582,55 @@ fn a_non_unicode_argument_is_a_usage_error_not_a_panic() {
         assert!(!err.contains("panicked"), "{err}");
     }
 }
+
+/// `PHOTOCRAFT_CONTROL_PORT` flips `serve` from stdio to a TCP listener and `mcp` from a
+/// headless engine to a bridge; both say so on stderr, a flag still wins, and an empty
+/// value counts as unset.
+#[test]
+fn control_port_env_switches_modes_with_a_notice_and_flags_win() {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = free.local_addr().unwrap().port().to_string();
+    drop(free);
+
+    // `serve` with the variable never exits: spawn, read its stderr, then kill it.
+    let mut child = bin().args(["serve"]).env("PHOTOCRAFT_CONTROL_PORT", &port).stderr(Stdio::piped()).stdin(Stdio::null()).spawn().unwrap();
+    let mut err = String::new();
+    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !err.contains("serving on TCP instead of stdio") && std::time::Instant::now() < deadline {
+        let mut buf = [0u8; 4096];
+        let n = child.stderr.as_mut().unwrap().read(&mut buf).unwrap_or(0);
+        err.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(err.contains("PHOTOCRAFT_CONTROL_PORT=") && err.contains("serving on TCP instead of stdio"), "{err}");
+    assert!(err.contains("unset it to serve stdio") && err.contains(&port), "{err}");
+
+    // `mcp` with the variable bridges: the notice names the mode, then stdin EOF ends it.
+    let o = bin().args(["mcp"]).env("PHOTOCRAFT_CONTROL_PORT", &port).stdin(Stdio::null()).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("PHOTOCRAFT_CONTROL_PORT=") && err.contains("bridging to the running app"), "{err}");
+    assert!(err.contains("unset it to run headless"), "{err}");
+
+    // A valid flag wins and the fallback never engages (this serve also never exits).
+    let mut child =
+        bin().args(["serve", "--port", &port]).env("PHOTOCRAFT_CONTROL_PORT", "not-a-port").stderr(Stdio::piped()).stdin(Stdio::null()).spawn().unwrap();
+    let mut err = String::new();
+    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !err.contains("serving on") && std::time::Instant::now() < deadline {
+        let mut buf = [0u8; 4096];
+        let n = child.stderr.as_mut().unwrap().read(&mut buf).unwrap_or(0);
+        err.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(err.contains("serving on") && !err.contains("PHOTOCRAFT_CONTROL_PORT"), "the flag wins without the fallback engaging: {err}");
+
+    // The escape hatch: an empty value counts as unset, so mcp stays headless.
+    let o = bin().args(["mcp"]).env("PHOTOCRAFT_CONTROL_PORT", "").stdin(Stdio::null()).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!err.contains("bridging"), "an empty value keeps the headless default: {err}");
+}

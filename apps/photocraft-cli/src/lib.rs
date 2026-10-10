@@ -467,8 +467,16 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
     use std::sync::{Arc, Mutex};
     let h = Arc::new(Mutex::new(Headless::with_workspace(automation_workspace(a)?)));
     let port = match a.get("--port") {
-        Some(port) => Some(port.parse().map_err(|_| format!("bad --port `{port}`"))?),
-        None => env_control_port()?,
+        Some(port) => Some(parse_control_port(port, "--port")?),
+        None => match env_control_port()? {
+            // Name the mode switch: an exported variable silently changes what this
+            // command does, and unset (or empty) is the only way back to stdio.
+            Some(port) => {
+                let _ = writeln!(err, "photocraft-cli: PHOTOCRAFT_CONTROL_PORT={port} is set; serving on TCP instead of stdio (unset it to serve stdio)");
+                Some(port)
+            }
+            None => None,
+        },
     };
     match port {
         Some(port) => {
@@ -495,7 +503,18 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
 fn mcp(a: &Args) -> R {
     let bridge = match a.get("--bridge") {
         Some(addr) => Some(addr.to_owned()),
-        None => env_control_port()?.map(|port| format!("127.0.0.1:{port}")),
+        None => match env_control_port()? {
+            // Name the mode switch: an exported variable silently changes what this
+            // command does, and unset (or empty) is the only way back to headless.
+            Some(port) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "photocraft-cli: PHOTOCRAFT_CONTROL_PORT={port} is set; bridging to the running app instead of a headless engine (unset it to run headless)"
+                );
+                Some(format!("127.0.0.1:{port}"))
+            }
+            None => None,
+        },
     };
     let server = match bridge {
         Some(addr) => {
