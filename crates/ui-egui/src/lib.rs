@@ -74,6 +74,7 @@ pub mod filter_dialog;
 mod filter_preview_worker;
 mod font_preview;
 pub mod gallery_ui;
+pub mod genai_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
@@ -276,6 +277,26 @@ pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
 pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
 /// Photoshop's own keyboard shortcut set on this machine, as (source path, `.kys` XML text):
 /// the newest install's live `Keyboard Shortcuts.psp` on the desktop, `None` without one.
+/// Reads the saved key for a provider id, if any.
+pub type LoadKeyFn = Box<dyn Fn(&str) -> Result<Option<String>, String>>;
+/// Saves a key (provider id, key).
+pub type SaveKeyFn = Box<dyn Fn(&str, &str) -> Result<(), String>>;
+/// Removes the key for a provider id.
+pub type DeleteKeyFn = Box<dyn Fn(&str) -> Result<(), String>>;
+/// Builds a provider (id, model, key) over the app's HTTPS transport.
+pub type BuildProviderFn = Box<dyn Fn(&str, &str, photocraft_genai::ApiKey) -> Result<photocraft_engine::genai_cmds::SharedProvider, String>>;
+
+/// Generative AI (#41): the OS credential store and the provider factory. Desktop only; `None`
+/// (the web build, tests) keeps Generative AI unavailable.
+pub struct GenAiServices {
+    pub load_key: LoadKeyFn,
+    pub save_key: SaveKeyFn,
+    pub delete_key: DeleteKeyFn,
+    pub provider: BuildProviderFn,
+    /// Where keys are kept, as the settings name it ("the macOS Keychain").
+    pub key_store_name: &'static str,
+}
+
 pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
@@ -346,6 +367,8 @@ pub struct Services {
     pub save_prefs: Option<SaveTextFn>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
+    /// Generative Fill's provider and key storage (see [`GenAiServices`]).
+    pub genai: Option<GenAiServices>,
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
@@ -585,6 +608,7 @@ pub struct PhotocraftApp {
     pub perf: gpu_canvas::Perf,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
+    pub(crate) genai: genai_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
@@ -702,6 +726,7 @@ impl PhotocraftApp {
             started: None,
             perf: Default::default(),
             prefs_rt: Default::default(),
+            genai: Default::default(),
             discard: None,
             file_dialog: None,
             tiff_options: None,
@@ -715,6 +740,10 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        // A configured generative AI provider (reads the credential store, no network).
+        if let Err(e) = genai_ui::restore(&mut app) {
+            app.ui.status = e;
+        }
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);

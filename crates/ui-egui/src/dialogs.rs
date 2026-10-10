@@ -214,6 +214,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::delete_layer_prompt::owns(&fields) => crate::delete_layer_prompt::body(ui, &mut fields),
+                DialogKind::Command if crate::genai_ui::owns(&fields) => crate::genai_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
@@ -268,6 +269,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             tl!("Delete")
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
+                        } else if let Some(label) = crate::genai_ui::ok_label(&d.fields) {
+                            label
                         } else {
                             crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                         };
@@ -429,6 +432,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
+        DialogKind::Command if crate::genai_ui::owns(&d.fields) => crate::genai_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
@@ -468,7 +472,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
-    app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if crate::genai_ui::owns(&d.fields) {
+        crate::genai_ui::cancelled(app);
+    }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
     app.color_range = None;

@@ -27,6 +27,7 @@ photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
+photocraft-genai = { workspace = true }
 # Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence"] }
@@ -40,6 +41,9 @@ arboard = { version = "3.6", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
+# Generative AI provider requests (genai.rs): blocking HTTPS with rustls, used only after the
+# user sets up a provider. No gzip, cookies or proxies. Pinned exactly: review the diff before bumping.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
@@ -61,6 +65,8 @@ muda = { version = "=0.21.1", default-features = false }
 # Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
 # Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
+# Generative AI API keys in the macOS Keychain (genai.rs). Pinned exactly.
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -81,6 +87,8 @@ winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+# Generative AI API keys in Windows Credential Manager (genai.rs). Pinned exactly.
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

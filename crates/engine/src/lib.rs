@@ -45,6 +45,7 @@ mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod genai_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod hidden_target;
@@ -370,6 +371,9 @@ pub struct Session {
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    /// The generative image provider the app configured (see [`genai_cmds`]); `None` keeps
+    /// generative commands off and the session network-free.
+    genai: Option<genai_cmds::SharedProvider>,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when

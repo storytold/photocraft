@@ -3447,3 +3447,28 @@ cameraRaw	Roughness	Chropowatość
 	Previous Document	Poprzedni dokument
 	W x H x Resolution	Szer. x Wys. x Rozdzielczość
 	Front Image	Obraz na wierzchu
+# Generative Fill and Generative AI Settings (#41)
+	API key	Klucz API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opisz, co ma powstać w zaznaczeniu, albo zostaw puste, aby obraz był w nim kontynuowany.
+	Fill the selection from a prompt	Wypełnij zaznaczenie na podstawie opisu
+	Generative AI	Generatywna AI
+	Generative AI Settings…	Ustawienia generatywnej AI…
+	Generative AI needs the desktop app.	Generatywna AI wymaga aplikacji na komputer.
+	Generative Fill uses {name} ({model}).	Wypełnienie generatywne korzysta z {name} ({model}).
+	Generative Fill…	Wypełnienie generatywne…
+	Get a Gemini API key from Google AI Studio	Uzyskaj klucz API Gemini w Google AI Studio
+	No API key is saved for {provider}.	Brak zapisanego klucza API dla {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nic nie jest wysyłane, dopóki nie uruchomisz wypełnienia generatywnego. Za każdym razem PhotoCraft wysyła do Google (generativelanguage.googleapis.com) zaznaczony obszar wraz z otaczającym go obrazem, czarno-białą maskę zaznaczenia i Twój opis, razem z Twoim kluczem API. Obowiązują warunki i polityka prywatności Gemini API firmy Google, a korzystanie jest rozliczane na Twój klucz. Wyniki mają znak wodny SynthID firmy Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Wyłączone. Aby korzystać z wypełnienia generatywnego, skonfiguruj dostawcę z własnym kluczem API.
+	Paste your Gemini API key	Wklej swój klucz API Gemini
+	Prompt (optional)	Opis (opcjonalny)
+	Provider	Dostawca
+	Remove Key	Usuń klucz
+	Saved (paste to replace)	Zapisany (wklej, aby zastąpić)
+	Set up Generative Fill with your own API key	Skonfiguruj wypełnienie generatywne z własnym kluczem API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Zaznaczony obszar, otaczający go obraz i opis są wysyłane do {name} ({model}).
+	What is sent, and to whom	Co jest wysyłane i do kogo
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Twój klucz jest przechowywany w {store}, nigdy w plikach ustawień PhotoCraft.
+	the macOS Keychain	pęku kluczy macOS
+	Windows Credential Manager	Menedżerze poświadczeń systemu Windows
+	memory until PhotoCraft quits	pamięci do zamknięcia PhotoCraft

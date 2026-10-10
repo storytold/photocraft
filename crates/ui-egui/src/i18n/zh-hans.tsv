@@ -2436,3 +2436,28 @@ fontWeight	Italic	斜体
 	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率
 	Front Image	前面的图像
+# Generative Fill and Generative AI Settings (#41)
+	API key	API 密钥
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	描述要在选区中生成的内容，留空则让周围的图像在选区中自然延续。
+	Fill the selection from a prompt	根据描述填充选区
+	Generative AI	生成式 AI
+	Generative AI Settings…	生成式 AI 设置…
+	Generative AI needs the desktop app.	生成式 AI 需要桌面版应用。
+	Generative Fill uses {name} ({model}).	生成式填充使用 {name}（{model}）。
+	Generative Fill…	生成式填充…
+	Get a Gemini API key from Google AI Studio	在 Google AI Studio 获取 Gemini API 密钥
+	No API key is saved for {provider}.	尚未为 {provider} 保存 API 密钥。
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	在你运行生成式填充之前，不会发送任何内容。每次运行时，PhotoCraft 会将选中的区域及其周围的图像、选区的黑白蒙版以及你的描述，连同你的 API 密钥一起发送给 Google（generativelanguage.googleapis.com）。Google Gemini API 的条款和隐私政策适用，用量计入你的密钥。生成结果带有 Google 的 SynthID 水印。
+	Off. Set up a provider with your own API key to use Generative Fill.	已关闭。请用你自己的 API 密钥设置服务提供方，以使用生成式填充。
+	Paste your Gemini API key	粘贴你的 Gemini API 密钥
+	Prompt (optional)	描述（可选）
+	Provider	服务提供方
+	Remove Key	移除密钥
+	Saved (paste to replace)	已保存（粘贴即可替换）
+	Set up Generative Fill with your own API key	用你自己的 API 密钥设置生成式填充
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	选中的区域、其周围的图像和描述会发送给 {name}（{model}）。
+	What is sent, and to whom	发送什么，发送给谁
+	Your key is kept in {store}, never in PhotoCraft's settings files.	你的密钥保存在 {store}，不会写入 PhotoCraft 的设置文件。
+	the macOS Keychain	macOS 钥匙串
+	Windows Credential Manager	Windows 凭据管理器
+	memory until PhotoCraft quits	内存中，直到 PhotoCraft 退出
