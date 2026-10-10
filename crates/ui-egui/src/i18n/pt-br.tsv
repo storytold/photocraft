@@ -937,6 +937,17 @@
 	Delete current channel	Excluir o canal atual
 	Delete current state	Excluir o estado atual
 	Delete effect layer	Excluir camada de efeito
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Excluir a camada “{name}”?
+	Delete {count} layers? {names}	Excluir {count} camadas? {names}
+	Delete layer?	Excluir camada?
+	The document is closed	O documento está fechado
+	The document or selected layers changed. Please request deletion again.	O documento ou as camadas selecionadas mudaram. Solicite a exclusão novamente.
+	Missing delete command	Comando de exclusão ausente
+	Invalid delete command	Comando de exclusão inválido
+	Layer deleted, but confirmation preference could not be saved: {error}	A camada foi excluída, mas não foi possível salvar a preferência de confirmação: {error}
+
 	Delete layer	Excluir camada
 	Delete layer comp	Excluir composição de camadas
 	Delete note	Excluir anotação
@@ -1280,6 +1291,7 @@
 	Remove All Pins	Remover todos os alfinetes
 	Remove Background	Remover plano de fundo
 	Remove Planes	Remover planos
+	Remove Tool	Ferramenta Remover
 	Remove stop	Remover parada
 	Remove variable	Remover variável
 	Rename	Renomear
@@ -1587,6 +1599,7 @@
 	Millimeters	Milímetros
 	Mobile	Dispositivos móveis
 	Move Tool	Ferramenta Mover
+	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -1631,6 +1644,7 @@
 	Quick Selection Tool	Ferramenta Seleção rápida
 	Radial	Radial
 	Rasterize Layer	Rasterizar camada
+	Rasterize Layers	Rasterizar camadas
 	Ratio	Proporção
 	Recent	Recentes
 	Rectangle Tool	Ferramenta Retângulo
@@ -2733,6 +2747,9 @@ fontWeight	Italic	Itálico
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desativa este limite; grupos SVG aninhados em mais de 100 níveis são sempre rasterizados.
 	Rule of Thirds	Regra dos terços
 	Triangle	Triângulo
 	Golden Ratio	Proporção áurea
@@ -2773,6 +2790,8 @@ fontWeight	Italic	Itálico
 	Create Ellipse	Criar elipse
 	Create Triangle	Criar triângulo
 	Create Polygon	Criar polígono
+	Pressure curve	Curva de pressão
+	Click to add a point, right-click to remove	Clique para adicionar um ponto; clique com o botão direito para removê-lo
 	Some brush presets could not be loaded	Não foi possível carregar algumas predefinições de pincel
 	Retry saving presets	Tentar salvar as predefinições novamente
 	Brush preset changes are not saved: {error}	As alterações nas predefinições de pincel não foram salvas: {error}
@@ -2785,3 +2804,7 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
+	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
+	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
+	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto

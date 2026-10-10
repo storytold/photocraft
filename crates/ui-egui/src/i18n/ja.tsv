@@ -953,6 +953,17 @@
 	Delete current channel	現在のチャンネルを削除
 	Delete current state	現在の状態を削除
 	Delete effect layer	効果レイヤーを削除
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	レイヤー「{name}」を削除しますか？
+	Delete {count} layers? {names}	{count} 個のレイヤーを削除しますか？ {names}
+	Delete layer?	レイヤーを削除しますか？
+	The document is closed	ドキュメントは閉じられています
+	The document or selected layers changed. Please request deletion again.	ドキュメントまたは選択したレイヤーが変更されました。もう一度削除してください。
+	Missing delete command	削除コマンドがありません
+	Invalid delete command	無効な削除コマンドです
+	Layer deleted, but confirmation preference could not be saved: {error}	レイヤーは削除されましたが、確認設定を保存できませんでした: {error}
+
 	Delete layer	レイヤーを削除
 	Delete layer comp	レイヤーカンプを削除
 	Delete note	注釈を削除
@@ -1614,6 +1625,7 @@
 	Millimeters	ミリメートル
 	Mobile	モバイル
 	Move Tool	移動ツール
+	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系
@@ -1658,6 +1670,7 @@
 	Quick Selection Tool	クイック選択ツール
 	Radial	円形
 	Rasterize Layer	レイヤーをラスタライズ
+	Rasterize Layers	レイヤーをラスタライズ
 	Ratio	縦横比
 	Recent	最近
 	Rectangle Tool	長方形ツール
@@ -2535,6 +2548,7 @@ fontWeight	Italic	斜体
 	Reduce Noise	ノイズを軽減
 	Relief	レリーフ
 	Remove Jpeg Artifact	JPEG アーティファクトを除去
+	Remove Tool	削除ツール
 	Reorder Layer	レイヤーを並べ替え
 	Repeat	繰り返し
 	Reticulation	粒状化
@@ -3329,6 +3343,9 @@ fontWeight	Italic	斜体
 	Color to Alpha…	カラーを透明に…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
+
+	Rasterize svg groups deeper than	この深さを超える SVG グループをラスタライズ
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 でこのしきい値は無効になります。100 階層を超えて入れ子になった SVG グループは常にラスタライズされます。
 	Rule of Thirds	三分割法
 	Golden Ratio	黄金比
 	Golden Spiral	黄金螺旋
@@ -3368,6 +3385,8 @@ fontWeight	Italic	斜体
 	Create Ellipse	楕円を作成
 	Create Triangle	三角形を作成
 	Create Polygon	多角形を作成
+	Pressure curve	筆圧カーブ
+	Click to add a point, right-click to remove	クリックでポイントを追加、右クリックで削除
 	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
 	Retry saving presets	プリセットの保存を再試行
 	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
@@ -3380,3 +3399,7 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
+	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
+	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
+	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください

@@ -947,6 +947,17 @@
 	Delete current channel	Aktuellen Kanal löschen
 	Delete current state	Aktuellen Status löschen
 	Delete effect layer	Effektebene löschen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Ebene „{name}“ löschen?
+	Delete {count} layers? {names}	{count} Ebenen löschen? {names}
+	Delete layer?	Ebene löschen?
+	The document is closed	Das Dokument ist geschlossen
+	The document or selected layers changed. Please request deletion again.	Das Dokument oder die ausgewählten Ebenen haben sich geändert. Bitte die Löschung erneut anfordern.
+	Missing delete command	Löschbefehl fehlt
+	Invalid delete command	Ungültiger Löschbefehl
+	Layer deleted, but confirmation preference could not be saved: {error}	Die Ebene wurde gelöscht, aber die Bestätigungseinstellung konnte nicht gespeichert werden: {error}
+
 	Delete layer	Ebene löschen
 	Delete layer comp	Ebenenkomposition löschen
 	Delete note	Notiz löschen
@@ -1296,6 +1307,7 @@
 	Remove All Pins	Alle Pins entfernen
 	Remove Background	Hintergrund entfernen
 	Remove Planes	Flächen entfernen
+	Remove Tool	Entfernen-Werkzeug
 	Remove stop	Farbstopp entfernen
 	Remove variable	Variable entfernen
 	Rename	Umbenennen
@@ -1605,6 +1617,7 @@
 	Millimeters	Millimeter
 	Mobile	Mobil
 	Move Tool	Verschieben-Werkzeug
+	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -1649,6 +1662,7 @@
 	Quick Selection Tool	Schnellauswahl-Werkzeug
 	Radial	Radial
 	Rasterize Layer	Ebene rasterisieren
+	Rasterize Layers	Ebenen rasterisieren
 	Ratio	Verhältnis
 	Recent	Zuletzt
 	Rectangle Tool	Rechteck-Werkzeug
@@ -2343,6 +2357,9 @@ fontWeight	Italic	Kursiv
 	Color to Alpha…	Farbe zu Alpha…
 	Transparency Threshold	Transparenz-Schwellenwert
 	Opacity Threshold	Deckkraft-Schwellenwert
+
+	Rasterize svg groups deeper than	SVG-Gruppen ab dieser Tiefe rastern
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schaltet diese Schwelle aus; SVG-Gruppen, die tiefer als 100 Ebenen verschachtelt sind, werden immer gerastert.
 	Rule of Thirds	Drittel-Regel
 	Triangle	Dreieck
 	Golden Ratio	Goldener Schnitt
@@ -2383,6 +2400,8 @@ fontWeight	Italic	Kursiv
 	Create Ellipse	Ellipse erstellen
 	Create Triangle	Dreieck erstellen
 	Create Polygon	Polygon erstellen
+	Pressure curve	Druckkurve
+	Click to add a point, right-click to remove	Klicken fügt einen Punkt hinzu, Rechtsklick entfernt ihn
 	Some brush presets could not be loaded	Einige Pinselvorgaben konnten nicht geladen werden
 	Retry saving presets	Speichern der Vorgaben erneut versuchen
 	Brush preset changes are not saved: {error}	Änderungen an Pinselvorgaben sind nicht gespeichert: {error}
@@ -2395,3 +2414,7 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
+	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
+	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
+	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
