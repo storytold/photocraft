@@ -1,4 +1,4 @@
-//! Boykov–Kolmogorov max-flow / min-cut.
+//! Hybrid max-flow / min-cut: Boykov–Kolmogorov and FIFO push/relabel.
 //!
 //! Implemented from Y. Boykov and V. Kolmogorov, "An Experimental Comparison of Min-Cut/Max-Flow
 //! Algorithms for Energy Minimization in Vision", IEEE PAMI 26(9), 2004: two search trees
@@ -6,8 +6,15 @@
 //! path; saturated tree edges create orphans that are re-adopted (or freed) before growing again.
 //! Search trees are reused between augmentations, which makes the algorithm very fast on the
 //! short-path grid graphs of image segmentation.
+//!
+//! Large finite graphs with both terminal directions use FIFO push/relabel instead:
+//! excess is discharged locally, with periodic exact distances to both terminals.
+//! This avoids repeated path augmentation for the many area-cost terminals in Quick Selection.
+//! Small graphs and graphs with only one terminal direction retain the BK path.
 
 use std::collections::VecDeque;
+
+mod push_relabel;
 
 const NONE: u32 = u32::MAX;
 const TERMINAL: u32 = u32::MAX - 1;
@@ -103,6 +110,24 @@ impl Graph {
 
     /// Computes the maximum flow (= minimum cut capacity).
     pub fn maxflow(&mut self) -> f64 {
+        if self.node_count() >= 4096 {
+            let mut source = false;
+            let mut sink = false;
+            for &capacity in &self.tr_cap {
+                if !capacity.is_finite() {
+                    return self.maxflow_bk();
+                }
+                source |= capacity > EPS;
+                sink |= capacity < -EPS;
+            }
+            if source && sink && self.r_cap.iter().all(|v| v.is_finite() && *v >= 0.0) {
+                return self.maxflow_push_relabel();
+            }
+        }
+        self.maxflow_bk()
+    }
+
+    pub(super) fn maxflow_bk(&mut self) -> f64 {
         let n = self.node_count();
         let mut queue: VecDeque<u32> = VecDeque::new();
         let mut orphans: VecDeque<u32> = VecDeque::new();

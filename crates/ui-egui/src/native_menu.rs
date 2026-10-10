@@ -683,8 +683,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// every command's enabled state, so it doesn't run on frames that only animate or scroll.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
-    let input = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })));
-    let state = state_hash(app, input.then_some(app.frame));
+    let state = state_hash(app, had_input(ctx).then_some(app.frame));
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
@@ -706,16 +705,23 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     menu.dirty = false;
 }
 
+/// A click or key press this frame: it may have changed state [`state_hash`] doesn't list.
+pub(crate) fn had_input(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })))
+}
+
 /// What the menus' rows depend on, cheaply: commands run, the documents and their revisions,
 /// selection, recent files, panels and view state, the language. `input` forces a change on
 /// frames with a click or key press, which covers state the hash doesn't list.
-fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
+pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
     input.hash(&mut h);
     let s = &app.session;
     s.journal.len().hash(&mut h);
     s.active_index().hash(&mut h);
     s.clipboard.is_some().hash(&mut h);
+    // A running job greys the commands that would change its document.
+    s.has_jobs().hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }
@@ -830,8 +836,19 @@ mod tests {
         assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
         assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Appearance Mode");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().label, "Sync with system");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().checked, Some(false));
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
         assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
+        a.session.prefs.edit(|p| p.interface.appearance_mode = photocraft_engine::prefs::AppearanceMode::Auto);
+        for palette in [crate::theme::ThemeKind::Classic, crate::theme::ThemeKind::ProMedium] {
+            a.ui.theme = palette;
+            let automatic = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+            assert_eq!(automatic.bar.find("window.theme.system").unwrap().checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(automatic.bar.find(&format!("window.theme.{}", kind.id())).unwrap().checked, Some(false));
+            }
+        }
     }
 
     /// Language follows Settings in the app menu: Auto and every UI language in its own name,
@@ -1044,6 +1061,72 @@ mod tests {
         app.ui.dialogs.clear();
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    }
+
+    /// Edit > Cut uses the type editor's selection, like the clipboard Cut event (#1355).
+    #[test]
+    fn cut_selected_type_from_native_menu_matches_keyboard_cut() {
+        for native_click in [true, false] {
+            let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut app = app(true);
+            let ctx = egui::Context::default();
+            let id = photocraft_doc::LayerId(app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 24})).unwrap()["layer"].as_u64().unwrap());
+            crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 5));
+            let events = if native_click { vec![Event::Click("edit.cut".into())] } else { Vec::new() };
+            app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events })));
+            frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+            assert!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be enabled for selected characters");
+
+            let mut raw = egui::RawInput::default();
+            app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+            if !native_click {
+                raw.events.push(egui::Event::Cut);
+            }
+            let mut out = ctx.run_ui(raw, |ui| {
+                run(&mut app, ui.ctx());
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                sync(&mut app, ui.ctx());
+            });
+            out.textures_delta.clear();
+            assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText("Hello".into())]);
+            let photocraft_doc::LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(id).unwrap().content else {
+                panic!("type layer changed kind")
+            };
+            assert!(text.text.is_empty());
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 0));
+            assert!(!synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be disabled at an empty caret");
+            assert!(app.session.clipboard.is_none(), "text Cut must not copy rendered pixels");
+        }
+    }
+
+    #[test]
+    fn native_cut_without_type_edit_keeps_pixel_clipboard_behavior() {
+        let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app(false);
+        app.run("file.new", json!({"width": 4, "height": 4, "background": "transparent"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([1.0, 0.0, 0.0, 1.0]));
+        let ctx = egui::Context::default();
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("edit.cut".into())] })));
+        frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+        assert_eq!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, app.session.is_enabled("edit.cut"));
+        assert!(app.session.is_enabled("edit.cut"));
+        let mut raw = egui::RawInput::default();
+        app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+        frame(&ctx, raw, |ui| {
+            run(&mut app, ui.ctx());
+            sync(&mut app, ui.ctx());
+        });
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([0.0, 0.0, 0.0, 0.0]));
+        let clip = app.session.clipboard.as_ref().unwrap();
+        assert_eq!((clip.bounds.width(), clip.bounds.height()), (4, 4));
+        let mut px = vec![[0u8; 4]; 16];
+        clip.surface.read_rgba8_into(clip.bounds, &mut px);
+        assert_eq!(px, vec![[255u8, 0, 0, 255]; 16]);
+        assert!(app.ui.text_edit.is_none());
     }
 
     /// With the Mac menu bar the title bar draws no menu titles: each title shows once fewer.

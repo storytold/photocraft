@@ -74,6 +74,21 @@
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.photocraft.ora</string>
+      <key>UTTypeDescription</key>
+      <string>OpenRaster Image</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.image</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>ora</string></array>
+        <key>public.mime-type</key>
+        <array><string>image/openraster</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
       <string>ai.storyteller.photocraft.pdn</string>
       <key>UTTypeDescription</key>
       <string>Paint.NET Document</string>
@@ -171,6 +186,7 @@
         <string>public.avif</string>
         <string>ai.storyteller.photocraft.qoi</string>
         <string>ai.storyteller.photocraft.pdn</string>
+        <string>ai.storyteller.photocraft.ora</string>
       </array>
     </dict>
   </array>

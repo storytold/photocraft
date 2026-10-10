@@ -169,6 +169,31 @@ fn closed_rect_stroke_and_alignment() {
 }
 
 #[test]
+fn aligned_dashes_keep_width_units_and_open_paths_stay_centered() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let square = shapes::rect(10.0, 10.0, 80.0, 80.0);
+    for (align, y, other_y) in [(StrokeAlign::Inside, 11, 7), (StrokeAlign::Center, 9, 6), (StrokeAlign::Outside, 7, 11)] {
+        let sh = ShapeLayer {
+            path: square.clone(),
+            stroke: Some(ShapeStroke { width: 4.0, align, dashes: vec![2.0, 2.0], ..Default::default() }),
+            ..Default::default()
+        };
+        let rgba = CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert!(rgba[(y * 100 + 13) as usize][3] > 0.99);
+        assert!(rgba[(y * 100 + 21) as usize][3] < 0.01);
+        assert!(rgba[(other_y * 100 + 13) as usize][3] < 0.01);
+    }
+    let open = Path::new(vec![Subpath::polyline(&[(10.0, 50.0), (90.0, 50.0)])]);
+    let render = |align| {
+        let sh =
+            ShapeLayer { path: open.clone(), stroke: Some(ShapeStroke { width: 4.0, align, cap: LineCap::Round, ..Default::default() }), ..Default::default() };
+        CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip)
+    };
+    assert_eq!(render(StrokeAlign::Center), render(StrokeAlign::Inside));
+    assert_eq!(render(StrokeAlign::Center), render(StrokeAlign::Outside));
+}
+
+#[test]
 fn dashes_cover_expected_fraction() {
     let line = Path::new(vec![Subpath::polyline(&[(0.0, 50.0), (120.0, 50.0)])]);
     let st = StrokeStyle { width: 4.0, dashes: vec![8.0, 4.0], ..Default::default() };
@@ -488,4 +513,60 @@ fn joined_subpaths_fill_as_one_component() {
     // A lone joined subpath acts as the first component.
     let lone = Path::new(vec![Subpath::polygon(&[(2.0, 2.0), (8.0, 2.0), (8.0, 8.0)]).with_op(PathOp::Join)]);
     assert_eq!(cov(&lone, r)[3 * 20 + 6], 1.0);
+}
+
+/// Content bounds of a filled shape rendered as a layer (every depth) and as a selection
+/// (every depth); they must all equal `want`.
+fn assert_rendered_bounds(path: &Path, want: Rect, what: &str) {
+    let canvas = Rect::new(0, 0, 1920, 1080);
+    let sh = ShapeLayer { path: path.clone(), fill: Some(Fill::Solid(Color::rgb(0.0, 0.0, 1.0))), ..Default::default() };
+    for sample in SampleType::ALL {
+        let fmt = PixelFormat::new(photocraft_color::ColorMode::Rgb, sample, true);
+        assert_eq!(render_shape(&sh, fmt, canvas).content_bounds(), want, "{what}: layer {sample:?}");
+        let sel = coverage_surface(&fill_rasterizer(path, DEFAULT_TOLERANCE), PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, false), canvas);
+        assert_eq!(sel.content_bounds(), want, "{what}: selection {sample:?}");
+    }
+}
+
+#[test]
+fn curved_shape_bounds_are_exact() {
+    // Issue #2537: f32 round-off left ~1e-7 coverage just right of curved edges, so curved
+    // shapes reported bounds one pixel too wide. Rectangles never showed it.
+    let p = |x: f64, y: f64| photocraft_geom::Point::new(x, y);
+    // An asymmetric Bézier blob whose extremes lie on its anchors (axis-parallel handles).
+    let blob = Path::new(vec![Subpath {
+        closed: true,
+        knots: vec![
+            photocraft_doc::Knot::smooth(p(60.0, 0.0), p(30.0, 0.0), p(80.0, 0.0)),
+            photocraft_doc::Knot::smooth(p(100.0, 45.0), p(100.0, 20.0), p(100.0, 70.0)),
+            photocraft_doc::Knot::smooth(p(40.0, 100.0), p(75.0, 100.0), p(15.0, 100.0)),
+            photocraft_doc::Knot::smooth(p(0.0, 55.0), p(0.0, 85.0), p(0.0, 25.0)),
+        ],
+        op: Default::default(),
+    }]);
+    let cases = [
+        ("ellipse", shapes::ellipse(0.0, 0.0, 100.0, 100.0), Rect::new(0, 0, 100, 100)),
+        ("ellipse 600", shapes::ellipse(660.0, 240.0, 600.0, 600.0), Rect::new(660, 240, 1260, 840)),
+        ("ellipse at x.5", shapes::ellipse(10.5, 10.0, 100.0, 100.0), Rect::new(10, 10, 111, 110)),
+        ("rounded rect", shapes::rounded_rect(0.0, 0.0, 100.0, 100.0, [20.0; 4]), Rect::new(0, 0, 100, 100)),
+        // Outer vertices at x = 50 ± 50·cos 18° (2.45, 97.55), lowest at y = 50 + 50·sin 54° (90.45).
+        ("star", shapes::polygon(0.0, 0.0, 100.0, 100.0, 5, 0.5), Rect::new(2, 0, 98, 91)),
+        ("custom path", blob, Rect::new(0, 0, 100, 100)),
+        ("rect", shapes::rect(0.0, 0.0, 100.0, 100.0), Rect::new(0, 0, 100, 100)),
+    ];
+    for (what, path, want) in &cases {
+        assert_rendered_bounds(path, *want, what);
+    }
+}
+
+#[test]
+fn thin_antialiased_edges_still_count_toward_bounds() {
+    // A quarter-pixel overhang and a 1-px bar straddling two columns are real coverage.
+    assert_rendered_bounds(&shapes::rect(0.0, 0.0, 100.25, 100.0), Rect::new(0, 0, 101, 100), "quarter overhang");
+    assert_rendered_bounds(&shapes::rect(10.5, 0.0, 1.0, 50.0), Rect::new(10, 0, 12, 50), "1-px bar");
+    assert_rendered_bounds(&shapes::rect(0.0, 0.0, 100.01, 10.0), Rect::new(0, 0, 101, 10), "1% sliver");
+    // At 32-bit even a 1e-4 sliver is kept: only round-off is dropped.
+    let r = fill_rasterizer(&shapes::rect(0.0, 0.0, 100.0001, 10.0), DEFAULT_TOLERANCE);
+    let c = r.render(Rect::new(0, 0, 102, 10));
+    assert!(c[100] > 5e-5 && c[101] == 0.0, "{} {}", c[100], c[101]);
 }

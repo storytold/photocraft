@@ -307,6 +307,25 @@ mod tests {
     }
 
     #[test]
+    fn execute_reports_invalid_filter_parameters_without_changing_history() {
+        let h = session();
+        assert_eq!(respond(&h, r#"{"method":"doc.new","params":{"width":8,"height":8}}"#)["ok"], true);
+        let before = h.lock().unwrap().inspect(None).unwrap();
+        for (params, key) in
+            [(json!({"radius":"big"}), "radius"), (json!({"radus":3}), "radus"), (json!({"radius":5000}), "radius"), (json!({"radius":-4}), "radius")]
+        {
+            for wait in [true, false] {
+                let request = json!({"method":"engine.execute","params":{"command":"filter.blur.gaussianBlur","params":params,"wait":wait}});
+                let reply = respond(&h, &request.to_string());
+                assert_eq!(reply["ok"], false);
+                let error = reply["error"].as_str().unwrap();
+                assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+                assert_eq!(h.lock().unwrap().inspect(None).unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
     fn lines_round_trip_and_errors() {
         let h = session();
         let input = concat!(

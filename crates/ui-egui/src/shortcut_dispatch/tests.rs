@@ -458,6 +458,43 @@ fn delete_without_a_selection_deletes_the_selected_layer() {
     }
 }
 
+/// With the layer mask targeted, Delete / Backspace edit the mask and never the layer's pixels:
+/// a selection fills the mask with the background colour there, and with no selection the mask
+/// itself is deleted.
+#[test]
+fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
+    for key in ["Delete", "Backspace"] {
+        let mut h = harness();
+        put_focus(&mut h, Place::Canvas);
+        let s = &mut h.state_mut().session;
+        let layer = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let sel = s.active().unwrap().doc.selection.as_ref().expect("the harness keeps a selection").content_bounds();
+        let (x, y) = ((sel.x0 + sel.x1) / 2, (sel.y0 + sel.y1) / 2);
+        h.state_mut().ui.mask_target = true;
+        h.run_steps(2);
+        let layer_pixels = |h: &Harness<'_, PhotocraftApp>| {
+            h.state().session.active().unwrap().doc.layer(layer).and_then(|l| l.surface().cloned()).map(|s| s.read_region(sel))
+        };
+        let mask_at = |h: &Harness<'_, PhotocraftApp>| {
+            h.state().session.active().unwrap().doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| m.surface.sample_channel(x, y, 0))
+        };
+        let before = layer_pixels(&h);
+        let bg = h.state().session.tools.background;
+        press(&mut h, key);
+        assert_eq!(logged(&h), ["edit.fillBackground"], "{key}");
+        assert_eq!(mask_at(&h), Some(bg[0]), "{key}: the mask takes the background colour in the selection");
+        assert_eq!(layer_pixels(&h), before, "{key}: the layer's pixels are untouched");
+        h.state_mut().session.execute("select.deselect", json!({})).unwrap();
+        h.run_steps(2);
+        press(&mut h, key);
+        assert_eq!(logged(&h), ["layer.layerMask.delete"], "{key}");
+        assert_eq!(mask_at(&h), None, "{key}: no selection deletes the mask");
+        assert!(h.state().session.active().unwrap().doc.layer(layer).is_some(), "{key}: the layer stays");
+        assert_eq!(layer_pixels(&h), before, "{key}: the layer's pixels are untouched");
+    }
+}
+
 /// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).
 #[test]
 fn delete_without_a_selection_deletes_every_selected_layer() {

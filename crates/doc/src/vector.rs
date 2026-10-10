@@ -263,6 +263,32 @@ impl Default for ShapeStroke {
     }
 }
 
+impl ShapeStroke {
+    /// Limits accepted by interactive commands. Importers retain original descriptor data;
+    /// renderers must additionally bound their work for arbitrary file-provided geometry.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.width.is_finite() || !(0.0..=1_000_000.0).contains(&self.width) {
+            return Err("stroke width must be finite and between 0 and 1000000 px");
+        }
+        if !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {
+            return Err("stroke opacity must be between 0 and 100%");
+        }
+        if !self.miter_limit.is_finite() || !(1.0..=500.0).contains(&self.miter_limit) {
+            return Err("miter limit must be between 1 and 500");
+        }
+        if !self.dash_offset.is_finite() || self.dash_offset.abs() > 1_000_000.0 {
+            return Err("dash offset must be finite and within ±1000000 widths");
+        }
+        if self.dashes.len() > 32 || self.dashes.iter().any(|d| !d.is_finite() || !(0.0..=10000.0).contains(d)) {
+            return Err("dash pattern must contain at most 32 finite lengths between 0 and 10000 widths");
+        }
+        if !self.dashes.is_empty() && self.dashes.iter().sum::<f32>() < 0.01 {
+            return Err("dash pattern total must be at least 0.01 widths");
+        }
+        Ok(())
+    }
+}
+
 /// Parametric ("live") shape the path was generated from, kept for re-editing (Properties panel).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

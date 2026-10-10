@@ -6,9 +6,9 @@ PhotoCraft follows the same conventions as FilmCraft #28. Start a headless sessi
 photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
 ```
 
-Paths are relative to the corresponding root; without a root that filesystem authority is
-absent. Bridge mode uses `--bridge` and `--control-token-file` as described in
-[development.md](development.md). UI tools require a running desktop app.
+Paths are relative to the corresponding root, or absolute paths beneath it; without a root that
+filesystem authority is absent. Bridge mode uses `--bridge` and `--control-token-file` as
+described in [development.md](development.md). UI tools require a running desktop app.
 
 ## Tools and resources
 

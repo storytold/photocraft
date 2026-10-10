@@ -9,7 +9,9 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
-            import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+            import: Some(Box::new(|name, bytes, max_svg_group_depth| {
+                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
             export: Some(Box::new(|doc, path, _| {
                 photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
             })),
@@ -113,4 +115,70 @@ fn web_download_and_automation_saves_use_the_same_identity_completion() {
     assert_eq!(app.session.active().unwrap().doc.name, "Untitled-1.psd");
     app.save_automation(Some("保存/agent save.psd".into())).unwrap();
     assert_eq!(app.session.active().unwrap().doc.name, "agent save.psd");
+}
+
+/// Save As to a flat format writes a copy when the flat file can't hold the document: its layers,
+/// or the layered file it already lives in. The document keeps its file, so Save still writes the
+/// layered original and the edits stay unsaved (#2550).
+#[test]
+fn save_as_flat_keeps_the_layered_original() {
+    let ctx = egui::Context::default();
+    // A layered document, and a one-layer one (the issue's case: the dialog offered a JPEG).
+    for layered in [true, false] {
+        let mut app = app();
+        if !layered {
+            app.run("file.new", json!({"width": 4, "height": 4, "name": "Untitled-2"})).unwrap();
+        }
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let w = written.clone();
+        app.services.write = Some(Box::new(move |path, _| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        }));
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "art.psd"})).unwrap();
+        app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+        let before = identity(&app);
+        for flat in ["art.jpg", "art.png"] {
+            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat})).unwrap();
+            assert_eq!(identity(&app), before, "{flat}, layered: {layered}");
+        }
+        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        assert_eq!(*written.borrow(), ["art.psd", "art.jpg", "art.png", "art.psd"]);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.saved_revision, st.revision);
+    }
+    // An untitled layered document saved as a JPEG is still untitled and unsaved.
+    let mut app = app();
+    let before = identity(&app);
+    app.save_as(Some("flat.jpg".into())).unwrap();
+    assert_eq!(identity(&app), before);
+}
+
+/// A flat document that isn't in a layered file becomes the flat file it is saved as, as before.
+#[test]
+fn save_as_flat_retargets_a_flat_document() {
+    let mut app = app();
+    app.run("file.new", json!({"width": 4, "height": 4, "name": "Untitled-2"})).unwrap();
+    app.save_as(Some("shot.png".into())).unwrap();
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shot.png"));
+    app.save_as(Some("shot.jpg".into())).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("shot.jpg", Some("shot.jpg")));
+    assert_eq!(st.saved_revision, st.revision);
+}
+
+/// `app.save` (control channel, MCP bridge) to a flat format is a copy, as in the headless server
+/// (#1547); only a layered format becomes the document's file (#2579).
+#[test]
+fn automation_flat_save_is_a_copy() {
+    let mut app = app();
+    let before = identity(&app);
+    for flat in ["flat.png", "flat.jpg", "flat.tif"] {
+        app.save_automation(Some(flat.into())).unwrap();
+        assert_eq!(identity(&app), before, "{flat}");
+    }
+    app.save_automation(Some("layers.psd".into())).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("layers.psd", Some("layers.psd")));
+    assert_eq!(st.saved_revision, st.revision);
 }

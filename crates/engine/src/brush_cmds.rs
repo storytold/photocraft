@@ -245,45 +245,55 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
     }
 }
 
+/// The document's own CMYK profile (absent, built-in or not a CMYK document: `None`, the
+/// default conversions), which the stroke's colour conversions must honour — the compositors
+/// and composite exports enter the same scope.
+fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_color::convert::CmykSpace>> {
+    photocraft_color::convert::CmykSpace::for_profile(s.active().and_then(|d| d.doc.icc_profile.as_ref()))
+}
+
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
-    let dmg = s.edit(label, |doc, _| {
-        let sel = doc.selection.clone();
-        let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
-        let mut brush = brush;
-        erase_locked(&mut brush, lock, bg);
-        if auto_erase {
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
-        }
-        let damage = if let Some(axis) = &symmetry {
-            let reflected = axis.reflected_passes(&pts);
-            let copies: Vec<_> = reflected
-                .iter()
-                .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
-                .map(|p| {
-                    let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                    renderer.push(p);
-                    renderer.finish();
-                    renderer
-                })
-                .collect();
-            if copies.is_empty() {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
-            } else {
-                let pre = surf.clone();
-                let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                original.push(&pts);
-                original.finish();
-                original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
+    let cmyk = doc_cmyk_space(s);
+    let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        s.edit(label, |doc, _| {
+            let sel = doc.selection.clone();
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            let mut brush = brush;
+            erase_locked(&mut brush, lock, bg);
+            if auto_erase {
+                apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
             }
-        } else {
-            render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
-        };
-        Ok(damage)
+            let damage = if let Some(axis) = &symmetry {
+                let reflected = axis.reflected_passes(&pts);
+                let copies: Vec<_> = reflected
+                    .iter()
+                    .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
+                    .map(|p| {
+                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                        renderer.push(p);
+                        renderer.finish();
+                        renderer
+                    })
+                    .collect();
+                if copies.is_empty() {
+                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                } else {
+                    let pre = surf.clone();
+                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                    original.push(&pts);
+                    original.finish();
+                    original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
+                }
+            } else {
+                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+            };
+            Ok(damage)
+        })
     })?;
     Ok(damage_json(s, dmg))
 }
@@ -302,6 +312,9 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
 /// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
 fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
     let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    if flag(p, "block", false) {
+        return block_brush(brush, p);
+    }
     brush.aliased = true;
     if num(p, "hardness").is_none() {
         brush.hardness = 1.0;
@@ -310,6 +323,42 @@ fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
         brush.flow = 1.0;
     }
     Ok(brush)
+}
+
+/// Edge of the Eraser's Block in screen pixels (Photoshop): constant on screen, so it covers
+/// `BLOCK_SCREEN_PX / zoom` document pixels.
+pub const BLOCK_SCREEN_PX: f64 = 16.0;
+
+/// The Eraser's Block edge in document pixels at view `zoom`: `16 / zoom`, rounded to whole
+/// pixels (a zoom that is not a positive number counts as 100 %).
+pub fn block_size(zoom: f64) -> f32 {
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    (BLOCK_SCREEN_PX / zoom).round().clamp(1.0, f64::from(photocraft_paint::brush::MAX_BRUSH_SIZE)) as f32
+}
+
+/// The Eraser's Block mode (`"block": true`): a hard, aliased square of
+/// [`BLOCK_SCREEN_PX`] screen pixels at the stroke's `"zoom"`, i.e. `16 / zoom` document
+/// pixels rounded to whole pixels. Size, opacity, flow, hardness and the brush's dynamics don't
+/// apply (Photoshop); colour, erase, smoothing and the seed are the resolved brush's.
+fn block_brush(b: BrushSettings, p: &Value) -> Result<BrushSettings> {
+    let zoom = match p.get("zoom") {
+        None => 1.0,
+        Some(v) => v.as_f64().filter(|z| z.is_finite() && *z > 0.0).ok_or_else(|| bad("paint.pencil", "`zoom` must be a positive number"))?,
+    };
+    Ok(BrushSettings {
+        size: block_size(zoom),
+        aliased: true,
+        square: true,
+        pressure_size: false,
+        pressure_opacity: false,
+        spacing: 0.25,
+        color: b.color,
+        background: b.background,
+        erase: b.erase,
+        smoothing: b.smoothing,
+        seed: b.seed,
+        ..BrushSettings::default()
+    })
 }
 
 /// Applies the options-bar blend `mode` to a brush. `"mode"` accepts any blend-mode name
@@ -353,6 +402,9 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
+    /// pixels a `paint.stroke` with `seed` will write.
+    cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
 }
 
 impl LiveStroke {
@@ -401,6 +453,7 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             tail: Rect::EMPTY,
+            cmyk: doc_cmyk_space(s),
         };
         live.push(&pts)?;
         Ok(live)
@@ -425,57 +478,60 @@ impl LiveStroke {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
-        self.renderer.push(pts);
-        if let Some(symmetry) = &self.symmetry {
-            for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
-                *distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &reflected);
-                mirror.push(&reflected);
+        let cmyk = self.cmyk.clone();
+        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+            self.renderer.push(pts);
+            if let Some(symmetry) = &self.symmetry {
+                for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
+                    *distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &reflected);
+                    mirror.push(&reflected);
+                }
             }
-        }
-        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-        if self.mirror_distinct.iter().any(|d| *d) {
-            // Merge every finished pass once, both here and on commit, including shared axes.
-            let old = self.tail;
-            let mut original_preview = self.renderer.clone();
-            original_preview.finish();
-            let copies: Vec<_> = self
-                .mirrors
-                .iter()
-                .zip(&self.mirror_distinct)
-                .filter(|(_, d)| **d)
-                .map(|(r, _)| {
-                    let mut r = r.clone();
-                    r.finish();
-                    r
-                })
-                .collect();
-            let bounds = copies.iter().fold(original_preview.bounds().union(&old), |b, r| b.union(&r.bounds()));
-            if self.symmetry_regions.is_empty() && !old.is_empty() {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            if self.mirror_distinct.iter().any(|d| *d) {
+                // Merge every finished pass once, both here and on commit, including shared axes.
+                let old = self.tail;
+                let mut original_preview = self.renderer.clone();
+                original_preview.finish();
+                let copies: Vec<_> = self
+                    .mirrors
+                    .iter()
+                    .zip(&self.mirror_distinct)
+                    .filter(|(_, d)| **d)
+                    .map(|(r, _)| {
+                        let mut r = r.clone();
+                        r.finish();
+                        r
+                    })
+                    .collect();
+                let bounds = copies.iter().fold(original_preview.bounds().union(&old), |b, r| b.union(&r.bounds()));
+                if self.symmetry_regions.is_empty() && !old.is_empty() {
+                    surf.write_region(old, &self.pre.read_region(old));
+                }
+                for region in &self.symmetry_regions {
+                    surf.write_region(*region, &self.pre.read_region(*region));
+                }
+                self.symmetry_regions =
+                    std::iter::once(original_preview.bounds()).chain(copies.iter().map(StrokeRenderer::bounds)).filter(|r| !r.is_empty()).collect();
+                let damage = original_preview.composite_union_many(&copies, &self.pre, surf, self.sel.as_ref(), self.lock);
+                self.tail = bounds;
+                return Ok(damage.union(&bounds));
+            }
+            let mut dmg = Rect::EMPTY;
+            let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+            if !old.is_empty() {
+                // Back to the stroke without the previous tail.
                 surf.write_region(old, &self.pre.read_region(old));
+                self.renderer.mark_dirty(old);
+                dmg = old;
             }
-            for region in &self.symmetry_regions {
-                surf.write_region(*region, &self.pre.read_region(*region));
+            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
+            if let Some(mut tail) = self.renderer.tail_preview() {
+                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+                dmg = dmg.union(&self.tail);
             }
-            self.symmetry_regions =
-                std::iter::once(original_preview.bounds()).chain(copies.iter().map(StrokeRenderer::bounds)).filter(|r| !r.is_empty()).collect();
-            let damage = original_preview.composite_union_many(&copies, &self.pre, surf, self.sel.as_ref(), self.lock);
-            self.tail = bounds;
-            return Ok(damage.union(&bounds));
-        }
-        let mut dmg = Rect::EMPTY;
-        let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-        if !old.is_empty() {
-            // Back to the stroke without the previous tail.
-            surf.write_region(old, &self.pre.read_region(old));
-            self.renderer.mark_dirty(old);
-            dmg = old;
-        }
-        dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-        if let Some(mut tail) = self.renderer.tail_preview() {
-            self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
-            dmg = dmg.union(&self.tail);
-        }
-        Ok(dmg)
+            Ok(dmg)
+        })
     }
 }
 
@@ -865,7 +921,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.pencil",
             "Pencil",
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             pencil,
             true

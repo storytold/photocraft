@@ -222,6 +222,24 @@ fn run_errors() {
 }
 
 #[test]
+fn run_rejects_invalid_filter_parameters_without_exporting() {
+    let d = tmp("invalid-filter-params");
+    let out = d.join("result.png");
+    for (params, key) in [(r#"{"radius":"big"}"#, "radius"), (r#"{"radus":3}"#, "radus"), (r#"{"radius":5000}"#, "radius"), (r#"{"radius":-4}"#, "radius")] {
+        let result = bin()
+            .args(["run", "--new", r#"{"width":8,"height":8}"#, "--cmd", "filter.blur.gaussianBlur", "--params", params, "--out"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+        assert!(!out.exists());
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
 fn batch_applies_actions_to_directory() {
     let d = tmp("batch");
     let (inp, outp) = (d.join("in"), d.join("out"));

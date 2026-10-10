@@ -563,6 +563,77 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, windows));
 }
 
+/// The Hand tool, and Space held over another tool, show an open hand while hovering and a fist
+/// while they pan (#2196). The OS draws those everywhere but Windows, where winit maps `Grab` to
+/// the four-arrow move cursor, so the app hands it a bitmap there (`Crosshair` is the fallback).
+#[test]
+fn hand_tool_shows_an_open_hand_and_a_fist_while_panning() {
+    let mut h = harness();
+    let p = h.state().last_canvas_rect.center();
+    let windows = cfg!(target_os = "windows");
+    // The icon the OS gets, and the bitmap for it if any.
+    let pointer = |h: &Harness<'static, PhotocraftApp>| {
+        let out = &h.output().platform_output;
+        (out.cursor_icon, out.cursor_image.as_ref().map(|i| i.rgba.clone()))
+    };
+    let expect = |got: (egui::CursorIcon, Option<std::sync::Arc<[u8]>>), native: egui::CursorIcon, what: &str| {
+        if windows {
+            assert_eq!(got.0, egui::CursorIcon::Crosshair, "{what}: fallback under the bitmap");
+            assert!(got.1.is_some(), "{what}: a bitmap");
+        } else {
+            assert_eq!(got, (native, None), "{what}");
+        }
+        got.1
+    };
+
+    h.state_mut().ui.tool = crate::state::Tool::Hand;
+    h.hover_at(p);
+    h.run_steps(2);
+    let open = expect(pointer(&h), egui::CursorIcon::Grab, "hovering with the Hand");
+    press(&mut h, p, true);
+    for i in 1..=3 {
+        h.hover_at(p + vec2(10.0 * i as f32, 0.0));
+        h.run_steps(1);
+    }
+    let fist = expect(pointer(&h), egui::CursorIcon::Grabbing, "dragging with the Hand");
+    if windows {
+        assert_ne!(open, fist, "a fist is not the open hand");
+    }
+    press(&mut h, p + vec2(30.0, 0.0), false);
+    h.run_steps(2);
+    expect(pointer(&h), egui::CursorIcon::Grab, "after the drag");
+
+    // Space turns any tool into the Hand while held.
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.hover_at(p);
+    h.run_steps(2);
+    let brush = pointer(&h);
+    assert_ne!(brush.0, egui::CursorIcon::Grab, "the Brush is not a hand");
+    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    expect(pointer(&h), egui::CursorIcon::Grab, "Space over the Brush");
+    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(pointer(&h), brush, "released: the Brush's own pointer is back");
+}
+
+/// With a dialog open the canvas still pans, and the Hand's pointer follows (#2196).
+#[test]
+fn hand_pointer_over_the_canvas_under_a_dialog() {
+    let mut h = harness();
+    open_dialog(&mut h);
+    h.state_mut().ui.tool = crate::state::Tool::Hand;
+    let p = free_canvas(&h);
+    h.hover_at(p);
+    h.run_steps(3);
+    let out = &h.output().platform_output;
+    if cfg!(target_os = "windows") {
+        assert!(out.cursor_image.is_some());
+    } else {
+        assert_eq!(out.cursor_icon, egui::CursorIcon::Grab);
+    }
+}
+
 /// Esc while drawing with the Pen ends the path where it is, left open, and keeps it as the work
 /// path, as ↩ does; it used to throw the path away (#1769).
 #[test]
@@ -579,4 +650,46 @@ fn esc_ends_a_pen_path_and_keeps_it() {
     assert!(!path.subpaths[0].closed, "left open");
     assert_eq!(path.subpaths[0].knots.len(), 3);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+}
+
+/// Esc with no active operation deselects (#2674), like ⌘D.
+#[test]
+fn escape_deselects_when_nothing_else_needs_cancelling() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.run_steps(1);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "Esc deselects");
+    assert!(!h.state().ui.status_error, "no error: {}", h.state().ui.status);
+    // With nothing selected, Esc stays untouched (no history step, no error).
+    let steps = h.state().session.active().unwrap().history.entries().len();
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "no Deselect step");
+}
+
+/// The dialog owns Esc: it cancels the dialog and the selection stays.
+#[test]
+fn escape_with_a_dialog_open_cancels_the_dialog_not_the_selection() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    open_dialog(&mut h);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.dialogs.is_empty(), "Esc cancelled the dialog");
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
+}
+
+/// The command palette owns Esc: it closes the palette and the selection stays.
+#[test]
+fn escape_with_the_palette_open_does_not_deselect() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().ui.palette_open = true;
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
 }

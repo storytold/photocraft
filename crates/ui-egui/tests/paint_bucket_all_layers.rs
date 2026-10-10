@@ -73,6 +73,7 @@ fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
+        aspect: app.ui.view.display_aspect(),
     }
     .to_screen(x, y)
 }

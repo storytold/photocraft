@@ -597,13 +597,16 @@ fn pad4(mut v: Vec<u8>) -> Vec<u8> {
 }
 
 /// `SoLd` block data. With `template` (the imported descriptor) every key it has is kept and only
-/// the transform (when it moved), warp and filter stack are rewritten; otherwise a fresh
-/// descriptor in Photoshop's key order.
+/// the placed id (for a duplicate), transform (when it moved), warp and filter stack are rewritten;
+/// otherwise a fresh descriptor in Photoshop's key order.
 pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
     let warp = warp_desc(s.warp, s.size, warnings);
     let d = match template {
         Some(t) => {
             let mut d = t.clone();
+            if text_of(t, "placed").as_deref() != Some(s.placed) {
+                set(&mut d, "placed", Value::Text(UnicodeString::new_nul(s.placed)));
+            }
             if quad_moved(t, s) {
                 set(&mut d, "Trnf", quad(s));
                 set(&mut d, "nonAffineTransform", quad(s));
@@ -789,8 +792,7 @@ fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sa
     FilterEffectsItem { id: placed.to_string(), version: 1, rect, depth: u32::from(depth), max_channels: 24, slots: vec![None; 26], mask: Some((rect, plane)) }
 }
 
-/// A uuid-shaped id (8-4-4-4-12 hex digits) derived from `seed`: equal contents get equal ids, so
-/// identical smart objects share one embedded file, as Photoshop's instances do.
+/// A deterministic uuid-shaped id (8-4-4-4-12 hex digits) derived from `seed`.
 pub fn uuid_from(seed: &[u8]) -> String {
     let h = blake3::hash(seed);
     let x = to_hex(&h.as_bytes()[..16]);

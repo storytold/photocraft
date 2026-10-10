@@ -233,14 +233,14 @@ impl Fetch for LoadFetch<'_> {
 pub(crate) fn load(src: &dyn Source, opts: &LoadOptions) -> Result<Document> {
     let m = read_manifest(src, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
-    let mut loader = Loader { fetch: &mut fetch, preserve_ids: opts.preserve_ids, max_id: 0, id_map: HashMap::new() };
-    let doc = loader.document(&m.document)?;
-    if opts.preserve_ids && !convert::reserve_ids_through(loader.max_id) {
-        // Ids far beyond our counter: remap instead of risking collisions.
-        let fresh = LoadOptions { preserve_ids: false, ..*opts };
-        return load(src, &fresh);
-    }
-    Ok(doc)
+    let mut loader = Loader {
+        fetch: &mut fetch,
+        preserve_ids: opts.preserve_ids,
+        id_map: HashMap::new(),
+        contents_id_map: HashMap::new(),
+        legacy_linked_contents: HashMap::new(),
+    };
+    loader.document(&m.document)
 }
 
 // ---------------------------------------------------------------------------

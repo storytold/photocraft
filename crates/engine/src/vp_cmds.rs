@@ -145,7 +145,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
         for (plane, src, rect, at, width) in &pastes {
-            if let Some(out) = paste(&sc, *plane, src, *rect, *at, *width) {
+            if let Some(out) = paste(&sc, *plane, src, *rect, *at, *width)? {
                 over(surf, &out);
             }
         }

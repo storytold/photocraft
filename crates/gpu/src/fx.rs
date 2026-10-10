@@ -7,14 +7,16 @@
 //!
 //! Inputs come from the CPU, computed by compose itself so they match it bit for bit: the
 //! layer's **shape** (`compose::layer_shape`) and the **distance fields** of it that the effects
-//! use (`compose::effects::distance_field`, an inherently sequential transform). Both are
+//! use (`compose::effects::distance_field`). Both are
 //! computed per layer state and uploaded once, and only where the layer changed:
 //!
 //! - damage is the union of the layer's tiles whose copy-on-write `Arc` changed, so a brush dab
 //!   recomputes one 256² tile of shape;
 //! - a distance field is exact up to the distance its effects can use (beyond it every consumer
 //!   saturates), so it is recomputed over the damage grown by that reach, from a window grown by
-//!   the reach again; large windows split into bands computed in parallel;
+//!   the reach again; large windows split into bands computed in parallel, except the Euclidean
+//!   fields (glows, chiselled bevels), which are one window that `distance_field` computes on all
+//!   threads itself;
 //! - each program re-runs only over the damage grown by its own reach, and only for effects
 //!   whose settings changed; an unrelated edit (another layer, an adjustment, the effect's colour
 //!   or opacity) reuses everything.
@@ -365,8 +367,8 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                 if g.chisel_soft > 0.0 { b.conv(h, photocraft_compose::effects::tent_kernel(g.chisel_soft)) } else { h }
             };
             if let Some(c) = &bv.contour {
-                // Contour element: the height through the contour over its range.
-                let lut = photocraft_compose::effects::ranged_lut(&c.contour, c.range).unwrap_or_else(|| (0..4096).map(|k| k as f32 / 4095.0).collect());
+                // Contour element: the height through the contour (`bevel_contour_lut`).
+                let lut = photocraft_compose::effects::bevel_contour_lut(c);
                 let mut st = stage(Kernel::MFinish, Some(h), None, [0.0, 0.0, 1.0, 0.0], 0);
                 st.lut = Some(Arc::new(lut));
                 h = b.push(st);
@@ -494,13 +496,35 @@ const BAND: i32 = 128;
 
 /// Field `kind` (exact up to `reach`) over `out` (inside `region`), computed from the
 /// region-sized `shape`. Values within the reach depend only on the shape within
-/// [`field_radius`], so each band is computed from a window grown by it.
+/// [`field_radius`], so a part is computed from a window grown by it.
 pub(crate) fn field(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, out: Rect) -> Vec<f32> {
     field_banded(kind, reach, shape, region, out, field_radius(kind, reach) + 1)
 }
 
-/// [`field`] with the band halo given (the tests shrink it to see that they notice).
+/// Whether `distance_field` spreads `kind` over threads itself, line by line: the exact Euclidean
+/// fields of precise glows and chiselled bevels. Those are computed from one window; for the others
+/// (the chamfer fields, a sequential sweep) the window is cut into bands that go in parallel. Without
+/// threads (wasm) there is nothing to spread over, and bands keep the memory small.
+fn threaded_inside(kind: FieldKind) -> bool {
+    !cfg!(target_arch = "wasm32") && matches!(kind, FieldKind::Outside | FieldKind::Inside | FieldKind::BevelOutside | FieldKind::BevelInside)
+}
+
+/// [`field`] with the halo given (the tests shrink it to see that they notice).
+///
+/// A band needs a halo of `reach + 9` rows for the bevel fields, so at a large size most of what a band
+/// computes is its halo (three times the region at size 250), the bands only keep as many threads busy
+/// as there are bands, and threads inside a band would pile onto those of the other bands. The Euclidean
+/// fields run on all threads inside `distance_field`, from one window. That is also the window the CPU
+/// compositor computes them from, so a rebuilt field is exactly the one it gives.
 fn field_banded(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, out: Rect, halo: i32) -> Vec<f32> {
+    if threaded_inside(kind) {
+        let win = out.inflate(halo).intersect(&region);
+        if win.is_empty() {
+            return Vec::new();
+        }
+        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
+        return if win == out { f } else { crop(&f, win, out) };
+    }
     let parts = par_map(bands(out, BAND.max(halo)), |band| {
         let win = band.inflate(halo).intersect(&region);
         let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
@@ -730,11 +754,12 @@ mod tests {
         }
     }
     #[test]
-    fn banded_bevel_fields_match_whole_region_on_anti_aliased_edges() {
+    fn windowed_bevel_fields_match_whole_region_on_anti_aliased_edges() {
         // The bevel fields read the edge pixels around the foot of the perpendicular and take the
-        // direction of each from its neighbours, so the band halo has to cover all of that. A wide
-        // bar with clean anti-aliased edges (almost along the 128 row bands, across them and at an
-        // angle) puts sharp edge pixels where the bands meet and inside the partial window.
+        // direction of each from its neighbours, so the halo of a part of the region has to cover all of
+        // that. A wide bar with clean anti-aliased edges (almost along the 128 row bands the other
+        // fields use, across them and at an angle) puts sharp edge pixels where bands would meet and
+        // inside the partial window. The whole region is one window, so it is exactly the CPU's field.
         let region = Rect::new(-20, -10, 300, 290);
         let (w, h) = (region.width() as usize, region.height() as usize);
         let part = Rect::new(40, 30, 170, 120);
@@ -755,9 +780,9 @@ mod tests {
             for reach in [9, 24] {
                 for kind in [FieldKind::BevelInside, FieldKind::BevelOutside] {
                     let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h, reach as f32);
-                    let differs = |banded: &[f32], out: Rect| {
+                    let differs = |part_field: &[f32], out: Rect| {
                         let ow = out.width() as usize;
-                        banded
+                        part_field
                             .iter()
                             .enumerate()
                             .filter(|&(i, b)| {
@@ -767,18 +792,18 @@ mod tests {
                             })
                             .count()
                     };
-                    assert_eq!(
-                        differs(&field(kind, reach, &shape, region, region), region),
-                        0,
-                        "{kind:?}, {deg} deg, reach {reach}: banded differs from whole"
+                    let all = field(kind, reach, &shape, region, region);
+                    assert!(
+                        all.iter().zip(&whole).all(|(a, b)| a.to_bits() == b.to_bits()),
+                        "{kind:?}, {deg} deg, reach {reach}: the whole region is not the CPU's field"
                     );
                     assert_eq!(
                         differs(&field(kind, reach, &shape, region, part), part),
                         0,
                         "{kind:?}, {deg} deg, reach {reach}: partial window differs from whole"
                     );
-                    // The test can see a halo that is too small: two rows past the band is not enough.
-                    too_small_noticed |= differs(&field_banded(kind, reach, &shape, region, region, 2), region) > 0;
+                    // The test can see a halo that is too small: two rows past the part is not enough.
+                    too_small_noticed |= differs(&field_banded(kind, reach, &shape, region, part, 2), part) > 0;
                 }
             }
         }

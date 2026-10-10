@@ -19,10 +19,14 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, dab_coverage};
+use crate::{Dab, StrokePoint, dab_coverage, tip_falloff};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
+/// Computed tips with a smaller radius (in pixels) are rasterised by area, not at pixel centres.
+const SMALL_TIP_RADIUS: f32 = 3.0;
+/// Sub-pixel sample offsets (a 4×4 grid) for the area coverage of small tips.
+const SUBPIXEL: [f32; 4] = [-0.375, -0.125, 0.125, 0.375];
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
 #[inline]
@@ -48,6 +52,13 @@ pub fn grid_square(x: f64, y: f64, diameter: f32) -> [f64; 4] {
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Wet Edges: how much paint stays at a pixel whose nearest dab reaches it at `rn` (0 at a dab's
+/// centre, 1 at its rim). The interior keeps half the paint, the rim all of it.
+#[inline]
+fn wet_factor(rn: f32) -> f32 {
+    0.5 + 0.5 * smoothstep(0.5, 1.0, rn)
 }
 
 /// Combine brush coverage `v` with a mask value `t` (texture/dual tip) at `depth`.
@@ -160,14 +171,25 @@ impl BrushContext {
     }
 
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × wet edges × flow).
+    /// Wet Edges shapes this one dab; a stroke applies it to its accumulated coverage instead.
     pub fn rasterize(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>) {
+        self.rasterize_into(d, dual, rect, out, None);
+    }
+
+    /// [`rasterize`](Self::rasterize); with `depth`, Wet Edges is left out of `out` and each
+    /// painted pixel's depth inside the dab (`1 − rn`) goes to `depth`, for the stroke to apply it.
+    fn rasterize_into(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>, mut depth: Option<&mut Vec<f32>>) {
         let (w, h) = (rect.width() as usize, rect.height() as usize);
         out.clear();
         out.resize(w * h, 0.0);
+        if let Some(dp) = depth.as_deref_mut() {
+            dp.clear();
+            dp.resize(w * h, 0.0);
+        }
         let b = &self.brush;
         let (hardness, mips) = if dual { (b.dual_brush.hardness, self.dual_tip.as_deref()) } else { (b.hardness, self.tip.as_deref()) };
         let aliased = b.aliased && !dual;
-        let wet = b.wet_edges && !dual;
+        let wet = b.wet_edges && !dual && depth.is_none();
         let noise = b.noise && !dual;
         let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
         let (cx, cy) = if aliased { grid_center(d.center.x, d.center.y, 2.0 * d.radius) } else { (d.center.x as f32, d.center.y as f32) };
@@ -192,22 +214,56 @@ impl BrushContext {
             }
             None => (0, 1.0, 1.0, 1.0),
         };
+        // A pixel offset from the dab centre in tip space: to y-up, project, rotate by -angle, flip.
+        let to_tip = |dx: f32, dy: f32| {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            ((ux * cs + uy * sn) * fx, (-ux * sn + uy * cs) * fy)
+        };
+        // A tip a few pixels across takes each pixel's covered area (a 4×4 grid inside it):
+        // sampling only the pixel centre made a tiny dab's total coverage swing with its sub-pixel
+        // position, and thin lines beaded.
+        let small = mips.is_none() && !aliased && rm < SMALL_TIP_RADIUS;
+        let small_reach2 = (rm + 0.75) * (rm + 0.75);
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                // To y-up, project, rotate by -angle, flip.
-                let (mut ux, mut uy) = (dx, -dy);
-                if let Some((ax, ay, k)) = proj {
-                    let t = (ux * ax + uy * ay) * k;
-                    ux += t * ax;
-                    uy += t * ay;
-                }
-                let u = (ux * cs + uy * sn) * fx;
-                let v = (-ux * sn + uy * cs) * fy;
+                let (u, v) = to_tip(dx, dy);
                 let (mut val, rn) = match mips {
+                    // Block: the whole-pixel square, hard (the Eraser's Block mode).
+                    _ if aliased && b.square => {
+                        if dx.abs() >= r || dy.abs() >= r {
+                            continue;
+                        }
+                        (1.0, 0.0)
+                    }
+                    None if small => {
+                        let d2 = (u * ro).powi(2) + v * v;
+                        if d2 >= small_reach2 {
+                            continue;
+                        }
+                        let mut sum = 0.0;
+                        for sy in SUBPIXEL {
+                            for sx in SUBPIXEL {
+                                let (su, sv) = to_tip(dx + sx, dy + sy);
+                                let sd = ((su * ro).powi(2) + sv * sv).sqrt();
+                                // Each sample anti-aliases over its own quarter pixel, so the
+                                // covered area changes smoothly with the dab's position.
+                                let inside = ((rm - sd) * 4.0 + 0.5).clamp(0.0, 1.0);
+                                if inside > 0.0 {
+                                    sum += inside * tip_falloff(sd.min(rm), rm, hardness);
+                                }
+                            }
+                        }
+                        (sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32, d2.sqrt() / rm)
+                    }
                     None => {
                         let d2 = (u * ro).powi(2) + v * v;
                         if d2 >= reach2 {
@@ -239,7 +295,10 @@ impl BrushContext {
                     val = mask_combine(b.texture.mode, val, self.texture_at(x, y), d.depth);
                 }
                 if wet {
-                    val *= 0.5 + 0.5 * smoothstep(0.5, 1.0, rn);
+                    val *= wet_factor(rn);
+                }
+                if let Some(slot) = depth.as_deref_mut().and_then(|dp| dp.get_mut(yy * w + xx)) {
+                    *slot = (1.0 - rn).clamp(0.0, 1.0);
                 }
                 out[yy * w + xx] = val * d.alpha;
             }
@@ -257,8 +316,18 @@ impl BrushContext {
     /// Stroke-level masks applied to accumulated coverage `c` at a pixel.
     #[inline]
     pub fn stroke_mask(&self, c: f32, dual: Option<f32>, x: i32, y: i32) -> f32 {
+        self.stroke_mask_wet(c, None, dual, x, y)
+    }
+
+    /// [`stroke_mask`](Self::stroke_mask) with Wet Edges from the stroke's depth at the pixel
+    /// (the deepest any dab reaches it, see [`CoverageMap::depth`]).
+    #[inline]
+    fn stroke_mask_wet(&self, c: f32, depth: Option<f32>, dual: Option<f32>, x: i32, y: i32) -> f32 {
         let b = &self.brush;
-        let mut m = c;
+        let mut m = match depth {
+            Some(dp) => c * wet_factor(1.0 - dp),
+            None => c,
+        };
         if let Some(dv) = dual {
             m = mask_combine(b.dual_brush.mode, m, dv, 1.0);
         }
@@ -276,6 +345,9 @@ impl BrushContext {
 #[derive(Clone, Debug)]
 struct CovTile {
     cov: Vec<f32>,
+    /// Wet Edges: the deepest any dab reaches each pixel (`1 − rn` of the nearest dab), empty
+    /// without Wet Edges. The stroke's interior is deep, its rim shallow, whatever the dabs' overlap.
+    depth: Vec<f32>,
     /// Premultiplied native colour channels (`nc` per pixel), empty without per-dab colour.
     col: Vec<f32>,
 }
@@ -302,9 +374,17 @@ impl CoverageMap {
         self.tiles.get(&(tx, ty)).map_or(0.0, |t| t.cov[((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize])
     }
 
+    /// Wet Edges depth at a pixel (see [`CovTile::depth`]); `None` when the stroke has none.
+    #[inline]
+    pub fn depth(&self, x: i32, y: i32) -> Option<f32> {
+        let (tx, ty) = (x.div_euclid(COV_TILE), y.div_euclid(COV_TILE));
+        self.tiles.get(&(tx, ty)).and_then(|t| t.depth.get(((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize).copied())
+    }
+
     /// Accumulate dab values over `rect`: flow builds up towards the dab's opacity ceiling
-    /// (`c ← c + v·(ceil − c)`), or with `max` (wet edges). `color` = native colour for per-dab colour.
-    pub fn accumulate(&mut self, rect: Rect, vals: &[f32], ceil: f32, use_max: bool, color: Option<&[f32]>) {
+    /// (`c ← c + v·(ceil − c)`). `color` = native colour for per-dab colour. `depth` (Wet Edges, one
+    /// value per pixel of `rect`) keeps the deepest any dab reaches each pixel.
+    pub fn accumulate(&mut self, rect: Rect, vals: &[f32], ceil: f32, color: Option<&[f32]>, depth: Option<&[f32]>) {
         if rect.is_empty() {
             return;
         }
@@ -330,10 +410,14 @@ impl CoverageMap {
                 }
                 let tile = self.tiles.entry((tx, ty)).or_insert_with(|| CovTile {
                     cov: vec![0.0; (COV_TILE * COV_TILE) as usize],
+                    depth: Vec::new(),
                     col: if want_col { vec![0.0; (COV_TILE * COV_TILE) as usize * nc] } else { Vec::new() },
                 });
                 if want_col && tile.col.is_empty() {
                     tile.col = vec![0.0; (COV_TILE * COV_TILE) as usize * nc];
+                }
+                if depth.is_some() && tile.depth.is_empty() {
+                    tile.depth = vec![0.0; (COV_TILE * COV_TILE) as usize];
                 }
                 self.dirty.insert((tx, ty));
                 for y in tr.y0..tr.y1 {
@@ -345,14 +429,11 @@ impl CoverageMap {
                             continue;
                         }
                         let ti = trow + (x - tx * COV_TILE) as usize;
+                        if let (Some(dv), Some(slot)) = (depth.and_then(|dp| dp.get(row + (x - rect.x0) as usize)), tile.depth.get_mut(ti)) {
+                            *slot = slot.max(*dv);
+                        }
                         let c = tile.cov[ti];
-                        let nv = if use_max {
-                            c.max(v * ceil)
-                        } else if ceil > c {
-                            c + v * (ceil - c)
-                        } else {
-                            c
-                        };
+                        let nv = if ceil > c { c + v * (ceil - c) } else { c };
                         if nv <= c {
                             continue;
                         }
@@ -386,6 +467,13 @@ impl CoverageMap {
                 self.dirty.insert(key);
                 continue;
             };
+            if target.depth.is_empty() {
+                target.depth.clone_from(&source.depth);
+            } else {
+                for (dst, src) in target.depth.iter_mut().zip(&source.depth) {
+                    *dst = dst.max(*src);
+                }
+            }
             for (index, (dst, src)) in target.cov.iter_mut().zip(&source.cov).enumerate() {
                 if *src > *dst {
                     *dst = *src;
@@ -416,6 +504,8 @@ pub struct StrokeRenderer {
     per_dab_color: bool,
     dabs_done: usize,
     scratch: Vec<f32>,
+    /// Wet Edges depth of the dab being accumulated (see [`CovTile::depth`]).
+    depth_scratch: Vec<f32>,
     dab_buf: Vec<Dab>,
     dual_buf: Vec<Dab>,
     all_dabs: Option<Vec<Dab>>,
@@ -459,6 +549,7 @@ impl StrokeRenderer {
             per_dab_color,
             dabs_done: 0,
             scratch: Vec::new(),
+            depth_scratch: Vec::new(),
             dab_buf: Vec::new(),
             dual_buf: Vec::new(),
             all_dabs: None,
@@ -488,7 +579,9 @@ impl StrokeRenderer {
         let mut native = [0.0f32; 8];
         for d in &dabs {
             let rect = self.ctx.dab_rect(d, false);
-            self.ctx.rasterize(d, false, rect, &mut self.scratch);
+            // Wet Edges acts on the whole stroke (#2088): the dab records how deep it reaches each
+            // pixel and the stroke darkens its own rim when composited, not every dab's.
+            self.ctx.rasterize_into(d, false, rect, &mut self.scratch, wet.then_some(&mut self.depth_scratch));
             let col = match (self.per_dab_color, self.fmt) {
                 (true, Some(f)) => {
                     from_rgba_into(&f, d.color, &mut native);
@@ -496,7 +589,7 @@ impl StrokeRenderer {
                 }
                 _ => None,
             };
-            self.cov.accumulate(rect, &self.scratch, d.opacity, wet, col);
+            self.cov.accumulate(rect, &self.scratch, d.opacity, col, wet.then_some(&self.depth_scratch[..]));
             // Bounds track the full dab rectangle (even fully transparent parts), like the damage.
             self.cov.bounds = self.cov.bounds.union(&rect);
         }
@@ -504,7 +597,7 @@ impl StrokeRenderer {
             for d in &duals {
                 let rect = self.ctx.dab_rect(d, true);
                 self.ctx.rasterize(d, true, rect, &mut self.scratch);
-                dm.accumulate(rect, &self.scratch, 1.0, false, None);
+                dm.accumulate(rect, &self.scratch, 1.0, None, None);
             }
         }
         self.dabs_done += dabs.len();
@@ -571,6 +664,7 @@ impl StrokeRenderer {
             per_dab_color: self.per_dab_color,
             dabs_done: self.dabs_done,
             scratch: Vec::new(),
+            depth_scratch: Vec::new(),
             dab_buf: dabs,
             dual_buf: duals,
             all_dabs: None,
@@ -622,7 +716,7 @@ impl StrokeRenderer {
         if c <= 0.0 {
             return 0.0;
         }
-        self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y)
+        self.ctx.stroke_mask_wet(c, self.cov.depth(x, y), self.dual.as_ref().map(|d| d.get(x, y)), x, y)
     }
 
     /// Dense final coverage over the stroke bounds.
@@ -634,9 +728,11 @@ impl StrokeRenderer {
             let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&b);
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
-                    let c = t.cov[((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize];
+                    let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
+                    let c = t.cov[ti];
                     if c > 0.0 {
-                        out[(y - b.y0) as usize * w + (x - b.x0) as usize] = self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y);
+                        out[(y - b.y0) as usize * w + (x - b.x0) as usize] =
+                            self.ctx.stroke_mask_wet(c, t.depth.get(ti).copied(), self.dual.as_ref().map(|d| d.get(x, y)), x, y);
                     }
                 }
             }
@@ -691,7 +787,7 @@ impl StrokeRenderer {
                         continue;
                     }
                     let i = (y - tr.y0) as usize * w + (x - tr.x0) as usize;
-                    let m = self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y);
+                    let m = self.ctx.stroke_mask_wet(c, tile.depth.get(ti).copied(), self.dual.as_ref().map(|d| d.get(x, y)), x, y);
                     let s = sel.as_ref().map_or(1.0, |(sc, v)| v[i * sc]);
                     let mut k = (m * opacity * s).min(1.0);
                     if k <= 0.0 {

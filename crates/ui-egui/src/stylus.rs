@@ -111,6 +111,9 @@ pub struct Stylus {
     pub feed: StylusFeed,
     /// Preferences › Tools › Use Tablet Pressure: off, a pen paints like a mouse.
     pub use_pressure: bool,
+    /// Preferences › Tools › Pressure Curve (`None`: linear), with the points it was built from.
+    pressure_curve: Option<photocraft_engine::prefs::PressureCurve>,
+    curve_points: Vec<[f32; 2]>,
     /// The pen end last seen (`Some(true)` = eraser), for the eraser tool switch.
     end: Option<bool>,
     /// The tool to restore when the pen tip comes back after the eraser end switched tools.
@@ -125,6 +128,8 @@ pub struct Stylus {
     prev: Option<PenSample>,
     /// The sample [`Self::select`] interpolated for the pointer move being processed.
     current: Option<PenSample>,
+    /// The highest pen pressure (before the curve) since the drag began, for a tap's one dab.
+    peak: f32,
     /// The egui frame [`Self::update_for_frame`] last ran in.
     updated_frame: Option<u64>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
@@ -142,6 +147,8 @@ impl Default for Stylus {
         Self {
             feed: StylusFeed::default(),
             use_pressure: true,
+            pressure_curve: None,
+            curve_points: Vec::new(),
             end: None,
             tool_before_eraser: None,
             touch: None,
@@ -149,6 +156,7 @@ impl Default for Stylus {
             frame: Vec::new(),
             prev: None,
             current: None,
+            peak: 0.0,
             updated_frame: None,
             stroke: Vec::new(),
             times: Vec::new(),
@@ -190,6 +198,25 @@ impl Stylus {
                 }
             }
         }
+        // A pen reports pressure 0 while it hovers and as it lifts (X11, macOS): that is no
+        // contact, so a frame that also touched keeps only its contact samples. A stroke's last
+        // moves then keep the pressure the pen left with, and a tap its own (#1798).
+        if self.frame.iter().any(|s| s.pressure > 0.0) {
+            self.frame.retain(|s| s.pressure > 0.0);
+        }
+        self.peak = self.frame.iter().fold(self.peak, |m, s| m.max(s.pressure));
+    }
+
+    /// The pen's current sample. When the pen touched during this frame but has lifted since
+    /// (the feed is cleared or back at pressure 0 by the time the UI runs, as for a tap shorter
+    /// than a frame), the frame's last contact sample: never full pressure as for a mouse, and
+    /// never the lift's 0.
+    fn latest(&self) -> Option<PenSample> {
+        let feed = self.feed.get();
+        match self.frame.last() {
+            Some(s) if s.pressure > 0.0 && feed.is_none_or(|f| f.pressure <= 0.0) => Some(*s),
+            _ => feed,
+        }
     }
 
     /// The current pen sample, `None` for a mouse (and for any pen while Use Tablet Pressure is
@@ -198,7 +225,21 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        self.current.or_else(|| self.feed.get()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+        let s = self.current.or_else(|| self.latest()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
+        // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
+        Some(match &self.pressure_curve {
+            Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
+            None => s,
+        })
+    }
+
+    /// Preferences › Tools › Pressure Curve (rebuilt only when the points change).
+    pub fn set_pressure_curve(&mut self, points: &[[f32; 2]]) {
+        if self.curve_points != points {
+            self.curve_points = points.to_vec();
+            let c = photocraft_engine::prefs::PressureCurve::new(points);
+            self.pressure_curve = (!c.is_linear()).then_some(c);
+        }
     }
 
     /// Choose the pen sample for move `k` of the `n` pointer moves this frame delivered: the pen
@@ -274,11 +315,24 @@ impl Stylus {
         self.sample().map_or(1.0, |s| s.pressure)
     }
 
+    /// Pressure for a tap, a drag released where it was pressed: the highest the pen pressed
+    /// since the drag began (through the pressure curve), as the first sample of a contact is
+    /// often far lighter than the tap. 1 for a mouse.
+    pub(crate) fn tap_pressure(&self) -> f32 {
+        let Some(s) = self.sample() else { return 1.0 };
+        let peak = match &self.pressure_curve {
+            Some(c) => c.eval(self.peak),
+            None => self.peak,
+        };
+        if self.peak > 0.0 { peak.max(s.pressure) } else { s.pressure }
+    }
+
     /// Start recording a drag's tilt/rotation.
     pub(crate) fn begin_stroke(&mut self) {
         // A new stroke's first moves interpolate from this frame's samples, never from a sample
         // left over from an earlier stroke.
         self.prev = None;
+        self.peak = self.frame.iter().fold(0.0, |m, s| m.max(s.pressure));
         self.stroke.clear();
         self.times.clear();
         self.record_point();
@@ -378,6 +432,22 @@ mod tests {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
         s.clear_selection();
         assert_eq!(s.pressure(), 0.8, "back to the current sample");
+    }
+
+    #[test]
+    fn the_pressure_curve_reshapes_pen_pressure_but_not_the_mouse() {
+        let mut s = Stylus::default();
+        s.set_pressure_curve(&[[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]);
+        s.feed.set(Some(pen(0.3)));
+        s.update(&[]);
+        assert!((s.pressure() - 0.6).abs() < 1e-5, "{}", s.pressure());
+        s.set_pressure_curve(&[[0.0, 0.0], [1.0, 1.0]]);
+        assert!((s.pressure() - 0.3).abs() < 1e-6, "linear again");
+        // A mouse is full pressure whatever the curve.
+        let mut m = Stylus::default();
+        m.set_pressure_curve(&[[0.0, 0.0], [1.0, 0.2]]);
+        m.update(&[egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+        assert_eq!(m.pressure(), 1.0);
     }
 
     #[test]

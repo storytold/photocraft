@@ -184,13 +184,20 @@ fn canvas(tree: &usvg::Tree, warnings: &mut Vec<String>) -> Canvas {
 
 /// Opens an SVG as a document of shape layers (see the module docs for what is rasterised).
 pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_svg_with_group_depth(name, bytes, MAX_GROUP_DEPTH)
+}
+
+/// Opens an SVG while rasterising any subtrees deeper than `max_group_depth` into single pixel
+/// layers. The document's hard nesting limit remains [`MAX_GROUP_DEPTH`].
+pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
     let tree = parse(bytes)?;
     let mut warnings = Vec::new();
     let cv = canvas(&tree, &mut warnings);
     let mut doc = Document::new(name, cv.size, ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
     let global = tiny_skia::Transform::from_scale(cv.scale, cv.scale);
-    let mut conv = Conv { fmt, canvas: doc.bounds(), global, warnings, noted: Vec::new(), counts: [0; 4] };
+    let max_group_depth = (max_group_depth != 0).then_some(max_group_depth.clamp(1, MAX_GROUP_DEPTH));
+    let mut conv = Conv { fmt, canvas: doc.bounds(), global, max_group_depth, warnings, noted: Vec::new(), counts: [0; 4] };
     if count_nodes(tree.root()) > MAX_NODES {
         conv.warnings.push(format!("SVG: more than {MAX_NODES} elements; opened as one pixel layer instead of shapes"));
         let (w, h) = (cv.size.width, cv.size.height);
@@ -273,6 +280,7 @@ struct Conv {
     canvas: Rect,
     /// Drawing units → canvas pixels.
     global: tiny_skia::Transform,
+    max_group_depth: Option<usize>,
     warnings: Vec<String>,
     /// Features already warned about (one warning each).
     noted: Vec<&'static str>,
@@ -317,7 +325,7 @@ impl Conv {
             usvg::Node::Group(g) => {
                 let dropped: [(bool, &'static str); 3] =
                     [(!g.filters().is_empty(), "filter"), (g.clip_path().is_some(), "clip-path"), (g.mask().is_some(), "mask")];
-                let too_deep = depth >= MAX_GROUP_DEPTH || rec >= MAX_RECURSION;
+                let too_deep = self.max_group_depth.is_some_and(|limit| depth >= limit) || depth >= MAX_GROUP_DEPTH || rec >= MAX_RECURSION;
                 if dropped.iter().any(|d| d.0) || too_deep {
                     for (yes, what) in dropped {
                         if yes {

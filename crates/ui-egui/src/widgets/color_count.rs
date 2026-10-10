@@ -5,7 +5,7 @@ use super::*;
 const STOPS: [u32; 6] = [8, 16, 32, 64, 128, 256];
 
 fn parse_count(text: &str) -> Option<f64> {
-    text.trim().parse::<u32>().ok().map(f64::from)
+    super::parse_num(text).filter(|v| *v >= 0.0 && *v <= f64::from(u32::MAX) && v.fract() == 0.0)
 }
 
 fn position(track: Rect, count: u32) -> f32 {
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn typed_color_counts_reject_fractions_and_allow_arbitrary_integers() {
-        for (text, expected) in [("17", 17), ("256", 256), ("17.5", 64), ("17,5", 64), ("1e2", 64)] {
+        for (text, expected) in [("17", 17), ("256", 256), ("17.5", 64), ("17,5", 64), ("1e2", 100), ("(8+8)*2", 32), ("2^8", 256), ("5/2", 64)] {
             let mut harness = Harness::builder().with_size(vec2(320.0, 100.0)).build_ui_state(
                 |ui, count: &mut u32| {
                     color_count_row(ui, "Colors", count);
@@ -148,5 +148,17 @@ mod tests {
         assert_eq!(at_pointer(track, position(track, 23)), 23);
         assert_eq!(position(track, 129), track.center().x);
         assert!(((position(track, 128) - position(track, 64)) - (position(track, 96) - position(track, 32))).abs() < 0.001);
+    }
+}
+
+#[cfg(test)]
+mod arithmetic_tests {
+    #[test]
+    fn count_expression_preserves_integer_validation() {
+        assert_eq!(super::parse_count("2^8"), Some(256.0));
+        assert_eq!(super::parse_count("(8+8)*2"), Some(32.0));
+        assert_eq!(super::parse_count("5/2"), None);
+        assert_eq!(super::parse_count("1/0"), None);
+        assert_eq!(super::parse_count("-2"), None);
     }
 }

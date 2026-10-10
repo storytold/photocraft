@@ -8,12 +8,12 @@
 //! - `engine.commands`: list commands with enablement
 //! - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size); the menu
 //!   tree is `ui.menu.list`
-//! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, brushSize?}`:
+//! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerName?, brushPickerStroke?, brushPickerTip?, brushPickerScale?, brushSize?}`:
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
-//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
+//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu (the pasteboard colour menu outside the image) or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 29] = [
+pub const UI_SET_FIELDS: [&str; 33] = [
     "tool",
     "panels",
     "dock",
@@ -93,7 +93,10 @@ pub const UI_SET_FIELDS: [&str; 29] = [
     "brushTab",
     "brushesView",
     "brushPicker",
-    "brushPickerView",
+    "brushPickerName",
+    "brushPickerStroke",
+    "brushPickerTip",
+    "brushPickerScale",
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
@@ -104,6 +107,7 @@ pub const UI_SET_FIELDS: [&str; 29] = [
     "cropOverlayShow",
     "cropOverlayOrientation",
     "cropShield",
+    "shapeStroke",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -214,6 +218,26 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
     [p.x, p.y]
 }
 
+/// Modifier flags of a request, top-level or grouped under `modifiers`.
+///
+/// Off the Mac, Ctrl is the shortcut key, so egui wants `ctrl` and `command` to carry the same
+/// value (`egui::Modifiers::command`: "On Windows and Linux, set this to the same value as
+/// `ctrl`") and shortcuts are matched on `command`. A real Ctrl press arrives with both set, so
+/// a request that sets only one of them gets both here and reaches the same shortcuts. On the Mac
+/// they are different keys and stay apart: `command` is the ⌘ key, `ctrl` the Control key.
+fn modifiers_from(p: &Value) -> egui::Modifiers {
+    let m = p.get("modifiers").unwrap_or(p);
+    let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let (ctrl, command) = (flag("ctrl"), flag("command"));
+    egui::Modifiers {
+        shift: flag("shift"),
+        alt: flag("alt"),
+        command: if cfg!(target_os = "macos") { command } else { command || ctrl },
+        mac_cmd: cfg!(target_os = "macos") && command,
+        ctrl: if cfg!(target_os = "macos") { ctrl } else { command || ctrl },
+    }
+}
+
 /// The `dialog` id of the shell's own dialog (`workspace_ui`) in `ui.inspect` and `ui.dialog.*`.
 const SHELL_DIALOG: &str = "shell";
 
@@ -239,8 +263,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if !crate::canvas_tool_menu::available(app, menu, id) {
                 return err("context action is unavailable");
             }
+            // A pasteboard row changes a preference: the policy sees the `prefs.set` it runs.
+            let (command, params) = crate::canvas_tool_menu::engine_call(menu, id);
             if let Some(authorize) = app.services.automation_command.as_ref()
-                && let Err(error) = authorize(id, &json!({}))
+                && let Err(error) = authorize(&command, &params)
             {
                 return err(error);
             }
@@ -308,6 +334,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             // rejected call applies none of its fields (#412's guarantee, down to the values
             // and nested keys).
             let applied = (|| -> std::result::Result<Value, String> {
+                let shape_stroke = match p.get("shapeStroke") {
+                    Some(v) => {
+                        if let Some(object) = v.as_object() {
+                            let keys = ["width", "opacity", "align", "cap", "join", "miterLimit", "dashes", "dashOffset"];
+                            if let Some(key) = object.keys().find(|key| !keys.contains(&key.as_str())) {
+                                return Err(format!("unknown shapeStroke field `{key}`"));
+                            }
+                        }
+                        let o = &app.ui.tool_options;
+                        let base = o.shape_stroke.stroke(o.stroke_width, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK));
+                        Some(photocraft_engine::vector_cmds::parse_stroke(v, Some(base), photocraft_doc::Color::BLACK)?)
+                    }
+                    None => None,
+                };
                 let tool = match s("tool") {
                     Some(t) => Tool::from_name(t).map(Some).ok_or_else(|| format!("unknown tool `{t}`"))?,
                     None => None,
@@ -400,8 +440,26 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))?,
                     None => None,
                 };
-                let brush_picker_view = match p.get("brushPickerView") {
-                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushPickerView: {e} (list, grid)"))?,
+                // The three parts of the picker's cards. At least one stays on (a rejected call
+                // leaves them all alone).
+                let brush_picker_name = bool_field(p, "brushPickerName")?;
+                let brush_picker_stroke = bool_field(p, "brushPickerStroke")?;
+                let brush_picker_tip = bool_field(p, "brushPickerTip")?;
+                if [brush_picker_name, brush_picker_stroke, brush_picker_tip].iter().any(Option::is_some) {
+                    let on = [
+                        brush_picker_name.unwrap_or(app.ui.brush_picker_list.show_name),
+                        brush_picker_stroke.unwrap_or(app.ui.brush_picker_list.show_stroke),
+                        brush_picker_tip.unwrap_or(app.ui.brush_picker_list.show_tip),
+                    ];
+                    if !on.iter().any(|b| *b) {
+                        return Err("brushPickerName, brushPickerStroke and brushPickerTip: at least one must stay on".into());
+                    }
+                }
+                // The picker footer slider: the preset cards' size scale (1 standard; 0.30 and
+                // below the tips drop their size numbers).
+                let brush_picker_scale = match num_field(p, "brushPickerScale")? {
+                    Some(s) if !(0.15..=2.0).contains(&s) => return Err("brushPickerScale must be between 0.15 and 2".into()),
+                    Some(s) => Some(s as f32),
                     None => None,
                 };
                 // `Some(None)` is an explicit null, which closes the picker (a missing field
@@ -431,6 +489,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
 
                 // Apply (nothing below can fail).
+                if let Some(stroke) = shape_stroke {
+                    if let Some(stroke) = stroke {
+                        app.ui.tool_options.stroke_width = stroke.width;
+                        app.ui.tool_options.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from(&stroke);
+                    } else {
+                        app.ui.tool_options.stroke_width = 0.0;
+                    }
+                }
                 if let Some(t) = tool {
                     app.ui.tool = t;
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
@@ -474,10 +540,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(m) = mask_target {
                     app.ui.mask_target = m;
                     app.ui.vector_mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 if let Some(m) = vector_mask_target {
                     app.ui.vector_mask_target = m;
                     app.ui.mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 // Selection tools' options-bar mode: 0 New, 1 Add, 2 Subtract, 3 Intersect.
                 if let Some(m) = selection_mode {
@@ -529,8 +597,17 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;
                 }
-                if let Some(v) = brush_picker_view {
-                    app.ui.brush_picker_list.view = v;
+                if let Some(v) = brush_picker_name {
+                    app.ui.brush_picker_list.show_name = v;
+                }
+                if let Some(v) = brush_picker_stroke {
+                    app.ui.brush_picker_list.show_stroke = v;
+                }
+                if let Some(v) = brush_picker_tip {
+                    app.ui.brush_picker_list.show_tip = v;
+                }
+                if let Some(v) = brush_picker_scale {
+                    app.ui.brush_picker_list.scale = v;
                 }
                 if let Some(at) = brush_picker {
                     app.ui.brush_picker = at;
@@ -686,22 +763,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let mods = egui::Modifiers {
-                shift: flag("shift"),
-                alt: flag("alt"),
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                ctrl: flag("ctrl"),
-            };
+            let mods = modifiers_from(p);
             if let Some(t) = s("tool").and_then(Tool::from_name) {
                 app.ui.tool = t;
             }
             // Space held: the Crop tool moves the frame being drawn, a marquee, lasso or shape
-            // being drawn moves instead of growing (hold_keys.rs).
-            let space = flag("space");
+            // being drawn moves instead of growing (hold_keys.rs). Like a modifier flag, it may be
+            // top-level or grouped under "modifiers".
+            let space = p.get("modifiers").unwrap_or(p).get("space").and_then(Value::as_bool).unwrap_or(false);
             crate::crop_ui::set_space(app, space);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.0);
@@ -751,6 +820,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         }
                         continue;
                     }
+                    if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
+                        if down {
+                            crate::canvas_tool_menu::open_pasteboard(app, app.ui.tool, screen_point(app, x, y));
+                        }
+                        continue;
+                    }
                     if crate::canvas_tool_menu::applies(app.ui.tool) {
                         if down {
                             crate::canvas_tool_menu::open(app, app.ui.tool, screen_point(app, x, y));
@@ -771,6 +846,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
                     d.reposition = space;
                 }
+                // A Crop drag in the default mode turns and pans the view with the image: its
+                // points are read as the view showed them at the press (`crop_mode`).
+                let ev = match ev {
+                    ToolEvent::Move { x, y, pressure } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Move { x, y, pressure }
+                    }
+                    ToolEvent::Up { x, y } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Up { x, y }
+                    }
+                    down => down,
+                };
                 tool_event(app, ev, mods);
             }
             app.stylus.feed.set(None);
@@ -801,16 +889,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.key" => {
             let Some(name) = s("key") else { return err("missing `key`") };
             let Some(key) = egui::Key::from_name(name) else { return err(format!("unknown key `{name}`")) };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let modifiers = egui::Modifiers {
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                shift: flag("shift"),
-                alt: flag("alt"),
-                ctrl: flag("ctrl"),
-            };
+            let modifiers = modifiers_from(p);
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
             ctx.request_repaint();
@@ -903,18 +982,32 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
-            "list": app.ui.brush_picker_list,
+            // The picker's content size once its corner grip was dragged (null: the default).
+            "size": app.ui.brush_picker_size,
+            "list": {
+                "collapsed": app.ui.brush_picker_list.collapsed,
+                "filter": app.ui.brush_picker_list.filter,
+                "renaming": app.ui.brush_picker_list.renaming,
+                // The card's parts (`view` is the Brushes panel's listing and doesn't apply).
+                "showName": app.ui.brush_picker_list.show_name,
+                "showStroke": app.ui.brush_picker_list.show_stroke,
+                "showTip": app.ui.brush_picker_list.show_tip,
+                // The footer slider: the cards' width scale.
+                "scale": app.ui.brush_picker_list.scale,
+            },
         })),
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
             json!({
                 "pos": menu.pos,
                 "tool": menu.tool,
+                "pasteboard": menu.pasteboard,
                 "entries": crate::canvas_tool_menu::rows(menu).iter().map(|row| match row {
                     Some((label, id)) => json!({"label": label, "id": id, "enabled": crate::canvas_tool_menu::entry_enabled(app, menu, id)}),
                     None => json!({"separator": true}),
@@ -931,6 +1024,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "statusError": app.ui.status_error,
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
+        "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
         "session": photocraft_engine::inspect::session(&app.session),
         "document": app.session.active().map(photocraft_engine::inspect::document),
@@ -1064,6 +1158,28 @@ mod tests {
             assert_eq!(call(&mut app, &ctx, "ui.dialog.open", params)["ok"], false);
             assert_eq!(app.ui.dialogs, before);
         }
+    }
+
+    #[test]
+    fn shape_stroke_defaults_are_drivable_and_validate_atomically() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.set",
+            json!({"tool":"Triangle", "shapeStroke":{"width":5,"cap":"round","join":"bevel","dashes":[0,2,4,1],"dashOffset":-0.5}}),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 5.0);
+        assert_eq!(app.ui.tool_options.shape_stroke.dashes, [0.0, 2.0, 4.0, 1.0]);
+        let before = app.ui.clone();
+        let bad = call(&mut app, &ctx, "ui.set", json!({"tool":"Rectangle","shapeStroke":{"dashes":[0,0]}}));
+        assert_eq!(bad["ok"], false);
+        assert_eq!(app.ui, before);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":{"colour":"#ff0000"}}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":null}))["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 0.0);
     }
 
     #[test]
@@ -1402,18 +1518,25 @@ mod tests {
     }
 
     #[test]
-    fn ui_set_opens_the_brush_preset_picker_and_sets_its_view() {
+    fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        assert_eq!(app.ui.brush_picker_list.view, crate::brush_panel::BrushesView::Grid, "tip thumbnails by default");
-        let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerView": "list"}));
+        let list = &app.ui.brush_picker_list;
+        assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+        let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
-        assert_eq!(app.ui.brush_picker_list.view, crate::brush_panel::BrushesView::List);
-        for bad in [json!({"brushPicker": [1]}), json!({"brushPicker": "here"}), json!({"brushPickerView": "tiles"})] {
+        assert!(!app.ui.brush_picker_list.show_stroke);
+        for bad in [
+            json!({"brushPicker": [1]}),
+            json!({"brushPicker": "here"}),
+            json!({"brushPickerStroke": "nope"}),
+            json!({"brushPickerName": false, "brushPickerStroke": false, "brushPickerTip": false}),
+        ] {
             assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
         }
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]), "a bad value leaves the picker alone");
+        assert!(app.ui.brush_picker_list.show_name, "a rejected call leaves the card parts alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
     }
@@ -1441,11 +1564,13 @@ mod tests {
         assert_eq!(click["ok"], true, "{click}");
         let open = call(&mut app, &ctx, "ui.inspect", json!({}));
         assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
-        assert_eq!(open["result"]["brushPicker"]["list"]["view"], "grid");
+        assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
+        assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
+        assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
 
-        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerView": "list"}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
         let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-        assert_eq!(changed["result"]["brushPicker"]["list"]["view"], "list");
+        assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
 
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
@@ -1645,7 +1770,7 @@ mod tests {
         let written: Rc<RefCell<Vec<String>>> = Rc::default();
         let w = written.clone();
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, _b: &[u8]| {
+            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
                 Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
@@ -1665,6 +1790,9 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
         assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
         assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
+        // A flat export is a copy: the document keeps its name and file (#2579).
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("warn.psd", Some("in/warn.psd")));
         // Without `path`, only a layered file is written back, like File › Save (#416).
         call(&mut app, &ctx, "app.open", json!({"path": "in/flat.jpg"}));
         let r = call(&mut app, &ctx, "app.save", json!({}));
@@ -1886,5 +2014,40 @@ mod tests {
             assert_eq!(app.synthetic.len(), events);
             app.synthetic.clear();
         }
+    }
+
+    /// A key event's modifiers, as `ui.key` queued them.
+    fn key_modifiers(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> egui::Modifiers {
+        app.synthetic.clear();
+        let (req, _rx) = ControlRequest::new("ui.key", params.clone());
+        assert!(matches!(handle(app, ctx, &req), Outcome::AfterInput), "{params}");
+        match app.synthetic.first() {
+            Some(egui::Event::Key { modifiers, .. }) => *modifiers,
+            other => panic!("{params}: expected a key event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ui_key_ctrl_reaches_shortcuts_like_a_real_ctrl_press() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let ctrl = key_modifiers(&mut app, &ctx, json!({"key":"N","ctrl":true}));
+        let command = key_modifiers(&mut app, &ctx, json!({"key":"N","command":true}));
+        let grouped = key_modifiers(&mut app, &ctx, json!({"key":"N","modifiers":{"ctrl":true}}));
+        assert_eq!(ctrl, grouped, "a grouped flag must match the top-level one");
+        if cfg!(target_os = "macos") {
+            // Two different keys: Control is not ⌘, and only ⌘ matches a shortcut.
+            assert!(ctrl.ctrl && !ctrl.command && !ctrl.mac_cmd, "{ctrl:?}");
+            assert!(command.command && command.mac_cmd && !command.ctrl, "{command:?}");
+        } else {
+            // One key under two names, and shortcuts are matched on `command`, so asking for
+            // either must reach them: Ctrl+N has to open New Document, not do nothing.
+            assert_eq!(ctrl, command, "ctrl and command are the same key off the Mac");
+            assert!(ctrl.command && ctrl.ctrl && !ctrl.mac_cmd, "{ctrl:?}");
+        }
+        let plain = key_modifiers(&mut app, &ctx, json!({"key":"N"}));
+        assert_eq!(plain, egui::Modifiers::default(), "{plain:?}");
+        let shift_alt = key_modifiers(&mut app, &ctx, json!({"key":"N","shift":true,"alt":true}));
+        assert!(shift_alt.shift && shift_alt.alt && !shift_alt.command && !shift_alt.ctrl, "{shift_alt:?}");
     }
 }

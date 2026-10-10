@@ -431,7 +431,13 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
             b"Scop" => Kind::Layer,
             b"Grup" => Kind::Group,
             b"PCrv" | b"ShpN" | b"Comp" | b"SNEN" | b"SNRR" | b"ShRN" => {
-                if class == Tag::of(b"ShpN") && s.bool(id, b"ABEn") == Some(true) {
+                // Current .af boards carry artboard properties (aprp) in phrp; older
+                // documents use ABEn. Converted curve boards keep those properties too.
+                // Other property classes also use phrp, so the field alone is not a marker.
+                if s.bool(id, b"ABEn") == Some(true) || s.obj(id, b"phrp").is_some_and(|p| s.is(p, b"aprp")) {
+                    if class != Tag::of(b"ShpN") {
+                        self.warn("a converted artboard outline (imported at its bounding box)");
+                    }
                     return Ok(self.artboard(id, world));
                 }
                 let Some((local, even_odd)) = crate::geometry::outline(self, id, class, world) else {

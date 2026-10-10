@@ -5,13 +5,17 @@ use std::sync::Arc;
 
 use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, vec2};
 
+mod hand;
+
 /// winit's cursor limit. Keep allocations bounded even for hostile brush sizes or zooms.
 const MAX_SIDE: u16 = 2048;
 
+/// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Shape {
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
+    Hand { closed: bool },
 }
 
 #[derive(Clone)]
@@ -55,6 +59,21 @@ pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> 
 
 pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> CursorIcon {
     show(painter, at, Shape::Crosshair { length, gap })
+}
+
+/// The Hand tool's pointer: an open hand, a fist while it drags (`closed`). winit maps `Grab` and
+/// `Grabbing` to the four-arrow move cursor on Windows, so there it is a bitmap; macOS and the
+/// Linux themes already draw hands, and the OS moves those without waiting for a frame.
+pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
+    hand_with(ctx, closed, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
+}
+
+fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
+    if bitmap && let Some(image) = cached_image(ctx, Shape::Hand { closed }, ctx.pixels_per_point()) {
+        ctx.set_cursor_image(Some(image));
+        return CursorIcon::None;
+    }
+    if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
 }
 
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
@@ -107,6 +126,8 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
                 }
             }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
+            // Only ever a bitmap: without one the OS draws its own grab cursors.
+            Shape::Hand { .. } => {}
         }
     }
 }
@@ -138,7 +159,36 @@ fn extent(shape: Shape) -> Option<f32> {
             }
             length
         }
+        Shape::Hand { .. } => hand::HALF,
     })
+}
+
+/// How much of the pixel at `(dx, dy)` physical pixels from the hotspot the light fill covers and
+/// how much the dark outline around it does, each 0 to 1. A dark crease inside the hand takes
+/// from the fill, so the fill never covers it.
+fn coverage(shape: Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
+    let (x, y) = (dx.abs(), dy.abs());
+    match shape {
+        Shape::Circle { radius, centre } => {
+            let ring = (x.hypot(y) - radius * scale).abs();
+            let distance = if centre { ring.min(cross_distance(x, y, 3.0 * scale, 0.0)) } else { ring };
+            stroke_coverage(distance, scale)
+        }
+        Shape::Crosshair { length, gap } => stroke_coverage(cross_distance(x, y, length * scale, gap * scale), scale),
+        Shape::Hand { closed } => {
+            let (lx, ly) = (dx / scale, dy / scale);
+            let edge = hand::shape(closed, lx, ly) * scale;
+            let inside = (0.5 - edge).clamp(0.0, 1.0);
+            let outline = (scale + 0.5 - edge).clamp(0.0, 1.0);
+            let crease = (0.45 * scale + 0.5 - hand::crease(closed, lx, ly) * scale).clamp(0.0, 1.0);
+            (inside * (1.0 - crease), outline.max(inside * crease))
+        }
+    }
+}
+
+/// A 1 px light line with a 1 px dark one on each side, `distance` physical pixels from its centre.
+fn stroke_coverage(distance: f32, scale: f32) -> (f32, f32) {
+    ((0.5 * scale + 0.5 - distance).clamp(0.0, 1.0), (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0))
 }
 
 fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
@@ -158,18 +208,12 @@ fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
     let mut rgba = Vec::with_capacity(bytes);
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     for row in 0..side {
-        let y = (f32::from(row) - f32::from(hot)).abs();
+        let dy = f32::from(row) - f32::from(hot);
         for col in 0..side {
-            let x = (f32::from(col) - f32::from(hot)).abs();
-            let distance = match shape {
-                Shape::Circle { radius, centre } => {
-                    let ring = (x.hypot(y) - radius * scale).abs();
-                    if centre { ring.min(cross_distance(x, y, 3.0 * scale, 0.0)) } else { ring }
-                }
-                Shape::Crosshair { length, gap } => cross_distance(x, y, length * scale, gap * scale),
-            };
-            let a_dark = (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(dark.a()) / 255.0;
-            let a_light = (0.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(light.a()) / 255.0;
+            let dx = f32::from(col) - f32::from(hot);
+            let (fill, outline) = coverage(shape, dx, dy, scale);
+            let a_dark = outline * f32::from(dark.a()) / 255.0;
+            let a_light = fill * f32::from(light.a()) / 255.0;
             let alpha = a_light + a_dark * (1.0 - a_light);
             // Straight RGBA, as required by winit, not egui's premultiplied representation.
             let white = if alpha > 0.0 { (255.0 * a_light / alpha).round() as u8 } else { 0 };

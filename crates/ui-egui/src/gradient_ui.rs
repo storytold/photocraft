@@ -76,7 +76,7 @@ pub struct LiveGradient {
 /// Painting into a layer mask, an alpha channel or the Quick Mask stays classic (pixels), except
 /// that a selected gradient fill layer is always edited live (selecting it targets its mask).
 pub fn live_mode(app: &PhotocraftApp) -> bool {
-    if app.ui.tool != Tool::Gradient || app.ui.tool_options.gradient_classic {
+    if app.active_tool() != Tool::Gradient || app.ui.tool_options.gradient_classic {
         return false;
     }
     match crate::canvas::paint_target(app).as_str() {

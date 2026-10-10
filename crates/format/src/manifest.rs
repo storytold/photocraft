@@ -283,6 +283,9 @@ pub enum ContentM {
         live: Option<LiveShape>,
     },
     Smart {
+        /// Shared source identity; older bundles did not record it.
+        #[serde(default)]
+        contents_id: Option<u64>,
         source: SmartSourceM,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,

@@ -124,9 +124,10 @@ pub fn bar_rects(rect: Rect, horizontal: bool, vertical: bool) -> (Option<Rect>,
 
 /// Show the scrollbars of the canvas `rect` and apply their drags and page clicks to `view`.
 /// `flip` is View › Flip Horizontal (the bar then runs the other way through the image);
-/// `overscroll` is Preferences › Tools › Overscroll.
+/// `aspect` is the displayed pixel aspect ratio (a document pixel is that many points wider per
+/// point of height); `overscroll` is Preferences › Tools › Overscroll.
 /// Returns true when the pointer is over a bar (the canvas then leaves the pointer alone).
-pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, overscroll: bool, key: Id) -> bool {
+pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, aspect: f32, overscroll: bool, key: Id) -> bool {
     let [w, h] = view.doc_size;
     // `Span` works in egui points; `View::zoom` is device pixels per document pixel.
     let ppp = ui.ctx().pixels_per_point();
@@ -134,7 +135,8 @@ pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, overscroll: bool, 
     // Horizontal axis in "screen order": with the view flipped, run the image backwards.
     let hx = |c: f32| if flip { w as f32 - c } else { c };
     let with_extent = |s: Span| (s, s.extent(overscroll));
-    let ex = Span::of(w as f32, hx(view.center[0]), rect.width(), zoom).map(with_extent);
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let ex = Span::of(w as f32, hx(view.center[0]), rect.width() / aspect, zoom).map(with_extent);
     let ey = Span::of(h as f32, view.center[1], rect.height(), zoom).map(with_extent);
     if ex.is_none() && ey.is_none() {
         return false;
@@ -397,7 +399,8 @@ mod tests {
                     assert!(c1[0] < c0[0] - 10.0, "{c0:?} -> {c1:?}");
                 } else {
                     assert!((len - (r.width() - THICKNESS)).abs() < 1.0, "the thumb fills the track: {len}");
-                    assert_eq!(c1, c0, "Overscroll off keeps a fitting image centred");
+                    // Within float error: the fit zoom is not a round number for every canvas height.
+                    assert!((c1[0] - c0[0]).abs() < 0.01 && (c1[1] - c0[1]).abs() < 0.01, "Overscroll off keeps a fitting image centred: {c0:?} -> {c1:?}");
                 }
             }
         }

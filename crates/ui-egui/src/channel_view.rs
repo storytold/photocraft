@@ -113,8 +113,10 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
                 }
                 for (k, x) in native[..colors].iter_mut().enumerate() {
                     if !v.color_visible(k) {
-                        // Hidden channels contribute nothing (Lab: neutral a/b).
-                        *x = if mode == ColorMode::Lab && k > 0 { 0.5 } else { 0.0 };
+                        // Hidden channels contribute nothing (Lab: neutral a/b, and a neutral
+                        // Lightness under Show Channels in Color, so an isolated a/b channel
+                        // tints over mid gray instead of black, as Photoshop does).
+                        *x = if mode == ColorMode::Lab && (k > 0 || in_color) { 0.5 } else { 0.0 };
                     }
                 }
                 let c = to_rgba(&fmt, &native);
@@ -205,7 +207,10 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
     // The plain-composite path above needs no preview work.
     let (doc, preview_key) = crate::canvas::display_doc(app, idx);
-    let in_color = false;
+    // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
+    // not just the panel thumbnails (#2385). The view key carries the flag, so toggling it
+    // rebuilds the texture.
+    let in_color = app.session.prefs().interface.show_channels_in_color;
     let key = view_key(&view, in_color);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
@@ -349,6 +354,64 @@ mod tests {
             }
             println!("24 MP mask view {mode}: {best:.1} ms (render at 1/{factor})");
         }
+    }
+
+    /// Interface ▸ Show Channels in Color (#2385): a solo RGB / CMYK channel tints the canvas
+    /// instead of staying gray, like the panel thumbnails wired in #1986.
+    #[test]
+    fn show_channels_in_color_tints_the_canvas() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        s.execute("channel.target", json!({"channel": "green"})).unwrap();
+        let st = s.active().unwrap();
+        let b = st.doc.bounds();
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, false).unwrap()[0], Color32::from_gray(128));
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0], Color32::from_rgb(0, 128, 0));
+
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        s.execute("channel.target", json!({"channel": "cyan"})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, true).unwrap()[0];
+        assert!(px.r() < 100 && px.g() > 150 && px.b() > 150, "cyan ink, not gray: {px:?}");
+        let gray = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap()[0];
+        assert_eq!(gray.r(), gray.g(), "off stays grayscale");
+    }
+
+    /// Lab: a and b tint over a neutral Lightness; Lightness itself stays gray (Adobe's exception).
+    #[test]
+    fn show_channels_in_color_lab_lightness_stays_gray() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "lab"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        let b = s.active().unwrap().doc.bounds();
+        s.execute("channel.target", json!({"channel": {"color": 0}})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0];
+        let spread = px.r().max(px.g().max(px.b())) as i32 - px.r().min(px.g().min(px.b())) as i32;
+        assert!(spread <= 3, "Lightness stays gray: {px:?}");
+        s.execute("channel.target", json!({"channel": {"color": 1}})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0];
+        assert!(px.r() != px.g() || px.g() != px.b(), "a channel is tinted, not gray: {px:?}");
+    }
+
+    /// The canvas texture cache is keyed by the preference, so toggling it rebuilds the view.
+    #[test]
+    fn ensure_honours_show_channels_in_color() {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.sync_views();
+        app.run("channel.target", json!({"channel": "green"})).unwrap();
+        let ctx = egui::Context::default();
+        assert!(ensure(&mut app, &ctx, 0).is_some());
+        let key_off = app.channel_views.values().next().unwrap().key;
+        app.session.execute("prefs.set", json!({"values": {"interface.showChannelsInColor": true}})).unwrap();
+        assert!(ensure(&mut app, &ctx, 0).is_some());
+        let key_on = app.channel_views.values().next().unwrap().key;
+        assert_ne!(key_off, key_on, "the preference changes the cached view key");
     }
 
     #[test]

@@ -1263,7 +1263,9 @@ mod tests {
     fn raw_app() -> (PhotocraftApp, Vec<u8>) {
         use photocraft_raw::testgen::{DngSpec, mosaic, scene};
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, b: &[u8]| photocraft_io::import(name, b).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+            import: Some(Box::new(|name: &str, b: &[u8], depth: usize| {
+                photocraft_io::import_with_svg_group_depth(name, b, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
             ..Default::default()
         };
         let (w, h) = (48, 32);

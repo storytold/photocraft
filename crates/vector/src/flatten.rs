@@ -70,6 +70,45 @@ fn eval(seg: &[Point; 4], t: f64) -> (f64, f64) {
     (a * p0.x + b * c1.x + c * c2.x + d * p1.x, a * p0.y + b * c1.y + c * c2.y + d * p1.y)
 }
 
+/// Validate before interactive rendering: finite coordinates and a bounded tessellation and
+/// dash workload. Arc length is bounded by the cubic control polygon, without allocating pixels.
+pub fn validate_shape(path: &Path, stroke: Option<&photocraft_doc::ShapeStroke>) -> Result<(), &'static str> {
+    let knots = path.subpaths.iter().try_fold(0usize, |n, s| n.checked_add(s.knots.len())).ok_or("too many path knots")?;
+    if knots > 4096 || path.subpaths.len() > 4096 {
+        return Err("shape path exceeds 4096 knots/subpaths");
+    }
+    let mut points = 0usize;
+    let mut length = 0.0;
+    for sub in &path.subpaths {
+        for k in &sub.knots {
+            for p in [k.anchor, k.in_ctrl, k.out_ctrl] {
+                if !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1_000_000.0 || p.y.abs() > 1_000_000.0 {
+                    return Err("shape coordinates must be finite and within ±1000000 px");
+                }
+            }
+        }
+        points = points.saturating_add(1);
+        for seg in sub.segments() {
+            points = points.saturating_add(if is_line(&seg) { 1 } else { pieces(&seg, crate::DEFAULT_TOLERANCE) });
+            length += seg.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).sum::<f64>();
+        }
+    }
+    if points > 100_000 {
+        return Err("shape tessellation exceeds 100000 points");
+    }
+    if let Some(s) = stroke {
+        s.validate()?;
+        if s.width > 0.0 && !s.dashes.is_empty() {
+            let period = s.dashes.iter().map(|d| f64::from(*d)).sum::<f64>() * f64::from(s.width);
+            let transitions = (length / period + 2.0) * s.dashes.len() as f64 + points as f64;
+            if !transitions.is_finite() || transitions > 100_000.0 {
+                return Err("dash pattern is too dense for this path (100000 step budget)");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Flattens one subpath. Closed subpaths do not repeat the first point at the end.
 pub fn flatten_subpath(s: &Subpath, tol: f64) -> Polyline {
     let mut out = Polyline { closed: s.closed, ..Default::default() };

@@ -62,7 +62,7 @@ fn kind_json(k: &VarKind) -> Value {
             let align = a[..1].to_lowercase() + &a[1..];
             json!({
                 "type": "pixelReplacement",
-                "method": format!("{method:?}").to_lowercase(),
+                "method": method,
                 "align": align,
                 "clip": clip,
             })
@@ -272,15 +272,15 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let delim = p.get("delimiter").and_then(Value::as_str).and_then(|d| d.bytes().next()).unwrap_or(b',');
     let text = std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
-    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-    let header: Vec<String> = lines.next().map(|h| split_csv(h, delim)).unwrap_or_default();
+    let mut records = csv_records(&text).filter(|r| !r.trim().is_empty());
+    let header: Vec<String> = records.next().map(|h| split_csv(h, delim)).unwrap_or_default();
     if header.is_empty() {
         return Err(bad("file.import.variableDataSets", "empty CSV"));
     }
     let named = header[0].trim().is_empty() || header[0].eq_ignore_ascii_case("dataset");
     let mut sets = Vec::new();
-    for (row, line) in lines.enumerate() {
-        let cells = split_csv(line, delim);
+    for (row, record) in records.enumerate() {
+        let cells = split_csv(record, delim);
         let name = if named {
             cells.first().cloned().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| format!("Data Set {}", row + 1))
         } else {
@@ -303,6 +303,28 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let n = sets.len();
     set_vars(s, |v| v.data_sets = sets)?;
     Ok(json!({"imported": n}))
+}
+
+/// Split logical CSV records without changing line endings inside quoted fields.
+fn csv_records(text: &str) -> impl Iterator<Item = &str> {
+    let mut chars = text.char_indices();
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let mut quoted = false;
+        for (end, c) in chars.by_ref() {
+            if c == '"' {
+                // An escaped quote pair toggles twice, leaving the surrounding state intact.
+                quoted = !quoted;
+            } else if c == '\n' && !quoted {
+                let record = text.get(start..end)?;
+                start = end.saturating_add(1);
+                return Some(record.strip_suffix('\r').unwrap_or(record));
+            }
+        }
+        let record = text.get(start..)?;
+        start = text.len();
+        (!record.is_empty()).then_some(record)
+    })
 }
 
 /// Minimal CSV field splitter with double-quote support.
@@ -341,7 +363,6 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
 fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad("file.export.dataSetsAsFiles", "need `dir`"))?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
-    std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
     let vars = original.variables.clone();
@@ -353,17 +374,29 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
     let doc_stem = original.name.rsplit_once('.').map_or(original.name.as_str(), |(a, _)| a).to_string();
+    // Plan the whole batch before writing: sanitised names or a constant template may collide.
+    // Match the case-insensitive comparison used by the other batch exporters.
+    let mut claimed = std::collections::HashMap::new();
     let mut files = Vec::new();
     for (n, set) in sets.iter().enumerate() {
-        let mut doc = (*original).clone();
-        apply_to_doc(&mut doc, &vars, set)?;
         let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
         let path = format!("{dir}/{stem}.{format}");
+        if let Some(first) = claimed.insert(path.to_lowercase(), &set.name) {
+            return Err(bad(
+                "file.export.dataSetsAsFiles",
+                format!("data sets `{first}` and `{}` resolve to the same output `{path}`; include {{index}} in `naming` to use distinct filenames", set.name),
+            ));
+        }
+        files.push(path);
+    }
+    std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
+    for (set, path) in sets.iter().zip(&files) {
+        let mut doc = (*original).clone();
+        apply_to_doc(&mut doc, &vars, set)?;
         let opts = photocraft_io::ExportOptions::default();
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
-        crate::file_cmds::write_file(&path, &bytes)?;
-        files.push(path);
+        crate::file_cmds::write_file(path, &bytes)?;
     }
     Ok(json!({"files": files, "count": files.len()}))
 }
@@ -424,7 +457,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document",
+            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document; colliding filenames are rejected before writing (include {index} to disambiguate)",
             |s, p| export_as_files(s, p)
         ),
         CommandSpec {

@@ -143,7 +143,7 @@ fn close_all_waits_for_each_layered_tiff_write() {
     for (i, doc) in [first, second].into_iter().enumerate() {
         h.key_press(Key::Y);
         h.run_steps(3);
-        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.documents().len(), 2 - i, "each saved document closes once written");
         assert_eq!(writes.borrow().len(), i);
         assert_eq!(docs_left(&h), Some(2 - i));
         h.key_press(Key::Enter);

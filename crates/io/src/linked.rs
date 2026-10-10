@@ -188,6 +188,23 @@ pub fn block_uuids(data: &[u8]) -> Vec<String> {
     split_items(data).into_iter().filter_map(|(u, _)| u).collect()
 }
 
+/// Copies one linked item under a new UUID, preserving its embedded, external or alias payload.
+pub(crate) fn copy_item(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u8>> {
+    let (_, raw) = split_items(data).into_iter().find(|(u, _)| u.as_deref() == Some(uuid))?;
+    let len = usize::try_from(u64::from_be_bytes(raw.get(..8)?.try_into().ok()?)).ok()?;
+    let item = raw.get(8..8usize.checked_add(len)?)?;
+    let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
+    let new_len = u8::try_from(new_uuid.len()).ok()?;
+    let mut copy = item.get(..8)?.to_vec();
+    copy.push(new_len);
+    copy.extend_from_slice(new_uuid.as_bytes());
+    copy.extend_from_slice(item.get(old_end..)?);
+    let mut out = (copy.len() as u64).to_be_bytes().to_vec();
+    out.extend(copy);
+    out.resize(out.len().next_multiple_of(4), 0);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +252,18 @@ mod tests {
         let mut d = encode_linked_file(&LinkedFile { uuid: "x".into(), file_name: "f".into(), bytes: vec![5; 4] });
         d.truncate(d.len() - 6);
         assert!(parse_linked_files(&d).is_empty());
+    }
+
+    #[test]
+    fn copying_linked_item_preserves_unknown_external_payload() {
+        let mut raw = encode_linked_file(&LinkedFile { uuid: "old".into(), file_name: "missing.psb".into(), bytes: vec![7; 5] });
+        raw[8..12].copy_from_slice(b"liFE");
+        let copy = copy_item(&raw, "old", "independent-copy").unwrap();
+        assert_eq!(block_uuids(&copy), vec!["independent-copy"]);
+        let original_len = u64::from_be_bytes(raw[..8].try_into().unwrap()) as usize;
+        let copied_len = u64::from_be_bytes(copy[..8].try_into().unwrap()) as usize;
+        assert_eq!(&copy[8..16], &raw[8..16]);
+        assert_eq!(&copy[17 + "independent-copy".len()..8 + copied_len], &raw[20..8 + original_len]);
+        assert!(copy_item(&raw, "missing", "new").is_none());
     }
 }

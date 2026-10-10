@@ -238,6 +238,23 @@ fn a_running_job_locks_its_document_but_not_others() {
 }
 
 #[test]
+fn jobs_list_puts_running_jobs_before_ended_ones() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let done = gated_job(&mut s, &gate);
+    assert!(matches!(wait_event(&mut s, done).outcome, JobOutcome::Done(_)));
+    // A second document, so the next job doesn't wait on the first one's.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let running = gated_job(&mut s, &gate);
+    let r = s.execute("jobs.list", json!({})).unwrap();
+    let listed: Vec<_> = r["jobs"].as_array().unwrap().iter().map(|j| (j["id"].clone(), j["state"].clone())).collect();
+    assert_eq!(listed, [(json!(running.0), json!("running")), (json!(done.0), json!("done"))], "{r}");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_event(&mut s, running);
+}
+
+#[test]
 fn background_job_finishes_bookkeeping_on_edited_document_after_tab_switch() {
     let mut s = session(64, 64);
     let edited_doc = s.active().unwrap().doc.id;
@@ -339,6 +356,27 @@ fn content_aware_fill_and_scale_run_as_jobs() {
 }
 
 #[test]
+fn smart_filter_edits_run_as_jobs() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    for t in [&mut inline, &mut s] {
+        t.execute("filter.convertForSmartFilters", json!({})).unwrap();
+        t.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+        t.execute("filter.blur.motionBlur", json!({"angle": 45, "distance": 8})).unwrap();
+    }
+    inline.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("layer.smartFilter.setVisible", json!({"index": 0})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before);
+}
+
+#[test]
 fn content_aware_move_runs_as_a_job() {
     let mut inline = session(160, 120);
     let mut s = session(160, 120);
@@ -362,6 +400,27 @@ fn content_aware_move_runs_as_a_job() {
     s.join_cancelled_jobs();
     assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
     assert_eq!(pixels(&s), before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().read_region(before.bounds()));
+}
+
+#[test]
+fn remove_runs_as_a_job() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    let p = json!({"points": [[60, 50], [100, 70]], "size": 24});
+    inline.execute("paint.remove", p.clone()).unwrap();
+    let before = pixels(&s);
+    let id = job(s.start("paint.remove", p.clone()).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(v["damage"].is_array(), "{v}");
+    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
+    // Cancelled at once: the document stays as it was.
+    s.undo();
+    let id = job(s.start("paint.remove", p).unwrap());
+    assert!(s.cancel_job(id));
+    s.join_cancelled_jobs();
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(pixels(&s), before);
 }
 
 #[test]

@@ -17,12 +17,14 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
-/// rather than the whole layer? With a selection, as in Photoshop; a layer whose pixels can't
-/// float (type, shape, Smart Object, group, position-locked), a hidden layer or several selected
-/// layers still move whole, as without one.
-pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
+/// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
+/// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
+/// several selected layers still move whole, as without one. The canvas cursor asks before the
+/// press, and a pointer event passes `canvas::event_tool`, which also sees a ⌘ sent with the event
+/// (#2768).
+pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
     let Some(st) = app.session.active() else { return false };
-    app.ui.tool == Tool::Move
+    tool == Tool::Move
         && app.ui.transform.is_none()
         && st.doc.selection.is_some()
         && st.selected_layers().len() <= 1
@@ -54,6 +56,8 @@ pub(crate) struct MovePreview {
     revision: u64,
     /// Layers that move ([`photocraft_engine::layer_multi_cmds::move_targets`]).
     ids: Vec<LayerId>,
+    /// `ids` and every layer inside them: the layers shown at the drag's offset.
+    moving: Vec<LayerId>,
     /// What moving them can change at offset (0, 0), not clipped to the canvas: a layer larger
     /// than the canvas brings its pixels from beyond the edge into view (`None` = anything).
     bounds: Option<Rect>,
@@ -121,7 +125,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
+        let moving = with_descendants(&doc, &ids);
+        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
     }
     let p = app.move_preview.as_mut()?;
     if offset == (0, 0) && p.offsets.is_empty() {
@@ -147,6 +152,25 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     Some((p.shown.clone()?, p.key()))
 }
 
+/// `ids` and every layer inside them (groups move their contents).
+fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let walk = doc.walk();
+    let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
+    walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
+}
+
+/// Where the canvas shows layer `id` of document `doc` at `revision` relative to where it is: the
+/// offset of the latest Move drag frame drawn ([`display_doc`]) when the layer moves with the drag,
+/// so its Layer Edges outline moves in lockstep with its pixels (#2413). `None` when it shows
+/// where it is.
+pub(crate) fn shown_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
+    let p = app.move_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision && !p.floating && p.shown.is_some())?;
+    if !p.moving.contains(&id) {
+        return None;
+    }
+    p.offsets.last().copied()
+}
+
 /// A floating selection's offset plus a drag of it in progress (`canvas::selection_drag_delta`).
 pub(crate) fn floating_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let f = photocraft_engine::float_cmds::floating(app.session.active()?)?;
@@ -166,7 +190,17 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
     if !fresh {
         let bounds = st.doc.selection.as_ref().map(|s| s.content_bounds());
         let canvas = st.doc.bounds();
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids: vec![f.layer], bounds, canvas, offsets: Vec::new(), shown: None, floating: true });
+        app.move_preview = Some(MovePreview {
+            doc: doc_id,
+            revision,
+            ids: vec![f.layer],
+            moving: Vec::new(),
+            bounds,
+            canvas,
+            offsets: Vec::new(),
+            shown: None,
+            floating: true,
+        });
     }
     let st = app.session.documents().get(idx)?;
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);
@@ -368,6 +402,23 @@ mod tests {
             assert!(app.session.undo());
             assert_eq!(alpha(&app, id, 35, 35), 0.0, "{depth}-bit: undone");
         }
+    }
+
+    /// ⌘-drag with a painting tool drags the selected pixels as the Move tool does, also when ⌘
+    /// comes with the event (control channel, MCP) rather than as the held-key override.
+    #[test]
+    fn command_drag_with_a_painting_tool_moves_only_the_selected_pixels() {
+        let (mut app, id) = selected_pixels(8);
+        app.ui.tool = Tool::Brush;
+        app.ui.tool_options.move_auto_select = false;
+        let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+        drag(&mut app, [50.0, 40.0], [60.0, 45.0], cmd);
+        assert_eq!(offset(&app), Some((10, 5)), "the selected pixels float");
+        drag(&mut app, [50.0, 40.0], [60.0, 45.0], cmd);
+        assert_eq!(offset(&app), Some((20, 10)), "a second drag moves the same floating piece");
+        app.run("select.drop", json!({})).unwrap();
+        assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 40, 30) == 1.0, "the red square moved");
+        assert_eq!(alpha(&app, id, 48, 16), 1.0, "the unselected blue one stayed");
     }
 
     /// A click moves nothing and leaves nothing floating (Undo isn't spent putting it back).

@@ -36,6 +36,13 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     Some(score - (t.len() as i32 / 8))
 }
 
+/// Bonus that puts a command or tool whose name is exactly the query ahead of every fuzzy match
+/// ("settings" finds Settings before Color Settings).
+fn exact_bonus(query: &str, names: &[&str]) -> i32 {
+    let q = query.trim();
+    if !q.is_empty() && names.iter().any(|n| n.trim_end_matches('…').trim().to_lowercase() == q.to_lowercase()) { 1000 } else { 0 }
+}
+
 /// How many recently run commands the palette remembers.
 const RECENT_CAP: usize = 8;
 
@@ -81,6 +88,29 @@ fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate
                 m.id.clone(),
                 label.trim_end_matches('…').to_string(),
                 Some(path + &m.shortcut.as_ref().map(|s| format!("   {}", crate::shortcuts::pretty(s))).unwrap_or_default()),
+                m.enabled,
+            ))
+        })
+        .collect()
+}
+
+/// The menu commands matching `q`, as palette rows. Separators are not commands: they would
+/// match on their menu path and list as blank "---" rows (#2479).
+fn menu_hits(menus: Vec<crate::menus::MenuItem>, q: &str, lang: crate::i18n::Lang) -> Vec<(i32, String, String, Option<String>, bool)> {
+    menus
+        .into_iter()
+        .filter(|m| m.label != "---")
+        .filter_map(|m| {
+            let path_en = m.path.join(" › ");
+            let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
+            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
+            // Match what is shown and the English name (commands are documented in English).
+            let s = fuzzy_score(q, &format!("{label} {path} {} {path_en}", m.label))? + exact_bonus(q, &[label, &m.label]);
+            Some((
+                s,
+                m.id,
+                label.trim_end_matches('…').to_string(),
+                Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()),
                 m.enabled,
             ))
         })
@@ -144,22 +174,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // fresh session) it falls back to the full fuzzy list, as before.
                     let mut hits: Vec<(i32, String, String, Option<String>, bool)> = if empty { recent_hits(&recents, &menus, lang) } else { Vec::new() };
                     if !empty || hits.is_empty() {
-                        hits.extend(menus.into_iter().filter_map(|m| {
-                            let path_en = m.path.join(" › ");
-                            let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
-                            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
-                            // Match what is shown and the English name (commands are documented in English).
-                            let s = fuzzy_score(&q, &format!("{label} {path} {} {path_en}", m.label))?;
-                            Some((
-                                s,
-                                m.id,
-                                label.trim_end_matches('…').to_string(),
-                                Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()),
-                                m.enabled,
-                            ))
-                        }));
+                        hits.extend(menu_hits(menus, &q, lang));
                         for tool in crate::state::Tool::ALL {
                             if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
+                                let s = s + exact_bonus(&q, &[tl!(tool.label()).as_ref(), tool.label()]);
                                 hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
                             }
                         }
@@ -240,7 +258,7 @@ mod tests {
     use egui_kittest::Harness;
     use serde_json::json;
 
-    use super::{fuzzy_score, push_recent};
+    use super::{exact_bonus, fuzzy_score, push_recent};
     use crate::PhotocraftApp;
 
     #[test]
@@ -315,12 +333,37 @@ mod tests {
         assert_eq!(super::recent_ids(&ctx).len(), 1, "re-running it moves it to the front, no duplicate");
     }
 
+    /// #2479: menu separators matched on their menu path ("f" → File, Filter) and filled the
+    /// palette with blank "---" rows.
+    #[test]
+    fn separators_are_not_palette_hits() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let menus = crate::menus::menu_items(&app);
+        assert!(menus.iter().any(|m| m.label == "---"), "the menus have separators to filter");
+        for q in ["f", "file", "filter", "", "-"] {
+            let hits = super::menu_hits(menus.clone(), q, crate::i18n::Lang::EN);
+            assert!(!hits.is_empty(), "{q:?} still matches commands");
+            assert!(hits.iter().all(|h| h.1 != "---" && h.2 != "---"), "{q:?} lists a separator");
+        }
+    }
+
     #[test]
     fn fuzzy_ranks_prefix_and_contiguous_higher() {
         assert!(fuzzy_score("hue", "Hue/Saturation…").unwrap() > fuzzy_score("hue", "Channel Mixer Hue").unwrap_or(-99));
         assert!(fuzzy_score("gblur", "Gaussian Blur").is_some());
         assert!(fuzzy_score("xyz", "Gaussian Blur").is_none());
         assert_eq!(fuzzy_score("", "anything"), Some(0));
+    }
+
+    /// Typing a command's exact name ranks it first, even when a longer name scores the same.
+    #[test]
+    fn exact_name_ranks_first() {
+        let settings = fuzzy_score("settings", "Settings Edit › Preferences Settings Edit › Preferences").unwrap() + exact_bonus("settings", &["Settings"]);
+        let color = fuzzy_score("settings", "Color Settings… Edit Color Settings… Edit").unwrap() + exact_bonus("settings", &["Color Settings…"]);
+        assert!(settings > color);
+        assert_eq!(exact_bonus("Color settings", &["Color Settings…"]), 1000);
+        assert_eq!(exact_bonus(" ", &[""]), 0);
+        assert_eq!(exact_bonus("set", &["Settings"]), 0);
     }
 
     /// #536: Edit › Search → "Keyboard Shortcuts" must open the dialog, with and without a document.

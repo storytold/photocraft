@@ -680,6 +680,12 @@ fn save_new_style(app: &mut PhotocraftApp, f: &Map<String, Value>) {
     }
 }
 
+/// Disabled effects keep their muted labels even when their parameter page stays
+/// selected; selecting a page is distinct from enabling its effect (#2288).
+fn fx_label_color(enabled: bool, t: &Tokens) -> Color32 {
+    if enabled { t.text } else { t.text_dim }
+}
+
 /// Dialog body (left list, right parameters).
 /// The enable checkbox of an effect row.
 fn fx_checkbox_rect(row: egui::Rect) -> egui::Rect {
@@ -774,7 +780,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         egui::Align2::LEFT_CENTER,
                         tl!(kind_label),
                         egui::FontId::proportional(12.5),
-                        if on || is_sel { t.text } else { t.text_dim },
+                        fx_label_color(on, &t),
                     );
                     // + adds another instance; − removes one once there are several.
                     if multi(kind) {
@@ -1316,7 +1322,7 @@ fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32) -> egui::Response 
                 dial.mark_changed();
             }
         }
-        let field = ui.add(egui::DragValue::new(angle).range(-180.0..=180.0).speed(1.0).suffix("°"));
+        let field = ui.add(egui::DragValue::new(angle).custom_parser(crate::widgets::parse_num).range(-180.0..=180.0).speed(1.0).suffix("°"));
         if field.changed() {
             dial.mark_changed();
         }
@@ -1595,6 +1601,16 @@ mod tests {
             let mut out = ctx.run_ui(Default::default(), |ui| body(&mut app, ui, &mut fields));
             out.textures_delta.clear();
             assert_eq!(fields.get("p:blendingOptions"), Some(&bad));
+        }
+    }
+
+    /// #2288: the selected effect row must dim again when its checkbox is cleared.
+    #[test]
+    fn disabled_effect_row_uses_muted_text_even_when_selected() {
+        for theme in crate::theme::ThemeKind::ALL {
+            let tokens = Tokens::for_kind(theme);
+            assert_eq!(fx_label_color(true, &tokens), tokens.text, "{theme:?}: checked");
+            assert_eq!(fx_label_color(false, &tokens), tokens.text_dim, "{theme:?}: unchecked");
         }
     }
 

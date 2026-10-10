@@ -11,6 +11,36 @@ use photocraft_raster::Rgba8Image;
 
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
 
+#[test]
+fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
+    for mode in MODES {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut d = rich_doc(mode, depth);
+            let stroke = photocraft_doc::ShapeStroke {
+                width: 5.5,
+                opacity: 0.35,
+                align: photocraft_doc::StrokeAlign::Outside,
+                cap: photocraft_doc::LineCap::Square,
+                join: photocraft_doc::LineJoin::Bevel,
+                miter_limit: 2.0,
+                dashes: vec![0.0, 2.0, 4.0, 1.0, 1.5, 3.0],
+                dash_offset: -0.5,
+                ..Default::default()
+            };
+            d.layers.push(Layer::new(
+                "Custom stroke",
+                LayerContent::Shape(photocraft_doc::ShapeLayer {
+                    path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (40.0, 10.0), (25.0, 40.0)])]),
+                    stroke: Some(stroke),
+                    ..Default::default()
+                }),
+            ));
+            let bytes = save_to_bytes(&d, &SaveOptions::default()).unwrap();
+            assert_eq!(load_from_bytes(&bytes).unwrap(), d);
+        }
+    }
+}
+
 fn check_zip(mode: ColorMode, depth: SampleType) {
     let doc = rich_doc(mode, depth);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();

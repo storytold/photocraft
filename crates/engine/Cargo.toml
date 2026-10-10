@@ -34,6 +34,9 @@ photocraft-plugins = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 photocraft-codecs = { workspace = true }
 flate2 = { workspace = true }
+# Photoshop `.kys` shortcut sets (`edit.keyboardShortcuts` `importKys`); already in the tree
+# through photocraft-ui-egui and usvg.
+roxmltree = "0.20"
 
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
@@ -41,3 +44,5 @@ photocraft-affinity = { workspace = true, features = ["synth"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 # WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
+# Synthetic multi-part EXR fixtures for the parts-commands tests.
+exr = { version = "1.73", default-features = false }
