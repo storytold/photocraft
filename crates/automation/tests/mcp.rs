@@ -545,6 +545,9 @@ async fn filesystem_policy_rejects_absolute_and_escaping_paths_before_effects() 
     let client = connect(headless_in(&root)).await;
 
     assert_ne!(call(&client, "doc_open", json!({"path": "inside.png"})).await.is_error, Some(true));
+    // An absolute path beneath the root is the same file (#2176).
+    let inside = call(&client, "doc_open", json!({"path": root.join("inside.png").to_string_lossy()})).await;
+    assert_ne!(inside.is_error, Some(true), "{}", text(&inside));
     let absolute = outside.join("absolute.png");
     let response = call(&client, "doc_save", json!({"path": absolute.to_string_lossy()})).await;
     assert_eq!(response.is_error, Some(true));

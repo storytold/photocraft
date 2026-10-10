@@ -110,7 +110,7 @@ fn an_unreadable_shortcut_is_reported_not_imported() {
     assert_eq!(p.unreadable, vec!["Undo".to_string()]);
 }
 
-/// The dialog's Import Photoshop Shortcuts… button: the chosen file fills the overrides (a key
+/// The dialog's Import Shortcuts… button: the chosen file fills the overrides (a key
 /// equal to the default clears its override), reports what it did, and OK applies the set like
 /// hand-made changes, taking a moved key from its old owner.
 #[test]
@@ -199,52 +199,97 @@ fn with_photoshop(set: &'static str, saved_prefs: Option<&'static str>) -> (Phot
     (PhotocraftApp::new(photocraft_engine::Session::new(), services), store)
 }
 
-/// First launch beside Photoshop: its live set is applied, a notice says so, and the
-/// preference remembers it so the next launch leaves the user's shortcuts alone.
+/// First launch beside Photoshop: its live set is offered, not applied. Import applies it,
+/// a notice says so, and the preference remembers it so the next launch does not ask again.
 #[test]
-fn first_launch_imports_photoshops_live_set_once() {
+fn first_launch_offers_photoshops_live_set_and_import_applies_it() {
     let (mut app, store) = with_photoshop(SAMPLE, None);
-    assert!(app.ui.dialogs.is_empty(), "applied without a dialog");
+    assert!(app.session.prefs().shortcuts.is_empty(), "nothing applied unasked");
+    assert!(!app.session.prefs().dialogs.contains_key(super::IMPORTED_PREF), "not answered yet");
+    let offer = app.ui.kys_offer.clone().unwrap();
+    assert_eq!(offer.set, "texcuts");
+    assert!(offer.changes > 0);
+    assert_eq!(crate::control::inspect(&app, &egui::Context::default())["kysOffer"]["set"], "texcuts");
+    super::answer_offer(&mut app, true);
+    assert!(app.ui.kys_offer.is_none());
+    assert!(app.ui.dialogs.is_empty(), "applied without the dialog");
     assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.blur.gaussianBlur", None).as_deref(), Some("Cmd+Ctrl+Alt+G"));
     assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.lastFilter", Some("Cmd+Alt+F")).as_deref(), Some("Cmd+F"));
     assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.search", Some("Cmd+F")), None, "taken by Last Filter");
-    assert_eq!(app.session.prefs().dialogs[super::IMPORTED_PREF]["source"].as_str().map(|s| s.ends_with("Keyboard Shortcuts.psp")), Some(true));
+    let answer = &app.session.prefs().dialogs[super::IMPORTED_PREF];
+    assert_eq!(answer["imported"], json!(true));
+    assert_eq!(answer["source"].as_str().map(|s| s.ends_with("Keyboard Shortcuts.psp")), Some(true));
     let notice = app.ui.notices.last().unwrap();
     assert_eq!(notice.title, "Keyboard shortcuts imported");
     let line = notice.text(&notice.lines[0]);
     assert!(line.starts_with("Your keyboard shortcut set texcuts is in use here: "), "{line}");
-    assert!(line.contains(" shortcuts differ from the defaults."), "{line}");
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    // The preference moved past the loaded revision, so the next frame saves it.
+    // The answer moved the preferences past the loaded revision, so the next frame saves it.
     crate::prefs_ui::tick(&mut app, &egui::Context::default());
     let saved = store.lock().unwrap().clone().unwrap();
     assert!(saved.contains("Cmd+Ctrl+Alt+G") && saved.contains(super::IMPORTED_PREF), "{saved}");
-    // Reset in the dialog, then a second run: the preference says it was done.
+    // Reset, then a second launch: the preference says it was answered.
     app.run("edit.keyboardShortcuts", json!({"reset": true})).unwrap();
-    super::auto_import(&mut app);
-    assert!(app.session.prefs().shortcuts.is_empty());
+    super::offer_import(&mut app);
+    assert!(app.ui.kys_offer.is_none());
 }
 
-/// Shortcuts the user already changed are theirs: the set is not applied, but the launch is
-/// still remembered, so it is never applied over them later either.
+/// Don't Import changes nothing and is remembered too.
 #[test]
-fn a_user_with_their_own_shortcuts_keeps_them() {
-    let saved = r#"{"shortcuts": {"edit.undo": "F1"}}"#;
-    let (mut app, _) = with_photoshop(SAMPLE, Some(saved));
-    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.undo", Some("Cmd+Z")).as_deref(), Some("F1"));
-    assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.blur.gaussianBlur", None), None);
+fn dont_import_keeps_the_defaults_and_is_not_asked_again() {
+    let (mut app, _) = with_photoshop(SAMPLE, None);
+    super::answer_offer(&mut app, false);
+    assert!(app.session.prefs().shortcuts.is_empty());
     assert!(app.ui.notices.is_empty());
+    assert_eq!(app.session.prefs().dialogs[super::IMPORTED_PREF]["imported"], json!(false));
+    super::offer_import(&mut app);
+    assert!(app.ui.kys_offer.is_none());
+}
+
+/// The prompt on screen: it names the set, and its Import button applies it.
+#[test]
+fn the_prompt_shows_the_set_and_its_import_button_applies_it() {
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        with_photoshop(SAMPLE, None).0
+    });
+    h.run_steps(2);
+    h.get_by_label("Import keyboard shortcuts?");
+    assert!(h.query_by_label_contains("keyboard shortcut set texcuts").is_some());
+    h.get_by_label("Import").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Import keyboard shortcuts?").is_none());
+    assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "filter.blur.gaussianBlur", None).as_deref(), Some("Cmd+Ctrl+Alt+G"));
+}
+
+/// Shortcuts the user already changed are theirs: nothing is offered, and the launch is
+/// remembered, so the set is never offered over them later either.
+#[test]
+fn a_user_with_their_own_shortcuts_is_not_asked() {
+    let saved = r#"{"shortcuts": {"edit.undo": "F1"}}"#;
+    let (app, _) = with_photoshop(SAMPLE, Some(saved));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.undo", Some("Cmd+Z")).as_deref(), Some("F1"));
+    assert!(app.ui.kys_offer.is_none());
     assert!(app.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
-    // A set that is just Photoshop's defaults changes nothing and says nothing.
+    // A set that is just Photoshop's defaults changes nothing, so it is not offered.
     let defaults = "<photoshop-keyboard-shortcuts><command kind=\"static\" name=\"Undo\"><shortcut>Cmd+Z</shortcut></command></photoshop-keyboard-shortcuts>";
-    let (mut quiet, _) = with_photoshop(defaults, None);
-    assert!(quiet.session.prefs().shortcuts.is_empty());
-    assert!(quiet.ui.notices.is_empty());
+    let (quiet, _) = with_photoshop(defaults, None);
+    assert!(quiet.ui.kys_offer.is_none());
     assert!(quiet.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
-    // A file that is not a set is reported, not applied, and not retried.
-    let (mut bad, _) = with_photoshop("binary junk", None);
+    // A file that is not a set is reported, not offered, and not retried.
+    let (bad, _) = with_photoshop("binary junk", None);
+    assert!(bad.ui.kys_offer.is_none());
     assert!(bad.ui.status_error, "{}", bad.ui.status);
-    assert!(bad.ui.status.contains("not a keyboard shortcut set (.kys)"), "{}", bad.ui.status);
+    assert!(bad.ui.status.starts_with("The keyboard shortcut set was not imported: not a keyboard shortcut set (.kys)"), "{}", bad.ui.status);
     assert!(bad.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
-    let _ = (&mut app, &mut quiet, &mut bad);
+}
+
+/// A file far larger than any set is refused before it is read as text.
+#[test]
+fn an_oversized_file_is_refused() {
+    let mut app = app();
+    let big = vec![b' '; super::MAX_BYTES + 1];
+    let e = super::open_bytes(&mut app, "huge.kys", &big).unwrap_err();
+    assert!(e.contains("larger than 4 MiB"), "{e}");
+    assert!(app.ui.dialogs.is_empty());
 }

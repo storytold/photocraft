@@ -216,7 +216,7 @@ pub fn crop_ratio(key: &str, doc_w: f64, doc_h: f64) -> Option<(f64, f64)> {
         return Some((doc_w, doc_h));
     }
     let (a, b) = key.split_once(':')?;
-    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+    Some((crate::numeric_expression::parse(a)?, crate::numeric_expression::parse(b)?))
 }
 
 #[cfg(test)]

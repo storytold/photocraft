@@ -1314,6 +1314,7 @@
 	Remove All Pins	移除所有圖釘
 	Remove Background	移除背景
 	Remove Planes	移除平面
+	Remove Tool	移除工具
 	Remove stop	移除色標
 	Remove variable	移除變數
 	Rename	重新命名
@@ -1329,6 +1330,11 @@
 	{n} commands are not in PhotoCraft.	{n} 個命令在 PhotoCraft 中不存在。
 	Keyboard shortcuts imported	已匯入鍵盤快速鍵
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此處正在使用你的鍵盤快速鍵集 {set}：{n} 個快速鍵與預設值不同。可在「編輯 › 鍵盤快速鍵」中查看；「全部重設為預設值」可復原。
+	Import keyboard shortcuts?	匯入鍵盤快速鍵？
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft 在這台電腦上找到你在其他影像編輯器中的鍵盤快速鍵集 {set}：其中 {n} 個快速鍵與 PhotoCraft 不同。要匯入嗎？
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	「編輯 › 鍵盤快速鍵 › 全部重設為預設值」可復原匯入。
+	Don't Import	不匯入
+	The keyboard shortcut set was not imported: {error}	未匯入鍵盤快速鍵集：{error}
 	Reset Section	重設區段
 	Reset Transform	重設變形
 	Reset to defaults	重設為預設值
@@ -1626,6 +1632,7 @@
 	Millimeters	公釐
 	Mobile	行動裝置
 	Move Tool	移動工具
+	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
 	Multiply	色彩增值
 	My Brushes	我的筆刷
 	Neutrals	中間色
@@ -1670,6 +1677,7 @@
 	Quick Selection Tool	快速選取工具
 	Radial	放射狀
 	Rasterize Layer	點陣化圖層
+	Rasterize Layers	點陣化圖層
 	Ratio	比例
 	Recent	最近
 	Rectangle Tool	矩形工具
@@ -2000,8 +2008,9 @@
 	Brush Preset Options	筆刷預設集選項
 	Group name	群組名稱
 	Brush name	筆刷名稱
-	Grid view	格狀檢視
-	List view	清單檢視
+	Brush Name	筆刷名稱
+	Brush Stroke	筆刷筆畫
+	Brush Tip	筆刷筆尖
 	Off: the speed of the pointer sets the spacing	關：由指標速度決定間距
 	Tilt Scale	傾斜縮放
 	Brush Projection	筆刷投影
@@ -2292,6 +2301,9 @@ fontWeight	Italic	斜體
 	Color to Alpha…	顏色轉為 Alpha…
 	Transparency Threshold	透明度臨界值
 	Opacity Threshold	不透明度臨界值
+
+	Rasterize svg groups deeper than	點陣化超過此深度的 SVG 群組
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	設為 0 可關閉此臨界值；巢狀超過 100 層的 SVG 群組一律會點陣化。
 	Rule of Thirds	三等分
 	Triangle	三角形
 	Golden Ratio	黃金比例
@@ -2332,6 +2344,8 @@ fontWeight	Italic	斜體
 	Create Ellipse	建立橢圓
 	Create Triangle	建立三角形
 	Create Polygon	建立多邊形
+	Pressure curve	壓力曲線
+	Click to add a point, right-click to remove	按一下新增點，按右鍵移除點
 	Some brush presets could not be loaded	部分筆刷預設集無法載入
 	Retry saving presets	重試儲存預設集
 	Brush preset changes are not saved: {error}	筆刷預設集的變更尚未儲存：{error}
@@ -2344,6 +2358,27 @@ fontWeight	Italic	斜體
 	XOR	XOR
 	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
 	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)
+	Stroke Options	筆畫選項
+	Solid	實線
+	Dashed	虛線
+	Dotted	點線
+	Alignment	對齊
+	Caps	端點
+	Butt / Flat	平頭
+	Corners	轉角
+	Miter	斜接
+	Round	圓角
+	Bevel	斜角
+	Miter limit	斜接限制
+	Dashed line	虛線
+	Dash	線段
+	Gap	間隔
+	Dash / gap lengths × stroke width	線段 / 間隔長度 × 筆畫寬度
+	Add pair	新增一對
+	Remove pair	移除一對
+	Dash offset	虛線偏移
+	Open paths use centered strokes	開放路徑使用置中筆畫
+	Use finite lengths and a positive pattern total	請使用有限長度和正數圖樣總長度
 	No subject found — try Object Selection or the Lasso	找不到主體 — 請嘗試物件選取工具或套索工具
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形

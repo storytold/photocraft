@@ -1,5 +1,5 @@
 //! Retouching tools as commands: Clone Stamp, Pattern Stamp, Healing Brush, Spot Healing Brush,
-//! Patch, Content-Aware Move, Dodge, Burn, Sponge, Blur, Sharpen, Smudge and History Brush.
+//! Patch, Content-Aware Move, Remove, Dodge, Burn, Sponge, Blur, Sharpen, Smudge and History Brush.
 //!
 //! Every command takes a Photoshop-style brush (`points`, `size`, `hardness`, `opacity`, `flow`,
 //! `spacing`, `layer`), respects the active selection as a mask and the layer's transparency lock, and
@@ -26,6 +26,7 @@ use crate::{EngineError, Result, Session};
 mod content_aware_move;
 mod patch;
 mod pattern_stamp;
+mod remove;
 pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -586,14 +587,19 @@ enum SpotType {
 
 /// Fill the stroke area with no source, then gradient-domain blend it into its surroundings. With
 /// `all` (Sample All Layers) it heals what is visible, so it works on an empty layer above the image.
+///
+/// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
+/// its texture from around it, as Edit › Fill does from its window
+/// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
 fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: SpotType, all: bool, sel: Option<&Surface>, lock: bool) -> Rect {
     let (bounds, cov) = stroke_coverage(stroke);
     let size = stroke.brush.size;
-    let margin = (size.max(8.0) * 1.0).ceil() as i32 + 8;
-    let region_rect = bounds.inflate(margin).intersect(&pre.bounds());
+    let region_rect = crate::fill_cmds::sampling_window(bounds, pre.bounds());
     if region_rect.is_empty() {
         return Rect::EMPTY;
     }
+    // Proximity Match looks for its source anywhere in that window.
+    let margin = (region_rect.width().max(region_rect.height()) / 2) as i32;
     let fmt = surf.format();
     let img = if all { composite_region(pre, None, SampleLayers::All, region_rect, fmt) } else { Region::read(surf, region_rect) };
     let (w, h, ch) = (img.width(), img.height(), img.ch);
@@ -1084,7 +1090,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Patch",
             menu: &[],
             shortcut: None,
-            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
+            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","contentAware":bool=false (fill the selection content-aware from the dragged-to place; a background job),"structure":1..7=4 (content-aware: 3..7 copy the middle exactly, 1..2 re-synthesise more of it),"color":0..10=0 (content-aware: how far the copy's level adapts to the selection's surroundings),"sampleAllLayers":bool=false (content-aware),"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
             enabled: patch::enabled,
             run: patch::patch,
             journal: true,
@@ -1094,9 +1100,21 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Content-Aware Move",
             menu: &[],
             shortcut: None,
-            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"move|extend"="move","structure":1..7=4 (7 keeps the content up to its edge, lower blends a wider edge band),"color":0..10=0 (how far the content's colour adapts to its new place),"sampleAllLayers":bool=false,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset","mode"} (a background job; the selection moves with the content)"#,
+            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"move|extend"="move","structure":1..7=4 (3..7 copy the content exactly but for a band about a patch wide along its edge; 2 widens the band, 1 re-synthesises the content too),"color":0..10=0 (0 keeps the content's level; higher values bring it towards its new place, by up to about 0.04 × color),"sampleAllLayers":bool=false,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset","mode"} (a background job; the selection moves with the content)"#,
             enabled: content_aware_move::enabled,
             run: content_aware_move::content_aware_move,
+            journal: true,
+        },
+        CommandSpec {
+            id: "paint.remove",
+            label: "Remove",
+            menu: &[],
+            shortcut: None,
+            params: brush_params!(
+                r#","closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false → {"damage"} (a background job)"#
+            ),
+            enabled: has_pixel_layer,
+            run: remove::remove,
             journal: true,
         },
         CommandSpec {

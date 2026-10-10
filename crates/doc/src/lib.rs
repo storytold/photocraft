@@ -64,7 +64,17 @@ impl LayerId {
     }
 }
 
-/// Advance the process-wide id counter (shared by layer and document ids) past `max`, so ids
+/// Identity of the source contents shared by smart-object instances, independent of their bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SmartContentsId(pub u64);
+
+impl SmartContentsId {
+    pub fn fresh() -> Self {
+        SmartContentsId(next_id())
+    }
+}
+
+/// Advance the process-wide id counter (shared by layer, document and smart-contents ids) past `max`, so ids
 /// loaded from a file never collide with ids minted later.
 pub fn ensure_ids_above(max: u64) {
     NEXT_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
@@ -457,6 +467,8 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
+    /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
+    pub contents_id: SmartContentsId,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
     pub transform: Affine,
@@ -488,6 +500,7 @@ impl SmartObject {
     /// A smart object with no filters and no PSD data.
     pub fn new(source: SmartSource, transform: Affine, cache: Option<Surface>) -> Self {
         Self {
+            contents_id: SmartContentsId::fresh(),
             source,
             transform,
             smart_filters: Vec::new(),

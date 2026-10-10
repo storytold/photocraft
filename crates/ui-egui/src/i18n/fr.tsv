@@ -1292,6 +1292,7 @@
 	Remove All Pins	Retirer toutes les épingles
 	Remove Background	Supprimer l'arrière-plan
 	Remove Planes	Supprimer les plans
+	Remove Tool	Outil Retirer
 	Remove stop	Retirer le point
 	Remove variable	Retirer la variable
 	Rename	Renommer
@@ -1307,6 +1308,11 @@
 	{n} commands are not in PhotoCraft.	{n} commandes n'existent pas dans PhotoCraft.
 	Keyboard shortcuts imported	Raccourcis clavier importés
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Votre jeu de raccourcis clavier {set} est utilisé ici : {n} raccourcis diffèrent des valeurs par défaut. Édition › Raccourcis clavier les affiche ; Tout rétablir par défaut annule l'import.
+	Import keyboard shortcuts?	Importer les raccourcis clavier ?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft a trouvé sur cet ordinateur votre jeu de raccourcis clavier {set} provenant d'un autre éditeur d'images : {n} de ses raccourcis diffèrent de ceux de PhotoCraft. L'importer ?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Édition › Raccourcis clavier › Tout rétablir par défaut annule un import.
+	Don't Import	Ne pas importer
+	The keyboard shortcut set was not imported: {error}	Le jeu de raccourcis clavier n'a pas été importé : {error}
 	Reset Section	Réinitialiser la section
 	Reset Transform	Réinitialiser la transformation
 	Reset to defaults	Réinitialiser aux valeurs par défaut
@@ -1599,6 +1605,7 @@
 	Millimeters	Millimètres
 	Mobile	Mobile
 	Move Tool	Outil Déplacement
+	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres
@@ -1643,6 +1650,7 @@
 	Quick Selection Tool	Outil Sélection rapide
 	Radial	Radial
 	Rasterize Layer	Rastériser le calque
+	Rasterize Layers	Rastériser les calques
 	Ratio	Proportions
 	Recent	Récent
 	Rectangle Tool	Outil Rectangle
@@ -1969,8 +1977,8 @@
 	Brush Preset Options	Options des préréglages de pinceau
 	Group name	Nom du groupe
 	Brush name	Nom du pinceau
-	Grid view	Vue en grille
-	List view	Vue en liste
+	Brush Name	Nom du pinceau
+	Brush Stroke	Trace de pinceau
 	Off: the speed of the pointer sets the spacing	Désactivé : la vitesse du pointeur détermine l'espacement
 	Tilt Scale	Échelle d'inclinaison
 	Brush Projection	Projection du pinceau
@@ -2736,6 +2744,9 @@ fontWeight	Italic	Italique
 	Color to Alpha…	Couleur vers alpha…
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité
+
+	Rasterize svg groups deeper than	Pixelliser les groupes SVG au-delà de cette profondeur
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 désactive ce seuil ; les groupes SVG imbriqués sur plus de 100 niveaux sont toujours pixellisés.
 	Rule of Thirds	Règle des tiers
 	Triangle	Triangle
 	Golden Ratio	Nombre d’or
@@ -2776,6 +2787,8 @@ fontWeight	Italic	Italique
 	Create Ellipse	Créer une ellipse
 	Create Triangle	Créer un triangle
 	Create Polygon	Créer un polygone
+	Pressure curve	Courbe de pression
+	Click to add a point, right-click to remove	Cliquez pour ajouter un point, clic droit pour le supprimer
 	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
 	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
 	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
@@ -2788,6 +2801,26 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+	Stroke Options	Options du contour
+	Solid	Continu
+	Dashed	Tirets
+	Dotted	Pointillé
+	Caps	Extrémités
+	Butt / Flat	Plat
+	Corners	Angles
+	Miter	Pointe
+	Round	Arrondi
+	Bevel	Biseau
+	Miter limit	Limite de pointe
+	Dashed line	Ligne en tirets
+	Dash	Tiret
+	Gap	Espace
+	Dash / gap lengths × stroke width	Longueurs des tirets / espaces × largeur du contour
+	Add pair	Ajouter une paire
+	Remove pair	Retirer une paire
+	Dash offset	Décalage des tirets
+	Open paths use centered strokes	Les tracés ouverts utilisent des contours centrés
+	Use finite lengths and a positive pattern total	Utiliser des longueurs finies et un total de motif positif
 	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré

@@ -1323,6 +1323,11 @@
 	{n} commands are not in PhotoCraft.	Poleceń, których nie ma w PhotoCraft: {n}.
 	Keyboard shortcuts imported	Zaimportowano skróty klawiaturowe
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Twój zestaw skrótów klawiaturowych {set} jest tu używany: skrótów innych niż domyślne: {n}. Edycja › Skróty klawiaturowe je pokazuje; Przywróć wszystkie domyślne cofa import.
+	Import keyboard shortcuts?	Zaimportować skróty klawiaturowe?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft znalazł na tym komputerze Twój zestaw skrótów klawiaturowych {set} z innego edytora obrazów: skrótów innych niż w PhotoCraft: {n}. Zaimportować go?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edycja › Skróty klawiaturowe › Przywróć wszystkie domyślne cofa import.
+	Don't Import	Nie importuj
+	The keyboard shortcut set was not imported: {error}	Nie zaimportowano zestawu skrótów klawiaturowych: {error}
 	Reset Section	Resetuj sekcję
 	Reset Transform	Resetuj przekształcenie
 	Reset to defaults	Przywróć wartości domyślne
@@ -1618,6 +1623,7 @@
 	Millimeters	Milimetry
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
+	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -1662,6 +1668,7 @@
 	Quick Selection Tool	Narzędzie Szybkie zaznaczanie
 	Radial	Promienisty
 	Rasterize Layer	Rasteryzuj warstwę
+	Rasterize Layers	Rasteryzuj warstwy
 	Ratio	Proporcje
 	Recent	Ostatnie
 	Rectangle Tool	Narzędzie Prostokąt
@@ -1995,8 +2002,8 @@
 	Delete Brush	Usuń pędzel
 	Group name	Nazwa grupy
 	Brush name	Nazwa pędzla
-	Grid view	Widok siatki
-	List view	Widok listy
+	Brush Name	Nazwa pędzla
+	Brush Stroke	Pociągnięcie pędzla
 	Off: the speed of the pointer sets the spacing	Wyłączone: prędkość wskaźnika określa odstępy
 	Tilt Scale	Skala nachylenia
 	Brush Projection	Rzutowanie pędzla
@@ -2688,6 +2695,7 @@ cameraRaw	Roughness	Chropowatość
 	Reduce Color Noise	Redukuj szum kolorów
 	Sharpen Details	Wyostrz szczegóły
 	Remove Jpeg Artifact	Usuń artefakty JPEG
+	Remove Tool	Narzędzie Usuń
 	Blade Curvature	Krzywizna listków
 	Depth Map	Mapa głębi
 	Focal Distance	Odległość ogniskowania
@@ -3339,6 +3347,9 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
+
+	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 wyłącza ten próg; grupy SVG zagnieżdżone głębiej niż 100 poziomów są zawsze rasteryzowane.
 	Rule of Thirds	Zasada trójpodziału
 	Golden Ratio	Złoty podział
 	Golden Spiral	Złota spirala
@@ -3378,6 +3389,8 @@ cameraRaw	Roughness	Chropowatość
 	Create Ellipse	Utwórz elipsę
 	Create Triangle	Utwórz trójkąt
 	Create Polygon	Utwórz wielokąt
+	Pressure curve	Krzywa nacisku
+	Click to add a point, right-click to remove	Kliknij, aby dodać punkt; kliknij prawym przyciskiem, aby go usunąć
 	Some brush presets could not be loaded	Nie udało się wczytać niektórych ustawień predefiniowanych pędzli
 	Retry saving presets	Ponów zapisywanie ustawień predefiniowanych
 	Brush preset changes are not saved: {error}	Zmiany w ustawieniach predefiniowanych pędzli nie zostały zapisane: {error}
@@ -3390,6 +3403,25 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+	Stroke Options	Opcje obrysu
+	Solid	Ciągły
+	Dashed	Kreskowany
+	Dotted	Kropkowany
+	Caps	Zakończenia
+	Butt / Flat	Płaskie
+	Miter	Ostre
+	Round	Okrągłe
+	Bevel	Ścięte
+	Miter limit	Limit ostrego narożnika
+	Dashed line	Linia kreskowana
+	Dash	Kreska
+	Gap	Odstęp
+	Dash / gap lengths × stroke width	Długości kreski / odstępu × szerokość obrysu
+	Add pair	Dodaj parę
+	Remove pair	Usuń parę
+	Dash offset	Przesunięcie kresek
+	Open paths use centered strokes	Otwarte ścieżki używają wyśrodkowanych obrysów
+	Use finite lengths and a positive pattern total	Użyj skończonych długości i dodatniej sumy wzoru
 	No subject found — try Object Selection or the Lasso	Nie znaleziono obiektu — spróbuj Zaznaczania obiektu lub Lassa
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
