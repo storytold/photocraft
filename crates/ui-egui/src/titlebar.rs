@@ -298,7 +298,7 @@ mod tests {
         for width in [760.0, 1100.0, 1440.0] {
             let mut w = Win::new(width);
             w.frame(vec![]);
-            let out = w.frame(vec![]);
+            w.frame(vec![]);
             let [min, max, close] = CAPTIONS.map(|c| w.caption(c));
             assert_eq!((close.right(), close.top()), (width, 0.0), "Close sits in the window's corner at {width}");
             // The bar's bottom point is the panel's separator line, which the buttons leave visible.
@@ -309,9 +309,18 @@ mod tests {
             for a in &widgets {
                 assert!(a.right() <= min.left(), "{a:?} runs into the caption buttons at {width}");
             }
-            // Wide windows show the whole group; the narrowest drops Discord (also Help › Discord).
-            let has_discord = texts(&out).iter().any(|(t, _)| t == "Discord");
-            assert_eq!(has_discord, width > 1000.0, "Discord at {width}");
+        }
+    }
+
+    #[test]
+    fn the_title_bar_promotes_no_community_chat() {
+        // Issue #1726: only the always-visible title-bar button is removed. The start-screen
+        // and About buttons and Help › Discord remain available.
+        for width in [760.0, 1100.0, 1440.0] {
+            let mut w = Win::new(width);
+            w.frame(vec![]);
+            let out = w.frame(vec![]);
+            assert!(!texts(&out).iter().any(|(t, _)| t.contains("Discord")), "no Discord in the bar at {width}");
         }
     }
 

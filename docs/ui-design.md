@@ -78,7 +78,7 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 
 - **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
 - **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
-- **Narrow windows** drop controls that are also in a menu before anything overlaps: Discord (Help › Discord), then the theme toggle, then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
+- **Narrow windows** drop controls that are also in a menu before anything overlaps: the theme toggle (Preferences), then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
 ## Menus
 
