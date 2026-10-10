@@ -26,6 +26,8 @@ pub mod camera_raw;
 pub mod color_to_alpha;
 pub mod content_aware;
 mod denoise;
+pub mod dff;
+pub mod direct;
 mod distort;
 mod distort2;
 pub mod erase;
