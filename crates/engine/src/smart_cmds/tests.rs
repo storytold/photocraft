@@ -841,7 +841,7 @@ fn automation_smart_contents_refuses_disk_sources_before_changes() {
         assert_eq!((s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entries().len()), (1, revision, history));
 
         // Human commands retain their linked-file behavior. Returning to an already-open child
-        // reads no source, and saving it updates only its parent layer, never a linked sibling.
+        // reads no source. Saving must authorize the external write again before changing anything.
         s.authorize = None;
         let r = s.execute(cmd, json!({"layer": id})).unwrap();
         if cmd.ends_with("editContents") {
@@ -852,17 +852,20 @@ fn automation_smart_contents_refuses_disk_sources_before_changes() {
             assert_eq!(again["document"], r["document"]);
             assert_eq!(s.documents().len(), 2);
             s.execute("image.adjustments.invert", json!({})).unwrap();
-            s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
-            assert!(!s.active().unwrap().is_dirty());
+            assert!(s.execute("layer.smartObjects.saveContents", json!({})).unwrap_err().to_string().contains("source path refused"));
+            assert!(s.active().unwrap().is_dirty());
             let parent = &s.documents()[0].doc;
-            assert!(matches!(smart(parent, LayerId(id)).unwrap().source, SmartSource::Embedded { .. }));
+            assert!(matches!(smart(parent, LayerId(id)).unwrap().source, SmartSource::Linked { .. }));
             assert_eq!(smart(parent, sibling).unwrap().cache.as_ref().unwrap().rgba(1, 1), [0.0, 0.0, 1.0, 1.0]);
+            s.undo(); // discard the test edit before closing the clean child
+            let state = s.active_mut().unwrap();
+            state.saved_revision = state.revision;
             s.close(child).unwrap();
         } else {
             assert_eq!(s.active().unwrap().doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().surface().unwrap().rgba(-5, 6), [1.0, 0.0, 0.0, 1.0]);
         }
     }
-    assert_eq!(std::fs::read(&path).unwrap(), source_bytes, "committing contents does not overwrite the linked file");
+    assert_eq!(std::fs::read(&path).unwrap(), source_bytes, "a denied save must not overwrite the linked file");
     std::fs::remove_file(path).unwrap();
 }
 
@@ -1040,4 +1043,98 @@ fn nested_edit_contents_uses_the_linked_childs_directory() {
     assert_eq!(parent.documents().len(), 3);
     assert!(parent.active().unwrap().path.is_none());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_linked_contents_writes_source_and_keeps_relative_link_at_all_depths() {
+    for depth in DEPTHS {
+        for ext in ["pcraft", "psd"] {
+            let mut s = session(depth);
+            paint(&mut s);
+            let id = convert(&mut s);
+            let dir = std::env::temp_dir().join(format!("pcraft-linked-save-{}-{}-{ext}", std::process::id(), s.active().unwrap().doc.id.0));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join(format!("poster.{ext}"));
+            let (name, bytes) = source_bytes(&s.active().unwrap().doc.metadata, &smart(&s.active().unwrap().doc, LayerId(id)).unwrap().source).unwrap();
+            let child = decode_source(&name, &bytes).unwrap();
+            crate::file_cmds::save_doc(&child, file.to_str().unwrap(), None).unwrap();
+            s.edit("relative link", |doc, _| {
+                smart_mut(doc, LayerId(id))?.source = SmartSource::Linked { path: format!("poster.{ext}") };
+                Ok(())
+            })
+            .unwrap();
+            s.active_mut().unwrap().path = Some(dir.join("wall.pcraft").to_string_lossy().into_owned());
+            let before = flat(&s);
+            s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+            s.execute("image.adjustments.invert", json!({})).unwrap();
+            s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+            assert!(!s.active().unwrap().is_dirty());
+            assert!(s.active().unwrap().path.is_none());
+            let saved = crate::file_cmds::import(file.to_str().unwrap(), &std::fs::read(&file).unwrap()).unwrap();
+            assert_eq!(saved.depth, s.active().unwrap().doc.depth);
+            s.execute("file.close", json!({})).unwrap();
+            s.set_active(0);
+            assert_eq!(smart(&s.active().unwrap().doc, LayerId(id)).unwrap().source, SmartSource::Linked { path: format!("poster.{ext}") });
+            assert_ne!(flat(&s), before);
+            let after = flat(&s);
+            // Save/reopen the parent: the link and the placed appearance survive on disk.
+            let reopened = decode_source("wall.pcraft", &encode_source(&s.active().unwrap().doc).unwrap()).unwrap();
+            assert_eq!(smart(&reopened, LayerId(id)).unwrap().source, SmartSource::Linked { path: format!("poster.{ext}") });
+            s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.layers.len(), saved.layers.len());
+            s.execute("image.adjustments.invert", json!({})).unwrap();
+            s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+            s.set_active(0);
+            assert_ne!(flat(&s), after);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn failed_linked_contents_write_keeps_parent_source_and_child_dirty() {
+    let file = contents_file();
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("layer.smartObjects.relinkToFile", json!({"path": file})).unwrap();
+    s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    let parent = s.documents()[0].doc.clone();
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap(); // portable, deterministic write failure even as root
+    assert!(s.execute("layer.smartObjects.saveContents", json!({})).is_err());
+    assert!(s.active().unwrap().is_dirty());
+    assert!(Arc::ptr_eq(&parent, &s.documents()[0].doc));
+    assert!(matches!(smart(&s.documents()[0].doc, LayerId(id)).unwrap().source, SmartSource::Linked { .. }));
+    assert!(s.execute("file.close", json!({})).is_err());
+    assert_eq!(s.documents().len(), 2, "a failed save cannot close and lose the edited child");
+    assert_eq!(s.active_index(), Some(1));
+    assert_eq!(s.smart_links.len(), 1);
+    assert!(s.execute("file.closeAll", json!({})).is_err());
+    assert_eq!(s.documents().len(), 2);
+    std::fs::remove_dir(file).unwrap();
+}
+
+#[test]
+fn relinked_parent_cannot_redirect_an_open_contents_save() {
+    let file = contents_file();
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("layer.smartObjects.relinkToFile", json!({"path": file})).unwrap();
+    s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    let before = std::fs::read(&file).unwrap();
+    s.set_active(0);
+    s.edit("change source", |doc, _| {
+        smart_mut(doc, LayerId(id))?.source = SmartSource::Linked { path: "different.pcraft".into() };
+        Ok(())
+    })
+    .unwrap();
+    s.set_active(1);
+    assert!(s.execute("layer.smartObjects.saveContents", json!({})).unwrap_err().to_string().contains("reopen Edit Contents"));
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert!(s.active().unwrap().is_dirty());
+    std::fs::remove_file(file).unwrap();
 }

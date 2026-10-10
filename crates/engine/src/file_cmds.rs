@@ -296,7 +296,7 @@ pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
 fn close_all(s: &mut Session) -> Result<Value> {
     let n = s.documents().len();
     while !s.documents().is_empty() {
-        s.close(s.documents().len() - 1);
+        s.try_close(s.documents().len() - 1)?;
     }
     Ok(json!({"closed": n}))
 }
@@ -309,7 +309,7 @@ fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.documents().len() - 1;
     for i in (0..s.documents().len()).rev() {
         if i != keep {
-            s.close(i);
+            s.try_close(i)?;
         }
     }
     s.set_active(0);

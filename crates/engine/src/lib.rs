@@ -400,10 +400,16 @@ impl Session {
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
+        self.try_close(index).ok()
+    }
+
+    /// Close only after Edit Contents has saved successfully. A failed linked-file write must
+    /// leave the edited child open, so callers can report the error and the user can retry.
+    pub fn try_close(&mut self, index: usize) -> Result<DocState> {
         if index >= self.docs.len() {
-            return None;
+            return Err(EngineError::NoDocument);
         }
-        smart_cmds::on_close(self, index);
+        smart_cmds::on_close(self, index)?;
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
         }
@@ -417,7 +423,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
-        Some(d)
+        Ok(d)
     }
 
     /// Run a command by id with JSON params. Returns a JSON result.
