@@ -397,9 +397,14 @@ fn build() -> Vec<CommandSpec> {
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
-        cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{}", has_pixel_layer, |s, p| {
+        cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{} (a targeted colour channel clears that channel only)", has_pixel_layer, |s, p| {
             let id = layer_param(s, p)?;
             let bg = s.tools.background;
+            // A targeted colour channel clears that channel only (#2720).
+            if let Some(k) = crate::channel_cmds::targeted_color(s) {
+                s.edit("Clear", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, k, bg))?;
+                return Ok(Value::Null);
+            }
             s.edit("Clear", |doc, _| {
                 let sel = doc.selection.clone();
                 let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
