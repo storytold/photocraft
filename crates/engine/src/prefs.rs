@@ -310,6 +310,8 @@ pub struct Tools {
     pub vary_round_brush_hardness_on_hud: bool,
     /// Round snapped vector and transform coordinates to whole pixels.
     pub snap_vector_tools_and_transforms_to_pixel_grid: bool,
+    /// The size and angle readouts beside the pointer while a marquee or crop frame is drawn,
+    /// resized or turned (off: none).
     pub show_transformation_values: bool,
     pub overscroll: bool,
     pub double_click_layer_mask_launches_select_and_mask: bool,
@@ -981,7 +983,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.enableNarrowOptionsBar",
     "tools.enableFlickPanning",
     "tools.varyRoundBrushHardnessOnHud",
-    "tools.showTransformationValues",
     "fileHandling.imagePreviews",
     "fileHandling.saveInBackground",
     "fileHandling.ignoreExifProfileTag",
