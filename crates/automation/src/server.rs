@@ -895,6 +895,27 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_reports_invalid_filter_parameters_without_changing_history() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width":8,"height":8}))).await.unwrap().unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        for (params, key) in
+            [(json!({"radius":"big"}), "radius"), (json!({"radus":3}), "radus"), (json!({"radius":5000}), "radius"), (json!({"radius":-4}), "radius")]
+        {
+            for wait in [true, false] {
+                let result = mcp
+                    .command_run(Parameters(RunParams { id: "filter.blur.gaussianBlur".into(), params: Some(params.clone()), wait: Some(wait) }))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(true));
+                let error = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
+                assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+                assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_panicking_command_does_not_wedge_the_session() {
         let mcp = PhotocraftMcp::headless();
         let r = mcp.headless_op(|_| -> Result<(), AutomationError> { panic!("boom") }).await.unwrap();

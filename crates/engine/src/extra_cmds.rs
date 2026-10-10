@@ -52,6 +52,21 @@ fn has_background(s: &Session) -> std::result::Result<(), String> {
     d.doc.layers.first().filter(|l| is_background(l)).map(|_| ()).ok_or_else(|| "the document has no Background layer".into())
 }
 
+/// The layers a layer-style command acts on: as [`crate::layer_multi_cmds::targets`], but with
+/// several layers selected only those `fits` (the Background carries no style, Clear needs one).
+pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> bool) -> Result<Vec<LayerId>> {
+    let ids = crate::layer_multi_cmds::targets(s, p)?;
+    if ids.len() < 2 {
+        return Ok(ids);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !is_background(l) && fits(l))).collect();
+    if ids.is_empty() {
+        return Err(EngineError::Other("none of the selected layers can take this layer style change".into()));
+    }
+    Ok(ids)
+}
+
 /// A key that makes the sub-commands of one command share a single history step.
 fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
@@ -641,13 +656,7 @@ fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) ->
 /// just that layer. Otherwise, as in Photoshop ("select the layer or layers you'd like to
 /// rasterize"), every selected layer the command applies to, in one history step.
 pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
-    let ids = match p.get("layer") {
-        Some(_) => vec![layer_param(s, p)?],
-        None => match crate::layer_multi_cmds::selected(s) {
-            sel if sel.is_empty() => vec![layer_param(s, p)?],
-            sel => sel,
-        },
-    };
+    let ids = crate::layer_multi_cmds::targets(s, p)?;
     let many = ids.len() > 1;
     let key = step_key(s, "rasterize");
     let mut done = Vec::new();
@@ -756,23 +765,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Layer Style",
             &["Layer", "Layer Style"],
             None,
-            r##"{"layer":id?}"##,
+            r##"{"layer":id?} (no layer: every selected layer but the Background)"##,
             |s| {
                 has_layer(s)?;
                 s.style_clipboard.as_ref().map(|_| ()).ok_or_else(|| "no layer style has been copied".into())
             },
             |s, p| {
-                let id = layer_param(s, p)?;
+                let ids = style_targets(s, p, |_| true)?;
                 let (mut fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 s.edit("Paste Layer Style", |doc, _| {
                     // A style copied from a document in another mode takes this one's colours.
                     let mode = doc.mode;
                     fx.items = std::mem::take(&mut fx.items).into_iter().map(|e| e.in_mode(mode)).collect();
-                    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-                    l.effects = fx;
-                    l.blend = blend;
-                    l.fill_opacity = fill;
-                    l.advanced = advanced;
+                    for id in ids {
+                        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        l.effects = fx.clone();
+                        l.blend = blend;
+                        l.fill_opacity = fill;
+                        l.advanced = advanced;
+                    }
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -798,19 +809,43 @@ pub fn specs() -> Vec<CommandSpec> {
             has_mask,
             |s, p| toggle_mask(s, p, "linked")
         ),
-        spec!("layer.rasterize.layer", "Layer", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(s, p, None)),
+        spec!(
+            "layer.rasterize.layer",
+            "Layer",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, None)
+        ),
         spec!("layer.rasterize.allLayers", "All Layers", &["Layer", "Rasterize"], None, "{}", has_doc, |s, _| rasterize_all(s)),
-        spec!("layer.rasterize.type", "Type", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(s, p, Some("type"))),
-        spec!("layer.rasterize.fillContent", "Fill Content", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(
-            s,
-            p,
-            Some("fill")
-        )),
-        spec!("layer.rasterize.smartObject", "Smart Object", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(
-            s,
-            p,
-            Some("smart")
-        )),
+        spec!(
+            "layer.rasterize.type",
+            "Type",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("type"))
+        ),
+        spec!(
+            "layer.rasterize.fillContent",
+            "Fill Content",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("fill"))
+        ),
+        spec!(
+            "layer.rasterize.smartObject",
+            "Smart Object",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("smart"))
+        ),
         spec!("layer.delete.hiddenLayers", "Hidden Layers", &["Layer", "Delete"], None, "{}", has_doc, |s, _| delete_where(s, "Delete Hidden Layers", |l| !l
             .visible)),
         spec!("file.scripts.deleteAllEmptyLayers", "Delete All Empty Layers", &["File", "Scripts"], None, "{}", has_doc, |s, _| delete_where(

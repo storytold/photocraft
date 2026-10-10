@@ -24,6 +24,33 @@ pub fn selected(s: &Session) -> Vec<LayerId> {
     s.active().map(DocState::selected_layers).unwrap_or_default()
 }
 
+/// The layers a layer command acts on: the `layer` param when given, else every selected layer
+/// (bottom-to-top), else the active layer. A single layer behaves exactly as before.
+pub(crate) fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+    if p.get("layer").is_some() {
+        return Ok(vec![crate::commands::layer_param(s, p)?]);
+    }
+    match selected(s) {
+        sel if sel.is_empty() => Ok(vec![crate::commands::layer_param(s, p)?]),
+        sel => Ok(sel),
+    }
+}
+
+/// [`targets`] for a command that adds a layer mask: with several layers selected, those that can
+/// take one (no layer mask yet, not the Background); one layer is taken as given.
+pub(crate) fn mask_targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+    let ids = targets(s, p)?;
+    if ids.len() < 2 {
+        return Ok(ids);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| l.mask.is_none() && !crate::extra_cmds::is_background(l))).collect();
+    if ids.is_empty() {
+        return Err(EngineError::Other("none of the selected layers can take a layer mask".into()));
+    }
+    Ok(ids)
+}
+
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
 /// selected children), bottom-to-top.
 pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {

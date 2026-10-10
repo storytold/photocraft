@@ -1297,6 +1297,9 @@ impl eframe::App for PhotocraftApp {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         raw_input.events.extend(self.take_synthetic_step());
+        if self.custom_titlebar {
+            titlebar::release_after_os_resize(ctx, raw_input);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

@@ -618,6 +618,7 @@ impl Session {
         if id == "file.new" {
             crate::document_preset_cmds::validate_new_params(self, &params)?;
         }
+        crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));

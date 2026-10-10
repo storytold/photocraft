@@ -6,7 +6,7 @@ use std::sync::Arc;
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
     AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartObject, SmartSource, TextLayer,
+    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
@@ -153,6 +153,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             live: s.live.clone(),
         },
         LayerContent::Smart(s) => ContentM::Smart {
+            contents_id: Some(s.contents_id.0),
             source: match &s.source {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
@@ -299,9 +300,10 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
 pub(crate) struct Loader<'a> {
     pub fetch: &'a mut dyn Fetch,
     pub preserve_ids: bool,
-    pub max_id: u64,
     /// Stored layer id → loaded id (differs when ids are remapped), for layer comp states.
     pub id_map: std::collections::HashMap<u64, LayerId>,
+    pub contents_id_map: std::collections::HashMap<u64, SmartContentsId>,
+    pub legacy_linked_contents: std::collections::HashMap<String, SmartContentsId>,
 }
 
 impl Loader<'_> {
@@ -346,14 +348,23 @@ impl Loader<'_> {
     }
 
     fn id(&mut self, raw: u64) -> LayerId {
-        let id = if self.preserve_ids {
-            self.max_id = self.max_id.max(raw);
-            LayerId(raw)
-        } else {
-            LayerId::fresh()
-        };
+        let id = if self.preserve_ids { LayerId(raw) } else { LayerId::fresh() };
         self.id_map.insert(raw, id);
         id
+    }
+
+    fn contents_id(&mut self, raw: Option<u64>, source: &SmartSourceM) -> SmartContentsId {
+        if let Some(raw) = raw {
+            return *self.contents_id_map.entry(raw).or_insert_with(|| if self.preserve_ids { SmartContentsId(raw) } else { SmartContentsId::fresh() });
+        }
+        // Legacy embedded blobs may be deduplicated despite representing independent objects.
+        // Only a nonempty linked path provides an existing shared-source identity.
+        if let SmartSourceM::Linked { path } = source
+            && !path.is_empty()
+        {
+            return *self.legacy_linked_contents.entry(path.clone()).or_insert_with(SmartContentsId::fresh);
+        }
+        SmartContentsId::fresh()
     }
 
     fn comp(&mut self, m: &LayerCompM) -> Result<LayerComp> {
@@ -438,8 +449,9 @@ impl Loader<'_> {
                 cache: self.opt_surface(cache)?,
                 psd_raw: self.opt_blob(psd_raw)?,
             }),
-            ContentM::Smart { source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
+            ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
                 LayerContent::Smart(SmartObject {
+                    contents_id: self.contents_id(*contents_id, source),
                     source: match source {
                         SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
                         SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
@@ -510,6 +522,27 @@ impl Loader<'_> {
     }
 
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
+        // Reserve every stored id before allocating identities missing from older bundles. If an
+        // id is implausibly large, remap the whole document while retaining shared contents groups.
+        if self.preserve_ids {
+            fn max_ids(layers: &[LayerM], depth: usize, max: &mut u64) -> Result<()> {
+                if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
+                    return Err(too_deep());
+                }
+                for l in layers {
+                    *max = (*max).max(l.id);
+                    match &l.content {
+                        ContentM::Group { children, .. } => max_ids(children, depth + 1, max)?,
+                        ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            let mut max = m.id;
+            max_ids(&m.layers, 0, &mut max)?;
+            self.preserve_ids = reserve_ids_through(max);
+        }
         let layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
         let mut channels = Vec::with_capacity(m.channels.len());
         for c in &m.channels {
@@ -550,12 +583,7 @@ impl Loader<'_> {
                 }
             }
         }
-        let id = if self.preserve_ids {
-            self.max_id = self.max_id.max(m.id);
-            DocId(m.id)
-        } else {
-            DocId::fresh()
-        };
+        let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
         Ok(Document {
             id,
             name: m.name.clone(),

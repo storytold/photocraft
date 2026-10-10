@@ -682,23 +682,37 @@ fn build() -> Vec<CommandSpec> {
             has_layer,
             |s, p| set_clipped(s, p, false)
         ),
-        cmd!("layer.layerMask.revealAll", "Reveal All", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Add Layer Mask",
-            Some(LayerMask::reveal_all())
-        )),
-        cmd!("layer.layerMask.hideAll", "Hide All", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Add Layer Mask",
-            Some(LayerMask::hide_all())
-        )),
-        cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_selection, |s, p| {
-            let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
-            let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
-            set_mask(s, p, "Add Layer Mask", Some(mask))
-        }),
+        cmd!(
+            "layer.layerMask.revealAll",
+            "Reveal All",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_layer,
+            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::reveal_all()))
+        ),
+        cmd!(
+            "layer.layerMask.hideAll",
+            "Hide All",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_layer,
+            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::hide_all()))
+        ),
+        cmd!(
+            "layer.layerMask.revealSelection",
+            "Reveal Selection",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_selection,
+            |s, p| {
+                let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
+                let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
+                set_mask(s, p, "Add Layer Mask", Some(mask))
+            }
+        ),
         cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
             s,
             p,
@@ -1252,13 +1266,17 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take
+/// one ([`crate::layer_multi_cmds::mask_targets`]), in one history step.
 fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) -> Result<Value> {
-    let id = layer_param(s, p)?;
+    let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
     s.edit(label, |doc, _| {
-        if mask.is_some() {
-            crate::extra_cmds::background_to_layer_for_mask(doc, id);
+        for id in &ids {
+            if mask.is_some() {
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            }
+            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
         }
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = mask;
         Ok(())
     })?;
     Ok(Value::Null)

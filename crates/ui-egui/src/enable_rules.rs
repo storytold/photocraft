@@ -42,9 +42,10 @@ fn kind_blocks(id: &str, l: &Layer) -> bool {
         "layer.rasterize.fillContent" => !matches!(c, LayerContent::Fill(_)),
         "layer.rasterize.smartObject" => !matches!(c, LayerContent::Smart(_)),
         "layer.rasterize.vectorMask" => l.vector_mask.is_none(),
-        "layer.rasterize.layer" => {
-            matches!(c, LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_)) && l.vector_mask.is_none() && l.effects.items.is_empty()
-        }
+        // What the command converts: type, shape, fill and Smart Object layers (a raster layer with a
+        // vector mask has Rasterize › Vector Mask; the command used to be enabled for layers with
+        // effects or a vector mask and then fail with "nothing to rasterize").
+        "layer.rasterize.layer" => !matches!(c, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Fill(_) | LayerContent::Smart(_)),
         "layer.layerStyle.copyLayerStyle" | "layer.layerStyle.clear" => l.effects.items.is_empty(),
         _ => id.starts_with("layer.combineShapes.") && !matches!(c, LayerContent::Shape(_)),
     }
@@ -66,18 +67,45 @@ pub fn disabled_for(doc: &Document, active: Option<&Layer>, id: &str) -> bool {
     kind_blocks(id, l)
 }
 
-/// Rasterize commands that act on every selected layer (not just the active one).
-const SELECTION_RASTERIZE: [&str; 5] =
-    ["layer.rasterize.layer", "layer.rasterize.type", "layer.rasterize.shape", "layer.rasterize.fillContent", "layer.rasterize.smartObject"];
+/// How a command that acts on the whole layer selection decides it is available.
+#[derive(Clone, Copy)]
+enum Targets {
+    /// Some selected layer can take it.
+    Any,
+    /// Some selected layer other than the lowest can (Create Clipping Mask clips every selected layer
+    /// but the lowest, which becomes the base).
+    AllButLowest,
+    /// Some selected layer without a layer mask can take one.
+    WithoutMask,
+}
 
-/// [`disabled_for`] with the layer selection in mind: with several layers selected, a Rasterize
-/// command is greyed only when none of them can be rasterized by it (the active layer alone must
-/// not decide, since the command runs on all of them).
+/// The commands that run on every selected layer, and so are judged by the selection and not by
+/// the active layer (the same selection used to grey or enable them depending on which of its
+/// layers happened to be active).
+fn selection_targets(id: &str) -> Option<Targets> {
+    Some(match id {
+        "layer.rasterize.layer" | "layer.rasterize.type" | "layer.rasterize.shape" | "layer.rasterize.fillContent" | "layer.rasterize.smartObject" => {
+            Targets::Any
+        }
+        "layer.releaseClippingMask" | "layer.layerStyle.pasteLayerStyle" | "layer.layerStyle.clear" => Targets::Any,
+        "layer.createClippingMask" => Targets::AllButLowest,
+        "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => Targets::WithoutMask,
+        _ => return None,
+    })
+}
+
+/// [`disabled_for`] with the layer selection in mind: with several layers selected, a command that
+/// runs on all of them is greyed only when none of them can take it (the active layer alone must
+/// not decide). Everything else, and a single selected layer, is judged by the active layer.
 pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Option<&Layer>, id: &str) -> bool {
-    if selected.len() > 1 && SELECTION_RASTERIZE.contains(&id) {
-        return selected.iter().filter_map(|l| doc.layer(*l)).all(|l| disabled_for(doc, Some(l), id));
-    }
-    disabled_for(doc, active, id)
+    let Some(rule) = selection_targets(id).filter(|_| selected.len() > 1) else { return disabled_for(doc, active, id) };
+    let layers = selected.iter().filter_map(|l| doc.layer(*l));
+    let can = |l: &Layer| !disabled_for(doc, Some(l), id) && (!matches!(rule, Targets::WithoutMask) || l.mask.is_none());
+    let any = match rule {
+        Targets::AllButLowest => layers.skip(1).any(&can),
+        Targets::Any | Targets::WithoutMask => layers.into_iter().any(can),
+    };
+    !any
 }
 
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
@@ -88,8 +116,8 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
         return false;
     }
-    // Only the Rasterize commands depend on the selection; skip walking the layers for the rest.
-    if SELECTION_RASTERIZE.contains(&id) {
+    // Only these commands depend on the selection; skip walking the layers for the rest.
+    if selection_targets(id).is_some() {
         return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
     }
     disabled_for(&st.doc, active, id)
@@ -164,6 +192,114 @@ mod tests {
         for id in ["layer.layerStyle.dropShadow", "layer.mergeDown", "layer.rasterize.vectorMask"] {
             assert_eq!(sel(&s, &ids, id), disabled_for(&st.doc, active, id), "{id}: decided by the active layer, as before");
         }
+    }
+
+    /// A document with a Background, plain layers, one with a mask, a type layer, a shape, a Smart
+    /// Object, an adjustment layer and one with a drop shadow; `select` picks a selection (the last
+    /// layer is active) and `copied` has a layer style on the clipboard.
+    fn world(select: &[&str], copied: bool) -> photocraft_engine::Session {
+        use photocraft_doc::LayerId;
+        let mut s = session();
+        let id = |r: serde_json::Value| LayerId(r["layer"].as_u64().unwrap());
+        let mut ids = std::collections::HashMap::new();
+        ids.insert("BG", s.active().unwrap().doc.layers[0].id);
+        ids.insert("R1", id(s.execute("layer.new.layer", json!({"name": "R1"})).unwrap()));
+        ids.insert("R2", id(s.execute("layer.new.layer", json!({"name": "R2"})).unwrap()));
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        ids.insert("T", id(s.execute("type.create", json!({"text": "T", "size": 12, "x": 2, "y": 12})).unwrap()));
+        ids.insert("S", id(s.execute("shape.create", json!({"kind": "rect", "rect": [4, 4, 6, 6]})).unwrap()));
+        s.execute("layer.new.layer", json!({"name": "M"})).unwrap();
+        s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 4})).unwrap();
+        ids.insert("M", id(s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()));
+        ids.insert("A", id(s.execute("layer.newAdjustmentLayer.hueSaturation", json!({"hue": 10})).unwrap()));
+        ids.insert("FX", id(s.execute("layer.new.layer", json!({"name": "FX"})).unwrap()));
+        s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
+        if copied {
+            s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": ids["FX"].0})).unwrap();
+        }
+        s.execute("layer.select", json!({"layer": ids[select[0]].0})).unwrap();
+        for name in &select[1..] {
+            s.execute("layer.select", json!({"layer": ids[name].0, "mode": "add"})).unwrap();
+        }
+        s
+    }
+
+    /// What a layer command can change: kind, clipping, mask and style of every layer.
+    fn fingerprint(s: &photocraft_engine::Session) -> Vec<String> {
+        s.active()
+            .unwrap()
+            .doc
+            .walk()
+            .iter()
+            .map(|(_, _, l)| format!("{:?}|{}|{}|{}", std::mem::discriminant(&l.content), l.clipped, l.mask.is_some(), l.effects.items.len()))
+            .collect()
+    }
+
+    /// The menu item and the command agree for every selection, whichever of its layers is active:
+    /// an enabled item runs, a greyed one would have changed nothing. (The same selection used to be
+    /// greyed or not depending on which layer was active, and Rasterize Layer was enabled for layers
+    /// it then refused.)
+    #[test]
+    fn enabled_commands_run_and_greyed_ones_would_do_nothing() {
+        // (command, an enabled item must really change something)
+        let commands = [
+            ("layer.rasterize.layer", true),
+            ("layer.createClippingMask", true),
+            ("layer.layerMask.revealAll", true),
+            ("layer.layerMask.hideAll", true),
+            ("layer.layerStyle.pasteLayerStyle", true),
+            ("layer.layerStyle.clear", true),
+            ("layer.releaseClippingMask", false),
+        ];
+        let selections: &[&[&str]] = &[
+            &["R1", "R2"],
+            &["R2", "R1"],
+            &["BG", "R1"],
+            &["R1", "BG"],
+            &["T", "S"],
+            &["S", "T"],
+            &["M", "R1"],
+            &["R1", "M"],
+            &["BG", "R1", "M", "A"],
+            &["R1", "A"],
+            &["A", "R1"],
+            &["FX", "R1"],
+            &["R1", "FX"],
+            &["BG", "FX", "T", "S", "M", "A"],
+            &["R2", "A"],
+            &["BG", "R2"],
+            &["T"],
+            &["R1"],
+            &["BG"],
+            &["FX"],
+        ];
+        let mut checked = 0;
+        for sel in selections {
+            for copied in [false, true] {
+                for (cmd, must_change) in commands {
+                    let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
+                    let enabled = crate::menus::is_enabled(&app, cmd);
+                    let mut s = app.session;
+                    let before = fingerprint(&s);
+                    let r = s.execute(cmd, json!({}));
+                    let changed = fingerprint(&s) != before;
+                    let what = format!(
+                        "{cmd} for {sel:?} (copied style: {copied}), enabled={enabled}, result={:?}",
+                        r.as_ref().map(|_| ()).map_err(|e| e.to_string())
+                    );
+                    if enabled {
+                        assert!(r.is_ok(), "an enabled item must run: {what}");
+                        assert!(changed || !must_change || sel.len() < 2, "an enabled item must do something: {what}");
+                    } else if sel.len() > 1 {
+                        // For one layer the greying is the menu's own policy (the engine, for instance,
+                        // lets a script clip the Background); several layers must be exact.
+                        assert!(r.is_err() || !changed, "a greyed item would have changed something: {what}");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, selections.len() * 2 * commands.len());
     }
 
     #[test]

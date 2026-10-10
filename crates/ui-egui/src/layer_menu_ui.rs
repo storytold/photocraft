@@ -39,6 +39,17 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
     }
 }
 
+/// Commands that act on the active layer only and have no sensible meaning for a selection: Blending
+/// Options (one dialog), Copy Layer Style (copy from which layer?), the exports, and the per-layer
+/// mask items. With several layers selected they would hit whichever layer is active, not the one
+/// that was right-clicked, so the menu greys them. Adding a mask, Paste/Clear Layer Style and
+/// Rasterize run on every selected layer instead.
+pub fn single_layer_only(id: &str) -> bool {
+    let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
+    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.quickExportAsPng" | "layer.exportAs")
+        || (id.starts_with("layer.layerMask.") && !adds_mask)
+}
+
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
@@ -75,7 +86,8 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         }
     }
     v.push(None);
-    if let Some(mask) = &l.mask {
+    // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
+    if let Some(mask) = l.mask.as_ref().filter(|_| !multi) {
         v.push(Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")));
         v.push(Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")));
         v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
@@ -129,17 +141,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
                     // Enablement is exact for the active layer (or the selection); another row is
                     // selected first when clicked, so its items stay available.
                     let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
-                    let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                    // With a multi-selection this toggle still dispatches to the active layer.
-                    let label = if on_set && id == "layer.layerMask.enabled" {
-                        app.session
-                            .active()
-                            .and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
-                            .and_then(|l| l.mask.as_ref())
-                            .map_or(label, |mask| tl!(mask_toggle_label(mask.enabled)))
-                    } else {
-                        label
-                    };
+                    let enabled = !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
                     if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
                         if !on_set {
                             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
@@ -243,10 +245,10 @@ mod tests {
         let check = |app: &crate::PhotocraftApp, label: Option<&str>| {
             let st = app.session.active().unwrap();
             let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
-            for multi in [false, true] {
-                let entry = entries(l, multi, st.doc.selection.is_some()).into_iter().flatten().find(|e| e.1 == toggle);
-                assert_eq!(entry.map(|e| e.0), label);
-            }
+            let entry = entries(l, false, st.doc.selection.is_some()).into_iter().flatten().find(|e| e.1 == toggle);
+            assert_eq!(entry.map(|e| e.0), label);
+            // A selection has no single mask to toggle: its menu never offers the item.
+            assert!(entries(l, true, st.doc.selection.is_some()).into_iter().flatten().all(|e| e.1 != toggle));
             let item = crate::menus::menu_items(app).into_iter().find(|i| i.id == toggle).unwrap();
             assert_eq!(item.enabled, label.is_some());
             assert_eq!(item.label, label.unwrap_or("Enable Layer Mask"));
@@ -282,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn mask_toggle_context_menu_uses_the_dispatch_target_and_existing_translations() {
+    fn mask_toggle_context_menu_follows_the_clicked_layer_and_existing_translations() {
         use egui_kittest::{Harness, kittest::Queryable};
 
         for language in ["en", "fr"] {
@@ -297,15 +299,15 @@ mod tests {
             let other = s.active().unwrap().active_layer.unwrap();
             s.execute("layer.layerMask.revealAll", json!({})).unwrap();
             s.execute("layer.layerMask.enabled", json!({})).unwrap();
-            let mut app = crate::PhotocraftApp::new(s, Default::default());
-            app.run("layer.select", json!({"layer": clicked.0, "mode": "add"})).unwrap();
-            app.run("layer.select", json!({"layer": other.0, "mode": "add"})).unwrap();
+            let app = crate::PhotocraftApp::new(s, Default::default());
+            // `other` stays the active layer with its mask disabled; the menu is opened over `clicked`,
+            // whose mask is enabled, and selects it first (a single-layer menu).
             let mut h = Harness::builder().with_size(egui::vec2(400.0, 900.0)).build_ui_state(
                 move |ui, app| {
                     let st = app.session.active().unwrap();
                     let l = st.doc.layer(clicked).unwrap().clone();
                     let mut actions = Vec::new();
-                    show(app, ui, &l, true, &mut actions);
+                    show(app, ui, &l, false, &mut actions);
                     for (id, params) in actions {
                         crate::menus::invoke(app, ui.ctx(), &id, params).unwrap();
                     }
@@ -315,15 +317,31 @@ mod tests {
             h.run_steps(3);
             let enabled_label = crate::i18n::tr(lang, "Enable Layer Mask");
             let disabled_label = crate::i18n::tr(lang, "Disable Layer Mask");
-            // Both rows stay selected. This menu toggles the active layer, even when opened
-            // over another selected row whose mask has a different enabled state.
-            h.get_by_label(enabled_label).click();
-            h.run_steps(3);
+            // The label follows the mask of the clicked layer, not of the active one.
+            assert!(h.query_by_label(enabled_label).is_none());
             h.get_by_label(disabled_label).click();
             h.run_steps(3);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(clicked));
+            assert!(!h.state().session.active().unwrap().doc.layer(clicked).unwrap().mask.as_ref().unwrap().enabled);
+            assert!(!h.state().session.active().unwrap().doc.layer(other).unwrap().mask.as_ref().unwrap().enabled);
             h.get_by_label(enabled_label);
-            assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2);
-            assert!(h.state().session.active().unwrap().doc.layer(clicked).unwrap().mask.as_ref().unwrap().enabled);
+        }
+    }
+
+    /// With several layers selected there is no single mask to toggle, apply or delete: the menu
+    /// offers Add Layer Mask only, whatever the clicked layer has, and does not hit the active layer.
+    #[test]
+    fn multi_selection_menu_has_no_per_layer_mask_items() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let masked = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let ids = entries(&masked, true, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
+        assert!(ids.contains(&"layer.layerMask.revealAll"));
+        for single in ["layer.layerMask.enabled", "layer.layerMask.apply", "layer.layerMask.delete"] {
+            assert!(!ids.contains(&single), "{single} acts on one layer, not on a selection");
         }
     }
 
@@ -450,34 +468,36 @@ mod tests {
         assert_eq!(label, "Rasterize Layers");
     }
 
-    /// The reported bug: right-click a layer inside a multi-layer selection, choose Rasterize, and
-    /// only the clicked (or active) layer was converted.
-    #[test]
-    fn rasterize_from_the_menu_converts_every_selected_layer() {
-        use crate::PhotocraftApp;
-        use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
-            h.hover_at(at);
+    fn click(h: &mut egui_kittest::Harness<'_, crate::PhotocraftApp>, at: egui::Pos2, button: egui::PointerButton) {
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button, pressed, modifiers: egui::Modifiers::NONE });
             h.step();
-            for pressed in [true, false] {
-                h.event(Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE });
-                h.step();
-            }
-            h.run_steps(3);
         }
+        h.run_steps(3);
+    }
+
+    /// A type layer, an ellipse and a rectangle; the type layer and the ellipse are selected (the
+    /// ellipse active), the rectangle stays out. The Layers menu is opened by right-clicking the
+    /// type row, which is selected but not the active layer. Returns `[type, ellipse, rectangle]`.
+    fn open_multi_selection_menu() -> (egui_kittest::Harness<'static, crate::PhotocraftApp>, [u64; 3]) {
+        use crate::PhotocraftApp;
+        use egui::{PointerButton, pos2, vec2};
 
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 640, "height": 480})).unwrap();
         let text = s.execute("type.create", json!({"text": "Hi", "size": 24, "x": 20, "y": 60})).unwrap()["layer"].as_u64().unwrap();
         let shape = s.execute("shape.create", json!({"kind": "ellipse", "rect": [100, 100, 200, 160]})).unwrap()["layer"].as_u64().unwrap();
         let other = s.execute("shape.create", json!({"kind": "rect", "rect": [300, 100, 380, 160]})).unwrap()["layer"].as_u64().unwrap();
-        // Select the text and the first shape, keeping the first shape active; the last shape stays out.
         s.execute("layer.select", json!({"layer": text})).unwrap();
         s.execute("layer.select", json!({"layer": shape, "mode": "add"})).unwrap();
-        let mut h =
-            Harness::builder().with_size(vec2(1440.0, 900.0)).with_pixels_per_point(1.0).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(1.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_max_steps(64)
+            .build_eframe(move |cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
                 PhotocraftApp::new(s, crate::Services::default())
             });
@@ -486,15 +506,86 @@ mod tests {
         crate::control::handle(h.state_mut(), &ctx, &req);
         h.run_steps(8);
         let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == text).expect("layer row drawn").row;
-        // Right-click the text row (selected, but not the active layer).
         click(&mut h, pos2(row.left() + 6.0 + 28.0 + 12.0, row.center().y), PointerButton::Secondary);
+        (h, [text, shape, other])
+    }
+
+    /// The reported bug: right-click a layer inside a multi-layer selection, choose Rasterize, and
+    /// only the clicked (or active) layer was converted.
+    #[test]
+    fn rasterize_from_the_menu_converts_every_selected_layer() {
+        use egui_kittest::kittest::Queryable;
+        let (mut h, [text, shape, other]) = open_multi_selection_menu();
         let at = h.get_by_label("Rasterize Layers").rect().center();
-        click(&mut h, at, PointerButton::Primary);
+        click(&mut h, at, egui::PointerButton::Primary);
         let doc = &h.state().session.active().unwrap().doc;
         let raster = |id: u64| matches!(doc.layer(photocraft_doc::LayerId(id)).unwrap().content, photocraft_doc::LayerContent::Raster(_));
         assert!(raster(text) && raster(shape), "both selected layers are rasterized");
         assert!(!raster(other), "an unselected layer is left alone");
         assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "the selection survives");
+    }
+
+    /// Items with no single target are greyed for a multi-layer selection (they used to run on
+    /// whichever layer happened to be active, not the one right-clicked); the ones that act on the
+    /// whole selection, including adding a mask, stay available.
+    #[test]
+    fn multi_selection_menu_greys_what_acts_on_one_layer() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let (h, _) = open_multi_selection_menu();
+        for label in ["Blending Options…", "Copy Layer Style", "Quick Export As PNG", "Export As…"] {
+            assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
+        }
+        for label in ["Add Layer Mask", "Duplicate Layers…", "Delete Layers", "Convert to Smart Object", "Rasterize Layers", "Link Layers", "Merge Layers"] {
+            assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} acts on the selection");
+        }
+        // Greyed here only for lack of something to act on: no style on the clipboard, no style to clear.
+        for label in ["Paste Layer Style", "Clear Layer Style"] {
+            assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} has nothing to do here");
+        }
+        // Whatever the clicked layer is, the menu has the same shape: no per-layer mask or Smart Object items.
+        for label in ["Disable Layer Mask", "Apply Layer Mask", "Delete Layer Mask", "Edit Contents", "Convert to Layers"] {
+            assert!(h.query_by_label(label).is_none(), "{label} is not offered for several layers");
+        }
+    }
+
+    /// Every entry of the multi-layer menu is either known to act on the selection or greyed by
+    /// [`single_layer_only`]; a new single-layer command added to the menu must be classified.
+    #[test]
+    fn single_layer_only_covers_the_per_layer_commands() {
+        for id in [
+            "layer.layerStyle.blendingOptions",
+            "layer.layerStyle.copyLayerStyle",
+            "layer.layerMask.enabled",
+            "layer.layerMask.apply",
+            "layer.layerMask.delete",
+            "layer.quickExportAsPng",
+            "layer.exportAs",
+        ] {
+            assert!(single_layer_only(id), "{id}");
+        }
+        for id in [
+            "layer.duplicate",
+            "layer.delete",
+            "layer.rasterize.layer",
+            "layer.smartObjects.convertToSmartObject",
+            "layer.createClippingMask",
+            "layer.linkLayers",
+            "layer.mergeLayers",
+            "layer.layerMask.revealAll",
+            "layer.layerMask.hideSelection",
+            "layer.layerStyle.pasteLayerStyle",
+            "layer.layerStyle.clear",
+        ] {
+            assert!(!single_layer_only(id), "{id}");
+        }
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let masked = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let ids: Vec<_> = entries(&masked, true, false).into_iter().flatten().map(|e| e.1).collect();
+        assert!(ids.contains(&"layer.layerMask.revealAll") && !ids.contains(&"layer.layerMask.apply"), "one stable mask item for several layers");
     }
 
     #[test]
