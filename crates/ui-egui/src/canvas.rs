@@ -4983,7 +4983,15 @@ mod tests {
                         let f = factor as i32;
                         let r = DRect::new(pos[0] as i32 * f, pos[1] as i32 * f, (pos[0] + image.size[0]) as i32 * f, (pos[1] + image.size[1]) as i32 * f)
                             .intersect(&shown.bounds());
-                        let expected = crate::channel_view::render(&shown, &app.session.documents()[0].channel_view, r, factor, false).unwrap();
+                        let expected = crate::channel_view::render(
+                            &shown,
+                            &app.session.documents()[0].channel_view,
+                            r,
+                            factor,
+                            false,
+                            app.session.documents()[0].active_layer,
+                        )
+                        .unwrap();
                         assert_eq!(image.pixels, expected, "uploaded mask values match the live stroke");
                         delta.clear();
                         assert_eq!(app.session.documents()[0].revision, revision);
@@ -5009,7 +5017,7 @@ mod tests {
                     let st = &app.session.documents()[0];
                     assert_eq!(
                         image.pixels,
-                        crate::channel_view::render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false).unwrap(),
+                        crate::channel_view::render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false, st.active_layer).unwrap(),
                         "undo restores the shown mask"
                     );
                     delta.clear();
@@ -5052,10 +5060,14 @@ mod tests {
             let pos = upload.pos.expect("partial channel upload");
             let egui::ImageData::Color(image) = &upload.image;
             let r = DRect::new(pos[0] as i32, pos[1] as i32, (pos[0] + image.size[0]) as i32, (pos[1] + image.size[1]) as i32);
-            assert_eq!(image.pixels, crate::channel_view::render(&shown, &app.session.documents()[0].channel_view, r, 1, false).unwrap(), "{target}");
+            assert_eq!(
+                image.pixels,
+                crate::channel_view::render(&shown, &app.session.documents()[0].channel_view, r, 1, false, app.session.documents()[0].active_layer).unwrap(),
+                "{target}"
+            );
             assert_ne!(
                 image.pixels,
-                crate::channel_view::render(&original, &app.session.documents()[0].channel_view, r, 1, false).unwrap(),
+                crate::channel_view::render(&original, &app.session.documents()[0].channel_view, r, 1, false, app.session.documents()[0].active_layer).unwrap(),
                 "target was painted"
             );
             delta.clear();
@@ -5070,7 +5082,18 @@ mod tests {
             let upload = &delta.set.get(&tex).unwrap()[0];
             assert!(upload.pos.is_none(), "discarding a preview refreshes the view");
             let egui::ImageData::Color(image) = &upload.image;
-            assert_eq!(image.pixels, crate::channel_view::render(&original, &app.session.documents()[0].channel_view, original.bounds(), 1, false).unwrap());
+            assert_eq!(
+                image.pixels,
+                crate::channel_view::render(
+                    &original,
+                    &app.session.documents()[0].channel_view,
+                    original.bounds(),
+                    1,
+                    false,
+                    app.session.documents()[0].active_layer
+                )
+                .unwrap()
+            );
             delta.clear();
         }
     }
