@@ -94,8 +94,10 @@ pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color
     if max_width < 8.0 {
         return None;
     }
+    // egui has no paragraph bidi: reorder Arabic/Hebrew to visual order before layout.
+    let display = crate::ui_bidi::for_egui(text);
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color, italics, ..Default::default() });
+    job.append(display.as_ref(), 0.0, egui::TextFormat { font_id: font, color, italics, ..Default::default() });
     job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     Some(painter.layout_job(job))
 }

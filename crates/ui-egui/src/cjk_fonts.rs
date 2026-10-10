@@ -1,12 +1,13 @@
-//! Lazy CJK and Thai fallback fonts for the UI.
+//! Lazy CJK, Thai, Arabic and Hebrew fallback fonts for the UI.
 //!
 //! The bundled Inter / JetBrains Mono have no Japanese, Chinese or Korean glyphs, and the OS
 //! fonts that do are large (Hiragino ~10 MB, Apple SD Gothic Neo 28 MB, PingFang 78 MB, Noto
 //! Sans CJK ~20 MB). Instead of reading them at startup, an egui plugin scans each frame's text
 //! for CJK characters no registered font covers, and registers the next system font for that
 //! character's script (`ctx.add_font`, active from the next frame, which it requests). Fonts are
-//! appended at the lowest priority to every family, so Latin text keeps Inter. Thai has its own
-//! candidate list and attempt state, independent of the locale-dependent CJK order.
+//! appended at the lowest priority to every family, so Latin text keeps Inter. Thai, Arabic and
+//! Hebrew each have their own candidate list and attempt state, independent of the locale-dependent
+//! CJK order.
 //!
 //! Script order follows the UI locale ([`photocraft_text::cjk::script_order`]): Kana prefers a
 //! Japanese font, Hangul a Korean one, Bopomofo a Traditional Chinese one, and Han the
@@ -37,6 +38,10 @@ pub struct Sources {
     pub last_resort: fn() -> Vec<FontFile>,
     /// Thai fonts, loaded only when a visible Thai character is missing.
     pub thai: fn() -> Vec<FontFile>,
+    /// Arabic-script fonts (Arabic, Persian, Sorani Kurdish, …).
+    pub arabic: fn() -> Vec<FontFile>,
+    /// Hebrew-script fonts.
+    pub hebrew: fn() -> Vec<FontFile>,
     /// Embedded fonts tried before `files` for a script (craft-fonts' Japanese fonts).
     pub embedded: fn(CjkScript) -> Vec<&'static CraftFont>,
 }
@@ -62,12 +67,22 @@ impl Sources {
             files: cjk::font_files,
             last_resort: cjk::last_resort_files,
             thai: thai_font_files,
+            arabic: arabic_font_files,
+            hebrew: hebrew_font_files,
             embedded: craft_embedded,
         }
     }
     #[cfg(target_arch = "wasm32")]
     pub fn system() -> Self {
-        Self { locale: || None, files: |_| Vec::new(), last_resort: Vec::new, thai: Vec::new, embedded: craft_embedded }
+        Self {
+            locale: || None,
+            files: |_| Vec::new(),
+            last_resort: Vec::new,
+            thai: Vec::new,
+            arabic: Vec::new,
+            hebrew: Vec::new,
+            embedded: craft_embedded,
+        }
     }
 }
 
@@ -80,6 +95,8 @@ pub struct CjkFallback {
     tried: Vec<CjkScript>,
     last_resort_tried: bool,
     thai_tried: bool,
+    arabic_tried: bool,
+    hebrew_tried: bool,
     loaded: Vec<PathBuf>,
     /// Fonts registered so far: (name, path, face index).
     pub registered: Vec<(String, PathBuf, u32)>,
@@ -94,9 +111,16 @@ impl CjkFallback {
             tried: Vec::new(),
             last_resort_tried: false,
             thai_tried: false,
+            arabic_tried: false,
+            hebrew_tried: false,
             loaded: Vec::new(),
             registered: Vec::new(),
         }
+    }
+
+    /// CJK, Thai, Arabic and Hebrew fallbacks have all been tried.
+    fn idle(&self) -> bool {
+        self.exhausted() && self.thai_tried && self.arabic_tried && self.hebrew_tried
     }
 
     /// Script order for the UI locale (resolved on first use, not at startup).
@@ -143,6 +167,20 @@ impl CjkFallback {
         self.load_first(&(self.sources.thai)())
     }
 
+    fn next_arabic_font(&mut self) -> Option<(String, FontData)> {
+        if std::mem::replace(&mut self.arabic_tried, true) {
+            return None;
+        }
+        self.load_first(&(self.sources.arabic)())
+    }
+
+    fn next_hebrew_font(&mut self) -> Option<(String, FontData)> {
+        if std::mem::replace(&mut self.hebrew_tried, true) {
+            return None;
+        }
+        self.load_first(&(self.sources.hebrew)())
+    }
+
     /// The first embedded (craft-fonts) font for `s`, registered from its static bytes.
     fn load_embedded(&mut self, s: CjkScript) -> Option<(String, FontData)> {
         let f = (self.sources.embedded)(s).into_iter().find(|f| !f.bytes.is_empty())?;
@@ -184,14 +222,31 @@ fn is_thai(c: char) -> bool {
     matches!(c, '\u{0e00}'..='\u{0e7f}')
 }
 
+/// Arabic and related scripts (Persian, Sorani Kurdish, …); same ranges as [`photocraft_text::served::script_of`].
+fn is_arabic(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF | 0x1EE00..=0x1EEFF
+    )
+}
+
+fn is_hebrew(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x05FF | 0xFB1D..=0xFB4F)
+}
+
 /// First supported missing character for which a fallback has not yet been exhausted.
 fn missing_char(ctx: &egui::Context, shapes: &[egui::epaint::ClippedShape], fallback: &CjkFallback) -> Option<char> {
-    fn collect(shape: &Shape, out: &mut Vec<char>, cjk_pending: bool, thai_pending: bool) {
+    fn collect(shape: &Shape, out: &mut Vec<char>, cjk_pending: bool, thai_pending: bool, arabic_pending: bool, hebrew_pending: bool) {
         match shape {
             Shape::Text(t) => {
                 let text = &t.galley.job.text;
                 if !text.is_ascii() {
-                    for c in text.chars().filter(|c| (cjk_pending && cjk::classify(*c).is_some()) || (thai_pending && is_thai(*c))) {
+                    for c in text.chars().filter(|c| {
+                        (cjk_pending && cjk::classify(*c).is_some())
+                            || (thai_pending && is_thai(*c))
+                            || (arabic_pending && is_arabic(*c))
+                            || (hebrew_pending && is_hebrew(*c))
+                    }) {
                         if out.len() >= 256 {
                             return;
                         }
@@ -201,13 +256,20 @@ fn missing_char(ctx: &egui::Context, shapes: &[egui::epaint::ClippedShape], fall
                     }
                 }
             }
-            Shape::Vec(v) => v.iter().for_each(|s| collect(s, out, cjk_pending, thai_pending)),
+            Shape::Vec(v) => v.iter().for_each(|s| collect(s, out, cjk_pending, thai_pending, arabic_pending, hebrew_pending)),
             _ => {}
         }
     }
     let mut chars = Vec::new();
     for s in shapes {
-        collect(&s.shape, &mut chars, !fallback.exhausted(), !fallback.thai_tried);
+        collect(
+            &s.shape,
+            &mut chars,
+            !fallback.exhausted(),
+            !fallback.thai_tried,
+            !fallback.arabic_tried,
+            !fallback.hebrew_tried,
+        );
     }
     if chars.is_empty() {
         return None;
@@ -287,22 +349,30 @@ impl egui::Plugin for CjkFontPlugin {
             ctx.request_repaint();
             return;
         }
-        if self.0.exhausted() && self.0.thai_tried {
+        if self.0.idle() {
             return;
         }
         let Some(c) = missing_char(ctx, &output.shapes, &self.0) else { return };
-        let font = if is_thai(c) { self.0.next_thai_font() } else { cjk::classify(c).and_then(|kind| self.0.next_font(kind)) };
+        let font = if is_thai(c) {
+            self.0.next_thai_font()
+        } else if is_arabic(c) {
+            self.0.next_arabic_font()
+        } else if is_hebrew(c) {
+            self.0.next_hebrew_font()
+        } else {
+            cjk::classify(c).and_then(|kind| self.0.next_font(kind))
+        };
         if let Some((name, data)) = font {
             add_to_all_families(ctx, name, data);
             ctx.request_repaint();
-        } else if !self.0.exhausted() || !self.0.thai_tried {
+        } else if !self.0.idle() {
             // Nothing readable for this script; try the next one on the next frame.
             ctx.request_repaint();
         }
     }
 }
 
-/// Installs the lazy CJK and Thai fallback (system fonts; nothing on the web).
+/// Installs the lazy CJK, Thai, Arabic and Hebrew fallback (system fonts; nothing on the web).
 pub fn install(ctx: &egui::Context) {
     install_with(ctx, Sources::system());
 }
@@ -351,6 +421,88 @@ fn thai_unix_font_files() -> Vec<FontFile> {
             ["/usr/share/fonts", "/run/host/fonts", "/usr/local/share/fonts"]
                 .into_iter()
                 .map(move |root| FontFile { path: std::path::Path::new(root).join(file), family: "Noto Sans Thai" })
+        })
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn arabic_font_files() -> Vec<FontFile> {
+    let f = |path: &str, family| FontFile { path: path.into(), family };
+    if cfg!(target_os = "macos") {
+        vec![
+            f("/System/Library/Fonts/GeezaPro.ttc", "Geeza Pro"),
+            f("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "Arial Unicode MS"),
+        ]
+    } else if cfg!(target_os = "windows") {
+        let dir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from).join("Fonts");
+        [
+            ("segoeui.ttf", "Segoe UI"),
+            ("arial.ttf", "Arial"),
+            ("NotoSansArabic-Regular.ttf", "Noto Sans Arabic"),
+            ("NotoNaskhArabic-Regular.ttf", "Noto Naskh Arabic"),
+        ]
+            .into_iter()
+            .map(|(file, family)| FontFile { path: dir.join(file), family })
+            .collect()
+    } else {
+        arabic_unix_font_files()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hebrew_font_files() -> Vec<FontFile> {
+    let f = |path: &str, family| FontFile { path: path.into(), family };
+    if cfg!(target_os = "macos") {
+        vec![
+            f("/System/Library/Fonts/Supplemental/Arial.ttf", "Arial"),
+            f("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "Arial Unicode MS"),
+        ]
+    } else if cfg!(target_os = "windows") {
+        let dir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from).join("Fonts");
+        [
+            ("segoeui.ttf", "Segoe UI"),
+            ("arial.ttf", "Arial"),
+            ("NotoSansHebrew-Regular.ttf", "Noto Sans Hebrew"),
+        ]
+            .into_iter()
+            .map(|(file, family)| FontFile { path: dir.join(file), family })
+            .collect()
+    } else {
+        hebrew_unix_font_files()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn arabic_unix_font_files() -> Vec<FontFile> {
+    [
+        "google-noto/NotoSansArabic-Regular.ttf",
+        "google-noto-vf/NotoSansArabic[wght].ttf",
+        "truetype/noto/NotoSansArabic-Regular.ttf",
+        "noto/NotoSansArabic-Regular.ttf",
+        "google-noto/NotoNaskhArabic-Regular.ttf",
+    ]
+        .into_iter()
+        .flat_map(|file| {
+            ["/usr/share/fonts", "/run/host/fonts", "/usr/local/share/fonts"]
+                .into_iter()
+                .map(move |root| FontFile { path: std::path::Path::new(root).join(file), family: "Noto Sans Arabic" })
+        })
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hebrew_unix_font_files() -> Vec<FontFile> {
+    [
+        "google-noto/NotoSansHebrew-Regular.ttf",
+        "google-noto-vf/NotoSansHebrew[wght].ttf",
+        "truetype/noto/NotoSansHebrew-Regular.ttf",
+        "noto/NotoSansHebrew-Regular.ttf",
+    ]
+        .into_iter()
+        .flat_map(|file| {
+            ["/usr/share/fonts", "/run/host/fonts", "/usr/local/share/fonts"]
+                .into_iter()
+                .map(move |root| FontFile { path: std::path::Path::new(root).join(file), family: "Noto Sans Hebrew" })
         })
         .collect()
 }
@@ -437,6 +589,8 @@ mod tests {
             },
             last_resort: || vec![fake("font.ttf")],
             thai: Vec::new,
+            arabic: Vec::new,
+            hebrew: Vec::new,
             embedded: no_embedded,
         }
     }
@@ -467,7 +621,15 @@ mod tests {
             ("zh-Hant-TW", CjkScript::TraditionalChinese),
             ("ko_KR", CjkScript::Korean),
         ] {
-            let mut fb = CjkFallback::new(Sources { locale: || None, files: |_| vec![], last_resort: Vec::new, thai: Vec::new, embedded: no_embedded });
+            let mut fb = CjkFallback::new(Sources {
+                locale: || None,
+                files: |_| vec![],
+                last_resort: Vec::new,
+                thai: Vec::new,
+                arabic: Vec::new,
+                hebrew: Vec::new,
+                embedded: no_embedded,
+            });
             fb.order = Some(cjk::script_order(Some(loc)));
             assert!(fb.next_font(CjkChar::Han).is_none());
             assert_eq!(fb.tried[0], first, "{loc}");
@@ -502,6 +664,8 @@ mod tests {
             files: |_| vec![],
             last_resort: Vec::new,
             thai: || vec![fake("missing.ttf"), fake("empty.ttf"), fake("font.ttf")],
+            arabic: Vec::new,
+            hebrew: Vec::new,
             embedded: no_embedded,
         };
         let ctx = egui::Context::default();
@@ -531,6 +695,73 @@ mod tests {
         let mut fallback = CjkFallback::new(fake_sources(|| Some("ko".into())));
         assert!(fallback.next_thai_font().is_none());
         assert!(fallback.next_font(CjkChar::Hangul).is_some());
+    }
+
+    #[test]
+    fn arabic_loading_is_lazy_once_per_install() {
+        let sources = Sources {
+            locale: || Some("en".into()),
+            files: |_| vec![],
+            last_resort: Vec::new,
+            thai: Vec::new,
+            arabic: || vec![fake("missing.ttf"), fake("empty.ttf"), fake("font.ttf")],
+            hebrew: Vec::new,
+            embedded: no_embedded,
+        };
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_with(&ctx, sources.clone());
+        assert!(render(&ctx, "Layer 1"));
+        ctx.with_plugin::<CjkFontPlugin, _>(|p| {
+            assert!(!p.0.arabic_tried, "Latin-only frames do not request Arabic fonts");
+            assert!(p.0.registered.is_empty());
+        })
+        .expect("font plugin");
+        // The stand-in is Inter too: it registers a fallback but still lacks Arabic glyphs.
+        assert!(!render(&ctx, "طبقة"));
+        ctx.with_plugin::<CjkFontPlugin, _>(|p| {
+            assert!(p.0.arabic_tried);
+            assert_eq!(p.0.registered.len(), 1);
+        })
+        .expect("font plugin");
+        let fonts = ctx.fonts(|f| f.definitions().clone());
+        assert_eq!(fonts.families[&FontFamily::Proportional].first().map(String::as_str), Some("Inter"));
+        for stack in fonts.families.values() {
+            assert_eq!(stack.iter().filter(|n| n.starts_with(FONT_PREFIX)).count(), 1);
+            assert_eq!(stack.last().map(String::as_str), Some("system-cjk-0"));
+        }
+    }
+
+    #[test]
+    fn system_fonts_cover_arabic_layer_names() {
+        let files = arabic_font_files();
+        if !files.iter().any(|f| f.path.is_file()) {
+            eprintln!("skipping: no Arabic system font");
+            return;
+        }
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        assert!(render(&ctx, "طبقة"), "Arabic layer name still has missing glyphs");
+        assert!(render(&ctx, "چین"), "Sorani Kurdish layer name still has missing glyphs");
+    }
+
+    /// After [`crate::ui_bidi::for_egui`], the last word's ش sits on the left (first word on the right).
+    #[test]
+    fn bidi_reordered_arabic_puts_first_word_on_the_right() {
+        let files = arabic_font_files();
+        if !files.iter().any(|f| f.path.is_file()) {
+            eprintln!("skipping: no Arabic system font");
+            return;
+        }
+        let logical = "ئەمە تێستە بۆ ئیش";
+        let display = crate::ui_bidi::for_egui(logical);
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        assert!(render(&ctx, logical));
+        let galley = ctx.fonts_mut(|f| f.layout_no_wrap(display.into_owned(), FontId::proportional(13.0), egui::Color32::WHITE));
+        let glyphs: Vec<_> = galley.rows.iter().flat_map(|r| r.glyphs.iter()).copied().collect();
+        let sheen = glyphs.iter().find(|g| g.chr == 'ش').map(|g| g.pos.x).unwrap();
+        let mid = galley.size().x * 0.5;
+        assert!(sheen < mid, "last word's ش should be on the left: x={sheen} mid={mid}");
     }
 
     #[test]
@@ -587,7 +818,15 @@ mod tests {
 
     /// No system fonts at all: craft-fonts alone draws Japanese.
     fn craft_only(locale: fn() -> Option<String>) -> Sources {
-        Sources { locale, files: |_| vec![], last_resort: Vec::new, thai: Vec::new, embedded: craft_embedded }
+        Sources {
+            locale,
+            files: |_| vec![],
+            last_resort: Vec::new,
+            thai: Vec::new,
+            arabic: Vec::new,
+            hebrew: Vec::new,
+            embedded: craft_embedded,
+        }
     }
 
     #[test]
@@ -617,7 +856,15 @@ mod tests {
         // The pre-craft-fonts behaviour: no embedded fonts, no system fonts. Latin renders,
         // Japanese is tried (and stays missing) without panicking, and the loader exhausts.
         let ctx = egui::Context::default();
-        crate::theme::install_fonts_with(&ctx, Sources { locale: || None, files: |_| vec![], last_resort: Vec::new, thai: Vec::new, embedded: no_embedded });
+        crate::theme::install_fonts_with(&ctx, Sources {
+            locale: || None,
+            files: |_| vec![],
+            last_resort: Vec::new,
+            thai: Vec::new,
+            arabic: Vec::new,
+            hebrew: Vec::new,
+            embedded: no_embedded,
+        });
         assert!(render(&ctx, "Layer 1 – café"));
         assert!(!render(&ctx, "日本語の文字"));
         let n = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
