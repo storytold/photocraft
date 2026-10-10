@@ -2882,9 +2882,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
         crate::slice_ui::draw_overlay(app, &painter, &xf);
         // Tool cursors (Photoshop-style).
-        let guide_hover = response.hover_pos().filter(|_| tool == Tool::Move).and_then(|p| {
+        let guide_hover = response.hover_pos().and_then(|p| {
             let d = xf.to_doc(p);
-            crate::rulers::guide_at(app, d[0], d[1])
+            if tool == Tool::Move {
+                return crate::rulers::guide_at(app, d[0], d[1]);
+            }
+            command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
         });
         if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
@@ -3805,6 +3808,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::gradient_ui::pointer(app, ev, mods) {
         return;
     }
+    // ⌘ with a selection tool over a guide takes the guide (#2690); the guide drag below moves it.
+    if let ToolEvent::Down { x, y, .. } = raw
+        && let Some((vertical, i)) = command_guide_at(app, app.active_tool(), [x, y], mods)
+    {
+        app.guide_drag = Some(crate::rulers::GuideDrag { vertical, index: Some(i), pos: if vertical { x } else { y } });
+        crate::snap_ui::begin_guide(app, [x, y]);
+        return;
+    }
     if crate::lasso_ui::pointer(app, ev, mods) {
         return;
     }
@@ -4131,6 +4142,15 @@ pub(crate) fn command_moves_layer(app: &PhotocraftApp, tool: Tool, p: [f64; 2], 
     let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     selection_tool && mods.command && !mods.shift && !floating && app.ui.polygon.is_empty() && !inside_selection(app, p)
+}
+
+/// The guide a ⌘ press with selection tool `tool` at `p` drags (vertical?, index), as the Move
+/// tool's press would (#2690): ⌘ is the Move tool, and a guide under the pointer comes before the
+/// layer or the selected pixels. Not while a polygon or lasso outline is being drawn.
+pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<(bool, usize)> {
+    let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
+    let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none();
+    (selection_tool && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
 
 /// Photoshop's cursor over a selection: what a press (or the drag under way) would do.
