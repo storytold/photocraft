@@ -234,6 +234,13 @@ pub fn builtin() -> Vec<Group<GradientPreset>> {
         stops: vec![(0.0, StopColor::Foreground), (1.0, StopColor::Foreground)],
         opacity: vec![(0.0, 1.0), (1.0, 0.0)],
     };
+    // A smooth spectrum: 13 hues evenly spaced from red (0°) to magenta (300°). The pastel and
+    // neon presets reuse the same hues at a different saturation/lightness, and Rainbow Fade
+    // reuses the classic ramp with its ends transparent. Colours are our own.
+    let rainbow = GradientPreset::new(
+        "Rainbow",
+        &["#ec1313", "#ec6d13", "#ecc813", "#b6ec13", "#5bec13", "#13ec25", "#13ec80", "#13ecda", "#13a4ec", "#1349ec", "#3713ec", "#9213ec", "#ec13ec"],
+    );
     vec![
         Group::new("Basics", vec![GradientPreset::foreground_to_background(), fg_transparent, GradientPreset::new("Black, White", &["#000000", "#ffffff"])]),
         Group::new(
@@ -347,6 +354,31 @@ pub fn builtin() -> Vec<Group<GradientPreset>> {
                     &["#e9ecef", "#ced4da", "#868e96"],
                 ],
             ),
+        ),
+        Group::new(
+            "Rainbows",
+            vec![
+                rainbow.clone(),
+                GradientPreset::new(
+                    "Pastel Rainbow",
+                    &[
+                        "#f4afaf", "#f4cbaf", "#f4e8af", "#e2f4af", "#c6f4af", "#aff4b4", "#aff4d1", "#aff4ee", "#afddf4", "#afc0f4", "#baaff4", "#d7aff4",
+                        "#f4aff4",
+                    ],
+                ),
+                GradientPreset::new(
+                    "Neon Rainbow",
+                    &[
+                        "#ff0000", "#ff6a00", "#ffd400", "#bfff00", "#55ff00", "#00ff15", "#00ff80", "#00ffea", "#00aaff", "#0040ff", "#2a00ff", "#9500ff",
+                        "#ff00ff",
+                    ],
+                ),
+                GradientPreset::new(
+                    "Oil Slick",
+                    &["#0b0f1a", "#1b2a4a", "#0f6f6f", "#1fae8a", "#5ac8a8", "#7a5cff", "#b13bd6", "#e04a8f", "#f2a65a", "#3a2a6b", "#0b0f1a"],
+                ),
+                GradientPreset { name: "Rainbow Fade".into(), opacity: vec![(0.0, 0.0), (0.125, 1.0), (0.875, 1.0), (1.0, 0.0)], ..rainbow },
+            ],
         ),
     ]
 }
