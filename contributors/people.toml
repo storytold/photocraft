@@ -264,3 +264,7 @@ sync_github_name = false
 
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
+
+[people.diegochagas]
+real_name = "Diego Chagas"
+display_name = "Diego Chagas"
