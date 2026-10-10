@@ -1644,6 +1644,7 @@
 	Mobile	移动设备
 	Move Tool	移动工具
 	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
+	Could not complete the Free Transform command because the layer is locked.	无法完成“自由变换”命令，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -2236,6 +2237,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker ({name})	拾色器（{name}）
 	Color Picker (Fill Color)	拾色器（填充颜色）
 	Fill color	填充颜色
 	Color Picker (Stroke Color)	拾色器（描边颜色）
@@ -2418,5 +2420,9 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Use Classic Mode	使用经典模式
+	Auto Center Preview	自动居中预览
+	Next Document	下一个文档
+	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率
 	Front Image	前面的图像

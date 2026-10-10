@@ -129,6 +129,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if color_picker {
             modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
         }
+        // Tab / ⇧Tab walk the topmost dialog's text fields, not every widget (field_tab.rs).
+        let tab = if top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let modal = modal.show(ctx, |ui| {
             if !interactive {
@@ -173,6 +175,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
+            crate::field_tab::begin(ui.ctx());
             match d.kind {
                 DialogKind::NewDocument => {
                     if crate::new_doc_ui::body(app, ui, &mut fields) {
@@ -243,6 +246,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
+            crate::field_tab::end(ui.ctx(), tab);
             if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);

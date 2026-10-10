@@ -382,6 +382,32 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: Iris Blur pin preparation, saturated-distance evaluation and trailing
+Gaussian-level halo trimming measure 1.18–1.76× faster across eight local 24 MP
+RGB U8/U16/F32 cases (Ryzen 7 9700X, Windows, eight workers). Default blur 15:
+626.8 → 426.9 ms; two pins: 1789.9 → 1016.2 ms. The default 1500×1000 filtered
+proxy for 24 MP, document blur 15/80: 28.7/51.8 → 24.9/42.6 ms. At 36 MP,
+two pins: 2595.8 → 1822.8 ms; small/medium U8 gains are inconclusive.
+Differential tests preserve exact finite pixel bits.
+These are computation timings, not GUI frame latency or new Photoshop parity;
+see [measurements, upstream SIMD findings and limits](iris-blur-performance.md).
+
+2026-10-10: Quick Selection object strokes through raster surfaces measured
+3.46-3.70x faster at 8-bit, 16-bit and 32f on 24-36 MP documents (AWS
+c7i.4xlarge, five paired release runs), with identical region bounds and mask bytes.
+Hybrid FIFO push/relabel and sparse edge enumeration preserve the fitted energy.
+See [stroke measurements and reproduction](quick-selection-performance.md).
+
+2026-10-10: Pixelate's Facet shares exact 3x3 quadrant statistics and Color Halftone
+shares dot radii within each rotated screen grid. Full tiled CPU application at 24 MP
+on a 16-vCPU m7i.4xlarge improves Facet from 0.684 s to 0.312 s in RGB8
+(2.20x), and from 7.888 s to 0.574 s in CMYK8 (13.74x).
+Color Halftone improves from 1.137 s to 0.604 s in RGB8 (1.88x)
+and from 3.589 s to 0.718 s in Lab8 (5.00x).
+Three alternating paired release runs also cover 36 MP RGB, 16/32-bit storage,
+and screen radii 2/8/64. All 36 complete output comparisons match exactly.
+See [method, raw timings and checks](pixelate-performance.md).
+
 2026-10-10: Native CMYK solid and gradient fills share depth-quantized samples between
 rendering and PSD export. The uncached 16-bit CMYK gradient now round-trips with zero
 rendered error; psd-tools round trips rise from 307 to 308. Mixed and Photoshop round

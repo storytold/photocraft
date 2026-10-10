@@ -75,6 +75,11 @@ real_name = "Ahmed Moussa"
 display_name = "Ahmed Moussa"
 sync_github_name = false
 
+[people.alexanderalber]
+real_name = "Alexander Alber"
+display_name = "Alexander Alber"
+sync_github_name = false
+
 [people.Erica4fr]
 sync_github_name = true
 

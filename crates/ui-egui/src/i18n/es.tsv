@@ -1631,6 +1631,7 @@
 	Mobile	Móvil
 	Move Tool	Herramienta Mover
 	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
+	Could not complete the Free Transform command because the layer is locked.	No se pudo completar el comando Transformación libre porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -2297,6 +2298,7 @@ cameraRaw	Amount	Cantidad
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selector de color (Color del texto)
+	Color Picker ({name})	Selector de color ({name})
 	Color Picker (Fill Color)	Selector de color (Color de relleno)
 	Fill color	Color de relleno
 	Color Picker (Stroke Color)	Selector de color (Color del trazo)
@@ -2478,5 +2480,9 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+	Use Classic Mode	Usar modo clásico
+	Auto Center Preview	Centrar previsualización automáticamente
+	Next Document	Documento siguiente
+	Previous Document	Documento anterior
 	W x H x Resolution	An. x Al. x Resolución
 	Front Image	Imagen frontal

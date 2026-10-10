@@ -3227,6 +3227,7 @@ cameraRaw	Yellow	Κίτρινο
 	Magic Wand Tool	Μαγικό ραβδί (Magic Wand Tool)
 	Move Tool	Μετακίνηση (Move Tool)
 	Could not use the move tool because the layer is locked.	Δεν ήταν δυνατή η χρήση του εργαλείου Μετακίνηση, επειδή το επίπεδο είναι κλειδωμένο.
+	Could not complete the Free Transform command because the layer is locked.	Δεν ήταν δυνατή η ολοκλήρωση της εντολής Ελεύθερος μετασχηματισμός, επειδή το επίπεδο είναι κλειδωμένο.
 	Note Tool	Σημείωση (Note Tool)
 	Object Selection Tool	Επιλογή αντικειμένου (Object Selection Tool)
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
@@ -3457,6 +3458,7 @@ fontWeight	Thin	Πολύ λεπτά
 
 # Shared text style Color Picker (#2015)
 	Color Picker (Text Color)	Επιλογέας χρώματος (χρώμα κειμένου)
+	Color Picker ({name})	Επιλογέας χρώματος ({name})
 	Auto Hide Notifications	Αυτόματη απόκρυψη ειδοποιήσεων
 	Notification Duration (seconds)	Διάρκεια ειδοποίησης (δευτερόλεπτα)
 	Appearance Mode	Λειτουργία εμφάνισης
@@ -3518,5 +3520,9 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Use Classic Mode	Χρήση κλασικής λειτουργίας
+	Auto Center Preview	Αυτόματο κεντράρισμα προεπισκόπησης
+	Next Document	Επόμενο έγγραφο
+	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση
 	Front Image	Μπροστινή εικόνα

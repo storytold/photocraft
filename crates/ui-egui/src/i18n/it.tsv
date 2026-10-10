@@ -1629,6 +1629,7 @@
 	Mobile	Mobile
 	Move Tool	Strumento Sposta
 	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
+	Could not complete the Free Transform command because the layer is locked.	Impossibile completare il comando Trasformazione libera perché il livello è bloccato.
 	Multiply	Moltiplica
 	My Brushes	I miei pennelli
 	Neutrals	Neutri
@@ -2301,6 +2302,7 @@ cameraRaw	Amount	Quantità
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selettore colore (Colore del testo)
+	Color Picker ({name})	Selettore colore ({name})
 	Color Picker (Fill Color)	Selettore colore (Colore di riempimento)
 	Fill color	Colore di riempimento
 	Color Picker (Stroke Color)	Selettore colore (Colore della traccia)
@@ -2480,5 +2482,9 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+	Use Classic Mode	Usa modalità classica
+	Auto Center Preview	Centra anteprima automaticamente
+	Next Document	Documento successivo
+	Previous Document	Documento precedente
 	W x H x Resolution	L x A x Risoluzione
 	Front Image	Immagine in primo piano

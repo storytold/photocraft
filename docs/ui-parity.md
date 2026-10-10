@@ -131,6 +131,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Straighten button and ⌘-drag line | done | TOOL-214-21 |
 | Overlays (thirds, grid, diagonal, triangle, golden ratio/spiral), O / ⇧O | done | TOOL-214-20 |
 | Crop shield, Show Cropped Area (H) | done | TOOL-214-22 |
+| Default mode: the image turns and moves behind an upright box; Auto Center Preview; Use Classic Mode | done | TOOL-214-23 |
 | W × H × Resolution with units, built-in size presets, Front Image | done | TOOL-214-9 (`crop_size.rs`) |
 | Saved custom crop presets | missing | TOOL-214-9 |
 | Content-Aware crop fill, Delete Cropped Pixels off | partial | |
