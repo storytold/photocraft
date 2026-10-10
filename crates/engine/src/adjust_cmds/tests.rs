@@ -356,6 +356,104 @@ fn invert_with_the_mask_targeted_inverts_the_mask() {
     }
 }
 
+// ---------- Image › Adjustments as smart filters (FILE-215-4) ----------
+
+/// A painted pixel layer converted to a smart object, over the painted Background.
+fn smart_session() -> Session {
+    let mut s = session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |x, y| [0.1 + x as f32 / 60.0, 0.2 + y as f32 / 50.0, 0.6 - x as f32 / 120.0, 1.0]);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s
+}
+
+fn flatten(s: &Session) -> Vec<[f32; 4]> {
+    photocraft_compose::flatten(doc(s)).px
+}
+
+fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
+    a.iter().zip(b).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
+}
+
+fn smart_filters_of(s: &Session) -> Vec<photocraft_doc::SmartFilter> {
+    let d = s.active().unwrap();
+    match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+        LayerContent::Smart(sm) => sm.smart_filters.clone(),
+        other => panic!("not a smart object: {}", other.kind_name()),
+    }
+}
+
+/// FILE-215-4: Image › Adjustments on a smart object record a smart filter (Photoshop) instead
+/// of baking into a copy of the pixels: it renders exactly what the destructive command would
+/// bake in, and can be hidden, re-edited and undone, each in one history step.
+#[test]
+fn adjustments_on_a_smart_object_record_a_smart_filter() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    // The destructive result on the same pixels: the smart filter must match it exactly.
+    let mut plain = session(8, "rgb");
+    plain.execute("image.adjustments.invert", json!({})).unwrap();
+    let baked = flatten(&plain);
+    assert!(max_diff(&original, &baked) > 0.5, "the control changes the pixels");
+    assert!(s.is_enabled("image.adjustments.invert"), "an adjustment runs on a smart object");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+    let sf = smart_filters_of(&s);
+    assert_eq!(sf.len(), 1);
+    assert_eq!(sf[0].command, "image.adjustments.invert");
+    assert!(sf[0].visible && sf[0].opacity == 1.0 && sf[0].blend == photocraft_color::BlendMode::Normal);
+    assert!(sf[0].params.get("__kind").is_none(), "the engine's private key is not recorded");
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "the smart filter renders the destructive result");
+    // Hiding the filter shows the original exactly.
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    assert_eq!(flatten(&s), original);
+    s.undo();
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "undo restores the filtered pixels");
+    // Re-editing the recorded params re-renders; the same params give the same pixels.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {}})).unwrap();
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "the same params render the same pixels");
+    // The setParams step, then the filter itself, undo away.
+    s.undo();
+    s.undo();
+    assert!(smart_filters_of(&s).is_empty(), "the filter is gone");
+    assert_eq!(flatten(&s), original);
+}
+
+/// A selection becomes the smart filter's mask, and the adjustment with its own command
+/// (Shadows/Highlights) records a filter too.
+#[test]
+fn adjustment_smart_filters_take_a_selection_as_their_mask() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 24, "height": 32})).unwrap();
+    s.execute("image.adjustments.shadowsHighlights", json!({"shadowAmount": 100, "blackClip": 0, "whiteClip": 0})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not smart") };
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, "image.adjustments.shadowsHighlights");
+    assert!(sm.filter_mask.is_some(), "the selection became the filter mask");
+    let now = flatten(&s);
+    let at = |px: &[[f32; 4]], x: i32, y: i32| px[(y * 48 + x) as usize];
+    assert!(changed(at(&original, 5, 16), at(&now, 5, 16)) > 1e-3, "inside the selection the shadows lifted");
+    assert_eq!(at(&now, 40, 16), at(&original, 40, 16), "outside the mask the composite is unchanged");
+}
+
+/// A wrong-typed value errors before anything is recorded (never a panic), and the adjustments
+/// that can't re-render from a source (Replace Color, Match Color) stay off a smart object.
+#[test]
+fn a_bad_adjustment_param_on_a_smart_object_is_an_error() {
+    let mut s = smart_session();
+    let (filters, steps, flat) = (smart_filters_of(&s).len(), s.active().unwrap().history.past_len(), flatten(&s));
+    let e = s.execute("image.adjustments.colorLookup", json!({"lut": 42})).unwrap_err();
+    assert!(e.to_string().contains("lut"), "{e}");
+    assert_eq!(smart_filters_of(&s).len(), filters, "nothing recorded");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
+    assert_eq!(flatten(&s), flat, "pixels untouched");
+    assert!(!s.is_enabled("image.adjustments.replaceColor"), "only adjustments that re-render become smart filters");
+    assert!(!s.is_enabled("image.adjustments.matchColor"), "only adjustments that re-render become smart filters");
+}
+
 /// #780: a targeted mask enables Invert (and filters) on layers without pixels, such as an
 /// adjustment layer; viewing the mask (⌥-click) targets it too.
 #[test]

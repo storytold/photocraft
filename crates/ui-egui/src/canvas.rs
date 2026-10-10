@@ -1183,15 +1183,10 @@ fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &egui::Contex
     // Previews edit what the command will: a targeted layer mask included (#780).
     let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(&d.fields));
     let st = app.session.documents().get(idx)?;
-    let request = crate::filter_dialog::FilterPreviewKey {
-        doc: st.doc.id,
-        revision: st.revision,
-        dialog: d.id,
-        active: st.active_layer,
-        command: cmd,
-        params,
-        k: crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)),
-    };
+    // Filters whose features don't scale with a proxy preview at full resolution (#2063).
+    let k = crate::filter_dialog::preview_factor(&cmd, &params, crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)));
+    let request =
+        crate::filter_dialog::FilterPreviewKey { doc: st.doc.id, revision: st.revision, dialog: d.id, active: st.active_layer, command: cmd, params, k };
     let key = request.doc.0 ^ (1u64 << 61);
     // Every filter's preview computes off the UI thread in the desktop app: Gaussian Blur at
     // 1000 px takes long enough to freeze the window. Once the slider settles, a preview still

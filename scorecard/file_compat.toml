@@ -29,9 +29,9 @@ note = "smart_cmds.rs:382 mask only from the selection"
 [[item]]
 id = "FILE-215-4"
 target = "Adjustments (Hue/Sat + Colorize, Curves, Levels, Shadows/Highlights) apply as Smart Filters"
-status = "partial"
+status = "done"
 issue = 215
-note = "PSD Levels/Curves/Shadows-Highlights smart filters render (adjust_cmds.rs adjust_as_filter); Image › Adjustments on a smart object doesn't add one yet"
+note = "Image › Adjustments on a smart object records image.adjustments.<kind> as a smart filter (adjust_cmds.rs adjust_as_smart_filter; the selection becomes the filter mask), re-rendered from the source by adjust_as_filter and re-editable with layer.smartFilter.setParams; PSD maps Levels/Curves/Shadows-Highlights both ways (smart_map.rs). Opening the editor from the smart-filter row is FILE-215-5's row work"
 
 [[item]]
 id = "FILE-215-5"

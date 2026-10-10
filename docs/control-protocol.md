@@ -272,12 +272,14 @@ Filesystem access fails closed unless launch-time read and/or write roots are gr
 the desktop `photocraft` process, but not by headless `photocraft-cli mcp` or `serve`;
 for those CLI modes, supply the flags explicitly. In MCP bridge mode, configure roots on the
 desktop process rather than on the bridging CLI. Request paths must be
-non-empty, forward-slash relative paths beneath the applicable root. Absolute paths, parent
-traversal, alternate separators, drive/device/stream prefixes, malformed components, and link
-escapes are rejected before file effects. Read and write authority are independent; the parent of
-a new output file must already exist. Engine commands that still use ambient filesystem paths are
-disabled for automation until they are migrated to the same capability interface. Interactive
-desktop file pickers retain normal user-selected access.
+non-empty, forward-slash relative paths beneath the applicable root, or absolute paths that lie
+beneath it. An absolute path is compared with the root as text and the rest is checked like a
+relative path; nothing is resolved on the filesystem. Absolute paths outside the root, parent
+traversal, alternate separators in relative paths, drive/device/stream prefixes, malformed
+components, and link escapes are rejected before file effects. Read and write authority are
+independent; the parent of a new output file must already exist. Engine commands that still use
+ambient filesystem paths are disabled for automation until they are migrated to the same
+capability interface. Interactive desktop file pickers retain normal user-selected access.
 
 ## Headless server
 

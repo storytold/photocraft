@@ -358,6 +358,24 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "layer.layerStyle.blendingOptions" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::layer_style::open(app, Some(crate::layer_style::BLENDING)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
+        // Formatting menus follow an inline text selection when editing. Outside an edit,
+        // snapshot the selected type layers; explicit automation targets retain their scope.
+        t if (t.starts_with("type.antiAlias.")
+            || t.starts_with("type.orientation.")
+            || t.starts_with("type.openType.")
+            || matches!(t, "type.warpText" | "type.loadDefaultTypeStyles"))
+            && params.get("layer").is_none()
+            && params.get("layers").is_none()
+            && params.get("range").is_none() =>
+        {
+            let Some(mut p) = crate::type_tool::formatting_params(app) else { return app.run(id, params) };
+            if let Some(props) = params.as_object() {
+                for (key, value) in props {
+                    p[key] = value.clone();
+                }
+            }
+            app.run(id, p)
+        }
         "type.editText" => {
             crate::type_tool::edit_active(app)?;
             if let Some(focus) = ctx.memory(|m| m.focused()) {

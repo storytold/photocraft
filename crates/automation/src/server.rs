@@ -48,7 +48,7 @@ pub struct DocIndex {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenParams {
-    /// Forward-slash relative path beneath the configured automation read root.
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
 }
 
@@ -75,7 +75,7 @@ pub struct NewParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SaveParams {
-    /// Forward-slash relative target beneath the configured automation write root.
+    /// Target beneath the configured automation write root: relative (forward slashes) or absolute.
     /// The extension selects the format. Omit to write back to the document's own file, which
     /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.

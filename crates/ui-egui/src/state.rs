@@ -478,6 +478,10 @@ pub struct ToolOptions {
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
     pub patch_mode: String,
+    /// Patch: Content-Aware instead of Normal, with its Structure 1..7 and Color 0..10.
+    pub patch_content_aware: bool,
+    pub patch_structure: f32,
+    pub patch_color: f32,
     /// Content-Aware Move: move | extend, Structure 1..7, Color 0..10.
     pub cam_mode: String,
     pub cam_structure: f32,
@@ -637,6 +641,9 @@ impl Default for ToolOptions {
             clone_sample: "current".into(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
+            patch_content_aware: false,
+            patch_structure: 4.0,
+            patch_color: 0.0,
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,

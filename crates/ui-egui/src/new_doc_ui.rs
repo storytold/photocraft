@@ -833,6 +833,15 @@ mod tests {
         }
 
         #[test]
+        fn arithmetic_dimensions_create_the_evaluated_size() {
+            let mut h = harness();
+            type_into(&mut h, 0, "1920/2");
+            type_into(&mut h, 1, "(100+50)*2");
+            enter(&mut h);
+            assert_eq!(created(&h), (960, 300, 72.0));
+        }
+
+        #[test]
         fn typed_size_then_enter_creates_that_size() {
             let mut h = harness();
             type_into(&mut h, 0, "512");
