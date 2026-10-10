@@ -182,7 +182,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use photocraft_doc::{DocId, Document};
 use photocraft_engine::Session;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse};
 pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
@@ -315,6 +315,9 @@ pub struct Services {
     pub import: Option<ImportFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
+    /// Background save over the automation write authority (`app.save`, #2017): same worker
+    /// contract as `save_file`, but the bytes go through the capability-scoped workspace.
+    pub automation_save: Option<SaveFileFn>,
     /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
@@ -1223,12 +1226,26 @@ impl PhotocraftApp {
     /// Save through the control session's capability-scoped writer. No file
     /// picker or ambient writer is reachable from this path. Returns the path
     /// written and the export warnings (also shown to the user).
-    pub fn save_automation(&mut self, path: Option<String>) -> Result<(String, Vec<String>), String> {
+    pub fn save_automation(&mut self, path: Option<String>) -> Result<Value, String> {
+        let target = {
+            let state = self.session.active().ok_or("no document")?;
+            // As File › Save: without `path` only a layered file is written back (#416).
+            path.or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
+                .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?
+        };
+        // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
+        if self.background_jobs
+            && let Some(save) = self.services.automation_save.clone()
+        {
+            return match jobs_ui::start_save(self, target.clone(), ExportSettings::default(), false, save)? {
+                Some((path, warnings)) => Ok(json!({"path": path, "warnings": warnings})),
+                None => {
+                    let job = self.jobs.last_started;
+                    Ok(json!({"path": target, "job": job, "pending": true}))
+                }
+            };
+        }
         let state = self.session.active().ok_or("no document")?;
-        // As File › Save: without `path` only a layered file is written back (#416).
-        let target = path
-            .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
-            .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
@@ -1244,7 +1261,7 @@ impl PhotocraftApp {
         self.ui.status_error = false;
         notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&target)), &warnings);
         self.sync_views();
-        Ok((target, warnings))
+        Ok(json!({"path": target, "warnings": warnings}))
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

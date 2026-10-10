@@ -201,6 +201,7 @@ pub fn start_save(
     let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
+    let result_path = path.clone();
     let state = Arc::new(SaveState::default());
     let worker = Arc::clone(&state);
     let started = app.session.start_job(
@@ -214,7 +215,7 @@ pub fn start_save(
             save(&snapshot, &target, &settings, &ctl)
                 .map_err(|e| if ctl.check().is_err() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
         },
-        |_, warnings: Vec<String>| Ok(json!({"warnings": warnings})),
+        move |_, warnings: Vec<String>| Ok(json!({"path": result_path, "warnings": warnings})),
     );
     match started.map_err(|e| e.to_string())? {
         Started::Done(v) => {
