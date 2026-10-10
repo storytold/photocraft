@@ -1530,6 +1530,28 @@ fn float_tone_adjustments_preserve_negative_and_untouched_channels() {
     }
 }
 
+#[test]
+fn float_exposure_stops_round_trip_without_losing_highlights() {
+    let input = [4.0, 2.0, 0.5, 0.75];
+    let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), input);
+    for exposure in [1.0, -1.0] {
+        adjust::apply_depth(&Adjustment::Exposure { exposure, offset: 0.0, gamma: 1.0 }, &mut b, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    }
+    assert_eq!(b.px[0], input);
+}
+
+#[test]
+fn float_levels_apply_channel_before_master_outside_unit_range() {
+    let channel = LevelsChannel { in_black: 0.5, in_white: 1.5, ..Default::default() };
+    let master = LevelsChannel { out_black: -0.1, out_white: 1.5, ..Default::default() };
+    let adj = Adjustment::Levels { master, per_channel: std::array::from_fn(|_| channel.clone()), space: Default::default(), black: Default::default() };
+    let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), [4.0, 2.0, -0.1, 1.0]);
+    adjust::apply_depth(&adj, &mut b, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    for (got, want) in b.px[0].iter().zip([5.5, 2.3, -1.06, 1.0]) {
+        assert!((got - want).abs() < 1e-6, "{:?}", b.px[0]);
+    }
+}
+
 // A 30° Reflected gradient fill on a 4 × 4 canvas renders as Photoshop's (its end point snaps to
 // the corner: t = |x − y| / 4) at every depth.
 #[test]
