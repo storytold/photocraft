@@ -976,3 +976,68 @@ fn inspect_reports_the_smart_source() {
     assert_eq!(source(&s)["kind"], "embedded");
     assert!(source(&s)["fileName"].is_string());
 }
+
+#[test]
+fn edit_linked_contents_resolves_beside_document_and_preserves_link_spelling() {
+    let dir = std::env::temp_dir().join(format!("photocraft-relative-smart-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session(8);
+    paint(&mut s);
+    let layer = convert(&mut s);
+    let source = dir.join("poster.pcraft");
+    s.execute("layer.smartObjects.convertToLinked", json!({"path": source})).unwrap();
+    s.edit("relative link", |doc, _| {
+        smart_mut(doc, LayerId(layer))?.source = SmartSource::Linked { path: "poster.pcraft".into() };
+        Ok(())
+    })
+    .unwrap();
+    s.active_mut().unwrap().path = Some(dir.join("wall.pcraft").to_string_lossy().into_owned());
+    let parent = s.active().unwrap().doc.clone();
+    let opened = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    assert!(s.active().unwrap().path.is_none(), "editing contents must not acquire a direct save destination");
+    assert_eq!(s.active().unwrap().smart_source_dir.as_deref(), Some(dir.as_path()));
+    assert!(opened["document"].is_number());
+    s.set_active(0);
+    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &parent));
+    // Authorization is checked before resolving/reading stored paths.
+    s.smart_links.clear();
+    s.authorize = Some(|_, _| Err(other("denied")));
+    assert!(s.execute("layer.smartObjects.editContents", json!({})).unwrap_err().to_string().contains("denied"));
+    s.authorize = None;
+    std::fs::remove_dir_all(&dir).unwrap();
+    let error = s.execute("layer.smartObjects.editContents", json!({})).unwrap_err().to_string();
+    assert!(error.contains("Relink to File"));
+    assert!(error.contains("poster.pcraft"));
+}
+
+#[test]
+fn nested_edit_contents_uses_the_linked_childs_directory() {
+    let dir = std::env::temp_dir().join(format!("photocraft-nested-smart-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    let mut child = session(8);
+    paint(&mut child);
+    let layer = convert(&mut child);
+    child.execute("layer.smartObjects.convertToLinked", json!({"path": dir.join("assets/inner.pcraft")})).unwrap();
+    child
+        .edit("relative link", |doc, _| {
+            smart_mut(doc, LayerId(layer))?.source = SmartSource::Linked { path: "inner.pcraft".into() };
+            Ok(())
+        })
+        .unwrap();
+    std::fs::write(dir.join("assets/poster.pcraft"), encode_source(&child.active().unwrap().doc).unwrap()).unwrap();
+    let mut parent = session(8);
+    paint(&mut parent);
+    let layer = convert(&mut parent);
+    parent
+        .edit("relative link", |doc, _| {
+            smart_mut(doc, LayerId(layer))?.source = SmartSource::Linked { path: "assets/poster.pcraft".into() };
+            Ok(())
+        })
+        .unwrap();
+    parent.active_mut().unwrap().path = Some(dir.join("wall.pcraft").to_string_lossy().into_owned());
+    parent.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    parent.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    assert_eq!(parent.documents().len(), 3);
+    assert!(parent.active().unwrap().path.is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -114,3 +114,33 @@ fn web_download_and_automation_saves_use_the_same_identity_completion() {
     app.save_automation(Some("保存/agent save.psd".into())).unwrap();
     assert_eq!(app.session.active().unwrap().doc.name, "agent save.psd");
 }
+
+#[test]
+fn automation_save_keeps_an_absolute_desktop_identity_and_scoped_write_requests() {
+    use crate::AutomationPathKind;
+    let mut app = app();
+    app.services.automation_path = Some(Box::new(|kind, path| match kind {
+        AutomationPathKind::Read | AutomationPathKind::Write => Ok(format!("/workspace/{path}")),
+        AutomationPathKind::WriteBack => path.strip_prefix("/workspace/").map(str::to_string).ok_or("outside write root".into()),
+    }));
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let capture = written.clone();
+    app.services.automation_write = Some(Box::new(move |path, _| {
+        capture.borrow_mut().push(path.to_string());
+        Ok(())
+    }));
+    app.save_automation(Some("poster.pcraft".into())).unwrap();
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/workspace/poster.pcraft"));
+    app.save_automation(None).unwrap();
+    assert_eq!(*written.borrow(), ["poster.pcraft", "poster.pcraft"]);
+    let capture = written.clone();
+    app.services.write = Some(Box::new(move |path, _| {
+        capture.borrow_mut().push(path.to_string());
+        Ok(())
+    }));
+    menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap();
+    assert_eq!(written.borrow().last().unwrap(), "/workspace/poster.pcraft");
+    app.session.active_mut().unwrap().path = Some("/read-only/poster.pcraft".into());
+    assert!(app.save_automation(None).is_err());
+    assert_eq!(written.borrow().len(), 3);
+}

@@ -166,6 +166,8 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    /// Base directory for unsaved Edit Contents documents; never a Save destination.
+    pub(crate) smart_source_dir: Option<std::path::PathBuf>,
     /// An Affinity document (or its preview) must not acquire the native source as its Save path.
     pub source_read_only: bool,
     /// Increments on every change; UIs re-render when it moves.
@@ -204,6 +206,7 @@ impl DocState {
             selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
+            smart_source_dir: None,
             source_read_only: false,
             revision: 1,
             saved_revision: 1,

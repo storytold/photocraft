@@ -424,6 +424,7 @@ fn wraps(id: &str) -> bool {
             | "file.saveACopy"
             | "file.placeEmbedded"
             | "file.placeLinked"
+            | "layer.smartObjects.relinkToFile"
             | "file.closeAll"
             | "file.closeOthers"
             | "file.fileInfo"
@@ -857,6 +858,19 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
                 app.place_bytes(&name, bytes, linked)
+            }))
+        }
+        "layer.smartObjects.relinkToFile" => {
+            let st = app.session.active()?;
+            let doc = st.doc.id;
+            let layer = st.active_layer?;
+            let initial_dir = st.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.to_string_lossy().into_owned());
+            Some(app.ask_file(crate::FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
+                let crate::FileDialogAnswer::Paths(paths) = answer else {
+                    return Err("Relink requires a file on disk; use Replace Contents to embed a file instead".into());
+                };
+                let path = paths.first().ok_or("no file selected")?;
+                app.with_document(doc, |app| app.run("layer.smartObjects.relinkToFile", json!({"layer": layer.0, "path": path})))
             }))
         }
         "file.fileInfo" => {
