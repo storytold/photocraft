@@ -548,7 +548,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             return vec3(select(0.0, 1.0, round_half_up(gray(c) * 255.0) >= p0.x));
         }
         case 3: { return vec3(posterize(c.r, p0.x), posterize(c.g, p0.x), posterize(c.b, p0.x)); }
-        case 4: { return clamp((c - 0.5) * p0.y + 0.5 + p0.x, vec3(0.0), vec3(1.0)); }   // B/C legacy
+        case 4: { return clamp((c + p0.x - p0.z) * p0.y + p0.z, vec3(0.0), vec3(1.0)); }   // B/C legacy: brightness, then contrast around compose::adjust::LEGACY_PIVOT (p0.z)
         case 5: {                                                              // B/C modern
             let b = p0.x; let ct = p0.y;
             return vec3(mcontrast(mbright(c.r, b), ct), mcontrast(mbright(c.g, b), ct), mcontrast(mbright(c.b, b), ct));
