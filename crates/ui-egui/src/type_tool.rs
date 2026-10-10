@@ -263,13 +263,20 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let o = app.ui.tool_options.clone();
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default).
     let text = if app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
+    let vertical = app.ui.tool == crate::state::Tool::VerticalType;
+    // The tool default direction (spec 5.1.2); RTL in vertical type is a non-goal. With RTL and
+    // the default Left alignment, new text is right-aligned.
+    let direction = if vertical { photocraft_doc::text::TextDirection::Auto } else { direction_of(&o.type_direction) };
+    let natural = photocraft_engine::type_cmds::natural_align(text, direction) == Some(photocraft_doc::text::TextAlign::Right);
+    let align = if o.type_align == "left" && natural { "right" } else { o.type_align.as_str() };
     let mut p = json!({
         "text": text,
-        "orientation": if app.ui.tool == crate::state::Tool::VerticalType { "vertical" } else { "horizontal" },
+        "orientation": if vertical { "vertical" } else { "horizontal" },
         "font": o.type_font,
         "fontStyle": o.type_style,
         "size": o.type_size,
-        "align": o.type_align,
+        "align": align,
+        "direction": direction_key(direction),
         "color": hex(app.session.tools.foreground),
     });
     if w >= min && h >= min {
@@ -957,6 +964,56 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value)
     let _ = app.run("type.setStyle", p);
 }
 
+fn direction_key(d: photocraft_doc::text::TextDirection) -> &'static str {
+    use photocraft_doc::text::TextDirection as D;
+    match d {
+        D::Auto => "auto",
+        D::Ltr => "ltr",
+        D::Rtl => "rtl",
+    }
+}
+
+fn direction_of(key: &str) -> photocraft_doc::text::TextDirection {
+    use photocraft_doc::text::TextDirection as D;
+    match key {
+        "rtl" => D::Rtl,
+        "ltr" => D::Ltr,
+        _ => D::Auto,
+    }
+}
+
+/// Spec 5.1.2: a direction for the targeted type: the selected paragraphs, or the caret's
+/// paragraph (Photoshop's Paragraph panel), or the whole layer when not editing. With no type
+/// layer targeted, it is the tool default for new layers.
+pub(crate) fn set_direction(app: &mut PhotocraftApp, ctx: &egui::Context, dir: &str) {
+    let Some((layer, range)) = target(app) else {
+        app.ui.tool_options.type_direction = dir.into();
+        return;
+    };
+    let mut p = json!({"layer": layer, "direction": dir});
+    if let Some(r) = range.or_else(|| app.ui.text_edit.as_ref().map(|e| [e.caret, e.caret])) {
+        p["range"] = json!(r);
+    }
+    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
+        p["coalesce"] = json!(key);
+    }
+    let _ = app.run("type.setStyle", p);
+}
+
+/// The paragraph-direction dropdown shared by the options bar and the Paragraph panel: shows the
+/// target's direction, else the tool default.
+fn direction_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width: f32) {
+    let mut cur = match target(app) {
+        Some(_) => styles_at(app).map_or("auto", |(_, p)| direction_key(p.direction)).to_string(),
+        None => app.ui.tool_options.type_direction.clone(),
+    };
+    let opts = [("auto".to_string(), tl!("Auto")), ("rtl".to_string(), tl!("Right-to-left")), ("ltr".to_string(), tl!("Left-to-right"))];
+    if crate::widgets::dropdown(ui, id, &mut cur, &opts, width) {
+        let ctx = ui.ctx().clone();
+        set_direction(app, &ctx, &cur);
+    }
+}
+
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
 /// the dialog never changes the text selection, tool colours, or document history.
 pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
@@ -1050,6 +1107,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.spacing_mut().item_spacing.x = 8.0;
+    crate::widgets::vline(ui, 22.0);
+    // Paragraph direction (spec 5.1.2): the target's paragraphs, else the default for new type.
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "¶", egui::FontId::proportional(13.0), t.icon);
+    resp.on_hover_text(tl!("Direction"));
+    direction_picker(app, ui, "type-direction", 130.0);
     crate::widgets::vline(ui, 22.0);
     // Text colour swatch with a picker popup.
     let c = shown
@@ -1454,6 +1517,15 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         ui.add_space(ROW_GAP);
         row(ui, &mut |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(LABEL_W, 22.0), egui::Sense::hover());
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "¶", egui::FontId::proportional(13.0), t.text_dim);
+                resp.on_hover_text(tl!("Direction"));
+                direction_picker(app, ui, "props-type-direction", (full - LABEL_W - LABEL_GAP).max(80.0));
+            });
+        });
+        row(ui, &mut |ui| {
             if let Some(v) = num_field(ui, "→|", "Indent left margin", para.start_indent_pt, -1296.0..=1296.0, "pt", w) {
                 apply(app, ui.ctx(), json!({"startIndent": v}));
             }
@@ -1704,5 +1776,29 @@ mod tests {
         assert_eq!(word_boundary("hello big world", 0, true), 5);
         assert_eq!(word_boundary("hello big world", 7, false), 6);
         assert_eq!(word_boundary("hello big world", 15, false), 10);
+    }
+
+    /// Spec 5.1.2: with no type layer the toggle sets the tool default (RTL new text is RTL and
+    /// right-aligned); while editing it sets the caret's or selection's paragraphs only.
+    #[test]
+    fn direction_sets_the_tool_default_or_the_selected_paragraphs() {
+        use photocraft_doc::text::{TextAlign, TextDirection};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        set_direction(&mut a, &ctx, "rtl");
+        assert_eq!(a.ui.tool_options.type_direction, "rtl");
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        let paras = |a: &PhotocraftApp| text_layer(&a.session.active().unwrap().doc, id).unwrap().paragraph_runs();
+        assert_eq!((paras(&a)[0].style.direction, paras(&a)[0].style.align), (TextDirection::Rtl, TextAlign::Right));
+        insert(
+            &mut a, "one
+two",
+        );
+        set_direction(&mut a, &ctx, "ltr");
+        let p = paras(&a);
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert_eq!((p[0].style.direction, p[1].style.direction), (TextDirection::Rtl, TextDirection::Ltr));
+        assert_eq!(a.ui.tool_options.type_direction, "rtl", "the tool default is untouched while a layer is targeted");
     }
 }
