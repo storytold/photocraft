@@ -3443,3 +3443,9 @@ fontWeight	Italic	斜体
 	Previous Document	前のドキュメント
 	W x H x Resolution	幅 x 高さ x 解像度
 	Front Image	前面の画像
+	New Crop Preset…	新規切り抜きプリセット…
+	Delete Crop Preset…	切り抜きプリセットを削除…
+	Select the crop presets to delete:	削除する切り抜きプリセットを選択してください:
+	Select the crop presets to delete	削除する切り抜きプリセットを選択してください
+	Enter a name for the crop preset	切り抜きプリセットの名前を入力してください
+	There is no crop size or ratio to save	保存する切り抜きのサイズまたは比率がありません

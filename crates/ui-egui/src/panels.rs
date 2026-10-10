@@ -1081,11 +1081,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         crate::gradient_ui::options_changed(app, &before);
                     }
                     Tool::Crop if t.pro => {
-                        let presets = crate::crop_size::dropdown_options();
-                        if widgets::dropdown(ui, "crop-ratio", &mut app.ui.tool_options.crop_ratio, &presets, 140.0) {
-                            // A size preset or Front Image fills W x H x Resolution (#2443).
-                            crate::crop_size::chosen(app);
-                        }
+                        // Ratios, sizes, saved presets, New / Delete Crop Preset… (#2443, #1919).
+                        crate::crop_presets::dropdown(app, ui);
                         let o = &mut app.ui.tool_options;
                         if o.crop_ratio == crate::crop_size::WHR {
                             crate::crop_size::fields(o, ui);

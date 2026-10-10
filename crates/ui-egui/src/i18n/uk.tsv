@@ -3530,3 +3530,9 @@ cameraRaw	Masking	Маскування
 	Previous Document	Попередній документ
 	W x H x Resolution	Ш x В x Роздільна здатність
 	Front Image	Зображення переднього плану
+	New Crop Preset…	Новий набір параметрів кадрування…
+	Delete Crop Preset…	Видалити набір параметрів кадрування…
+	Select the crop presets to delete:	Виберіть набори параметрів кадрування для видалення:
+	Select the crop presets to delete	Виберіть набори параметрів кадрування для видалення
+	Enter a name for the crop preset	Введіть назву набору параметрів кадрування
+	There is no crop size or ratio to save	Немає розміру чи співвідношення сторін кадрування для збереження

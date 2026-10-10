@@ -2431,3 +2431,9 @@ fontWeight	Italic	斜体
 	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率
 	Front Image	前面的图像
+	New Crop Preset…	新建裁剪预设…
+	Delete Crop Preset…	删除裁剪预设…
+	Select the crop presets to delete:	选择要删除的裁剪预设：
+	Select the crop presets to delete	选择要删除的裁剪预设
+	Enter a name for the crop preset	输入裁剪预设的名称
+	There is no crop size or ratio to save	没有可保存的裁剪大小或比例

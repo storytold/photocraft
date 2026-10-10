@@ -2400,3 +2400,9 @@ fontWeight	Italic	斜體
 	Previous Document	上一個文件
 	W x H x Resolution	寬 x 高 x 解析度
 	Front Image	前面的影像
+	New Crop Preset…	新增裁切預設集…
+	Delete Crop Preset…	刪除裁切預設集…
+	Select the crop presets to delete:	選取要刪除的裁切預設集：
+	Select the crop presets to delete	選取要刪除的裁切預設集
+	Enter a name for the crop preset	輸入裁切預設集的名稱
+	There is no crop size or ratio to save	沒有可儲存的裁切尺寸或比例

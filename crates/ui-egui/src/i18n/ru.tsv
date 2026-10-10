@@ -2708,3 +2708,9 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+	New Crop Preset…	Новый набор параметров кадрирования…
+	Delete Crop Preset…	Удалить набор параметров кадрирования…
+	Select the crop presets to delete:	Выберите наборы параметров кадрирования для удаления:
+	Select the crop presets to delete	Выберите наборы параметров кадрирования для удаления
+	Enter a name for the crop preset	Введите имя набора параметров кадрирования
+	There is no crop size or ratio to save	Нет размера или соотношения сторон кадрирования для сохранения
