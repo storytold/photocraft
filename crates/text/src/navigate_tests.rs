@@ -2,7 +2,7 @@
 //! .notdef, but bidi levels, clusters, line breaks and offsets are real.
 
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{Orientation, ParagraphRun, ParagraphStyle, TextDirection, TextShape};
+use photocraft_doc::text::{Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextShape};
 
 use crate::navigate::{Caret, Dir, Unit, adjacent_line, caret_geometry, caret_segment, collapse, hit, home_end, selection_segments, step};
 use crate::{TextEngine, TextLayout};
@@ -432,4 +432,142 @@ fn the_selected_line_break_shows_on_the_paragraphs_end_side() {
     let t = "aaa bbb ccc ddd";
     let l = e.layout(&boxed(t, 90.0, 1000.0), 72.0);
     assert!(selection_segments(&l, t, 0, t.len()).iter().all(|g| !g.line_break));
+}
+
+#[test]
+fn an_upstream_caret_after_a_forced_break_steps_like_the_downstream_one() {
+    let mut e = TextEngine::new();
+    // RTL: the break is visually leftmost on line 0, so parley's upstream cluster for byte 7 is it.
+    let t = "ابت\u{3}ثجح";
+    let l = e.layout(&point(t), 72.0);
+    assert!(l.lines.len() == 2 && l.lines[0].rtl, "{:?}", l.lines);
+    for dir in [Dir::Left, Dir::Right] {
+        let up = step(&l, t, Caret::new(7, true), dir, Unit::Grapheme);
+        assert_eq!(up, step(&l, t, Caret::new(7, false), dir, Unit::Grapheme), "{dir:?}");
+    }
+    // ← lands on line 1, one cluster in from its right edge, not at the end of the line.
+    let left = step(&l, t, Caret::new(7, true), Dir::Left, Unit::Grapheme);
+    let g = caret_geometry(&l, t, left);
+    let first = l.clusters.iter().find(|k| k.line == 1 && k.range.start == 7).unwrap();
+    assert_eq!(g.line, 1);
+    assert!((g.x - first.x).abs() < 0.01, "{g:?} {first:?}");
+    assert_eq!(left, Caret::new(9, true));
+}
+
+#[test]
+fn a_forced_break_at_the_end_of_a_paragraph_leaves_a_reachable_empty_line() {
+    let mut e = TextEngine::new();
+    let t = "ab\u{3}";
+    let l = e.layout(&point(t), 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert_eq!(caret_geometry(&l, t, Caret::new(3, false)).line, 1);
+    assert_eq!(step(&l, t, Caret::new(2, true), Dir::Right, Unit::Grapheme), Caret::new(3, false));
+    assert_eq!(step(&l, t, Caret::new(3, false), Dir::Left, Unit::Grapheme), Caret::new(2, true));
+}
+
+#[test]
+fn a_caret_between_cr_and_lf_still_moves() {
+    let mut e = TextEngine::new();
+    let t = "ab\r\ncd";
+    let l = e.layout(&point(t), 72.0);
+    for dir in [Dir::Left, Dir::Right] {
+        let n = step(&l, t, Caret::new(3, false), dir, Unit::Grapheme);
+        assert_ne!(n.byte, 3, "{dir:?}: {n:?}");
+    }
+}
+
+/// Attaches one paragraph style to the whole text.
+fn styled(mut t: TextLayer, style: ParagraphStyle) -> TextLayer {
+    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style }];
+    t
+}
+
+#[test]
+fn an_indented_justified_rtl_box_sweeps_visually() {
+    let mut e = TextEngine::new();
+    let t = "سلام عليكم سلام عليكم سلام عليكم سلام عليكم";
+    let style = ParagraphStyle { align: TextAlign::JustifyRight, start_indent_pt: 30.0, ..Default::default() };
+    let l = e.layout(&styled(boxed(t, 200.0, 1000.0), style), 72.0);
+    assert!(l.lines.len() >= 2 && l.lines[0].rtl, "wraps RTL: {:?}", l.lines);
+    let (lo, hi) = edges(&l, 0);
+    let start = l
+        .clusters
+        .iter()
+        .filter(|c| c.line == 0)
+        .max_by(|a, b| (a.x + a.advance).total_cmp(&(b.x + b.advance)))
+        .map(|k| Caret::new(k.range.start, false))
+        .unwrap();
+    let w: Vec<Caret> = walk(&l, t, start, Dir::Left, Unit::Grapheme).into_iter().take_while(|c| caret_geometry(&l, t, *c).line == 0).collect();
+    let xs: Vec<f32> = w.iter().map(|c| x_of(&l, t, *c)).collect();
+    assert!(xs.windows(2).all(|p| p[0] - p[1] > 0.5), "strictly leftwards: {xs:?}");
+    let clusters = l.clusters.iter().filter(|c| c.line == 0).count();
+    assert_eq!(w.len(), clusters + 1, "one stop per cluster edge: {w:?}");
+    assert!((xs[0] - hi).abs() < 0.01 && (xs[xs.len() - 1] - lo).abs() < 0.01, "{xs:?} vs {lo}..{hi}");
+    assert!(hi < 300.0 - 29.0, "the start indent keeps the text off the right edge: {hi}");
+}
+
+#[test]
+fn ctrl_arrows_cross_a_wrapped_rtl_line() {
+    let mut e = TextEngine::new();
+    let t = "سلام عليكم سلام عليكم سلام";
+    let l = e.layout(&boxed(t, 120.0, 1000.0), 72.0);
+    assert!(l.lines.len() >= 2 && l.lines[0].rtl, "wraps RTL");
+    let w = walk(&l, t, Caret::new(0, false), Dir::Left, Unit::Word);
+    let lines: Vec<usize> = w.iter().map(|c| caret_geometry(&l, t, *c).line).collect();
+    assert!(lines.contains(&0) && lines.contains(&1), "{w:?} {lines:?}");
+    let last = *w.last().unwrap();
+    let last_line = l.lines.len() - 1;
+    assert_eq!(caret_geometry(&l, t, last).line, last_line);
+    assert!((x_of(&l, t, last) - edges(&l, last_line).0).abs() < 0.01, "far (left) edge of the last line");
+}
+
+/// Home and End are logical (Dhia's decision): Home is the line's first character and End its last,
+/// wherever they sit on screen. In a mixed line they are not the visual edges.
+#[test]
+fn home_and_end_on_a_mixed_line_are_logical() {
+    let mut e = TextEngine::new();
+    let t = "Hello مرحبا";
+    let l = e.layout(&point(t), 72.0);
+    assert_eq!(home_end(&l, t, Caret::new(2, false), true).byte, t.len());
+    assert_eq!(home_end(&l, t, Caret::new(2, false), false).byte, 0);
+    let t = "Galaxy S24 شاشة";
+    let l = e.layout(&directed(t, TextDirection::Rtl), 72.0);
+    let home = home_end(&l, t, Caret::new(t.len(), true), false);
+    assert_eq!(home.byte, 0);
+    let (lo, hi) = edges(&l, 0);
+    let x = x_of(&l, t, home);
+    assert!(x > lo + 1.0 && x < hi - 1.0, "the G is mid-line: {x} in {lo}..{hi}");
+}
+
+#[test]
+fn collapsing_across_lines_goes_to_the_end_further_in_the_arrows_direction() {
+    let mut e = TextEngine::new();
+    // LTR: the later line is further right in flow.
+    let t = "abc\ndef";
+    let l = e.layout(&point(t), 72.0);
+    let (a, b) = (Caret::new(1, false), Caret::new(6, false));
+    assert_eq!(collapse(&l, t, a, b, Dir::Right), b);
+    assert_eq!(collapse(&l, t, a, b, Dir::Left), a);
+    assert_eq!(collapse(&l, t, b, a, Dir::Right), b, "anchor and focus in either order");
+    // RTL: the later line is further left.
+    let t = "ابت\nثجح";
+    let l = e.layout(&point(t), 72.0);
+    let (a, b) = (Caret::new(2, false), Caret::new(9, false));
+    assert_eq!(collapse(&l, t, a, b, Dir::Left), b);
+    assert_eq!(collapse(&l, t, a, b, Dir::Right), a);
+}
+
+#[test]
+fn vertical_type_never_steps_into_hidden_columns() {
+    let mut e = TextEngine::new();
+    let s = "aaa bbb ccc ddd eee fff ggg hhh";
+    let mut t = boxed(s, 60.0, 50.0);
+    t.orientation = Orientation::Vertical;
+    let l = e.layout(&t, 72.0);
+    assert!(l.vertical);
+    let end = l.lines.last().map_or(0, |ln| ln.range.end);
+    assert!(end < s.len(), "has hidden text: drawn to {end}");
+    let w = walk(&l, s, Caret::new(0, false), Dir::Right, Unit::Grapheme);
+    assert!(w.iter().all(|c| c.byte <= end), "{w:?}");
+    assert_eq!(step(&l, s, Caret::new(end, true), Dir::Right, Unit::Grapheme).byte, end);
 }

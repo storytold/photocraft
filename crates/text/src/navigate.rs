@@ -89,6 +89,10 @@ pub fn caret_geometry(l: &TextLayout, text: &str, c: Caret) -> CaretGeom {
         let x = if trailing == k.rtl { k.x } else { k.x + k.advance };
         return CaretGeom { x, top: ln.baseline - ln.ascent, bottom: ln.baseline + ln.descent, line: k.line };
     }
+    // An empty line owns its offset (a forced break ending the text leaves one after it).
+    if let Some((line, ln)) = l.lines.iter().enumerate().find(|(_, ln)| ln.range.is_empty() && ln.range.start == c.byte) {
+        return CaretGeom { x: ln.x0, top: ln.baseline - ln.ascent, bottom: ln.baseline + ln.descent, line };
+    }
     let (x, top, bottom) = l.caret(c.byte);
     CaretGeom { x, top, bottom, line: crate::layout::line_index(l, c.byte) }
 }
@@ -148,7 +152,7 @@ pub enum Unit {
 pub fn step(l: &TextLayout, text: &str, from: Caret, dir: Dir, unit: Unit) -> Caret {
     let from = clamp(l, text, from);
     if l.vertical {
-        return logical_step(text, from, dir, unit);
+        return clamp(l, text, logical_step(text, from, dir, unit));
     }
     let start = caret_geometry(l, text, from);
     let Some(p) = l.paragraphs.iter().find(|p| (p.start..=p.end).contains(&from.byte)) else { return from };
@@ -248,14 +252,24 @@ fn drawn_end(l: &TextLayout) -> usize {
     l.lines.last().map_or(0, |ln| ln.range.end)
 }
 
-/// `c` on a char boundary and inside the drawn text.
+/// `c` normalised: on a char boundary, not between the CR and LF of a CR LF (no paragraph
+/// contains that offset), inside the drawn text, and not upstream right after a forced line break
+/// (the break is never the cluster a caret comes after, see [`caret_geometry`]).
 fn clamp(l: &TextLayout, text: &str, c: Caret) -> Caret {
     let mut b = c.byte.min(text.len());
     while b > 0 && !text.is_char_boundary(b) {
         b -= 1;
     }
+    let between_cr_lf = text.get(..b).is_some_and(|s| s.ends_with('\r')) && text.get(b..).is_some_and(|s| s.starts_with('\n'));
+    if between_cr_lf {
+        b -= 1;
+    }
     let end = drawn_end(l);
-    if b > end { Caret::new(end, end > 0) } else { Caret::new(b, c.upstream) }
+    if b > end {
+        return Caret::new(end, end > 0);
+    }
+    let after_break = text.get(..b).is_some_and(|s| s.ends_with(FORCED_LINE_BREAK));
+    Caret::new(b, c.upstream && !after_break)
 }
 
 /// Home (`end` false) or End of the caret's line: its logical start, or its logical end with the
