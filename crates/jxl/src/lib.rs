@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn quantize_rounds_and_clamps() {
         assert_eq!(quantize(&[0.0, 0.5, 1.0, 1.5, -1.0], Sample::U8), [0, 128, 255, 255, 0]);
-        let u16s: Vec<u16> = quantize(&[0.5, 2.0], Sample::U16).chunks_exact(2).map(|b| u16::from_ne_bytes([b[0], b[1]])).collect();
+        let u16s: Vec<u16> = quantize(&[0.5, 2.0], Sample::U16).as_chunks::<2>().0.iter().map(|b| u16::from_ne_bytes(*b)).collect();
         assert_eq!(u16s, [32768, 65535]);
         assert_eq!(quantize(&[1.5], Sample::F32), 1.5f32.to_ne_bytes());
     }
