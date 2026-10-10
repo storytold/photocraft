@@ -438,8 +438,8 @@ pub struct PhotocraftApp {
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,
-    /// End of the last painting stroke: ⇧-click draws a straight line from it (#178).
-    last_stroke_end: Option<(DocId, [f64; 2])>,
+    /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
+    last_stroke_end: Option<(DocId, [f64; 3])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
     /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
