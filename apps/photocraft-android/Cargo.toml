@@ -1,0 +1,27 @@
+[package]
+name = "photocraft-android"
+description = "Native Android Activity shell for PhotoCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "photocraft_android"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.13"
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
+egui = { workspace = true }
+log = { workspace = true }
+photocraft-engine = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-format = { workspace = true }
