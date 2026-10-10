@@ -1358,10 +1358,56 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon>
     })
 }
 
+/// Split the preview at the artboard edge: full opacity inside, half outside.
+/// Disjoint scissor rectangles avoid drawing translucent pixels twice.
+fn paint_transform_pixels(painter: &egui::Painter, mesh: egui::Mesh, boundary: Option<egui::Rect>) {
+    let Some(boundary) = boundary else {
+        painter.add(mesh);
+        return;
+    };
+    let clip = painter.clip_rect();
+    let inside = clip.intersect(boundary);
+    if inside.is_positive() {
+        painter.with_clip_rect(inside).add(mesh.clone());
+    }
+    let mut faded = mesh;
+    for vertex in &mut faded.vertices {
+        vertex.color = vertex.color.gamma_multiply(0.5);
+    }
+    if !inside.is_positive() {
+        painter.add(faded);
+        return;
+    }
+    let outside = [
+        egui::Rect::from_min_max(clip.min, egui::pos2(clip.max.x, inside.min.y)),
+        egui::Rect::from_min_max(egui::pos2(clip.min.x, inside.max.y), clip.max),
+        egui::Rect::from_min_max(egui::pos2(clip.min.x, inside.min.y), egui::pos2(inside.min.x, inside.max.y)),
+        egui::Rect::from_min_max(egui::pos2(inside.max.x, inside.min.y), egui::pos2(clip.max.x, inside.max.y)),
+    ];
+    for rect in outside {
+        if rect.is_positive() {
+            painter.with_clip_rect(rect).add(faded.clone());
+        }
+    }
+}
+
 /// Warped preview of the moving pixels plus the box, handles and reference point.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
+    let boundary = if t.selection {
+        None
+    } else {
+        app.session.active().and_then(|state| {
+            let layer = photocraft_doc::LayerId(t.layer);
+            let board = state.doc.artboard_of(layer);
+            if board == Some(layer) {
+                return None;
+            }
+            let bounds = board.and_then(|id| state.doc.layer(id)).and_then(|l| l.artboard()).map(|a| a.rect).unwrap_or_else(|| state.doc.bounds());
+            Some(egui::Rect::from_two_pos(xf.to_screen(bounds.x0 as f32, bounds.y0 as f32), xf.to_screen(bounds.x1 as f32, bounds.y1 as f32)))
+        })
+    };
     if let Some(w) = &t.warp {
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
         let at = pv.split_pointer.or(over_canvas);
@@ -1370,7 +1416,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             let tool = pv.split_tool.or_else(|| (alt || pv.split_quick).then(|| quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
             tool.map(|tool| (tool, p))
         });
-        draw_warp(painter, xf, t, w, pv, guide);
+        draw_warp(painter, xf, t, w, pv, (guide, boundary));
         return;
     }
     if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
@@ -1393,7 +1439,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
             }
         }
-        painter.add(mesh);
+        paint_transform_pixels(painter, mesh, boundary);
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
@@ -1458,7 +1504,15 @@ fn draw_rotate_feedback(painter: &egui::Painter, at: Pos2, angle: Option<f64>, b
 /// boundaries are solid. A single patch (Grid › Default) also draws its rule-of-thirds guides;
 /// 3×3, 4×4 and 5×5 are just those even cells, with an anchor at every intersection. `guide` is
 /// the split line following the pointer.
-fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
+fn draw_warp(
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    t: &TransformSession,
+    w: &Warp,
+    pv: &TransformPreview,
+    overlay: (Option<(SplitTool, [f64; 2])>, Option<egui::Rect>),
+) {
+    let (guide, boundary) = overlay;
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let r = t.rect;
     let n = 32;
@@ -1479,7 +1533,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
             mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
         }
     }
-    painter.add(mesh);
+    paint_transform_pixels(painter, mesh, boundary);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let line = Stroke::new(1.0, accent);
     let thin = Stroke::new(0.75, accent.gamma_multiply(0.7));
@@ -1875,6 +1929,41 @@ fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_overflow_is_half_opacity_with_non_overlapping_clips() {
+        for (boundary, color) in [
+            egui::Rect::from_min_max(pos2(25.0, 25.0), pos2(75.0, 75.0)),
+            egui::Rect::from_min_max(pos2(120.0, 120.0), pos2(140.0, 140.0)),
+            egui::Rect::from_min_max(pos2(-25.0, 25.0), pos2(75.0, 125.0)),
+        ]
+        .into_iter()
+        .flat_map(|boundary| [Color32::WHITE, Color32::from_white_alpha(128)].map(|color| (boundary, color)))
+        {
+            let ctx = egui::Context::default();
+            let clip = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(clip);
+                let mut mesh = egui::Mesh::with_texture(egui::TextureId::Managed(1));
+                mesh.add_rect_with_uv(clip, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
+                paint_transform_pixels(&painter, mesh, Some(boundary));
+            });
+            output.textures_delta.clear();
+            let shapes = output
+                .shapes
+                .iter()
+                .filter_map(|shape| if let egui::Shape::Mesh(mesh) = &shape.shape { Some((shape.clip_rect, mesh)) } else { None })
+                .collect::<Vec<_>>();
+            assert_eq!(shapes.iter().map(|(rect, _)| rect.area()).sum::<f32>(), clip.area());
+            for (i, (rect, mesh)) in shapes.iter().enumerate() {
+                let inside = boundary.contains_rect(*rect);
+                assert!(mesh.vertices.iter().all(|vertex| vertex.color == if inside { color } else { color.gamma_multiply(0.5) }));
+                for (other, _) in shapes.iter().skip(i + 1) {
+                    assert!(!rect.intersect(*other).is_positive());
+                }
+            }
+        }
+    }
 
     fn session() -> TransformSession {
         TransformSession {
