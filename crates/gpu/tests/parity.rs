@@ -73,6 +73,7 @@ fn gpu() -> Option<Gpu> {
         }
     };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+    eprintln!("GPU parity backend: {:?}", adapter.get_info().backend);
     // Exact parity needs 32-bit float targets. Adapters without them (e.g. GL software
     // rasterizers) use the CPU compositor in the app, so there is nothing to compare there.
     if Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
