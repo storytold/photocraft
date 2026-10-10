@@ -713,6 +713,46 @@ fn shared_tiles_upload_once_and_copy() {
     }
 }
 
+/// Painting past a layer's tiles grows its resident page: the texels it already holds are kept
+/// (only the new tiles upload, where re-uploading every tile made some brush dabs on large
+/// 32-bit documents several times slower), in every direction, at 8 and 32 bits, under a mask
+/// whose absent tiles read as a non-zero default; going back to an earlier, smaller state (undo)
+/// shrinks it. Pixels match a compositor that uploads everything afresh, exactly.
+#[test]
+fn growing_layer_keeps_its_resident_tiles() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (1100, 700);
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA32F] {
+        let mut d = base_doc(w, h);
+        let mut l = Layer::raster("paint", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(500, 300, 540, 340), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
+        let mut m = LayerMask::reveal_all();
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.75]);
+        m.surface.fill_rect(Rect::new(510, 310, 520, 320), &[0.25]);
+        l.mask = Some(m);
+        d.layers.push(l);
+        check(&mut g, &d, &format!("{fmt:?} initial"));
+        let small = d.clone();
+        // Dabs right (over a stored tile too, so it changes as the page grows), down, up-left
+        // (the page grows towards the origin), inside, and far out.
+        for (i, r) in [(480, 320, 760, 380), (520, 560, 580, 620), (60, 40, 120, 100), (505, 305, 535, 335), (1040, 640, 1100, 700)].into_iter().enumerate() {
+            let dab = Rect::new(r.0, r.1, r.2, r.3);
+            d.layers[1].surface_mut().unwrap().fill_rect(dab, &[0.9, 0.1, 0.3, 0.7][..fmt.channels()]);
+            if i == 2 {
+                d.layers[1].mask.as_mut().unwrap().surface.fill_rect(dab, &[0.5]);
+            }
+            let what = format!("{fmt:?} dab {i}");
+            let s = diff_rect(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
+            assert!(s.tiles_uploaded <= 2, "{what}: only the dab's tiles upload: {s:?}");
+            let mut fresh = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+            let want = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
+            assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap() == want, "{what}: same pixels as a fresh upload");
+        }
+        // Undo back to the small layer: the pages shrink and show its pixels again.
+        check(&mut g, &small, &format!("{fmt:?} undone"));
+    }
+}
+
 // ---- layer effects --------------------------------------------------------------------------
 
 use photocraft_doc::adjust::CurvePoint as Cp;
