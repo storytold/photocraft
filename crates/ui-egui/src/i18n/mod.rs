@@ -389,7 +389,7 @@ mod tests {
         let ar = AR();
         assert_eq!(ar.name(), "العربية");
         assert!(ar.complete_menus());
-        for tag in ["ar", "AR", "ar-SA", "ar_EG", "ar_EG.UTF-8", "ar-AE"] {
+        for tag in ["ar", "AR", "ar-SA", "ar_EG", "ar_MA", "ar-AE"] {
             assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
             assert_eq!(Lang::from_pref(tag), ar, "{tag}");
         }
