@@ -123,6 +123,9 @@ pub struct Stylus {
     pub(crate) tool_before_eraser: Option<crate::state::Tool>,
     /// Force of the touch/pen contact currently down (egui `Event::Touch`).
     touch: Option<f32>,
+    /// The primary contact egui-winit converts into pointer events. Secondary
+    /// fingers must not overwrite the S Pen pressure for the drawing pointer.
+    touch_id: Option<(egui::TouchDeviceId, egui::TouchId)>,
     /// The contact ended this frame: keep its force for this frame's last tool events, clear next frame.
     lifted: bool,
     /// This frame's pen samples, oldest first (the feed's queue and the touch forces).
@@ -153,6 +156,7 @@ impl Default for Stylus {
             end: None,
             tool_before_eraser: None,
             touch: None,
+            touch_id: None,
             lifted: false,
             frame: Vec::new(),
             prev: None,
@@ -191,17 +195,34 @@ impl Stylus {
         let android_pen_feed = cfg!(target_os = "android") && !self.frame.is_empty();
         self.current = None;
         for e in events {
-            if let egui::Event::Touch { phase, force, .. } = e {
+            if let egui::Event::Touch { device_id, id, phase, force, .. } = e {
+                let contact = (*device_id, *id);
+                if *phase == egui::TouchPhase::Start && self.touch_id.is_none() {
+                    // egui-winit makes the first down contact the primary
+                    // pointer. Reset its pressure when another stroke begins.
+                    self.touch_id = Some(contact);
+                    self.touch = None;
+                    self.lifted = false;
+                }
+                if self.touch_id != Some(contact) {
+                    continue;
+                }
                 match phase {
                     egui::TouchPhase::Start | egui::TouchPhase::Move => {
                         if let Some(f) = force.filter(|f| f.is_finite()) {
-                            self.touch = Some(f.clamp(0.0, 1.0));
+                            let pressure = f.clamp(0.0, 1.0);
+                            self.touch = Some(pressure);
                             if !android_pen_feed {
-                                self.frame.push(PenSample { pressure: f.clamp(0.0, 1.0), ..Default::default() });
+                                self.frame.push(PenSample { pressure, ..Default::default() });
                             }
                         }
                     }
-                    egui::TouchPhase::End | egui::TouchPhase::Cancel => self.lifted = true,
+                    egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                        // Retain the release frame's final pressure for the
+                        // last dab, but never carry it into the next stroke.
+                        self.touch_id = None;
+                        self.lifted = true;
+                    }
                 }
             }
         }
@@ -213,7 +234,13 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        let s = self.current.or_else(|| self.feed.get()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
+        // Java may deliver DOWN/MOVE/UP before a single egui frame. The
+        // feed then has no live sample, but its queued contact samples still
+        // describe the just-finished stroke. Do not lose their pressure/tilt.
+        let s = self.current
+            .or_else(|| self.feed.get())
+            .or_else(|| self.frame.last().copied())
+            .or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
         // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
         Some(match &self.pressure_curve {
             Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
@@ -498,6 +525,47 @@ mod tests {
         assert_eq!(s.pressure(), 0.4);
         s.update(&[]);
         assert_eq!(s.pressure(), 1.0);
+    }
+
+    #[test]
+    fn secondary_finger_does_not_change_primary_pen_pressure() {
+        let mut s = Stylus::default();
+        let with_id = |id: u64, phase, force| egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(id),
+            phase,
+            pos: egui::pos2(id as f32, 1.0),
+            force,
+        };
+        s.update(&[
+            with_id(3, egui::TouchPhase::Start, Some(0.2)),
+            with_id(4, egui::TouchPhase::Start, Some(0.9)),
+            with_id(4, egui::TouchPhase::Move, Some(0.8)),
+        ]);
+        assert_eq!(s.pressure(), 0.2, "secondary finger must not replace the primary pen pressure");
+        s.update(&[with_id(4, egui::TouchPhase::End, None)]);
+        assert_eq!(s.pressure(), 0.2, "lifting another finger must not end the stroke");
+        s.update(&[with_id(3, egui::TouchPhase::Move, Some(0.4))]);
+        assert_eq!(s.pressure(), 0.4);
+        s.update(&[with_id(3, egui::TouchPhase::End, None)]);
+        s.update(&[]);
+        assert_eq!(s.pressure(), 1.0);
+    }
+
+    #[test]
+    fn java_contact_finished_within_one_frame_keeps_pen_pressure_and_tilt() {
+        let mut s = Stylus::default();
+        s.feed.set(Some(PenSample { pressure: 0.35, tilt_x: 21.0, ..pen(1.0) }));
+        s.feed.set(Some(PenSample { pressure: 0.75, tilt_x: 29.0, ..pen(1.0) }));
+        s.feed.set(None);
+        s.update(&[]);
+        assert_eq!(s.pressure(), 0.75, "up before the render frame must not discard pressure");
+        s.select(0, 2);
+        assert!((s.pressure() - 0.35).abs() < 1e-6);
+        assert_eq!(s.sample().map(|p| p.tilt_x), Some(21.0));
+        s.clear_selection();
+        s.update(&[]);
+        assert_eq!(s.pressure(), 1.0, "completed contact is cleared next frame");
     }
 
     #[test]
