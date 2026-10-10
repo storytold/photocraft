@@ -1,9 +1,12 @@
 //! Client for the desktop app's JSON-lines control protocol
 //! (`docs/control-protocol.md`): one JSON request per line, replies matched
-//! by `id`. Keeps one connection and reconnects for the next call after a failure.
+//! by `id`. Keeps one connection, reconnecting after a failure — or before
+//! a call, once the connection has been idle long enough that the app
+//! (which closes idle control connections after
+//! [`IO_TIMEOUT`](crate::security::IO_TIMEOUT)) may already have closed it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -12,16 +15,51 @@ use tokio::sync::Mutex;
 
 use crate::AutomationError;
 use crate::budgets::MAX_RESPONSE_BYTES;
-use crate::security::{AUTH_METHOD, MAX_REQUEST_BYTES, validate_token};
+use crate::security::{AUTH_METHOD, IO_TIMEOUT, MAX_REQUEST_BYTES, validate_token};
 
 type Conn = (BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf);
+
+/// Reconnect before sending when the cached connection has been idle this long: the app
+/// drops idle control connections after [`IO_TIMEOUT`], and reconnecting before the send
+/// keeps the request out of the "was it applied?" state. The margin covers a request
+/// still in flight when the idle clock runs out.
+const IDLE_RECONNECT: Duration = IO_TIMEOUT.saturating_sub(Duration::from_secs(5));
+
+/// The default call timeout sits strictly below the app's 60s reply deadline, so this
+/// client's error — not the app's deadline reply, not the caller's own cutoff — is the
+/// one the caller sees.
+pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(55);
+
+/// Control methods that only read state. A transport failure around one of these applies
+/// nothing, so the bridge may reconnect and resend it once; every other method keeps #1007
+/// semantics (never resend a possibly-applied edit).
+const IDEMPOTENT_READS: &[&str] = &[
+    "ui.inspect",
+    "document.inspect",
+    "session.inspect",
+    "engine.commands",
+    "command.list",
+    "jobs.list",
+    "document.pixel",
+    "brush.get",
+    "shape.info",
+    "type.info",
+    "path.info",
+    "path.list",
+    "swatches.list",
+    "gradient.fill.get",
+];
+
+const NO_REPLY_CAUSES: &str =
+    "the command may still be running, or the app was not drawing frames (display asleep, window fully occluded, or a long operation blocked the frame loop)";
 
 pub struct BridgeClient {
     addr: String,
     token: String,
-    conn: Mutex<Option<Conn>>,
+    conn: Mutex<Option<(Conn, Instant)>>,
     next_id: AtomicU64,
     timeout: Duration,
+    idle_reconnect: Duration,
 }
 
 impl BridgeClient {
@@ -35,11 +73,24 @@ impl BridgeClient {
             return Err(AutomationError::BadRequest(format!("bridge address must be loopback, got `{addr}`")));
         }
         validate_token(&token)?;
-        Ok(BridgeClient { addr, token: token.to_ascii_lowercase(), conn: Mutex::new(None), next_id: AtomicU64::new(1), timeout: Duration::from_secs(60) })
+        Ok(BridgeClient {
+            addr,
+            token: token.to_ascii_lowercase(),
+            conn: Mutex::new(None),
+            next_id: AtomicU64::new(1),
+            timeout: DEFAULT_CALL_TIMEOUT,
+            idle_reconnect: IDLE_RECONNECT,
+        })
     }
 
     pub fn with_timeout(mut self, t: Duration) -> Self {
         self.timeout = t;
+        self
+    }
+
+    /// Shrink the idle-reconnect threshold; tests use it to run the reconnect path quickly.
+    pub fn with_idle_reconnect(mut self, t: Duration) -> Self {
+        self.idle_reconnect = t;
         self
     }
 
@@ -49,13 +100,42 @@ impl BridgeClient {
 
     /// Call a control method; returns its `result` or the app's error.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, AutomationError> {
+        match self.call_once(method, &params).await {
+            Err(Failure::Transport(e)) if IDEMPOTENT_READS.contains(&method) => {
+                // A transport failure around a pure read applies nothing: one fresh
+                // attempt is safe.
+                match self.call_once(method, &params).await {
+                    Ok(v) => Ok(v),
+                    Err(Failure::Transport(e2)) => {
+                        Err(AutomationError::Bridge(format!("`{method}` failed: {e}; idempotent read, retried once on a fresh connection: {e2}")))
+                    }
+                    Err(Failure::TimedOut(e2)) => Err(AutomationError::Bridge(e2)),
+                    Err(Failure::Definite(e)) => Err(e),
+                }
+            }
+            Err(Failure::Transport(e)) => {
+                Err(AutomationError::Bridge(format!("`{method}` failed: {e}; operation may have completed; inspect state before retrying")))
+            }
+            Err(Failure::TimedOut(e)) => Err(AutomationError::Bridge(e)),
+            Err(Failure::Definite(e)) => Err(e),
+            Ok(v) => Ok(v),
+        }
+    }
+
+    async fn call_once(&self, method: &str, params: &Value) -> Result<Value, Failure> {
         let mut guard = self.conn.lock().await;
+        if let Some((_, last_used)) = guard.as_ref()
+            && last_used.elapsed() >= self.idle_reconnect
+        {
+            // The request below goes to a fresh socket, not one the app may have dropped.
+            *guard = None;
+        }
         if guard.is_none() {
             let s = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
                 .await
-                .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
+                .map_err(|_| Failure::Transport(format!("timed out connecting to {}", self.addr)))?
                 .map_err(|e| {
-                    AutomationError::Bridge(format!(
+                    Failure::Transport(format!(
                         "cannot connect to {} ({e}); start the app with `photocraft --control <port>` and matching control credentials",
                         self.addr
                     ))
@@ -65,37 +145,64 @@ impl BridgeClient {
             let auth_id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let auth = tokio::time::timeout(Duration::from_secs(5), exchange(&mut conn, auth_id, AUTH_METHOD, &json!({"token": self.token})))
                 .await
-                .map_err(|_| AutomationError::Bridge("control authentication timed out".into()))??;
-            auth?;
-            *guard = Some(conn);
+                .map_err(|_| Failure::Transport("control authentication timed out".into()))?
+                .map_err(|e| Failure::Transport(e.to_string()))?;
+            if let Err(e) = auth {
+                return Err(Failure::Definite(e));
+            }
+            *guard = Some((conn, Instant::now()));
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let Some(conn) = guard.as_mut() else {
-            return Err(AutomationError::Bridge(format!("not connected to {}", self.addr)));
+        let Some((conn, _)) = guard.as_mut() else {
+            return Err(Failure::Transport(format!("not connected to {}", self.addr)));
         };
-        match tokio::time::timeout(self.timeout, exchange(conn, id, method, &params)).await {
+        let outcome = tokio::time::timeout(self.timeout, exchange(conn, id, method, params)).await;
+        match outcome {
             Ok(Ok(Err(error @ AutomationError::BadRequest(_)))) => {
                 // An oversized frame leaves unread bytes. Drop this connection and
                 // report the budget failure without retrying a possibly completed edit.
                 *guard = None;
-                Err(error)
+                Err(Failure::Definite(error))
             }
-            Ok(Ok(v)) => v,
+            Ok(Ok(Ok(v))) => {
+                if let Some((_, last_used)) = guard.as_mut() {
+                    *last_used = Instant::now();
+                }
+                Ok(v)
+            }
+            Ok(Ok(Err(e))) => {
+                // The app answered with an error: the operation certainly did not apply.
+                if let Some((_, last_used)) = guard.as_mut() {
+                    *last_used = Instant::now();
+                }
+                Err(Failure::Definite(e))
+            }
             Ok(Err(e)) => {
                 // A failed write or lost reply does not prove the edit was not applied.
                 // Reconnect on the next call, but never resend this operation (#1007).
                 *guard = None;
-                Err(AutomationError::Bridge(format!("`{method}` failed: {e}; operation may have completed; inspect state before retrying")))
+                Err(Failure::Transport(e.to_string()))
             }
             Err(_) => {
                 *guard = None;
-                Err(AutomationError::Bridge(format!(
-                    "`{method}` timed out after {:?}; operation may have completed; inspect state before retrying",
+                Err(Failure::TimedOut(format!(
+                    "`{method}` timed out after {:?}; {NO_REPLY_CAUSES}; operation may have completed; inspect state before retrying",
                     self.timeout
                 )))
             }
         }
     }
+}
+
+/// How a single call attempt failed, deciding the read-retry above.
+enum Failure {
+    /// The connection broke or the reply was lost. Fast, and the outcome is uncertain —
+    /// retried once for idempotent reads, never for edits (#1007).
+    Transport(String),
+    /// The call's own timeout elapsed. Retrying would only double the wait.
+    TimedOut(String),
+    /// The app answered (ok or error) or the request was refused before it was sent.
+    Definite(AutomationError),
 }
 
 /// Outer `Err` = transport failure with an uncertain outcome; inner = app-level result.
@@ -131,5 +238,31 @@ async fn exchange(conn: &mut Conn, id: u64, method: &str, params: &Value) -> Res
         } else {
             Err(AutomationError::App(v.get("error").and_then(Value::as_str).unwrap_or("unknown error").to_owned()))
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_call_timeout_stays_below_the_app_reply_deadline() {
+        // At or above the app's 60s deadline, callers would see their own cutoff first.
+        assert!(DEFAULT_CALL_TIMEOUT < Duration::from_secs(60));
+    }
+
+    #[test]
+    fn reads_are_idempotent_and_edits_are_not() {
+        assert!(IDEMPOTENT_READS.contains(&"ui.inspect"));
+        assert!(IDEMPOTENT_READS.contains(&"jobs.list"));
+        assert!(!IDEMPOTENT_READS.contains(&"engine.execute"), "edits are never auto-resent (#1007)");
+        assert!(!IDEMPOTENT_READS.contains(&"app.save"));
+        assert!(!IDEMPOTENT_READS.contains(&"ui.pointer"));
+    }
+
+    #[test]
+    fn idle_reconnect_stays_below_the_app_idle_cutoff() {
+        // Reconnecting later than IO_TIMEOUT would send into a socket the app dropped.
+        assert!(IDLE_RECONNECT < IO_TIMEOUT);
     }
 }
