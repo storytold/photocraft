@@ -2232,6 +2232,15 @@
 	Contributors: {contributors} · Commits: {commits}	Mitwirkende: {contributors} · Commits: {commits}
 	No contributor data was built into this copy.	In diese Kopie wurden keine Mitwirkendendaten eingebaut.
 	No model credits were built into this copy.	In diese Kopie wurden keine Modellnennungen eingebaut.
+	Check for Updates	Nach Updates suchen
+	Checking for updates…	Suche nach Updates…
+	Update	Aktualisieren
+	Download	Herunterladen
+	Downloading update…	Update wird heruntergeladen…
+	Install Update	Update installieren
+	New version {version}	Neue Version {version}
+	You're up to date.	Sie verwenden die neueste Version.
+	Update failed: {error}	Update fehlgeschlagen: {error}
 	Company	Firma
 	Version	Version
 	% of all commits	% aller Commits

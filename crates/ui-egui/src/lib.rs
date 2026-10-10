@@ -223,6 +223,18 @@ pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
+/// A message from the Windows release checker or package downloader.
+pub enum UpdateEvent {
+    Current,
+    Available { version: String, installable: bool },
+    Progress { downloaded: u64, total: Option<u64> },
+    Ready { version: String, installer: std::path::PathBuf },
+    Failed(String),
+}
+pub type UpdateEvents = std::sync::mpsc::Receiver<UpdateEvent>;
+pub type CheckForUpdatesFn = Box<dyn FnMut() -> UpdateEvents>;
+pub type DownloadUpdateFn = Box<dyn FnMut() -> UpdateEvents>;
+pub type InstallUpdateFn = Box<dyn FnMut(std::path::PathBuf) -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
@@ -303,6 +315,11 @@ pub struct Services {
     pub encode_png: Option<EncodePngFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
     pub open_url: Option<OpenUrlFn>,
+    /// Check and download the official Windows MSI update on background workers.
+    pub check_for_updates: Option<CheckForUpdatesFn>,
+    pub download_update: Option<DownloadUpdateFn>,
+    /// Start the interactive Windows Installer for a previously verified package.
+    pub install_update: Option<InstallUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame.
     pub inbox: Option<Inbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
@@ -541,6 +558,8 @@ pub struct PhotocraftApp {
     gpu: Option<gpu_canvas::GpuCanvas>,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
+    /// Latest release check/download shown by the active About dialog.
+    pub(crate) about_update: Option<dialogs::AboutUpdate>,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
     pub perf: gpu_canvas::Perf,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
@@ -655,6 +674,7 @@ impl PhotocraftApp {
             hist_job: None,
             gpu: None,
             started: None,
+            about_update: None,
             perf: Default::default(),
             prefs_rt: Default::default(),
             discard: None,

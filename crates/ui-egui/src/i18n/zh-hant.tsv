@@ -2169,6 +2169,15 @@ cameraRaw	Blending	混合
 	Contributors: {contributors} · Commits: {commits}	貢獻者：{contributors} · 提交：{commits}
 	No contributor data was built into this copy.	此副本未內建貢獻者資料。
 	No model credits were built into this copy.	此副本未內建模型致謝。
+	Check for Updates	檢查更新
+	Checking for updates…	正在檢查更新…
+	Update	更新
+	Download	下載
+	Downloading update…	正在下載更新…
+	Install Update	安裝更新
+	New version {version}	新版本 {version}
+	You're up to date.	目前已是最新版本。
+	Update failed: {error}	更新失敗：{error}
 	Company	公司
 	Model	模型
 	Version	版本

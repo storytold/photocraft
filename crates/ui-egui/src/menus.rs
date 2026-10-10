@@ -139,6 +139,14 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if id == "app.installUpdate" {
+        let installer = params.get("installer").and_then(Value::as_str).ok_or("missing verified installer path")?;
+        let install = app.services.install_update.as_mut().ok_or("Windows updates are unavailable")?;
+        install(std::path::PathBuf::from(installer))?;
+        app.allow_close = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        return Ok(Value::Null);
+    }
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
     }

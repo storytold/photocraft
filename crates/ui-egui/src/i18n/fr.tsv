@@ -2619,6 +2619,15 @@ cameraRaw	Blending	Fusion
 	Contributors: {contributors} · Commits: {commits}	Contributeurs : {contributors} · Commits : {commits}
 	No contributor data was built into this copy.	Aucune donnée de contributeurs n'est incluse dans cette copie.
 	No model credits were built into this copy.	Aucun crédit de modèle n'est inclus dans cette copie.
+	Check for Updates	Rechercher des mises à jour
+	Checking for updates…	Recherche des mises à jour…
+	Update	Mettre à jour
+	Download	Télécharger
+	Downloading update…	Téléchargement de la mise à jour…
+	Install Update	Installer la mise à jour
+	New version {version}	Nouvelle version {version}
+	You're up to date.	Vous disposez de la dernière version.
+	Update failed: {error}	Échec de la mise à jour : {error}
 	Company	Société
 	Version	Version
 	% of all commits	% de tous les commits

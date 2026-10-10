@@ -2192,6 +2192,15 @@ cameraRaw	Color	Barvy
 	Contributors: {contributors} · Commits: {commits}	Přispěvatelé: {contributors} · Commity: {commits}
 	No contributor data was built into this copy.	Tato kopie neobsahuje údaje o přispěvatelích.
 	No model credits were built into this copy.	Tato kopie neobsahuje údaje o modelech.
+	Check for Updates	Zkontrolovat aktualizace
+	Checking for updates…	Probíhá kontrola aktualizací…
+	Update	Aktualizovat
+	Download	Stáhnout
+	Downloading update…	Stahování aktualizace…
+	Install Update	Nainstalovat aktualizaci
+	New version {version}	Nová verze {version}
+	You're up to date.	Máte aktuální verzi.
+	Update failed: {error}	Aktualizace se nezdařila: {error}
 	Company	Společnost
 	Model	Model
 	Version	Verze

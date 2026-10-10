@@ -2627,6 +2627,15 @@ cameraRaw	Whites	Brancos
 	Contributors: {contributors} · Commits: {commits}	Colaboradores: {contributors} · Commits: {commits}
 	No contributor data was built into this copy.	Esta cópia não inclui dados de colaboradores.
 	No model credits were built into this copy.	Esta cópia não inclui créditos de modelos.
+	Check for Updates	Verificar atualizações
+	Checking for updates…	Verificando atualizações…
+	Update	Atualizar
+	Download	Baixar
+	Downloading update…	Baixando atualização…
+	Install Update	Instalar atualização
+	New version {version}	Nova versão {version}
+	You're up to date.	Você está com a versão mais recente.
+	Update failed: {error}	Falha na atualização: {error}
 	Company	Empresa
 	Version	Versão
 	% of all commits	% de todos os commits

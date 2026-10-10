@@ -2468,6 +2468,15 @@ cameraRaw	Roughness	Неровность
 	Contributors: {contributors} · Commits: {commits}	Участники: {contributors} · Коммиты: {commits}
 	No contributor data was built into this copy.	В эту копию не встроены данные об участниках.
 	No model credits were built into this copy.	В эту копию не встроены сведения о моделях.
+	Check for Updates	Проверить обновления
+	Checking for updates…	Проверка обновлений…
+	Update	Обновить
+	Download	Скачать
+	Downloading update…	Загрузка обновления…
+	Install Update	Установить обновление
+	New version {version}	Новая версия {version}
+	You're up to date.	У вас установлена последняя версия.
+	Update failed: {error}	Не удалось обновить: {error}
 	Company	Компания
 	Version	Версия
 	% of all commits	% от всех коммитов

@@ -2606,6 +2606,15 @@ cameraRaw	Blending	Pembauran
 	Contributors: {contributors} · Commits: {commits}	Kontributor: {contributors} · Commit: {commits}
 	No contributor data was built into this copy.	Salinan ini tidak memuat data kontributor.
 	No model credits were built into this copy.	Salinan ini tidak memuat kredit model.
+	Check for Updates	Periksa pembaruan
+	Checking for updates…	Memeriksa pembaruan…
+	Update	Perbarui
+	Download	Unduh
+	Downloading update…	Mengunduh pembaruan…
+	Install Update	Instal pembaruan
+	New version {version}	Versi baru {version}
+	You're up to date.	Anda sudah menggunakan versi terbaru.
+	Update failed: {error}	Pembaruan gagal: {error}
 	Company	Perusahaan
 	Version	Versi
 	% of all commits	% dari semua commit

@@ -13,6 +13,7 @@ use crate::PhotocraftApp;
 use crate::widgets::{ButtonRole, DialogButton};
 
 const EXIT: &str = "file.exit";
+const INSTALL_UPDATE: &str = "app.installUpdate";
 
 /// An action waiting on the user, and the dirty documents still to ask about.
 pub struct Prompt {
@@ -42,6 +43,7 @@ const DISCARDING: &[(&str, Reach)] = &[
     ("file.closeOthers", Reach::AllButTarget),
     ("file.closeAll", Reach::All),
     (EXIT, Reach::All),
+    (INSTALL_UPDATE, Reach::All),
 ];
 
 /// The command's target document and the unsaved documents it would discard (empty for commands
@@ -65,6 +67,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
+    let target = (id != INSTALL_UPDATE).then_some(target).flatten();
     let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
     match &app.discard {
         None => app.discard = Some(prompt),
@@ -389,6 +392,83 @@ mod tests {
         assert!(!app.allow_close);
         advance(&mut app, &ctx);
         assert!(app.allow_close);
+    }
+
+    #[test]
+    fn update_waits_for_the_unsaved_document_answer_before_starting() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let installed = Rc::new(RefCell::new(None::<std::path::PathBuf>));
+        let installed_by_service = installed.clone();
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                install_update: Some(Box::new(move |path| {
+                    *installed_by_service.borrow_mut() = Some(path);
+                    Ok(())
+                })),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        make_dirty(&mut app, 0);
+        let ctx = egui::Context::default();
+
+        assert!(intercept(&mut app, INSTALL_UPDATE, &json!({"installer": "verified.msi"})));
+        assert!(installed.borrow().is_none(), "installer waits for the unsaved-work answer");
+        advance(&mut app, &ctx);
+        assert_eq!(installed.borrow().clone(), Some(std::path::PathBuf::from("verified.msi")));
+        assert!(app.allow_close);
+    }
+
+    #[test]
+    fn cancelling_an_unsaved_update_keeps_the_app_open_without_installing() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let started = Rc::new(Cell::new(false));
+        let started_by_install = started.clone();
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                install_update: Some(Box::new(move |_| {
+                    started_by_install.set(true);
+                    Ok(())
+                })),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        make_dirty(&mut app, 0);
+        let mut harness = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, app| show(app, ui.ctx()),
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        harness.ctx.set_os(egui::os::OperatingSystem::Windows);
+        assert!(intercept(harness.state_mut(), INSTALL_UPDATE, &json!({"installer": "verified.msi"})));
+        harness.run_steps(2);
+        harness.get_by_label("Cancel").click();
+        harness.run_steps(2);
+
+        assert!(!started.get());
+        assert!(harness.state().discard.is_none());
+        assert!(!harness.state().allow_close);
+        assert_eq!(harness.state().session.documents().len(), 1);
+    }
+
+    #[test]
+    fn installer_start_failure_keeps_the_app_open_for_retry() {
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services { install_update: Some(Box::new(|_| Err("installer launch failed".into()))), ..Default::default() },
+        );
+        let ctx = egui::Context::default();
+
+        assert!(crate::menus::invoke(&mut app, &ctx, INSTALL_UPDATE, json!({"installer": "verified.msi"})).is_err());
+        assert!(!app.allow_close);
     }
 
     #[test]

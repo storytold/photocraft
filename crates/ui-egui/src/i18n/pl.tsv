@@ -3227,6 +3227,15 @@ cameraRaw	Roughness	Chropowatość
 	Contributors: {contributors} · Commits: {commits}	Współtwórcy: {contributors} · Commity: {commits}
 	No contributor data was built into this copy.	Ta kopia nie zawiera danych o współtwórcach.
 	No model credits were built into this copy.	Ta kopia nie zawiera informacji o modelach.
+	Check for Updates	Sprawdź dostępność aktualizacji
+	Checking for updates…	Sprawdzanie aktualizacji…
+	Update	Aktualizuj
+	Download	Pobierz
+	Downloading update…	Pobieranie aktualizacji…
+	Install Update	Zainstaluj aktualizację
+	New version {version}	Nowa wersja {version}
+	You're up to date.	Masz najnowszą wersję.
+	Update failed: {error}	Aktualizacja nie powiodła się: {error}
 	Company	Firma
 	Version	Wersja
 	% of all commits	% wszystkich commitów

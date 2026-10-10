@@ -2217,6 +2217,13 @@
 	Contributors: {contributors} · Commits: {commits}	Bijdragers: {contributors} · Commits: {commits}
 	No contributor data was built into this copy.	Er zijn geen bijdragersgegevens in deze versie ingebouwd.
 	No model credits were built into this copy.	Er zijn geen modelvermeldingen in deze versie ingebouwd.
+	Checking for updates…	Controleren op updates…
+	Download	Downloaden
+	Downloading update…	Update downloaden…
+	Install Update	Update installeren
+	New version {version}	Nieuwe versie {version}
+	You're up to date.	Je hebt de nieuwste versie.
+	Update failed: {error}	Update mislukt: {error}
 	Company	Bedrijf
 	Version	Versie
 	% of all commits	% van alle commits

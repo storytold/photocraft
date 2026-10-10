@@ -46,6 +46,8 @@ mod services;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod tablet;
 mod ui_state;
+#[cfg(target_os = "windows")]
+mod updater;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -157,7 +159,20 @@ fn main() -> eframe::Result {
     let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
     let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
-    let mut args = std::env::args_os().skip(1);
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(target_os = "windows")]
+    {
+        match updater::run_update_helper(&args) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("photocraft: {error}");
+                let _ = open::that(updater::RELEASE_PAGE);
+                std::process::exit(1);
+            }
+        }
+    }
+    let mut args = args.into_iter();
     while let Some(a) = args.next() {
         match a.to_str() {
             Some("--control") => match args.next() {
