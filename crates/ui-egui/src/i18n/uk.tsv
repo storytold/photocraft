@@ -1577,6 +1577,8 @@
 	Uses the foreground and background colours.	Використовує кольори переднього плану та фону.
 	Answer the unsaved-changes prompt first	Спочатку дайте відповідь у діалозі незбережених змін
 	Unsaved changes	Незбережені зміни
+	Unsaved changes prompt	Запит про незбережені зміни
+	Don't Save / Cancel / Save	Не зберігати / Скасувати / Зберегти
 	Don't Save	Не зберігати
 	No	Ні
 	Yes	Так

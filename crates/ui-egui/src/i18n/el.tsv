@@ -3092,6 +3092,8 @@
 	Underline	Υπογράμμιση
 	Unnamed {mode} profile	Ανώνυμο προφίλ {mode}
 	Unsaved changes	Μη αποθηκευμένες αλλαγές
+	Unsaved changes prompt	Μήνυμα για μη αποθηκευμένες αλλαγές
+	Don't Save / Cancel / Save	Να μην αποθηκευτεί / Ακύρωση / Αποθήκευση
 	Unsharp Mask	Μάσκα όξυνσης
 	Unsharp Mask…	Μάσκα όξυνσης…
 	Untagged {mode}	Χωρίς ετικέτα προφίλ {mode}

@@ -1594,6 +1594,8 @@
 	Uses the foreground and background colours.	Использует основной цвет и цвет фона.
 	Answer the unsaved-changes prompt first	Сначала ответьте на запрос о несохранённых изменениях
 	Unsaved changes	Несохранённые изменения
+	Unsaved changes prompt	Запрос о несохранённых изменениях
+	Don't Save / Cancel / Save	Не сохранять / Отмена / Сохранить
 	Don't Save	Не сохранять
 	No	Нет
 	Yes	Да
