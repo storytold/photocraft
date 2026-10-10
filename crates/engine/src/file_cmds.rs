@@ -391,7 +391,9 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 
 /// Place a file's bytes as a smart object layer, centred and (when larger than the canvas)
 /// scaled down to fit, like Photoshop's Place with "Resize Image During Place". `linked` makes it
-/// a linked smart object that refers to that path instead of embedding the bytes.
+/// a linked smart object that refers to that path instead of embedding the bytes. With
+/// Preferences ▸ General ▸ Always Create Smart Objects When Placing off, an embedded place lands
+/// as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
@@ -421,23 +423,31 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         px = resize_surface(&px, scale, scale, Resample::Bicubic);
     }
     let px = translate_surface(&px, dx as i32, dy as i32);
+    // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an
+    // embedded place lands as a plain pixel layer. A linked place is always a smart object.
+    let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
     let source = match linked {
         Some(path) => SmartSource::Linked { path },
         None => SmartSource::Embedded { file_name: file_name(name), bytes: Arc::new(bytes) },
     };
-    let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
-    // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
-    if vector && let Some(sharp) = crate::smart_cmds::render(&d.doc, &so)? {
-        so.cache = Some(sharp);
-    }
     let layer_name = stem(name);
-    let label = if matches!(so.source, SmartSource::Linked { .. }) { "Place Linked" } else { PLACE_EMBEDDED };
+    let label = if matches!(&source, SmartSource::Linked { .. }) { "Place Linked" } else { PLACE_EMBEDDED };
     let id = s.edit(label, |doc, active| {
-        let id = doc.insert_above(*active, Layer::new(layer_name, LayerContent::Smart(so)));
+        let layer = if smart {
+            let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
+            // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
+            if vector && let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
+                so.cache = Some(sharp);
+            }
+            Layer::new(layer_name, LayerContent::Smart(so))
+        } else {
+            Layer::new(layer_name, LayerContent::Raster(px))
+        };
+        let id = doc.insert_above(*active, layer);
         *active = Some(id);
         Ok(id)
     })?;
-    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale]}))
+    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "smartObject": smart}))
 }
 
 fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
@@ -1274,7 +1284,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool=true,"center":[x,y]?}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool=true,"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
