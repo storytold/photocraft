@@ -201,7 +201,7 @@ impl PartialEq for Lang {
 impl Eq for Lang {}
 
 impl Lang {
-    pub const EN: Lang = Lang(&LANGUAGES[1]); // English is now index 1 since Arabic is 0
+    pub const EN: Lang = Lang(&LANGUAGES[0]);
 
     pub fn code(self) -> &'static str {
         self.0.code
