@@ -294,6 +294,89 @@ fn quick_mask_without_selection_and_options() {
     assert!(sel_at(&s, 10, 10) < 0.05 && sel_at(&s, 30, 10) > 0.99, "{} {}", sel_at(&s, 10, 10), sel_at(&s, 30, 10));
 }
 
+/// Overlay coverage of the live Quick Mask at (x, y): how much colour the canvas shows there.
+fn qm_overlay(s: &Session, x: i32, y: i32) -> f32 {
+    let q = doc(s).quick_mask.as_ref().unwrap();
+    q.overlay_coverage(q.surface.sample_channel(x, y, 0))
+}
+
+#[test]
+fn quick_mask_without_selection_starts_empty_in_both_modes() {
+    // #2743 case 1: nothing selected → nothing selected in the mask, whichever way the colour
+    // reads; painting white adds to the selection that comes out.
+    for depth in [8, 16, 32] {
+        // Selected Areas set before entering.
+        let mut s = session_depth(depth);
+        s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        assert_eq!((qm_overlay(&s, 5, 5), qm_overlay(&s, 35, 15)), (0.0, 0.0), "depth {depth}: no overlay");
+        s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+        assert!(doc(&s).selection.is_none(), "depth {depth}: untouched → no selection");
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+        assert!(qm_overlay(&s, 5, 5) > 0.99 && qm_overlay(&s, 30, 10) == 0.0, "depth {depth}");
+        s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+        assert!(sel_at(&s, 5, 5) > 0.99 && sel_at(&s, 30, 10) == 0.0, "depth {depth}: painted area is the selection");
+
+        // Selected Areas switched on while in Quick Mask (the order in the report).
+        let mut s = session_depth(depth);
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        assert_eq!(qm_overlay(&s, 5, 5), 0.0, "depth {depth}: Masked Areas, nothing masked yet");
+        s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+        assert_eq!((qm_overlay(&s, 5, 5), qm_overlay(&s, 35, 15)), (0.0, 0.0), "depth {depth}: still no overlay");
+        // …and back again: still the untouched, nothing-selected mask.
+        s.execute("channel.options", json!({"channel": "quickMask", "indicates": "masked"})).unwrap();
+        assert_eq!(qm_overlay(&s, 5, 5), 0.0, "depth {depth}");
+        s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+        assert!(doc(&s).selection.is_none(), "depth {depth}");
+    }
+}
+
+#[test]
+fn quick_mask_round_trip_keeps_select_all() {
+    // #2743 case 2: a full selection comes back full, in either mode.
+    for depth in [8, 16] {
+        for indicates in ["masked", "selected"] {
+            let mut s = session_depth(depth);
+            s.execute("channel.options", json!({"channel": "quickMask", "indicates": indicates})).unwrap();
+            s.execute("select.all", json!({})).unwrap();
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            assert!(doc(&s).selection.is_some(), "depth {depth} {indicates}: Select All survives");
+            assert_eq!((sel_at(&s, 0, 0), sel_at(&s, 39, 19)), (1.0, 1.0), "depth {depth} {indicates}");
+            // Switching the mode in between doesn't change what is selected.
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            let other = if indicates == "masked" { "selected" } else { "masked" };
+            s.execute("channel.options", json!({"channel": "quickMask", "indicates": other})).unwrap();
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            assert_eq!((sel_at(&s, 0, 0), sel_at(&s, 39, 19)), (1.0, 1.0), "depth {depth} {indicates}→{other}");
+        }
+    }
+    // A no-selection entry followed by Select All entry: the second one isn't "no selection".
+    let mut s = session();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    assert_eq!(sel_at(&s, 20, 10), 1.0);
+}
+
+#[test]
+fn quick_mask_odd_states_dont_panic() {
+    let mut s = Session::new();
+    assert!(s.execute("select.editInQuickMaskMode", json!({})).is_err(), "no document");
+    let _ = s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"}));
+    let mut s = session();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+    s.undo();
+    s.undo();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+}
+
 #[test]
 fn channel_options_and_spot_channels() {
     let mut s = session();

@@ -59,6 +59,9 @@ pub struct DocM {
     /// The temporary Quick Mask channel (saved while Quick Mask mode is on).
     #[serde(default)]
     pub quick_mask: Option<ChannelM>,
+    /// Quick Mask was entered with no selection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quick_mask_unselected: bool,
     /// Patterns stored with the document.
     #[serde(default)]
     pub patterns: Vec<PatternM>,
