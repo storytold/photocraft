@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
       CARGO_TERM_COLOR: always
     steps:
       - name: Checkout
@@ -37,6 +36,11 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
       - name: Rust dependency cache
         uses: Swatinem/rust-cache@v2
 
@@ -51,7 +55,7 @@ jobs:
           CXX_aarch64_linux_android: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-        run: cargo build --locked --release --target aarch64-linux-android -p photocraft-android
+        run: cargo build --release --target aarch64-linux-android -p photocraft-android
 
       - name: Copy native library into Android project
         run: |
