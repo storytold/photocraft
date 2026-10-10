@@ -426,7 +426,12 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 
 /// Runs `f` on a type layer as one undo step. `f` may set an explicit layer name (`type.edit`'s
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
-fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>) -> Result<R> {
+pub(crate) fn with_text_layer<R>(
+    s: &mut Session,
+    p: &Value,
+    label: &str,
+    f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>,
+) -> Result<R> {
     let id = layer_id(s, p)?;
     let (r, damage) = s.edit(label, |doc, _| {
         let snapshot = doc.clone();
