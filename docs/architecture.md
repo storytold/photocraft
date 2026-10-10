@@ -117,7 +117,8 @@ photocraft/
 ├─ apps/
 │  ├─ photocraft/              desktop binary (winit + wgpu + ui-egui + platform-native)
 │  ├─ photocraft-cli/          headless batch CLI (open → commands → export), also hosts `mcp` subcommand
-│  └─ photocraft-web/          wasm32 binary (ui-egui + platform-web), demo
+│  ├─ photocraft-web/          wasm32 binary (ui-egui + platform-web), demo
+│  └─ photocraft-android/      Android runner (eframe/wgpu on Vulkan, mobile-adapted UI)
 ├─ shaders/                    (or inside gpu/) WGSL, with generated struct headers
 ├─ assets/                     icons, bundled fonts, default brushes/swatches/presets
 ├─ fuzz/                       cargo-fuzz targets (psd, codecs, format)

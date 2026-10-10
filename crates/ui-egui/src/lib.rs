@@ -23,7 +23,7 @@ mod alt_grab;
 pub mod analysis_ui;
 pub mod artboard_ui;
 pub(crate) mod blend_preview;
-mod brand;
+pub mod brand;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;

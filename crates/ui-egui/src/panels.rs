@@ -779,8 +779,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             let r = ui.max_rect();
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
-            ui.horizontal_centered(|ui| {
+            egui::ScrollArea::horizontal()
+                .id_salt("options_bar_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::home_button(app, ui);
                     widgets::vline(ui, 22.0);
@@ -1262,6 +1265,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 crate::brush_panel::commit_gesture(app, ui.ctx(), &brush_before, &brush);
             });
         });
+    });
 }
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
@@ -1406,8 +1410,13 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::dock::persist(app, ui.ctx());
 }
 
-/// The right dock's width range (points).
-const DOCK_WIDTH: std::ops::RangeInclusive<f32> = 250.0..=520.0;
+/// The right dock's width range (points), responsive to screen width.
+fn dock_width_range(ctx: &egui::Context) -> std::ops::RangeInclusive<f32> {
+    let screen_w = ctx.content_rect().width();
+    let max_w = (screen_w - 60.0_f32).clamp(160.0_f32, 520.0_f32);
+    let min_w = 160.0_f32.min(max_w);
+    min_w..=max_w
+}
 
 fn dock_width_id() -> egui::Id {
     egui::Id::new("dock-width-request")
@@ -1415,7 +1424,8 @@ fn dock_width_id() -> egui::Id {
 
 /// Set the right dock's width on the next frame (`ui.set {dockWidth}`); clamped to its range.
 pub fn request_dock_width(ctx: &egui::Context, w: f32) {
-    let w = if w.is_finite() { w.clamp(*DOCK_WIDTH.start(), *DOCK_WIDTH.end()) } else { *DOCK_WIDTH.start() };
+    let range = dock_width_range(ctx);
+    let w = if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { *range.start() };
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
 }
 
@@ -1437,7 +1447,10 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
         return;
     }
     let margin = if t.pro { 2 } else { 8 };
-    let mut panel = egui::Panel::right("dock").resizable(true).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
+    let range = dock_width_range(ui.ctx());
+    let default_w: f32 = if t.pro { 290.0 } else { 300.0 };
+    let default_w = default_w.clamp(*range.start(), *range.end());
+    let mut panel = egui::Panel::right("dock").resizable(true).default_size(default_w).size_range(range);
     if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
         panel = panel.exact_size(w);
     }
