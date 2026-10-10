@@ -2613,7 +2613,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         }
         // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
-        // Skew, Distort, Perspective, Warp).
+        // Skew, Distort, Perspective, Warp), or rotate or flip the box.
         let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
         if response.secondary_clicked()
             && transforming
