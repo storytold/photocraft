@@ -45,7 +45,7 @@ fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
 
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
     let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip), ..Default::default() };
-    BrushPreset { name: name.into(), brush, builtin: false, group: group.into() }
+    BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new() }
 }
 
 fn user(s: &Session) -> Vec<BrushPreset> {
@@ -567,4 +567,59 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
     let a = back.iter().find(|p| p.name == "Old A").unwrap();
     assert_eq!(a.brush.tip, TipShape::Sampled(tips[0].clone()));
     assert_eq!(a.brush.texture.pattern, Pattern::Tile(tips[1].clone()));
+}
+
+/// A v6 `.abr` whose presets sit in Photoshop folders (`phry`).
+fn abr_with_folders(presets: &[(&str, &[&str])]) -> Vec<u8> {
+    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
+    let descs: Vec<Descriptor> = presets.iter().map(|(n, _)| Descriptor::new("brushPreset").with("Nm  ", Value::Text(UnicodeString::new_nul(n)))).collect();
+    let folders: Vec<Vec<String>> = presets.iter().map(|(_, f)| f.iter().map(|x| x.to_string()).collect()).collect();
+    photocraft_psd::abr::write_v6_folders(2, &[], &[], &descs, &folders, true).unwrap()
+}
+
+#[test]
+fn imported_abr_folders_persist_and_old_stores_load_flat() {
+    let dir = TempDir::new("abr-folders");
+    let (mut s, _) = session(&dir);
+    let abr = abr_with_folders(&[("Loose", &[]), ("Pen", &["Inks"]), ("Nib", &["Inks", "Fine"]), ("Kit Chalk", &["Dry"])]);
+    let r = s.execute("brush.presets.importAbr", json!({"data": photocraft_paint::tile::b64_encode(&abr), "group": "Kit"})).unwrap();
+    assert_eq!((r["count"].as_u64(), r["folders"].as_u64()), (Some(4), Some(3)));
+    let folder = |s: &Session, n: &str| photocraft_paint::presets::find(&s.tools.presets, n).unwrap().folder.join("/");
+    assert_eq!((folder(&s, "Loose"), folder(&s, "Nib"), folder(&s, "Kit Chalk")), ("".into(), "Inks/Fine".into(), "Dry".into()));
+    // One group file still holds the whole imported set, folders included.
+    let groups: Vec<String> = dir.files().into_iter().filter(|f| f.ends_with(".pcbrushes")).collect();
+    assert_eq!(groups, [group_file_name("Kit")]);
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(user(&t), user(&s));
+    // Renaming a nested folder rewrites the group; the next start sees the new name.
+    s.execute("brush.presets.renameGroup", json!({"group": "Kit", "folder": ["Inks"], "newName": "Ink"})).unwrap();
+    let (t, _) = session(&dir);
+    assert_eq!(folder(&t, "Nib"), "Ink/Fine");
+    // Exported preset files keep the folders.
+    let out = s.execute("edit.presets.exportImportPresets", json!({"action": "export"})).unwrap();
+    assert_eq!(out["data"]["brushes"].as_array().unwrap().iter().find(|b| b["name"] == "Nib").unwrap()["folder"], json!(["Ink", "Fine"]));
+
+    // A group file written before #1851 has no `folder`: every preset loads directly in its group,
+    // without a warning and without rewriting the file.
+    let mem = MemBackend::default();
+    let old = json!({"format": GROUP_FORMAT, "version": 1, "group": "Old", "presets": [{"name": "Plain", "brush": {"size": 5}}]});
+    let file = group_file_name("Old");
+    mem.write(&file, &serde_json::to_vec(&old).unwrap()).unwrap();
+    let before = mem.read(&file, MAX_GROUP_BYTES).unwrap();
+    let mut o = Session::new();
+    assert!(o.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
+    let p = photocraft_paint::presets::find(&o.tools.presets, "Plain").unwrap();
+    assert!(p.group == "Old" && p.folder.is_empty());
+    assert_eq!(mem.read(&file, MAX_GROUP_BYTES).unwrap(), before);
+    // A hand-edited folder path is bounded.
+    let deep = json!({"format": GROUP_FORMAT, "version": 1, "group": "Deep", "presets": [
+        {"name": "Deep", "brush": {}, "folder": vec!["x"; 1000]},
+        {"name": "Blank", "brush": {}, "folder": ["", "  "]},
+    ]});
+    mem.write(&group_file_name("Deep"), &serde_json::to_vec(&deep).unwrap()).unwrap();
+    let mut d = Session::new();
+    d.attach_preset_store(open(Box::new(mem.clone())));
+    assert_eq!(photocraft_paint::presets::find(&d.tools.presets, "Deep").unwrap().folder.len(), crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
+    assert!(photocraft_paint::presets::find(&d.tools.presets, "Blank").unwrap().folder.is_empty());
 }

@@ -523,6 +523,12 @@
 	Reset	Скинути
 	Reset Section	Скинути розділ
 	Reset All to Defaults	Скинути все до типових значень
+	Import Shortcuts…	Імпортувати сполучення клавіш…
+	Load a keyboard shortcut set saved as .kys	Завантажити набір сполучень клавіш, збережений як .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Імпортовано сполучень клавіш: {n} із {file}. Натисніть OK, щоб зберегти їх.
+	{n} commands are not in PhotoCraft.	Команд, яких немає в PhotoCraft: {n}.
+	Keyboard shortcuts imported	Сполучення клавіш імпортовано
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Тут використовується ваш набір сполучень клавіш {set}: сполучень, що відрізняються від стандартних: {n}. Їх показує Редагування › Сполучення клавіш; «Скинути все до стандартних» скасовує імпорт.
 	Defaults restored.	Типові значення відновлено.
 	Restore Defaults	Відновити типові значення
 	Restore original size	Відновити початковий розмір
@@ -949,6 +955,7 @@
 	Brush Preset Options	Параметри набору пензля
 	New Brush	Новий пензель
 	Create new brush from these settings	Створити новий пензель із цими параметрами
+	Update the current brush with these settings	Оновити поточний пензель цими параметрами
 	Reset the brush to the defaults	Скинути пензель до типових значень
 	No brush presets	Немає наборів пензлів
 	Override Pressure	Перевизначити натиск
@@ -1349,6 +1356,12 @@
 	Switch theme	Перемкнути тему
 	Next Theme	Наступна тема
 	Classic Theme	Класична тема
+	Solarized dark	Solarized темна
+	Solarized Dark Theme	Темна тема Solarized
+	Adwaita Light Theme	Світла тема Adwaita
+	Adwaita Dark Theme	Темна тема Adwaita
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita темна
 	Studio Theme	Тема «Студія»
 	Studio Light Theme	Світла тема «Студія»
 	Pro Theme	Тема «Профі»
@@ -1900,6 +1913,13 @@
 	Capture	Зберегти стан
 	Center Crop Marks	Центральні мітки обрізання
 	Centre the gradient (offset 0, 0)	Центрувати градієнт (зсув 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градієнтів
+	Gradient picker	Вибір градієнта
+	Gradient stops	Точки градієнта
+	Save As Preset	Зберегти як набір
+	The gradient the Gradient tool paints with	Градієнт, яким малює інструмент «Градієнт»
+	Adds the current gradient to the Gradients panel	Додає поточний градієнт на панель «Градіенти»
 	Change Screen Mode  (F)	Змінити режим екрана  (F)
 	Change To:	Змінити на:
 	Clear All	Очистити все
@@ -2304,6 +2324,9 @@
 	Cancelled {label}	Скасовано: {label}
 	Esc to cancel	Esc для скасування
 	Opening {name}	Відкриття {name}
+	Saving {name}	Збереження {name}
+	A save to {name} is still running; try again when it finishes	Збереження в {name} ще триває; спробуйте ще раз, коли воно завершиться
+	{label} is writing the file and can no longer be cancelled	{label}: триває запис файлу, скасувати вже не можна
 	Opening {name}…	Відкриття {name}…
 	Opening…	Відкриття…
 	Reading…	Читання…
@@ -3402,4 +3425,44 @@ cameraRaw	Masking	Маскування
 	Cycle Orientation	Змінити орієнтацію
 	Set the overlay options for the Crop tool	Задати параметри накладання для інструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-клік перехопило робоче середовище, яке переміщує вікна через Alt-перетягування. Призначте для переміщення вікон клавішу Super або зафіксуйте Alt у меню Вікно › Клавіші-модифікатори.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Палітра кольорів (колір стилю шару)
+	Auto Hide Notifications	Автоматично приховувати сповіщення
+	Notification Duration (seconds)	Тривалість сповіщення (секунди)
+	Appearance Mode	Режим вигляду
+	Dark Theme	Темна тема
+	Light Theme	Світла тема
+	Next Appearance Mode	Наступний режим вигляду
+	Sync with system	Синхронізувати із системою
+	Active	Активна
+	Color Picker (Solid Color)	Вибір кольору (суцільний колір)
 	Straighten the image by drawing a line on it	Вирівняти зображення, намалювавши на ньому лінію
+	Set additional Crop options	Задати додаткові параметри кадрування
+	Show Cropped Area	Показати відсічену область
+	Enable Crop Shield	Увімкнути екран кадрування
+	Match Canvas	Як у полотна
+	Auto Adjust Opacity	Автоматично налаштовувати непрозорість
+	Crop Shield color	Колір екрана кадрування
+	Color Picker (Crop Shield Color)	Вибір кольору (колір екрана кадрування)
+	From Center	Від центру
+	Link radii	Зв'язати радіуси
+	Star Ratio:	Пропорції зірки:
+	Create Rectangle	Створити прямокутник
+	Create Ellipse	Створити еліпс
+	Create Triangle	Створити трикутник
+	Create Polygon	Створити багатокутник
+	Some brush presets could not be loaded	Не вдалося завантажити деякі набори пензлів
+	Retry saving presets	Повторити збереження наборів
+	Brush preset changes are not saved: {error}	Зміни наборів пензлів не збережено: {error}
+	Keep this tab open to retain your brushes.	Не закривайте цю вкладку, щоб зберегти пензлі.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Сховище браузера недоступне; пензлі діють лише в цьому сеансі. Не закривайте цю вкладку, щоб зберегти їх.
+	Saving brush presets… Keep this tab open until saving finishes.	Збереження наборів пензлів… Не закривайте цю вкладку, доки збереження не завершиться.
+	Reflect	Відбиття
+	Glow	Світіння
+	Negation	Заперечення
+	XOR	XOR
+	Color Burn (Paint.NET)	Затемнення основи (Paint.NET)
+	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light

@@ -25,6 +25,21 @@ fn app() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>) {
     (app, open, written)
 }
 
+#[test]
+fn pdn_save_requests_a_native_copy_without_overwriting_the_source() {
+    let (mut app, open, written) = app();
+    let st = app.session.active_mut().unwrap();
+    st.path = Some("/pics/layers.PDN".into());
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/layers.pcraft"));
+    answer(&open, Some(FileDialogAnswer::SaveTo("/pics/layers.pcraft".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/pics/layers.pcraft"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/layers.pcraft"));
+}
+
 /// The user answers the open dialog, from the dialog's own thread.
 fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
     let (_, reply) = open.borrow_mut().pop().expect("a dialog is open");
