@@ -2929,6 +2929,8 @@ fontWeight	Italic	기울임
 	Color Picker (Layer Style Color)	색상 피커 (레이어 스타일 색상)
 	Auto Hide Notifications	알림 자동 숨기기
 	Notification Duration (seconds)	알림 지속 시간(초)
+	Bundle Arrow-Key Nudges	방향키 이동을 하나로 묶기
+	Nudge Bundle Pause (ms)	이동 묶음 대기 시간(ms)
 	Appearance Mode	화면 모드
 	Dark Theme	어두운 테마
 	Light Theme	밝은 테마

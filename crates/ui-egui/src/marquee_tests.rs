@@ -421,12 +421,14 @@ fn hovering_inside_the_selection_shows_the_move_cursor() {
 }
 
 /// #1428: with a marquee, the arrow keys nudge the selection outline 1 px, ⇧ 10 px (Photoshop);
-/// each press is one undoable step.
+/// each press is one undoable step with Bundle Arrow-Key Nudges off, a run of them one step with
+/// it on (#2259, the default).
 #[test]
 fn arrow_keys_nudge_the_selection_outline() {
     use egui::Key;
-    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+    for (tool, bundle) in [(Tool::RectMarquee, false), (Tool::EllipseMarquee, false), (Tool::RectMarquee, true), (Tool::EllipseMarquee, true)] {
         let mut h = harness(tool);
+        h.state_mut().session.edit_prefs(|p| p.tools.bundle_nudges = bundle);
         press_at(&mut h, 100.0, 80.0, Modifiers::NONE);
         release_at(&mut h, 200.0, 160.0, Modifiers::NONE);
         let drawn = selection(&h);
@@ -445,9 +447,15 @@ fn arrow_keys_nudge_the_selection_outline() {
         h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
         h.run_steps(1);
         assert_eq!(selection(&h), shifted(-9, 9), "{tool:?} shift-left 10 px");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 4, "one step per press");
+        let nudges = h.state().session.active().unwrap().history.past_len() - steps;
         h.state_mut().session.undo();
-        assert_eq!(selection(&h), shifted(1, 9), "{tool:?} undo takes back one nudge");
+        if bundle {
+            assert_eq!(nudges, 1, "{tool:?} four quick presses, one step");
+            assert_eq!(selection(&h), drawn, "{tool:?} undo takes back the run");
+        } else {
+            assert_eq!(nudges, 4, "{tool:?} one step per press");
+            assert_eq!(selection(&h), shifted(1, 9), "{tool:?} undo takes back one nudge");
+        }
     }
 }
 

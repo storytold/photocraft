@@ -2389,6 +2389,8 @@ fontWeight	Italic	Kursiv
 	Color Picker (Layer Style Color)	Farbwähler (Ebenenstilfarbe)
 	Auto Hide Notifications	Benachrichtigungen automatisch ausblenden
 	Notification Duration (seconds)	Dauer der Benachrichtigung (Sekunden)
+	Bundle Arrow-Key Nudges	Pfeiltasten-Verschiebungen bündeln
+	Nudge Bundle Pause (ms)	Pause für gebündelte Verschiebungen (ms)
 	Appearance Mode	Erscheinungsmodus
 	Dark Theme	Dunkles Design
 	Light Theme	Helles Design

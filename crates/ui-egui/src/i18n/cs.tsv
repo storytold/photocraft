@@ -2350,6 +2350,8 @@ fontWeight	Italic	Kurzíva
 	Color Picker (Layer Style Color)	Výběr barvy (barva stylu vrstvy)
 	Auto Hide Notifications	Automaticky skrývat oznámení
 	Notification Duration (seconds)	Trvání oznámení (sekundy)
+	Bundle Arrow-Key Nudges	Slučovat posuny šipkami
+	Nudge Bundle Pause (ms)	Pauza slučování posunů (ms)
 	Appearance Mode	Režim vzhledu
 	Dark Theme	Tmavý motiv
 	Light Theme	Světlý motiv

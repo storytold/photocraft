@@ -2623,6 +2623,8 @@ fontWeight	Italic	Курсив
 	Color Picker (Layer Style Color)	Палитра цветов (цвет стиля слоя)
 	Auto Hide Notifications	Автоскрытие уведомлений
 	Notification Duration (seconds)	Длительность уведомления (секунды)
+	Bundle Arrow-Key Nudges	Объединять сдвиги стрелками
+	Nudge Bundle Pause (ms)	Пауза объединения сдвигов (мс)
 	Appearance Mode	Режим оформления
 	Dark Theme	Тёмная тема
 	Light Theme	Светлая тема

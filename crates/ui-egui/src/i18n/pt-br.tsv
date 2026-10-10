@@ -2778,6 +2778,8 @@ fontWeight	Italic	Itálico
 	Color Picker (Layer Style Color)	Seletor de cores (cor do estilo de camada)
 	Auto Hide Notifications	Ocultar notificações automaticamente
 	Notification Duration (seconds)	Duração da notificação (segundos)
+	Bundle Arrow-Key Nudges	Agrupar deslocamentos com as setas
+	Nudge Bundle Pause (ms)	Pausa para agrupar deslocamentos (ms)
 	Appearance Mode	Modo de aparência
 	Dark Theme	Tema escuro
 	Light Theme	Tema claro

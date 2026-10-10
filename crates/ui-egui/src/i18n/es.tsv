@@ -2418,6 +2418,8 @@ fontWeight	Italic	Cursiva
 	Color Picker (Layer Style Color)	Selector de color (color del estilo de capa)
 	Auto Hide Notifications	Ocultar notificaciones automáticamente
 	Notification Duration (seconds)	Duración de la notificación (segundos)
+	Bundle Arrow-Key Nudges	Agrupar desplazamientos con las flechas
+	Nudge Bundle Pause (ms)	Pausa para agrupar desplazamientos (ms)
 	Appearance Mode	Modo de apariencia
 	Dark Theme	Tema oscuro
 	Light Theme	Tema claro

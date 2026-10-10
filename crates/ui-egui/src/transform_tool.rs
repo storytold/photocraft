@@ -133,12 +133,30 @@ struct Steps {
     settled: Option<Step>,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// When the latest arrow-key nudge came (egui time) and the box it left.
+    nudged: Option<(f64, Step)>,
+    /// The nudge that moved the box since it last came to rest follows another one closely: it
+    /// joins that one's step instead of adding its own (#2259).
+    fold: bool,
 }
 
 impl Steps {
+    /// An arrow-key nudge at `now` moved the box from `before` to `after`. With `pause` (seconds,
+    /// `None`: nudges aren't bundled) it folds into the previous nudge's step when it came within
+    /// that time of it and found the box as that nudge left it, so a drag, an option edit, Undo
+    /// or Redo in between start a step of their own.
+    fn nudged(&mut self, before: &Step, after: Step, now: f64, pause: Option<f64>) {
+        self.fold = pause.is_some_and(|w| self.nudged.as_ref().is_some_and(|(at, left)| left == before && now >= *at && now - at <= w));
+        self.nudged = pause.map(|_| (now, after));
+    }
+
     /// Record a step if the box changed since it last came to rest.
     fn settle(&mut self, now: Step) {
         if self.settled.as_ref() == Some(&now) {
+            return;
+        }
+        if std::mem::take(&mut self.fold) && self.settled.is_some() {
+            self.settled = Some(now);
             return;
         }
         if let Some(prev) = self.settled.replace(now) {
@@ -922,9 +940,24 @@ fn start_steps(app: &mut PhotocraftApp) {
 pub fn track_steps(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return };
     if pv.gesture.is_some() || pv.warp_drag.is_some() || ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() {
+        // Whatever comes to rest after this is more than the nudge.
+        pv.steps.fold = false;
         return;
     }
     pv.steps.settle(Step::of(t));
+}
+
+/// Arrow keys while Free Transform is active: move the box (and its pivot) by `(dx, dy)`.
+/// Nudges that follow each other closely are one Undo step of the session (`nudge_bundle`).
+pub(crate) fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64) {
+    let (pause, now) = (crate::nudge_bundle::pause(app), app.nudge_bundle.now);
+    let Some(t) = app.ui.transform.as_mut().filter(|t| t.warp.is_none()) else { return };
+    let before = Step::of(t);
+    t.quad = t.quad.map(|q| [q[0] + dx, q[1] + dy]);
+    t.pivot = [t.pivot[0] + dx, t.pivot[1] + dy];
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.steps.nudged(&before, Step::of(t), now, pause);
+    }
 }
 
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and

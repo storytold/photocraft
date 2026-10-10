@@ -183,8 +183,11 @@ Values the app honours live: history states (every open document), effect-cache 
 theme, canvas colour and border, checkerboard size and colours (CPU and GPU canvas), gamut warning
 colour and opacity, guide/grid/smart-guide colours and styles, grid spacing and subdivisions, ruler
 units (rulers, Info panel, Image Size default unit), image interpolation (Image Size default),
-painting and other cursors, zoom with scroll wheel, Use Shift Key for Tool Switch, keyboard
-shortcuts, hidden and coloured menu items, autosave interval and crash recovery, and the history
+painting and other cursors, zoom with scroll wheel, Use Shift Key for Tool Switch, Bundle Arrow-Key
+Nudges and Nudge Bundle Pause (arrow keys sent with `ui.key` that follow each other within the pause
+nudge the layers, selection outline or Free Transform box as one history step; an agent calling
+`layer.translate` or `select.transformSelection` itself gets the same with a shared `coalesce` key),
+keyboard shortcuts, hidden and coloured menu items, autosave interval and crash recovery, and the history
 log text file. GPU on/off and the GPU tile size apply at the next launch.
 
 The desktop app stores them in `preferences.json` in the platform config directory (macOS

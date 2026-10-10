@@ -2757,6 +2757,8 @@ fontWeight	Italic	Miring
 	Color Picker (Layer Style Color)	Pemilih Warna (Warna Gaya Lapisan)
 	Auto Hide Notifications	Sembunyikan notifikasi secara otomatis
 	Notification Duration (seconds)	Durasi notifikasi (detik)
+	Bundle Arrow-Key Nudges	Gabungkan pergeseran tombol panah
+	Nudge Bundle Pause (ms)	Jeda penggabungan pergeseran (ms)
 	Appearance Mode	Mode tampilan
 	Dark Theme	Tema gelap
 	Light Theme	Tema terang

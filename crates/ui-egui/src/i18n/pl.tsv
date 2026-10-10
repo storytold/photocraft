@@ -3372,6 +3372,8 @@ cameraRaw	Roughness	Chropowatość
 	Color Picker (Layer Style Color)	Próbnik kolorów (kolor stylu warstwy)
 	Auto Hide Notifications	Automatycznie ukrywaj powiadomienia
 	Notification Duration (seconds)	Czas trwania powiadomienia (sekundy)
+	Bundle Arrow-Key Nudges	Grupuj przesunięcia strzałkami
+	Nudge Bundle Pause (ms)	Przerwa grupowania przesunięć (ms)
 	Appearance Mode	Tryb wyglądu
 	Dark Theme	Ciemny motyw
 	Light Theme	Jasny motyw
