@@ -66,8 +66,7 @@ fn cmd_enter_while_drawing_finishes_the_path_and_loads_it() {
     let mut h = harness();
     h.state_mut().ui.tool = Tool::Pen;
     let p = |x: f64, y: f64| [[x, y], [x, y], [x, y]];
-    h.state_mut().ui.pen =
-        Some(PenPath { knots: vec![p(20.0, 20.0), p(120.0, 20.0), p(120.0, 80.0)], unlinked: Vec::new(), dragging: false, adjusting_last: false });
+    h.state_mut().ui.pen = Some(PenPath { knots: vec![p(20.0, 20.0), p(120.0, 20.0), p(120.0, 80.0)], ..Default::default() });
     h.run_steps(2);
     press(&mut h, Key::Enter, command());
     let app = h.state();
@@ -77,8 +76,7 @@ fn cmd_enter_while_drawing_finishes_the_path_and_loads_it() {
     // Plain ↩ still only finishes a path.
     let mut h = harness();
     h.state_mut().ui.tool = Tool::Pen;
-    h.state_mut().ui.pen =
-        Some(PenPath { knots: vec![p(20.0, 20.0), p(120.0, 20.0), p(120.0, 80.0)], unlinked: Vec::new(), dragging: false, adjusting_last: false });
+    h.state_mut().ui.pen = Some(PenPath { knots: vec![p(20.0, 20.0), p(120.0, 20.0), p(120.0, 80.0)], ..Default::default() });
     h.run_steps(2);
     press(&mut h, Key::Enter, Modifiers::NONE);
     assert!(h.state().session.active().unwrap().doc.work_path.is_some());

@@ -186,6 +186,53 @@ pub fn anchors_in(path: &Path, [x0, y0, x1, y1]: [f64; 4]) -> Vec<[usize; 2]> {
     out
 }
 
+/// The Curvature Pen's knots, `[anchor, in, out]`, through `anchors`: a smooth curve that passes
+/// through every anchor, Catmull-Rom style. An inner anchor's handles lie on the line parallel
+/// to its neighbours' chord (so they are collinear), each a third of the distance to the
+/// neighbour on its side long (the chordal scaling that keeps uneven spacing from overshooting).
+/// The ends of an open path aim at their neighbour's nearer handle. `corners[i]` retracts anchor
+/// `i`'s handles (a corner point); a missing entry is smooth. Coincident points give retracted
+/// handles, never NaN.
+pub fn curvature_knots(anchors: &[[f64; 2]], corners: &[bool], closed: bool) -> Vec<[[f64; 2]; 3]> {
+    let n = anchors.len();
+    let mut knots: Vec<[[f64; 2]; 3]> = anchors.iter().map(|&a| [a; 3]).collect();
+    let dist = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
+    let unit = |a: [f64; 2], b: [f64; 2]| {
+        let l = dist(a, b);
+        (l > 1e-9).then(|| [(b[0] - a[0]) / l, (b[1] - a[1]) / l])
+    };
+    let corner = |i: usize| corners.get(i).copied().unwrap_or(false);
+    let inner = |i: usize| closed || (i > 0 && i + 1 < n);
+    for (i, &p) in anchors.iter().enumerate() {
+        if n < 3 || corner(i) || !inner(i) {
+            continue;
+        }
+        let prev = anchors[(i + n - 1) % n];
+        let next = anchors[(i + 1) % n];
+        let Some(d) = unit(prev, next).or_else(|| unit(p, next)) else { continue };
+        let (li, lo) = (dist(prev, p) / 3.0, dist(p, next) / 3.0);
+        knots[i] = [p, [p[0] - d[0] * li, p[1] - d[1] * li], [p[0] + d[0] * lo, p[1] + d[1] * lo]];
+    }
+    if !closed && n >= 3 {
+        for (end, nb, take_in) in [(0, 1, true), (n - 1, n - 2, false)] {
+            if corner(end) {
+                continue;
+            }
+            let p = anchors[end];
+            let aim = if take_in { knots[nb][1] } else { knots[nb][2] };
+            let Some(d) = unit(p, aim) else { continue };
+            let l = dist(p, anchors[nb]) / 3.0;
+            let h = [p[0] + d[0] * l, p[1] + d[1] * l];
+            if take_in {
+                knots[end][2] = h;
+            } else {
+                knots[end][1] = h;
+            }
+        }
+    }
+    knots
+}
+
 fn eval(seg: &[Point; 4], t: f64) -> Point {
     let u = 1.0 - t;
     let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);

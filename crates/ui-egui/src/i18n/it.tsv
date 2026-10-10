@@ -2495,3 +2495,8 @@ fontWeight	Italic	Corsivo
 	Previous Document	Documento precedente
 	W x H x Resolution	L x A x Risoluzione
 	Front Image	Immagine in primo piano
+	Freeform Pen Tool	Strumento Penna a mano libera
+	Curvature Pen Tool	Strumento Penna curvatura
+	Curve Fit:	Adattamento curva:
+	Drag: draw freehand · Release on the start point: close	Trascina: disegna a mano libera · Rilascia sul punto iniziale: chiudi
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Click: punto morbido · Doppio click: angolo · Trascina un punto: sposta · Click primo punto: chiudi · {key} termina

@@ -3532,3 +3532,8 @@ cameraRaw	Masking	Маскування
 	Previous Document	Попередній документ
 	W x H x Resolution	Ш x В x Роздільна здатність
 	Front Image	Зображення переднього плану
+	Freeform Pen Tool	Інструмент «Довільне перо»
+	Curvature Pen Tool	Інструмент «Перо кривизни»
+	Curve Fit:	Точність кривої:
+	Drag: draw freehand · Release on the start point: close	Перетягування: малювати від руки · Відпускання на початковій точці: замкнути
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Клацання: плавна точка · Подвійне клацання: кут · Перетягування точки: перемістити · Клацання першої точки: замкнути · {key}: завершити

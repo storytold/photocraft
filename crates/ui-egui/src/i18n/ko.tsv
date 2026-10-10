@@ -3003,3 +3003,8 @@ fontWeight	Italic	기울임
 	Previous Document	이전 문서
 	W x H x Resolution	폭 x 높이 x 해상도
 	Front Image	전면 이미지
+	Freeform Pen Tool	자유 형태 펜 도구
+	Curvature Pen Tool	곡률 펜 도구
+	Curve Fit:	곡선 맞춤:
+	Drag: draw freehand · Release on the start point: close	드래그: 자유롭게 그리기 · 시작점에서 놓기: 닫기
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	클릭: 매끄러운 점 · 더블 클릭: 모서리 · 점 드래그: 이동 · 첫 점 클릭: 닫기 · {key}: 완료

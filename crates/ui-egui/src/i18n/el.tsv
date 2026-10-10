@@ -3533,3 +3533,8 @@ fontWeight	Thin	Πολύ λεπτά
 	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση
 	Front Image	Μπροστινή εικόνα
+	Freeform Pen Tool	Πένα ελεύθερης σχεδίασης
+	Curvature Pen Tool	Πένα καμπυλότητας
+	Curve Fit:	Προσαρμογή καμπύλης:
+	Drag: draw freehand · Release on the start point: close	Σύρσιμο: ελεύθερη σχεδίαση · Άφημα στο αρχικό σημείο: κλείσιμο
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Κλικ: ομαλό σημείο · Διπλό κλικ: γωνία · Σύρσιμο σημείου: μετακίνηση · Κλικ στο πρώτο σημείο: κλείσιμο · {key}: τέλος
