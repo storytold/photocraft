@@ -843,6 +843,10 @@ pub struct ColorPanelState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
+    /// The last tool used in each shortcut group (the tools sharing a key, [`Tool::key`]), at most
+    /// one per group: the group's key brings it back, as in Photoshop (#2608).
+    #[serde(default)]
+    pub group_tools: Vec<Tool>,
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
     pub recent_files: Vec<String>,
@@ -1019,6 +1023,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             tool: Tool::Brush,
+            group_tools: Vec::new(),
             recent_files: Vec::new(),
             text_edit: None,
             type_transform: None,
@@ -1087,6 +1092,20 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Records the current tool as the last one used in its shortcut group.
+    pub fn remember_group_tool(&mut self) {
+        let tool = self.tool;
+        if !self.group_tools.contains(&tool) {
+            self.group_tools.retain(|t| t.key() != tool.key());
+            self.group_tools.push(tool);
+        }
+    }
+
+    /// The last tool used in the shortcut group of `key`, if any.
+    pub fn group_tool(&self, key: char) -> Option<Tool> {
+        self.group_tools.iter().copied().find(|t| t.key() == key)
+    }
+
     pub fn alloc_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
