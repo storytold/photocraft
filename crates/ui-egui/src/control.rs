@@ -214,6 +214,26 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
     [p.x, p.y]
 }
 
+/// Modifier flags of a request, top-level or grouped under `modifiers`.
+///
+/// Off the Mac, Ctrl is the shortcut key, so egui wants `ctrl` and `command` to carry the same
+/// value (`egui::Modifiers::command`: "On Windows and Linux, set this to the same value as
+/// `ctrl`") and shortcuts are matched on `command`. A real Ctrl press arrives with both set, so
+/// a request that sets only one of them gets both here and reaches the same shortcuts. On the Mac
+/// they are different keys and stay apart: `command` is the ⌘ key, `ctrl` the Control key.
+fn modifiers_from(p: &Value) -> egui::Modifiers {
+    let m = p.get("modifiers").unwrap_or(p);
+    let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let (ctrl, command) = (flag("ctrl"), flag("command"));
+    egui::Modifiers {
+        shift: flag("shift"),
+        alt: flag("alt"),
+        command: if cfg!(target_os = "macos") { command } else { command || ctrl },
+        mac_cmd: cfg!(target_os = "macos") && command,
+        ctrl: if cfg!(target_os = "macos") { ctrl } else { command || ctrl },
+    }
+}
+
 /// The `dialog` id of the shell's own dialog (`workspace_ui`) in `ui.inspect` and `ui.dialog.*`.
 const SHELL_DIALOG: &str = "shell";
 
@@ -686,22 +706,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let mods = egui::Modifiers {
-                shift: flag("shift"),
-                alt: flag("alt"),
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                ctrl: flag("ctrl"),
-            };
+            let mods = modifiers_from(p);
             if let Some(t) = s("tool").and_then(Tool::from_name) {
                 app.ui.tool = t;
             }
             // Space held: the Crop tool moves the frame being drawn, a marquee, lasso or shape
-            // being drawn moves instead of growing (hold_keys.rs).
-            let space = flag("space");
+            // being drawn moves instead of growing (hold_keys.rs). Like a modifier flag, it may be
+            // top-level or grouped under "modifiers".
+            let space = p.get("modifiers").unwrap_or(p).get("space").and_then(Value::as_bool).unwrap_or(false);
             crate::crop_ui::set_space(app, space);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.0);
@@ -801,16 +813,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.key" => {
             let Some(name) = s("key") else { return err("missing `key`") };
             let Some(key) = egui::Key::from_name(name) else { return err(format!("unknown key `{name}`")) };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let modifiers = egui::Modifiers {
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                shift: flag("shift"),
-                alt: flag("alt"),
-                ctrl: flag("ctrl"),
-            };
+            let modifiers = modifiers_from(p);
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
             ctx.request_repaint();
@@ -1886,5 +1889,40 @@ mod tests {
             assert_eq!(app.synthetic.len(), events);
             app.synthetic.clear();
         }
+    }
+
+    /// A key event's modifiers, as `ui.key` queued them.
+    fn key_modifiers(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> egui::Modifiers {
+        app.synthetic.clear();
+        let (req, _rx) = ControlRequest::new("ui.key", params.clone());
+        assert!(matches!(handle(app, ctx, &req), Outcome::AfterInput), "{params}");
+        match app.synthetic.first() {
+            Some(egui::Event::Key { modifiers, .. }) => *modifiers,
+            other => panic!("{params}: expected a key event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ui_key_ctrl_reaches_shortcuts_like_a_real_ctrl_press() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let ctrl = key_modifiers(&mut app, &ctx, json!({"key":"N","ctrl":true}));
+        let command = key_modifiers(&mut app, &ctx, json!({"key":"N","command":true}));
+        let grouped = key_modifiers(&mut app, &ctx, json!({"key":"N","modifiers":{"ctrl":true}}));
+        assert_eq!(ctrl, grouped, "a grouped flag must match the top-level one");
+        if cfg!(target_os = "macos") {
+            // Two different keys: Control is not ⌘, and only ⌘ matches a shortcut.
+            assert!(ctrl.ctrl && !ctrl.command && !ctrl.mac_cmd, "{ctrl:?}");
+            assert!(command.command && command.mac_cmd && !command.ctrl, "{command:?}");
+        } else {
+            // One key under two names, and shortcuts are matched on `command`, so asking for
+            // either must reach them: Ctrl+N has to open New Document, not do nothing.
+            assert_eq!(ctrl, command, "ctrl and command are the same key off the Mac");
+            assert!(ctrl.command && ctrl.ctrl && !ctrl.mac_cmd, "{ctrl:?}");
+        }
+        let plain = key_modifiers(&mut app, &ctx, json!({"key":"N"}));
+        assert_eq!(plain, egui::Modifiers::default(), "{plain:?}");
+        let shift_alt = key_modifiers(&mut app, &ctx, json!({"key":"N","shift":true,"alt":true}));
+        assert!(shift_alt.shift && shift_alt.alt && !shift_alt.command && !shift_alt.ctrl, "{shift_alt:?}");
     }
 }
