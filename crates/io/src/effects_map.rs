@@ -106,27 +106,34 @@ fn contour(d: &Descriptor, key: &str) -> Contour {
         _ => String::new(),
     };
     let mut points = Vec::new();
+    let mut corners = Vec::new();
     if let Some(Value::List(items)) = c.get("Crv ") {
         for it in items {
             if let Value::Descriptor(p) = it {
                 points.push(CurvePoint { input: f(p, "Hrzn", 0.0) / 255.0, output: f(p, "Vrtc", 0.0) / 255.0 });
+                // `Cnty` (continuity): false marks a corner point; absent means smooth.
+                corners.push(matches!(p.get("Cnty"), Some(Value::Boolean(false))));
             }
         }
     }
+    if !corners.contains(&true) {
+        corners.clear();
+    }
     let linear = points.len() == 2 && points[0].input == 0.0 && points[0].output == 0.0 && points[1].input == 1.0 && points[1].output == 1.0;
-    if points.is_empty() || (linear && (name.is_empty() || name == "Linear")) { Contour::Linear } else { Contour::Custom { name, points } }
+    if points.is_empty() || (linear && (name.is_empty() || name == "Linear")) { Contour::Linear } else { Contour::Custom { name, points, corners } }
 }
 fn contour_value(c: &Contour) -> Value {
     let (name, points) = match c {
         Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
-        Contour::Custom { name, points } => (name.clone(), points.clone()),
+        Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
     };
     let pts = points
         .iter()
-        .map(|p| {
-            Value::Descriptor(
-                Descriptor::new("CrPt").with("Hrzn", Value::Double(f64::from(p.input * 255.0))).with("Vrtc", Value::Double(f64::from(p.output * 255.0))),
-            )
+        .enumerate()
+        .map(|(i, p)| {
+            let d = Descriptor::new("CrPt").with("Hrzn", Value::Double(f64::from(p.input * 255.0))).with("Vrtc", Value::Double(f64::from(p.output * 255.0)));
+            // Photoshop writes no `Cnty` (continuity) on smooth points; a corner carries `Cnty` false.
+            Value::Descriptor(if c.is_corner(i) { d.with("Cnty", Value::Boolean(false)) } else { d })
         })
         .collect();
     Value::Descriptor(Descriptor::new("ShpC").with("Nm  ", Value::Text(UnicodeString::new_nul(&name))).with("Crv ", Value::List(pts)))
@@ -628,6 +635,7 @@ mod tests {
                 contour: Contour::Custom {
                     name: "Cone".into(),
                     points: vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 0.5, output: 1.0 }, CurvePoint { input: 1.0, output: 0.0 }],
+                    corners: vec![false, true, false],
                 },
                 ..match Effect::default_drop_shadow() {
                     Effect::DropShadow(s) => s,

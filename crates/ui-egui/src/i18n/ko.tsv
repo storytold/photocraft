@@ -2854,6 +2854,19 @@ cameraRaw	Color	색상
 	Domed	돔
 	Domed (Inverted)	돔(반전)
 	Diagonal (Descending)	대각선(내림)
+	Contour Editor	윤곽선 편집기
+	Anti-aliased	앤티 앨리어스
+	Corner	모퉁이
+	Gloss Contour	광택 윤곽선
+	Contour	윤곽선
+	Cone - Inverted	원뿔 - 반전
+	Cove - Deep	후미 - 깊게
+	Cove - Shallow	후미 - 얕게
+	Half Round	반원
+	Ring - Double	링 - 이중
+	Rolling Slope - Descending	구르는 경사 - 내림차순
+	Rounded Steps	둥근 계단
+	Sawtooth 1	톱니 1
 
 	Red Eye Tool	적목 현상 도구
 	Red Eye	적목 현상

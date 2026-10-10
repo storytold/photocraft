@@ -878,7 +878,7 @@ fn dilate(s: &Map, r: f32) -> Map {
 fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
     match c {
         Contour::Linear => None,
-        Contour::Custom { points, .. } => Some(crate::adjust::curve_lut(points)),
+        Contour::Custom { points, corners, .. } => Some(crate::adjust::contour_curve_lut(points, corners)),
     }
 }
 
@@ -2832,7 +2832,11 @@ mod tests {
             photocraft_doc::adjust::CurvePoint { input: 0.5, output: 1.0 },
             photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.0 },
         ];
-        c.contour = Some(photocraft_doc::BevelContour { contour: Contour::Custom { name: "fold".into(), points: fold }, range: 1.0, anti_alias: false });
+        c.contour = Some(photocraft_doc::BevelContour {
+            contour: Contour::Custom { name: "fold".into(), points: fold, corners: vec![] },
+            range: 1.0,
+            anti_alias: false,
+        });
         let (b, _) = bevel_maps(&shape, &c, &l, &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES));
         let diff: f32 = a[1].v.iter().zip(&b[1].v).map(|(x, y)| (x - y).abs()).sum();
         assert!(diff > 5.0, "{diff}");

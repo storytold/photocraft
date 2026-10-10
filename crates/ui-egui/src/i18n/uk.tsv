@@ -2513,6 +2513,19 @@ cameraRaw	Roughness	Шорсткість
 	Domed	Купол
 	Domed (Inverted)	Купол (інвертований)
 	Diagonal (Descending)	Діагональ (спадна)
+	Contour Editor	Редактор контуру
+	Anti-aliased	Згладжування
+	Corner	Кут
+	Gloss Contour	Контур глянцю
+	Contour	Контур
+	Cone - Inverted	Конус - інвертований
+	Cove - Deep	Бухта - глибока
+	Cove - Shallow	Бухта - мілка
+	Half Round	Півколо
+	Ring - Double	Кільце - подвійне
+	Rolling Slope - Descending	Хвилястий схил - низхідний
+	Rounded Steps	Заокруглені сходинки
+	Sawtooth 1	Пилка 1
 	Linear	Лінійний
 
 	Red Eye Tool	Інструмент «Червоні очі»

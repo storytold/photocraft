@@ -58,7 +58,24 @@ pub enum Contour {
     #[default]
     Linear,
     /// Custom curve (input → output), both `0..=1`.
-    Custom { name: String, points: Vec<CurvePoint> },
+    Custom {
+        name: String,
+        points: Vec<CurvePoint>,
+        /// Corner (non-continuous) flags, parallel to `points`: the curve bends sharply at a
+        /// corner point instead of passing smoothly through it. Missing entries are smooth.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        corners: Vec<bool>,
+    },
+}
+
+impl Contour {
+    /// Whether point `i` of a custom contour is a corner.
+    pub fn is_corner(&self, i: usize) -> bool {
+        match self {
+            Contour::Linear => false,
+            Contour::Custom { corners, .. } => corners.get(i).copied().unwrap_or(false),
+        }
+    }
 }
 
 /// Paint used by strokes and glows.

@@ -2243,6 +2243,21 @@ cameraRaw	Blending	混合
 	Domed	圓頂
 	Domed (Inverted)	圓頂（反轉）
 	Diagonal (Descending)	對角線（下降）
+	Contour Editor	輪廓編輯器
+	Anti-aliased	消除鋸齒
+	Corner	角點
+	Gloss Contour	光澤輪廓
+	Contour	輪廓
+	Cone - Inverted	錐形 - 反轉
+	Cove - Deep	凹槽 - 深
+	Cove - Shallow	凹槽 - 淺
+	Gaussian	高斯
+	Half Round	半圓
+	Ring	環形
+	Ring - Double	環形 - 雙
+	Rolling Slope - Descending	滾動斜坡 - 遞減
+	Rounded Steps	圓角梯形
+	Sawtooth 1	鋸齒 1
 
 	Red Eye Tool	紅眼工具
 	Red Eye	紅眼

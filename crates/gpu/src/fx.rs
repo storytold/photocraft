@@ -267,7 +267,7 @@ pub(crate) fn blur_kernel(size: f32) -> Option<(i32, Vec<f32>)> {
 fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
     match c {
         Contour::Linear => None,
-        Contour::Custom { points, .. } => Some(photocraft_compose::adjust::curve_lut(points)),
+        Contour::Custom { points, corners, .. } => Some(photocraft_compose::adjust::contour_curve_lut(points, corners)),
     }
 }
 

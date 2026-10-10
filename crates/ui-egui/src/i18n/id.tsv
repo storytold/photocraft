@@ -2676,6 +2676,21 @@ cameraRaw	Blending	Pembauran
 	Domed	Kubah
 	Domed (Inverted)	Kubah (Terbalik)
 	Diagonal (Descending)	Diagonal (Menurun)
+	Contour Editor	Editor Kontur
+	Anti-aliased	Dihaluskan
+	Corner	Sudut
+	Gloss Contour	Kontur Kilap
+	Contour	Kontur
+	Cone - Inverted	Kerucut - Terbalik
+	Cove - Deep	Teluk - Dalam
+	Cove - Shallow	Teluk - Dangkal
+	Gaussian	Gaussian
+	Half Round	Setengah Bulat
+	Ring	Cincin
+	Ring - Double	Cincin - Ganda
+	Rolling Slope - Descending	Lereng Bergelombang - Menurun
+	Rounded Steps	Tangga Bulat
+	Sawtooth 1	Gigi Gergaji 1
 
 	Red Eye Tool	Alat Mata Merah
 	Pupil Size	Ukuran pupil

@@ -61,6 +61,7 @@ pub mod path;
 pub mod patterns;
 pub mod pixels;
 pub mod resources;
+pub mod shc;
 pub mod slices;
 pub mod tagged;
 #[cfg(any(test, feature = "testgen"))]
