@@ -1078,7 +1078,7 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: has_pixel_or_channel,
+            enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 let eyedropped = if kind == "curves" { crate::adjust_params::curves_eyedropper_from_params(s, p)? } else { None };
@@ -1087,6 +1087,11 @@ fn build() -> Vec<CommandSpec> {
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
                 };
                 let label = adj.label().to_string();
+                // A smart object records the adjustment as a smart filter (Photoshop), which
+                // re-runs from the source instead of baking into a copy of the pixels.
+                if crate::adjust_cmds::adjust_as_smart_filter(s, &kind, &label, p)? {
+                    return Ok(Value::Null);
+                }
                 destructive_adjust(s, &label, adj, p)
             },
             journal: true,
