@@ -5,10 +5,12 @@
 //! Wayland, desktop file pickers and subprocess dependencies.
 
 #![cfg(target_os = "android")]
-#![forbid(unsafe_code)]
+// Exporting android_main and the JNI callback requires unsafe symbol attributes.
+// The entrypoints and their bodies do not dereference raw pointers.
 
 mod picker;
 mod services;
+mod spen;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -16,7 +18,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Once;
 
-use android_activity::AndroidApp;
+use android_activity::{AndroidApp, input::Axis};
 use photocraft_engine::Session;
 use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{PhotocraftApp, FileDialogReply, FileDialogRequest};
@@ -31,6 +33,12 @@ fn android_main(android_app: AndroidApp) {
     INIT_LOGGER.call_once(|| {
         android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info));
     });
+
+    // Non-position axes are opt-in in android-activity. Winit still owns the
+    // input queue; we must never drain the same queue ourselves.
+    android_app.enable_motion_axis(Axis::Pressure);
+    android_app.enable_motion_axis(Axis::Tilt);
+    android_app.enable_motion_axis(Axis::Orientation);
 
     let data_dir = android_app.internal_data_path();
     let documents_dir = data_dir.as_ref().map(|path| path.join("Documents"));
@@ -55,6 +63,7 @@ fn android_main(android_app: AndroidApp) {
         PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
         let mut app = PhotocraftApp::new(Session::new(), services::android_services(data_dir, dialogs.clone()));
         app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
+        spen::install(Some(app.stylus.feed.clone()));
         photocraft_ui_egui::android_touch::configure_touch_ui(&cc.egui_ctx);
         if let Some(state) = cc.wgpu_render_state.clone() {
             app.perf.gpu_info.set_adapter(&state.adapter.get_info());
@@ -70,6 +79,7 @@ fn android_main(android_app: AndroidApp) {
         }))
     }));
 
+    spen::install(None);
     if let Err(err) = result {
         log::error!("PhotoCraft Android Activity terminated: {err}");
     }
@@ -103,5 +113,12 @@ impl eframe::App for AndroidShell {
                 self.picker = None;
             }
         }
+    }
+}
+
+impl Drop for AndroidShell {
+    fn drop(&mut self) {
+        // A re-created Activity must not write samples into the old session.
+        spen::install(None);
     }
 }
