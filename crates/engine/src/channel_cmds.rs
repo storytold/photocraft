@@ -842,27 +842,40 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------------------------------------------------------------------------------------
 // Quick Mask
 
-/// Quick Mask channel for the current selection: white where selected; no selection = an empty
-/// mask (nothing masked), as in Photoshop.
+/// Quick Mask channel for the current selection: white where selected. No selection is an empty
+/// mask that shows no colour: white (nothing masked, as in Photoshop) when the colour indicates
+/// masked areas, black (nothing selected) when it indicates selected areas. White and "no
+/// selection" are told apart by [`Document::quick_mask_unselected`].
 fn quick_mask_from(doc: &Document, o: &QuickMaskOptions) -> AlphaChannel {
     let area = doc.bounds();
     let fmt = channel_format(doc);
     let surface = match &doc.selection {
         Some(s) => plane_surface(&sel::mask_from_surface(Some(s), area), area, fmt),
-        None => {
-            let mut s = Surface::new(fmt);
-            s.fill_rect(area, &[1.0]);
-            s
-        }
+        None => unselected_surface(area, fmt, o.indicates),
     };
     AlphaChannel { color: o.color, opacity: o.opacity, indicates: o.indicates, ..AlphaChannel::new("Quick Mask", surface) }
 }
 
-/// The selection a Quick Mask channel turns back into (an untouched or all-white mask = none).
+/// The colourless, nothing-selected Quick Mask for `indicates`.
+fn unselected_surface(area: Rect, fmt: PixelFormat, indicates: ColorIndicates) -> Surface {
+    let mut s = Surface::new(fmt);
+    if indicates != ColorIndicates::SelectedAreas {
+        s.fill_rect(area, &[1.0]);
+    }
+    s
+}
+
+/// Every pixel of `vals` reads as `target` on the 8-bit grid.
+fn uniform(vals: &[f32], target: f32) -> bool {
+    vals.iter().all(|v| (v - target).abs() <= 0.5 / 255.0)
+}
+
+/// The selection a Quick Mask channel turns back into. All white is Select All, unless Quick
+/// Mask was entered with no selection and the white is its untouched masked-areas start.
 fn selection_from(doc: &Document, ch: &AlphaChannel) -> Option<Surface> {
     let area = doc.bounds();
     let vals = read_plane(&ch.surface, area);
-    if vals.iter().all(|v| *v >= 1.0 - 0.5 / 255.0) {
+    if doc.quick_mask_unselected && ch.indicates != ColorIndicates::SelectedAreas && uniform(&vals, 1.0) {
         return None;
     }
     sel::combine(None, &vals, area, SelectionMode::Replace)
@@ -878,6 +891,7 @@ fn quick_mask(s: &mut Session, p: &Value) -> Result<Value> {
     if want {
         s.edit("Edit in Quick Mask", |doc, _| {
             doc.quick_mask = Some(quick_mask_from(doc, &opts));
+            doc.quick_mask_unselected = doc.selection.is_none();
             doc.selection = None;
             Ok(())
         })?;
@@ -1269,7 +1283,18 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
             if s.active().is_some_and(|d| d.doc.quick_mask.is_some()) {
                 let o = s.quick_mask_options;
                 s.edit("Quick Mask Options", |doc, _| {
+                    let area = doc.bounds();
+                    let fmt = channel_format(doc);
+                    let unselected = doc.quick_mask_unselected;
                     if let Some(q) = &mut doc.quick_mask {
+                        // An untouched no-selection mask stays colourless (nothing selected)
+                        // when the colour switches between masked and selected areas.
+                        if unselected && q.indicates != o.indicates {
+                            let empty = if q.indicates == ColorIndicates::SelectedAreas { 0.0 } else { 1.0 };
+                            if uniform(&read_plane(&q.surface, area), empty) {
+                                q.surface = unselected_surface(area, fmt, o.indicates);
+                            }
+                        }
                         q.color = o.color;
                         q.opacity = o.opacity;
                         q.indicates = o.indicates;

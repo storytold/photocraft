@@ -300,6 +300,35 @@ mod tests {
     }
 
     #[test]
+    fn quick_mask_without_selection_shows_no_overlay_in_either_mode() {
+        // #2743: nothing selected is a colourless mask, whichever way the colour reads.
+        for (before, after) in [(None, Some("selected")), (Some("selected"), None), (Some("selected"), Some("masked"))] {
+            let mut s = session();
+            if let Some(i) = before {
+                s.execute("channel.options", json!({"channel": "quickMask", "indicates": i})).unwrap();
+            }
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            let st = s.active().unwrap();
+            let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+            assert!(px.iter().all(|p| *p == Color32::TRANSPARENT), "{before:?}");
+            if let Some(i) = after {
+                s.execute("channel.options", json!({"channel": "quickMask", "indicates": i})).unwrap();
+                let st = s.active().unwrap();
+                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+                assert!(px.iter().all(|p| *p == Color32::TRANSPARENT), "{before:?} → {i}");
+            }
+        }
+        // Selected Areas with Select All: the whole canvas is coloured.
+        let mut s = session();
+        s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+        assert!(px.iter().all(|p| *p == Color32::from_rgba_premultiplied(128, 0, 0, 128)));
+    }
+
+    #[test]
     fn layer_mask_views_and_damage_on_the_downsampled_grid() {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 37, "height": 21})).unwrap();

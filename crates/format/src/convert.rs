@@ -242,6 +242,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         work_path: d.work_path.clone(),
         clipping_path: d.clipping_path.clone(),
         quick_mask: d.quick_mask.as_ref().map(|c| channel_m(c, sink)),
+        quick_mask_unselected: d.quick_mask_unselected,
         patterns: d
             .patterns
             .iter()
@@ -602,6 +603,7 @@ impl Loader<'_> {
             work_path: m.work_path.clone(),
             clipping_path: m.clipping_path.clone(),
             quick_mask,
+            quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: m.color_table.clone(),
             duotone: m.duotone.clone(),
