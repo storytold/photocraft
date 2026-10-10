@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["vendor/winit"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
 
 [workspace.package]
@@ -107,3 +108,7 @@ opt-level = 3
 opt-level = 3
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
+
+# Local macOS first-key Korean IME repair; see vendor/winit/PHOTOCRAFT-PATCH.md.
+[patch.crates-io]
+winit = { path = "vendor/winit" }
