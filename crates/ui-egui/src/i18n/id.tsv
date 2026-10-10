@@ -1284,6 +1284,12 @@
 	Rename…	Ganti Nama…
 	Resample	Resample
 	Reset All to Defaults	Reset Semua ke Default
+	Import Shortcuts…	Impor Pintasan…
+	Load a keyboard shortcut set saved as .kys	Muat set pintasan keyboard yang disimpan sebagai .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} pintasan diimpor dari {file}. Klik OK untuk menyimpannya.
+	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
+	Keyboard shortcuts imported	Pintasan keyboard diimpor
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan keyboard Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default
@@ -2717,6 +2723,19 @@ fontWeight	Italic	Miring
 	Cycle Orientation	Ganti Orientasi
 	Set the overlay options for the Crop tool	Atur opsi overlay untuk alat Crop
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-klik diambil oleh desktop, yang memindahkan jendela dengan Alt-seret. Atur tombol pemindah jendelanya ke Super, atau kunci Alt di Jendela › Tombol Pengubah.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Pemilih Warna (Warna Gaya Lapisan)
+	Auto Hide Notifications	Sembunyikan notifikasi secara otomatis
+	Notification Duration (seconds)	Durasi notifikasi (detik)
+	Appearance Mode	Mode tampilan
+	Dark Theme	Tema gelap
+	Light Theme	Tema terang
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Mode tampilan berikutnya
+	Sync with system	Sinkronkan dengan sistem
+	Active	Aktif
 	Color Picker (Solid Color)	Pemilih Warna (Warna Solid)
 	Straighten the image by drawing a line on it	Luruskan gambar dengan menggambar garis di atasnya
 	Set additional Crop options	Atur opsi Crop tambahan

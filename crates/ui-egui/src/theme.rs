@@ -1,6 +1,6 @@
 //! Design system: themes, colour tokens, radii, typography.
 //!
-//! - **Studio** (default): near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
+//! - **Studio**: near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
 //!   accent. Modelled on the look of modern pro editors (such as Photoshop 2025).
 //! - **Studio Light**: the same system on light surfaces.
 //! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
@@ -535,19 +535,30 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// [`install_fonts`] with the CJK fallback fonts taken from `cjk` (tests swap the sources).
 pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let mut fonts = FontDefinitions::default();
-    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
+    // The bundled fonts are inflated on first use (photocraft_text::fonts). Should one ever fail
+    // to inflate (empty bytes), it is left out and egui's default fonts draw that text.
+    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| -> Option<String> {
+        if bytes.is_empty() {
+            log::error!("bundled font {name} is unavailable; using the default UI font");
+            return None;
+        }
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+        Some(name.to_owned())
     };
-    add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR);
-    add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM);
-    add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD);
-    add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR);
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
+    let inter = add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR.as_slice());
+    let medium = add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM.as_slice());
+    let semibold = add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD.as_slice());
+    let mono = add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR.as_slice());
+    if let Some(inter) = inter {
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, inter);
+    }
+    if let Some(mono) = mono {
+        fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
+    }
     // Named weights fall back to the default stack for missing glyphs.
-    let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
-    for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
-        let mut stack = vec![primary.to_owned()];
+    let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (fam, primary) in [("medium", medium), ("semibold", semibold)] {
+        let mut stack: Vec<String> = primary.into_iter().collect();
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }

@@ -4,7 +4,8 @@
 
 | Theme | Intent |
 |---|---|
-| **Pro** (default) | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| Pro | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| Pro Medium | Photoshop-style medium-gray panels and a dark canvas |
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
 | Classic | Windows-2000 bevels, square corners, navy selection |
@@ -12,7 +13,7 @@
 | Adwaita Dark | The libadwaita dark palette on the same layout |
 | Solarized Dark | Ethan Schoonover's Solarized palette: base03 canvas, base02 panels, base0 text, Solarized blue accent |
 
-Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"}` over the control channel.
+Edit → Preferences → Interface shows an Appearance Mode selector (Sync with system, Dark, Light) above separate light and dark theme cards with PhotoCraft editor previews and radio choices. Auto is opt-in and follows the operating system while the app is running. On Linux it reads the desktop portal once and then listens for its `SettingChanged` signal (no polling, and the UI repaints only when the value changes); `gsettings` runs at most once at start-up, by absolute path, when the portal gives no answer. A missing system appearance falls back to Dark. New installs keep Photoshop's default: Dark mode with Pro Medium (Studio Light is the saved light theme). Existing saved single-theme preferences migrate to a fixed Dark or Light mode with their chosen theme. The header appearance button cycles Auto → Light → Dark; its icon shows a monitor, moon or sun for the selected mode. Window → Theme and `ui.set {"theme":"classic"}` select a theme and fix the mode to its light or dark family.
 
 The toolbar's foreground and background colour chips follow the `Tokens::round_chips` flag. Pro and Classic leave it off and draw Photoshop's overlapping squares with Default Colors and Switch Colors above them. Studio, Studio Light, Solarized Dark, Adwaita and Adwaita Dark (the Studio-layout themes) turn it on and draw large round chips with a curved Switch Colors arrow centred right under them, its heads touching the chips: stacked vertically in one tool column, with Default Colors at their top-right, and side by side in two tool columns, with Default Colors at the toolbar's left edge. Another non-Pro theme can opt in by setting the flag.
 
@@ -86,6 +87,17 @@ Menus never run off the window: the menu bar's menus and submenus scroll with ar
 ## Automation for visual checks
 
 Use `ui.click {x,y}`, `ui.move`, `ui.key` and `ui.type` (synthetic input in screen points) to open menus, popups and context menus, then `ui.screenshot`.
+
+## Font menus
+
+The Type options bar, Character panel, Character/Paragraph Style editors and Glyphs panel
+share a searchable family picker. Each visible row shows an `AaBbCc` sample rendered by
+PhotoCraft's text engine in that family (script/symbol fonts use characters they support).
+Samples are cached with a bounded cache and follow display scale and theme text colour.
+Builds without system fonts preview the bundled fonts.
+While the menu is open, Up/Down applies the previous/next matching family and scrolls it into
+view; Enter accepts the selection and closes the menu. Escape closes it, keeping already
+applied changes (Edit › Undo restores text-layer font changes).
 
 ## Preferences
 
