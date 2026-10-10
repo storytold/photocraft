@@ -316,6 +316,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f64, y: f64) -> Pos2 {
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
+        aspect: app.ui.view.display_aspect(),
     };
     xf.to_screen(x as f32, y as f32)
 }

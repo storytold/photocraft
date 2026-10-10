@@ -57,7 +57,7 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
-    ViewXform { rect: app.last_canvas_rect, zoom: v.zoom / app.ppp, center: v.center, flip: false, rotation: 0.0 }
+    ViewXform { rect: app.last_canvas_rect, zoom: v.zoom / app.ppp, center: v.center, flip: false, rotation: 0.0, aspect: 1.0 }
 }
 
 /// The screen point of document point `p`.

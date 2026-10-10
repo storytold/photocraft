@@ -1913,6 +1913,9 @@ mod input_tests;
 mod pencil_tests;
 
 #[cfg(test)]
+mod pixel_aspect_tests;
+
+#[cfg(test)]
 mod transform_undo_tests;
 
 #[cfg(test)]

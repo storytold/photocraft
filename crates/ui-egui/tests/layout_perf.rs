@@ -46,7 +46,7 @@ fn screen(h: &H, p: [f64; 2]) -> Pos2 {
     let app = h.state();
     let v = &app.ui.views[0];
     let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation }.to_screen(p[0] as f32, p[1] as f32)
+    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 }.to_screen(p[0] as f32, p[1] as f32)
 }
 
 /// A point where `id` (or, for a group, one of its layers) is the topmost layer with pixels.

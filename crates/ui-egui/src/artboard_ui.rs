@@ -169,7 +169,14 @@ mod tests {
         app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 50]})).unwrap();
         app.run("layer.new.artboard", json!({"rect": [60, 10, 40, 30]})).unwrap();
         let doc = app.session.active().unwrap().doc.clone();
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)), zoom: 1.0, center: [50.0, 25.0], flip: false, rotation: 0.0 };
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)),
+            zoom: 1.0,
+            center: [50.0, 25.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
         let rects = pasteboard_rects(&xf, &doc);
         let area: f32 = rects.iter().map(|r| r.area()).sum();
         // 100×50 canvas − 40×50 − 40×30 boards.

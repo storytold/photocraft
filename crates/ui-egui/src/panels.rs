@@ -1616,7 +1616,8 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let v = app.ui.views[idx].clone();
     let canvas = app.last_canvas_rect;
     let point_zoom = (v.zoom / app.canvas_ppp()).max(1e-6);
-    let vw = canvas.width() / point_zoom * s;
+    // Pixel aspect correction shows fewer document columns across the same canvas width.
+    let vw = canvas.width() / point_zoom / app.ui.view.display_aspect() * s;
     let vh = canvas.height() / point_zoom * s;
     let c = pos2(rect.min.x + v.center[0] * s, rect.min.y + v.center[1] * s);
     let vr = Rect::from_center_size(c, vec2(vw, vh)).intersect(frame.shrink(1.0));

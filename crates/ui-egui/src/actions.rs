@@ -623,7 +623,7 @@ mod tests {
         let idx = app.session.active_index().unwrap();
         assert!(app.ui.views[idx].fit_pending);
         let doc = &app.session.active().unwrap().doc;
-        crate::canvas::fit_view(&mut app.ui.views[idx], doc, vec2(100.0, 100.0), 1.0);
+        crate::canvas::fit_view(&mut app.ui.views[idx], doc, vec2(100.0, 100.0), 1.0, 1.0);
         assert_eq!(app.ui.views[idx].zoom, 0.75);
         assert_eq!(app.ui.views[idx].center, [40.0, 30.0]);
         assert!(!app.ui.views[idx].fit_pending);
