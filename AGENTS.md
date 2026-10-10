@@ -88,6 +88,18 @@ Priorities: important infrastructure first, then low-hanging parity, then the lo
 
 When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower it).
 
+### Claiming an issue
+
+Contributors can't assign themselves, so a plain comment is the claim. Before you start on an issue:
+
+1. Read its comments (`gh issue view N --comments`). A comment that **starts with** `I'm working on this` and is less than 72 hours old (or whose author has since posted progress or opened a PR) means it is taken: pick another issue. Quoted replies don't count.
+2. Check for an open PR that fixes it (`gh pr list --search "N in:body" --state open`, or the issue's *Development* sidebar). If there is one, it is taken.
+3. Otherwise claim it **before writing code**: comment `I'm working on this.` (details may follow on the next lines).
+4. Put `Fixes #N` in the PR, and re-check for a competing PR right before opening it; if one appeared, review it instead of opening a duplicate.
+5. If you stop, comment `Releasing my claim.` so the issue is free again.
+
+A claim older than 72 hours with no PR and no update has expired; you may take the issue and mention the old claim in your comment.
+
 ## 5. Before you finish a task
 
 ```sh
