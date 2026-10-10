@@ -12,6 +12,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureH
 use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -21,6 +22,7 @@ use crate::widgets;
 
 /// Longest side of the preview proxy (px).
 const PROXY_SIDE: usize = 1600;
+const MAX_VIEW_PREVIEW_PIXELS: usize = 8 * 1024 * 1024;
 const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
@@ -130,10 +132,17 @@ pub struct LiquifyDialog {
     /// The lasso polygon being drawn (document px) and whether it thaws (Alt held at pointer-down).
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
+    source: Surface,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
     dirty: Option<[usize; 4]>,
+    /// Document-pixel preview used above 100% zoom.
+    view_bounds: Option<Rect>,
+    view_out: Vec<[u8; 4]>,
+    view_source_scratch: Vec<[f32; 4]>,
+    view_tex: Option<TextureHandle>,
+    view_dirty: Option<Rect>,
     backdrop: Option<TextureHandle>,
     mask_tex: Option<TextureHandle>,
     mask_dirty: bool,
@@ -145,6 +154,8 @@ pub struct LiquifyDialog {
     last_dab: f64,
     /// Last dab + proxy update time (ms), shown in the footer.
     pub dab_ms: f64,
+    /// CPU time spent refreshing the zoomed-in source-resolution preview.
+    pub preview_ms: f64,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -153,6 +164,16 @@ fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
     }
     Some(match a {
         Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+        None => b,
+    })
+}
+
+fn union_rect(a: Option<Rect>, b: Rect) -> Option<Rect> {
+    if b.is_empty() {
+        return a;
+    }
+    Some(match a {
+        Some(a) => Rect::new(a.x0.min(b.x0), a.y0.min(b.y0), a.x1.max(b.x1), a.y1.max(b.y1)),
         None => b,
     })
 }
@@ -169,6 +190,8 @@ impl LiquifyDialog {
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
+            "fullResolutionPreview": self.view_bounds.is_some(),
+            "previewMs": self.preview_ms,
         })
     }
 
@@ -190,6 +213,7 @@ impl LiquifyDialog {
             return;
         }
         self.dirty = union(self.dirty, self.proxy.proxy_rect(doc_rect));
+        self.view_dirty = union_rect(self.view_dirty, doc_rect);
         self.mask_dirty |= mask;
     }
 
@@ -302,6 +326,87 @@ impl LiquifyDialog {
         }
     }
 
+    /// Builds or updates the visible source-resolution viewport. At ordinary zoom the whole-layer
+    /// proxy remains cheaper; above 100%, a full-resolution crop is enough to fill the preview.
+    fn update_view_preview(&mut self, ctx: &egui::Context, area: ERect) {
+        if self.zoom <= 1.0 {
+            return;
+        }
+        let half_w = f64::from(area.width() / self.zoom) * 0.5;
+        let half_h = f64::from(area.height() / self.zoom) * 0.5;
+        let clamp_x = |x: f64| x.max(f64::from(self.canvas.x0)).min(f64::from(self.canvas.x1)) as i32;
+        let clamp_y = |y: f64| y.max(f64::from(self.canvas.y0)).min(f64::from(self.canvas.y1)) as i32;
+        let bounds = Rect::new(
+            clamp_x((self.center[0] - half_w).floor()),
+            clamp_y((self.center[1] - half_h).floor()),
+            clamp_x((self.center[0] + half_w).ceil()),
+            clamp_y((self.center[1] + half_h).ceil()),
+        );
+        if bounds.is_empty() {
+            self.view_bounds = None;
+            self.view_tex = None;
+            self.view_dirty = None;
+            return;
+        }
+        let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+        let Some(len) = w.checked_mul(h).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS) else {
+            self.view_bounds = None;
+            self.view_tex = None;
+            self.view_dirty = None;
+            return;
+        };
+        if self.view_bounds != Some(bounds) || self.view_out.len() != len {
+            if self.view_out.try_reserve(len.saturating_sub(self.view_out.len())).is_err() {
+                self.view_bounds = None;
+                self.view_tex = None;
+                self.view_dirty = None;
+                return;
+            }
+            self.view_out.resize(len, [0; 4]);
+            self.view_bounds = Some(bounds);
+            self.view_tex = None;
+            self.view_dirty = Some(bounds);
+        }
+        let Some(dirty) = self.view_dirty.take().map(|r| r.intersect(&bounds)) else { return };
+        if dirty.is_empty() {
+            return;
+        }
+        let started = crate::gpu_canvas::now_ms();
+        let rendered = ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch);
+        if !rendered {
+            self.view_bounds = None;
+            self.view_tex = None;
+            self.preview_ms = crate::gpu_canvas::now_ms() - started;
+            return;
+        }
+        let x0 = (dirty.x0 - bounds.x0) as usize;
+        let y0 = (dirty.y0 - bounds.y0) as usize;
+        let x1 = (dirty.x1 - bounds.x0) as usize;
+        let y1 = (dirty.y1 - bounds.y0) as usize;
+        let mut pixels = Vec::with_capacity((x1 - x0) * (y1 - y0));
+        for y in y0..y1 {
+            if let Some(row) = self.view_out.get(y * w + x0..y * w + x1) {
+                pixels.extend(row.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])));
+            }
+        }
+        let image = egui::ColorImage::new([x1 - x0, y1 - y0], pixels);
+        match &mut self.view_tex {
+            Some(tex) => tex.set_partial([x0, y0], image, egui::TextureOptions::NEAREST),
+            None => {
+                // A new viewport always starts dirty over its full bounds.
+                self.view_tex = Some(ctx.load_texture(
+                    "liquify-detail",
+                    {
+                        let pixels = self.view_out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect();
+                        egui::ColorImage::new([w, h], pixels)
+                    },
+                    egui::TextureOptions::NEAREST,
+                ));
+            }
+        }
+        self.preview_ms = crate::gpu_canvas::now_ms() - started;
+    }
+
     fn upload(&mut self, ctx: &egui::Context) {
         let (w, h) = (self.proxy.w, self.proxy.h);
         match (&mut self.tex, self.dirty.take()) {
@@ -358,9 +463,15 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         cur: None,
         lasso: None,
         proxy,
+        source: surf,
         out,
         tex: None,
         dirty: None,
+        view_bounds: None,
+        view_out: Vec::new(),
+        view_source_scratch: Vec::new(),
+        view_tex: None,
+        view_dirty: None,
         backdrop: None,
         mask_tex: None,
         mask_dirty: true,
@@ -370,6 +481,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         hover: None,
         last_dab: 0.0,
         dab_ms: 0.0,
+        preview_ms: 0.0,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
@@ -682,9 +794,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             widgets::hairline(ui);
             ui.label(
-                egui::RichText::new(format!("{} stroke(s) · field {} px/node · dab {:.2} ms", d.strokes.len(), d.cell, d.dab_ms))
-                    .color(t.text_faint)
-                    .size(11.0),
+                egui::RichText::new(format!(
+                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms",
+                    d.strokes.len(),
+                    d.cell,
+                    d.dab_ms,
+                    d.preview_ms
+                ))
+                .color(t.text_faint)
+                .size(11.0),
             );
         });
         // Footer buttons.
@@ -715,14 +833,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 && let Some(hp) = resp.hover_pos()
             {
                 let before = to_doc(d, area, hp);
-                // Liquify's own preview zoom, not the canvas (`zoom_levels` doesn't apply): the
-                // preview is a proxy of at most PROXY_SIDE px, so past 3200 % it would only magnify
-                // proxy pixels further.
+                // Liquify's own preview zoom, not the canvas (`zoom_levels` doesn't apply).
                 d.zoom = (d.zoom * (scroll / 200.0).exp()).clamp(0.01, 32.0);
                 let after = to_doc(d, area, hp);
                 d.center = [d.center[0] + before[0] - after[0], d.center[1] + before[1] - after[1]];
             }
         }
+        d.update_view_preview(ctx, area);
         let img = ERect::from_min_max(
             to_screen(d, area, [f64::from(d.canvas.x0), f64::from(d.canvas.y0)]),
             to_screen(d, area, [f64::from(d.canvas.x1), f64::from(d.canvas.y1)]),
@@ -735,11 +852,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         {
             clip.image(b.id(), img, uv, Color32::from_white_alpha((d.opts.backdrop_opacity / 100.0 * 255.0) as u8));
         }
-        // The proxy covers whole proxy pixels, a little past the canvas edge.
-        let pr =
-            ERect::from_min_max(img.min, img.min + vec2(d.proxy.w as f32 * d.proxy.scale as f32 * d.zoom, d.proxy.h as f32 * d.proxy.scale as f32 * d.zoom));
-        if let Some(tex) = &d.tex {
-            clip.image(tex.id(), pr, uv, Color32::WHITE);
+        if d.zoom > 1.0
+            && let (Some(bounds), Some(tex)) = (d.view_bounds, &d.view_tex)
+        {
+            let detail = ERect::from_min_max(
+                to_screen(d, area, [f64::from(bounds.x0), f64::from(bounds.y0)]),
+                to_screen(d, area, [f64::from(bounds.x1), f64::from(bounds.y1)]),
+            );
+            clip.image(tex.id(), detail, uv, Color32::WHITE);
+        } else {
+            // The proxy covers whole proxy pixels, a little past the canvas edge.
+            let pr = ERect::from_min_max(
+                img.min,
+                img.min + vec2(d.proxy.w as f32 * d.proxy.scale as f32 * d.zoom, d.proxy.h as f32 * d.proxy.scale as f32 * d.zoom),
+            );
+            if let Some(tex) = &d.tex {
+                clip.image(tex.id(), pr, uv, Color32::WHITE);
+            }
         }
         if d.opts.show_mask
             && let Some(m) = &d.mask_tex
@@ -899,6 +1028,30 @@ mod tests {
             .unwrap();
         app.sync_views();
         app
+    }
+
+    #[test]
+    fn zoomed_liquify_preview_uses_only_the_visible_full_resolution_crop() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.zoom = 2.0;
+        d.center = [60.0, 40.0];
+        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+        assert_eq!(d.view_bounds, Some(Rect::new(45, 30, 75, 50)));
+        assert_eq!(d.view_out.len(), 30 * 20, "one preview texel per document pixel");
+        assert!(d.view_tex.is_some());
+
+        let before = d.view_out.clone();
+        let mut stroke = LiquifyStroke::new(LiquifyTool::ForwardWarp, 24.0);
+        stroke.points = vec![vec![50.0, 40.0, 1.0], vec![58.0, 40.0, 1.0]];
+        let dirty = d.field.stroke_segment(&stroke, [50.0, 40.0, 1.0], [58.0, 40.0, 1.0]);
+        d.mark(dirty, false);
+        d.render_dirty();
+        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+        assert_ne!(d.view_out, before, "a brush update refreshes the visible source-resolution crop");
+        assert!(d.preview_ms.is_finite());
     }
 
     /// #418: the brush settings survive Cancel, OK and Esc, and come back the next time Liquify
