@@ -1,15 +1,18 @@
 //! Window › Actions, as engine commands (`actions.record` / `stop` / `play` / `list` / `get` /
-//! `delete` / `move` / `rename`).
+//! `delete` / `move` / `rename` / `toggle`).
 //!
 //! The list lives on [`Session`] so the panel, the CLI, the control channel and MCP share one
 //! copy. Recording copies replayable journal entries (commands whose [`CommandSpec::journal`] is
 //! set, except action-editing commands and the already-expanded `edit.transform.again`) into an
 //! action. Playback runs those steps with [`Session::execute`]
-//! and stops at the first error, leaving one history step per step that ran.
+//! and stops at the first error, leaving one history step per step that ran. Steps switched off
+//! with `actions.toggle` (the Actions panel check marks) are skipped by playback, Batch and droplets.
 //!
 //! An untrusted session installs [`Session::authorize`]. `actions.play` calls it for every nested
 //! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
 //! the top-level check.
+
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,11 +26,29 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 /// One recorded action. `steps` is the `[[id, params], …]` shape `file.automate.batch` and
 /// droplets already accept.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
     pub name: String,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
+    /// Indices of steps excluded from playback (unchecked in the Actions panel).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub disabled: BTreeSet<usize>,
+}
+
+impl Action {
+    pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
+        Self { name: name.into(), steps, disabled: BTreeSet::new() }
+    }
+
+    pub fn step_enabled(&self, step: usize) -> bool {
+        !self.disabled.contains(&step)
+    }
+
+    /// The steps playback runs, with their indices in `steps`.
+    pub fn enabled_steps(&self) -> impl Iterator<Item = (usize, &(String, Value))> {
+        self.steps.iter().enumerate().filter(|(i, _)| self.step_enabled(*i))
+    }
 }
 
 /// On-disk form of [`ActionState::list`] (`actions.json` in the preset store).
@@ -162,7 +183,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, "actions.get")?;
     let action = &s.actions.list[idx];
     let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
-    Ok(json!({"name": action.name, "steps": steps}))
+    Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled}))
 }
 
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
@@ -188,7 +209,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         if s.actions.list.iter().any(|action| action.name == name) {
             return Err(bad("actions.record", "an action with this name already exists"));
         }
-        s.actions.list.push(Action { name, steps: Vec::new() });
+        s.actions.list.push(Action::new(name, Vec::new()));
         s.actions.touch();
         s.actions.list.len() - 1
     };
@@ -228,10 +249,10 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"action": action.name, "steps": action.steps.len()}))
 }
 
-fn run_recorded(s: &mut Session, steps: &[(String, Value)], from: usize) -> (u64, Option<Value>) {
+fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
     let mut ran = 0u64;
     let mut failed = None;
-    for (i, (id, params)) in steps.iter().enumerate().skip(from) {
+    for (i, (id, params)) in action.enabled_steps().skip_while(|(i, _)| *i < from) {
         if let Some(auth) = s.authorize
             && let Err(e) = auth(id, params)
         {
@@ -294,7 +315,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
-    let (ran, failed) = run_recorded(s, &action.steps, from);
+    let (ran, failed) = run_recorded(s, &action, from);
     finish_playback(s, recording, &action, from);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
@@ -329,6 +350,7 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         let action = &mut s.actions.list[idx];
         let moved = action.steps.remove(step);
         action.steps.insert(to, moved);
+        action.disabled = action.disabled.iter().map(|&i| moved_index(i, step, to)).collect();
         let result = json!({"action": action.name, "step": to});
         s.actions.touch();
         Ok(result)
@@ -376,6 +398,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let action = &mut s.actions.list[idx];
         action.steps.remove(step);
+        action.disabled = action.disabled.iter().filter(|&&i| i != step).map(|&i| if i > step { i - 1 } else { i }).collect();
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
         s.actions.touch();
         return Ok(result);
@@ -386,6 +409,45 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let name = s.actions.list.remove(idx).name;
     s.actions.touch();
     Ok(json!({"deleted": name}))
+}
+
+/// The Actions panel check marks. With `step`, switch one step on or off; without it, switch
+/// every step (all on unless all already are, like clicking the action's check mark).
+fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.toggle";
+    not_playing(s, cmd)?;
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    let enabled = match p.get("enabled") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(cmd, "\"enabled\" must be true or false")),
+    };
+    let step = match p.get("step") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "step must be a non-negative integer"))?),
+    };
+    let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
+    if step.is_some_and(|step| step >= len) {
+        return Err(bad(cmd, "step is out of range"));
+    }
+    if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+        flush_recording(s)?;
+    }
+    let action = &mut s.actions.list[idx];
+    match step {
+        Some(step) => {
+            if enabled.unwrap_or(!action.step_enabled(step)) {
+                action.disabled.remove(&step);
+            } else {
+                action.disabled.insert(step);
+            }
+        }
+        None if enabled.unwrap_or(!action.disabled.is_empty()) => action.disabled.clear(),
+        None => action.disabled = (0..action.steps.len()).collect(),
+    }
+    let result = json!({"action": action.name, "disabled": action.disabled});
+    s.actions.touch();
+    Ok(result)
 }
 
 /// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
@@ -458,7 +520,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Get Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index} → {name, steps:[[id, params]…]} (the shape file.automate.batch and droplets take)"##,
+            params: r##"{"action":name|index} → {name, steps:[[id, params]…], disabled:[step…]} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips)"##,
             enabled: always,
             run: get,
             journal: false,
@@ -488,7 +550,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
             enabled: always,
             run: play,
             journal: false,
@@ -501,6 +563,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"action":name|index, "step":index?} → {deleted:name} or {action, deletedStep, steps:count}. step is 0-based, including pending recorded steps. Whole-action deletion is refused while recording."##,
             enabled: always,
             run: delete,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.toggle",
+            label: "Toggle Action Steps",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index, "step":index?, "enabled":bool?} → {action, disabled:[step…]}. Switch one 0-based step (including pending recorded steps) on or off for playback, Batch and droplets; omitted enabled flips it. Without step, switch every step: on unless all already are, or as enabled says."##,
+            enabled: always,
+            run: toggle,
             journal: false,
         },
         CommandSpec {
@@ -526,10 +598,57 @@ mod tests {
     }
 
     #[test]
+    fn unchecked_steps_are_skipped_and_follow_move_and_delete() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let step = |name: &str| ("layer.new.layer".to_string(), json!({"name": name}));
+        s.actions.list.push(Action::new("Three", vec![step("A"), step("B"), step("C")]));
+        let names = |s: &Session| s.active().unwrap().doc.layers.iter().skip(1).map(|l| l.name.clone()).collect::<Vec<_>>();
+
+        assert_eq!(s.execute("actions.toggle", json!({"action": "Three", "step": 1})).unwrap()["disabled"], json!([1]));
+        let played = s.execute("actions.play", json!({"action": 0})).unwrap();
+        assert_eq!(played["ran"], 2);
+        assert_eq!(names(&s), ["A", "C"], "the unchecked step is skipped");
+        assert_eq!(s.execute("actions.get", json!({"action": 0})).unwrap()["disabled"], json!([1]));
+
+        // Moving step 3 to the top keeps B (now step 2) unchecked; deleting the moved step shifts it to 1.
+        s.execute("actions.move", json!({"action": 0, "step": 2, "to": 0})).unwrap();
+        let ids: Vec<_> = s.actions.list[0].steps.iter().map(|(_, p)| p["name"].as_str().unwrap()).collect();
+        assert_eq!((ids, s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>()), (vec!["C", "A", "B"], vec![2]));
+        s.execute("actions.delete", json!({"action": 0, "step": 0})).unwrap();
+        assert_eq!(s.actions.list[0].steps, [step("A"), step("B")], "deleting removes only that step");
+        assert_eq!(s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>(), [1]);
+
+        // The action's own check: all on unless all already are.
+        s.execute("actions.toggle", json!({"action": 0})).unwrap();
+        assert!(s.actions.list[0].disabled.is_empty());
+        s.execute("actions.toggle", json!({"action": 0})).unwrap();
+        assert_eq!(s.actions.list[0].disabled.len(), 2);
+        s.execute("actions.toggle", json!({"action": 0, "step": 0, "enabled": true})).unwrap();
+        assert_eq!(s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>(), [1]);
+
+        for bad in [
+            json!({"action": 0, "step": 2}),
+            json!({"action": 0, "step": -1}),
+            json!({"action": 0, "step": "x"}),
+            json!({"action": 0, "step": 0, "enabled": "yes"}),
+            json!({"action": 7, "step": 0}),
+            json!({}),
+        ] {
+            assert!(s.execute("actions.toggle", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>(), [1], "rejected toggles change nothing");
+    }
+
+    #[test]
     fn rename_keeps_calls_and_function_key_and_rejects_bad_names() {
         let mut s = Session::new();
-        s.actions.list.push(Action { name: "Action 1".into(), steps: vec![("layer.new.layer".into(), json!({}))] });
-        s.actions.list.push(Action { name: "Caller".into(), steps: vec![("actions.play".into(), json!({"action": "Action 1"}))] });
+        s.actions.list.push(Action { name: "Action 1".into(), steps: vec![("layer.new.layer".into(), json!({}))], disabled: Default::default() });
+        s.actions.list.push(Action {
+            name: "Caller".into(),
+            steps: vec![("actions.play".into(), json!({"action": "Action 1"}))],
+            disabled: Default::default(),
+        });
         s.edit_prefs(|p| p.shortcuts.insert(format!("{PLAY_SHORTCUT_PREFIX}Action 1"), "F2".into()));
         assert_eq!(s.execute("actions.rename", json!({"action": 0, "name": "Sepia"})).unwrap()["action"], "Sepia");
         assert_eq!(s.execute("actions.list", json!({})).unwrap()["actions"][0]["name"], "Sepia");
@@ -682,7 +801,7 @@ mod tests {
     #[test]
     fn play_refuses_recursion() {
         let mut s = Session::new();
-        s.actions.list.push(Action { name: "Loop".into(), steps: vec![("actions.play".into(), json!({"action": "Loop"}))] });
+        s.actions.list.push(Action { name: "Loop".into(), steps: vec![("actions.play".into(), json!({"action": "Loop"}))], disabled: Default::default() });
         let r = s.execute("actions.play", json!({"action": "Loop"})).unwrap();
         assert_eq!(r["ran"], 0);
         assert_eq!(r["failed"]["id"], "actions.play");
@@ -697,9 +816,11 @@ mod tests {
         }
         let mut s = Session::new();
         s.authorize = Some(deny_file);
-        s.actions
-            .list
-            .push(Action { name: "Open".into(), steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))] });
+        s.actions.list.push(Action {
+            name: "Open".into(),
+            steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
+            disabled: Default::default(),
+        });
         let r = s.execute("actions.play", json!({"action": "Open"})).unwrap();
         assert_eq!(r["ran"], 0);
         assert_eq!(r["failed"]["step"], 0);
@@ -772,7 +893,11 @@ mod tests {
     fn nested_call_records_one_named_step_and_tracks_child_edits() {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
-        s.actions.list.push(Action { name: "Child".into(), steps: vec![("layer.new.layer".into(), json!({"name": "Child layer"}))] });
+        s.actions.list.push(Action {
+            name: "Child".into(),
+            steps: vec![("layer.new.layer".into(), json!({"name": "Child layer"}))],
+            disabled: Default::default(),
+        });
         s.execute("actions.record", json!({"name": "Parent"})).unwrap();
         s.execute("layer.new.layer", json!({"name": "Before"})).unwrap();
         s.execute("actions.play", json!({"action": 0})).unwrap();
@@ -800,8 +925,9 @@ mod tests {
         s.actions.list.push(Action {
             name: "A".into(),
             steps: vec![("actions.play".into(), json!({"action": "B"})), ("file.new".into(), json!({"width": 2,"height": 2}))],
+            disabled: Default::default(),
         });
-        s.actions.list.push(Action { name: "B".into(), steps: vec![("actions.play".into(), json!({"action": "A"}))] });
+        s.actions.list.push(Action { name: "B".into(), steps: vec![("actions.play".into(), json!({"action": "A"}))], disabled: Default::default() });
         let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert!(r["failed"]["error"].as_str().unwrap().contains("recursive"));
         assert!(s.documents().is_empty());
@@ -816,6 +942,7 @@ mod tests {
             s.actions.list.push(Action {
                 name: format!("N{i}"),
                 steps: if i < 16 { vec![("actions.play".into(), json!({"action":format!("N{}", i + 1)}))] } else { vec![] },
+                disabled: Default::default(),
             });
         }
         let r = s.execute("actions.play", json!({"action": "N0"})).unwrap();
@@ -860,7 +987,7 @@ mod tests {
     #[test]
     fn new_names_do_not_collide_with_named_calls() {
         let mut s = Session::new();
-        s.actions.list.push(Action { name: "Action 2".into(), steps: vec![] });
+        s.actions.list.push(Action { name: "Action 2".into(), steps: vec![], disabled: Default::default() });
         assert_eq!(s.execute("actions.record", json!({})).unwrap()["action"], "Action 3");
         s.execute("actions.stop", json!({})).unwrap();
         assert!(s.execute("actions.record", json!({"name":"Action 2"})).is_err());
@@ -872,7 +999,7 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":4,"height":4})).unwrap();
         for name in ["A", "B", "C"] {
-            s.actions.list.push(Action { name: name.into(), steps: vec![] });
+            s.actions.list.push(Action { name: name.into(), steps: vec![], disabled: Default::default() });
         }
         s.execute("actions.record", json!({"action":"B"})).unwrap();
         s.execute("layer.new.layer", json!({"name":"before"})).unwrap();

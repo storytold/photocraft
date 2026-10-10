@@ -529,8 +529,11 @@ fn delete_with_a_selection_clears_it() {
 #[test]
 fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     let mut h = harness();
-    let action =
-        photocraft_engine::actions_cmds::Action { name: "LivePrint 2R".into(), steps: vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))] };
+    let action = photocraft_engine::actions_cmds::Action {
+        name: "LivePrint 2R".into(),
+        steps: vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))],
+        disabled: Default::default(),
+    };
     h.state_mut().session.actions.list.push(action);
     crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
@@ -551,11 +554,11 @@ fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
 fn assigning_action_function_key_moves_it_and_reports_failed_steps() {
     let mut h = harness();
     for name in ["first", "second"] {
-        h.state_mut()
-            .session
-            .actions
-            .list
-            .push(photocraft_engine::actions_cmds::Action { name: name.into(), steps: vec![("no.such.command".into(), json!({}))] });
+        h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
+            name: name.into(),
+            steps: vec![("no.such.command".into(), json!({}))],
+            disabled: Default::default(),
+        });
     }
     crate::actions::assign_shortcut(h.state_mut(), "first", "F6").unwrap();
     crate::actions::assign_shortcut(h.state_mut(), "second", "F6").unwrap();
@@ -573,6 +576,7 @@ fn action_function_key_checks_automation_authorization() {
     h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
         name: "restricted".into(),
         steps: vec![("layer.new.layer".into(), json!({"name": "should not exist"}))],
+        disabled: Default::default(),
     });
     crate::actions::assign_shortcut(h.state_mut(), "restricted", "F6").unwrap();
     h.state_mut().services.automation_command = Some(Box::new(|id, _| if id == "actions.play" { Err("denied action playback".into()) } else { Ok(()) }));
@@ -609,6 +613,7 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
         name: "LivePrint 2R".into(),
         steps: vec![("layer.new.layer".into(), json!({"name":"Nested overlay"})), ("view.fitOnScreen".into(), json!({}))],
+        disabled: Default::default(),
     });
     crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
