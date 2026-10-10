@@ -75,7 +75,7 @@ fn screen(h: &H, x: f64, y: f64) -> Pos2 {
     let idx = app.session.active_index().unwrap_or(0);
     let v = &app.ui.views[idx];
     let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation }.to_screen(x as f32, y as f32)
+    ViewXform { rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation, aspect: 1.0 }.to_screen(x as f32, y as f32)
 }
 
 fn stats(name: &str, mut v: Vec<f64>) {

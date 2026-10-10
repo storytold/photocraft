@@ -147,7 +147,7 @@ mod tests {
     fn view_xf(h: &Harness<'static, PhotocraftApp>) -> ViewXform {
         let app = h.state();
         let v = &app.ui.views[0];
-        ViewXform { rect: app.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation }
+        ViewXform { rect: app.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 }
     }
 
     fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {

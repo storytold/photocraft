@@ -316,7 +316,7 @@ mod tests {
             for center in [[0.0, 0.0], [320.0, 240.0], [10.0, -4.0]] {
                 for flip in [false, true] {
                     let rect = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
-                    let a = ViewXform { rect, zoom, center, flip, rotation: 0.0 };
+                    let a = ViewXform { rect, zoom, center, flip, rotation: 0.0, aspect: 1.0 };
                     let sx = if flip { -1.0 } else { 1.0 };
                     let want = rect.center() + vec2((10.0 - center[0]) * zoom * sx, (20.0 - center[1]) * zoom);
                     let got = a.to_screen(10.0, 20.0);
@@ -327,25 +327,57 @@ mod tests {
     }
 
     #[test]
+    fn view_xform_pixel_aspect_stretches_document_x() {
+        // #2594: with a 2:1 pixel aspect ratio a document pixel is twice as wide on screen.
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
+        let c = rect.center();
+        let xf = ViewXform { rect, zoom: 1.5, center: [0.0, 0.0], flip: false, rotation: 0.0, aspect: 2.0 };
+        let s = xf.to_screen(10.0, 10.0);
+        assert!((s.x - (c.x + 30.0)).abs() < 1e-4 && (s.y - (c.y + 15.0)).abs() < 1e-4, "{s:?}");
+        assert!((xf.doc_rect(photocraft_geom::Rect::new(0, 0, 10, 10)).width() - 30.0).abs() < 1e-4);
+        // The stretch is in document space: at 90° the document's X runs down the screen.
+        let xf = ViewXform { rotation: 90.0, ..xf };
+        let s = xf.to_screen(10.0, 0.0);
+        assert!((s.x - c.x).abs() < 1e-3 && (s.y - (c.y + 30.0)).abs() < 1e-3, "{s:?}");
+        // Screen -> document inverts it at any rotation, flip and ratio.
+        for aspect in [0.91, 1.46, 2.0] {
+            for rot in [0.0, 15.0, 90.0, -45.0] {
+                for flip in [false, true] {
+                    let xf = ViewXform { rect, zoom: 2.0, center: [80.0, 40.0], flip, rotation: rot, aspect };
+                    let d = xf.to_doc(xf.to_screen(10.0, 20.0));
+                    assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3, "aspect={aspect} rot={rot} flip={flip} {d:?}");
+                }
+            }
+        }
+        // A broken ratio draws square instead of collapsing the view.
+        for aspect in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: false, rotation: 0.0, aspect };
+            let s = xf.to_screen(10.0, 0.0);
+            assert!((s.x - (c.x + 10.0)).abs() < 1e-4, "aspect={aspect} {s:?}");
+            assert!(xf.to_doc(s)[0].is_finite());
+        }
+    }
+
+    #[test]
     fn view_xform_roundtrip_and_ninety_degrees() {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
         for rot in [15.0, 90.0, -45.0, 180.0] {
             for flip in [false, true] {
-                let xf = ViewXform { rect, zoom: 2.0, center: [80.0, 40.0], flip, rotation: rot };
+                let xf = ViewXform { rect, zoom: 2.0, center: [80.0, 40.0], flip, rotation: rot, aspect: 1.0 };
                 let s = xf.to_screen(10.0, 20.0);
                 let d = xf.to_doc(s);
                 assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3, "rot={rot} flip={flip} {d:?}");
             }
         }
         // 90°: a point on +X in document space lands on +Y on screen (Y-down = clockwise).
-        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: false, rotation: 90.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: false, rotation: 90.0, aspect: 1.0 };
         let s = xf.to_screen(1.0, 0.0);
         let c = rect.center();
         assert!((s.x - c.x).abs() < 1e-3 && (s.y - (c.y + 1.0)).abs() < 1e-3, "{s:?} vs {c:?}");
         // Flip after rotate: 0° +X goes left.
-        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 0.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 0.0, aspect: 1.0 };
         assert!(xf.to_screen(1.0, 0.0).x < rect.center().x);
-        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 90.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 90.0, aspect: 1.0 };
         let s = xf.to_screen(1.0, 0.0);
         assert!((s.x - c.x).abs() < 1e-3 && (s.y - (c.y + 1.0)).abs() < 1e-3, "flip then rotate {s:?}");
     }
@@ -509,7 +541,8 @@ mod tests {
         let b = st.doc.selection.as_ref().and_then(|s| photocraft_compose::bounds::content_bounds(s).into()).expect("selection");
         // Axis-aligned in the file: the outline is drawn rotated via ViewXform.
         assert!(b.width() >= 40 && b.height() >= 10, "{b:?}");
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 50.0], flip: false, rotation: 30.0 };
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 50.0], flip: false, rotation: 30.0, aspect: 1.0 };
         let a = xf.to_screen(10.0, 20.0);
         let c = xf.to_screen(50.0, 20.0);
         let v = c - a;

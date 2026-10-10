@@ -278,6 +278,9 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         c
     };
     app.ui.view.pixel_aspect = format!("custom:{}:{}", c.ratio, c.name);
+    if c.ratio != 1.0 {
+        app.ui.view.pixel_aspect_correction = true;
+    }
     Ok(json!({"pixelAspectRatio": c.ratio, "name": c.name}))
 }
 

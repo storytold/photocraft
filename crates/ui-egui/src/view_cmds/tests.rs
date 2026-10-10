@@ -53,6 +53,17 @@ fn show_snap_extras_and_screen_modes_are_state() {
     assert_eq!(checked(&app, "view.screenMode.fullScreen"), Some(true));
     menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
     assert_eq!(pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.0);
+    // #2594: a non-square ratio turns the correction on, and the canvas draws with it.
+    assert_eq!(checked(&app, "view.pixelAspectRatioCorrection"), Some(true));
+    assert_eq!(display_aspect(&app.ui.view), 2.0);
+    menu(&mut app, &ctx, "view.pixelAspectRatioCorrection", json!({})).unwrap();
+    assert_eq!(display_aspect(&app.ui.view), 1.0, "correction off draws square pixels");
+    menu(&mut app, &ctx, "view.pixelAspectRatio.square", json!({})).unwrap();
+    assert!(!app.ui.view.pixel_aspect_correction, "Square leaves the toggle alone");
+    menu(&mut app, &ctx, "view.pixelAspectRatio.d1DvNtsc", json!({})).unwrap();
+    assert_eq!(display_aspect(&app.ui.view), 0.91);
+    menu(&mut app, &ctx, "view.pixelAspectRatio.square", json!({})).unwrap();
+    assert_eq!(display_aspect(&app.ui.view), 1.0);
     // State serializes with the rest of the UI (control channel).
     let v = serde_json::to_value(&app.ui).unwrap();
     assert_eq!(v["view"]["screen_mode"], "fullScreen");

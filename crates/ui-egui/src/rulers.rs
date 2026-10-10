@@ -437,7 +437,7 @@ mod tests {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
         for flip in [false, true] {
-            let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0 };
+            let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0, aspect: 1.0 };
             let (u0, u1) = ruler_range(&xf, top.left_top(), top.right_top(), 0, 1.0);
             assert!(u0 <= u1, "flip={flip}: u0 ({u0}) must be <= u1 ({u1})");
             assert!(u1 - u0 > 0.0, "flip={flip}: range is empty");

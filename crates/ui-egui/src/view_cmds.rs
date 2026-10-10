@@ -176,6 +176,13 @@ pub fn pixel_aspect_ratio(id: &str) -> f32 {
     }
 }
 
+/// On-screen width of a document pixel relative to its height: the chosen pixel aspect ratio
+/// while View › Pixel Aspect Ratio Correction is on, else 1.0 (#2594).
+pub fn display_aspect(o: &ViewOptions) -> f32 {
+    let r = pixel_aspect_ratio(&o.pixel_aspect);
+    if o.pixel_aspect_correction && r.is_finite() && r > 0.0 { r } else { 1.0 }
+}
+
 fn show_slot<'a>(s: &'a mut Show, key: &str) -> Option<&'a mut bool> {
     Some(match key {
         "layerEdges" => &mut s.layer_edges,
@@ -536,7 +543,12 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     }
     if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
         o.pixel_aspect = k.to_string();
-        return Ok(json!({"pixelAspectRatio": pixel_aspect_ratio(k)}));
+        let ratio = pixel_aspect_ratio(k);
+        // Like Photoshop, picking a non-square ratio turns the correction on so the view changes.
+        if ratio != 1.0 {
+            o.pixel_aspect_correction = true;
+        }
+        return Ok(json!({"pixelAspectRatio": ratio}));
     }
     if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
         o.font_preview_size = k.to_string();
