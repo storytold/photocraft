@@ -20,9 +20,6 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::{ThemeKind, Tokens};
 
-#[cfg(test)]
-mod recovery_tests;
-
 /// Shell runtime state for preferences, autosave and snapping (not serialised).
 #[derive(Default)]
 pub struct Runtime {
@@ -1568,6 +1565,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 #[cfg(test)]
 #[path = "shortcut_capture_tests.rs"]
 mod shortcut_capture_tests;
+
+#[cfg(test)]
+mod recovery_tests;
 
 #[cfg(test)]
 mod tests {
