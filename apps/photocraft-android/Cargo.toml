@@ -6,8 +6,14 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-[lints]
-workspace = true
+# The Android NativeActivity/JNI exported symbols require #[unsafe(no_mangle)].
+# Their implementations stay in safe Rust; no raw JNI pointers are accessed.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
 
 [lib]
 name = "photocraft_android"
