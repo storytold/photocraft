@@ -1886,7 +1886,7 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         let contains = |needle: &str, section: &str| preference_sections(&values, needle).iter().any(|(id, _)| *id == section);
         assert!(contains("UI Scale", "interface"));
-        assert!(contains("font", "type"));
+        assert!(contains("placeholder", "type"));
         assert!(contains("performance", "performance"));
         assert!(contains("interface.uiScale", "interface"));
         assert!(preference_sections(&values, "this setting does not exist").is_empty());
@@ -2663,8 +2663,10 @@ mod tests {
     fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
         use egui_kittest::{Harness, kittest::Queryable};
         let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
-        let mut h =
-            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None), obj);
+        let mut h = Harness::new_ui_state(
+            |ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
+            obj,
+        );
         h.run_steps(4);
         assert!(h.query_by_label("Applies at next launch.").is_none());
         h.get_by_label("Show tooltips").click();
