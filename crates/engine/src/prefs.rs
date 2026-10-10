@@ -1348,7 +1348,7 @@ fn capitalize(s: &str) -> String {
 pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
     ("tools.temporary.hand", "Hand Tool (hold)", "Space"),
     ("tools.temporary.zoomIn", "Zoom In (hold, drag to scrub)", "Cmd+Space"),
-    ("tools.temporary.zoomOut", "Zoom Out (hold)", "Cmd+Alt+Space"),
+    ("tools.temporary.zoomOut", "Zoom Out (hold)", "Alt+Space"),
 ];
 
 /// Every bindable id with its default: commands, then the temporary tools.

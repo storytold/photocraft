@@ -2,8 +2,11 @@
 //!
 //! - Space: the Hand tool while held.
 //! - ⌘Space (Ctrl+Space off the Mac): Zoom In while held; a drag is a scrubby zoom.
-//! - ⌘⌥Space: Zoom Out while held. ⌥ added to a held Zoom In zooms out too, as ⌥ does with the
-//!   Zoom tool.
+//! - ⌥Space (Alt+Space off the Mac): Zoom Out while held. ⌥ added to a held Zoom In (⌘⌥Space)
+//!   zooms out too, as ⌥ does with the Zoom tool.
+//! - The keys can be pressed in any order. Photoshop users usually hold Space first: on the Mac
+//!   that keeps ⌘Space from opening Spotlight, and many Linux desktops take ⌥Space for the window
+//!   menu when ⌥ comes first.
 //! - Space while a marquee, lasso or shape is being dragged repositions it; releasing Space
 //!   goes back to sizing it (the Crop tool does the same for its frame, `crop_ui`).
 //! - ⌘ (Ctrl off the Mac): the Move tool while held, with the painting, retouching, eraser,
@@ -130,8 +133,8 @@ fn held(i: &InputState, sc: &KeyboardShortcut) -> bool {
         && (!want.mac_cmd || m.mac_cmd)
 }
 
-/// The temporary tool whose key is held now, the most specific binding first (⌘⌥Space before
-/// ⌘Space before Space). Never while a text field has the keyboard.
+/// The temporary tool whose key is held now, the most specific binding first (⌘Space before
+/// Space). Never while a text field has the keyboard.
 pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> {
     if ctx.text_edit_focused() {
         return None;
@@ -155,8 +158,8 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
         cmd_move = cmd_move_held(app, i);
         alt = i.modifiers.alt;
     });
-    // ⌥ turns a held Zoom In around, as it does the Zoom tool, unless ⌥ is part of the Zoom In
-    // key itself.
+    // ⌥ turns a held Zoom In around, as it does the Zoom tool: ⌘⌥Space zooms out (and wins the
+    // tie with ⌥Space), unless ⌥ is part of the Zoom In key itself.
     let held = best.map(|(_, t, sc)| if t == Temporary::ZoomIn && alt && !sc.modifiers.alt { Temporary::ZoomOut } else { t });
     // A bound key (⌘Space is Zoom In) wins over ⌘ alone.
     held.or(cmd_move.then_some(Temporary::Move))
