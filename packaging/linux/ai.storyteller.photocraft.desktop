@@ -3,7 +3,7 @@ Type=Application
 Name=PhotoCraft
 GenericName=Image Editor
 Comment=Edit photos and layered PSD documents
-Exec=photocraft %F
+Exec=env WINIT_X11_SCALE_FACTOR=1 photocraft %F
 TryExec=photocraft
 Icon=ai.storyteller.photocraft
 Terminal=false
