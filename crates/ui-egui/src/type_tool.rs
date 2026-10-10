@@ -1091,6 +1091,24 @@ fn direction_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width:
     }
 }
 
+fn digits_key(d: photocraft_doc::text::Digits) -> &'static str {
+    use photocraft_doc::text::Digits as D;
+    match d {
+        D::Western => "western",
+        D::ArabicIndic => "arabicIndic",
+        D::Persian => "persian",
+    }
+}
+
+/// The digit-shape dropdown of the Character panel (display only: the text keeps ASCII digits).
+fn digits_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width: f32, current: photocraft_doc::text::Digits) {
+    let mut cur = digits_key(current).to_string();
+    let opts = [("western".to_string(), tl!("Western 123")), ("arabicIndic".to_string(), tl!("Arabic-Indic ١٢٣")), ("persian".to_string(), tl!("Persian ۱۲۳"))];
+    if crate::widgets::dropdown(ui, id, &mut cur, &opts, width) {
+        apply(app, ui.ctx(), json!({"digits": cur}));
+    }
+}
+
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
 /// the dialog never changes the text selection, tool colours, or document history.
 pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
@@ -1563,6 +1581,16 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 }
             }
         });
+        row(ui, &mut |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                let g = ui.painter().layout_no_wrap(tl!("Digits").into(), egui::FontId::proportional(12.0), t.text_dim);
+                let lw = g.size().x.max(LABEL_W);
+                let (lr, _) = ui.allocate_exact_size(egui::vec2(lw, 22.0), egui::Sense::hover());
+                ui.painter().galley(egui::pos2(lr.left(), lr.center().y - g.size().y / 2.0), g, t.text_dim);
+                digits_picker(app, ui, "props-type-digits", (full - lw - LABEL_GAP).max(80.0), c.digits);
+            });
+        });
         ui.add_space(ROW_GAP);
     }
     if paragraph && section(ui, "paragraph", tl!("Paragraph")) {
@@ -1626,6 +1654,10 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let mut hy = para.hyphenate;
         if crate::widgets::checkbox(ui, &mut hy, "Hyphenate").changed() {
             apply(app, ui.ctx(), json!({"hyphenate": hy}));
+        }
+        let mut kashida = para.kashida;
+        if crate::widgets::checkbox(ui, &mut kashida, "Kashida").changed() {
+            apply(app, ui.ctx(), json!({"kashida": kashida}));
         }
         ui.add_space(ROW_GAP);
     }
@@ -1902,6 +1934,33 @@ two",
         assert_eq!(p.len(), 2, "{p:?}");
         assert_eq!((p[0].style.direction, p[1].style.direction), (TextDirection::Rtl, TextDirection::Ltr));
         assert_eq!(a.ui.tool_options.type_direction, "rtl", "the tool default is untouched while a layer is targeted");
+    }
+
+    /// Spec 6: the Digits dropdown and the Kashida checkbox go through `apply` to `type.setStyle`;
+    /// a bad value is refused without changing the type.
+    #[test]
+    fn digits_and_kashida_apply_through_set_style() {
+        use photocraft_doc::text::Digits;
+        let ctx = egui::Context::default();
+        let mut a = app();
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        insert(&mut a, "عدد 123");
+        let layer = |a: &PhotocraftApp| text_layer(&a.session.active().unwrap().doc, id).unwrap().clone();
+        for d in [Digits::ArabicIndic, Digits::Persian, Digits::Western] {
+            apply(&mut a, &ctx, json!({"digits": digits_key(d)}));
+            let t = layer(&a);
+            assert!(t.char_runs().iter().all(|r| r.style.digits == d), "{d:?}");
+        }
+        apply(&mut a, &ctx, json!({"digits": "persian", "kashida": true}));
+        let t = layer(&a);
+        assert!(t.paragraph_runs().iter().all(|p| p.style.kashida));
+        assert!(t.char_runs().iter().all(|r| r.style.digits == Digits::Persian));
+        apply(&mut a, &ctx, json!({"digits": "klingon", "kashida": "yes"}));
+        let t = layer(&a);
+        assert!(t.paragraph_runs().iter().all(|p| p.style.kashida), "a bad value changes nothing");
+        assert!(t.char_runs().iter().all(|r| r.style.digits == Digits::Persian));
+        assert_eq!(t.text, "عدد 123", "display only");
     }
 
     /// Spec 5.1.1: in a layer this session created, the first strong Arabic letter typed into a
