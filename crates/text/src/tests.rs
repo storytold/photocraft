@@ -211,7 +211,7 @@ fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn truetype_collections_load() {
-    let ttc = make_ttc(&[fonts::BUNDLED[0].1, fonts::BUNDLED[3].1]);
+    let ttc = make_ttc(&[fonts::BUNDLED[0].1.as_slice(), fonts::BUNDLED[3].1.as_slice()]);
     assert_eq!(fonts::face_count(&ttc), 2);
     let mut db = fonts::FontDb::new();
     // A fresh DB without the bundled mono font would miss it; register the collection anyway

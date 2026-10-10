@@ -89,7 +89,8 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         hardness: pct("hardness", base.hardness * 100.0, 0.0, 100.0),
         opacity: pct("opacity", 100.0, 1.0, 100.0),
         flow: pct("flow", 100.0, 1.0, 100.0),
-        spacing: pct("spacing", 25.0, 1.0, 1000.0),
+        // Brush Settings › Brush Tip Shape › Spacing, as the Brush uses it (#2140).
+        spacing: pct("spacing", base.spacing * 100.0, 1.0, 1000.0),
         erase: false,
         ..base
     };
@@ -1025,7 +1026,7 @@ impl<'a> AllLayers<'a> {
 /// The brush every retouching command shares, plus the tool's own params.
 macro_rules! brush_params {
     ($extra:literal) => {
-        concat!("{", r#""points":[[x,y,pressure?],…],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=25,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
+        concat!("{", r#""points":[[x,y,pressure?],…],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=Brush Settings spacing,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
     };
 }
 
