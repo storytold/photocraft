@@ -2585,3 +2585,7 @@ fontWeight	Italic	Курсив
 	Create Ellipse	Создать эллипс
 	Create Triangle	Создать треугольник
 	Create Polygon	Создать многоугольник
+	Pressure curve	Кривая нажима
+	Click to add a point, right-click to remove	Щёлкните, чтобы добавить точку; щелчок правой кнопкой удаляет её
+	Soft	Мягкая
+	Hard	Жёсткая

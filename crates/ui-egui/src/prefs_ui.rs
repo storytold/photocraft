@@ -1159,6 +1159,12 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                         obj.insert(k, json!(x));
                     }
                 }
+                Value::Array(_) if path == "tools.pressureCurve" => {
+                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                    if let Some(next) = crate::pressure_curve_ui::editor(ui, &v) {
+                        obj.insert(k, next);
+                    }
+                }
                 Value::Array(items) if k == "disks" => {
                     ui.label(RichText::new(tl!("Scratch disks")).color(t.text_dim));
                     let mut items = items.clone();

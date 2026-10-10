@@ -3420,3 +3420,5 @@ cameraRaw	Masking	Маскування
 	Create Ellipse	Створити еліпс
 	Create Triangle	Створити трикутник
 	Create Polygon	Створити багатокутник
+	Pressure curve	Крива натиску
+	Click to add a point, right-click to remove	Клацніть, щоб додати точку; клацання правою кнопкою вилучає її

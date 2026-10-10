@@ -113,6 +113,7 @@ pub mod point_curve;
 pub mod prefs_ui;
 pub mod preset_files_ui;
 pub mod preset_panels;
+mod pressure_curve_ui;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
