@@ -58,6 +58,7 @@ fn default_build_formats_all_symmetric() {
         Format::Qoi,
         Format::OpenExr,
         Format::Hdr,
+        Format::Fits,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -245,6 +246,8 @@ fn extension_specific_cases() {
     assert_eq!(from_extension("tif"), Some(Format::Tiff));
     assert_eq!(from_extension("pfm"), Some(Format::Pnm));
     assert_eq!(from_extension("pam"), Some(Format::Pnm));
+    assert_eq!(from_extension("FIT"), Some(Format::Fits));
+    assert_eq!(from_extension("m31.fits"), Some(Format::Fits));
     assert_eq!(from_extension("exr"), Some(Format::OpenExr));
     assert_eq!(from_extension("psd"), None);
     assert_eq!(from_extension(""), None);

@@ -94,6 +94,10 @@ fn ico_metadata() {
     check_format(Format::Ico);
 }
 #[test]
+fn fits_metadata() {
+    check_format(Format::Fits);
+}
+#[test]
 fn pnm_metadata() {
     check_format(Format::Pnm);
 }

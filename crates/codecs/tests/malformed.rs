@@ -60,7 +60,7 @@ fn truncated_files_mostly_error() {
     // Chopping off the second half must not silently succeed for formats
     // with length-checked rasters.
     for (f, bytes) in samples() {
-        if matches!(f, Format::Png | Format::Pnm | Format::Qoi | Format::OpenExr | Format::Tiff | Format::Bmp) {
+        if matches!(f, Format::Png | Format::Pnm | Format::Fits | Format::Qoi | Format::OpenExr | Format::Tiff | Format::Bmp) {
             let r = decode_as_with(f, &bytes[..bytes.len() / 2], &tight());
             assert!(r.is_err(), "{f:?} decoded half a file");
         }

@@ -1,6 +1,7 @@
 pub(crate) mod deep_exr;
 pub(crate) mod exr;
 pub(crate) mod exr_cryptomatte;
+pub(crate) mod fits;
 pub(crate) mod heif;
 pub(crate) mod jpeg;
 pub(crate) mod png;
