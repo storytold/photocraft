@@ -49,6 +49,13 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
 ## Honest parity assessment (2026-10-05)
 
+2026-10-06 infrastructure update: undo now has demand-grown compressed scratch
+storage with shared 4 GiB managed-RAM / 8 GiB disk defaults. Exact restoration,
+quota/error atomicity and asynchronous cleanup are covered by regression tests;
+current working documents themselves remain resident. See [undo-cache.md](undo-cache.md)
+for the synthetic 24 MP result (12 retained steps in 7.36 MiB scratch, cold undo p50 37.8 ms) and the limits of the memory target.
+
+
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
 before picking work. Update it (with dated measurements) when the numbers move; don't restate the
 menu-parity number in its place.

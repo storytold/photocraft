@@ -501,8 +501,11 @@ fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Res
     let explicit = p.get("state").and_then(Value::as_u64).map(|v| v as usize);
     let source_doc = match explicit {
         Some(i) if i == st.history.past_len() => st.doc.clone(),
-        Some(i) => st.history.state(i).ok_or_else(|| bad(cmd, format!("no history state {i} (0..={})", st.history.past_len())))?,
-        None => st.history.state(0).unwrap_or_else(|| st.doc.clone()),
+        Some(i) => {
+            st.history.try_state(i).map_err(EngineError::Other)?.ok_or_else(|| bad(cmd, format!("no history state {i} (0..={})", st.history.past_len())))?
+        }
+        // Default: the oldest state still held (the "Open" snapshot unless it was trimmed).
+        None => st.history.try_state(0).map_err(EngineError::Other)?.unwrap_or_else(|| st.doc.clone()),
     };
     let mut source_doc = (*source_doc).clone();
     crate::channel_cmds::target_surface(&mut source_doc, id, p)

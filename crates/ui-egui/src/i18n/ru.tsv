@@ -2651,6 +2651,14 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+
+# Undo cache budgets
+	Memory budget (MiB)	Лимит памяти (МиБ)
+	Undo disk budget (MiB)	Лимит диска для отмены (МиБ)
+	Budget mb	Лимит (МиБ)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Лимит памяти общий для пикселей документа, встроенных данных и истории отмены. Память выделяется по мере необходимости; остальные нужды приложения требуют дополнительной памяти.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Место на диске для отмены используется только по мере необходимости, до этого лимита. Ноль отключает дисковый кэш. Пути рабочих дисков применяются со следующего сеанса кэша.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Версия для браузера хранит историю отмены в памяти. Настройки рабочих дисков применяются к настольному приложению.
 	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
 	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
 	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник

@@ -274,6 +274,14 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    app.session.poll_history_cache();
+    if let Some(message) = app.session.take_history_cache_notice() {
+        app.ui.status = message;
+        app.ui.status_error = true;
+    }
+    if app.session.history_cache_busy() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
     for e in app.session.poll_jobs() {
         on_event(app, ctx, e);
     }

@@ -520,8 +520,8 @@ impl Default for Export {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
-    /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
-    /// oldest states are dropped beyond it).
+    /// Shared RAM target for managed document/history pixels, in MiB. This is not a
+    /// reservation or a limit on total process memory, GPU caches, or temporary allocations.
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
@@ -552,8 +552,7 @@ impl Performance {
         self.rendering_mode.unwrap_or_else(|| if !self.use_gpu || self.gpu_backend == GpuBackend::Cpu { RenderingMode::Cpu } else { RenderingMode::Auto })
     }
 
-    /// Pixel memory a document and its History may hold (Memory Usage), in bytes: beyond it
-    /// the oldest history states are dropped.
+    /// Shared managed-pixel RAM target (Memory Usage), in bytes.
     pub fn history_budget_bytes(&self) -> usize {
         (self.memory_usage_mb as usize).saturating_mul(1 << 20)
     }
@@ -562,7 +561,7 @@ impl Performance {
 impl Default for Performance {
     fn default() -> Self {
         Self {
-            memory_usage_mb: 8192,
+            memory_usage_mb: 4096,
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
@@ -587,13 +586,16 @@ pub struct ScratchDisk {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ScratchDisks {
+    /// Maximum compressed history bytes on scratch disks, in MiB (0 disables disk spill).
+    /// The cache grows on demand; no space is reserved upfront.
+    pub budget_mb: u32,
     /// Disks for spilling tiles once the memory budget is reached (in priority order).
     pub disks: Vec<ScratchDisk>,
 }
 
 impl Default for ScratchDisks {
     fn default() -> Self {
-        Self { disks: vec![ScratchDisk { path: "(system temp)".into(), enabled: true }] }
+        Self { budget_mb: 8192, disks: vec![ScratchDisk { path: "(system temp)".into(), enabled: true }] }
     }
 }
 
@@ -968,7 +970,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
-    "scratchDisks.disks",
     "cursors.brushPreviewColor",
     "unitsAndRulers.typeUnits",
     "unitsAndRulers.columnWidth",
@@ -1056,7 +1057,8 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
-        "performance.historyStates" => (1.0, 1000.0),
+        "scratchDisks.budgetMb" => (0.0, 1_048_576.0),
+        "performance.historyStates" => (1.0, 10000.0),
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
         "performance.effectCacheMb" => (16.0, 65536.0),
@@ -1404,13 +1406,12 @@ impl Session {
     /// the layer-effect cache budget.
     pub fn apply_prefs(&mut self) {
         let n = self.prefs().performance.history_states.max(1) as usize;
-        let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;
         for st in &mut self.docs {
             st.history.max_states = n;
-            st.history.max_bytes = bytes;
-            st.history.trim(&st.doc);
+            st.history.enforce_state_limit();
         }
+        self.configure_history_cache();
         photocraft_compose::set_effect_cache_budget(budget << 20);
         crate::plugin_cmds::sync_prefs(self);
     }

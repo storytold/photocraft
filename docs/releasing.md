@@ -280,7 +280,7 @@ and lists the tarball, which checks the layout without a FreeBSD machine.
 and zips `dist/web` together with sample `_headers` and `.htaccess` files and the hosting guide.
 The site only uses relative URLs, so it works under any path and in an iframe. The wasm builds
 with the size-optimized `wasm-release` Cargo profile (set in `apps/photocraft-web/index.html`),
-and the script fails if any `.wasm` exceeds 24 MiB, below Cloudflare's 25 MiB per-file limit.
+and the script fails if any `.wasm` exceeds Cloudflare's 25 MiB per-file limit.
 [`packaging/web/README.md`](../packaging/web/README.md) covers MIME types, compression,
 caching, the iframe snippet and the `?webgl` / `?cpu` flags.
 

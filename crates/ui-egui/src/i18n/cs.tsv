@@ -2375,6 +2375,14 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+
+# Undo cache budgets
+	Memory budget (MiB)	Limit paměti (MiB)
+	Undo disk budget (MiB)	Limit disku pro historii (MiB)
+	Budget mb	Limit (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Limit paměti je společný pro pixely dokumentů, vložená data a historii změn. Paměť se přiděluje podle potřeby; ostatní paměť aplikace je navíc.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Místo na disku pro historii roste pouze podle potřeby až do tohoto limitu. Nula vypíná diskovou mezipaměť. Cesty odkládacích disků se použijí při příští relaci mezipaměti.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Tato verze pro prohlížeč uchovává historii změn v paměti. Nastavení odkládacích disků platí pro aplikaci pro počítač.
 	No subject found — try Object Selection or the Lasso	Nebyl nalezen žádný objekt — zkuste Výběr objektu nebo Laso
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník

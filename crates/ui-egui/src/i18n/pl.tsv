@@ -3398,6 +3398,14 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Limit (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Piksele dokumentów, osadzone dane i historia cofania współdzielą limit pamięci. Pamięć jest przydzielana w razie potrzeby; inne zużycie pamięci aplikacji jest dodatkowe.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Miejsce na dysku dla cofania jest używane tylko w razie potrzeby, do tego limitu. Zero wyłącza pamięć podręczną na dysku. Ścieżki dysków roboczych obowiązują od następnej sesji pamięci podręcznej.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ta wersja przeglądarkowa przechowuje historię cofania w pamięci. Ustawienia dysków roboczych dotyczą aplikacji komputerowej.
+	Memory budget (MiB)	Limit pamięci (MiB)
+	Undo disk budget (MiB)	Limit dysku dla cofania (MiB)
 	No subject found — try Object Selection or the Lasso	Nie znaleziono obiektu — spróbuj Zaznaczania obiektu lub Lassa
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta

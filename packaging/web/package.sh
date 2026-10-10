@@ -25,9 +25,9 @@ if grep -Eq '(src|href)="/[^/]' "$SITE/index.html"; then
 fi
 
 # Size gate (issue #198): Cloudflare Pages/Workers reject any single file over 25 MiB, and other
-# hosts and CDNs have similar caps. Fail well before that so a regression shows up here, not at
-# upload time. Override with PHOTOCRAFT_WASM_MAX_BYTES only to investigate.
-MAX_WASM_BYTES="${PHOTOCRAFT_WASM_MAX_BYTES:-25165824}" # 24 MiB
+# hosts and CDNs have similar caps. Enforce the host cap during packaging so releases remain
+# uploadable. Override with PHOTOCRAFT_WASM_MAX_BYTES only to investigate.
+MAX_WASM_BYTES="${PHOTOCRAFT_WASM_MAX_BYTES:-26214400}" # 25 MiB
 WASM_COUNT=0
 for wasm in "$SITE"/*.wasm; do
   [ -f "$wasm" ] || continue

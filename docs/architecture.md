@@ -273,7 +273,7 @@ pub enum LayerContent {
 - **Pixels.** `raster::TiledSurface<F>` is a sparse map from `TileCoord` to `Arc<Tile<F>>`, with 256×256 tiles. Missing tiles are transparent, or take a fill value. Mutation calls `Arc::make_mut`, so it is copy-on-write.
 - **Tile generation counters** feed the GPU residency cache and the thumbnail cache.
 - **Mip pyramids** are derived lazily per layer, for zoomed-out views.
-- **Big documents.** The tile store is behind a `TileStore` trait: in-memory now, disk-spilling ("scratch disk") later, with LRU eviction under a global memory budget.
+- **Big documents.** Current surfaces use in-memory COW tiles. Cold undo states spill through an engine-owned archive interface to deduplicated native-format scratch objects under shared RAM/disk budgets; see [undo-cache.md](undo-cache.md). Paging the current working document itself remains future work.
 - **The first milestone supports RGB and Gray, at 8/16/32f.** CMYK and Lab are modelled in the types from day one (so PSD round-trips don't lose them) but are rendered by converting to RGB until later phases.
 
 ---
@@ -287,7 +287,7 @@ pub enum LayerContent {
 - **Brush strokes** accumulate into one transaction per stroke. Tiles are published incrementally with damage regions, so the viewport updates live.
 - **Snapshots for readers.** After each committed op the engine publishes a new `Arc<DocSnapshot>` through `arc-swap`. The UI, background jobs (filters, AI inference, export) and autosave read snapshots without locks.
 - **Background jobs** compute from snapshot N and commit as a transaction. If the doc changed meanwhile, the job rebases, meaning it re-targets the same layer id if it still exists, or reports a conflict.
-- **History features:** a history panel, a memory cap with oldest-first eviction, and named snapshots. The history brush comes later, reading tiles from a past state.
+- **History features:** the History panel and History Brush read complete COW document states. A shared 4 GiB managed-RAM target and demand-grown 8 GiB disk tier retain cold history; bounded workers write/clean compressed immutable objects, and fallible restores complete before history cursors move. Oldest chronological states expire on count/quota/backpressure limits. See [undo-cache.md](undo-cache.md) for limits and measurements.
 
 ---
 

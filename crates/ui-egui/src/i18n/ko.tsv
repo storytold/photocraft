@@ -2954,6 +2954,14 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	한도 (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	문서 픽셀, 포함된 데이터 및 실행 취소 기록이 메모리 한도를 공유합니다. 메모리는 필요할 때 할당되며 앱의 다른 메모리는 별도입니다.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	실행 취소 디스크 공간은 필요할 때만 이 한도까지 사용됩니다. 0은 디스크 캐시를 끕니다. 스크래치 경로는 다음 캐시 세션부터 적용됩니다.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	이 브라우저 버전은 실행 취소 기록을 메모리에 유지합니다. 스크래치 디스크 설정은 데스크톱 앱에 적용됩니다.
+	Memory budget (MiB)	메모리 한도 (MiB)
+	Undo disk budget (MiB)	실행 취소 디스크 한도 (MiB)
 	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요

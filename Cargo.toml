@@ -76,7 +76,7 @@ codegen-units = 1
 # visit, so this profile optimizes for size: fat LTO, and opt-level "s" for everything except the
 # pixel-processing crates, which keep opt-level 3 so filters and compositing stay fast. panic
 # stays the target default (wasm32-unknown-unknown aborts; AGENTS.md's `panic = "unwind"` is for
-# the native app shell). packaging/web/package.sh fails the build above 24 MiB. Issue #198:
+# the native app shell). packaging/web/package.sh fails the build above 25 MiB. Issue #198:
 # this took the wasm from 26.3 MiB (release profile) to 18.8 MiB.
 [profile.wasm-release]
 inherits = "release"

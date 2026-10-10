@@ -2352,6 +2352,14 @@ fontWeight	Italic	斜體
 	XOR	XOR
 	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
 	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)
+
+# Undo cache budgets
+	Memory budget (MiB)	記憶體上限 (MiB)
+	Undo disk budget (MiB)	復原磁碟上限 (MiB)
+	Budget mb	容量上限 (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	文件像素、嵌入資料與復原歷程共用記憶體上限。記憶體依需求增加；應用程式的其他記憶體另行使用。
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	復原磁碟空間僅在需要時增加，不超過此上限。設為零可停用磁碟快取。暫存路徑將在下一個快取工作階段生效。
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	瀏覽器版將復原歷程保存在記憶體中。暫存磁碟設定適用於桌面應用程式。
 	No subject found — try Object Selection or the Lasso	找不到主體 — 請嘗試物件選取工具或套索工具
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形

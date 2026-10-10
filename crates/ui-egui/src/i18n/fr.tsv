@@ -2796,6 +2796,14 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Budget (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Les pixels des documents, les données intégrées et l’historique d’annulation partagent le budget mémoire. La mémoire est allouée selon les besoins ; les autres usages de l’application s’y ajoutent.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	L’espace disque pour l’annulation est utilisé selon les besoins, dans cette limite. Zéro désactive le cache disque. Les chemins des disques de travail s’appliquent à la prochaine session de cache.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Cette version navigateur conserve l’historique d’annulation en mémoire. Les réglages des disques de travail concernent l’application de bureau.
+	Memory budget (MiB)	Budget mémoire (MiB)
+	Undo disk budget (MiB)	Budget disque pour l’annulation (MiB)
 	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré

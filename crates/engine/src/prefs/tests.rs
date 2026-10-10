@@ -455,6 +455,60 @@ fn linux_only_preferences_show_only_on_linux() {
 }
 
 #[test]
+fn history_cache_preferences_default_and_round_trip() {
+    let defaults = Preferences::default();
+    assert_eq!(defaults.performance.memory_usage_mb, 4096);
+    assert_eq!(defaults.scratch_disks.budget_mb, 8192);
+    assert_eq!(defaults.scratch_disks.disks.len(), 1);
+    assert_eq!(defaults.scratch_disks.disks[0].path, "(system temp)");
+    let mut s = Session::new();
+    s.execute(
+        "prefs.set",
+        json!({"values": {
+            "performance.memoryUsageMb": 512,
+            "scratchDisks.budgetMb": 1024,
+            "scratchDisks.disks": [{"path": "/test-scratch", "enabled": true}]
+        }}),
+    )
+    .unwrap();
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs().performance.memory_usage_mb, 512);
+    assert_eq!(restored.prefs().scratch_disks, s.prefs().scratch_disks);
+    restored.execute("prefs.set", json!({"path": "scratchDisks.budgetMb", "value": 0})).unwrap();
+    assert_eq!(restored.prefs().scratch_disks.budget_mb, 0, "zero disables spill");
+}
+
+#[test]
+fn legacy_preferences_gain_disk_budget_without_replacing_user_memory() {
+    let mut s = Session::new();
+    s.load_prefs_json(r#"{"performance":{"memoryUsageMb":3072},"scratchDisks":{"disks":[{"path":"/existing","enabled":false}]}}"#).unwrap();
+    assert_eq!(s.prefs().performance.memory_usage_mb, 3072);
+    assert_eq!(s.prefs().scratch_disks.budget_mb, 8192);
+    assert_eq!(s.prefs().scratch_disks.disks[0].path, "/existing");
+    assert!(!s.prefs().scratch_disks.disks[0].enabled);
+}
+
+#[test]
+fn scratch_budget_rejects_invalid_values_atomically() {
+    let mut s = Session::new();
+    for value in [json!(-1), json!(1_048_577), json!("eight"), json!(true), json!(1.5), Value::Null] {
+        let before = s.prefs().clone();
+        assert!(
+            s.execute(
+                "prefs.set",
+                json!({"values": {
+                    "performance.memoryUsageMb": 512,
+                    "scratchDisks.budgetMb": value
+                }})
+            )
+            .is_err()
+        );
+        assert_eq!(*s.prefs(), before);
+    }
+}
+
+#[test]
 fn the_default_pressure_curve_is_linear() {
     let c = PressureCurve::new(&Preferences::default().tools.pressure_curve);
     assert!(c.is_linear());
