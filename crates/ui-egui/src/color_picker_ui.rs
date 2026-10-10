@@ -694,6 +694,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     if crate::solid_fill_ui::owns(f) {
         return crate::solid_fill_ui::confirm(app, f);
     }
+    if crate::shape_fill_ui::owns(f) {
+        return crate::shape_fill_ui::confirm(app, f);
+    }
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {

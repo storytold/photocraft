@@ -386,9 +386,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Solid Color uses the Color Picker; other adjustment / fill controls use Properties.
+        // Solid Color fills and solid-colour shapes use the Color Picker; other adjustment /
+        // fill / shape controls use Properties.
         "layer.layerContentOptions" => {
-            if let Some(dialog) = crate::solid_fill_ui::open(app) {
+            if let Some(dialog) = crate::solid_fill_ui::open(app).or_else(|| crate::shape_fill_ui::open(app)) {
                 return Ok(json!({"dialog": dialog}));
             }
             let r = app.run(id, params)?;

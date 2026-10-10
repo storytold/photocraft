@@ -137,6 +137,7 @@ pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
 pub mod shape_dialog;
+pub(crate) mod shape_fill_ui;
 pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
@@ -537,6 +538,8 @@ pub struct PhotocraftApp {
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
     pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
+    /// Shape fill Color Picker preview (shape_fill_ui).
+    pub(crate) shape_fill_preview: Option<shape_fill_ui::Preview>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).
@@ -689,6 +692,7 @@ impl PhotocraftApp {
             style_preview: None,
             text_style_preview: None,
             solid_fill_preview: None,
+            shape_fill_preview: None,
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
