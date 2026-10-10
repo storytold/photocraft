@@ -3,15 +3,20 @@
 //! Both share Photomerge's registration and blending ([`photocraft_algo::panorama`] via
 //! `photo_cmds`). Auto-Align matches Harris / steered-BRIEF features between every pair of
 //! layers, chains the verified pairs from the reference layer (maximum spanning tree) and
-//! bundle-adjusts all of them, then warps each layer. Projections: Auto, Perspective
+//! bundle-adjusts all of them, then warps each layer. Layers that nearly coincide (a focus or
+//! exposure bracket) have nothing to match and register by intensity instead
+//! ([`photocraft_algo::direct`], `registration`: auto falls back to it, or ask for it). Projections: Auto, Perspective
 //! (homography), Cylindrical and Spherical (rigid motion on the cylinder / sphere, focal length
 //! from the homographies or EXIF), Collage (similarity) and Reposition (translation). The
 //! reference stays put in the planar projections.
 //!
 //! Auto-Blend gives each selected layer a mask so the composite shows, per pixel, the sharpest
 //! layer (Stack Images, for focus stacking) or one layer per region with seams routed where the
-//! layers agree (Panorama). With Seamless Tones and Colors it also adds a merged layer blended
-//! with Laplacian pyramids so transitions are invisible.
+//! layers agree (Panorama). With Seamless Tones and Colors it also adds a merged layer: the
+//! panorama blended with Laplacian pyramids so transitions are invisible, the stack fused on the
+//! Laplacian pyramid, each coefficient from the layer sharpest at that scale
+//! ([`pyramid::fuse_stack`]; `haloControl` keeps a bright object's defocused glow out of the
+//! coarse levels).
 
 use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
@@ -22,7 +27,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::photo_cmds::{plane_matrix, register, seam_blend, seam_order, warp_placed};
+use crate::photo_cmds::{NO_DETAIL, plane_matrix, register, register_direct, seam_blend, seam_order, warp_placed};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -62,8 +67,22 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let images: Vec<(&Surface, Rect)> = surfs.iter().map(|s| (*s, area)).collect();
     let focal35 = doc.metadata.exif.as_ref().and_then(|e| photocraft_algo::exif::read(e).focal_length_35mm);
     let geometric = p.get("geometricCorrection").and_then(Value::as_bool).unwrap_or(false);
-    let al = register(&images, layout, Some(ref_idx), geometric, focal35)
-        .ok_or_else(|| EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into()))?;
+    let registration = p.get("registration").and_then(Value::as_str).unwrap_or("auto");
+    if !matches!(registration, "auto" | "features" | "intensity") {
+        return Err(bad(cmd, "`registration` must be auto|features|intensity"));
+    }
+    let no_detail = || EngineError::Other(NO_DETAIL.into());
+    // Features first (a panorama); layers that nearly coincide (a focus or exposure bracket) have
+    // nothing to match, and register by intensity instead.
+    let by_features = (registration != "intensity").then(|| register(&images, layout, Some(ref_idx), geometric, focal35)).flatten();
+    let (al, used) = match (by_features, registration) {
+        (Some(al), _) => (al, "features"),
+        (None, "features") => return Err(no_detail()),
+        (None, _) => (
+            register_direct(&images, layout, ref_idx).map_err(|m| if registration == "intensity" && m != NO_DETAIL { bad(cmd, m) } else { no_detail() })?,
+            "intensity",
+        ),
+    };
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let planar = matches!(al.layout, Layout::Perspective | Layout::Collage | Layout::Reposition);
     let mut inliers = vec![0usize; ids.len()];
@@ -118,7 +137,9 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
             Some(json!({"layer": ids[i].0, "model": model, "matches": inliers[i], "matrix": plane_matrix(pl, (0.0, 0.0)).map(|h| h.0.to_vec())}))
         })
         .collect();
-    Ok(json!({"reference": reference.0, "layout": al.layout.name(), "focal": al.focal, "rms": al.rms, "aligned": aligned, "failed": failed}))
+    Ok(
+        json!({"reference": reference.0, "layout": al.layout.name(), "registration": used, "focal": al.focal, "rms": al.rms, "aligned": aligned, "failed": failed}),
+    )
 }
 
 /// Native-channel pixels of a layer over `area` (transparent outside its content).
@@ -138,6 +159,13 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`method` must be panorama|stack"));
     }
     let seamless = p.get("seamlessTones").and_then(Value::as_bool).unwrap_or(true);
+    let halo = match p.get("haloControl") {
+        None | Some(Value::Null) => pyramid::StackFusion::default().halo,
+        Some(v) => match v.as_f64() {
+            Some(h) if (0.0..=f64::from(pyramid::HALO_MAX)).contains(&h) => h as f32,
+            _ => return Err(bad(cmd, format!("`haloControl` must be a number from 0 to {}", pyramid::HALO_MAX))),
+        },
+    };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc: std::sync::Arc<Document> = st.doc.clone();
     let mut area = Rect::EMPTY;
@@ -178,7 +206,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         let weights = pyramid::stack_weights(w, h, &luma, &alpha);
         let blended = seamless.then(|| {
             let refs: Vec<&[f32]> = imgs.iter().map(Vec::as_slice).collect();
-            pyramid::blend(w, h, fmt.channels(), &refs, &weights, pyramid::auto_levels(w, h))
+            let p = pyramid::StackFusion { halo, ..Default::default() };
+            pyramid::fuse_stack(w, h, fmt.channels(), &refs, &luma, &alpha, p)
         });
         (weights, blended)
     } else {
@@ -225,10 +254,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
-            r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest"}"##,
+            r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
-        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true}"##, auto_blend),
+        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2}"##, auto_blend),
     ]
 }
 
@@ -367,5 +396,138 @@ mod tests {
         assert_eq!(shown, 64);
         assert_eq!(doc.layer(flat).unwrap().mask.as_ref().unwrap().value(10, 10), 0.0);
         assert!(s.execute("edit.autoBlendLayers", json!({"method": "sideways"})).is_err());
+    }
+
+    /// A smooth layer (soft blobs on a gradient) and the same picture a few pixels away: the
+    /// intensity registration finds the shift to a fraction of a pixel at every motion model.
+    fn smooth_layer(s: &mut Session, name: &str, dx: i32, dy: i32) -> LayerId {
+        s.execute("layer.new.layer", json!({"name": name})).unwrap();
+        s.edit("smooth", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..150 {
+                for x in 0..200 {
+                    let (u, v) = ((x - dx) as f32, (y - dy) as f32);
+                    let blob = (-((u - 90.0).powi(2) + (v - 70.0).powi(2)) / (2.0 * 25.0f32.powi(2))).exp();
+                    let blob2 = (-((u - 150.0).powi(2) + (v - 40.0).powi(2)) / (2.0 * 15.0f32.powi(2))).exp();
+                    let g = 0.2 + 0.5 * blob + 0.25 * blob2 + 0.001 * u;
+                    surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[g, g * 0.8, g * 0.6, 1.0]);
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        s.active().unwrap().active_layer.unwrap()
+    }
+
+    #[test]
+    fn auto_align_registers_a_smooth_bracket_by_intensity() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 200, "height": 150, "depth": depth, "background": "transparent"})).unwrap();
+            let a = smooth_layer(&mut s, "A", 0, 0);
+            let b = smooth_layer(&mut s, "B", 4, 3);
+            select(&mut s, &[a, b]);
+            assert!(s.execute("edit.autoAlignLayers", json!({"registration": "sideways"})).is_err());
+            assert!(s.execute("edit.autoAlignLayers", json!({"projection": "cylindrical", "registration": "intensity"})).is_err());
+            for (params, model) in [
+                (json!({"projection": "reposition", "registration": "intensity"}), "reposition"),
+                (json!({"registration": "intensity"}), "collage"),
+                (json!({"projection": "perspective", "registration": "intensity"}), "perspective"),
+            ] {
+                let r = s.execute("edit.autoAlignLayers", params).unwrap();
+                assert_eq!(r["registration"], "intensity", "depth {depth}: {r}");
+                assert_eq!(r["aligned"][0]["model"], model);
+                let m = r["aligned"][0]["matrix"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+                assert!((m[2] + 4.0).abs() < 0.25 && (m[5] + 3.0).abs() < 0.25, "depth {depth} {model}: {r}");
+                // B now shows A's picture.
+                let doc = &s.active().unwrap().doc;
+                let (pa, pb) = (doc.layer(a).unwrap().surface().unwrap().pixel(90, 70), doc.layer(b).unwrap().surface().unwrap().pixel(90, 70));
+                assert!((pa[0] - pb[0]).abs() < 0.02, "depth {depth} {model}: {pa:?} vs {pb:?}");
+                s.undo();
+            }
+        }
+    }
+
+    /// Layers with nothing in common are no fit: the intensity registration says so instead of
+    /// moving them by whatever pose its search box ends at.
+    #[test]
+    fn auto_align_rejects_unrelated_layers_instead_of_guessing_a_pose() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 150, "depth": 8, "background": "transparent"})).unwrap();
+        let a = smooth_layer(&mut s, "A", 0, 0);
+        s.execute("layer.new.layer", json!({"name": "stripes"})).unwrap();
+        s.edit("stripes", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..150 {
+                for x in 0..200 {
+                    let g = if (x / 7 + y / 11) % 2 == 0 { 0.9 } else { 0.1 };
+                    surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[g, g, g, 1.0]);
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        let b = s.active().unwrap().active_layer.unwrap();
+        select(&mut s, &[a, b]);
+        for registration in ["intensity", "auto"] {
+            let err = s.execute("edit.autoAlignLayers", json!({"registration": registration})).unwrap_err().to_string();
+            assert_eq!(err, NO_DETAIL, "{registration}");
+        }
+        // A layer that is mostly empty overlaps too little to be placed.
+        let c = smooth_layer(&mut s, "C", 2, 1);
+        s.edit("hole", |doc, _| {
+            let surf = doc.layer_mut(c).unwrap().surface_mut().unwrap();
+            surf.fill_rect(Rect::new(0, 0, 200, 120), &[0.0, 0.0, 0.0, 0.0]);
+            Ok(())
+        })
+        .unwrap();
+        select(&mut s, &[a, c]);
+        assert_eq!(s.execute("edit.autoAlignLayers", json!({"registration": "intensity"})).unwrap_err().to_string(), NO_DETAIL);
+    }
+
+    /// Two layers, each sharp on one half: the merged layer takes each half from the sharp layer.
+    #[test]
+    fn auto_blend_stack_fuses_the_sharp_halves() {
+        let checker = |x: i32, y: i32| if (x / 3 + y / 3) % 2 == 0 { 0.2 } else { 0.8 };
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 96, "height": 64, "depth": depth, "background": "transparent"})).unwrap();
+            let mut ids = Vec::new();
+            for (name, sharp_left) in [("left", true), ("right", false)] {
+                s.execute("layer.new.layer", json!({"name": name})).unwrap();
+                s.edit(name, |doc, active| {
+                    let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..64 {
+                        for x in 0..96 {
+                            // The sharp half is the checker, the other half its local mean (flat gray).
+                            let v = if (x < 48) == sharp_left { checker(x, y) } else { 0.5 };
+                            surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[v, v, v, 1.0]);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                ids.push(s.active().unwrap().active_layer.unwrap());
+            }
+            select(&mut s, &ids);
+            for halo in [0.0, 2.0] {
+                let r = s.execute("edit.autoBlendLayers", json!({"method": "stack", "haloControl": halo})).unwrap();
+                let doc = &s.active().unwrap().doc;
+                let blended = doc.layer(LayerId(r["blended"].as_u64().unwrap())).unwrap().surface().unwrap();
+                for (x, y) in [(10, 20), (20, 40), (76, 20), (85, 40)] {
+                    let px = blended.pixel(x, y);
+                    assert!((px[0] - checker(x, y)).abs() < 0.08, "depth {depth} halo {halo} ({x},{y}): {px:?}");
+                    assert!((px[3] - 1.0).abs() < 1e-3, "{px:?}");
+                }
+                // The masks still pick per pixel.
+                assert_eq!(doc.layer(ids[0]).unwrap().mask.as_ref().unwrap().value(10, 20), 1.0);
+                assert_eq!(doc.layer(ids[1]).unwrap().mask.as_ref().unwrap().value(85, 40), 1.0);
+                s.undo();
+                assert!(s.active().unwrap().doc.layer(ids[0]).unwrap().mask.is_none());
+            }
+            for bad in [json!(-1), json!(9), json!("hard")] {
+                assert!(s.execute("edit.autoBlendLayers", json!({"method": "stack", "haloControl": bad})).is_err(), "{bad}");
+            }
+        }
     }
 }
