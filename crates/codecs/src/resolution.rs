@@ -382,10 +382,36 @@ pub fn xmp_with_resolution(xmp: &str, ppi: (f32, f32)) -> Cow<'_, str> {
     if out == xmp { Cow::Borrowed(xmp) } else { Cow::Owned(out) }
 }
 
+/// `exif` without its embedded thumbnail, or `None` when it has none (or doesn't parse).
+///
+/// EXIF keeps the thumbnail in IFD1, the IFD IFD0's next-IFD pointer names. Finder, Android's
+/// gallery and upload pickers show that thumbnail instead of decoding the image, so a copied one
+/// keeps showing the photo as it was before it was edited (#2147, #2373). The pointer is cleared;
+/// nothing else moves, so every other offset in the block stays valid.
+fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
+    let body = tiff_body(exif);
+    let prefix = exif.len() - body.len();
+    let (_, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
+    let next = prefix.checked_add(first)?.checked_add(count.checked_mul(entry_bytes)?)?;
+    let width = if big_tiff { 8 } else { 4 };
+    // In bounds: `ifd0_entries` checked that the whole pointer is present.
+    if exif.get(next..next.checked_add(width)?)?.iter().all(|b| *b == 0) {
+        return None;
+    }
+    let mut out = exif.to_vec();
+    out.get_mut(next..next + width)?.fill(0);
+    Some(out)
+}
+
 /// The EXIF to write next to upright pixels at resolution `ppi`: Orientation 1 (see
-/// [`upright_exif`]) and, when `ppi` is known, the resolution (see [`exif_with_resolution`]).
+/// [`upright_exif`]), no thumbnail of the source image (see [`exif_without_thumbnail`]) and,
+/// when `ppi` is known, the resolution (see [`exif_with_resolution`]).
 pub fn export_exif(exif: &[u8], ppi: Option<(f32, f32)>) -> Cow<'_, [u8]> {
     let up = upright_exif(exif);
+    let up = match exif_without_thumbnail(&up) {
+        Some(v) => Cow::Owned(v),
+        None => up,
+    };
     let Some(ppi) = ppi else { return up };
     if let Cow::Owned(v) = exif_with_resolution(&up, ppi) {
         return Cow::Owned(v);

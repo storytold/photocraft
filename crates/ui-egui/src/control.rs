@@ -13,7 +13,7 @@
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
-//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
+//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu (the pasteboard colour menu outside the image) or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
@@ -40,6 +40,19 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{DialogKind, Tool};
 
 pub type ControlResponse = Value;
+
+/// The control server's per-request reply deadline.
+pub const REPLY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The error both timeout sites return when a request's [`REPLY_DEADLINE`] passes: the
+/// transport thread waiting for a reply, and the UI thread rejecting a request it is only
+/// now draining. Built from the same constant, so the text cannot drift from the deadline.
+pub fn timeout_error() -> String {
+    format!(
+        "timeout: no reply in {}s — the command may still be running, or the app was not drawing frames (display asleep, window fully occluded, or a long operation blocked the frame loop)",
+        REPLY_DEADLINE.as_secs()
+    )
+}
 
 pub struct ControlRequest {
     pub method: String,
@@ -218,6 +231,26 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
     [p.x, p.y]
 }
 
+/// Modifier flags of a request, top-level or grouped under `modifiers`.
+///
+/// Off the Mac, Ctrl is the shortcut key, so egui wants `ctrl` and `command` to carry the same
+/// value (`egui::Modifiers::command`: "On Windows and Linux, set this to the same value as
+/// `ctrl`") and shortcuts are matched on `command`. A real Ctrl press arrives with both set, so
+/// a request that sets only one of them gets both here and reaches the same shortcuts. On the Mac
+/// they are different keys and stay apart: `command` is the ⌘ key, `ctrl` the Control key.
+fn modifiers_from(p: &Value) -> egui::Modifiers {
+    let m = p.get("modifiers").unwrap_or(p);
+    let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let (ctrl, command) = (flag("ctrl"), flag("command"));
+    egui::Modifiers {
+        shift: flag("shift"),
+        alt: flag("alt"),
+        command: if cfg!(target_os = "macos") { command } else { command || ctrl },
+        mac_cmd: cfg!(target_os = "macos") && command,
+        ctrl: if cfg!(target_os = "macos") { ctrl } else { command || ctrl },
+    }
+}
+
 /// The `dialog` id of the shell's own dialog (`workspace_ui`) in `ui.inspect` and `ui.dialog.*`.
 const SHELL_DIALOG: &str = "shell";
 
@@ -243,8 +276,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if !crate::canvas_tool_menu::available(app, menu, id) {
                 return err("context action is unavailable");
             }
+            // A pasteboard row changes a preference: the policy sees the `prefs.set` it runs.
+            let (command, params) = crate::canvas_tool_menu::engine_call(menu, id);
             if let Some(authorize) = app.services.automation_command.as_ref()
-                && let Err(error) = authorize(id, &json!({}))
+                && let Err(error) = authorize(&command, &params)
             {
                 return err(error);
             }
@@ -518,10 +553,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(m) = mask_target {
                     app.ui.mask_target = m;
                     app.ui.vector_mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 if let Some(m) = vector_mask_target {
                     app.ui.vector_mask_target = m;
                     app.ui.mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 // Selection tools' options-bar mode: 0 New, 1 Add, 2 Subtract, 3 Intersect.
                 if let Some(m) = selection_mode {
@@ -739,22 +776,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "ui.pointer" => {
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let mods = egui::Modifiers {
-                shift: flag("shift"),
-                alt: flag("alt"),
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                ctrl: flag("ctrl"),
-            };
+            let mods = modifiers_from(p);
             if let Some(t) = s("tool").and_then(Tool::from_name) {
                 app.ui.tool = t;
             }
             // Space held: the Crop tool moves the frame being drawn, a marquee, lasso or shape
-            // being drawn moves instead of growing (hold_keys.rs).
-            let space = flag("space");
+            // being drawn moves instead of growing (hold_keys.rs). Like a modifier flag, it may be
+            // top-level or grouped under "modifiers".
+            let space = p.get("modifiers").unwrap_or(p).get("space").and_then(Value::as_bool).unwrap_or(false);
             crate::crop_ui::set_space(app, space);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.0);
@@ -804,6 +833,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         }
                         continue;
                     }
+                    if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
+                        if down {
+                            crate::canvas_tool_menu::open_pasteboard(app, app.ui.tool, screen_point(app, x, y));
+                        }
+                        continue;
+                    }
                     if crate::canvas_tool_menu::applies(app.ui.tool) {
                         if down {
                             crate::canvas_tool_menu::open(app, app.ui.tool, screen_point(app, x, y));
@@ -824,6 +859,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
                     d.reposition = space;
                 }
+                // A Crop drag in the default mode turns and pans the view with the image: its
+                // points are read as the view showed them at the press (`crop_mode`).
+                let ev = match ev {
+                    ToolEvent::Move { x, y, pressure } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Move { x, y, pressure }
+                    }
+                    ToolEvent::Up { x, y } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Up { x, y }
+                    }
+                    down => down,
+                };
                 tool_event(app, ev, mods);
             }
             app.stylus.feed.set(None);
@@ -854,16 +902,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.key" => {
             let Some(name) = s("key") else { return err("missing `key`") };
             let Some(key) = egui::Key::from_name(name) else { return err(format!("unknown key `{name}`")) };
-            // Modifier flags may be top-level or grouped under "modifiers".
-            let m = p.get("modifiers").unwrap_or(p);
-            let flag = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-            let modifiers = egui::Modifiers {
-                command: flag("command"),
-                mac_cmd: cfg!(target_os = "macos") && flag("command"),
-                shift: flag("shift"),
-                alt: flag("alt"),
-                ctrl: flag("ctrl"),
-            };
+            let modifiers = modifiers_from(p);
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
             ctx.request_repaint();
@@ -981,6 +1020,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             json!({
                 "pos": menu.pos,
                 "tool": menu.tool,
+                "pasteboard": menu.pasteboard,
                 "entries": crate::canvas_tool_menu::rows(menu).iter().map(|row| match row {
                     Some((label, id)) => json!({"label": label, "id": id, "enabled": crate::canvas_tool_menu::entry_enabled(app, menu, id)}),
                     None => json!({"separator": true}),
@@ -1227,11 +1267,23 @@ mod tests {
         retry.deadline = Some(Instant::now() + Duration::from_secs(60));
         tx.send(retry).unwrap();
         app.drain_control(&egui::Context::default());
-        assert_eq!(expired_reply.try_recv().unwrap(), json!({"ok": false, "error": "timeout"}));
+        assert_eq!(expired_reply.try_recv().unwrap(), json!({"ok": false, "error": super::timeout_error()}));
         assert_eq!(retry_reply.try_recv().unwrap()["ok"], true);
         let after = app.session.active().unwrap();
         assert_eq!(after.doc.layers.len(), layers + 1, "only the live retry adds a layer");
         assert_eq!(after.history.past_len(), steps + 1, "the expired edit adds no undo step");
+    }
+
+    #[test]
+    fn timeout_errors_name_the_likely_causes() {
+        // #2489: the reply must tell "wait" from "check the machine", and its number
+        // must come from the deadline it reports.
+        let error = super::timeout_error();
+        assert!(error.starts_with("timeout"), "machines match on the prefix");
+        assert!(error.contains(&format!("{}s", super::REPLY_DEADLINE.as_secs())), "the text matches the deadline: {error}");
+        assert!(error.contains("may still be running"), "the wait-it-out cause");
+        assert!(error.contains("display asleep"), "the check-the-display cause");
+        assert!(error.contains("frame"), "the frame-loop cause");
     }
 
     #[test]
@@ -1763,6 +1815,9 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
         assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
         assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
+        // A flat export is a copy: the document keeps its name and file (#2579).
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("warn.psd", Some("in/warn.psd")));
         // Without `path`, only a layered file is written back, like File › Save (#416).
         call(&mut app, &ctx, "app.open", json!({"path": "in/flat.jpg"}));
         let r = call(&mut app, &ctx, "app.save", json!({}));
@@ -1984,5 +2039,40 @@ mod tests {
             assert_eq!(app.synthetic.len(), events);
             app.synthetic.clear();
         }
+    }
+
+    /// A key event's modifiers, as `ui.key` queued them.
+    fn key_modifiers(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> egui::Modifiers {
+        app.synthetic.clear();
+        let (req, _rx) = ControlRequest::new("ui.key", params.clone());
+        assert!(matches!(handle(app, ctx, &req), Outcome::AfterInput), "{params}");
+        match app.synthetic.first() {
+            Some(egui::Event::Key { modifiers, .. }) => *modifiers,
+            other => panic!("{params}: expected a key event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ui_key_ctrl_reaches_shortcuts_like_a_real_ctrl_press() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let ctrl = key_modifiers(&mut app, &ctx, json!({"key":"N","ctrl":true}));
+        let command = key_modifiers(&mut app, &ctx, json!({"key":"N","command":true}));
+        let grouped = key_modifiers(&mut app, &ctx, json!({"key":"N","modifiers":{"ctrl":true}}));
+        assert_eq!(ctrl, grouped, "a grouped flag must match the top-level one");
+        if cfg!(target_os = "macos") {
+            // Two different keys: Control is not ⌘, and only ⌘ matches a shortcut.
+            assert!(ctrl.ctrl && !ctrl.command && !ctrl.mac_cmd, "{ctrl:?}");
+            assert!(command.command && command.mac_cmd && !command.ctrl, "{command:?}");
+        } else {
+            // One key under two names, and shortcuts are matched on `command`, so asking for
+            // either must reach them: Ctrl+N has to open New Document, not do nothing.
+            assert_eq!(ctrl, command, "ctrl and command are the same key off the Mac");
+            assert!(ctrl.command && ctrl.ctrl && !ctrl.mac_cmd, "{ctrl:?}");
+        }
+        let plain = key_modifiers(&mut app, &ctx, json!({"key":"N"}));
+        assert_eq!(plain, egui::Modifiers::default(), "{plain:?}");
+        let shift_alt = key_modifiers(&mut app, &ctx, json!({"key":"N","shift":true,"alt":true}));
+        assert!(shift_alt.shift && shift_alt.alt && !shift_alt.command && !shift_alt.ctrl, "{shift_alt:?}");
     }
 }

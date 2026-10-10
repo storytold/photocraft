@@ -203,3 +203,31 @@ fn render_writer_progress_and_cancellation_leave_session_unchanged() {
         assert_eq!(s.active().unwrap().doc.timeline, before.timeline);
     }
 }
+
+/// A 16×12 32-bit Targa: red, alpha 255 on the left half and 0 on the right.
+fn write_tga(path: &str) {
+    let mut b = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 12, 0, 32, 8];
+    for _y in 0..12 {
+        for x in 0..16 {
+            b.extend_from_slice(&[0, 0, 255, if x < 8 { 255 } else { 0 }]);
+        }
+    }
+    std::fs::write(path, b).unwrap();
+}
+
+/// #2225: a Targa opens with its alpha as an "Alpha 1" channel (as in Photoshop), but an image
+/// sequence treats a frame's alpha as transparency, as video footage does, so TGA sequences
+/// keep their transparent areas.
+#[test]
+fn tga_sequence_frames_keep_their_transparency() {
+    let dir = tmpdir("tga");
+    write_tga(&format!("{dir}/f01.tga"));
+    write_tga(&format!("{dir}/f02.tga"));
+    let frames = load_frames(&dir, photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, true)).unwrap();
+    assert_eq!(frames.len(), 2);
+    for f in &frames {
+        assert_eq!(f.pixel(2, 6), vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(f.pixel(12, 6)[3], 0.0, "the right half stays transparent");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

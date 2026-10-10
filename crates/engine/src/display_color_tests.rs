@@ -191,6 +191,25 @@ fn exr_round_trip_is_linear() {
 }
 
 #[test]
+fn gray_exr_round_trip_is_linear() {
+    let mut s = Session::new();
+    // An sGray document exported to EXR is linearised (#2386); re-opened it is tagged linear gray
+    // and displays as before.
+    let d = Document::with_background("t", Size::new(8, 8), ColorMode::Grayscale, SampleType::U8, Color::gray(128.0 / 255.0));
+    let r = photocraft_io::export(&d, "x.exr", &photocraft_io::ExportOptions::default()).unwrap();
+    let back = photocraft_io::import("x.exr", &r.bytes).unwrap().document;
+    let icc = back.icc_profile.clone().expect("tagged");
+    assert_eq!(Profile::parse(&icc).unwrap().content_hash(), photocraft_cms::builtin::linear_gray().content_hash());
+    let v = back.layers[0].surface().unwrap().pixel(1, 1);
+    assert!((v[0] - 0.2159).abs() < 1e-3, "stored linear: {v:?}");
+    assert!(close(shown(&s, &back), shown(&s, &d), 1.0), "{:?} vs {:?}", shown(&s, &back), shown(&s, &d));
+    // Opening keeps it linear without a mismatch prompt.
+    let (_, report) = s.open_document(back, None);
+    assert_eq!(report["action"], "kept");
+    assert!(report.get("ask").is_none());
+}
+
+#[test]
 fn monitor_profile_setting() {
     let mut s = Session::new();
     let srgb = rgb_doc(None, [0.8, 0.5, 0.3], SampleType::U8);

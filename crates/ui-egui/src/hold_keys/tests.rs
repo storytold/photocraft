@@ -46,6 +46,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
+        aspect: app.ui.view.display_aspect(),
     };
     xf.to_screen(x, y)
 }
@@ -529,6 +530,7 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
         Tool::VerticalType,
         Tool::Crop,
         Tool::PathSelection,
+        Tool::DirectSelection,
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,

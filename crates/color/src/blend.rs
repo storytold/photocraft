@@ -336,7 +336,17 @@ pub fn lum(c: [f32; 3]) -> f32 {
     0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
 }
 
-fn clip_color(c: [f32; 3]) -> [f32; 3] {
+/// ClipColor: moves `c` towards its grey ([`lum`]) until every channel is within `0..=top`,
+/// keeping the luminosity. `top` is the brightest in-gamut value: 1, or `f32::MAX` in 32-bit
+/// documents (values above 1 are valid light there, so only negatives are pulled in).
+///
+/// The scale factors `l / (l − min)` and `(top − l) / (max − l)` lie in 0..1 only while the
+/// luminosity itself is in range. Outside it no colour of that luminosity is in gamut: the plain
+/// formula turned colours inside out (a grey of 2 as the Luminosity of (0.5, 0.25, 0.125) gave
+/// (1.0, 2.32, 2.99)) and, for greys, divided by the rounding noise of `max − l`, so results were
+/// arbitrary and differed between the CPU and the GPU. Such colours become their grey instead
+/// (the formula's value as the luminosity reaches the bound).
+fn clip_color(c: [f32; 3], top: f32) -> [f32; 3] {
     let l = lum(c);
     let n = c[0].min(c[1]).min(c[2]);
     let x = c[0].max(c[1]).max(c[2]);
@@ -344,13 +354,13 @@ fn clip_color(c: [f32; 3]) -> [f32; 3] {
     if n < 0.0 {
         let d = l - n;
         for v in &mut out {
-            *v = if d.abs() < 1e-12 { l } else { l + (*v - l) * l / d };
+            *v = if l > 0.0 && d > 0.0 { l + (*v - l) * l / d } else { l };
         }
     }
-    if x > 1.0 {
+    if x > top {
         let d = x - l;
         for v in &mut out {
-            *v = if d.abs() < 1e-12 { l } else { l + (*v - l) * (1.0 - l) / d };
+            *v = if l < top && d > 0.0 { l + (*v - l) * (top - l) / d } else { l };
         }
     }
     out
@@ -359,8 +369,13 @@ fn clip_color(c: [f32; 3]) -> [f32; 3] {
 /// `c` with its luminosity ([`lum`]) moved to `l`, clipped back into gamut towards grey (the
 /// Luminosity blend mode's SetLum + ClipColor).
 pub fn set_lum(c: [f32; 3], l: f32) -> [f32; 3] {
+    set_lum_within(c, l, 1.0)
+}
+
+/// [`set_lum`] clipping at `top` instead of 1 (see [`blend_rgb_within`]).
+fn set_lum_within(c: [f32; 3], l: f32, top: f32) -> [f32; 3] {
     let d = l - lum(c);
-    clip_color([c[0] + d, c[1] + d, c[2] + d])
+    clip_color([c[0] + d, c[1] + d, c[2] + d], top)
 }
 
 fn sat(c: [f32; 3]) -> f32 {
@@ -382,11 +397,17 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 
 /// Blend a whole RGB triple: `B(Cb, Cs)` including non-separable modes.
 pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    blend_rgb_within(mode, cb, cs, 1.0)
+}
+
+/// [`blend_rgb`] with Hue / Saturation / Color / Luminosity clipped at `top` instead of 1:
+/// `f32::MAX` keeps the values above 1 of 32-bit documents (their gamut has no upper bound).
+pub fn blend_rgb_within(mode: BlendMode, cb: [f32; 3], cs: [f32; 3], top: f32) -> [f32; 3] {
     match mode {
-        BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
-        BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
-        BlendMode::Color => set_lum(cs, lum(cb)),
-        BlendMode::Luminosity => set_lum(cb, lum(cs)),
+        BlendMode::Hue => set_lum_within(set_sat(cs, sat(cb)), lum(cb), top),
+        BlendMode::Saturation => set_lum_within(set_sat(cb, sat(cs)), lum(cb), top),
+        BlendMode::Color => set_lum_within(cs, lum(cb), top),
+        BlendMode::Luminosity => set_lum_within(cb, lum(cs), top),
         BlendMode::DarkerColor => {
             if lum(cs) < lum(cb) {
                 cs
@@ -405,9 +426,10 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// [`blend_rgb`] for 32-bit float documents: separable modes use [`blend_channel_hdr`].
+/// [`blend_rgb`] for 32-bit float documents: separable modes use [`blend_channel_hdr`], and the
+/// non-separable ones keep values above 1 ([`blend_rgb_within`] at `f32::MAX`).
 pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
-    if mode.is_separable() { std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i])) } else { blend_rgb(mode, cb, cs) }
+    if mode.is_separable() { std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i])) } else { blend_rgb_within(mode, cb, cs, f32::MAX) }
 }
 
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.
@@ -598,8 +620,9 @@ mod tests {
         assert_eq!(blend_channel_hdr(BlendMode::Divide, f32::MAX, 1e-30), f32::MAX);
         assert_eq!(blend_channel_hdr(BlendMode::LinearDodge, f32::MAX, f32::MAX), f32::MAX);
         assert!(blend_channel_hdr(BlendMode::LinearDodge, f32::INFINITY, 1.0).is_finite());
-        // Every other mode is unchanged, and the in-range results agree.
-        for m in BlendMode::LAYER_MODES.into_iter().filter(|m| !matches!(m, BlendMode::LinearDodge | BlendMode::Divide)) {
+        // Every other separable mode is unchanged (the non-separable ones keep values above 1:
+        // blend_rgb_within), and the in-range results agree.
+        for m in BlendMode::LAYER_MODES.into_iter().filter(|m| m.is_separable() && !matches!(m, BlendMode::LinearDodge | BlendMode::Divide)) {
             for (cb, cs) in [(0.2, 0.3), (0.9, 0.05), (2.0, 0.5), (0.4, 1.5)] {
                 assert_eq!(blend_rgb(m, [cb, cs, 0.5], [cs, cb, 0.25]), blend_rgb_hdr(m, [cb, cs, 0.5], [cs, cb, 0.25]), "{m:?} cb={cb} cs={cs}");
             }
@@ -622,6 +645,149 @@ mod tests {
         let s = blend_rgb(BlendMode::Saturation, cb, [0.5, 0.5, 0.5]);
         // zero-saturation source desaturates the backdrop
         assert!(close(s[0], s[1]) && close(s[1], s[2]));
+    }
+
+    /// ClipColor exactly as ISO 32000 / W3C write it (what `clip_color` was before it guarded
+    /// out-of-range luminosities).
+    fn spec_clip_color(c: [f32; 3]) -> [f32; 3] {
+        let l = lum(c);
+        let n = c[0].min(c[1]).min(c[2]);
+        let x = c[0].max(c[1]).max(c[2]);
+        let mut out = c;
+        if n < 0.0 {
+            let d = l - n;
+            for v in &mut out {
+                *v = if d.abs() < 1e-12 { l } else { l + (*v - l) * l / d };
+            }
+        }
+        if x > 1.0 {
+            let d = x - l;
+            for v in &mut out {
+                *v = if d.abs() < 1e-12 { l } else { l + (*v - l) * (1.0 - l) / d };
+            }
+        }
+        out
+    }
+
+    fn spec_blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+        let set_lum = |c: [f32; 3], l: f32| {
+            let d = l - lum(c);
+            spec_clip_color([c[0] + d, c[1] + d, c[2] + d])
+        };
+        match mode {
+            BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
+            BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
+            BlendMode::Color => set_lum(cs, lum(cb)),
+            BlendMode::Luminosity => set_lum(cb, lum(cs)),
+            m => blend_rgb(m, cb, cs),
+        }
+    }
+
+    const NON_SEPARABLE: [BlendMode; 4] = [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+
+    #[test]
+    fn non_separable_modes_unchanged_on_integer_inputs() {
+        // 8/16-bit documents only hold 0..1, where the luminosity stays in range (up to a
+        // rounding step at white) and ClipColor is the plain ISO 32000 formula.
+        let mut edges: Vec<f32> = vec![0.0, 1.0 / 255.0, 0.5, 254.0 / 255.0, 65534.0 / 65535.0, 1.0];
+        edges.extend((0..=8).map(|i| i as f32 / 8.0));
+        let mut colors = Vec::new();
+        for &r in &edges {
+            for &g in &edges {
+                for &b in &edges {
+                    colors.push([r, g, b]);
+                }
+            }
+        }
+        let mut seed = 0x1234_5678u32;
+        let mut next = |levels: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            ((seed >> 8) % (levels + 1)) as f32 / levels as f32
+        };
+        for _ in 0..2000 {
+            let levels = if next(1) > 0.5 { 255 } else { 65535 };
+            colors.push([next(levels), next(levels), next(levels)]);
+        }
+        let mut worst = 0.0f32;
+        for (i, &cb) in colors.iter().enumerate() {
+            for &cs in colors.iter().skip(i % 7).step_by(7) {
+                for m in NON_SEPARABLE {
+                    let (got, want) = (blend_rgb(m, cb, cs), spec_blend_rgb(m, cb, cs));
+                    for k in 0..3 {
+                        worst = worst.max((got[k] - want[k]).abs());
+                    }
+                }
+            }
+        }
+        // Only white-ish colours whose luminosity rounds a step above 1 can differ, by a rounding step.
+        assert!(worst <= 1e-6, "{worst}");
+    }
+
+    #[test]
+    fn non_separable_modes_stable_when_luminosity_is_out_of_range() {
+        // The spec formula divided by `max − lum`, which is rounding noise for a grey above 1 and
+        // turns colours inside out when the luminosity is above 1: Luminosity of a grey of 2 over
+        // (0.5, 0.25, 0.125) gave (1.0, 2.32, 2.99).
+        let spec = spec_blend_rgb(BlendMode::Luminosity, [0.5, 0.25, 0.125], [2.0; 3]);
+        assert!(spec[0] < spec[2], "{spec:?}");
+        let colors: [[f32; 3]; 10] = [
+            [1.0, 1.0, 1.0],
+            [1.5, 1.5, 1.5],
+            [2.0, 2.0, 2.0],
+            [4.0, 4.0, 4.0],
+            [1000.0, 1000.0, 1000.0],
+            [2.0, 2.0, 1.999_999],
+            [4.0, 3.999_9, 4.0],
+            [3.0, 0.25, 0.125],
+            [1.25, 0.875, 3.75],
+            [-0.25, 0.5, 1.375],
+        ];
+        for top in [1.0, f32::MAX] {
+            for m in NON_SEPARABLE {
+                for cb in colors {
+                    for cs in colors {
+                        let r = blend_rgb_within(m, cb, cs, top);
+                        assert!(r.iter().all(|v| v.is_finite()), "{m:?} {cb:?} {cs:?} {top}: {r:?}");
+                        // The target luminosity is kept, at any depth.
+                        let want = if m == BlendMode::Luminosity { lum(cs) } else { lum(cb) };
+                        if want >= 0.0 {
+                            assert!((lum(r) - want).abs() <= 1e-4 * want.max(1.0), "{m:?} {cb:?} {cs:?} {top}: {r:?}");
+                        }
+                        let (lo, hi) = (r[0].min(r[1]).min(r[2]), r[0].max(r[1]).max(r[2]));
+                        if top == 1.0 {
+                            // In gamut, or (a luminosity above 1 has no in-gamut colour) its grey.
+                            assert!((lo >= 0.0 && hi <= 1.0 + E) || hi - lo <= 1e-6 * hi, "{m:?} {cb:?} {cs:?}: {r:?}");
+                        } else {
+                            assert!(lo >= -1e-6 * hi.max(1.0), "{m:?} {cb:?} {cs:?}: {r:?}");
+                        }
+                    }
+                }
+            }
+        }
+        // 32-bit: a grey backdrop gives a grey of its own luminosity in Hue and Saturation, a
+        // grey source a grey in Color, and bright colours keep their values above 1.
+        for g in [1.5f32, 2.0, 4.0, 1000.0] {
+            let grey = [g; 3];
+            for cs in colors {
+                for m in [BlendMode::Hue, BlendMode::Saturation] {
+                    let r = blend_rgb_within(m, grey, cs, f32::MAX);
+                    assert!(r.iter().all(|&v| (v - lum(grey)).abs() <= 1e-5 * g), "{m:?} {g} {cs:?}: {r:?}");
+                }
+            }
+            let r = blend_rgb_within(BlendMode::Luminosity, [0.5, 0.25, 0.125], grey, f32::MAX);
+            assert!(r[0] > 1.0 && r[0] > r[1] && r[1] > r[2], "{g}: {r:?}");
+            let r = blend_rgb_within(BlendMode::Color, grey, [3.0, 0.25, 0.125], f32::MAX);
+            assert!(r[0] > 1.0 && r[0] > r[1] && r[1] > r[2], "{g}: {r:?}");
+            // Integer documents: no colour of that luminosity fits in 0..1, so it is its grey.
+            let r = blend_rgb_within(BlendMode::Luminosity, [0.5, 0.25, 0.125], grey, 1.0);
+            assert!(r.iter().all(|&v| (v - lum(grey)).abs() <= 1e-5 * g), "{g}: {r:?}");
+        }
+        // Continuous across near-greys: the result barely moves from the grey's.
+        for m in NON_SEPARABLE {
+            let a = blend_rgb_within(m, [2.0, 2.0, 2.0], [4.0, 4.0, 4.0], f32::MAX);
+            let b = blend_rgb_within(m, [2.0, 2.0, 1.999_999], [4.0, 3.999_999, 4.0], f32::MAX);
+            assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-4), "{m:?}: {a:?} {b:?}");
+        }
     }
 
     #[test]

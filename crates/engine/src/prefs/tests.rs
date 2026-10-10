@@ -521,3 +521,35 @@ fn prefs_set_validates_the_pressure_curve() {
     }
     assert_eq!(p.tools.pressure_curve, vec![[0.0, 0.1], [0.5, 0.7], [1.0, 1.0]], "a refused value changes nothing");
 }
+
+/// #2434: each unit's readout keeps Photoshop's precision, rounded half away from zero and
+/// without trailing zeros, so 0.7995 in reads 0.8 rather than 0.799 or 0.800.
+#[test]
+fn ruler_units_round_to_their_own_decimal_places() {
+    use super::{Unit, fmt_decimals};
+    assert_eq!(Unit::Pixels.decimals(), 0);
+    assert_eq!(Unit::Points.decimals(), 1);
+    for u in [Unit::Millimeters, Unit::Centimeters, Unit::Picas] {
+        assert_eq!(u.decimals(), 2, "{u:?}");
+    }
+    assert_eq!(Unit::Inches.decimals(), 3);
+    // Rounded to the unit's places, then trailing zeros dropped.
+    assert_eq!(fmt_decimals(0.7995, 3), "0.8");
+    assert_eq!(fmt_decimals(0.799, 3), "0.799");
+    assert_eq!(fmt_decimals(0.799, 2), "0.8");
+    assert_eq!(fmt_decimals(2.0, 3), "2");
+    assert_eq!(fmt_decimals(1234.5678, 2), "1234.57");
+    // Half away from zero, both signs, and no "-0".
+    assert_eq!(fmt_decimals(0.125, 2), "0.13");
+    assert_eq!(fmt_decimals(-0.125, 2), "-0.13");
+    assert_eq!(fmt_decimals(-0.004, 2), "0");
+    // A whole number keeps its zeros: 550 px is not 55.
+    assert_eq!(fmt_decimals(550.0, 0), "550");
+    // A 1500 px side at 300 dpi is 5 in / 12.7 cm / 127 mm / 360 pt / 30 pica.
+    let r = super::UnitsAndRulers { rulers: Unit::Inches, ..Default::default() };
+    assert_eq!(r.format(1500.0, 300.0, 1500.0), "5");
+    let r = super::UnitsAndRulers { rulers: Unit::Centimeters, ..Default::default() };
+    assert_eq!(r.format(1500.0, 300.0, 1500.0), "12.7");
+    let r = super::UnitsAndRulers { rulers: Unit::Inches, ..Default::default() };
+    assert_eq!(r.format(100.0, 300.0, 1500.0), "0.333");
+}

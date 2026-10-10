@@ -92,6 +92,28 @@ fn revert_reloads_as_one_undoable_step() {
 }
 
 #[test]
+fn injected_import_failure_does_not_open_a_document() {
+    let mut s = session(8, 8, 8);
+    let before = s.documents().len();
+    crate::allocation::fail_next_for_test();
+    let result = open_bytes_as(&mut s, "image.png", b"not decoded", None, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for importing document")));
+    assert_eq!(s.documents().len(), before);
+}
+
+#[test]
+fn injected_save_failure_does_not_modify_the_destination() {
+    let dir = tmp("allocation-save");
+    let path = join(&dir, "existing.psd");
+    std::fs::write(&path, b"previous file").unwrap();
+    let s = session(8, 8, 8);
+    crate::allocation::fail_next_for_test();
+    let result = save_doc(doc(&s), &path, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for saving document")));
+    assert_eq!(std::fs::read(path).unwrap(), b"previous file");
+}
+
+#[test]
 fn save_a_copy_keeps_path_and_dirty_state() {
     let dir = tmp("copy");
     let mut s = session(20, 10, 16);
@@ -156,6 +178,23 @@ fn place_embedded_centres_fits_and_embeds() {
         assert!(s.undo() && s.undo());
         assert_eq!(doc(&s).layers.len(), 1);
     }
+}
+
+/// Preferences ▸ General ▸ Resize Image During Place: off, a larger image keeps its natural size
+/// instead of being fitted to the canvas; an explicit `"fit"` still wins.
+#[test]
+fn resize_image_during_place_preference_controls_the_fit() {
+    let dir = tmp("place-fit-pref");
+    let big = png(&dir, "big.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    s.execute("prefs.set", json!({"path": "general.resizeImageDuringPlace", "value": false})).unwrap();
+    let r = s.execute("file.placeEmbedded", json!({"path": big})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 100.0).abs() < 1e-9, "natural size: {r}");
+    let b = r["bounds"].as_array().unwrap();
+    assert!(b[2].as_f64().unwrap() > 100.0, "wider than the canvas: {b:?}");
+    // An explicit "fit": true overrides the preference.
+    let r = s.execute("file.placeEmbedded", json!({"path": big, "fit": true})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 50.0).abs() < 1e-9, "fitted on request: {r}");
 }
 
 /// A 40×20 JPEG (left half red, right half blue) tagged EXIF Orientation = 6: shown upright it

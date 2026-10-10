@@ -116,6 +116,16 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
         return false;
     }
+    // Editable type can be scaled, rotated and skewed but not distorted (#2630): Photoshop greys
+    // Distort and Perspective until the type is rasterized. A targeted unlinked mask or channel of
+    // the type layer is pixels, and can be.
+    if matches!(id, "edit.transform.distort" | "edit.transform.perspective")
+        && active.is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
+        && photocraft_engine::transform_cmds::lone_target(&st.doc, st.active_layer, &serde_json::json!({ "target": crate::canvas::paint_target(app) }))
+            .is_ok_and(|t| t.is_none())
+    {
+        return true;
+    }
     // Only these commands depend on the selection; skip walking the layers for the rest.
     if selection_targets(id).is_some() {
         return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
