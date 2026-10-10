@@ -6,16 +6,29 @@ use std::sync::Arc;
 use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, vec2};
 
 mod hand;
+mod zoom;
 
 /// winit's cursor limit. Keep allocations bounded even for hostile brush sizes or zooms.
 const MAX_SIDE: u16 = 2048;
 
-/// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags.
+/// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags;
+/// `Zoom` is the Zoom tool's magnifier, with − while it zooms out.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Shape {
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
     Hand { closed: bool },
+    Zoom { out: bool },
+}
+
+/// Distance to the segment `a`–`b`, minus `r` (a capsule; a bare line when `r` is 0). Shared by the
+/// signed distance fields of the hand and the magnifier.
+fn capsule(x: f32, y: f32, a: [f32; 2], b: [f32; 2], r: f32) -> f32 {
+    let (px, py) = (x - a[0], y - a[1]);
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 { ((px * dx + py * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    (px - dx * t).hypot(py - dy * t) - r
 }
 
 #[derive(Clone)]
@@ -69,11 +82,27 @@ pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
 }
 
 fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
-    if bitmap && let Some(image) = cached_image(ctx, Shape::Hand { closed }, ctx.pixels_per_point()) {
+    bitmap_or(ctx, Shape::Hand { closed }, bitmap, if closed { CursorIcon::Grabbing } else { CursorIcon::Grab })
+}
+
+/// The Zoom tool's pointer: a magnifier with − while it zooms out (`out`), + otherwise. winit maps
+/// `ZoomIn` and `ZoomOut` to the arrow on Windows, so there it is a bitmap; macOS and the Linux
+/// themes already draw magnifiers.
+pub(crate) fn zoom(ctx: &egui::Context, out: bool) -> CursorIcon {
+    zoom_with(ctx, out, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
+}
+
+fn zoom_with(ctx: &egui::Context, out: bool, bitmap: bool) -> CursorIcon {
+    bitmap_or(ctx, Shape::Zoom { out }, bitmap, if out { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn })
+}
+
+/// `shape` as a bitmap where the OS lacks it (`bitmap`), else the OS's own `native` cursor.
+fn bitmap_or(ctx: &egui::Context, shape: Shape, bitmap: bool, native: CursorIcon) -> CursorIcon {
+    if bitmap && let Some(image) = cached_image(ctx, shape, ctx.pixels_per_point()) {
         ctx.set_cursor_image(Some(image));
         return CursorIcon::None;
     }
-    if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
+    native
 }
 
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
@@ -126,8 +155,8 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
                 }
             }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
-            // Only ever a bitmap: without one the OS draws its own grab cursors.
-            Shape::Hand { .. } => {}
+            // Only ever bitmaps: without one the OS draws its own grab and zoom cursors.
+            Shape::Hand { .. } | Shape::Zoom { .. } => {}
         }
     }
 }
@@ -160,6 +189,7 @@ fn extent(shape: Shape) -> Option<f32> {
             length
         }
         Shape::Hand { .. } => hand::HALF,
+        Shape::Zoom { .. } => zoom::HALF,
     })
 }
 
@@ -182,6 +212,10 @@ fn coverage(shape: Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             let outline = (scale + 0.5 - edge).clamp(0.0, 1.0);
             let crease = (0.45 * scale + 0.5 - hand::crease(closed, lx, ly) * scale).clamp(0.0, 1.0);
             (inside * (1.0 - crease), outline.max(inside * crease))
+        }
+        Shape::Zoom { out } => {
+            let edge = zoom::shape(out, dx / scale, dy / scale) * scale;
+            ((0.5 - edge).clamp(0.0, 1.0), (scale + 0.5 - edge).clamp(0.0, 1.0))
         }
     }
 }

@@ -3,17 +3,10 @@
 //! in Photoshop. Only Windows needs it: winit maps its `Grab` and `Grabbing` to the four-arrow move
 //! cursor there, while macOS and the Linux themes already draw hands.
 
+use super::capsule;
+
 /// Half the side of the square the hand fits in, outline excluded.
 pub(super) const HALF: f32 = 12.5;
-
-/// Distance to the segment `a`–`b`, minus `r` (a capsule; a bare line when `r` is 0).
-fn capsule(x: f32, y: f32, a: [f32; 2], b: [f32; 2], r: f32) -> f32 {
-    let (px, py) = (x - a[0], y - a[1]);
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 > 0.0 { ((px * dx + py * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-    (px - dx * t).hypot(py - dy * t) - r
-}
 
 /// A box of half-size `half` about `c` with corners rounded by `r`.
 fn round_box(x: f32, y: f32, c: [f32; 2], half: [f32; 2], r: f32) -> f32 {
