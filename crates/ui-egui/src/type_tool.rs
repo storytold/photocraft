@@ -800,7 +800,8 @@ pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut Stri
         // Clicks inside the menu (the search field, the scroll bar) must not close it (#1369);
         // picking a font closes it explicitly below.
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    combo.show_ui(ui, |ui| {
+
+    let response = combo.show_ui(ui, |ui| {
         let (pass_id, focus_id, height_id) = (search_id.with("pass"), search_id.with("focus"), search_id.with("height"));
         let pass = ui.ctx().cumulative_pass_nr();
         let last_pass: Option<u64> = ui.data(|d| d.get_temp(pass_id));
@@ -841,10 +842,13 @@ pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut Stri
                 photocraft_text::served::request(f);
             }
         }
-        if enter && filtered.iter().any(|f| *f == current) {
+        let accept = enter && filtered.iter().any(|f| *f == current);
+        if accept {
             ui.data_mut(|d| d.remove::<String>(search_id));
             ui.close();
         }
+
+        let mut hovered: Option<String> = None;
         for f in filtered {
             let response = ui.add_sized(
                 [330.0, 28.0],
@@ -856,12 +860,16 @@ pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut Stri
             if ui.is_rect_visible(response.rect) {
                 crate::font_preview::paint(ui, f, response.rect);
             }
+            if response.hovered() {
+                hovered = Some(f.clone());
+            }
             if response.clicked() {
                 *current = f.clone();
                 // A served family not fetched yet: start now, before any text needs it.
                 photocraft_text::served::request(f);
                 changed = true;
                 ui.data_mut(|d| d.remove::<String>(search_id));
+                hovered = None;
                 ui.close();
             }
         }
@@ -874,12 +882,24 @@ pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut Stri
         } else if let Some(h) = ui.data(|d| d.get_temp::<f32>(height_id)) {
             ui.set_min_height(h.min(FONT_MENU_HEIGHT));
         }
+        if accept { None } else { hovered }
     });
+    let hovered_font = response.inner.unwrap_or_default();
+
+    if salt == "type-font" {
+        let hover_id = egui::Id::new("type-font-hover");
+        if let Some(f) = hovered_font {
+            ui.ctx().data_mut(|d| d.insert_temp(hover_id, f));
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<String>(hover_id));
+        }
+    }
+
     changed
 }
 
 /// The type layer the options bar edits: the one being edited, else the active layer if it is type.
-fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
+pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
     if let Some(ed) = &app.ui.text_edit {
         let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
         return Some((ed.layer, (a < b).then_some([a, b])));

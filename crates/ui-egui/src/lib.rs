@@ -157,6 +157,7 @@ mod tool_cursor;
 pub mod tool_feedback;
 pub mod transform_tex;
 pub mod transform_tool;
+mod type_font_preview;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
@@ -530,6 +531,8 @@ pub struct PhotocraftApp {
     /// Type tool layout cache: ((doc, revision, layer), layout).
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
+    /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
+    pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
     channel_thumbs: Option<(DocId, std::sync::Weak<Document>, bool, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.
@@ -631,6 +634,7 @@ impl PhotocraftApp {
             channel_views: HashMap::new(),
             type_layout: None,
             type_transform_preview: None,
+            type_font_preview: None,
             guide_drag: None,
             crop: Default::default(),
             hover_doc: None,
@@ -1226,6 +1230,7 @@ impl eframe::App for PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         if self.live_tokens.poll(ctx, self.ui.theme) {
