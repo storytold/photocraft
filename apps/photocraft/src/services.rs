@@ -309,6 +309,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             photocraft_automation::workspace::authorize_desktop_engine_command(id, params).map_err(|error| error.to_string())
         }) as photocraft_ui_egui::AutomationCommandFn
     });
+    #[cfg(target_os = "windows")]
+    let updater = crate::updater::services();
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8]| {
             crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
@@ -330,6 +332,12 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
+        #[cfg(target_os = "windows")]
+        check_for_updates: Some(updater.0),
+        #[cfg(target_os = "windows")]
+        download_update: Some(updater.1),
+        #[cfg(target_os = "windows")]
+        install_update: Some(updater.2),
         clipboard_set_image: Some({
             let clip = clip.clone();
             Box::new(move |w: u32, h: u32, px: &[u8]| {

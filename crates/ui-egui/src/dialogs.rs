@@ -10,6 +10,100 @@ use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 /// Where this frame's dialogs are on screen (the canvas reads last frame's: it draws first).
 const RECTS: &str = "pc-dialog-rects";
 
+pub(crate) struct AboutUpdate {
+    dialog_id: u64,
+    status: AboutUpdateStatus,
+    receiver: Option<crate::UpdateEvents>,
+}
+
+#[derive(Clone)]
+enum AboutUpdateStatus {
+    Checking,
+    Current,
+    Available { version: String, installable: bool },
+    Downloading { version: String, downloaded: u64, total: Option<u64> },
+    Ready { version: String, installer: std::path::PathBuf },
+    Failed(String),
+}
+
+fn begin_update_check(app: &mut PhotocraftApp, dialog_id: u64) {
+    let receiver = app.services.check_for_updates.as_mut().map(|check| check());
+    let status = if receiver.is_some() { AboutUpdateStatus::Checking } else { return };
+    app.about_update = Some(AboutUpdate { dialog_id, status, receiver });
+}
+
+fn start_update_download(app: &mut PhotocraftApp, version: String) {
+    let receiver = app.services.download_update.as_mut().map(|download| download());
+    let Some(receiver) = receiver else { return };
+    if let Some(update) = app.about_update.as_mut() {
+        update.status = AboutUpdateStatus::Downloading { version, downloaded: 0, total: None };
+        update.receiver = Some(receiver);
+    }
+}
+
+fn poll_update(app: &mut PhotocraftApp, dialog_id: u64, ctx: &egui::Context) {
+    if app.about_update.as_ref().is_none_or(|update| update.dialog_id != dialog_id) {
+        begin_update_check(app, dialog_id);
+    }
+    let mut events = Vec::new();
+    let mut disconnected = false;
+    if let Some(update) = app.about_update.as_ref().filter(|update| update.dialog_id == dialog_id)
+        && let Some(receiver) = &update.receiver
+    {
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => events.push(event),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(update) = app.about_update.as_mut().filter(|update| update.dialog_id == dialog_id) {
+        for event in events {
+            update.status = match event {
+                crate::UpdateEvent::Current => AboutUpdateStatus::Current,
+                crate::UpdateEvent::Available { version, installable } => AboutUpdateStatus::Available { version, installable },
+                crate::UpdateEvent::Progress { downloaded, total } => match &update.status {
+                    AboutUpdateStatus::Downloading { version, .. } => AboutUpdateStatus::Downloading { version: version.clone(), downloaded, total },
+                    _ => continue,
+                },
+                crate::UpdateEvent::Ready { version, installer } => AboutUpdateStatus::Ready { version, installer },
+                crate::UpdateEvent::Failed(error) => AboutUpdateStatus::Failed(error),
+            };
+        }
+        if disconnected && matches!(&update.status, AboutUpdateStatus::Checking | AboutUpdateStatus::Downloading { .. }) {
+            update.status = AboutUpdateStatus::Failed("The update worker stopped before it finished.".into());
+            update.receiver = None;
+        }
+        if matches!(&update.status, AboutUpdateStatus::Checking | AboutUpdateStatus::Downloading { .. }) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+fn update_action(app: &mut PhotocraftApp, ctx: &egui::Context, dialog_id: u64) {
+    let status = app.about_update.as_ref().filter(|update| update.dialog_id == dialog_id).map(|update| update.status.clone());
+    match status {
+        Some(AboutUpdateStatus::Current | AboutUpdateStatus::Failed(_)) => begin_update_check(app, dialog_id),
+        Some(AboutUpdateStatus::Available { version, installable: true }) => start_update_download(app, version),
+        Some(AboutUpdateStatus::Available { installable: false, .. }) => {
+            crate::links::open(app, ctx, crate::links::RELEASES);
+        }
+        Some(AboutUpdateStatus::Ready { installer, .. }) => {
+            let result = crate::menus::invoke(app, ctx, "app.installUpdate", json!({"installer": installer.to_string_lossy()}));
+            if let Err(error) = result
+                && let Some(update) = app.about_update.as_mut()
+            {
+                update.status = AboutUpdateStatus::Failed(error);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn rects(ctx: &egui::Context) -> Vec<egui::Rect> {
     ctx.data(|m| m.get_temp(egui::Id::new(RECTS))).unwrap_or_default()
 }
@@ -83,6 +177,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let top = dialogs.last().map(|d| d.id);
     let mut shown = Vec::new();
     for d in dialogs {
+        if d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true) {
+            poll_update(app, d.id, ctx);
+        }
         let lang = if crate::prefs_ui::is_preferences(&d.fields) {
             crate::i18n::Lang::from_pref(d.fields.get("values").and_then(|v| v.pointer("/interface/language")).and_then(Value::as_str).unwrap_or("auto"))
         } else {
@@ -185,7 +282,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         fields.insert("tab".into(), json!(chosen));
                     }
                     ui.add_space(8.0);
-                    about_tab_body(app, ui, chosen);
+                    about_tab_body(app, ui, chosen, d.id);
                 }
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
@@ -240,8 +337,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     if matches!(d.kind, DialogKind::About | DialogKind::Error) {
-                        if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
-                            outcome = Some(false);
+                        let mut buttons = vec![DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)];
+                        if d.kind == DialogKind::About && app.services.check_for_updates.is_some() {
+                            let update = app.about_update.as_ref().filter(|update| update.dialog_id == d.id);
+                            let (label, enabled) = match update.map(|update| &update.status) {
+                                Some(AboutUpdateStatus::Checking) => ("Checking for updates…", false),
+                                Some(AboutUpdateStatus::Current) => ("Check for Updates", true),
+                                Some(AboutUpdateStatus::Available { installable: true, .. }) => ("Update", true),
+                                Some(AboutUpdateStatus::Available { installable: false, .. }) => ("Download", true),
+                                Some(AboutUpdateStatus::Downloading { .. }) => ("Downloading update…", false),
+                                Some(AboutUpdateStatus::Ready { .. }) => ("Install Update", true),
+                                Some(AboutUpdateStatus::Failed(_)) => ("Check for Updates", true),
+                                None => ("Checking for updates…", false),
+                            };
+                            buttons.insert(0, DialogButton::new(ButtonRole::Alternate, tl!(label), 112.0).enabled(enabled));
+                        }
+                        match dialog_buttons(ui, &buttons) {
+                            Some(ButtonRole::Alternate) => update_action(app, ctx, d.id),
+                            Some(_) => outcome = Some(false),
+                            None => {}
                         }
                     } else {
                         let ok_label = if d.kind == DialogKind::NewDocument {
@@ -346,13 +460,53 @@ fn about_tab(fields: &serde_json::Map<String, Value>) -> &'static str {
 }
 
 /// One About tab's contents: the credits lists, or the product blurb and links.
-fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
+fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str, dialog_id: u64) {
     match tab {
         "contributors" => crate::credits::contributors_ui(app, ui),
         "models" => crate::credits::models_ui(ui),
         _ => {
             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
-            ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+            let update = app.about_update.as_ref().filter(|update| update.dialog_id == dialog_id).map(|update| update.status.clone());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+                if let Some(version) = update.as_ref().and_then(|status| match status {
+                    AboutUpdateStatus::Available { version, .. }
+                    | AboutUpdateStatus::Downloading { version, .. }
+                    | AboutUpdateStatus::Ready { version, .. } => Some(version.as_str()),
+                    _ => None,
+                }) {
+                    ui.label(crate::i18n::fmt(tl!("New version {version}"), &[("version", version)]));
+                }
+            });
+            match update {
+                Some(AboutUpdateStatus::Checking) => {
+                    ui.weak(tl!("Checking for updates…"));
+                }
+                Some(AboutUpdateStatus::Current) => {
+                    ui.weak(tl!("You're up to date."));
+                }
+                Some(AboutUpdateStatus::Available { installable: false, .. }) => {
+                    if ui.link(tl!("GitHub")).clicked() {
+                        crate::links::open(app, ui.ctx(), crate::links::RELEASES);
+                    }
+                }
+                Some(AboutUpdateStatus::Downloading { downloaded, total, .. }) => {
+                    ui.weak(tl!("Downloading update…"));
+                    if let Some(total) = total.filter(|total| *total > 0) {
+                        ui.add(egui::ProgressBar::new((downloaded as f32 / total as f32).clamp(0.0, 1.0)).show_percentage());
+                    } else {
+                        ui.spinner();
+                    }
+                }
+                Some(AboutUpdateStatus::Ready { .. }) => {}
+                Some(AboutUpdateStatus::Failed(error)) => {
+                    ui.weak(crate::i18n::fmt(tl!("Update failed: {error}"), &[("error", &error)]));
+                    if ui.link(tl!("GitHub")).clicked() {
+                        crate::links::open(app, ui.ctx(), crate::links::RELEASES);
+                    }
+                }
+                None => {}
+            }
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {
                 crate::links::discord_button(app, ui, 220.0);
@@ -485,6 +639,50 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn update_events(event: crate::UpdateEvent) -> crate::UpdateEvents {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(event);
+        receiver
+    }
+
+    #[test]
+    fn about_shows_the_new_version_and_downloads_the_verified_update() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let installer = std::env::temp_dir().join("photocraft-update-test.msi");
+        let installed = Arc::new(Mutex::new(Vec::<std::path::PathBuf>::new()));
+        let installed_by_service = installed.clone();
+        let services = crate::Services {
+            check_for_updates: Some(Box::new(|| update_events(crate::UpdateEvent::Available {
+                version: "0.7.0".into(),
+                installable: true,
+            }))),
+            download_update: Some(Box::new({
+                let installer = installer.clone();
+                move || update_events(crate::UpdateEvent::Ready { version: "0.7.0".into(), installer: installer.clone() })
+            })),
+            install_update: Some(Box::new(move |path| {
+                installed_by_service.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(path);
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.ui.open_dialog(DialogKind::About, serde_json::Map::new());
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        harness.run_steps(4);
+        assert!(harness.query_by_label("New version 0.7.0").is_some());
+        harness.get_by_label("Update").click();
+        harness.run_steps(3);
+        harness.get_by_label("Install Update").click();
+        harness.run_steps(2);
+        assert_eq!(*installed.lock().unwrap_or_else(std::sync::PoisonError::into_inner), vec![installer]);
+        assert!(harness.state().allow_close);
+    }
 
     /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
     fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {

@@ -2778,6 +2778,15 @@ cameraRaw	Color	색상
 	Contributors: {contributors} · Commits: {commits}	기여자: {contributors} · 커밋: {commits}
 	No contributor data was built into this copy.	이 사본에는 기여자 데이터가 포함되어 있지 않습니다.
 	No model credits were built into this copy.	이 사본에는 모델 크레딧이 포함되어 있지 않습니다.
+	Check for Updates	업데이트 확인
+	Checking for updates…	업데이트 확인 중…
+	Update	업데이트
+	Download	다운로드
+	Downloading update…	업데이트 다운로드 중…
+	Install Update	업데이트 설치
+	New version {version}	새 버전 {version}
+	You're up to date.	최신 버전을 사용 중입니다.
+	Update failed: {error}	업데이트 실패: {error}
 	Company	회사
 	Version	버전
 	% of all commits	전체 커밋 대비 %

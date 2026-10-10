@@ -1415,6 +1415,13 @@
 	Contributors: {contributors} · Commits: {commits}	Συντελεστές: {contributors} · Commits: {commits}
 	No contributor data was built into this copy.	Αυτή η έκδοση δεν περιλαμβάνει δεδομένα συντελεστών.
 	No model credits were built into this copy.	Αυτή η έκδοση δεν περιλαμβάνει στοιχεία αναγνώρισης μοντέλων.
+	Checking for updates…	Έλεγχος για ενημερώσεις…
+	Download	Λήψη
+	Downloading update…	Λήψη ενημέρωσης…
+	Install Update	Εγκατάσταση ενημέρωσης
+	New version {version}	Νέα έκδοση {version}
+	You're up to date.	Έχετε την πιο πρόσφατη έκδοση.
+	Update failed: {error}	Αποτυχία ενημέρωσης: {error}
 	Company	Εταιρεία
 	% of all commits	% του συνόλου των commits
 	Lines +/−	Γραμμές +/−

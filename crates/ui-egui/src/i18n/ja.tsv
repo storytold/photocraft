@@ -2171,6 +2171,15 @@ cameraRaw	Color	カラー
 	Contributors: {contributors} · Commits: {commits}	コントリビューター: {contributors} · コミット: {commits}
 	No contributor data was built into this copy.	このコピーにはコントリビューターのデータが含まれていません。
 	No model credits were built into this copy.	このコピーにはモデルのクレジットが含まれていません。
+	Check for Updates	更新を確認
+	Checking for updates…	更新を確認中…
+	Update	更新
+	Download	ダウンロード
+	Downloading update…	更新をダウンロード中…
+	Install Update	更新をインストール
+	New version {version}	新しいバージョン {version}
+	You're up to date.	最新バージョンを使用しています。
+	Update failed: {error}	更新に失敗しました: {error}
 	Company	会社
 	Model	モデル
 	Version	バージョン

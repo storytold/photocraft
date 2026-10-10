@@ -2444,6 +2444,15 @@ cameraRaw	Roughness	Шорсткість
 	Contributors: {contributors} · Commits: {commits}	Учасники: {contributors} · Коміти: {commits}
 	No contributor data was built into this copy.	У цю копію не вбудовано дані про учасників.
 	No model credits were built into this copy.	У цю копію не вбудовано дані про використані моделі.
+	Check for Updates	Перевірити оновлення
+	Checking for updates…	Перевірка оновлень…
+	Update	Оновити
+	Download	Завантажити
+	Downloading update…	Завантаження оновлення…
+	Install Update	Установити оновлення
+	New version {version}	Нова версія {version}
+	You're up to date.	Використовується найновіша версія.
+	Update failed: {error}	Помилка оновлення: {error}
 	Company	Компанія
 	Version	Версія
 	% of all commits	% усіх комітів

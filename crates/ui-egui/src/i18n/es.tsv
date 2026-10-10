@@ -2260,6 +2260,15 @@ cameraRaw	Amount	Cantidad
 	Contributors: {contributors} · Commits: {commits}	Colaboradores: {contributors} · Commits: {commits}
 	No contributor data was built into this copy.	Esta copia no incluye datos de colaboradores.
 	No model credits were built into this copy.	Esta copia no incluye créditos de modelos.
+	Check for Updates	Buscar actualizaciones
+	Checking for updates…	Buscando actualizaciones…
+	Update	Actualizar
+	Download	Descargar
+	Downloading update…	Descargando actualización…
+	Install Update	Instalar actualización
+	New version {version}	Nueva versión {version}
+	You're up to date.	Estás al día.
+	Update failed: {error}	Error al actualizar: {error}
 	Company	Empresa
 	Version	Versión
 	% of all commits	% de todos los commits

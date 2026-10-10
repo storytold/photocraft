@@ -147,6 +147,14 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   the wizard's banner and side bitmaps from the app icon, so no WiX stock art ships. `msiexec /qn`
   still installs silently. Building needs the WiX UI and Util extensions:
   `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
+- **Help › About update:** the Windows desktop app checks the latest stable GitHub Release in the
+  background and offers its MSI only when the running executable matches the MSI-registered install
+  directory. It selects the MSI for the running architecture and checks it against the release's
+  `SHA256SUMS.txt` before showing the install action. The user starts the interactive Windows
+  Installer after PhotoCraft's unsaved-document prompt; a helper waits for the app to exit, then
+  starts `msiexec` without silent-install or elevation flags. Portable and manually copied builds
+  open the official releases page for manual updating. The MSI's existing user settings stay under
+  `%APPDATA%\Photocraft`.
 - Shortcut icon identifiers keep the executable's `.exe` extension: MSI uses the identifier
   as the cached icon filename, and an extensionless filename can render as a blank document
   icon. `packaging/windows/check-icons.ps1` checks the references and extensions in CI;
