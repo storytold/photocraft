@@ -34,7 +34,8 @@ impl Rule {
 }
 
 // The bounds and choices are the core filters' public dialog-unit contract. Defaults remain in
-// params_for; extended/gallery filters keep their own parsing until their validation is added.
+// params_for; extended filters keep their own parsing until their validation is added (gallery
+// filters are checked in gallery_cmds).
 fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     use Rule::{Bool, Choice, Number, Unsigned};
     Some(match id {
@@ -95,7 +96,7 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
 /// Runs both at dispatch (before committing a floating selection) and at the shared runner
 /// (direct specs/Last Filter). Filters outside this module's core family are unaffected.
 pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
-    let Some(fields) = fields(id) else { return Ok(()) };
+    let Some(fields) = fields(id) else { return crate::gallery_cmds::validate_params(id, params) };
     let bad = |msg| EngineError::BadParams { cmd: id.into(), msg };
     if params.is_null() {
         return Ok(());
