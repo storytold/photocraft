@@ -1101,22 +1101,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if pick_shield_color {
                             crate::crop_shield::pick_custom_color(app);
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if icons::button(
-                                ui,
-                                "check",
-                                26.0,
-                                false,
-                                &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]),
-                            )
-                            .clicked()
-                            {
-                                crate::canvas::commit_crop(app);
-                            }
-                            if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                                crate::crop_ui::cancel(app);
-                            }
-                        });
+                        // Right after the options, never pinned to the far edge.
+                        widgets::vline(ui, 22.0);
+                        let cancel = icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)"));
+                        cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel crop"));
+                        if cancel.clicked() {
+                            crate::crop_ui::cancel(app);
+                        }
+                        let commit = icons::button(
+                            ui,
+                            "check",
+                            26.0,
+                            false,
+                            &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]),
+                        );
+                        commit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Commit crop"));
+                        if commit.clicked() {
+                            crate::canvas::commit_crop(app);
+                        }
                     }
                     // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
                     Tool::Type | Tool::VerticalType => crate::type_tool::options_bar(app, ui),
@@ -4112,6 +4114,31 @@ mod group_drag_selection_tests {
         assert_eq!((r.top(), r.bottom()), (cell.top(), cell.bottom()));
         assert!((r.width() - 7.5).abs() < 1e-3, "{r:?}");
         assert!((uv.width() - 0.25).abs() < 1e-3 && (uv.height() - 1.0).abs() < 1e-3, "{uv:?}");
+    }
+
+    /// The Crop bar's Cancel and Commit sit right after its options, not at the far right edge.
+    #[test]
+    fn crop_bar_buttons_follow_the_options_on_a_wide_bar() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = crate::state::Tool::Crop;
+        let width = 2400.0;
+        let mut h = Harness::builder().with_size(vec2(width, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(6);
+        let commit = h.get_by_label("Commit crop").rect();
+        let cancel = h.get_by_label("Cancel crop").rect();
+        assert!(commit.right() < width * 0.5, "commit sits next to the options, not at the far right: {commit:?}");
+        assert!(cancel.right() < commit.left() + 1.0, "cancel is left of commit");
     }
 }
 

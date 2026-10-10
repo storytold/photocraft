@@ -324,16 +324,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             s.update_grid();
         }
     }
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if crate::widgets::primary_button(ui, "✓", 32.0)
-            .on_hover_text(crate::i18n::fmt(tl!("Commit Perspective Warp ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
-            .clicked()
-        {
-            commit(app);
-        } else if crate::widgets::secondary_button(ui, "⊘", 32.0).on_hover_text(tl!("Cancel (Esc)")).clicked() {
-            app.distort.perspective = None;
-        }
-    });
+    // Right after the options, never pinned to the far edge.
+    crate::widgets::vline(ui, 22.0);
+    if crate::widgets::secondary_button(ui, "⊘", 32.0).on_hover_text(tl!("Cancel (Esc)")).clicked() {
+        app.distort.perspective = None;
+    } else if crate::widgets::primary_button(ui, "✓", 32.0)
+        .on_hover_text(crate::i18n::fmt(tl!("Commit Perspective Warp ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+        .clicked()
+    {
+        commit(app);
+    }
 }
 
 #[cfg(test)]

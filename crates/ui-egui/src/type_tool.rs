@@ -1053,23 +1053,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         open_color_picker(app, [c[0], c[1], c[2]]);
     }
     if app.ui.text_edit.is_some() {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(8.0);
-            if crate::icons::button(
-                ui,
-                "check",
-                24.0,
-                false,
-                &crate::i18n::fmt(tl!("Commit any current edits ({key})"), &[("key", &crate::shortcuts::pretty("Cmd+Enter"))]),
-            )
-            .clicked()
-            {
-                commit(app);
-            }
-            if crate::icons::button(ui, "ban", 24.0, false, tl!("Cancel any current edits (Esc)")).clicked() {
-                cancel(app);
-            }
-        });
+        // Right after the options, never pinned to the far edge.
+        crate::widgets::vline(ui, 22.0);
+        if crate::icons::button(ui, "ban", 24.0, false, tl!("Cancel any current edits (Esc)")).clicked() {
+            cancel(app);
+        }
+        if crate::icons::button(
+            ui,
+            "check",
+            24.0,
+            false,
+            &crate::i18n::fmt(tl!("Commit any current edits ({key})"), &[("key", &crate::shortcuts::pretty("Cmd+Enter"))]),
+        )
+        .clicked()
+        {
+            commit(app);
+        }
     }
 }
 
