@@ -274,6 +274,33 @@ on PRs that touch `packaging/freebsd/`, `freebsd.yml` or `release.yml`), so the 
 isn't the first place it runs. Locally, on any OS, `packaging/freebsd/package.sh --dry-run` stages the tree from stub binaries
 and lists the tarball, which checks the layout without a FreeBSD machine.
 
+### Arch Linux (AUR)
+
+`photocraft-bin` (repackages the release's Linux tarballs) and `photocraft` (builds the tag's
+source) live in [`packaging/arch/`](../packaging/arch/README.md). They aren't built by
+`release.yml`: the AUR fetches from the published release, so the separate `aur.yml` workflow
+runs when a release is **published** (pre-releases are skipped). It runs
+`packaging/arch/update.sh` to set pkgver, checksums and the tag's commit, builds and installs
+`photocraft-bin` in an `archlinux:base-devel` container, runs `photocraft-cli --version` and
+`namcap`, checks the source package's checksums, and pushes both `PKGBUILD` + `.SRCINFO` to
+`ssh://aur@aur.archlinux.org/<pkg>.git`. *Actions → AUR → Run workflow* does the same for a
+given version, with a `dry_run` option that skips the push.
+
+One-time setup, by the repository owner:
+
+1. Create an account on [aur.archlinux.org](https://aur.archlinux.org) (it becomes the
+   packages' maintainer) and generate a key used only for this:
+   `ssh-keygen -t ed25519 -C photocraft-aur -f aur_photocraft -N ''`.
+2. Add `aur_photocraft.pub` under *My Account → SSH Public Key* on the AUR.
+3. Create the **`aur`** environment (*Settings → Environments*), with deployment branches and
+   tags set to `main` and `v*`, and add the private key `aur_photocraft` as its
+   `AUR_SSH_PRIVATE_KEY` secret. Optional variables `AUR_GIT_NAME` and `AUR_GIT_EMAIL` set the
+   AUR commit author. Then delete the local key files.
+4. The first push creates the two AUR packages. To publish a release that predates this
+   workflow, run it by hand on `main` with that version.
+
+Without the secret the workflow still checks the packages and ends with a `::warning::`.
+
 ### Web
 
 `packaging/web/package.sh` runs `trunk build --release` (see `apps/photocraft-web/Trunk.toml`)
@@ -305,6 +332,9 @@ the run shows a `::warning::`.
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing (an alternative to the `.pfx`) |
 | `AZURE_SIGNING_ENDPOINT` | e.g. `https://eus.codesigning.azure.net` |
 | `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing account and certificate profile names |
+
+`AUR_SSH_PRIVATE_KEY` is the exception: it lives in the separate **`aur`** environment, because
+`aur.yml` runs on the release tag rather than the `release` branch (see *Arch Linux (AUR)* above).
 
 `GITHUB_TOKEN` creates the release. Only the final job gets `contents: write`.
 
