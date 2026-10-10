@@ -1201,8 +1201,9 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
         let mut copies = Vec::new();
         let mut new_active = None;
         for id in top_level(doc, &sel) {
-            let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-            dup.name = doc.copy_name(&dup.name);
+            // Match the single-layer duplicate path: Background copies become
+            // ordinary layers, while normal copies retain their original locks.
+            let dup = crate::commands::layer_copy(doc, id)?;
             let nid = doc.insert_above(Some(id), dup);
             if !in_place {
                 crate::artboard_cmds::place_copy(doc, nid)?;

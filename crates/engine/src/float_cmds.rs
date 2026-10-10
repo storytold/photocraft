@@ -82,7 +82,7 @@ impl CutParts {
                 rest.write_region(b, &rp);
             }
             if fill {
-                crate::pixels::fill_surface(&mut rest, b, background, Some(sel), true);
+                crate::pixels::try_fill_surface(&mut rest, b, background, Some(sel), true)?;
             }
             rest.prune();
             piece.write_region(b, &pp);
@@ -109,7 +109,7 @@ impl CutParts {
         let mut out = self.rest.clone();
         let piece = photocraft_algo::resample::translate_surface(&self.piece, dx, dy);
         if self.mask {
-            crate::fill_cmds::composite_over(&mut out, &piece, piece.content_bounds(), None);
+            crate::fill_cmds::composite_over(&mut out, &piece, piece.content_bounds(), None)?;
         } else {
             crate::transform_cmds::composite_over(&mut out, &piece);
         }

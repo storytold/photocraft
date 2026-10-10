@@ -306,6 +306,16 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         let canvas = doc.bounds();
         let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
+        // A Background cannot contain transparent pixels. When a transparent
+        // extension adds canvas area, make it a normal paintable layer first.
+        // A shrink or no-op resize must not silently convert the Background.
+        if ext[3] == 0.0
+            && (nw > ow as u32 || nh > oh as u32)
+            && let Some(bg) = doc.layers.first_mut()
+            && crate::extra_cmds::is_background(bg)
+        {
+            crate::extra_cmds::unlock_background(bg);
+        }
         // The locked Background layer is extended with the extension colour.
         if ext[3] > 0.0
             && let Some(bg) = doc.layers.first_mut()

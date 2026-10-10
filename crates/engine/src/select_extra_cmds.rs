@@ -195,7 +195,7 @@ fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let selected = s.edit("Transform Selection", |doc, _| {
         if let Some(sel) = &doc.selection {
-            doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, interp)).filter(|s| !s.content_bounds().is_empty());
+            doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, interp)?).filter(|s| !s.content_bounds().is_empty());
         }
         Ok(doc.selection.is_some())
     })?;

@@ -715,7 +715,13 @@ impl Ex {
                         }
                         None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
                     };
-                    crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt)
+                    match unfiltered {
+                        Ok(unfiltered) => crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt),
+                        Err(e) => {
+                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
