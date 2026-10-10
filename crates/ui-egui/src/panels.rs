@@ -1572,8 +1572,11 @@ fn simple_lock_toggle(background: bool, l: &Layer) -> (String, Value) {
     ("layer.setProps".into(), json!({"layer": l.id.0, "locks": locks}))
 }
 
-fn blend_options(groups: bool) -> Vec<(BlendMode, &'static str)> {
-    std::iter::once(BlendMode::PassThrough).filter(|_| groups).chain(BlendMode::LAYER_MODES).map(|m| (m, m.label())).collect()
+/// The Layers panel's blend modes: Photoshop's, plus the layer's own Paint.NET mode when it has one
+/// (an imported `.pdn`), so the menu matches Photoshop's for every other layer.
+fn blend_options(groups: bool, current: BlendMode) -> Vec<(BlendMode, &'static str)> {
+    let own = Some(current).filter(|m| !m.has_psd_equivalent());
+    std::iter::once(BlendMode::PassThrough).filter(|_| groups).chain(BlendMode::LAYER_MODES).chain(own).map(|m| (m, m.label())).collect()
 }
 
 /// Scroll the Layers panel while holding a layer drag over its top/bottom edge or past them.
@@ -1654,7 +1657,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
                 let right = (body_text_width(ui, opacity_label) + LAYER_PCT_W + 2.0 * ui.spacing().item_spacing.x + 16.0).max(150.0);
                 let w = ui.available_width() - right;
-                let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(l.is_group()), w.max(100.0));
+                let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(l.is_group(), l.blend), w.max(100.0));
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
                     actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "blend": m.label()})));

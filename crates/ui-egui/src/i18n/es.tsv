@@ -2399,3 +2399,9 @@ fontWeight	Italic	Cursiva
 	Keep this tab open to retain your brushes.	Mantén esta pestaña abierta para conservar tus pinceles.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	El almacenamiento del navegador no está disponible; los pinceles solo duran esta sesión. Mantén esta pestaña abierta para conservarlos.
 	Saving brush presets… Keep this tab open until saving finishes.	Guardando ajustes preestablecidos de pincel… Mantén esta pestaña abierta hasta que termine.
+	Reflect	Reflejar
+	Glow	Resplandor
+	Negation	Negación
+	XOR	XOR
+	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
+	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)

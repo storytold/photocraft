@@ -2910,3 +2910,9 @@ fontWeight	Italic	기울임
 	Keep this tab open to retain your brushes.	브러시를 유지하려면 이 탭을 열어 두세요.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	브라우저 저장소를 사용할 수 없어 브러시는 이 세션에서만 유지됩니다. 유지하려면 이 탭을 열어 두세요.
 	Saving brush presets… Keep this tab open until saving finishes.	브러시 사전 설정 저장 중… 저장이 끝날 때까지 이 탭을 열어 두세요.
+	Reflect	반사
+	Glow	광선
+	Negation	부정
+	XOR	XOR
+	Color Burn (Paint.NET)	색상 번 (Paint.NET)
+	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)

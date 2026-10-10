@@ -3355,3 +3355,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
 	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)

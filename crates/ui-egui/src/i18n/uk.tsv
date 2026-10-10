@@ -3441,3 +3441,9 @@ cameraRaw	Masking	Маскування
 	Keep this tab open to retain your brushes.	Не закривайте цю вкладку, щоб зберегти пензлі.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Сховище браузера недоступне; пензлі діють лише в цьому сеансі. Не закривайте цю вкладку, щоб зберегти їх.
 	Saving brush presets… Keep this tab open until saving finishes.	Збереження наборів пензлів… Не закривайте цю вкладку, доки збереження не завершиться.
+	Reflect	Відбиття
+	Glow	Світіння
+	Negation	Заперечення
+	XOR	XOR
+	Color Burn (Paint.NET)	Затемнення основи (Paint.NET)
+	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)

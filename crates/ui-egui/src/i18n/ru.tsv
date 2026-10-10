@@ -2606,3 +2606,9 @@ fontWeight	Italic	Курсив
 	Keep this tab open to retain your brushes.	Не закрывайте эту вкладку, чтобы сохранить кисти.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Хранилище браузера недоступно; кисти действуют только в этом сеансе. Не закрывайте эту вкладку, чтобы сохранить их.
 	Saving brush presets… Keep this tab open until saving finishes.	Сохранение наборов кистей… Не закрывайте эту вкладку, пока сохранение не завершится.
+	Reflect	Отражение
+	Glow	Свечение
+	Negation	Отрицание
+	XOR	XOR
+	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
+	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)

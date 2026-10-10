@@ -2339,3 +2339,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	请保持此标签页打开以保留您的画笔。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	浏览器存储不可用；画笔仅在本次会话中有效。请保持此标签页打开以保留它们。
 	Saving brush presets… Keep this tab open until saving finishes.	正在保存画笔预设… 请保持此标签页打开，直到保存完成。
+	Reflect	反射
+	Glow	发光
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
+	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)

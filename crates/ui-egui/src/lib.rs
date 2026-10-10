@@ -963,14 +963,19 @@ impl PhotocraftApp {
             return self.save_to(path);
         }
         let st = self.session.active().ok_or("no document")?;
-        // Suggest the file's own name if Save As can write its format, otherwise switch to .psd.
+        // PDN imports default to our native format, which preserves Paint.NET's blend modes.
+        // Other files keep their format when writable, otherwise switch to .psd.
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
-            p => std::path::Path::new(p.as_deref().unwrap_or(&st.doc.name)).with_extension("psd").to_string_lossy().into_owned(),
+            p => {
+                let source = p.as_deref().unwrap_or(&st.doc.name);
+                let ext = if photocraft_engine::file_cmds::extension(source).as_deref() == Some("pdn") { "pcraft" } else { "psd" };
+                std::path::Path::new(source).with_extension(ext).to_string_lossy().into_owned()
+            }
         };
         let doc = st.doc.id;
         self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path)))
