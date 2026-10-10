@@ -21,6 +21,7 @@ pub mod engine_data;
 pub mod fonts;
 pub mod glyphs;
 pub mod layout;
+pub mod navigate;
 pub mod optical;
 pub mod psd;
 pub mod psd_styles;
@@ -157,6 +158,8 @@ pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
     })
 }
 
+#[cfg(test)]
+mod navigate_tests;
 #[cfg(test)]
 mod rtl_tests;
 #[cfg(test)]

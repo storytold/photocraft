@@ -195,6 +195,8 @@ pub struct TextLayout {
     pub px_per_pt: f32,
     /// Vertical type: line space is turned 90° clockwise into text space.
     pub vertical: bool,
+    /// Each laid-out paragraph's parley layout, in order, for caret movement ([`crate::navigate`]).
+    pub(crate) paragraphs: Vec<crate::navigate::ParagraphNav>,
 }
 
 impl TextLayout {
@@ -978,6 +980,8 @@ impl Layouter {
                     rtl,
                 });
             }
+            // Kept for caret movement (`navigate`), hidden lines of an overflowing box included.
+            out.paragraphs.push(crate::navigate::ParagraphNav { layout, start: prange.start, end: content_end, prefix: prefix.len() });
             pending_space += ps.space_after_pt * k;
         }
         out
