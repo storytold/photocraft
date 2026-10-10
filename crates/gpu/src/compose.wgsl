@@ -301,29 +301,32 @@ fn fill_is_special(mode: i32) -> bool {
     return mode == 5 || mode == 6 || mode == 10 || mode == 11 || mode == 16 || mode == 17 || mode == 19 || mode == 20;
 }
 
-// psblend::blend_rgb_fill: below 100% Fill the special eight blend a source pulled toward the
-// mode's neutral colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)).
-fn blend_rgb_fill(mode: i32, cb: vec3<f32>, cs: vec3<f32>, fill: f32) -> vec3<f32> {
-    let f = clamp(fill, 0.0, 1.0);
-    if (f >= 1.0 || !fill_is_special(mode)) { return blend_rgb(mode, cb, cs); }
-    if (mode == 19) { return clamp((cb - f * (vec3(1.0) - cs)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
-    var neutral = 0.0;
-    if (mode == 5 || mode == 6) { neutral = 1.0; }
-    if (mode == 16 || mode == 17) { neutral = 0.5; }
-    return blend_rgb(mode, cb, vec3(neutral) + (cs - vec3(neutral)) * f);
-}
-
-// psblend::composite_fill: Fill is coverage except for the special eight, where coverage over the
-// backdrop is `opacity` and the blend is blend_rgb_fill (Fill stays coverage over transparency).
+// psblend::composite_fill, with a single blend_rgb call (fs_blend's only composite: every
+// inlined blend_rgb copy grows the shader, and WARP compiles it slowly). Normal modes take Fill
+// as coverage; below 100% Fill the special eight blend a source pulled toward the mode's neutral
+// colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)) at `opacity`, Fill staying coverage over
+// transparency. Lab documents mix Normal in CIELAB; type layers mix in the text gamma space.
 fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32, gamma_on: bool) -> vec4<f32> {
-    if (fill >= 1.0 || !fill_is_special(mode)) { return composite_g(mode, b, s, opacity * clamp(fill, 0.0, 1.0), gamma_on); }
+    let f = clamp(fill, 0.0, 1.0);
+    let special = f < 1.0 && fill_is_special(mode);
     let ab = b.a;
-    let over = s.a * opacity;
-    let alone = over * clamp(fill, 0.0, 1.0);
+    var over = s.a * opacity;
+    var alone = over * f;
+    if (!special) { over = alone; }
     if (over <= 0.0) { return b; }
     let ao = ab + (1.0 - ab) * alone;
     if (ao <= 0.0) { return vec4(0.0); }
-    let bl = blend_rgb_fill(mode, b.rgb, s.rgb, fill);
+    if (!special && !gamma_on && (op.flags & F_LAB) != 0u && mode == M_NORMAL && ab > 0.0) {
+        let m = srgb_to_lab(b.rgb) * (ab * (1.0 - over) / ao) + srgb_to_lab(s.rgb) * (over / ao);
+        return vec4(lab_to_srgb(m), ao);
+    }
+    var neutral = 0.0;
+    if (mode == 5 || mode == 6) { neutral = 1.0; }
+    if (mode == 16 || mode == 17) { neutral = 0.5; }
+    var cs = s.rgb;
+    if (special) { cs = vec3(neutral) + (s.rgb - vec3(neutral)) * f; }
+    var bl = blend_rgb(mode, b.rgb, cs);
+    if (special && mode == 19) { bl = clamp((b.rgb - f * (vec3(1.0) - s.rgb)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
     let wb = ab * (1.0 - over) / ao;
     let wbs = ab * over / ao;
     let ws = (1.0 - ab) * alone / ao;
