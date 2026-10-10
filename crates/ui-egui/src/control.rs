@@ -668,6 +668,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     let target = if s("target") == Some("background") { "background" } else { "foreground" };
                     return ok(json!({"dialog": crate::color_picker_ui::open(app, target)}));
                 }
+                // The Crop tool's New / Delete Crop Preset… (#1919).
+                "newCropPreset" => {
+                    return match crate::crop_presets::open_new(app) {
+                        Some(id) => ok(json!({"dialog": id})),
+                        None => err("nothing to save: set W and H (W x H x Resolution) or a ratio first"),
+                    };
+                }
+                "deleteCropPreset" => {
+                    return match crate::crop_presets::open_delete(app) {
+                        Some(id) => ok(json!({"dialog": id})),
+                        None => err("no crop presets are saved"),
+                    };
+                }
                 "command" | "Command" => {
                     let Some(cmd) = s("command") else { return err("command dialogs need `command`") };
                     let label = photocraft_engine::commands::find(cmd).map(|c| c.label).unwrap_or(cmd);

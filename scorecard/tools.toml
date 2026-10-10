@@ -169,9 +169,9 @@ note = "Arbitrary rotation is a generic dialog; ruler only feeds straighten"
 [[item]]
 id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
-status = "partial"
+status = "done"
 issue = 214
-note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); no New/Delete Crop Preset"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); New / Delete Crop Preset save and delete crop tool presets (crop_presets.rs, tool.presets.* with tool crop, persisted with the preferences)"
 
 [[item]]
 id = "TOOL-214-10"

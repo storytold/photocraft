@@ -512,6 +512,92 @@ fn tool_presets_save_filter_select() {
     assert!(s.execute("tool.presets.new", json!({"name": "x"})).is_err());
 }
 
+/// Crop presets are `crop` tool presets: saved, listed, persisted and deleted like the others.
+#[test]
+fn crop_presets_are_tool_presets_that_persist() {
+    let mut s = Session::new();
+    let opts =
+        json!({"toolOptions": {"crop_ratio": "whr", "crop_width": "4 in", "crop_height": "5 in", "crop_resolution": "300", "crop_resolution_unit": "px/in"}});
+    s.execute("tool.presets.new", json!({"name": "4 x 5 in 300 ppi", "tool": "crop", "options": opts})).unwrap();
+    let r = s.execute("tool.presets.new", json!({"name": "4 x 5 in 300 ppi", "tool": "crop", "options": opts})).unwrap();
+    assert_eq!(r["name"], "4 x 5 in 300 ppi 2", "a taken name gets a number");
+    let mut t = Session::new();
+    t.load_prefs_json(&s.prefs_to_json()).unwrap();
+    let v = t.execute("tool.presets.list", json!({"tool": "crop"})).unwrap();
+    assert_eq!(v["presets"].as_array().unwrap().len(), 2);
+    let r = t.execute("tool.presets.select", json!({"preset": "4 x 5 in 300 ppi"})).unwrap();
+    assert_eq!(r["options"]["toolOptions"]["crop_width"], "4 in");
+    // Deleting several is all or nothing.
+    assert!(t.execute("tool.presets.edit", json!({"action": "delete", "preset": ["4 x 5 in 300 ppi", "missing"]})).is_err());
+    assert_eq!(t.presets.tool_presets.iter().filter(|p| p.tool == "crop").count(), 2);
+    let r = t.execute("tool.presets.edit", json!({"action": "delete", "preset": ["4 x 5 in 300 ppi 2", "4 x 5 in 300 ppi", "4 x 5 in 300 ppi"]})).unwrap();
+    assert_eq!(r["deleted"], 2);
+    assert!(t.presets.tool_presets.iter().all(|p| p.tool != "crop"));
+}
+
+#[test]
+fn tool_preset_names_and_params_are_checked() {
+    let mut s = Session::new();
+    let n = s.presets.tool_presets.len();
+    let long = "x".repeat(crate::brush_preset_cmds::MAX_NAME + 1);
+    for bad in [
+        json!({"name": long, "tool": "crop"}),
+        json!({"name": 7, "tool": "crop"}),
+        json!({"name": ["a"], "tool": "crop"}),
+        json!({"tool": 3}),
+        json!({"tool": "crop", "options": "big"}),
+        json!({"tool": "crop", "options": [1]}),
+        json!(null),
+        json!([]),
+    ] {
+        assert!(s.execute("tool.presets.new", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(s.presets.tool_presets.len(), n);
+    // An empty or blank name falls back to the tool's; the longest name fits.
+    assert_eq!(s.execute("tool.presets.new", json!({"name": "   ", "tool": "crop"})).unwrap()["name"], "crop");
+    let max = "é".repeat(crate::brush_preset_cmds::MAX_NAME);
+    assert_eq!(s.execute("tool.presets.new", json!({"name": max, "tool": "crop"})).unwrap()["name"], json!(max));
+    assert!(s.execute("tool.presets.edit", json!({"action": "rename", "preset": "crop", "name": long})).is_err());
+    assert!(s.execute("tool.presets.edit", json!({"action": "rename", "preset": "crop", "name": "  "})).is_err());
+    // The store is capped.
+    while s.presets.tool_presets.len() < super::tools::MAX_PRESETS {
+        let i = s.presets.tool_presets.len();
+        s.presets.tool_presets.push(super::tools::ToolPreset { name: format!("p{i}"), tool: "crop".into(), options: json!({}) });
+    }
+    assert!(s.execute("tool.presets.new", json!({"name": "one more", "tool": "crop"})).is_err());
+}
+
+/// A damaged entry in the saved tool presets is skipped; the other presets (and preferences) load.
+#[test]
+fn damaged_tool_presets_skip_only_the_bad_entries() {
+    let mut s = Session::new();
+    s.execute("gradient.presets.new", json!({"name": "Kept", "stops": [[0, "#ff0000"], [1, "#0000ff"]]})).unwrap();
+    let mut prefs: Value = serde_json::from_str(&s.prefs_to_json()).unwrap();
+    prefs["presets"]["tool_presets"] = json!([
+        {"name": "Good", "tool": "crop", "options": {"toolOptions": {"crop_ratio": "2:3"}}},
+        {"name": 5, "tool": "crop"},
+        {"tool": "crop"},
+        {"name": "   ", "tool": "crop"},
+        {"name": "x".repeat(300), "tool": "crop"},
+        {"name": "No tool", "tool": ""},
+        "junk",
+        null,
+        {"name": "Good", "tool": "brush"},
+        {"name": "Odd options", "tool": "crop", "options": 12},
+    ]);
+    let mut t = Session::new();
+    t.load_prefs_json(&prefs.to_string()).unwrap();
+    let names: Vec<&str> = t.presets.tool_presets.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Good", "Odd options"]);
+    assert!(t.presets.tool_presets[1].options.is_object());
+    assert!(t.presets.gradients.iter().any(|g| g.items.iter().any(|p| p.name == "Kept")), "other presets still load");
+    // Not an array at all: no tool presets, still no crash.
+    prefs["presets"]["tool_presets"] = json!({"a": 1});
+    let mut u = Session::new();
+    u.load_prefs_json(&prefs.to_string()).unwrap();
+    assert!(u.presets.tool_presets.is_empty());
+}
+
 // ------------------------------------------------------------------ clone source
 
 fn clone_doc(depth: u32) -> Session {
