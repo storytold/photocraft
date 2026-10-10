@@ -235,7 +235,7 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
 pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
     let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
+    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.
@@ -568,12 +568,13 @@ fn build() -> Vec<CommandSpec> {
             }
             let id = layer_param(s, p)?;
             s.edit("Delete Layer", |doc, active| {
+                let neighbours = crate::layer_multi_cmds::deletion_neighbours(doc, id);
                 doc.remove(id).ok_or(EngineError::NoLayer(id))?;
                 if doc.layers.is_empty() {
                     return Err(EngineError::Other("a document must keep at least one layer".into()));
                 }
-                if *active == Some(id) {
-                    *active = doc.top_layer();
+                if active.is_some_and(|current| doc.layer(current).is_none()) {
+                    *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
                 }
                 Ok(())
             })?;

@@ -3,7 +3,7 @@
 
 use egui::{Rect, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::json;
 
@@ -231,4 +231,35 @@ fn character_and_paragraph_dock_panels_share_the_headers_without_type_options() 
     select(&mut h, px);
     assert!(headers(&h).is_empty());
     assert!(h.query_by_value("Select a type layer to edit its character and paragraph settings.").is_some());
+}
+
+/// #2085: like Photoshop, Opacity and Fill stack in one right-aligned column: both fields end at
+/// the same edge, and both labels end the same gap before them (Fill's label used to touch its field).
+#[test]
+fn layers_opacity_and_fill_share_one_right_column() {
+    for theme in ["pro", "studioLight"] {
+        let (s, layers) = kinds();
+        let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::new(s, crate::Services::default())
+        });
+        set(&mut h, json!({"theme": theme}));
+        select(&mut h, layers[0].1);
+        // The popup-slider arrow is named after the field; its label is the text left of it on its row.
+        let row = |name: &str| {
+            let arrow = h.query_all_by_label(name).find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).unwrap().rect();
+            let text = if theme == "pro" { format!("{name}:") } else { name.to_string() };
+            let label = h
+                .query_all_by_label(&text)
+                .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+                .map(|n| n.rect())
+                .find(|r| (r.center().y - arrow.center().y).abs() < 12.0 && r.right() <= arrow.left())
+                .unwrap();
+            (label, arrow)
+        };
+        let (ol, oa) = row("Opacity");
+        let (fl, fa) = row("Fill");
+        assert!((oa.right() - fa.right()).abs() < 0.5, "{theme}: fields end at {} and {}", oa.right(), fa.right());
+        assert!((ol.right() - fl.right()).abs() < 0.5, "{theme}: Opacity label ends at {}, Fill label at {}", ol.right(), fl.right());
+    }
 }

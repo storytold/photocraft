@@ -69,8 +69,12 @@ pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_la
 }
 
 /// Stores `region` combined with the current selection by `m` as one history step.
+/// Finding nothing never destroys work: the selection (and history) is left alone and the
+/// caller gets `changed: false`, whatever the mode. (Select Subject and Object Selection run
+/// heuristics that often find nothing on busy photos; clearing the selection then looks like
+/// a dead button.)
 fn apply(s: &mut Session, label: &str, region: Option<Region>, m: SelectionMode) -> Result<Value> {
-    if region.is_none() && matches!(m, SelectionMode::Add | SelectionMode::Subtract) {
+    if region.is_none() {
         // Nothing found: leave the selection (and history) alone.
         let selected = s.active().ok_or(EngineError::NoDocument)?.doc.selection.is_some();
         return Ok(json!({ "selected": selected, "changed": false }));
@@ -400,6 +404,27 @@ mod tests {
         s.execute("select.deselect", json!({})).unwrap();
         s.execute("select.quick", json!({"points": [[20, 50]], "size": 8, "enhanceEdge": true})).unwrap();
         assert!(cov(&s, 10, 10) >= 0.5 && cov(&s, 100, 50) < 0.5);
+    }
+
+    #[test]
+    fn empty_result_keeps_the_selection_in_every_mode() {
+        // Finding nothing must never wipe the selection, whatever the mode: Select Subject
+        // and Object Selection run heuristics that often miss on busy photos, and a missed
+        // Quick Selection dab must not destroy the work either.
+        for m in ["add", "subtract", "replace"] {
+            let mut s = two_regions(8);
+            s.execute("select.all", json!({})).unwrap();
+            let r = s.execute("select.quick", json!({"points": [[-5000, -5000]], "size": 8, "mode": m})).unwrap();
+            assert_eq!(r["changed"], false, "mode {m}");
+            assert_eq!(r["selected"], true, "mode {m}");
+            assert!(cov(&s, 10, 50) >= 0.99, "mode {m}: Select All survived an empty result");
+        }
+        // Select Subject on a flat field finds nothing and keeps the selection too.
+        let mut s = session_with(140, 100, 8, |_, _| [0.5, 0.5, 0.5]);
+        s.execute("select.all", json!({})).unwrap();
+        let r = s.execute("select.subject", json!({})).unwrap();
+        assert_eq!(r["changed"], false);
+        assert!(cov(&s, 10, 10) >= 0.99);
     }
 
     #[test]

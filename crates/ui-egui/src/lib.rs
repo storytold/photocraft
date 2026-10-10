@@ -50,6 +50,7 @@ pub mod crop_overlay;
 pub mod crop_shield;
 pub mod crop_straighten;
 pub mod crop_ui;
+pub mod delete_layer_prompt;
 pub mod dialog_blend_ui;
 pub mod dialogs;
 pub mod direct_select;
@@ -68,6 +69,7 @@ pub mod fill_ui;
 pub mod filter_dialog;
 #[cfg(not(target_arch = "wasm32"))]
 mod filter_preview_worker;
+mod font_preview;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
@@ -77,6 +79,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+pub mod kys_import;
 pub mod lasso_ui;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
@@ -113,6 +116,7 @@ pub mod point_curve;
 pub mod prefs_ui;
 pub mod preset_files_ui;
 pub mod preset_panels;
+pub mod press_menu;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
@@ -227,6 +231,8 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
+/// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
+pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 /// Poll successful or failed background writes: (document id, revision, result).
@@ -236,6 +242,9 @@ pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
 /// List recoverable documents without decoding them. Their data stays until the documents are
 /// saved or closed; the shell runs each entry's loader on a background worker.
 pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
+/// Photoshop's own keyboard shortcut set on this machine, as (source path, `.kys` XML text):
+/// the newest install's live `Keyboard Shortcuts.psp` on the desktop, `None` without one.
+pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
@@ -300,6 +309,9 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
+    pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
+    pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -405,6 +417,10 @@ pub struct PhotocraftApp {
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
+    /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
+    /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
+    /// (#2022); set by `notices::show`.
+    pub(crate) notices_hovered: bool,
     /// Apply theme on first frame.
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
@@ -467,6 +483,8 @@ pub struct PhotocraftApp {
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
+    /// Cached document for a modal text Style Options color preview.
+    pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
     pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
@@ -571,6 +589,7 @@ impl PhotocraftApp {
             input_waiters: Vec::new(),
             live_adjust: None,
             frame: 0,
+            notices_hovered: false,
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -612,6 +631,7 @@ impl PhotocraftApp {
             transform_preview: None,
             move_mods: Default::default(),
             style_preview: None,
+            text_style_preview: None,
             solid_fill_preview: None,
             distort: Default::default(),
             gradient: Default::default(),
@@ -638,6 +658,8 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        // After the saved preferences and their revision mark, so the imported set is saved.
+        kys_import::auto_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
@@ -701,6 +723,9 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
+            return result;
+        }
         // Automation input also gates every step a command runs on its behalf (`actions.play`).
         let gate = if self.automation_input && self.session.authorize.is_none() { self.services.automation_authorize } else { None };
         if gate.is_some() {
@@ -819,6 +844,14 @@ impl PhotocraftApp {
         }
         self.ui.views = views.into_iter().map(Option::unwrap_or_default).collect();
         self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
+        if !self.session.prefs().workspace.open_documents_as_tabs {
+            let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
+            for &idx in &new_docs {
+                if !self.ui.windows.iter().any(|w| w.document == idx) {
+                    crate::view_cmds::float_window(self, idx, idx);
+                }
+            }
+        }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
@@ -963,14 +996,19 @@ impl PhotocraftApp {
             return self.save_to(path);
         }
         let st = self.session.active().ok_or("no document")?;
-        // Suggest the file's own name if Save As can write its format, otherwise switch to .psd.
+        // PDN imports default to our native format, which preserves Paint.NET's blend modes.
+        // Other files keep their format when writable, otherwise switch to .psd.
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
-            p => std::path::Path::new(p.as_deref().unwrap_or(&st.doc.name)).with_extension("psd").to_string_lossy().into_owned(),
+            p => {
+                let source = p.as_deref().unwrap_or(&st.doc.name);
+                let ext = if photocraft_engine::file_cmds::extension(source).as_deref() == Some("pdn") { "pcraft" } else { "psd" };
+                std::path::Path::new(source).with_extension(ext).to_string_lossy().into_owned()
+            }
         };
         let doc = st.doc.id;
         self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path)))
@@ -1261,7 +1299,7 @@ impl eframe::App for PhotocraftApp {
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
-        if chrome {
+        if chrome && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
         if chrome && self.ui.panels.options_bar {
@@ -1409,6 +1447,14 @@ impl PhotocraftApp {
     }
 
     pub fn set_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
+        if let Err(e) = self.run("prefs.set", serde_json::json!({"path": "interface.theme", "value": kind.id()})) {
+            self.ui.status = e;
+        } else {
+            self.apply_theme(ctx, kind);
+        }
+    }
+
+    pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
         self.ui.theme = kind;
         theme::apply(ctx, kind);
         self.checker = None;
@@ -1468,9 +1514,14 @@ impl PhotocraftApp {
     }
 }
 
-/// Cheap identity of a surface's pixels: tile coordinates and `Arc` pointers.
+/// Cheap identity of a surface's pixels: its default (untouched) pixel, tile coordinates and
+/// `Arc` pointers. The default pixel matters: inverting or filling a tile-less mask only changes
+/// it (#2117).
 pub fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ s.tile_count() as u64;
+    for &b in s.default_bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+    }
     for (c, t) in s.tiles() {
         let p = std::sync::Arc::as_ptr(t) as usize as u64;
         h = (h ^ p ^ ((c.tx as u64) << 32 | c.ty as u32 as u64)).wrapping_mul(0x100_0000_01b3);
@@ -1769,6 +1820,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod mask_thumb_refresh_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
