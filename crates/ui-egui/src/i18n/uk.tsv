@@ -627,6 +627,7 @@
 	Resolution:	Роздільність:
 	Resolution: {dpi} pixels/inch	Роздільність: {dpi} пікселів/дюйм
 	{w} px x {h} px ({ppi} ppi)	{w} пкс x {h} пкс ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Pixels:	Пікселі:
 	Pixel Length:	Довжина в пікселях:
 	Logical Length:	Логічна довжина:
@@ -3533,6 +3534,8 @@ cameraRaw	Masking	Маскування
 	Previous Document	Попередній документ
 	W x H x Resolution	Ш x В x Роздільна здатність
 	Front Image	Зображення переднього плану
+	Search settings…	Пошук налаштувань…
+	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
 
 # Guide layout dialog

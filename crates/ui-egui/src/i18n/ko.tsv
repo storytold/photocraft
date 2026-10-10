@@ -1717,6 +1717,7 @@
 	Scratch: {size}	스크래치: {size}
 	Untagged {mode}	프로파일 없는 {mode}
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	해상도: {dpi}픽셀/인치
 	Doc: {w} × {h} px	문서: {w} × {h} px
 	Frame {current} / {total}	프레임 {current} / {total}
@@ -3006,6 +3007,8 @@ fontWeight	Italic	기울임
 	Previous Document	이전 문서
 	W x H x Resolution	폭 x 높이 x 해상도
 	Front Image	전면 이미지
+	Search settings…	설정 검색…
+	No matching settings	일치하는 설정 없음
 
 # Guide layout dialog
 	Columns	열

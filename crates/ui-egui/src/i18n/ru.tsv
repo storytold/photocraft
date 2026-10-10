@@ -647,6 +647,7 @@
 	Resolution:	Разрешение:
 	Resolution: {dpi} pixels/inch	Разрешение: {dpi} пикс./дюйм
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Pixels:	Пикселы:
 	Pixel Length:	Длина в пикселах:
 	Logical Length:	Логическая длина:
@@ -2712,6 +2713,8 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+	Search settings…	Поиск настроек…
+	No matching settings	Нет подходящих настроек
 
 # Guide layout dialog
 	Rows	Строки
