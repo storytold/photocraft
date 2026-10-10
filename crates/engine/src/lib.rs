@@ -402,10 +402,16 @@ impl Session {
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
+            self.sync_tools_mask_target();
             true
         } else {
             false
         }
+    }
+
+    pub fn sync_tools_mask_target(&mut self) {
+        let mask = self.active().is_some_and(|st| st.channel_view.target == crate::channel_cmds::ChannelTarget::LayerMask);
+        self.tools.target_mask(mask);
     }
 
     /// Move the document at `from` to tab position `to` (clamped to the last), keeping the active
@@ -557,6 +563,7 @@ impl Session {
         st.active_layer = Some(id);
         st.selected_layers = vec![id];
         st.layer_anchor = Some(id);
+        channel_cmds::fix_view(st);
         // Selecting a layer is not an edit: keep a clean document clean.
         let clean = st.saved_revision == st.revision;
         st.revision += 1;

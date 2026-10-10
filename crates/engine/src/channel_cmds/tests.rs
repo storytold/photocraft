@@ -521,3 +521,47 @@ fn apply_image_and_calculations_fail_gracefully_never_panic() {
     // A well-formed self-apply still works.
     assert!(s.execute("image.applyImage", json!({"source": {"channel": "composite"}})).is_ok());
 }
+
+#[test]
+fn channel_target_layer_mask_and_vector_mask() {
+    let mut s = session();
+    // Initially the layer has no mask: targeting mask or vectorMask fails.
+    let err_mask = s.execute("channel.target", json!({"channel": "mask"})).unwrap_err().to_string();
+    assert!(err_mask.contains("no layer mask"), "{err_mask}");
+    let err_vec = s.execute("channel.target", json!({"channel": "vectorMask"})).unwrap_err().to_string();
+    assert!(err_vec.contains("no vector mask"), "{err_vec}");
+
+    // Add a layer mask.
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    // Target the mask explicitly via channel.target.
+    let j = s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert_eq!(j["target"]["kind"], "layerMask");
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::LayerMask);
+    assert!(s.tools.mask_targeted);
+
+    // Commands that follow target (invert, paint) edit the mask without explicit target.
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    let l_id = s.active().unwrap().active_layer.unwrap();
+    let mask_sf = &s.active().unwrap().doc.layer(l_id).unwrap().mask.as_ref().unwrap().surface;
+    assert_eq!(mask_sf.pixel(10, 10)[0], 0.0, "inverted mask is black");
+
+    // Target composite again.
+    let j2 = s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    assert_eq!(j2["target"]["kind"], "composite");
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Composite);
+    assert!(!s.tools.mask_targeted);
+
+    // Issue #2458 repro: new adjustment layer then channel.target {"channel": "mask"}
+    s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    let j_adj = s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert_eq!(j_adj["target"]["kind"], "layerMask");
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::LayerMask);
+
+    // Vector mask targeting.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
+    let j_vec = s.execute("channel.target", json!({"channel": "vectorMask"})).unwrap();
+    assert_eq!(j_vec["target"]["kind"], "vectorMask");
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::VectorMask);
+}
+

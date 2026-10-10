@@ -65,7 +65,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The active layer's mask (Photoshop lists it, in italics, below the colour channels).
     let masked = active_layer.and_then(|id| doc.layer(id)).filter(|l| l.mask.is_some()).cloned();
     let mask_tex = masked.as_ref().and_then(|l| Some(app.mask_thumb(&ctx, &doc, l.id, l.mask.as_ref()?)));
-    let mask_targeted = masked.is_some() && app.ui.mask_target && view.target == ChannelTarget::Composite && !quick;
+    let mask_targeted = masked.is_some()
+        && (app.ui.mask_target || view.target == ChannelTarget::LayerMask)
+        && (view.target == ChannelTarget::Composite || view.target == ChannelTarget::LayerMask)
+        && !quick;
     // Multichannel images are their ink channels only (no composite or colour rows).
     let multichannel = doc.mode == photocraft_doc::ColorMode::Multichannel;
     let mut rows = if multichannel { Vec::new() } else { vec![Row::Composite] };
@@ -195,7 +198,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if row == Row::LayerMask {
                     // Targets the mask, as clicking its thumbnail in the Layers panel does.
                     mask_click = Some(true);
-                    actions.push(("channel.target".into(), json!({ "channel": "composite" })));
+                    actions.push(("channel.target".into(), json!({ "channel": "mask" })));
                 } else {
                     if matches!(row, Row::Composite | Row::Color(_)) {
                         mask_click = Some(false);
@@ -276,6 +279,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ChannelTarget::Alpha(i) => json!(i),
             ChannelTarget::Color(k) => json!({ "color": k }),
             ChannelTarget::Composite => json!("composite"),
+            ChannelTarget::LayerMask => json!("mask"),
+            ChannelTarget::VectorMask => json!("vectorMask"),
         };
         if icons::button(ui, "trash", 26.0, false, tl!("Delete current channel")).clicked() {
             actions.push(("channel.delete".into(), json!({})));

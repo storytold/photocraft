@@ -251,7 +251,8 @@ fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     }
     let Some(st) = app.session.active() else { return id };
     let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
-    let mask = app.ui.mask_target && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
+    let mask = (app.ui.mask_target || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask)
+        && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
     if st.doc.selection.is_some() || !composite || mask {
         return id;
     }

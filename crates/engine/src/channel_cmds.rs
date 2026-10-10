@@ -40,6 +40,10 @@ pub enum ChannelTarget {
     Color(usize),
     /// An alpha or spot channel (index into [`Document::channels`]).
     Alpha(usize),
+    /// The active layer's layer mask.
+    LayerMask,
+    /// The active layer's vector mask.
+    VectorMask,
 }
 
 /// Per-document Channels panel state: the target and the eye toggles. Not part of history.
@@ -119,6 +123,12 @@ pub(crate) fn fix_view(st: &mut DocState) {
     match v.target {
         ChannelTarget::Alpha(i) if i >= n => v.target = ChannelTarget::Composite,
         ChannelTarget::Color(k) if k >= colors || colors < 2 => v.target = ChannelTarget::Composite,
+        ChannelTarget::LayerMask if !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) => {
+            v.target = ChannelTarget::Composite;
+        }
+        ChannelTarget::VectorMask if !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some()) => {
+            v.target = ChannelTarget::Composite;
+        }
         _ => {}
     }
     // Never leave the canvas showing nothing at all.
@@ -596,6 +606,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
         _ => return params,
@@ -1064,23 +1075,25 @@ fn move_channel(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Make `t` the edit target and show it the way Photoshop does when its row is clicked.
 fn target(s: &mut Session, t: ChannelTarget) {
-    let Some(st) = s.active_mut() else { return };
-    let colors = color_count(&st.doc);
-    let n = st.doc.channels.len();
-    let v = &mut st.channel_view;
-    v.target = t;
-    match t {
-        ChannelTarget::Composite => v.color_hidden.clear(),
-        ChannelTarget::Color(k) => {
-            v.color_hidden = (0..colors).map(|c| c != k).collect();
-            v.alpha_visible.clear();
+    if let Some(st) = s.active_mut() {
+        let colors = color_count(&st.doc);
+        let n = st.doc.channels.len();
+        let v = &mut st.channel_view;
+        v.target = t;
+        match t {
+            ChannelTarget::Composite | ChannelTarget::LayerMask | ChannelTarget::VectorMask => v.color_hidden.clear(),
+            ChannelTarget::Color(k) => {
+                v.color_hidden = (0..colors).map(|c| c != k).collect();
+                v.alpha_visible.clear();
+            }
+            ChannelTarget::Alpha(i) => {
+                v.color_hidden = vec![true; colors];
+                v.alpha_visible = (0..n).map(|c| c == i).collect();
+            }
         }
-        ChannelTarget::Alpha(i) => {
-            v.color_hidden = vec![true; colors];
-            v.alpha_visible = (0..n).map(|c| c == i).collect();
-        }
+        fix_view_now(st);
     }
-    fix_view_now(st);
+    s.tools.target_mask(t == ChannelTarget::LayerMask);
 }
 
 fn parse_target(s: &Session, p: &Value, cmd: &str) -> Result<ChannelTarget> {
@@ -1089,7 +1102,21 @@ fn parse_target(s: &Session, p: &Value, cmd: &str) -> Result<ChannelTarget> {
         Some(ChanRef::Composite) => Ok(ChannelTarget::Composite),
         Some(ChanRef::Color(k)) if k < color_count(doc) && color_count(doc) > 1 => Ok(ChannelTarget::Color(k)),
         Some(ChanRef::Alpha(i)) if i < doc.channels.len() => Ok(ChannelTarget::Alpha(i)),
-        _ => Err(bad(cmd, "`channel` must be \"composite\", a colour channel name or an alpha channel")),
+        Some(ChanRef::LayerMask) => {
+            let active = crate::active_layer_of(s).map_err(|e| bad(cmd, e))?;
+            if active.mask.is_none() {
+                return Err(bad(cmd, "the active layer has no layer mask"));
+            }
+            Ok(ChannelTarget::LayerMask)
+        }
+        Some(ChanRef::VectorMask) => {
+            let active = crate::active_layer_of(s).map_err(|e| bad(cmd, e))?;
+            if active.vector_mask.is_none() {
+                return Err(bad(cmd, "the active layer has no vector mask"));
+            }
+            Ok(ChannelTarget::VectorMask)
+        }
+        _ => Err(bad(cmd, "`channel` must be \"composite\", \"mask\", \"vectorMask\", a colour channel name or an alpha channel")),
     }
 }
 
@@ -1587,7 +1614,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("channel.delete", "Delete Channel", [], None, r##"{"channel":index|name?=targeted}"##, has_channels, delete_channel),
         spec!("channel.rename", "Rename Channel", [], None, r##"{"channel":index|name,"name":str}"##, has_channels, rename_channel),
         spec!("channel.move", "Reorder Channel", [], None, r##"{"channel":index|name,"to":index}"##, has_channels, move_channel),
-        spec!("channel.target", "Target Channel", [], None, r##"{"channel":"composite"|"red|green|blue|…"|index|name="composite"}"##, has_doc, target_cmd),
+        spec!("channel.target", "Target Channel", [], None, r##"{"channel":"composite"|"mask"|"vectorMask"|"red|green|blue|…"|index|name="composite"}"##, has_doc, target_cmd),
         spec!(
             "channel.setVisible",
             "Channel Visibility",
