@@ -447,6 +447,37 @@ impl Session {
         )
     }
 
+    /// [`Session::start_open`] for deep EXRs: the document keeps its depth data as a deep
+    /// layer (`io::import_deep_exr`) instead of opening flattened.
+    pub fn start_open_deep(&mut self, name: &str, source: OpenSource) -> Result<Started> {
+        let label = format!("Opening {name}");
+        let name_w = name.to_string();
+        let name_a = name.to_string();
+        self.start_job(
+            OPEN_JOB,
+            json!({"name": name, "deep": true}),
+            &label,
+            false,
+            move |ctx| {
+                ctx.progress(0.0, "Reading");
+                let bytes = match source {
+                    OpenSource::Bytes(b) => b,
+                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
+                };
+                ctx.check()?;
+                ctx.progress(0.02, "Decoding");
+                photocraft_io::import_deep_exr(&name_w, &bytes, &photocraft_codecs::Limits::default()).map_err(|e| match e {
+                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                    e => EngineError::Other(e.to_string()),
+                })
+            },
+            move |s, r: photocraft_io::ImportResult| {
+                let (index, color) = s.open_document(r.document, None);
+                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
+            },
+        )
+    }
+
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in

@@ -162,8 +162,18 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 /// Open a file in the background: a tab appears at once and shows the progress; the document
 /// replaces it when decoded. `path` is remembered for File › Save and Open Recent.
 pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
+    start_open_inner(app, name, path, source, false)
+}
+
+/// [`start_open`] for deep EXRs: the document keeps its depth data (a deep layer).
+pub fn start_open_deep(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
+    start_open_inner(app, name, path, source, true)
+}
+
+fn start_open_inner(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource, deep: bool) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open(name, source).map_err(|e| e.to_string())? {
+    let started = if deep { app.session.start_open_deep(name, source) } else { app.session.start_open(name, source) };
+    match started.map_err(|e| e.to_string())? {
         // Inline (wasm): finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
         Started::Job(job) => {

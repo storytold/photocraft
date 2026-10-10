@@ -23,6 +23,7 @@ pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Se
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
+    ("file.openDeep", "Open as Deep…", &["File"], None),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
     ("file.exit", "Exit", &["File"], Some("Cmd+Q")),
@@ -265,6 +266,15 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 open_path(app, path)
             } else {
                 app.open_dialog_file()
+            }
+        }
+        "file.openDeep" => {
+            if let Some(path) = params.get("path").and_then(Value::as_str) {
+                app.open_path_deep(path)?;
+                Ok(Value::Null)
+            } else {
+                // The multi-file picker of File › Open, with the depth kept.
+                app.open_dialog_file_deep()
             }
         }
         "file.save" => {
@@ -604,8 +614,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
-        i if i.starts_with("file.openRecent.") => true,
+"file.open" | "file.openDeep" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,        i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => {

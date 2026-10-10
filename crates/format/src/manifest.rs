@@ -303,6 +303,27 @@ pub enum ContentM {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
     },
+    /// Deep samples ([`photocraft_doc::LayerContent::Deep`]): channels and counts as
+    /// little-endian f32 / u64 blobs.
+    Deep {
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        channels: Vec<DeepChannelM>,
+        counts: Hash,
+    },
+}
+
+/// One channel of the deep variant of [`ContentM`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DeepChannelM {
+    pub name: String,
+    /// Every sample, little-endian f32.
+    pub samples: Hash,
 }
 
 fn yes() -> bool {

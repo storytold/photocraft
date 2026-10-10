@@ -538,3 +538,66 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc);
 }
+
+#[test]
+fn deep_layer_round_trips_with_its_samples() {
+    use photocraft_doc::{DeepChannel, DeepData};
+    let mut doc = Document::new("deep", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+    doc.layers.clear();
+    // One pixel with two unsorted samples (red z=1 over blue z=9), one with none.
+    let channels = |names: &[&str], a: f32, z0: f32, z1: f32| -> Vec<DeepChannel> {
+        names
+            .iter()
+            .map(|n| DeepChannel {
+                name: (*n).to_string(),
+                samples: match *n {
+                    "R" => vec![0.5 * a, 0.0],
+                    "G" => vec![0.0, 0.0],
+                    "B" => vec![0.0, a],
+                    "A" => vec![a, a],
+                    _ => vec![z0, z1],
+                },
+            })
+            .collect()
+    };
+    let d = DeepData { x: 3, y: -2, width: 2, height: 1, channels: channels(&["A", "B", "G", "R", "Z"], 0.5, 1.0, 9.0), counts: vec![0, 2, 2] };
+    doc.layers.push(Layer::new("deep", LayerContent::Deep(d)));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back, doc);
+    // A saved bundle cannot lie about its sample counts: every channel must hold exactly
+    // `counts.last()` samples (checked on load, pinned here with the good case above).
+}
+
+/// A file whose deep counts decrease (a hostile or truncated edit) must be refused on load,
+/// not turned into a `total * 4` slice mismatch or an underflowing index later. The counts
+/// blob is rewritten through the save path, so the bundle itself stays valid.
+#[test]
+fn decreasing_deep_counts_are_refused_at_load() {
+    use photocraft_doc::{DeepChannel, DeepData};
+    let mut doc = Document::new("deep", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    doc.layers.clear();
+    doc.layers.push(Layer::new(
+        "deep",
+        LayerContent::Deep(DeepData {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+            channels: vec![DeepChannel { name: "A".into(), samples: vec![1.0, 1.0] }],
+            counts: vec![0, 2, 2],
+        }),
+    ));
+    // A decreasing count table behind a *valid* bundle: save a document whose channels match
+    // the patched total, so the length check passes and only monotonicity can reject it.
+    let mut hostile = doc.clone();
+    if let Some(LayerContent::Deep(d)) = hostile.layers.first_mut().map(|l| &mut l.content) {
+        d.counts = vec![0, 2, 1];
+        for c in &mut d.channels {
+            c.samples = vec![1.0, 1.0]; // total == 2 keeps the length check happy
+        }
+    }
+    let bytes = save_to_bytes(&hostile, &SaveOptions::default()).unwrap();
+    let err = load_from_bytes(&bytes).expect_err("decreasing counts must be refused");
+    assert!(err.to_string().contains("must not decrease"), "{err}");
+}

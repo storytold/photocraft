@@ -1407,3 +1407,75 @@ fn delete_layer_preserves_an_unaffected_active_layer_and_last_layer_guard() {
     assert_eq!(s.active().unwrap().active_layer, Some(other));
     assert_eq!(s.active().unwrap().history.past_len(), before);
 }
+
+/// Merging deep layers keeps their samples (Nuke's DeepMerge) and therefore refuses an
+/// upper layer whose compositing the sample merge would silently drop: opacity, a blend
+/// mode, a mask or effects. Baked-in (opacity 100 %, plain) it merges and stays deep.
+#[test]
+fn deep_merge_refuses_dropped_compositing() {
+    fn deep_doc() -> Session {
+        let mut s = session_with_doc();
+        let deep = photocraft_doc::LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        let upper = s
+            .edit("deep", |doc, _| {
+                doc.layers.push(photocraft_doc::Layer::new("lower", deep.clone()));
+                doc.layers.push(photocraft_doc::Layer::new("upper", deep));
+                Ok(doc.layers.last().unwrap().id)
+            })
+            .unwrap();
+        s.select_layer(upper).unwrap();
+        s
+    }
+    // 50 % opacity on the upper layer is refused, naming what to bake in first.
+    let mut s = deep_doc();
+    s.edit("opacity", |doc, _| {
+        doc.layers.last_mut().unwrap().opacity = 0.5;
+        Ok(())
+    })
+    .unwrap();
+    let err = s.execute("layer.mergeDown", json!({})).unwrap_err().to_string();
+    assert!(err.contains("opacity") && err.contains("Flatten"), "{err}");
+    // So is a mask, a blend mode and effects; at 100 % with none of those it merges and stays deep.
+    let mut s = deep_doc();
+    s.edit("blend", |doc, _| {
+        doc.layers.last_mut().unwrap().blend = photocraft_doc::BlendMode::Multiply;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("layer.mergeDown", json!({})).unwrap_err().to_string().contains("blend mode"));
+    let mut s = deep_doc();
+    s.edit("mask", |doc, _| {
+        let surface = photocraft_raster::Surface::new(doc.pixel_format());
+        doc.layers.last_mut().unwrap().mask = Some(photocraft_doc::LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("layer.mergeDown", json!({})).unwrap_err().to_string().contains("mask"));
+    let mut s = deep_doc();
+    s.execute("layer.mergeDown", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(doc.layer_count(), 2);
+    assert!(matches!(doc.layers.last().unwrap().content, photocraft_doc::LayerContent::Deep(_)));
+    // The multi-selection merge (Merge Layers) refuses the same things on its upper layers.
+    let mut s = deep_doc();
+    s.edit("opacity", |doc, _| {
+        doc.layers.last_mut().unwrap().opacity = 0.5;
+        Ok(())
+    })
+    .unwrap();
+    // Only the two deep layers (not the raster Background) make the all-deep merge path.
+    let deeps: Vec<u64> =
+        s.active().unwrap().doc.layers.iter().filter(|l| matches!(l.content, photocraft_doc::LayerContent::Deep(_))).map(|l| l.id.0).collect();
+    for l in deeps {
+        s.execute("layer.select", json!({"layer": l, "mode": "add"})).unwrap();
+    }
+    let err = s.execute("layer.mergeLayers", json!({})).unwrap_err().to_string();
+    assert!(err.contains("opacity") && err.contains("Flatten"), "{err}");
+}

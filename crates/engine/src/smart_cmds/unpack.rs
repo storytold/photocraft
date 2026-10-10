@@ -71,8 +71,11 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
     let [a, b, c, d, e, f] = sm.transform.m;
     let whole = |v: f64| (v - v.round()).abs() < 1e-9;
     if sm.perspective.is_none() && [a - 1.0, b, c, d - 1.0].iter().all(|v| v.abs() < 1e-9) && whole(e) && whole(f) {
-        // Saturating casts: a placement that far out moves the layers off any canvas either way.
-        layers.iter_mut().for_each(|l| shift_layer(l, e.round() as i32, f.round() as i32));
+        // Saturating casts: a placement that far out moves the layers off any canvas either
+        // way, and shift_layer refuses a shift that would overflow the coordinate range.
+        for l in layers.iter_mut() {
+            shift_layer(l, e.round() as i32, f.round() as i32)?;
+        }
         return Ok(());
     }
     // Unlike a whole-pixel shift, this path re-renders nested smart objects from their sources.

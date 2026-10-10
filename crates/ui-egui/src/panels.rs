@@ -1871,6 +1871,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ("type", "type", tl!("Filter for type layers")),
                 ("shape", "square", tl!("Filter for shape layers")),
                 ("smart", "app-window", tl!("Filter for smart objects")),
+                ("deep", "layers", tl!("Filter for deep layers")),
             ] {
                 let on = app.ui.layer_filter.iter().any(|k| k == kind);
                 if icons::button(ui, icon, 22.0, on, tip).clicked() {
@@ -2010,6 +2011,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         LayerContent::Text(_) => "type",
                         LayerContent::Shape(_) => "shape",
                         LayerContent::Smart(_) => "smart",
+                        LayerContent::Deep(_) => "deep",
                         LayerContent::Group(_) => "",
                     };
                     if !filter.iter().any(|k| k == kind) {
