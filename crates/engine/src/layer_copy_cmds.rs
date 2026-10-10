@@ -8,8 +8,10 @@
 //! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
+use std::collections::HashMap;
+
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{Document, LayerContent, LayerId, SmartContentsId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -104,6 +106,17 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             l.locks = Default::default();
         }
         copies.layers.push(l);
+    }
+    // Contents IDs belong to a document. Preserve sharing within this batch, without joining
+    // pre-existing objects in the destination (including another opening of the same file).
+    let mut contents = HashMap::new();
+    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
+    for id in smart_ids {
+        if let Some(l) = copies.layer_mut(id)
+            && let LayerContent::Smart(sm) = &mut l.content
+        {
+            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
+        }
     }
     if (copies.mode, &copies.icc_profile) != (ddoc.mode, &ddoc.icc_profile) {
         let profile = crate::color_cmds::document_profile(&ddoc);

@@ -191,7 +191,7 @@ fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: 
     if hole_bounds.is_empty() {
         return Err(EngineError::Other("the selection is outside the canvas".into()));
     }
-    let window = hole_bounds.inflate(sampling_margin(hole_bounds)).intersect(&canvas);
+    let window = sampling_window(hole_bounds, canvas);
     let fmt = surf.format();
     let n = fmt.channels();
     let (w, h) = window_size(window)?;
@@ -219,12 +219,12 @@ fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: 
     Ok(Source::Pixels(window, px))
 }
 
-/// The automatic Content-Aware sampling margin around `hole`: three quarters of its larger side,
-/// at least 32 pixels. Worked out in u64 because a loaded document can declare a selection whose
-/// extent times three overflows u32 (#963); a margin beyond i32 saturates, as `Rect::inflate` does.
-pub(crate) fn sampling_margin(hole: Rect) -> i32 {
-    let ext = u64::from(hole.width().max(hole.height()));
-    i32::try_from(ext * 3 / 4).unwrap_or(i32::MAX).max(32)
+/// Photoshop's Content-Aware sampling window around the selection bounds `hole`
+/// ([`photocraft_algo::content_aware::sampling_window`]): Edit › Fill, the workspace's Rectangular
+/// and Auto areas and the retouching tools all copy from within it. Worked out in i64, so a loaded
+/// document declaring an absurd selection can't overflow it (#963).
+pub(crate) fn sampling_window(hole: Rect, canvas: Rect) -> Rect {
+    photocraft_algo::content_aware::sampling_window(hole.intersect(&canvas), canvas)
 }
 
 /// The size of a Content-Aware sampling window, or an error for a window too large to read and

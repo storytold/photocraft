@@ -49,8 +49,10 @@ pub mod history_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
+pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
+pub mod layer_mask_props_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
@@ -257,6 +259,33 @@ pub struct ToolState {
     /// preset stays "the current brush" so `brush.presets.update` can overwrite it); cleared when
     /// the brush is reset or the preset is gone.
     pub current_preset: Option<String>,
+    /// A layer mask is the edit target ([`ToolState::target_mask`]).
+    pub mask_targeted: bool,
+    /// The foreground/background pair of the edit target that isn't current: the layer pixels'
+    /// colours while a mask is targeted, the mask's while the pixels are (#2166).
+    pub other_colors: [[f32; 4]; 2],
+}
+
+impl ToolState {
+    /// Photoshop's colour pair for a layer mask that has none yet: white foreground, black
+    /// background (reveal-paint first).
+    pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
+
+    /// Switch the edit target between layer pixels and a layer mask. Like Photoshop, the mask and
+    /// the pixels keep separate app-wide foreground/background pairs: changing the target puts
+    /// the current pair aside and brings back the other one, so colours picked while a mask is
+    /// targeted are remembered for masks (#2166). The mask pair starts at [`Self::MASK_COLORS`].
+    /// Returns whether the target changed.
+    pub fn target_mask(&mut self, mask: bool) -> bool {
+        if self.mask_targeted == mask {
+            return false;
+        }
+        self.mask_targeted = mask;
+        let [fg, bg] = std::mem::replace(&mut self.other_colors, [self.foreground, self.background]);
+        self.foreground = fg;
+        self.background = bg;
+        true
+    }
 }
 
 impl Default for ToolState {
@@ -274,6 +303,8 @@ impl Default for ToolState {
             mixer: Default::default(),
             brush_gesture: None,
             current_preset: None,
+            mask_targeted: false,
+            other_colors: Self::MASK_COLORS,
         }
     }
 }

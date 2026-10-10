@@ -12,10 +12,10 @@ Automation is a privilege boundary because requests can cause filesystem access,
   enforced before rmcp's line buffer; an oversized MCP line closes that stdio session because
   its request ID cannot safely be parsed. Active TCP connections are limited to 16, and
   headless/MCP batches to 256 steps.
-- Capability-scoped automation file opens reject a file larger than 1 GiB before allocating
-  from its metadata length. Reads check the byte ceiling while reading as well, so a file that
-  grows after the metadata check cannot bypass it. Trusted-local CLI opens retain the existing
-  large-file path; the automation ceiling does not bound decoded document size.
+- Capability-scoped automation file opens read in chunks without reserving from the file's
+  metadata length. A read rejects data beyond the length observed on the opened file, so growth
+  after the metadata check cannot expand the read. Large PSB files have no fixed automation file
+  size ceiling; their materialized bytes and decoded document still require available memory.
 - JSON-lines replies and encoded MCP tool results are limited to 8 MiB; retained batch replies
   have an aggregate budget and stop later steps when exhausted. The headless stdio JSON-lines
   transport enforces the same request/reply ceilings as TCP.

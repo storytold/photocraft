@@ -1,7 +1,7 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use cap_std::ambient_authority;
@@ -12,21 +12,23 @@ use serde_json::Value;
 use crate::AutomationError;
 
 const DENIED: &str = "automation filesystem access is not granted";
-/// Files opened through automation are currently materialized before parsing. Keep that
-/// allocation finite; trusted local CLI opens retain their separate large-file path.
-pub const MAX_AUTOMATION_FILE_BYTES: u64 = 1 << 30;
 
 #[derive(Clone)]
 struct RootCapability {
     dir: Arc<Dir>,
+    /// The root as an absolute path (trusted launch configuration), to recognise absolute request
+    /// paths that name a file beneath it.
+    path: PathBuf,
 }
 
 /// Separate directory capabilities for automation reads and writes.
 ///
 /// Root paths are trusted launch-time configuration. Request paths are always
 /// untrusted, forward-slash relative paths resolved by `cap-std` beneath the
-/// held directory handle. Absolute paths, parent traversal, alternate
-/// separators, Windows prefixes and empty components are rejected before I/O.
+/// held directory handle, or absolute paths whose text lies beneath the root
+/// (translated to relative ones, see [`request_path`]). Parent traversal,
+/// alternate separators, Windows prefixes and empty components are rejected
+/// before I/O.
 #[derive(Clone, Default)]
 pub struct AuthorizedWorkspace {
     read: Option<RootCapability>,
@@ -42,14 +44,14 @@ impl AuthorizedWorkspace {
 
     /// Read one regular file below the configured read root.
     pub fn read(&self, path: &str) -> Result<Vec<u8>, AutomationError> {
-        let relative = relative_path(path)?;
+        let relative = request_path(path, self.read.as_ref())?;
         let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
         let mut file = root.dir.open(&relative).map_err(|e| file_error("read", path, e))?;
         let metadata = file.metadata().map_err(|e| file_error("read", path, e))?;
         if !metadata.is_file() {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
         }
-        read_capped(&mut file, metadata.len(), MAX_AUTOMATION_FILE_BYTES)
+        read_to_observed_length(&mut file, metadata.len())
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -61,7 +63,7 @@ impl AuthorizedWorkspace {
     /// resolution and file creation relative to the held directory handle, so
     /// a non-existent final target is supported without ambient path access.
     pub fn write(&self, path: &str, bytes: &[u8]) -> Result<(), AutomationError> {
-        let relative = relative_path(path)?;
+        let relative = request_path(path, self.write.as_ref())?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         let leaf = relative.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let parent = relative.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -90,16 +92,13 @@ impl AuthorizedWorkspace {
     }
 }
 
-fn read_capped(reader: &mut impl Read, size_hint: u64, maximum: u64) -> Result<Vec<u8>, AutomationError> {
-    if size_hint > maximum {
-        return Err(AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")));
-    }
-    // Do not reserve from a potentially stale or attacker-controlled metadata length. A file
-    // growing after metadata() must still be rejected before its extra bytes enter the Vec.
+fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
+    // Do not reserve from a potentially stale or attacker-controlled metadata length. Read in
+    // chunks, and reject growth beyond the length observed on the opened file before appending.
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 64 << 10];
     loop {
-        let remaining = maximum.saturating_sub(bytes.len() as u64);
+        let remaining = observed_length.saturating_sub(bytes.len() as u64);
         let ask = chunk.len().min(usize::try_from(remaining.saturating_add(1)).unwrap_or(chunk.len()));
         let n = match reader.read(&mut chunk[..ask]) {
             Ok(n) => n,
@@ -110,11 +109,11 @@ fn read_capped(reader: &mut impl Read, size_hint: u64, maximum: u64) -> Result<V
             return Ok(bytes);
         }
         if n as u64 > remaining {
-            return Err(AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")));
+            return Err(AutomationError::BadRequest(format!("automation file grew beyond its observed length of {observed_length} bytes")));
         }
-        let needed = bytes.len().checked_add(n).ok_or_else(|| AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")))?;
+        let needed = bytes.len().checked_add(n).ok_or_else(|| AutomationError::BadRequest("automation file is too large to read".into()))?;
         if needed > bytes.capacity() {
-            let target = bytes.capacity().saturating_add(bytes.capacity() / 2).max(needed).min(usize::try_from(maximum).unwrap_or(usize::MAX));
+            let target = bytes.capacity().saturating_add(bytes.capacity() / 2).max(needed).min(usize::try_from(observed_length).unwrap_or(usize::MAX));
             bytes.try_reserve_exact(target - bytes.len()).map_err(|e| AutomationError::Io(format!("automation read allocation failed: {e}")))?;
         }
         bytes.extend_from_slice(&chunk[..n]);
@@ -128,7 +127,33 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     }
     let dir = Dir::open_ambient_dir(path, ambient_authority())
         .map_err(|e| AutomationError::Io(format!("cannot open automation {authority} root `{}`: {e}", path.display())))?;
-    Ok(Some(RootCapability { dir: Arc::new(dir) }))
+    // Textual (no link resolution), like the request paths it is compared with.
+    let absolute =
+        std::path::absolute(path).map_err(|e| AutomationError::Io(format!("cannot resolve automation {authority} root `{}`: {e}", path.display())))?;
+    Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute }))
+}
+
+/// A request path as the relative path the root's capability resolves. An absolute path is
+/// accepted only when its text names a file beneath `root`: the root's components are
+/// stripped (the drive letter compared without case) and the rest must pass
+/// [`relative_path`], so `..`, prefixes and device names are refused as before. Nothing is
+/// resolved on the filesystem; the held directory handle still does all the opening, so
+/// links cannot escape the root.
+fn request_path(raw: &str, root: Option<&RootCapability>) -> Result<PathBuf, AutomationError> {
+    let Some(root) = root.filter(|_| Path::new(raw).is_absolute()) else { return relative_path(raw) };
+    let mut request = Path::new(raw).components();
+    for want in root.path.components() {
+        let same = match (request.next(), want) {
+            (Some(Component::Prefix(a)), Component::Prefix(b)) => a.as_os_str().eq_ignore_ascii_case(b.as_os_str()),
+            (Some(got), want) => got == want,
+            (None, _) => false,
+        };
+        if !same {
+            return Err(path_error(raw, "absolute paths must be inside the automation root"));
+        }
+    }
+    let rest: Vec<&str> = request.map(|c| c.as_os_str().to_str().unwrap_or("\u{FFFD}")).collect();
+    relative_path(&rest.join("/"))
 }
 
 fn relative_path(raw: &str) -> Result<PathBuf, AutomationError> {
@@ -335,7 +360,7 @@ pub(crate) struct ExportSequence {
 
 impl AuthorizedWorkspace {
     pub(crate) fn export_sequence(&self, path: &str) -> Result<ExportSequence, AutomationError> {
-        let relative = relative_path(path)?;
+        let relative = request_path(path, self.write.as_ref())?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))?;
         let dir = root.dir.open_dir(&relative).map_err(|e| file_error("open export directory", path, e))?;
@@ -434,23 +459,20 @@ mod tests {
     }
 
     #[test]
-    fn oversized_sparse_file_is_rejected_before_allocation() {
-        let (inside, _, workspace) = roots("oversized-read");
-        let file = std::fs::File::create(inside.join("large.psb")).unwrap();
-        file.set_len(MAX_AUTOMATION_FILE_BYTES + 1).unwrap();
-        let error = workspace.read("large.psb").unwrap_err().to_string();
-        assert!(error.contains("exceeds"), "{error}");
-        drop(file);
-        std::fs::remove_file(inside.join("large.psb")).unwrap();
+    fn large_observed_length_does_not_trigger_a_fixed_limit_or_upfront_reservation() {
+        let mut shortened = std::io::Cursor::new(b"psb");
+        assert_eq!(read_to_observed_length(&mut shortened, (1 << 30) + 1).unwrap(), b"psb");
     }
 
     #[test]
-    fn read_growth_is_rejected_at_the_ceiling() {
-        let mut growing = std::io::repeat(b'x').take(66);
-        let error = read_capped(&mut growing, 4, 64).unwrap_err().to_string();
-        assert!(error.contains("exceeds 64 bytes"), "{error}");
+    fn read_growth_is_rejected_at_the_observed_length() {
+        let mut growing = std::io::repeat(b'x').take(65);
+        let error = read_to_observed_length(&mut growing, 64).unwrap_err().to_string();
+        assert!(error.contains("grew beyond its observed length of 64 bytes"), "{error}");
         let mut allowed = std::io::repeat(b'x').take(64);
-        assert_eq!(read_capped(&mut allowed, 64, 64).unwrap().len(), 64);
+        assert_eq!(read_to_observed_length(&mut allowed, 64).unwrap().len(), 64);
+        let mut empty = std::io::Cursor::new(b"x");
+        assert!(read_to_observed_length(&mut empty, 0).is_err());
     }
 
     fn temp_files(dir: &Path) -> Vec<String> {
@@ -805,5 +827,48 @@ mod tests {
         }
         headless.command_run("file.new", serde_json::json!({"width": 5, "height": 5})).unwrap();
         assert!(headless.session.file_menu.event_log.is_empty());
+    }
+
+    /// #2176: an absolute path beneath the root names the same file as its relative path; every
+    /// other absolute path is refused before any file effect.
+    #[test]
+    fn absolute_paths_beneath_the_root_are_translated_and_others_refused() {
+        let (inside, outside, workspace) = roots("absolute-paths");
+        let abs = |p: &Path| p.to_string_lossy().into_owned();
+
+        workspace.write(&abs(&inside.join("a.bin")), b"one").unwrap();
+        assert_eq!(std::fs::read(inside.join("a.bin")).unwrap(), b"one");
+        assert_eq!(workspace.read(&abs(&inside.join("a.bin"))).unwrap(), b"one");
+        // Forward slashes too (on Windows the native spelling uses `\`).
+        assert_eq!(workspace.read(&abs(&inside.join("a.bin")).replace('\\', "/")).unwrap(), b"one");
+        std::fs::create_dir(inside.join("sub")).unwrap();
+        workspace.write(&abs(&inside.join("sub").join("b.bin")), b"two").unwrap();
+        assert_eq!(std::fs::read(inside.join("sub/b.bin")).unwrap(), b"two");
+        assert_eq!(workspace.read("sub/b.bin").unwrap(), b"two", "relative paths still work");
+
+        let refused = |path: String| {
+            let error = workspace.write(&path, b"x").unwrap_err().to_string();
+            assert!(error.contains("automation path rejected"), "{path}: {error}");
+        };
+        refused(abs(&outside.join("escape.bin")));
+        refused(abs(&inside.join("..").join("outside").join("traversal.bin")));
+        refused(abs(&inside));
+        refused(abs(&inside.join("CON")));
+        refused(format!("{}:hidden", abs(&inside.join("a.bin"))));
+        assert!(!outside.join("escape.bin").exists());
+        assert!(!outside.join("traversal.bin").exists());
+        assert_eq!(std::fs::read(inside.join("a.bin")).unwrap(), b"one");
+    }
+
+    /// Each authority is checked against its own root, and none granted refuses absolute paths.
+    #[test]
+    fn absolute_paths_are_checked_against_the_authority_s_own_root() {
+        let (inside, outside, _) = roots("absolute-authority");
+        let workspace = AuthorizedWorkspace::new(Some(&outside), Some(&inside)).unwrap();
+        let target = inside.join("written.bin");
+        workspace.write(&target.to_string_lossy(), b"w").unwrap();
+        assert!(workspace.read(&target.to_string_lossy()).is_err(), "not under the read root");
+        let none = AuthorizedWorkspace::default();
+        assert!(none.read(&target.to_string_lossy()).is_err());
     }
 }

@@ -1049,3 +1049,52 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     let r = crate::retouch::dab_rect(&huge);
     assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
 }
+
+/// Alpha down from a horizontal line at `y = 100.5` on an f32 surface, one value per pixel row.
+fn cross_section(b: &BrushSettings, pts: &[StrokePoint], x: i32) -> Vec<f32> {
+    let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    render_stroke(&mut s, b, pts, None, false, 1.0);
+    (100..170).map(|y| s.rgba(x, y)[3]).collect()
+}
+
+/// Rows from where the profile drops below 90 % to where it drops below 10 %.
+fn soft_edge_width(profile: &[f32]) -> usize {
+    let below = |v: f32| profile.iter().position(|a| *a < v).unwrap_or(profile.len());
+    below(0.1).saturating_sub(below(0.9))
+}
+
+#[test]
+fn a_soft_stroke_keeps_most_of_its_tips_softness() {
+    // The default brush (10 % spacing), 100 px, hardness 0. Overlapping dabs build up (Flow); a
+    // Gaussian-like tip keeps most of its area faint, so the stroke keeps about two thirds of the
+    // tip's soft edge (half with the old smoothstep falloff).
+    let b = BrushSettings { size: 100.0, hardness: 0.0, pressure_size: false, ..Default::default() };
+    let stroke = cross_section(&b, &line(0.0, 400.0, 100.5), 200);
+    let dab = cross_section(&b, &[StrokePoint::new(200.5, 100.5, 1.0)], 200);
+    let (s, d) = (soft_edge_width(&stroke), soft_edge_width(&dab));
+    assert!(d >= 20 && s * 100 >= d * 65, "stroke soft edge {s} px vs tip {d} px");
+}
+
+#[test]
+fn a_tiny_dabs_coverage_does_not_depend_on_where_it_lands_in_a_pixel() {
+    let total = |x: f64, y: f64| {
+        let b = BrushSettings { size: 1.0, hardness: 1.0, pressure_size: false, ..Default::default() };
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        render_stroke(&mut s, &b, &[StrokePoint::new(x, y, 1.0)], None, false, 1.0);
+        (0..10).flat_map(|py| (0..10).map(move |px| (px, py))).map(|(px, py)| s.rgba(px, py)[3]).sum::<f32>()
+    };
+    let sums: Vec<f32> = [(5.5, 5.5), (5.75, 5.5), (5.0, 5.0), (5.3, 5.8)].iter().map(|&(x, y)| total(x, y)).collect();
+    let (lo, hi) = sums.iter().fold((f32::MAX, 0.0f32), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+    assert!(hi - lo < 0.03 * hi, "total coverage by sub-pixel position: {sums:?}");
+}
+
+#[test]
+fn the_tip_falls_off_from_the_hard_core_to_zero_at_the_edge() {
+    use crate::tip_falloff;
+    assert_eq!(tip_falloff(0.0, 10.0, 0.0), 1.0);
+    assert_eq!(tip_falloff(10.0, 10.0, 0.0), 0.0);
+    assert_eq!(tip_falloff(4.0, 10.0, 0.5), 1.0, "inside the hard core");
+    let v: Vec<f32> = (0..=20).map(|i| tip_falloff(i as f32 * 0.5, 10.0, 0.0)).collect();
+    assert!(v.windows(2).all(|w| w[1] <= w[0]), "{v:?}");
+    assert!((tip_falloff(5.0, 10.0, 0.0) - 0.75f32.powi(4)).abs() < 1e-6);
+}
