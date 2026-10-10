@@ -11,6 +11,10 @@ use photocraft_engine::prefs::RightClickPaint;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
+fn picker_open_frame_id() -> egui::Id {
+    egui::Id::new("canvas-brush-picker-open-frame")
+}
+
 /// The brush is a tool option, kept per tool like Photoshop's options bar: switching from the
 /// Brush to the Eraser saves the session brush for the old tool and loads the new tool's, so each
 /// keeps its own size, hardness, mode, opacity, dynamics and smoothing. A tool seen for the
@@ -104,6 +108,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
+        let frame = response.ctx.cumulative_frame_nr();
+        response.ctx.data_mut(|d| d.insert_temp(picker_open_frame_id(), frame));
         app.ui.brush_picker = Some([p.x, p.y]);
     }
     let erase_click = erase && right_click;
@@ -186,7 +192,11 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // just being open: a press elsewhere closes the picker in the same click that closes the menu.
     let press = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
     let on_menu = press.is_some_and(|p| ctx.layer_id_at(p).is_some_and(|l| l.order == egui::Order::Foreground));
-    let outside = press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !on_menu;
+    // A quick trackpad tap can press and release in one frame. The area rounds its position
+    // to physical pixels, so that opening press can lie just outside its rounded rectangle.
+    // Ignore it throughout the opening frame, including any additional layout passes.
+    let opening = ctx.data(|d| d.get_temp::<u64>(picker_open_frame_id())) == Some(ctx.cumulative_frame_nr());
+    let outside = !opening && press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !on_menu;
     if outside || key_close || area.inner {
         crate::brush_picker::close(&mut app.ui);
     }
@@ -302,6 +312,46 @@ mod tests {
         let clicked = &points[1];
         assert!(points[1..].iter().all(|p| p[0] == clicked[0] && p[1] == clicked[1]), "{points:?}");
         assert!(alpha_at(&h, end + vec2(60.0, 40.0)) > 0.9, "the segment between the strokes is painted");
+    }
+
+    #[test]
+    fn secondary_taps_reopen_the_picker_after_closing() {
+        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.ui.tool = Tool::Brush;
+            app
+        });
+        h.run_steps(5);
+        let canvas = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect);
+        let points = [canvas.center(), canvas.left_top() + vec2(40.0, 40.0), canvas.right_bottom() - vec2(40.0, 40.0)];
+        for at in points {
+            for attempt in 0..3 {
+                let before = strokes(&h).len();
+                let undo = h.state().session.active().unwrap().history.past_len();
+                h.event(egui::Event::PointerMoved(at));
+                h.run_steps(2);
+                for pressed in [true, false] {
+                    // Harness::event processes each event in a separate frame. RawInput keeps
+                    // the press and release together, as a quick two-finger tap can arrive.
+                    h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+                }
+                h.run_steps(3);
+                assert!(h.state().ui.brush_picker.is_some(), "reopen {attempt} at {at:?}");
+                assert_eq!(strokes(&h).len(), before, "opening never paints");
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), undo);
+                let shown = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).unwrap();
+                let outside = points.into_iter().find(|p| !shown.contains(*p)).unwrap();
+                h.event(egui::Event::PointerMoved(outside));
+                for pressed in [true, false] {
+                    h.input_mut().events.push(egui::Event::PointerButton { pos: outside, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                }
+                h.run_steps(3);
+                assert!(h.state().ui.brush_picker.is_none());
+            }
+        }
     }
 
     #[test]
