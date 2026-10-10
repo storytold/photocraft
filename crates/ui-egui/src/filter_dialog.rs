@@ -441,6 +441,9 @@ fn uses_logarithmic_slider(min: f32, max: f32) -> bool {
     min > 0.0 && max / min > 500.0
 }
 
+/// Schema dialogs whose `profile` menu lists the installed profiles after the built-ins.
+const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile", "view.proofSetup"];
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -498,7 +501,21 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     let mut cur = f.get(&p.key).and_then(Value::as_str).unwrap_or(&options[0]).to_string();
                     let labels: Vec<String> = options.iter().map(|o| choice_label(o)).collect();
-                    let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
+                    let mut opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
+                    // Like Photoshop, the profile menus also list every profile installed in
+                    // the system (printer and paper profiles), by description.
+                    let installed = if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) {
+                        photocraft_engine::installed_profiles::installed().into_iter().filter(|i| i.is_destination()).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    opts.extend(installed.iter().map(|i| (i.path.clone(), i.description.as_str())));
+                    // A profile given by path that isn't listed (typed by an agent, or spelled with
+                    // different case) still shows, by its file name, instead of a blank menu.
+                    let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) && !opts.iter().any(|(v, _)| *v == cur) {
+                        opts.push((cur.clone(), stem.as_str()));
+                    }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
                     f.insert(p.key.clone(), json!(cur));
                 });

@@ -1188,6 +1188,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::web_cmds::specs());
     v.extend(crate::automate_cmds::specs());
     v.extend(crate::print_cmds::specs());
+    v.extend(crate::installed_profiles::specs());
     v.extend(crate::pick_cmds::specs());
     v.extend(crate::layer_nav_cmds::specs());
     v.extend(crate::frame_cmds::specs());

@@ -4359,6 +4359,7 @@ dependencies = [
  "photocraft-raw",
  "photocraft-text",
  "photocraft-vector",
+ "photocraft-winprint",
  "rayon",
  "roxmltree",
  "serde",
@@ -4582,6 +4583,7 @@ dependencies = [
  "photocraft-testkit",
  "photocraft-text",
  "photocraft-vector",
+ "photocraft-winprint",
  "rayon",
  "serde",
  "serde_json",
@@ -4620,6 +4622,13 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "photocraft-winprint"
+version = "0.6.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

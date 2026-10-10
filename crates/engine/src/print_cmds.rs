@@ -68,6 +68,9 @@ pub struct PrintPage {
     pub marks: Marks,
     pub description: Option<String>,
     pub label: Option<String>,
+    /// Photoshop's Functions › Emulsion Down: the whole page mirrored left to right, for transfer
+    /// printing (sublimation, iron-on, DTF, film read from the back).
+    pub emulsion_down: bool,
 }
 
 fn pdf_string(s: &str) -> String {
@@ -153,7 +156,11 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
         .as_bytes(),
     );
     // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
-    let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n");
+    let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\n");
+    if page.emulsion_down {
+        content.push_str(&format!("q -1 0 0 1 {pw:.2} 0 cm\n"));
+    }
+    content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
     content.push_str(&marks_ops(page.marks, page.rect));
     let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
     let pad = if any_marks { 30.0 } else { 6.0 };
@@ -162,6 +169,9 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     }
     if let Some(d) = page.description.as_deref().filter(|d| !d.is_empty()) {
         content.push_str(&format!("BT /F1 8 Tf 0 g {:.2} {:.2} Td {} Tj ET\n", x, y - pad - 8.0, pdf_string(d)));
+    }
+    if page.emulsion_down {
+        content.push_str("Q\n");
     }
     let c = deflate(content.as_bytes());
     let mut body = format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", c.len()).into_bytes();
@@ -281,6 +291,8 @@ pub struct PrintLayout {
     /// Print scale (1.0 = 100 %).
     pub scale: f64,
     pub marks: Marks,
+    /// Emulsion Down: the page prints mirrored (`rect` is where the image is before mirroring).
+    pub emulsion_down: bool,
 }
 
 /// The print layout for `doc` with Print parameters `p` (used by the dialog's preview too).
@@ -310,14 +322,15 @@ pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
         let left = p.get("left").and_then(Value::as_f64).unwrap_or(0.0) * 72.0;
         (left, ph - top - h)
     };
-    Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks })
+    let emulsion_down = p.get("emulsionDown").and_then(Value::as_bool).unwrap_or(false);
+    Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, emulsion_down })
 }
 
 /// Lays out, renders and (unless dry-run) spools a print. Shared by Print and Print One Copy.
 fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
-    let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks } = layout(&doc, p, cmd)?;
+    let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, emulsion_down } = layout(&doc, p, cmd)?;
     let (img, color) = print_image(&doc, p, cmd)?;
     let description = p
         .get("description")
@@ -325,8 +338,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         .unwrap_or(false)
         .then(|| crate::file_cmds::read_file_info(doc.metadata.xmp.as_deref())["description"].as_str().unwrap_or_default().to_string());
     let label = p.get("labels").and_then(Value::as_bool).unwrap_or(false).then(|| doc.name.clone());
-    let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, description, label };
-    let pdf = print_pdf(&page);
+    let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, description, label, emulsion_down };
     let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
     let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
     let pdf_path = match &output {
@@ -339,8 +351,24 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             join(&tmp, &format!("{}-print-{}-{n}.pdf", crate::file_cmds::sanitize(&stem(&doc.name)), std::process::id()))
         }
     };
-    write_file(&pdf_path, &pdf)?;
     let copies = crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999);
+    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    // Windows has no `lp`: print through the driver (GDI, ICM off) instead of spooling a PDF.
+    // Only with an explicit `"send": true` (the dialog's Print button): a bare call, such as a
+    // fuzzer's or a script's `{}`, never puts paper through a printer. A dry run still renders
+    // the PDF and reports the `lp` line, as on every platform.
+    let explicit_send = p.get("send").and_then(Value::as_bool) == Some(true);
+    if cfg!(windows) && explicit_send && !dry && output.is_none() {
+        let printed = print_windows(&page, p, &doc.name, copies)?;
+        remember_print(s, p);
+        crate::automate_cmds::fire_event(s, "print");
+        return Ok(json!({
+            "pdf": Value::Null, "paper": [pw, ph], "imageRect": [x, y, w, h], "emulsionDown": emulsion_down, "scale": scale * 100.0,
+            "copies": copies, "command": Value::Null, "sent": true, "spooler": printed, "color": color,
+        }));
+    }
+    let pdf = print_pdf(&page);
+    write_file(&pdf_path, &pdf)?;
     let mut argv: Vec<String> = vec!["lp".into()];
     if let Some(pr) = p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()) {
         argv.extend(["-d".into(), pr.to_string()]);
@@ -349,23 +377,97 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         argv.extend(["-n".into(), copies.to_string()]);
     }
     argv.extend(["-t".into(), doc.name.clone(), pdf_path.clone()]);
-    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
     let mut sent = false;
     let mut spool = Value::Null;
     if send && !dry {
         spool = json!(spool_pdf(&argv)?);
         sent = true;
     }
+    remember_print(s, p);
+    crate::automate_cmds::fire_event(s, "print");
+    Ok(
+        json!({"pdf": pdf_path, "bytes": pdf.len(), "paper": [pw, ph], "imageRect": [x, y, w, h], "emulsionDown": emulsion_down, "scale": scale * 100.0, "copies": copies, "command": if send { json!(argv) } else { Value::Null }, "sent": sent, "spooler": spool, "color": color}),
+    )
+}
+
+/// Print One Copy repeats these.
+fn remember_print(s: &mut Session, p: &Value) {
     let mut remembered = p.clone();
     if let Some(o) = remembered.as_object_mut() {
         o.remove("output");
         o.remove("dryRun");
     }
     s.file_menu.last_print = Some(remembered);
-    crate::automate_cmds::fire_event(s, "print");
-    Ok(
-        json!({"pdf": pdf_path, "bytes": pdf.len(), "paper": [pw, ph], "imageRect": [x, y, w, h], "scale": scale * 100.0, "copies": copies, "command": if send { json!(argv) } else { Value::Null }, "sent": sent, "spooler": spool, "color": color}),
-    )
+}
+
+/// The `printer` parameter, or the system's default printer.
+fn printer_name(p: &Value) -> Result<String> {
+    if let Some(name) = p.get("printer").and_then(Value::as_str).filter(|v| !v.trim().is_empty()) {
+        return Ok(name.to_string());
+    }
+    photocraft_winprint::default_printer().map_err(other)?.ok_or_else(|| other("no printer chosen and no default printer is set"))
+}
+
+/// The driver settings chosen with Print Settings… (`printerSettings`, hex), when any.
+fn printer_settings(p: &Value) -> Result<Option<photocraft_winprint::DevMode>> {
+    match p.get("printerSettings").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+        Some(hex) => photocraft_winprint::DevMode::from_hex(hex).map(Some).map_err(|e| bad("file.print", e.to_string())),
+        None => Ok(None),
+    }
+}
+
+/// The page's image as 8-bit RGB rows (gray expanded), mirrored for Emulsion Down.
+pub fn page_rgb(page: &PrintPage) -> Result<Vec<u8>> {
+    let img = &page.image;
+    let (w, h) = (img.width as usize, img.height as usize);
+    let mut rgb = match img.channels {
+        3 => img.data.clone(),
+        1 => img.data.iter().flat_map(|g| [*g, *g, *g]).collect(),
+        _ => return Err(other("this printer profile is CMYK; Windows printers take RGB, so choose the printer's own (RGB) profile")),
+    };
+    if rgb.len() != w * h * 3 {
+        return Err(other("nothing to print"));
+    }
+    if page.emulsion_down {
+        for row in rgb.chunks_exact_mut(w * 3) {
+            row.as_chunks_mut::<3>().0.reverse();
+        }
+    }
+    Ok(rgb)
+}
+
+/// The image box with its origin at the sheet's top-left (GDI's), mirrored for Emulsion Down.
+pub fn page_rect_top_left(page: &PrintPage) -> (f64, f64, f64, f64) {
+    let (pw, ph) = page.paper;
+    let (x, y, w, h) = page.rect;
+    let x = if page.emulsion_down { pw - x - w } else { x };
+    (x, ph - y - h, w, h)
+}
+
+/// Prints `page` on a Windows printer. Printer marks, description and labels are PDF-only.
+fn print_windows(page: &PrintPage, p: &Value, title: &str, copies: i64) -> Result<Value> {
+    let printer = printer_name(p)?;
+    let settings = printer_settings(p)?;
+    let rgb = page_rgb(page)?;
+    let image = photocraft_winprint::RgbImage { width: page.image.width, height: page.image.height, data: &rgb };
+    let job = photocraft_winprint::Job { printer: &printer, settings: settings.as_ref(), title, output_file: None, copies: copies.clamp(1, 999) as u32 };
+    let done = photocraft_winprint::print(&job, &image, page_rect_top_left(page)).map_err(other)?;
+    let marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration || page.description.is_some() || page.label.is_some();
+    Ok(json!({"printer": printer, "dpi": [done.dpi.0, done.dpi.1], "deviceRect": [done.device_rect.0, done.device_rect.1, done.device_rect.2, done.device_rect.3], "marksSkipped": marks}))
+}
+
+fn printers(_: &mut Session, _: &Value) -> Result<Value> {
+    match photocraft_winprint::printers() {
+        Ok(list) => Ok(json!({"supported": true, "printers": list.iter().map(|p| json!({"name": p.name, "default": p.default})).collect::<Vec<_>>()})),
+        Err(photocraft_winprint::PrintError::Unsupported) => Ok(json!({"supported": false, "printers": []})),
+        Err(e) => Err(other(e)),
+    }
+}
+
+fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+    let printer = printer_name(p)?;
+    let pg = photocraft_winprint::page(&printer, printer_settings(p)?.as_ref()).map_err(other)?;
+    Ok(json!({"printer": printer, "paper": [pg.paper.0, pg.paper.1], "printable": [pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3], "dpi": [pg.dpi.0, pg.dpi.1]}))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -549,9 +651,29 @@ pub fn specs() -> Vec<CommandSpec> {
             CommandSpec { id: $id, label: $label, menu: $menu, shortcut: $sc, params: $params, enabled: $enabled, journal: true, run: $run }
         };
     }
-    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"dryRun":bool=false (render the PDF, report the lp command, don't spool)} → {pdf, imageRect, command, sent}"##;
+    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"printerSettings":hex? (the driver settings from Print Settings…, Windows),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"emulsionDown":bool=false (mirror the page left to right, for sublimation and other transfer printing),"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool? (Windows prints to the printer only with an explicit true),"dryRun":bool=false (render the PDF, report the lp command, don't spool)} → {pdf, imageRect, command, sent}"##;
     vec![
         spec!("file.print", "Print…", &["File"], Some("Cmd+P"), PRINT_PARAMS, native_doc, print),
+        CommandSpec {
+            id: "file.print.printers",
+            label: "Printers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{} → {supported, printers: [{name, default}]} (supported: Windows; elsewhere Print spools with lp)"##,
+            enabled: |_| Ok(()),
+            journal: false,
+            run: printers,
+        },
+        CommandSpec {
+            id: "file.print.page",
+            label: "Printer Page",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"printer":name? (default printer),"printerSettings":hex?} → {printer, paper: [w,h] pt, printable: [x,y,w,h] pt from the top-left, dpi: [x,y]} (Windows)"##,
+            enabled: |_| Ok(()),
+            journal: false,
+            run: printer_page,
+        },
         spec!(
             "file.printOneCopy",
             "Print One Copy",
