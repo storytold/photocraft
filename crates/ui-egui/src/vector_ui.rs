@@ -730,7 +730,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| format!("shape-{doc_id:?}-{}-{k}", id.0);
     // The shared collapsible section headers (#155).
-    if crate::props_layout::section(ui, "appearance", tl!("Appearance")) {
+    // Prefs "Appearance" is theme chrome (Giao diện); shape fill/stroke is Diện mạo.
+    if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
             if let Some(c) = swatch(ui, sh.fill.as_ref(), tl!("Set shape fill type")) {

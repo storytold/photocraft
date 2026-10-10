@@ -421,7 +421,9 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             ui.set_width(260.0);
             ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
-            let mut name = get_s(f, "name", tl!("Untitled-1"));
+            // Keep the canonical English default in state; only the TextEdit shows a translation.
+            let raw = get_s(f, "name", "Untitled-1");
+            let mut name = if raw == "Untitled-1" { tl!("Untitled-1").to_string() } else { raw };
             let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
             if r.changed() {
                 f.insert("name".into(), json!(name));
@@ -458,9 +460,11 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
-                small_label(ui, tl!("Orientation"));
+                // Page orientation (≠ Type › Orientation → Hướng chữ).
+                small_label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "document", "Orientation"));
                 let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
                 for (icon, portrait) in [("rectangle-vertical", true), ("rectangle-horizontal", false)] {
+                    // Tooltip strings are looked up via `icons::button` → `tl!`; enum/state is aspect swap only.
                     if icons::button(ui, icon, 24.0, (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked() && (h > w) != portrait {
                         swap_size(f);
                     }

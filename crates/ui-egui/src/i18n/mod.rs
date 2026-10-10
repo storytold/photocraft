@@ -122,7 +122,7 @@ fn inflate(source: &[u8]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 17] = [
+pub static LANGUAGES: [LangInfo; 18] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -145,6 +145,9 @@ pub static LANGUAGES: [LangInfo; 17] = [
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
     LangInfo { code: "nl", name: "Nederlands", source: catalog!("nl"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "it", name: "Italiano", source: catalog!("it"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Vietnamese covers all current stable localization keys. `complete_menus` remains false
+    // while generated/dynamic long-tail labels are still under review.
+    LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -355,6 +358,7 @@ mod tests {
     const ZH: fn() -> Lang = || Lang::from_code("zh-hant").expect("zh-hant registered");
     const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
     const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
+    const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 
     #[test]
     fn indonesian_tags_resolve() {
@@ -362,6 +366,17 @@ mod tests {
             assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
         }
         assert_eq!(ID().name(), "Bahasa Indonesia");
+    }
+
+    #[test]
+    fn vietnamese_tags_resolve() {
+        for tag in ["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(VI()), "{tag}");
+        }
+        assert_eq!(VI().name(), "Tiếng Việt");
+        assert!(!VI().complete_menus(), "Vietnamese keeps complete_menus false while long-tail labels are under review");
+        assert_eq!(Lang::from_pref("vi"), VI());
+        assert_eq!(Lang::from_pref("VI"), VI());
     }
 
     #[test]

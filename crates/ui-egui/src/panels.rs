@@ -1918,7 +1918,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.add_space((theme::ROW_GAP - ui.spacing().item_spacing.y).max(0.0));
         ui.horizontal(|ui| {
             let lock_label = if t.pro { tl!("Lock:") } else { tl!("Lock") };
-            let fill_label = if t.pro { tl!("Fill:") } else { tl!("Fill") };
+            // Layer fill opacity (≠ Edit › Fill / path fill → Tô).
+            let lang = crate::i18n::current();
+            let fill_label = if t.pro { crate::i18n::tr_ctx(lang, "layers", "Fill:") } else { crate::i18n::tr_ctx(lang, "layers", "Fill") };
             // In a narrow panel with long translated labels, drop the "Lock:" text (the icons keep
             // their tooltips) rather than let the Fill label run over the lock icons.
             let gap = ui.spacing().item_spacing.x;
@@ -2813,7 +2815,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let _ = app.run("layer.setProps", json!({"layer": layer.id.0, "opacity": o / 100.0}));
     }
     let mut f = layer.fill_opacity * 100.0;
-    let r = widgets::slider_row(ui, tl!("Fill"), &mut f, 0.0..=100.0, "%", None);
+    let r = widgets::slider_row(ui, crate::i18n::tr_ctx(crate::i18n::current(), "layers", "Fill"), &mut f, 0.0..=100.0, "%", None);
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
         let _ = app.run("layer.setProps", json!({"layer": layer.id.0, "fill": f / 100.0}));
     }

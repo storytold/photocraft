@@ -178,7 +178,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         for tool in crate::state::Tool::ALL {
                             if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
                                 let s = s + exact_bonus(&q, &[tl!(tool.label()).as_ref(), tool.label()]);
-                                hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
+                                hits.push((
+                                    s + 2,
+                                    format!("tool:{tool:?}"),
+                                    tl!(tool.label()).into(),
+                                    Some(format!("{}   {}", crate::i18n::tr(lang, "Tool"), tool.key())),
+                                    true,
+                                ));
                             }
                         }
                     }

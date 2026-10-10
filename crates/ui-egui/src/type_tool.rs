@@ -1375,6 +1375,8 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         row(ui, &mut |ui| {
             let k = shown_scale(app);
+            // Hover tips stay English until wired through `tl!` in a multi-locale change
+            // (`every_tl_literal_is_translated` requires every complete catalog).
             if let Some(v) = num_field(ui, "tT", "Font size", c.size_pt * k, 0.1..=1296.0, "pt", w) {
                 app.ui.tool_options.type_size = v;
                 apply(app, ui.ctx(), json!({"size": v, "metricsAsShown": true}));
@@ -1431,18 +1433,19 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         // Faux styles: T (bold)  T (italic)  TT  Tᴛ  T̲  T̶, sharing the row evenly.
         let caps = c.caps;
+        // Tip strings are English keys; `toggle_cell` runs them through `tl!`.
         let toggles: [(&str, &str, bool, serde_json::Value); 6] = [
             ("T", "Faux Bold", c.faux_bold, json!({"fauxBold": !c.faux_bold})),
             ("T", "Faux Italic", c.faux_italic, json!({"fauxItalic": !c.faux_italic})),
             (
                 "TT",
-                tl!("All Caps"),
+                "All Caps",
                 caps == photocraft_doc::text::Caps::AllCaps,
                 json!({"caps": if caps == photocraft_doc::text::Caps::AllCaps { "normal" } else { "allCaps" }}),
             ),
             (
                 "Tᴛ",
-                tl!("Small Caps"),
+                "Small Caps",
                 caps == photocraft_doc::text::Caps::SmallCaps,
                 json!({"caps": if caps == photocraft_doc::text::Caps::SmallCaps { "normal" } else { "smallCaps" }}),
             ),

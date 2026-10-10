@@ -449,9 +449,19 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                 ui.add_enabled_ui(on, |ui| match kind {
                     "align" => {
                         let mut a = v.as_str().unwrap_or("Left").to_string();
-                        let opts = [tl!("Left"), tl!("Center"), tl!("Right"), "JustifyLeft", "JustifyCenter", "JustifyRight", "JustifyAll"]
-                            .map(|o| (o.to_string(), o));
-                        let opts: Vec<(String, &str)> = opts.to_vec();
+                        // English values for the engine; labels go through `dropdown`'s `tl!`.
+                        let opts: Vec<(String, &str)> = [
+                            ("Left", "Left"),
+                            ("Center", "Center"),
+                            ("Right", "Right"),
+                            ("JustifyLeft", "Justify last left"),
+                            ("JustifyCenter", "Justify last centered"),
+                            ("JustifyRight", "Justify last right"),
+                            ("JustifyAll", "Justify all"),
+                        ]
+                        .into_iter()
+                        .map(|(v, l)| (v.to_string(), l))
+                        .collect();
                         if crate::widgets::dropdown(ui, &format!("style-align-{id}"), &mut a, &opts, 110.0) {
                             set = Some(json!({ "align": a }));
                         }
