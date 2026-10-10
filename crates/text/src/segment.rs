@@ -27,6 +27,11 @@ pub(crate) fn is_cursive_letter(c: char) -> bool {
     GeneralCategoryGroup::Letter.contains(CodePointMapData::<GeneralCategory>::new().get(c)) && in_cursive_script(c)
 }
 
+/// A character of the Latin script (Script_Extensions), the bundled spelling dictionary's.
+pub(crate) fn is_latin(c: char) -> bool {
+    ScriptWithExtensions::new().has_script(c, Script::Latin)
+}
+
 /// ZWNJ, ZWJ and the Mongolian vowel separator: they sit inside cursive words.
 fn is_joiner(c: char) -> bool {
     matches!(c, '\u{200C}' | '\u{200D}' | '\u{180E}')
