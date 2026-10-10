@@ -1094,21 +1094,28 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let gid = s.edit("Group Layers", |doc, active| {
-        let ids = top_level(doc, &ids);
-        let top = *ids.last().ok_or(EngineError::NoLayer(LayerId(0)))?;
-        let name = name.unwrap_or_else(|| doc.next_layer_name("Group"));
-        let gid = doc.insert_above(Some(top), Layer::group(name, vec![]));
-        let mut children = Vec::with_capacity(ids.len());
-        for id in &ids {
-            children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
-        }
-        *doc.layer_mut(gid).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(gid))? = children;
-        check_group_depth(doc, "Group Layers")?;
+        let gid = group_selection(doc, &ids, name)?;
         *active = Some(gid);
         Ok(gid)
     })?;
     reselect(s, vec![gid], Some(gid));
     Ok(json!({ "layer": gid.0 }))
+}
+
+/// Group the selected roots inside the caller's edit, so a compound operation records and trims
+/// history only after its whole document change succeeds.
+pub(crate) fn group_selection(doc: &mut Document, ids: &[LayerId], name: Option<String>) -> Result<LayerId> {
+    let ids = top_level(doc, ids);
+    let top = *ids.last().ok_or(EngineError::NoLayer(LayerId(0)))?;
+    let name = name.unwrap_or_else(|| doc.next_layer_name("Group"));
+    let gid = doc.insert_above(Some(top), Layer::group(name, vec![]));
+    let mut children = Vec::with_capacity(ids.len());
+    for id in &ids {
+        children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
+    }
+    *doc.layer_mut(gid).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(gid))? = children;
+    check_group_depth(doc, "Group Layers")?;
+    Ok(gid)
 }
 
 fn merge_layers(s: &mut Session) -> Result<Value> {
