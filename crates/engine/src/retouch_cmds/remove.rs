@@ -121,6 +121,10 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
         let img = if plan.all_layers { composite_region(doc, None, SampleLayers::All, win, fmt) } else { Region::read(surf, win) };
         (img, fmt)
     };
+    // Nothing to remove, and nothing to fill from, on a fully transparent window of the layer itself.
+    if !plan.all_layers && alpha_index(&fmt).is_some_and(|a| img.data.chunks_exact(img.ch).all(|px| px.get(a).is_none_or(|v| *v <= 0.0))) {
+        return Err(bad(CMD, "nothing to remove on this layer (turn on Sample All Layers to remove from the image below)"));
+    }
     let (w, h) = (win.width() as usize, win.height() as usize);
     let mut data = ctx
         .stage(0.0, 1.0, label, |ctl| photocraft_algo::remove::remove_with(w, h, img.ch, &img.data, &hole, SEED, ctl))

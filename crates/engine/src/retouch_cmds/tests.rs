@@ -1431,6 +1431,19 @@ fn remove_open_strokes_and_the_selection_limit_what_changes() {
 }
 
 #[test]
+fn remove_on_an_empty_layer_is_refused_without_a_history_step() {
+    let mut s = square_session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let err = s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap_err().to_string();
+    assert!(err.contains("nothing to remove on this layer"), "{err}");
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+    // With Sample All Layers on, the image below is there to remove from.
+    s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16, "sampleAllLayers": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+}
+
+#[test]
 fn remove_thin_scratches_take_their_surroundings() {
     let mut s = session(80, 40, 16, "rgb");
     paint_layer(&mut s, |x, y| if y == 20 { [1.0, 1.0, 1.0, 1.0] } else { [x as f32 / 80.0, 0.4, 0.6, 1.0] });
