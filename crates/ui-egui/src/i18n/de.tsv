@@ -1616,6 +1616,7 @@
 	Millimeters	Millimeter
 	Mobile	Mobil
 	Move Tool	Verschieben-Werkzeug
+	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -1660,6 +1661,7 @@
 	Quick Selection Tool	Schnellauswahl-Werkzeug
 	Radial	Radial
 	Rasterize Layer	Ebene rasterisieren
+	Rasterize Layers	Ebenen rasterisieren
 	Ratio	Verhältnis
 	Recent	Zuletzt
 	Rectangle Tool	Rechteck-Werkzeug

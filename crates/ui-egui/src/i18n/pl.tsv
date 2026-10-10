@@ -1618,6 +1618,7 @@
 	Millimeters	Milimetry
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
+	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -1662,6 +1663,7 @@
 	Quick Selection Tool	Narzędzie Szybkie zaznaczanie
 	Radial	Promienisty
 	Rasterize Layer	Rasteryzuj warstwę
+	Rasterize Layers	Rasteryzuj warstwy
 	Ratio	Proporcje
 	Recent	Ostatnie
 	Rectangle Tool	Narzędzie Prostokąt

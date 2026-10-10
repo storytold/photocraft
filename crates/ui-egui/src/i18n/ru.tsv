@@ -164,6 +164,8 @@
 	Rasterize	Растрировать
 	Rasterize Type	Растрировать текст
 	Rasterize Shape	Растрировать фигуру
+	Rasterize Layer	Растрировать слой
+	Rasterize Layers	Растрировать слои
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
@@ -1500,6 +1502,7 @@
 	Adjustment Layer	Корректирующий слой
 	{name} Properties	Свойства: {name}
 	Move Tool	Перемещение
+	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Brush Tool	Кисть

@@ -56,16 +56,23 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
     v.push(None);
     v.push(Some((tl!("Convert to Smart Object"), "layer.smartObjects.convertToSmartObject")));
-    match &l.content {
-        LayerContent::Text(_) => v.push(Some(("Rasterize Type", "layer.rasterize.type"))),
-        LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
-        LayerContent::Smart(_) => {
-            v.push(Some((tl!("Edit Contents"), "layer.smartObjects.editContents")));
-            v.push(Some((tl!("Convert to Layers"), "layer.smartObjects.convertToLayers")));
-            v.push(Some(("Rasterize Layer", "layer.rasterize.smartObject")));
+    if multi {
+        // One item for the whole selection, whatever the clicked layer is: Rasterize acts on every
+        // selected layer. Edit Contents and Convert to Layers work on one layer, so they are not
+        // offered here.
+        v.push(Some(("Rasterize Layers", "layer.rasterize.layer")));
+    } else {
+        match &l.content {
+            LayerContent::Text(_) => v.push(Some(("Rasterize Type", "layer.rasterize.type"))),
+            LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
+            LayerContent::Smart(_) => {
+                v.push(Some((tl!("Edit Contents"), "layer.smartObjects.editContents")));
+                v.push(Some((tl!("Convert to Layers"), "layer.smartObjects.convertToLayers")));
+                v.push(Some(("Rasterize Layer", "layer.rasterize.smartObject")));
+            }
+            LayerContent::Fill(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.fillContent"))),
+            _ => v.push(Some(("Rasterize Layer", "layer.rasterize.layer"))),
         }
-        LayerContent::Fill(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.fillContent"))),
-        _ => v.push(Some(("Rasterize Layer", "layer.rasterize.layer"))),
     }
     v.push(None);
     if let Some(mask) = &l.mask {
@@ -421,6 +428,75 @@ mod tests {
         assert_eq!(ids[edit + 1..edit + 3], ["layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]);
     }
 
+    /// Right-clicking inside a multi-layer selection offers one Rasterize item for the whole
+    /// selection, whatever kind the clicked layer is, and no single-layer Smart Object items.
+    #[test]
+    fn multi_selection_menu_rasterizes_the_selection() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Source"})).unwrap();
+        s.execute("paint.stroke", json!({"points": [[12, 12]], "size": 8})).unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let smart = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let ids = |multi| entries(&smart, multi, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
+        assert!(ids(false).contains(&"layer.smartObjects.editContents"), "a single smart object keeps its items");
+        let multi = ids(true);
+        assert!(multi.contains(&"layer.rasterize.layer"));
+        for single in ["layer.rasterize.smartObject", "layer.rasterize.shape", "layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+            assert!(!multi.contains(&single), "{single} acts on one layer, not on a selection");
+        }
+        let label = entries(&smart, true, false).into_iter().flatten().find(|e| e.1 == "layer.rasterize.layer").unwrap().0;
+        assert_eq!(label, "Rasterize Layers");
+    }
+
+    /// The reported bug: right-click a layer inside a multi-layer selection, choose Rasterize, and
+    /// only the clicked (or active) layer was converted.
+    #[test]
+    fn rasterize_from_the_menu_converts_every_selected_layer() {
+        use crate::PhotocraftApp;
+        use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
+            h.hover_at(at);
+            h.step();
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE });
+                h.step();
+            }
+            h.run_steps(3);
+        }
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 640, "height": 480})).unwrap();
+        let text = s.execute("type.create", json!({"text": "Hi", "size": 24, "x": 20, "y": 60})).unwrap()["layer"].as_u64().unwrap();
+        let shape = s.execute("shape.create", json!({"kind": "ellipse", "rect": [100, 100, 200, 160]})).unwrap()["layer"].as_u64().unwrap();
+        let other = s.execute("shape.create", json!({"kind": "rect", "rect": [300, 100, 380, 160]})).unwrap()["layer"].as_u64().unwrap();
+        // Select the text and the first shape, keeping the first shape active; the last shape stays out.
+        s.execute("layer.select", json!({"layer": text})).unwrap();
+        s.execute("layer.select", json!({"layer": shape, "mode": "add"})).unwrap();
+        let mut h =
+            Harness::builder().with_size(vec2(1440.0, 900.0)).with_pixels_per_point(1.0).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                PhotocraftApp::new(s, crate::Services::default())
+            });
+        let ctx = h.ctx.clone();
+        let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
+        crate::control::handle(h.state_mut(), &ctx, &req);
+        h.run_steps(8);
+        let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == text).expect("layer row drawn").row;
+        // Right-click the text row (selected, but not the active layer).
+        click(&mut h, pos2(row.left() + 6.0 + 28.0 + 12.0, row.center().y), PointerButton::Secondary);
+        let at = h.get_by_label("Rasterize Layers").rect().center();
+        click(&mut h, at, PointerButton::Primary);
+        let doc = &h.state().session.active().unwrap().doc;
+        let raster = |id: u64| matches!(doc.layer(photocraft_doc::LayerId(id)).unwrap().content, photocraft_doc::LayerContent::Raster(_));
+        assert!(raster(text) && raster(shape), "both selected layers are rasterized");
+        assert!(!raster(other), "an unselected layer is left alone");
+        assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "the selection survives");
+    }
+
     #[test]
     fn entries_follow_layer_state() {
         let mut s = photocraft_engine::Session::new();
@@ -509,7 +585,7 @@ mod tests {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
         let l = s.active().unwrap().doc.layers[0].clone();
-        for (_, id) in entries(&l, false, true).into_iter().chain(entries(&l, false, false)).flatten() {
+        for (_, id) in entries(&l, false, true).into_iter().chain(entries(&l, false, false)).chain(entries(&l, true, false)).flatten() {
             assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
         }
     }

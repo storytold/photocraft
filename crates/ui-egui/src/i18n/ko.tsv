@@ -1595,6 +1595,7 @@
 	Millimeters	밀리미터
 	Mobile	모바일
 	Move Tool	이동 도구
+	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -1639,6 +1640,7 @@
 	Quick Selection Tool	빠른 선택 도구
 	Radial	방사형
 	Rasterize Layer	레이어 래스터화
+	Rasterize Layers	레이어 래스터화
 	Ratio	비율
 	Recent	최근 항목
 	Rectangle Tool	사각형 도구

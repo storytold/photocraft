@@ -1633,6 +1633,7 @@
 	Millimeters	毫米
 	Mobile	移动设备
 	Move Tool	移动工具
+	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -1677,6 +1678,7 @@
 	Quick Selection Tool	快速选择工具
 	Radial	径向
 	Rasterize Layer	栅格化图层
+	Rasterize Layers	栅格化图层
 	Ratio	比例
 	Recent	最近使用
 	Rectangle Tool	矩形工具

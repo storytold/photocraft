@@ -1626,6 +1626,7 @@
 	Millimeters	公釐
 	Mobile	行動裝置
 	Move Tool	移動工具
+	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
 	Multiply	色彩增值
 	My Brushes	我的筆刷
 	Neutrals	中間色
@@ -1670,6 +1671,7 @@
 	Quick Selection Tool	快速選取工具
 	Radial	放射狀
 	Rasterize Layer	點陣化圖層
+	Rasterize Layers	點陣化圖層
 	Ratio	比例
 	Recent	最近
 	Rectangle Tool	矩形工具
