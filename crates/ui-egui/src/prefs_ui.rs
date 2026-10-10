@@ -933,7 +933,7 @@ fn choice_label(v: &str) -> String {
     match v {
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "75" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
+        "75" | "80" | "85" | "90" | "95" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
