@@ -1651,7 +1651,7 @@ fn op_words(p: &plan::Pass<'_>, tex: Option<[i32; 4]>, mask: Option<[i32; 4]>, m
         F(p.opacity),
         F(density),
         F(mdefault),
-        F(0.0),
+        F(p.fill),
         I(to[0]),
         I(to[1]),
         I(ts[0]),

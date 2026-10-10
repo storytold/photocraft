@@ -120,6 +120,76 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// Photoshop's "special eight": the modes for which a layer's Fill isn't just less coverage.
+/// Below 100% Fill, Photoshop blends at full strength a source pulled toward the mode's neutral
+/// colour, the one that leaves the backdrop unchanged (Hard Mix has its own formula); Opacity
+/// still mixes the result in. Measured on Photoshop 27.11 (Fill 50%, eight modes, ±1 level).
+pub fn fill_is_special(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::ColorBurn
+            | BlendMode::LinearBurn
+            | BlendMode::ColorDodge
+            | BlendMode::LinearDodge
+            | BlendMode::VividLight
+            | BlendMode::LinearLight
+            | BlendMode::HardMix
+            | BlendMode::Difference
+    )
+}
+
+/// [`blend_rgb`] for a layer at `fill` (0..1): the special eight ([`fill_is_special`]) change
+/// their blend below 100%; every other mode, or `fill >= 1`, is plain [`blend_rgb`].
+pub fn blend_rgb_fill(mode: BlendMode, cb: [f32; 3], cs: [f32; 3], fill: f32) -> [f32; 3] {
+    let f = fill.clamp(0.0, 1.0);
+    if f >= 1.0 || !fill_is_special(mode) {
+        return blend_rgb(mode, cb, cs);
+    }
+    let toward = |neutral: f32| -> [f32; 3] { std::array::from_fn(|i| neutral + (cs[i] - neutral) * f) };
+    match mode {
+        // Hard Mix at Fill f: (cb − f·(1 − cs)) / (1 − f), clamped. At f = 1 it is the hard
+        // threshold (cb + cs ≥ 1), at f = 0 the backdrop.
+        BlendMode::HardMix => std::array::from_fn(|i| ((cb[i] - f * (1.0 - cs[i])) / (1.0 - f)).clamp(0.0, 1.0)),
+        BlendMode::ColorBurn | BlendMode::LinearBurn => blend_rgb(mode, cb, toward(1.0)),
+        BlendMode::VividLight | BlendMode::LinearLight => blend_rgb(mode, cb, toward(0.5)),
+        _ => blend_rgb(mode, cb, toward(0.0)),
+    }
+}
+
+/// [`composite_gamma`] for a layer with separate `opacity` and `fill`. Normal modes take both
+/// as coverage, as before. For the special eight below 100% Fill, coverage over the backdrop is
+/// `opacity` and the blend is [`blend_rgb_fill`]; over transparency, Fill stays coverage, so a
+/// layer over nothing looks as it did.
+pub fn composite_fill(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, fill: f32, gamma: f32) -> [f32; 4] {
+    if fill >= 1.0 || !fill_is_special(mode) {
+        return composite_gamma(mode, backdrop, source, opacity * fill.clamp(0.0, 1.0), gamma);
+    }
+    let ab = backdrop[3];
+    let over = source[3] * opacity;
+    let alone = over * fill.clamp(0.0, 1.0);
+    if over <= 0.0 {
+        return backdrop;
+    }
+    let ao = ab + (1.0 - ab) * alone;
+    if ao <= 0.0 {
+        return [0.0; 4];
+    }
+    let cb = [backdrop[0], backdrop[1], backdrop[2]];
+    let cs = [source[0], source[1], source[2]];
+    let b = blend_rgb_fill(mode, cb, cs, fill);
+    let (wb, wbs, ws) = (ab * (1.0 - over) / ao, ab * over / ao, (1.0 - ab) * alone / ao);
+    let mut out = [0.0f32; 4];
+    for i in 0..3 {
+        out[i] = if gamma == 1.0 {
+            wb * cb[i] + wbs * b[i] + ws * cs[i]
+        } else {
+            text_decode(wb * text_encode(cb[i], gamma) + wbs * text_encode(b[i], gamma) + ws * text_encode(cs[i], gamma), gamma)
+        };
+    }
+    out[3] = ao;
+    out
+}
+
 /// Straight-alpha source over straight-alpha backdrop (W3C/PDF general
 /// formula) using [`blend_rgb`].
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
@@ -249,6 +319,67 @@ mod tests {
     }
 
     use super::*;
+
+    /// Photoshop 27.11, measured: Background #c89664, a layer #64b4dc at Fill 50% (128/255),
+    /// Opacity 100%, in each of the special eight. Values are the composite at 8 bits.
+    #[test]
+    fn special_eight_fill_matches_photoshop() {
+        let measured: [(BlendMode, [u8; 3]); 8] = [
+            (BlendMode::ColorBurn, [176, 132, 88]),
+            (BlendMode::LinearBurn, [122, 112, 82]),
+            (BlendMode::ColorDodge, [249, 232, 176]),
+            (BlendMode::LinearDodge, [250, 240, 210]),
+            (BlendMode::VividLight, [193, 188, 157]),
+            (BlendMode::LinearLight, [171, 202, 192]),
+            (BlendMode::HardMix, [245, 225, 165]),
+            (BlendMode::Difference, [150, 60, 10]),
+        ];
+        let px = |c: [u8; 3]| [f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, 1.0];
+        let (b, t) = (px([200, 150, 100]), px([100, 180, 220]));
+        for (mode, want) in measured {
+            let got = composite_fill(mode, b, t, 1.0, 128.0 / 255.0, 1.0);
+            for i in 0..3 {
+                assert!((got[i] * 255.0 - f32::from(want[i])).abs() <= 1.5, "{mode:?} channel {i}: {} vs Photoshop {}", got[i] * 255.0, want[i]);
+            }
+            // At 100% Fill it is the plain blend; at 0% the backdrop.
+            assert_eq!(composite_fill(mode, b, t, 1.0, 1.0, 1.0), composite(mode, b, t, 1.0), "{mode:?}");
+            let none = composite_fill(mode, b, t, 1.0, 0.0, 1.0);
+            assert!((0..3).all(|i| (none[i] - b[i]).abs() < 1e-5), "{mode:?} at Fill 0: {none:?}");
+        }
+        // A second measurement: Background #3c78b4, layer #d25a1e at Fill 25% (64/255) and 75%
+        // (191/255). Hard Mix at 75% is 3 levels off in red: dividing by 1 − f = 0.25 magnifies
+        // Photoshop's 8-bit rounding.
+        let confirm: [(BlendMode, [u8; 3], [u8; 3]); 8] = [
+            (BlendMode::ColorBurn, [51, 94, 159], [30, 0, 33]),
+            (BlendMode::LinearBurn, [49, 79, 124], [26, 0, 11]),
+            (BlendMode::ColorDodge, [76, 132, 186], [156, 163, 197]),
+            (BlendMode::LinearDodge, [113, 143, 188], [217, 187, 202]),
+            (BlendMode::VividLight, [71, 109, 162], [117, 81, 80]),
+            (BlendMode::LinearLight, [100, 100, 130], [183, 63, 33]),
+            (BlendMode::HardMix, [65, 105, 166], [102, 0, 47]),
+            (BlendMode::Difference, [7, 97, 172], [97, 53, 158]),
+        ];
+        let (b2, t2) = (px([60, 120, 180]), px([210, 90, 30]));
+        for (mode, q, tq) in confirm {
+            for (fill, want) in [(64.0 / 255.0, q), (191.0 / 255.0, tq)] {
+                let got = composite_fill(mode, b2, t2, 1.0, fill, 1.0);
+                let tol = if mode == BlendMode::HardMix { 3.5 } else { 1.5 };
+                for i in 0..3 {
+                    assert!(
+                        (got[i] * 255.0 - f32::from(want[i])).abs() <= tol,
+                        "{mode:?} fill {fill} channel {i}: {} vs Photoshop {}",
+                        got[i] * 255.0,
+                        want[i]
+                    );
+                }
+            }
+        }
+        // Other modes keep Fill as coverage, like Opacity.
+        assert_eq!(composite_fill(BlendMode::Multiply, b, t, 0.8, 0.5, 1.0), composite(BlendMode::Multiply, b, t, 0.4));
+        // Over transparency Fill is still coverage for the special eight.
+        let r = composite_fill(BlendMode::LinearDodge, [0.0; 4], t, 1.0, 0.5, 1.0);
+        assert!((r[3] - 0.5).abs() < 1e-6 && (r[0] - t[0]).abs() < 1e-6, "{r:?}");
+    }
 
     #[test]
     fn vivid_light_source_extremes_win() {

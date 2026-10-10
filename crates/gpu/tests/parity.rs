@@ -170,6 +170,37 @@ fn blend_modes() {
     }
 }
 
+/// Photoshop's special eight apply Fill inside the blend (psblend::composite_fill): the GPU's
+/// blend pass takes Fill separately and must match the CPU at low and middle Fill, with Opacity,
+/// over transparency and over an opaque backdrop.
+#[test]
+fn special_eight_fill_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let special = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+    for mode in special {
+        for fill in [0.3, 0.6] {
+            let mut d = base_doc(64, 48);
+            let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("{mode:?} fill {fill}"));
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            check(&mut g, &d, &format!("{mode:?} fill {fill} opaque"));
+        }
+    }
+}
+
 #[test]
 fn xor_rounding_on_half_float_targets() {
     let Some((_adapter, device, queue, _lock)) = any_device() else { return };

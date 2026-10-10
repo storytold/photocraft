@@ -171,6 +171,9 @@ pub struct Pass<'a> {
     pub d: Option<Slot>,
     pub mode: BlendMode,
     pub opacity: f32,
+    /// The layer's Fill where it isn't folded into `opacity`: the final blend of a plain layer
+    /// (`Kernel::Blend`), so the special eight can apply it inside the blend. 1 elsewhere.
+    pub fill: f32,
     /// Layer pixels (raster / text / shape / smart cache / fill cache).
     pub tex: Option<TexUse<'a>>,
     /// Colour outside `tex` (the surface's default pixel), the solid fill colour, or the effect
@@ -232,6 +235,7 @@ impl<'a> Pass<'a> {
             d: None,
             mode: BlendMode::Normal,
             opacity: 1.0,
+            fill: 1.0,
             tex: None,
             color: [0.0; 4],
             mask: None,
@@ -670,7 +674,8 @@ impl<'a> Planner<'a> {
             p.a = Some(backdrop);
             p.b = Some(content);
             p.mode = layer.blend;
-            p.opacity = opacity;
+            p.opacity = layer.opacity;
+            p.fill = layer.fill_opacity;
             return Ok(self.emit(p));
         }
 
@@ -703,7 +708,8 @@ impl<'a> Planner<'a> {
         p.a = Some(if clip.is_some() { self.retain(backdrop) } else { backdrop });
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
+        p.opacity = layer.opacity;
+        p.fill = layer.fill_opacity;
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
         p.clip = clip;

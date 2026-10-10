@@ -18,7 +18,7 @@ struct Op {
     opacity: f32,
     mask_density: f32,
     mask_default: f32,
-    _pad1: f32,
+    fill: f32,       // layer Fill for fs_blend (psblend::composite_fill); 1 elsewhere
     tex_origin: vec2<i32>,
     tex_size: vec2<i32>,
     mask_origin: vec2<i32>,
@@ -293,6 +293,43 @@ fn composite_g(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, gamma_on: bo
     let g = op.p4.w; // psblend::text_gamma
     let pw = (1.0 - as_) * ab * text_enc(b.rgb, g) + (1.0 - ab) * as_ * text_enc(s.rgb, g) + as_ * ab * text_enc(bl, g);
     return vec4(text_dec(pw / ao, g), ao);
+}
+
+// psblend::fill_is_special: Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light,
+// Linear Light, Hard Mix, Difference (mode_index 5, 6, 10, 11, 16, 17, 19, 20).
+fn fill_is_special(mode: i32) -> bool {
+    return mode == 5 || mode == 6 || mode == 10 || mode == 11 || mode == 16 || mode == 17 || mode == 19 || mode == 20;
+}
+
+// psblend::blend_rgb_fill: below 100% Fill the special eight blend a source pulled toward the
+// mode's neutral colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)).
+fn blend_rgb_fill(mode: i32, cb: vec3<f32>, cs: vec3<f32>, fill: f32) -> vec3<f32> {
+    let f = clamp(fill, 0.0, 1.0);
+    if (f >= 1.0 || !fill_is_special(mode)) { return blend_rgb(mode, cb, cs); }
+    if (mode == 19) { return clamp((cb - f * (vec3(1.0) - cs)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
+    var neutral = 0.0;
+    if (mode == 5 || mode == 6) { neutral = 1.0; }
+    if (mode == 16 || mode == 17) { neutral = 0.5; }
+    return blend_rgb(mode, cb, vec3(neutral) + (cs - vec3(neutral)) * f);
+}
+
+// psblend::composite_fill: Fill is coverage except for the special eight, where coverage over the
+// backdrop is `opacity` and the blend is blend_rgb_fill (Fill stays coverage over transparency).
+fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32, gamma_on: bool) -> vec4<f32> {
+    if (fill >= 1.0 || !fill_is_special(mode)) { return composite_g(mode, b, s, opacity * clamp(fill, 0.0, 1.0), gamma_on); }
+    let ab = b.a;
+    let over = s.a * opacity;
+    let alone = over * clamp(fill, 0.0, 1.0);
+    if (over <= 0.0) { return b; }
+    let ao = ab + (1.0 - ab) * alone;
+    if (ao <= 0.0) { return vec4(0.0); }
+    let bl = blend_rgb_fill(mode, b.rgb, s.rgb, fill);
+    let wb = ab * (1.0 - over) / ao;
+    let wbs = ab * over / ao;
+    let ws = (1.0 - ab) * alone / ao;
+    if (!gamma_on) { return vec4(wb * b.rgb + wbs * bl + ws * s.rgb, ao); }
+    let g = op.p4.w;
+    return vec4(text_dec(wb * text_enc(b.rgb, g) + wbs * text_enc(bl, g) + ws * text_enc(s.rgb, g), g), ao);
 }
 
 // photocraft_color::convert::{srgb_to_lab, lab_to_srgb} (D50, Bradford to sRGB).
@@ -746,10 +783,10 @@ fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
     var s = textureLoad(tex_b, p, 0);
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
-        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity);
+        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
-    return composite_g(op.mode, b, s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
+    return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.
