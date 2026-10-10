@@ -63,9 +63,11 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let size = [st.doc.size.width, st.doc.size.height];
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
+    let ppp = app.canvas_ppp();
     let v = &mut app.ui.views[i];
-    // Leave room for the name above the board.
-    v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32);
+    // Leave room for the name above the board. The area is in egui points; the stored zoom is
+    // device pixels per document pixel.
+    v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32) * ppp;
     v.zoom = crate::zoom_levels::clamp(v.zoom, size);
     // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,
     // overflows an i32 sum (#981).

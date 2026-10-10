@@ -209,14 +209,72 @@ fn extension_forms() {
     }
 }
 
+/// Asserts how a flat file opened: the locked Background when opaque, a normal "Layer 0" (as in
+/// Photoshop) when it has transparency.
+fn assert_opens_as(what: &str, d: &photocraft_doc::Document, transparent: bool) {
+    let [l] = &d.layers[..] else { panic!("{what}: {} layers", d.layers.len()) };
+    if transparent {
+        assert_eq!(l.name, "Layer 0", "{what}");
+        assert!(!l.locks.transparency && !l.locks.position, "{what}: unlocked");
+    } else {
+        assert_eq!(l.name, "Background", "{what}");
+        assert!(l.locks.transparency && l.locks.position, "{what}: locked");
+    }
+}
+
 #[test]
 fn background_lock_follows_alpha() {
     let r = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
-    let d = import("a.png", &r.bytes).unwrap().document;
-    assert!(d.layers[0].locks.transparency);
+    assert_opens_as("opaque PNG", &import("a.png", &r.bytes).unwrap().document, false);
+    let r = export(&single(ColorMode::Rgb, SampleType::U8, true), "png", &ExportOptions::default()).unwrap();
+    assert_opens_as("RGBA PNG", &import("a.png", &r.bytes).unwrap().document, true);
+}
+
+#[test]
+fn transparent_flat_images_open_as_layer_0() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CS};
+    let (w, h) = (6u32, 4u32);
+    let n = (w * h) as usize;
+    let enc = |layout: ChannelLayout, sample: CS, format: Format| {
+        let ch = layout.channels();
+        let img = match sample {
+            CS::U8 => Image::from_u8(w, h, layout, (0..n * ch).map(|i| if (i + 1) % ch == 0 && i < ch * 5 { 0 } else { 200 }).collect()),
+            _ => Image::from_u16(w, h, layout, &(0..n * ch).map(|i| if (i + 1) % ch == 0 && i < ch * 5 { 0 } else { 50_000 }).collect::<Vec<_>>()),
+        }
+        .unwrap();
+        photocraft_codecs::encode(&img, format, &EncodeOptions::default()).unwrap()
+    };
+    let cases: Vec<(&str, Vec<u8>, bool)> = vec![
+        ("a.png", enc(ChannelLayout::Rgba, CS::U8, Format::Png), true),
+        ("a16.png", enc(ChannelLayout::Rgba, CS::U16, Format::Png), true),
+        ("ga.png", enc(ChannelLayout::GrayA, CS::U8, Format::Png), true),
+        ("a.tif", enc(ChannelLayout::Rgba, CS::U8, Format::Tiff), true),
+        ("ga.tif", enc(ChannelLayout::GrayA, CS::U16, Format::Tiff), true),
+        ("pal.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], Some(0)).unwrap(), true),
+        ("pal_opaque.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], None).unwrap(), false),
+        ("rgb.png", enc(ChannelLayout::Rgb, CS::U8, Format::Png), false),
+        ("g.png", enc(ChannelLayout::Gray, CS::U16, Format::Png), false),
+        ("rgb.tif", enc(ChannelLayout::Rgb, CS::U8, Format::Tiff), false),
+        ("rgb.jpg", enc(ChannelLayout::Rgb, CS::U8, Format::Jpeg), false),
+    ];
+    for (name, bytes, transparent) in cases {
+        let d = import(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}")).document;
+        assert_opens_as(name, &d, transparent);
+        // Photoshop numbers the next new layer after "Layer 0" as "Layer 1".
+        assert_eq!(d.next_layer_name("Layer"), "Layer 1", "{name}");
+    }
+}
+
+#[test]
+fn layer_0_saves_back_to_png_and_reopens_as_layer_0() {
     let r = export(&single(ColorMode::Rgb, SampleType::U8, true), "png", &ExportOptions::default()).unwrap();
     let d = import("a.png", &r.bytes).unwrap().document;
-    assert!(!d.layers[0].locks.transparency);
+    assert_opens_as("first open", &d, true);
+    let again = export(&d, "b.png", &ExportOptions::default()).unwrap();
+    assert!(again.warnings.iter().all(|w| !w.contains("flattened")), "a lone Layer 0 is written natively: {:?}", again.warnings);
+    let back = import("b.png", &again.bytes).unwrap().document;
+    assert_opens_as("reopened", &back, true);
+    pixels_eq(&d, &back, 0.0);
 }
 
 #[test]
@@ -370,4 +428,91 @@ fn animation_imports_the_first_frame_with_a_warning() {
     let three = import("a.gif", &gif_frames(3)).unwrap();
     assert_eq!(three.warnings, ["only the first of 3 frames was imported"]);
     pixels_eq(&one.document, &three.document, 0.0);
+}
+
+/// Alpha channel values for the #2124 tests: white (selected) on the left, mid grey, black.
+fn alpha_value(x: u32) -> f32 {
+    match x {
+        0..=3 => 1.0,
+        4 => g(128),
+        _ => 0.0,
+    }
+}
+
+/// `d` with one alpha channel holding [`alpha_value`] (Photoshop's "Alpha 1").
+fn with_alpha_channel(mut d: photocraft_doc::Document, name: &str) -> photocraft_doc::Document {
+    let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, d.depth, false);
+    let mut s = photocraft_raster::Surface::new(fmt);
+    let r = d.bounds();
+    let vals: Vec<f32> = (r.y0..r.y1).flat_map(|_| (r.x0..r.x1).map(|x| alpha_value(x as u32))).collect();
+    s.write_region(r, &vals);
+    d.channels.push(photocraft_doc::AlphaChannel::new(name, s));
+    d
+}
+
+/// Header and decoded pixels of a TGA file.
+fn tga(bytes: &[u8]) -> (u8, u8, photocraft_codecs::Image) {
+    (bytes[16], bytes[17] & 0x0f, photocraft_codecs::decode(bytes).expect("decode tga"))
+}
+
+/// #2124: Photoshop writes the document's alpha channel as a 32-bit Targa's alpha (8 alpha bits
+/// in the descriptor), and the file opens back with that alpha. 16-bit documents are written as
+/// 8-bit Targa without panicking.
+#[test]
+fn tga_writes_the_alpha_channel_as_32_bit_alpha() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let d = with_alpha_channel(single(ColorMode::Rgb, depth, false), "Alpha 1");
+        let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
+        let (bpp, alpha_bits, img) = tga(&r.bytes);
+        assert_eq!((bpp, alpha_bits), (32, 8), "{depth:?}");
+        assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba, "{depth:?}");
+        let (w, _) = img.dimensions();
+        for (i, px) in img.data().as_chunks::<4>().0.iter().enumerate() {
+            let x = i as u32 % w;
+            assert_eq!(px[3], (alpha_value(x) * 255.0).round() as u8, "{depth:?} pixel {i}");
+        }
+        // The colours are the document's (opaque Background, untouched by the alpha).
+        let want = single(ColorMode::Rgb, SampleType::U8, false);
+        let back = import("a.tga", &r.bytes).unwrap().document;
+        let (sa, sb) = (want.layers[0].surface().unwrap(), back.layers[0].surface().unwrap());
+        let (va, vb) = (sa.read_region(want.bounds()), sb.read_region(back.bounds()));
+        for (i, (a, b)) in va.as_chunks::<4>().0.iter().zip(vb.as_chunks::<4>().0.iter()).enumerate() {
+            assert!(a[..3].iter().zip(&b[..3]).all(|(p, q)| (p - q).abs() <= 1.0 / 255.0), "{depth:?} colour {i}: {a:?} {b:?}");
+            // Round trip: the alpha opens back as the layer's transparency.
+            assert!((b[3] - alpha_value(i as u32 % 9)).abs() <= 0.5 / 255.0, "{depth:?} alpha {i}: {}", b[3]);
+        }
+    }
+}
+
+/// #2124: as in Photoshop, the alpha channel (not layer transparency) is the alpha; transparent
+/// pixels are composited over white. Spot channels are not alpha channels.
+#[test]
+fn tga_alpha_channel_wins_over_transparency_and_skips_spot_channels() {
+    let mut d = with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, true), "Alpha 2");
+    let spot = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+    let spot =
+        photocraft_doc::AlphaChannel { spot: Some((photocraft_color::Color::rgb(1.0, 0.0, 0.0), 1.0)), ..photocraft_doc::AlphaChannel::new("Spot", spot) };
+    d.channels.insert(0, spot);
+    let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (32, 8));
+    let src = d.layers[0].surface().unwrap().read_region(d.bounds());
+    for (i, (px, s)) in img.data().as_chunks::<4>().0.iter().zip(src.as_chunks::<4>().0.iter()).enumerate() {
+        assert_eq!(px[3], (alpha_value(i as u32 % 9) * 255.0).round() as u8, "alpha {i}");
+        let over_white = s[0] * s[3] + 1.0 - s[3];
+        assert!((f32::from(px[0]) / 255.0 - over_white).abs() <= 1.0 / 255.0, "red {i}: {} vs {over_white}", px[0]);
+    }
+}
+
+/// #2124: Photoshop writes no channel as the alpha when there are several, and grayscale Targas
+/// have no alpha at all.
+#[test]
+fn tga_ignores_several_alpha_channels_and_grayscale() {
+    let d = with_alpha_channel(with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, false), "Alpha 1"), "Alpha 2");
+    let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
+    assert_eq!(tga(&r.bytes).0, 24);
+    assert!(r.warnings.iter().any(|w| w.contains("one alpha channel")), "{:?}", r.warnings);
+    let d = with_alpha_channel(single(ColorMode::Grayscale, SampleType::U8, false), "Alpha 1");
+    let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
+    assert_eq!(tga(&r.bytes).0, 8);
 }

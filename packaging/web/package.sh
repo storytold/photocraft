@@ -50,6 +50,24 @@ cp -R "$SITE/." "$WORK/$NAME/"
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"
 cp "$HERE/README.md" "$WORK/$NAME/HOSTING.md"
 copy_docs "$WORK/$NAME"
+# Optional served fonts (README.md › Fonts): PHOTOCRAFT_WEB_FONTS_DIR=<a craft-fonts checkout, or any
+# folder with a fonts/manifest.txt in its format> copies the manifest, every font and licence file
+# it lists into the site, at the same paths. The wasm is unchanged; the app fetches fonts on demand.
+if [ -n "${PHOTOCRAFT_WEB_FONTS_DIR:-}" ]; then
+  FONTS_MANIFEST="$PHOTOCRAFT_WEB_FONTS_DIR/fonts/manifest.txt"
+  [ -f "$FONTS_MANIFEST" ] || { echo "error: $FONTS_MANIFEST missing (PHOTOCRAFT_WEB_FONTS_DIR)" >&2; exit 1; }
+  mkdir -p "$WORK/$NAME/fonts"
+  cp "$FONTS_MANIFEST" "$WORK/$NAME/fonts/manifest.txt"
+  # Field 3 is the font file, field 6 (if any) its licence file; both relative to the folder.
+  awk -F' [|] ' '!/^[[:space:]]*(#|$)/ { print $3; if ($6 != "") print $6 }' "$FONTS_MANIFEST" | sort -u | while IFS= read -r f; do
+    case "$f" in
+      "" | /* | *..* | *\\* | *://*) echo "error: $FONTS_MANIFEST: '$f' is not a relative path inside the folder" >&2; exit 1 ;;
+    esac
+    mkdir -p "$WORK/$NAME/$(dirname "$f")"
+    cp "$PHOTOCRAFT_WEB_FONTS_DIR/$f" "$WORK/$NAME/$f"
+  done
+  echo "served fonts: $(grep -cvE '^[[:space:]]*(#|$)' "$FONTS_MANIFEST") manifest lines from $PHOTOCRAFT_WEB_FONTS_DIR"
+fi
 rm -f "$DIST/$NAME.zip"
 (cd "$WORK" && zip -qr9 "$DIST/$NAME.zip" "$NAME")
 echo "wrote $DIST/$NAME.zip"

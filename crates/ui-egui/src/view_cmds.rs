@@ -576,10 +576,12 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         }
         "view.twoHundredPercent" | "view.printSize" => {
             let i = app.session.active_index().ok_or("no document")?;
-            // Print Size assumes Photoshop's default 72 ppi screen resolution.
+            // Print Size shows the document at its print size for the screen resolution
+            // (Preferences ▸ Units & Rulers: Screen Resolution, 72 ppi by default).
             let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
             let size = app.session.active().map_or([0, 0], |d| [d.doc.size.width, d.doc.size.height]);
-            let z = if id == "view.twoHundredPercent" { 2.0 } else { 72.0 / dpi };
+            let screen = app.session.prefs().units_and_rulers.screen_resolution.max(1.0) as f32;
+            let z = if id == "view.twoHundredPercent" { 2.0 } else { screen / dpi };
             app.ui.views[i].zoom = crate::zoom_levels::clamp(z, size);
             Ok(json!({"zoom": app.ui.views[i].zoom}))
         }
@@ -605,14 +607,17 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     let size = [st.doc.size.width, st.doc.size.height];
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
+    // The area is in egui points; the stored zoom is device pixels per document pixel.
+    let ppp = app.canvas_ppp();
+    let points = ((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32);
     let v = &mut app.ui.views[i];
-    v.zoom = crate::zoom_levels::clamp(((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32), size);
+    v.zoom = crate::zoom_levels::clamp(points * ppp, size);
     v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
-fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
+pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
     let wid = app.ui.alloc_id();
     let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
     view.fit_pending = offset > 0 || view.fit_pending;
@@ -756,7 +761,9 @@ mod label_tests {
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
-    let keys: Vec<String> = f.keys().filter(|k| !k.starts_with("__")).cloned().collect();
+    let warp_text = f.get("__command").and_then(Value::as_str) == Some("type.warpText");
+    let keys: Vec<String> =
+        f.keys().filter(|k| !(k.starts_with("__") || warp_text && matches!(k.as_str(), "layer" | "layers" | "range" | "coalesce"))).cloned().collect();
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
@@ -878,11 +885,13 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
         }
         "type.warpText" => {
             let styles: Vec<&str> = std::iter::once("none").chain(photocraft_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
-            dialog(
-                app,
-                json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0}),
-                json!({"style": styles, "orientation": ["horizontal", "vertical"]}),
-            )
+            let mut fields = json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0});
+            if let Some(Value::Object(target)) = crate::type_tool::formatting_params(app) {
+                for (key, value) in target {
+                    fields[key] = value;
+                }
+            }
+            dialog(app, fields, json!({"style": styles, "orientation": ["horizontal", "vertical"]}))
         }
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
@@ -919,7 +928,18 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
         "file.export.colorLookupTables" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.cube"), "size": 33, "title": stem}), json!({}))
+            // A selected adjustment is a common use case, but existing no-selection exports
+            // continue to bake the entire visible stack. The scope remains explicit in the UI.
+            let selected_adjustments = app.session.active().is_some_and(|st| {
+                let chosen = st.selected_layers();
+                !chosen.is_empty()
+                    && chosen.iter().all(|id| {
+                        st.doc.layers.iter().any(|root| root.id == *id)
+                            && st.doc.layer(*id).is_some_and(|layer| layer.visible && matches!(layer.content, photocraft_doc::LayerContent::Adjustment(_)))
+                    })
+            });
+            let scope = if selected_adjustments { "selected" } else { "all" };
+            dialog(app, json!({"path": format!("{dir}/{stem}.cube"), "size": 33, "title": stem, "scope": scope}), json!({"scope": ["all", "selected"]}))
         }
         "file.scripts.loadFilesIntoStack" => dialog(app, json!({"paths": dir}), json!({})),
         // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).

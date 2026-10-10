@@ -14,7 +14,7 @@ pub type Preset = (&'static str, u32, u32, f32);
 
 /// Photoshop's New Document categories and their blank-document presets.
 pub const CATEGORIES: &[(&str, &[Preset])] = &[
-    ("Recent", &[("Default Photoshop Size", 2100, 1500, 300.0), ("HDTV 1080p", 1920, 1080, 72.0)]),
+    ("Recent", &[("Default PhotoCraft Size", 2100, 1500, 300.0), ("HDTV 1080p", 1920, 1080, 72.0)]),
     (
         "Photo",
         &[
@@ -833,6 +833,15 @@ mod tests {
         }
 
         #[test]
+        fn arithmetic_dimensions_create_the_evaluated_size() {
+            let mut h = harness();
+            type_into(&mut h, 0, "1920/2");
+            type_into(&mut h, 1, "(100+50)*2");
+            enter(&mut h);
+            assert_eq!(created(&h), (960, 300, 72.0));
+        }
+
+        #[test]
         fn typed_size_then_enter_creates_that_size() {
             let mut h = harness();
             type_into(&mut h, 0, "512");
@@ -879,7 +888,7 @@ mod tests {
             let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
             // Pick the second card, then the first (Clipboard) again.
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 172.0, 60.0));
-            assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default Photoshop Size"));
+            assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default PhotoCraft Size"));
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
             assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));
             enter(&mut h);

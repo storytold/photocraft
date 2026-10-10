@@ -119,7 +119,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
             None => {}
         }
         response.clone().on_hover_cursor(if hand {
-            egui::CursorIcon::Grab
+            crate::tool_cursor::hand(ui.ctx(), false)
         } else if !zoom_tool {
             egui::CursorIcon::Crosshair
         } else if modifiers.alt {
@@ -139,7 +139,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
     let mut zoom_box = None;
     if panning && (response.dragged_by(PointerButton::Primary) || response.dragged_by(PointerButton::Middle)) {
         state.pan(response.drag_delta(), viewport, size);
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        ui.ctx().set_cursor_icon(crate::tool_cursor::hand(ui.ctx(), true));
     } else if response.dragged_by(PointerButton::Primary)
         && let Some(capture) = capture
     {

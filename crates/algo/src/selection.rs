@@ -151,11 +151,12 @@ pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMo
 }
 
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
-    (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
+    (a[3] == 0.0 && b[3] == 0.0) || (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
 }
 
 /// Pixels similar to the seed pixel (per-channel difference ≤ `tolerance`
-/// levels, alpha included). `contiguous` limits to the 4-connected region
+/// levels, alpha included; fully transparent pixels match regardless of hidden RGB).
+/// `contiguous` limits to the 4-connected region
 /// around the seed. `px` covers `area`.
 pub fn magic_wand(px: &[[f32; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Vec<f32> {
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -252,7 +253,9 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
     let (w, h) = (area.width() as usize, area.height() as usize);
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
     let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    let similar = |p: [u8; 4]| (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
+    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    // split a transparent region into pieces, as if the copied source were still visible.
+    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
@@ -706,67 +709,9 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
         .collect()
 }
 
-/// 1D squared distance transform (Felzenszwalb & Huttenlocher).
-fn dt1(f: &[f32], out: &mut [f32], v: &mut [usize], z: &mut [f32]) {
-    let n = f.len();
-    let mut k = 0usize;
-    v[0] = 0;
-    z[0] = f32::NEG_INFINITY;
-    z[1] = f32::INFINITY;
-    for q in 1..n {
-        loop {
-            let p = v[k];
-            let s = ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
-            if s <= z[k] && k > 0 {
-                k -= 1;
-                continue;
-            }
-            if s <= z[k] {
-                v[0] = q;
-                z[0] = f32::NEG_INFINITY;
-                z[1] = f32::INFINITY;
-                break;
-            }
-            k += 1;
-            v[k] = q;
-            z[k] = s;
-            z[k + 1] = f32::INFINITY;
-            break;
-        }
-    }
-    k = 0;
-    for (q, o) in out.iter_mut().enumerate() {
-        while z[k + 1] < q as f32 {
-            k += 1;
-        }
-        let d = q as f32 - v[k] as f32;
-        *o = d * d + f[v[k]];
-    }
-}
+mod distance;
 
-/// Euclidean distance to the nearest `true` pixel.
-pub fn edt(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
-    let mut g: Vec<f32> = inside.iter().map(|&b| if b { 0.0 } else { 1e20 }).collect();
-    let n = w.max(h).max(1);
-    let (mut f, mut o, mut v, mut z) = (vec![0.0; n], vec![0.0; n], vec![0usize; n], vec![0.0f32; n + 1]);
-    for x in 0..w {
-        for y in 0..h {
-            f[y] = g[y * w + x];
-        }
-        dt1(&f[..h], &mut o[..h], &mut v, &mut z);
-        for y in 0..h {
-            g[y * w + x] = o[y];
-        }
-    }
-    for y in 0..h {
-        f[..w].copy_from_slice(&g[y * w..(y + 1) * w]);
-        dt1(&f[..w], &mut o[..w], &mut v, &mut z);
-        for x in 0..w {
-            g[y * w + x] = o[x].sqrt();
-        }
-    }
-    g
-}
+pub use distance::edt;
 
 /// Grows the selection by `r` pixels.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
@@ -875,6 +820,32 @@ mod tests {
         let px = img(10, 1, |x, _| [x as f32 * 10.0 / 255.0, 0.0, 0.0, 1.0]);
         let m = magic_wand(&px, Rect::new(0, 0, 10, 1), (0, 0), 25.0, true, false);
         assert_eq!(m.iter().filter(|v| **v > 0.0).count(), 3);
+    }
+
+    #[test]
+    fn wand_ignores_hidden_rgb_only_when_both_pixels_are_fully_transparent() {
+        let area = Rect::new(0, 0, 6, 1);
+        let pixels = [[255, 0, 0, 0], [0, 255, 0, 0], [255, 0, 0, 128], [253, 0, 0, 128], [0, 0, 255, 0], [255, 0, 0, 255]];
+        let floats: Vec<_> = pixels.iter().map(|p| p.map(|v| f32::from(v) / 255.0)).collect();
+        for (seed, tolerance, contiguous, expected) in [
+            ((0, 0), 0.0, true, [1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+            ((0, 0), 0.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((4, 0), 32.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((2, 0), 0.0, false, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            ((2, 0), 2.0, true, [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]),
+            ((5, 0), 32.0, false, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        ] {
+            assert_eq!(magic_wand(&floats, area, seed, tolerance, contiguous, false), expected);
+            let region = wand_region(&pixels, area, seed, tolerance, contiguous, false).unwrap();
+            for (x, value) in expected.into_iter().enumerate() {
+                assert_eq!(region.at(x as i32, 0), value, "seed={seed:?}, tolerance={tolerance}, x={x}");
+            }
+        }
+        // Hidden RGB cannot introduce extra edges into the anti-aliased selection either.
+        let plain: Vec<_> = pixels.iter().map(|p| if p[3] == 0 { [0; 4] } else { *p }).collect();
+        for contiguous in [false, true] {
+            assert_eq!(wand_region(&pixels, area, (0, 0), 0.0, contiguous, true), wand_region(&plain, area, (0, 0), 0.0, contiguous, true));
+        }
     }
 
     #[test]

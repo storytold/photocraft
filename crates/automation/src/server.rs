@@ -48,7 +48,7 @@ pub struct DocIndex {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenParams {
-    /// Forward-slash relative path beneath the configured automation read root.
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
 }
 
@@ -75,7 +75,7 @@ pub struct NewParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SaveParams {
-    /// Forward-slash relative target beneath the configured automation write root.
+    /// Target beneath the configured automation write root: relative (forward slashes) or absolute.
     /// The extension selects the format. Omit to write back to the document's own file, which
     /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
@@ -169,11 +169,42 @@ pub struct BatchParams {
     pub stop_on_error: Option<bool>,
 }
 
+/// One `ui_pointer` event, for the tool schema only: events are forwarded to `ui.pointer` as JSON.
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct PointerEvent {
+    /// `down`, `move` (default) or `up`.
+    kind: Option<PointerKind>,
+    /// Document x in pixels.
+    x: f64,
+    /// Document y in pixels.
+    y: f64,
+    /// Pen pressure 0..1 (default 1).
+    pressure: Option<f64>,
+    /// A simulated pen's tilt, as a stylus reports it.
+    #[serde(rename = "tiltX")]
+    tilt_x: Option<f64>,
+    #[serde(rename = "tiltY")]
+    tilt_y: Option<f64>,
+    /// A simulated pen's barrel rotation.
+    rotation: Option<f64>,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
+enum PointerKind {
+    Down,
+    Move,
+    Up,
+}
+
 /// Strict: an argument the tool doesn't forward is an error, not silently dropped.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PointerParams {
     /// Events in document coordinates: `[{"kind":"down|move|up","x":..,"y":..,"pressure":..}]`.
+    #[schemars(with = "Vec<PointerEvent>")]
     pub events: Vec<Value>,
     /// Modifier keys, e.g. `{"shift":true}` (also `alt`, `command`, `ctrl`, `space`).
     #[serde(default)]
@@ -198,12 +229,20 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
-    /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
-    /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
+    /// studioLight, classic, solarizedDark, adwaita, adwaitaDark), brushSection, brushTab,
+    /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
+    /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
+    /// on), brushPickerScale (the picker footer's card-scale slider, 0.15 to 2, 1 the standard),
+    /// brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
     /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
-    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool). Other fields are an
-    /// error.
+    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool), cropOverlay (thirds,
+    /// grid, diagonal, triangle, goldenRatio, goldenSpiral), cropOverlayShow (auto, always, never),
+    /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
+    /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100) and
+    /// auto_adjust), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
+    /// `shape.edit` names and units; colour comes from `tools.setColors`. Other fields are an error.
     pub fields: Value,
 }
 
@@ -219,6 +258,65 @@ pub struct ControlParams {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Rewrites a tool's input schema into the subset strict tool-schema validators accept (#1782):
+/// `$ref`s into `$defs` are inlined and `$defs` dropped, and a `true` schema (any value, as
+/// schemars writes for `Value`) becomes `{}`. Tool schemas travel to every provider a client uses,
+/// and some reject the whole request over either construct.
+fn strict_schema(schema: &mut serde_json::Map<String, Value>) {
+    let defs = schema.remove("$defs").and_then(|d| d.as_object().cloned()).unwrap_or_default();
+    let mut root = Value::Object(std::mem::take(schema));
+    strict_node(&mut root, &defs, 0, true);
+    if let Value::Object(m) = root {
+        *schema = m;
+    }
+}
+
+/// `v` (a schema when `is_schema`, else any value that may contain schemas) made strict. Inlining
+/// stops at a fixed depth so a recursive definition can't loop.
+fn strict_node(v: &mut Value, defs: &serde_json::Map<String, Value>, depth: usize, is_schema: bool) {
+    const MAX_DEPTH: usize = 32;
+    if is_schema && *v == Value::Bool(true) {
+        *v = json!({});
+        return;
+    }
+    let Value::Object(m) = v else {
+        if let Value::Array(a) = v {
+            for x in a {
+                strict_node(x, defs, depth, is_schema);
+            }
+        }
+        return;
+    };
+    if let Some(def) = m.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix("#/$defs/")).and_then(|name| defs.get(name))
+        && depth < MAX_DEPTH
+    {
+        let mut inlined = def.clone();
+        if let Value::Object(im) = &mut inlined {
+            // Keep the use site's own annotations (its description) over the definition's.
+            for (k, x) in m.iter().filter(|(k, _)| k.as_str() != "$ref") {
+                im.insert(k.clone(), x.clone());
+            }
+        }
+        *v = inlined;
+        strict_node(v, defs, depth + 1, true);
+        return;
+    }
+    for (k, x) in m.iter_mut() {
+        match k.as_str() {
+            // Maps of name → schema.
+            "properties" | "patternProperties" => {
+                if let Value::Object(props) = x {
+                    for p in props.values_mut() {
+                        strict_node(p, defs, depth, true);
+                    }
+                }
+            }
+            "items" | "additionalProperties" | "not" | "anyOf" | "oneOf" | "allOf" | "prefixItems" => strict_node(x, defs, depth, true),
+            _ => {}
+        }
+    }
+}
 
 fn ok_json(v: &Value) -> CallToolResult {
     let text = match json_bytes(v).and_then(|bytes| String::from_utf8(bytes).map_err(|error| AutomationError::Other(error.to_string()))) {
@@ -286,7 +384,13 @@ impl PhotocraftMcp {
     }
 
     pub fn with_backend(backend: Backend) -> Self {
-        PhotocraftMcp { backend: Arc::new(backend), tool_router: Self::tool_router() }
+        let mut tool_router = Self::tool_router();
+        for route in tool_router.map.values_mut() {
+            let mut schema = (*route.attr.input_schema).clone();
+            strict_schema(&mut schema);
+            route.attr.input_schema = Arc::new(schema);
+        }
+        PhotocraftMcp { backend: Arc::new(backend), tool_router }
     }
 
     /// Serve MCP over stdin/stdout until the client disconnects.
@@ -752,6 +856,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strict_schema_inlines_refs_and_stops_on_recursive_definitions() {
+        // A definition that refers to itself: inlining stops at a depth instead of looping.
+        let mut s = json!({
+            "type": "object",
+            "properties": {
+                "node": {"$ref": "#/$defs/Node", "description": "use-site text"},
+                "any": true,
+                "list": {"type": "array", "items": true}
+            },
+            "$defs": {"Node": {"type": "object", "description": "def text", "properties": {"child": {"$ref": "#/$defs/Node"}}}}
+        });
+        let m = s.as_object_mut().unwrap();
+        strict_schema(m);
+        assert!(m.get("$defs").is_none());
+        let props = &m["properties"];
+        assert_eq!(props["node"]["type"], "object");
+        assert_eq!(props["node"]["description"], "use-site text", "the use site's description wins");
+        assert_eq!(props["node"]["properties"]["child"]["type"], "object", "nested refs inline too");
+        assert_eq!((&props["any"], &props["list"]["items"]), (&json!({}), &json!({})));
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(text.len() < 1 << 20, "bounded: {} bytes", text.len());
+    }
+
+    #[test]
     fn mcp_text_checks_the_encoded_tool_envelope() {
         // JSON escaping in the outer text-content envelope also consumes the budget.
         let result = ok_json(&json!("\n".repeat(crate::budgets::MAX_RESPONSE_BYTES / 3)));
@@ -769,6 +897,27 @@ mod tests {
         assert!(downscale_png(b"not a png", 32).is_err());
         assert!(downscale_png(&png, 0).is_err());
         assert!(downscale_png(&png, 1024).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_reports_invalid_filter_parameters_without_changing_history() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width":8,"height":8}))).await.unwrap().unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        for (params, key) in
+            [(json!({"radius":"big"}), "radius"), (json!({"radus":3}), "radus"), (json!({"radius":5000}), "radius"), (json!({"radius":-4}), "radius")]
+        {
+            for wait in [true, false] {
+                let result = mcp
+                    .command_run(Parameters(RunParams { id: "filter.blur.gaussianBlur".into(), params: Some(params.clone()), wait: Some(wait) }))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(true));
+                let error = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
+                assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+                assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

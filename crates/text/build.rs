@@ -11,8 +11,11 @@
 //! stay under the 24 MiB gate in `packaging/web/package.sh` (#237; Cloudflare's per-file cap is
 //! 25 MiB). Measured 2026-10-06 (`trunk build --release`): 24,190,076 bytes
 //! without craft-fonts, 28,867,488 with only the UI face (BIZ UDPGothic Regular) embedded, over
-//! the 25,165,824-byte gate. The web build keeps no Japanese font until craft-fonts can be
-//! served next to the wasm instead of inside it.
+//! the 25,165,824-byte gate. The web build loads fonts served next to the wasm instead, on
+//! demand (`fonts/manifest.txt`, see `served.rs` and packaging/web/README.md › Fonts).
+//!
+//! Also deflates the bundled UI fonts (`assets/fonts/*.ttf`, `fonts::BUNDLED`) into
+//! `OUT_DIR/fonts/<file>.deflate`: 0.73 MB of binary instead of 1.5 MB, for the same size gate.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -34,6 +37,28 @@ fn main() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("craft_fonts.rs");
     if let Err(e) = std::fs::write(&out, src) {
         println!("cargo::error=writing {}: {e}", out.display());
+    }
+    deflate_bundled_fonts();
+}
+
+/// Deflate the bundled fonts into `OUT_DIR/fonts/` (`fonts::BUNDLED` includes them).
+fn deflate_bundled_fonts() {
+    use std::io::Write as _;
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("fonts");
+    let result = (|| -> std::io::Result<()> {
+        std::fs::create_dir_all(&out)?;
+        for name in ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf", "JetBrainsMono-Regular.ttf"] {
+            let path = src.join(name);
+            println!("cargo::rerun-if-changed={}", path.display());
+            let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            z.write_all(&std::fs::read(&path)?)?;
+            std::fs::write(out.join(format!("{name}.deflate")), z.finish()?)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        println!("cargo::error=deflating the bundled fonts in {}: {e}", src.display());
     }
 }
 

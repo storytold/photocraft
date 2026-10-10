@@ -22,6 +22,8 @@ const MAX_SIDE: u32 = 4096;
 pub struct Cache {
     revision: u64,
     key: u64,
+    /// The canvas document shown by a live stroke (0 is the committed document).
+    pub(crate) preview_key: u64,
     factor: u32,
     /// False while the plain composite shows: the texture is kept (so toggling a view back on
     /// reuses its allocation) but its pixels are stale.
@@ -205,47 +207,56 @@ fn view_key(v: &ChannelView, in_color: bool) -> u64 {
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.
 pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
     let st = app.session.documents().get(idx)?;
-    let doc = st.doc.clone();
     let view = st.channel_view.clone();
     let active = st.active_layer;
-    let (revision, damage) = (st.revision, st.last_damage);
-    let id = doc.id.0;
-    if view.is_plain(&doc) {
+    let (revision, last_damage) = (st.revision, st.last_damage);
+    let id = st.doc.id.0;
+    if view.is_plain(&st.doc) {
         if let Some(c) = app.channel_views.get_mut(&id) {
             c.valid = false;
         }
         return None;
     }
+    // Mask and channel views are drawn over the canvas: show the same live document,
+    // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
+    // The plain-composite path above needs no preview work.
+    let (doc, preview_key) = crate::canvas::display_doc(app, idx);
     let in_color = false;
     let key = view_key(&view, in_color);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
+    if let Some(c) = app.channel_views.get(&id)
+        && c.key == key
+        && c.factor == factor
+        && c.valid
+        && c.revision == revision
+        && c.preview_key == preview_key
+    {
+        return Some(c.tex.id());
+    }
+    let damage =
+        app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
     if let Some(c) = app.channel_views.get_mut(&id)
         && c.key == key
         && c.factor == factor
         && c.valid
+        && let Some(d) = damage
     {
-        if c.revision == revision {
-            return Some(c.tex.id());
-        }
-        if c.revision + 1 == revision
-            && let Some(d) = damage
+        // Re-render just the damage, snapped to the sampling grid so a downsampled texture
+        // (big documents) updates in place too.
+        let f = factor as i32;
+        let d = d.intersect(&doc.bounds());
+        let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
+        if !r.is_empty()
+            && let Some(px) = render(&doc, &view, r, factor, in_color, active)
         {
-            // Re-render just the damage, snapped to the sampling grid so a downsampled texture
-            // (big documents) updates in place too.
-            let f = factor as i32;
-            let d = d.intersect(&doc.bounds());
-            let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
-            if !r.is_empty()
-                && let Some(px) = render(&doc, &view, r, factor, in_color, active)
-            {
-                let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
-                c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
-            }
-            c.revision = revision;
-            return Some(c.tex.id());
+            let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
+            c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
         }
+        c.revision = revision;
+        c.preview_key = preview_key;
+        return Some(c.tex.id());
     }
     let b = doc.bounds();
     let px = render(&doc, &view, b, factor, in_color, active)?;
@@ -255,13 +266,14 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         Some(c) if c.tex.size() == size => {
             c.tex.set(img, TextureOptions::LINEAR);
             c.revision = revision;
+            c.preview_key = preview_key;
             c.key = key;
             c.factor = factor;
             c.valid = true;
         }
         _ => {
             let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
-            app.channel_views.insert(id, Cache { revision, key, factor, valid: true, tex });
+            app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex });
         }
     }
     app.channel_views.get(&id).map(|c| c.tex.id())

@@ -35,6 +35,122 @@ fn decode(path: &str) -> photocraft_codecs::Image {
 }
 
 #[test]
+fn estimates_preserve_last_successful_export_settings() {
+    let dir = tmp("estimate_settings");
+    let mut s = session(8);
+    let saved = json!({"format": "png24", "path": format!("{dir}/saved.png"), "width": 32, "height": 24});
+    s.execute("file.export.saveForWebLegacy", saved.clone()).unwrap();
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+
+    let estimate = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "quality": 10, "width": 16, "height": 12})).unwrap();
+    assert_eq!((estimate["width"].as_u64(), estimate["height"].as_u64()), (Some(16), Some(12)));
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved), "preview estimates must not replace the settings from the last successful export");
+}
+
+#[test]
+fn platform_writer_receives_resized_image_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let params = json!({"format": "png24", "path": "download.png", "width": 32, "height": 24});
+        let mut files = Vec::new();
+        let r = save_for_web_with_writer(&mut s, &params, &mut |path, bytes| {
+            files.push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "download.png");
+        assert_eq!(r["files"], json!(["download.png"]));
+        assert_eq!(r["bytes"].as_u64(), Some(files[0].1.len() as u64));
+        let img = photocraft_codecs::decode(&files[0].1).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+        assert_eq!(img.dimensions(), (32, 24), "{depth}-bit document");
+        let i = (8 * 32 + 8) * 4;
+        assert_eq!(&img.data()[i..i + 4], &[255, 0, 0, 255]);
+        assert_eq!(s.file_menu.last_web.as_ref(), Some(&params));
+    }
+}
+
+#[test]
+fn platform_writer_checks_authorization_before_dropping_floating_pixels() {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
+    s.authorize = Some(|cmd, params| {
+        assert_eq!(cmd, "file.export.saveForWebLegacy");
+        assert_eq!(params["path"], "moved.png");
+        Err(other("export denied"))
+    });
+    let params = json!({"format": "png24", "path": "moved.png"});
+    let mut output = Vec::new();
+    let denied = save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+        output.extend_from_slice(bytes);
+        Ok(())
+    });
+    assert!(denied.unwrap_err().to_string().contains("export denied"));
+    assert!(output.is_empty());
+    assert!(s.file_menu.last_web.is_none());
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "denied export must not commit a floating move");
+
+    s.authorize = None;
+    save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+        output.extend_from_slice(bytes);
+        Ok(())
+    })
+    .unwrap();
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
+    let img = photocraft_codecs::decode(&output).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+    let old = (10 * 64 + 10) * 4;
+    let moved = (10 * 64 + 42) * 4;
+    assert_eq!(img.data()[old + 3], 0, "the selected pixels left their original position");
+    assert_eq!(&img.data()[moved..moved + 4], &[255, 0, 0, 255], "the download contains the moved pixels");
+}
+
+#[test]
+fn platform_writer_receives_slices_spacer_and_html_with_sibling_references() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [8, 8, 24, 24], "name": "logo", "alt": "Logo"})).unwrap();
+    s.execute("slice.new", json!({"rect": [40, 0, 24, 20], "kind": "noImage", "cellText": "Hello & bye"})).unwrap();
+    let params = json!({"format": "png24", "dir": "downloads", "imagesFolder": "", "html": true});
+    let mut files = std::collections::BTreeMap::new();
+    let r = save_for_web_with_writer(&mut s, &params, &mut |path, bytes| {
+        assert!(files.insert(path.to_string(), bytes.to_vec()).is_none(), "each file is written once");
+        Ok(())
+    })
+    .unwrap();
+    let page = std::str::from_utf8(files.get(r["html"].as_str().unwrap()).unwrap()).unwrap();
+    let images = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), images.len() + 2, "image slices, spacer and HTML all reach the writer");
+    for path in images {
+        let path = path.as_str().unwrap();
+        let filename = path.strip_prefix("downloads/").unwrap();
+        assert!(page.contains(&format!("src=\"{filename}\"")), "the HTML refers to its sibling {filename}");
+        assert!(photocraft_codecs::decode(files.get(path).unwrap()).is_ok());
+    }
+    assert!(page.contains("src=\"spacer.gif\""));
+    assert!(page.contains("Hello &amp; bye"));
+    assert_eq!(photocraft_codecs::decode(files.get("downloads/spacer.gif").unwrap()).unwrap().dimensions(), (1, 1));
+    assert_eq!(photocraft_codecs::decode(files.get("downloads/logo.png").unwrap()).unwrap().dimensions(), (24, 24));
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&params));
+}
+
+#[test]
+fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
+    let mut s = session(8);
+    let saved = json!({"format": "png24", "path": "saved.png"});
+    save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
+    s.execute("slice.new", json!({"rect": [8, 8, 24, 24], "name": "logo"})).unwrap();
+    let mut attempts = 0;
+    let failed = save_for_web_with_writer(&mut s, &json!({"format": "gif", "dir": "downloads", "html": true}), &mut |_, _| {
+        attempts += 1;
+        if attempts == 2 { Err(other("download failed")) } else { Ok(()) }
+    });
+    assert!(failed.unwrap_err().to_string().contains("download failed"));
+    assert_eq!(attempts, 2, "no later slice, spacer or HTML should be written after failure");
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+}
+
+#[test]
 fn estimates_every_format_at_every_depth() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);

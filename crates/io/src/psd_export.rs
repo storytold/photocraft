@@ -1,7 +1,7 @@
 //! [`Document`] → PSD/PSB.
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent, LayerMask};
+use photocraft_doc::{Document, Layer, LayerContent, LayerMask, SmartContentsId};
 use photocraft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
 use photocraft_psd::layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask as PsdMask, MaskData, MaskParameters};
 use photocraft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
@@ -51,6 +51,10 @@ struct Ex {
     next_id: u32,
     /// PSD ids assigned to document layers (kept from `psd_id` when unique).
     layer_ids: std::collections::HashMap<photocraft_doc::LayerId, u32>,
+    /// The generated `Txt2` object number of each type layer (a preserved `TySh` keeps its own
+    /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
+    /// written into the `TySh` data this export re-serializes.
+    text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -60,6 +64,8 @@ struct Ex {
     comps: Option<(Vec<photocraft_doc::LayerComp>, Option<photocraft_doc::LayerComp>)>,
     /// Smart objects: embedded files and filter caches for the global blocks.
     smart: SmartOut,
+    /// The document's patterns, which Pattern Fill layers are rendered from.
+    patterns: Vec<photocraft_doc::Pattern>,
 }
 
 /// How deep embedded documents are exported inside each other before a smart object is written
@@ -73,6 +79,13 @@ struct Source {
     /// Pixel size of the source document.
     size: (f64, f64),
     dpi: f64,
+}
+
+fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> String {
+    let mut identity = blake3::Hasher::new();
+    identity.update(&contents_id.0.to_le_bytes());
+    identity.update(bytes);
+    crate::smart_map::uuid_from(identity.finalize().as_bytes())
 }
 
 /// Smart-object state collected while emitting layers, written into the global blocks at the end.
@@ -90,8 +103,18 @@ struct SmartOut {
     prune_ok: bool,
     /// Files to embed.
     add: Vec<crate::linked::LinkedFile>,
-    /// Sources converted so far, by content hash (`Err` = can't be embedded).
-    converted: std::collections::HashMap<[u8; 32], Result<Source, String>>,
+    /// Sources converted so far, by contents identity and bytes (`Err` = can't be embedded).
+    converted: std::collections::HashMap<(SmartContentsId, [u8; 32]), Result<Source, String>>,
+    /// Each placed layer has its own id, even when it duplicates an imported layer.
+    placed_used: std::collections::HashSet<String>,
+    /// Original instances reserve their imported placement regardless of layer order.
+    placed_owners: std::collections::HashMap<String, photocraft_doc::LayerId>,
+    /// Legacy records without a placed id stay unchanged for the original instance.
+    unplaced_owners: std::collections::HashMap<SmartContentsId, photocraft_doc::LayerId>,
+    /// The imported identity that keeps each original linked UUID.
+    linked_contents: std::collections::HashMap<String, SmartContentsId>,
+    /// Independent copies of preserved linked items, including unavailable external sources.
+    linked_copies: std::collections::BTreeMap<(String, SmartContentsId), photocraft_doc::PsdGlobalBlock>,
     /// Embedded documents decoded while converting them, by uuid (for the filter caches).
     docs: std::collections::HashMap<String, Document>,
     /// Source composites (document pixel format, source space) by uuid; `None` = unreadable.
@@ -125,7 +148,27 @@ impl SmartOut {
             .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d).ok())
             .flat_map(|fx| fx.items)
             .collect();
-        SmartOut { depth, globals, known, prune_ok: true, old_fx, ..Default::default() }
+        let mut linked_contents = std::collections::HashMap::new();
+        let mut placed_owners = std::collections::HashMap::new();
+        let mut unplaced_owners = std::collections::HashMap::new();
+        let mut layers = doc.walk();
+        // Duplicating a layer clears psd_id and gives it a newer runtime id.
+        layers.sort_by_key(|(_, _, layer)| (layer.psd_id.is_none(), layer.id));
+        for (_, _, layer) in layers {
+            if let LayerContent::Smart(sm) = &layer.content
+                && let photocraft_doc::SmartSource::Linked { path } = &sm.source
+                && let Some(placed) = sm.psd_raw.as_ref().and_then(|d| crate::smart_map::parse_sold(d))
+                && placed.idnt == *path
+            {
+                linked_contents.entry(path.clone()).or_insert(sm.contents_id);
+                if placed.placed.is_empty() {
+                    unplaced_owners.entry(sm.contents_id).or_insert(layer.id);
+                } else {
+                    placed_owners.entry(placed.placed).or_insert(layer.id);
+                }
+            }
+        }
+        SmartOut { depth, globals, known, prune_ok: true, old_fx, linked_contents, placed_owners, unplaced_owners, ..Default::default() }
     }
 
     /// The document's global blocks with the linked-layer files and filter caches brought up to
@@ -170,6 +213,13 @@ impl SmartOut {
         if !added && !self.add.is_empty() {
             let data: Vec<u8> = self.add.iter().flat_map(crate::linked::encode_linked_file).collect();
             out.push((*b"8BIM", *b"lnk2", Arc::new(data)));
+        }
+        for (sig, key, data) in self.linked_copies.values() {
+            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| s == sig && k == key) {
+                Arc::make_mut(block).extend_from_slice(data);
+            } else {
+                out.push((*sig, *key, data.clone()));
+            }
         }
         if !fx_placed && !self.new_fx.is_empty() {
             let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
@@ -366,6 +416,29 @@ impl Ex {
         // Effects: the original lfx2 while the effects are unchanged (or
         // could not be decoded at all); otherwise regenerated.
         let fx = &l.effects;
+        for effect in &fx.items {
+            use photocraft_doc::effects::Effect;
+            let modes = match effect {
+                Effect::DropShadow(s) | Effect::InnerShadow(s) => [Some(s.common.blend), None],
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => [Some(g.common.blend), None],
+                Effect::Stroke(s) => [Some(s.common.blend), None],
+                Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => {
+                    [Some(common.blend), None]
+                }
+                Effect::Satin(s) => [Some(s.common.blend), None],
+                Effect::BevelEmboss(b) => [Some(b.highlight.blend), Some(b.shadow.blend)],
+            };
+            for mode in modes.into_iter().flatten() {
+                if !mode.has_psd_equivalent() {
+                    self.warnings.push(format!(
+                        "layer \"{}\", {}: {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                        l.name,
+                        effect.label(),
+                        mode.label()
+                    ));
+                }
+            }
+        }
         let lfx2 = match effects_unchanged(l) {
             Some(true) | None if fx.psd_raw.is_some() => fx.psd_raw.as_ref().map(|r| r.to_vec()),
             _ => (!fx.items.is_empty()).then(|| crate::effects_map::write_lfx2(fx.enabled, &fx.items)),
@@ -382,6 +455,13 @@ impl Ex {
             if b.data.len() % 2 == 1 && b.padding.is_none() {
                 b.data.push(0);
             }
+        }
+        if !l.blend.has_psd_equivalent() {
+            self.warnings.push(format!(
+                "layer \"{}\": {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                l.name,
+                l.blend.label()
+            ));
         }
         LayerRecord {
             rect,
@@ -475,7 +555,16 @@ impl Ex {
                 let src = t.psd_raw.as_ref().or(generated.as_ref());
                 // Character/paragraph style sheets from the document's styles.
                 let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
-                set_principal(&mut raw, &[b"TySh"], styled.as_ref().or(src));
+                // `TextIndex` names the layer's object in the document's `Txt2` (where the
+                // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
+                // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
+                // Duplicate or out-of-range file TextIndex values must be renumbered,
+                // however, even when no style sheet needed rebuilding: otherwise two
+                // layers may read the same Txt2 object and acquire the wrong kerning.
+                let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
+                let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
+                let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
+                set_principal(&mut raw, &[b"TySh"], fresh.as_ref().or(styled.as_ref().or(src)));
                 if !raw.iter().any(|(k, _)| k == b"TySh") {
                     self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
                 }
@@ -565,8 +654,25 @@ impl Ex {
             mask_linked: sm.filter_mask.as_ref().is_some_and(|m| m.linked),
         };
         let same_source = template.as_ref().filter(|t| t.idnt == src.uuid);
+        let unchanged = same_source.zip(sm.psd_raw.as_ref()).is_some_and(|(t, data)| self.placed_unchanged(t, data, sm, &stack));
+        let placed = match same_source {
+            Some(t) if t.placed.is_empty() && unchanged && self.smart.unplaced_owners.get(&sm.contents_id) == Some(&l.id) => String::new(),
+            Some(t) if self.smart.placed_owners.get(&t.placed) == Some(&l.id) && self.smart.placed_used.insert(t.placed.clone()) => t.placed.clone(),
+            _ => {
+                let seed = format!("{}:{}", src.uuid, l.id.0);
+                let mut suffix = 0u64;
+                loop {
+                    let id = uuid_from(if suffix == 0 { seed.clone() } else { format!("{seed}:{suffix}") }.as_bytes());
+                    if !self.smart.placed_owners.contains_key(&id) && self.smart.placed_used.insert(id.clone()) {
+                        break id;
+                    }
+                    suffix += 1;
+                }
+            }
+        };
         if let (Some(t), Some(data)) = (same_source, sm.psd_raw.as_ref())
-            && self.placed_unchanged(t, data, sm, &stack)
+            && t.placed == placed
+            && unchanged
         {
             let keys: &[&[u8; 4]] = if raw.iter().any(|(k, _)| k == b"SoLd") { &[b"SoLd"] } else { &[b"SoLE", b"SoLd"] };
             match keys.iter().find_map(|k| raw.iter().position(|(rk, _)| rk == *k)) {
@@ -578,10 +684,6 @@ impl Ex {
             }
             return;
         }
-        let placed = match same_source {
-            Some(t) if !t.placed.is_empty() => t.placed.clone(),
-            _ => uuid_from(format!("{}:{}", src.uuid, l.id.0).as_bytes()),
-        };
         let size = same_source.and_then(|t| crate::smart_map::stored_size(&t.descriptor)).unwrap_or(src.size);
         let size = if size.0 > 0.0 && size.1 > 0.0 { size } else { size_from_layer(sm) };
         let mut warnings = Vec::new();
@@ -662,7 +764,31 @@ impl Ex {
                     source_geometry(&f.file_name, &f.bytes).ok()
                 });
                 let (size, dpi) = geometry.unwrap_or((size_from_layer(sm), f64::from(self.dpi)));
-                Ok(Source { uuid: path.clone(), size, dpi })
+                let original = self.smart.linked_contents.entry(path.clone()).or_insert(sm.contents_id);
+                // An absent Idnt is not a shared-source identity; import treats each as fresh.
+                let uuid = if path.is_empty() || *original == sm.contents_id {
+                    path.clone()
+                } else {
+                    let uuid = contents_uuid(sm.contents_id, path.as_bytes());
+                    let key = (path.clone(), sm.contents_id);
+                    if !self.smart.linked_copies.contains_key(&key) {
+                        let copy = self
+                            .smart
+                            .globals
+                            .iter()
+                            .find_map(|(sig, k, data)| {
+                                LINK_KEYS
+                                    .contains(&k)
+                                    .then(|| crate::linked::copy_item(data, path, &uuid))
+                                    .flatten()
+                                    .map(|data| (*sig, *k, std::sync::Arc::new(data)))
+                            })
+                            .ok_or_else(|| format!("the linked source {path} has no readable record to copy independently"))?;
+                        self.smart.linked_copies.insert(key, copy);
+                    }
+                    uuid
+                };
+                Ok(Source { uuid, size, dpi })
             }
             SmartSource::Linked { path } => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -670,12 +796,12 @@ impl Ex {
                     let bytes = std::fs::read(path).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
-                    self.embed(&name, &bytes)
+                    self.embed(sm.contents_id, &name, &bytes)
                 }
                 #[cfg(target_arch = "wasm32")]
                 Err(format!("the linked file {path} can't be read here"))
             }
-            SmartSource::Embedded { file_name, bytes } => self.embed(file_name, bytes),
+            SmartSource::Embedded { file_name, bytes } => self.embed(sm.contents_id, file_name, bytes),
         }
     }
 
@@ -689,7 +815,10 @@ impl Ex {
             Some(d) => Some(d.clone()),
             None => {
                 let file = self.smart.add.iter().find(|f| f.uuid == uuid).cloned().or_else(|| {
-                    let meta = photocraft_doc::Metadata { psd_global_blocks: self.smart.globals.clone(), ..Default::default() };
+                    let meta = photocraft_doc::Metadata {
+                        psd_global_blocks: self.smart.globals.iter().chain(self.smart.linked_copies.values()).cloned().collect(),
+                        ..Default::default()
+                    };
                     crate::linked::find_linked_file(&meta, uuid)
                 });
                 file.and_then(|f| crate::import(&f.file_name, &f.bytes).ok()).map(|r| r.document)
@@ -716,18 +845,18 @@ impl Ex {
     }
 
     /// Adds `bytes` as an embedded file (converted to PSB when it is a `.pcraft` bundle), once
-    /// per distinct content.
-    fn embed(&mut self, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
-        let key = *blake3::hash(bytes).as_bytes();
+    /// per contents identity and bytes. Equal bytes in independent objects stay independent.
+    fn embed(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
+        let key = (contents_id, *blake3::hash(bytes).as_bytes());
         if let Some(r) = self.smart.converted.get(&key) {
             return r.clone();
         }
-        let r = self.convert_source(file_name, bytes);
+        let r = self.convert_source(contents_id, file_name, bytes);
         self.smart.converted.insert(key, r.clone());
         r
     }
 
-    fn convert_source(&mut self, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
+    fn convert_source(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
         let (name, data, size, dpi, nested) = if photocraft_format::is_pcraft(bytes) {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
@@ -744,7 +873,7 @@ impl Ex {
             let (size, dpi) = source_geometry(file_name, bytes).unwrap_or(((0.0, 0.0), f64::from(self.dpi)));
             (file_name.to_string(), bytes.to_vec(), size, dpi, None)
         };
-        let uuid = crate::smart_map::uuid_from(&data);
+        let uuid = contents_uuid(contents_id, &data);
         if let Some(d) = nested {
             self.smart.docs.insert(uuid.clone(), d);
         }
@@ -763,7 +892,9 @@ impl Ex {
             return c.surface.clone();
         }
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &[]);
+        // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
+        // fill must be rendered from the document's patterns, not left transparent (#1907).
+        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
         let mut s = Surface::new(self.fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
         s.write_region(self.canvas, &vals);
@@ -1119,6 +1250,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         fmt,
         dpi: doc.resolution_dpi,
         text_styles: doc.text_styles.clone(),
+        text_index: Default::default(),
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, sample, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
@@ -1131,6 +1263,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         guides: doc.guides.clone(),
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
+        patterns: doc.patterns.clone(),
     };
     if big && !opts.force_psb {
         ex.warnings.push("document exceeds 30000 px; written as PSB".into());
@@ -1163,6 +1296,29 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
             }
         }
         ex.next_id = used.iter().copied().max().unwrap_or(0);
+        // Text objects' number in the generated `Txt2` (#1348): a preserved `TySh` keeps the
+        // number it already names — its `Txt2` object must sit at that slot for `apply_txt2` —
+        // and new layers get the next free number.
+        let mut used_txt = std::collections::HashSet::new();
+        let mut next_txt = 0i32;
+        ex.text_index = Default::default();
+        for (_, _, l) in &walk {
+            let LayerContent::Text(t) = &l.content else {
+                continue;
+            };
+            let kept = t.psd_raw.as_deref().and_then(|d| photocraft_text::psd::text_index(d));
+            let index = match kept {
+                Some(i) if used_txt.insert(i) => i,
+                _ => {
+                    while used_txt.contains(&next_txt) {
+                        next_txt += 1;
+                    }
+                    used_txt.insert(next_txt);
+                    next_txt
+                }
+            };
+            ex.text_index.insert(l.id, index);
+        }
     }
     ex.emit(&doc.layers);
 
@@ -1281,13 +1437,38 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::export_exif(e, ppi).into_owned()));
     }
     let mut global_blocks = Vec::new();
-    for (sig, key, data) in &ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc))) {
-        let mut tb = TaggedBlock::new(*key, data.to_vec());
-        tb.signature = *sig;
+    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc)));
+    // The type layers' `Txt2` is regenerated (the auto-kern modes live there, and a preserved
+    // block goes stale as text is edited): one object per `TextIndex`, at the slot each layer's
+    // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block
+    // it replaces is handed over so a kept object keeps everything the file held beyond its text
+    // and style runs (Photoshop's `/21 /1` glyph pen positions, …).
+    let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = doc
+        .walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), t)),
+            _ => None,
+        })
+        .collect();
+    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
+    let txt2 = (!text_layers.is_empty()).then(|| photocraft_text::psd::build_txt2(&text_layers, previous.as_deref()));
+    for (sig, key, data) in preserved {
+        if txt2.is_some() && key == *b"Txt2" {
+            continue;
+        }
+        let mut tb = TaggedBlock::new(key, data.to_vec());
+        tb.signature = sig;
         // Photoshop pads document-level (global) blocks to a multiple of 4, and readers such as
         // psd-tools step to the next block that way: an even pad after `CAI ` (77 bytes)
         // misaligned every block after it (#200).
         tb.padding = Some(vec![0; (4 - data.len() % 4) % 4]);
+        global_blocks.push(tb);
+    }
+    if let Some(txt2) = txt2 {
+        let mut tb = TaggedBlock::new(*b"Txt2", txt2.clone());
+        tb.signature = *b"8BIM";
+        tb.padding = Some(vec![0; (4 - txt2.len() % 4) % 4]);
         global_blocks.push(tb);
     }
     let comps_resource = ex.comps.is_some().then(|| crate::comps_map::write_comps_resource(doc));

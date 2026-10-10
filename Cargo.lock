@@ -165,6 +165,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -668,6 +683,16 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -2738,6 +2763,184 @@ dependencies = [
 ]
 
 [[package]]
+name = "jxl-bitstream"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b480e752277e29eb4054f69546887a9b84656fe78c08f54ba5850ced98a378fe"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
+name = "jxl-coding"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd972bcd125e776f1eb241ac50e39f956095a1c2770c64736c968f8946bd9a3c"
+dependencies = [
+ "jxl-bitstream",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-color"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f316b1358c1711755b3ee8e8cb5c4a1dad12e796233088a7a513440782de80b2"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-frame"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d967c6fd669c7c01060b5022d8835fa82fd46b06ffc98b549f17600a097c2b3"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-grid"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01671307879a033bfa52e6e8784b941aca770b3f3a7d33830b455b6844f793fb"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
+name = "jxl-image"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5f752d62577c702a94dbbce4045caf08cb58639e8a4d56464b40ecf33ffe565"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-grid",
+ "jxl-oxide-common",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-jbr"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35d032bcec660647828527ff42c6f5776d2fd44b8357f9f6d9ac6dc07218e46"
+dependencies = [
+ "brotli-decompressor",
+ "jxl-bitstream",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-modular"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a2f045b24c738dd91d482be385512b512721ae08a671bd4b27bf1c47f215235"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-oxide"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d36c662923f47586880211f3bc7c0d83fb3a9b410d278c7bde93450748abeef3"
+dependencies = [
+ "brotli-decompressor",
+ "jxl-bitstream",
+ "jxl-color",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-jbr",
+ "jxl-oxide-common",
+ "jxl-render",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-oxide-common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62394c5021b3a9e7e0dbb2d639d555d019090c9946c39f6d3b09d390db4157b"
+dependencies = [
+ "jxl-bitstream",
+]
+
+[[package]]
+name = "jxl-render"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d34386bfdb6a19b5a30cc9beb4d475d537422c31ae8c39bb69640fcce3fcaf19"
+dependencies = [
+ "bytemuck",
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-color",
+ "jxl-frame",
+ "jxl-grid",
+ "jxl-image",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "jxl-vardct",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-threadpool"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f15eb830aa77a7f21148d72e153562a26bfe570139bd4922eab1908dd499d3"
+dependencies = [
+ "rayon",
+ "rayon-core",
+ "tracing",
+]
+
+[[package]]
+name = "jxl-vardct"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce72a18c6d3a47172ab6c479be2bdb56f22066b5d7092663f03b4490820b4511"
+dependencies = [
+ "jxl-bitstream",
+ "jxl-coding",
+ "jxl-grid",
+ "jxl-modular",
+ "jxl-oxide-common",
+ "jxl-threadpool",
+ "tracing",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3970,7 +4173,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "async-io",
@@ -4011,7 +4214,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-affinity"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -4021,7 +4224,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-algo"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -4034,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-automation"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "cap-std",
@@ -4056,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-automation",
  "photocraft-codecs",
@@ -4070,7 +4273,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-cms"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "moxcms",
  "rayon",
@@ -4078,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-codecs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "exr",
  "flate2",
@@ -4090,6 +4293,7 @@ dependencies = [
  "png 0.18.1",
  "proptest",
  "rayon",
+ "serde_json",
  "thiserror 2.0.21",
  "tiff",
  "zune-core 0.5.3",
@@ -4098,7 +4302,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-color"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-cms",
  "serde",
@@ -4106,7 +4310,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-compose"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "criterion",
  "photocraft-color",
@@ -4121,7 +4325,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-doc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -4132,7 +4336,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -4155,6 +4359,7 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "rayon",
+ "roxmltree",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4163,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-format"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "flate2",
@@ -4182,14 +4387,14 @@ dependencies = [
 
 [[package]]
 name = "photocraft-geom"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "photocraft-gpu"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "half",
  "log",
@@ -4206,14 +4411,14 @@ dependencies = [
 
 [[package]]
 name = "photocraft-heif"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "heic-rs",
 ]
 
 [[package]]
 name = "photocraft-io"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "crc32fast",
@@ -4235,20 +4440,21 @@ dependencies = [
  "photocraft-vector",
  "proptest",
  "resvg",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "photocraft-ops"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-doc",
 ]
 
 [[package]]
 name = "photocraft-paint"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -4259,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-plugins"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -4274,7 +4480,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-psd"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "flate2",
  "photocraft-psd",
@@ -4285,7 +4491,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-raster"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -4295,16 +4501,20 @@ dependencies = [
 
 [[package]]
 name = "photocraft-raw"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
+ "flate2",
+ "jxl-oxide",
  "photocraft-raw",
  "png 0.18.1",
  "rayon",
+ "zune-core 0.5.3",
+ "zune-jpegxl",
 ]
 
 [[package]]
 name = "photocraft-tablet"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -4316,7 +4526,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-testkit"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "memory-stats",
  "photocraft-color",
@@ -4327,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-text"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "flate2",
  "parley",
@@ -4341,13 +4551,14 @@ dependencies = [
 
 [[package]]
 name = "photocraft-ui-egui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "eframe",
  "egui",
  "egui_extras",
  "egui_kittest",
+ "flate2",
  "log",
  "photocraft-algo",
  "photocraft-cms",
@@ -4377,7 +4588,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-vector"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "photocraft-color",
  "photocraft-doc",
@@ -4388,7 +4599,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-web"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4398,8 +4609,11 @@ dependencies = [
  "photocraft-doc",
  "photocraft-engine",
  "photocraft-io",
+ "photocraft-paint",
+ "photocraft-psd",
  "photocraft-ui-egui",
  "rfd",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -7218,7 +7432,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7483,6 +7697,15 @@ name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core 0.5.3",
+]
+
+[[package]]
+name = "zune-jpegxl"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cba11ecd07cc23351500e840ae03841b7e4997923ec8e4832ee3ae199ea0b6b4"
 dependencies = [
  "zune-core 0.5.3",
 ]

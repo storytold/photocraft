@@ -45,11 +45,10 @@ fn hex(c: [f32; 4]) -> String {
 fn valid(app: &PhotocraftApp, key: &str, v: &Value) -> bool {
     match key {
         "contents" => v.as_str().is_some_and(|c| CONTENTS.iter().any(|(k, _)| *k == c)),
-        "mode" => v.as_str().and_then(photocraft_engine::commands::blend_from_str).is_some_and(|m| m != photocraft_color::BlendMode::PassThrough),
-        "opacity" => v.as_f64().is_some_and(|o| (0.0..=100.0).contains(&o)),
+        "mode" | "opacity" | "preserveTransparency" => crate::dialog_blend_ui::valid(key, v),
         "color" => v.as_str().is_some_and(|h| h.len() == 7 && h.starts_with('#') && h.get(1..).is_some_and(|d| d.chars().all(|c| c.is_ascii_hexdigit()))),
         "pattern" => v.as_str().is_some_and(|p| app.session.patterns.items.iter().any(|q| q.id == p)),
-        "colorAdaptation" | "preserveTransparency" => v.is_boolean(),
+        "colorAdaptation" => v.is_boolean(),
         _ => false,
     }
 }
@@ -139,15 +138,20 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         let opts: Vec<(String, &str)> = CONTENTS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
         if crate::widgets::dropdown(ui, "fill-contents", &mut contents, &opts, 170.0) {
             f.insert("contents".into(), json!(contents));
+            // Choosing Color… opens the Color Picker, as in Photoshop.
+            if contents == "color" {
+                crate::color_picker_ui::request(f, tl!("Color Picker (Fill Color)"));
+            }
         }
     });
     match contents.as_str() {
         "color" => {
             ui.horizontal(|ui| {
                 label(ui, tl!("Color:"));
-                let mut rgb = parse_hex(&get_str(f, "color", "#000000"));
-                if crate::widgets::color_edit_button_srgb(ui, &mut rgb).changed() {
-                    f.insert("color".into(), json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
+                // Photoshop shows no swatch; this one reopens the Color Picker on the colour.
+                let rgb = parse_hex(&get_str(f, "color", "#000000"));
+                if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Fill color")).clicked() {
+                    crate::color_picker_ui::request(f, tl!("Color Picker (Fill Color)"));
                 }
             });
         }
@@ -178,38 +182,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         }
         _ => {}
     }
-    ui.add_space(4.0);
-    crate::widgets::section_label(ui, "Blending");
-    crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
-        label(ui, tl!("Mode:"));
-        let mut mode = get_str(f, "mode", "normal");
-        let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (mode_key(*m), m.label())).collect();
-        if crate::widgets::dropdown(ui, "fill-mode", &mut mode, &opts, 170.0) {
-            f.insert("mode".into(), json!(mode));
-        }
-    });
-    ui.horizontal(|ui| {
-        label(ui, tl!("Opacity:"));
-        let mut o = f.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
-        if crate::widgets::value_field(ui, &mut o, 0.0..=100.0, "%", 70.0).changed() {
-            f.insert("opacity".into(), json!(o.round()));
-        }
-    });
-    ui.horizontal(|ui| {
-        label(ui, "");
-        let mut on = f.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
-        if crate::widgets::checkbox(ui, &mut on, "Preserve Transparency").changed() {
-            f.insert("preserveTransparency".into(), json!(on));
-        }
-    });
-}
-
-/// The `mode` param naming a blend mode (`"normal"`, `"colorBurn"`…), which the engine parses.
-fn mode_key(m: photocraft_color::BlendMode) -> String {
-    let s = format!("{m:?}");
-    let mut c = s.chars();
-    c.next().map(|f| f.to_ascii_lowercase().to_string() + c.as_str()).unwrap_or_default()
+    crate::dialog_blend_ui::body(ui, f, "fill");
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@
 	Layer	Επίπεδο
 	Type	Κείμενο
 	Select	Επιλογή
+	Scope	Εύρος
 	Filter	Φίλτρο
 	View	Προβολή
 	Window	Παράθυρο
@@ -239,8 +240,7 @@
 	Filter for shape layers	Φιλτράρισμα επιπέδων σχημάτων
 	Filter for type layers	Φιλτράρισμα επιπέδων κειμένου
 	Import Brushes…	Εισαγωγή πινέλων…
-	Import Photoshop brushes (.abr)	Εισαγωγή πινέλων Photoshop (.abr)
-	Load Photoshop brushes (.abr)	Φόρτωση πινέλων Photoshop (.abr)
+	Import brushes (.abr)	Εισαγωγή πινέλων (.abr)
 	Mask All	Απόκρυψη όλων με μάσκα
 	Mask Options	Επιλογές μάσκας
 	Masking	Χρήση μασκών
@@ -269,6 +269,10 @@
 	Foreground	Προσκήνιο
 	Background	Φόντο
 	Color Picker	Επιλογέας χρώματος
+	Color Picker (Fill Color)	Επιλογέας χρώματος (Χρώμα γεμίσματος)
+	Fill color	Χρώμα γεμίσματος
+	Color Picker (Stroke Color)	Επιλογέας χρώματος (Χρώμα περιγράμματος)
+	Stroke color	Χρώμα περιγράμματος
 	Color Swatches	Δείγματα χρωμάτων
 	Angle	Γωνία
 	Scale	Κλίμακα
@@ -455,6 +459,7 @@
 	Rename Layer	Μετονομασία επιπέδου
 	Convert to Smart Object	Μετατροπή σε έξυπνο αντικείμενο
 	Rasterize Layer	Μετατροπή επιπέδου σε εικονοστοιχεία
+	Rasterize Layers	Μετατροπή επιπέδων σε εικονοστοιχεία
 	Lock Transparent Pixels	Κλείδωμα διαφανών εικονοστοιχείων
 	Lock Image Pixels	Κλείδωμα εικονοστοιχείων εικόνας
 	Lock Position	Κλείδωμα θέσης
@@ -552,6 +557,7 @@
 	Middle	Μέση
 	Position	Θέση
 	Location	Τοποθεσία
+	Location:	Θέση:
 	Offset	Μετατόπιση
 	Distance	Απόσταση
 	Radius	Ακτίνα
@@ -1458,6 +1464,7 @@
 	Collapse Panel Group	Σύμπτυξη ομάδας πλαισίων
 	Create new brush from the current settings	Δημιουργία νέου πινέλου από τις τρέχουσες ρυθμίσεις
 	Create new brush from these settings	Δημιουργία νέου πινέλου από αυτές τις ρυθμίσεις
+	Update the current brush with these settings	Ενημέρωση του τρέχοντος πινέλου με αυτές τις ρυθμίσεις
 	Delete brush	Διαγραφή πινέλου
 	Drag the arrow to set the angle, the dots to set the roundness	Σύρετε το βέλος για τη γωνία και τις κουκκίδες για τη στρογγυλότητα
 	Expand Panel Group	Ανάπτυξη ομάδας πλαισίων
@@ -1484,8 +1491,8 @@
 	Delete Brush	Διαγραφή πινέλου
 	Group name	Όνομα ομάδας
 	Brush name	Όνομα πινέλου
-	Grid view	Προβολή πλέγματος
-	List view	Προβολή λίστας
+	Brush Name	Όνομα πινέλου
+	Brush Stroke	Πινελιά
 	Off: the speed of the pointer sets the spacing	Ανενεργό: η ταχύτητα του δείκτη καθορίζει την απόσταση
 	Tilt Scale	Κλίμακα κλίσης
 	Brush Projection	Προβολή πινέλου
@@ -1500,6 +1507,13 @@
 	Align with layer	Στοίχιση με το επίπεδο
 	Reset Alignment	Επαναφορά στοίχισης
 	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Επεξεργασία διαβάθμισης
+	Gradient picker	Επιλογή διαβάθμισης
+	Gradient stops	Σημεία διαβάθμισης
+	Save As Preset	Αποθήκευση ως προεπιλογή
+	The gradient the Gradient tool paints with	Η διαβάθμιση με την οποία ζωγραφίζει το εργαλείο Διαβάθμιση
+	Adds the current gradient to the Gradients panel	Προσθέτει την τρέχουσα διαβάθμιση στον πίνακα Διαβαθμίσεις
 	The current gradient (pick one in Window › Gradients)	Η τρέχουσα διαβάθμιση (επιλέξτε μία από Παράθυρο › Διαβαθμίσεις)
 	Select a type layer to edit its character and paragraph settings.	Επιλέξτε επίπεδο κειμένου για επεξεργασία των ρυθμίσεων χαρακτήρων και παραγράφων.
 	Text color	Χρώμα κειμένου
@@ -1525,6 +1539,9 @@
 	Cancelled {label}	Ακυρώθηκε: {label}
 	Esc to cancel	Esc για ακύρωση
 	Opening {name}	Άνοιγμα του {name}
+	Saving {name}	Αποθήκευση του {name}
+	A save to {name} is still running; try again when it finishes	Η αποθήκευση στο {name} βρίσκεται ακόμη σε εξέλιξη· δοκιμάστε ξανά όταν ολοκληρωθεί
+	{label} is writing the file and can no longer be cancelled	{label}: γίνεται εγγραφή του αρχείου και δεν μπορεί πλέον να ακυρωθεί
 	Opening {name}…	Άνοιγμα του {name}…
 	Opening…	Άνοιγμα…
 	Reading…	Ανάγνωση…
@@ -1928,7 +1945,7 @@
 	All Caps	Όλα κεφαλαία
 	All Slices	Όλες οι τομές
 	All User Slices	Όλες οι τομές χρήστη
-	All shortcuts reset to Photoshop defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές του Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές του PhotoCraft.
 	Alternates for Current Selection	Εναλλακτικοί χαρακτήρες για την τρέχουσα επιλογή
 	Altitude	Υψόμετρο
 	Always	Πάντα
@@ -2045,6 +2062,8 @@
 	Chrome	Χρώμιο
 	Classic	Κλασικό
 	Classic Theme	Κλασικό θέμα
+	Solarized dark	Solarized σκούρο
+	Solarized Dark Theme	Σκούρο θέμα Solarized
 	Clear Canvas Guides	Απαλοιφή οδηγών καμβά
 	Clear Override	Απαλοιφή παράκαμψης
 	Clear Samples	Απαλοιφή δειγμάτων
@@ -2170,6 +2189,17 @@
 	Delete Pins	Διαγραφή καρφιτσών
 	Delete Workspace	Διαγραφή χώρου εργασίας
 	Delete Workspace…	Διαγραφή χώρου εργασίας…
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Διαγραφή του επιπέδου «{name}»;
+	Delete {count} layers? {names}	Διαγραφή {count} επιπέδων; {names}
+	Delete layer?	Διαγραφή επιπέδου;
+	The document is closed	Το έγγραφο είναι κλειστό
+	The document or selected layers changed. Please request deletion again.	Το έγγραφο ή τα επιλεγμένα επίπεδα άλλαξαν. Ζητήστε ξανά τη διαγραφή.
+	Missing delete command	Λείπει η εντολή διαγραφής
+	Invalid delete command	Μη έγκυρη εντολή διαγραφής
+	Layer deleted, but confirmation preference could not be saved: {error}	Το επίπεδο διαγράφηκε, αλλά δεν ήταν δυνατή η αποθήκευση της προτίμησης επιβεβαίωσης: {error}
+
 	Delete layer	Διαγραφή επιπέδου
 	Density:	Πυκνότητα:
 	Depth	Βάθος
@@ -2201,7 +2231,7 @@
 	Dots	Κουκκίδες
 	Down	Κάτω
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Σύρετε για λάσο ή κάντε κλικ για πολυγωνική επιλογή · {add} προσθήκη · {sub} αφαίρεση
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Σύρετε για περιοχή περικοπής · σύρετε στο εσωτερικό για μετακίνηση · από τα άκρα αλλάζει μέγεθος ({ratio} αναλογία, {centre} κέντρο) · Space για μετακίνηση κατά τη σχεδίαση · {commit} εφαρμογή · Esc ακύρωση
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Σύρετε για περιοχή περικοπής · σύρετε στο εσωτερικό για μετακίνηση · από τα άκρα αλλάζει μέγεθος ({ratio} αναλογία, {centre} κέντρο) · Space για μετακίνηση κατά τη σχεδίαση · βέλη για μετακίνηση · X εναλλαγή προσανατολισμού · {commit} εφαρμογή · Esc ακύρωση
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Σύρετε γύρω από το κέντρο για να περιστρέψετε την προβολή  ·  Shift περιορίζει στις 15°
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Σύρετε πάνω στην εικόνα για προσθήκη περιορισμού· Shift για οριζόντιο/κατακόρυφο· δεξί κλικ για διαγραφή.
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Σύρετε ή κάντε κλικ για πολυγωνικά σημεία · κρατήστε Alt κατά το λάσο για ευθείες · {add} προσθήκη · {sub} αφαίρεση πριν από τη σχεδίαση
@@ -2766,6 +2796,7 @@
 	Remove All Pins	Αφαίρεση όλων των καρφιτσών
 	Remove Background	Αφαίρεση φόντου
 	Remove Planes	Αφαίρεση επιπέδων προοπτικής
+	Remove Tool	Αφαίρεση (Remove Tool)
 	Remove Warp Split	Αφαίρεση διαχωρισμού παραμόρφωσης
 	Remove stop	Αφαίρεση σημείου διαβάθμισης
 	Remove variable	Αφαίρεση μεταβλητής
@@ -2781,6 +2812,17 @@
 	Resample	Επαναδειγματοληψία
 	Reselect	Επαναφορά προηγούμενης επιλογής
 	Reset All to Defaults	Επαναφορά όλων στις προεπιλογές
+	Import Shortcuts…	Εισαγωγή συντομεύσεων…
+	Load a keyboard shortcut set saved as .kys	Φόρτωση ενός σετ συντομεύσεων πληκτρολογίου αποθηκευμένου ως .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Εισήχθησαν {n} συντομεύσεις από το {file}. Πατήστε OK για να τις κρατήσετε.
+	{n} commands are not in PhotoCraft.	{n} εντολές δεν υπάρχουν στο PhotoCraft.
+	Keyboard shortcuts imported	Οι συντομεύσεις πληκτρολογίου εισήχθησαν
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Το σετ συντομεύσεων πληκτρολογίου {set} χρησιμοποιείται εδώ: {n} συντομεύσεις διαφέρουν από τις προεπιλογές. Το Επεξεργασία › Συντομεύσεις πληκτρολογίου τις δείχνει· η Επαναφορά όλων στις προεπιλογές το αναιρεί.
+	Import keyboard shortcuts?	Εισαγωγή συντομεύσεων πληκτρολογίου;
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	Το PhotoCraft βρήκε σε αυτόν τον υπολογιστή το σετ συντομεύσεων πληκτρολογίου {set} από άλλο πρόγραμμα επεξεργασίας εικόνας: {n} συντομεύσεις του διαφέρουν από του PhotoCraft. Να γίνει εισαγωγή;
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Το Επεξεργασία › Συντομεύσεις πληκτρολογίου › Επαναφορά όλων στις προεπιλογές αναιρεί μια εισαγωγή.
+	Don't Import	Χωρίς εισαγωγή
+	The keyboard shortcut set was not imported: {error}	Το σετ συντομεύσεων πληκτρολογίου δεν εισήχθη: {error}
 	Reset GPU Backend	Επαναφορά συστήματος απόδοσης GPU
 	Reset Section	Επαναφορά ενότητας
 	Reset Transform	Επαναφορά μετασχηματισμού
@@ -2963,8 +3005,12 @@
 	Studio (Dark)	Studio (σκοτεινό)
 	Studio (Light)	Studio (φωτεινό)
 	Studio Light Theme	Φωτεινό θέμα Studio
+	Adwaita Light Theme	Φωτεινό θέμα Adwaita
+	Adwaita Dark Theme	Σκούρο θέμα Adwaita
 	Studio Theme	Θέμα Studio
 	Studio light	Φωτεινό στούντιο
+	Adwaita	Adwaita
+	Adwaita dark	Σκούρο Adwaita
 	Style	Στυλ
 	Style Options	Επιλογές στυλ
 	Style Options…	Επιλογές στυλ…
@@ -3176,6 +3222,7 @@ cameraRaw	Yellow	Κίτρινο
 	Magic Eraser Tool	Μαγική γόμα (Magic Eraser Tool)
 	Magic Wand Tool	Μαγικό ραβδί (Magic Wand Tool)
 	Move Tool	Μετακίνηση (Move Tool)
+	Could not use the move tool because the layer is locked.	Δεν ήταν δυνατή η χρήση του εργαλείου Μετακίνηση, επειδή το επίπεδο είναι κλειδωμένο.
 	Note Tool	Σημείωση (Note Tool)
 	Object Selection Tool	Επιλογή αντικειμένου (Object Selection Tool)
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
@@ -3304,7 +3351,7 @@ cameraRaw	Yellow	Κίτρινο
 	Color…	Χρώμα…
 	Cone (Inverted)	Κώνος (αντεστραμμένος)
 	Could not open	Δεν ήταν δυνατό το άνοιγμα
-	Default Photoshop Size	Προεπιλεγμένο μέγεθος Photoshop
+	Default PhotoCraft Size	Προεπιλεγμένο μέγεθος PhotoCraft
 	Diagonal (Descending)	Διαγώνιος (φθίνουσα)
 	DirectX 12	DirectX 12
 	Display p3	Display P3
@@ -3363,6 +3410,11 @@ fontWeight	Thin	Πολύ λεπτά
 	Preset Name	Όνομα προεπιλογής
 	No saved presets yet.	Δεν υπάρχουν ακόμη αποθηκευμένες προεπιλογές.
 
+# Painting symmetry presets.
+	Dual Axis	Διπλός άξονας
+	Diagonal	Διαγώνια
+	Transform Symmetry	Μετασχηματισμός συμμετρίας
+
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	Σημειακό δείγμα
 	3 by 3 Average	Μέσος όρος 3 × 3
@@ -3382,3 +3434,83 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+
+	Rasterize svg groups deeper than	Ραστεροποίηση ομάδων SVG πέρα από αυτό το βάθος
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	Το 0 απενεργοποιεί αυτό το όριο· ομάδες SVG με ένθεση βαθύτερη από 100 επίπεδα ραστεροποιούνται πάντα.
+	Rule of Thirds	Κανόνας των τρίτων
+	Golden Ratio	Χρυσή τομή
+	Golden Spiral	Χρυσή σπείρα
+	Auto Show Overlay	Αυτόματη εμφάνιση επικάλυψης
+	Always Show Overlay	Πάντα εμφάνιση επικάλυψης
+	Never Show Overlay	Ποτέ εμφάνιση επικάλυψης
+	Cycle Overlay	Εναλλαγή επικάλυψης
+	Cycle Orientation	Εναλλαγή προσανατολισμού
+	Set the overlay options for the Crop tool	Ορισμός επιλογών επικάλυψης για το εργαλείο Περικοπή
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Το Alt-κλικ πήγε στο περιβάλλον εργασίας, που μετακινεί παράθυρα με Alt-σύρσιμο. Ορίστε το πλήκτρο μετακίνησης παραθύρων του σε Super ή κλειδώστε το Alt στο Παράθυρο › Πλήκτρα τροποποίησης.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Επιλογέας χρώματος (χρώμα στυλ επιπέδου)
+
+# Shared text style Color Picker (#2015)
+	Color Picker (Text Color)	Επιλογέας χρώματος (χρώμα κειμένου)
+	Auto Hide Notifications	Αυτόματη απόκρυψη ειδοποιήσεων
+	Notification Duration (seconds)	Διάρκεια ειδοποίησης (δευτερόλεπτα)
+	Appearance Mode	Λειτουργία εμφάνισης
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Επόμενη λειτουργία εμφάνισης
+	Sync with system	Συγχρονισμός με το σύστημα
+	Active	Ενεργό
+	Color Picker (Solid Color)	Επιλογέας χρώματος (συμπαγές χρώμα)
+	Straighten the image by drawing a line on it	Ευθυγράμμιση της εικόνας σχεδιάζοντας μια γραμμή πάνω της
+	Set additional Crop options	Ορισμός πρόσθετων επιλογών περικοπής
+	Show Cropped Area	Εμφάνιση περιοχής περικοπής
+	Enable Crop Shield	Ενεργοποίηση ασπίδας περικοπής
+	Match Canvas	Ταίριασμα με τον καμβά
+	Auto Adjust Opacity	Αυτόματη προσαρμογή αδιαφάνειας
+	Crop Shield color	Χρώμα ασπίδας περικοπής
+	Color Picker (Crop Shield Color)	Επιλογέας χρώματος (Χρώμα ασπίδας περικοπής)
+	From Center	Από το κέντρο
+	Link radii	Σύνδεση ακτίνων
+	Star Ratio:	Αναλογία αστεριού:
+	Create Rectangle	Δημιουργία ορθογωνίου
+	Create Ellipse	Δημιουργία έλλειψης
+	Create Triangle	Δημιουργία τριγώνου
+	Create Polygon	Δημιουργία πολυγώνου
+	Pressure curve	Καμπύλη πίεσης
+	Click to add a point, right-click to remove	Κάντε κλικ για να προσθέσετε σημείο, δεξί κλικ για να το αφαιρέσετε
+	Some brush presets could not be loaded	Ορισμένες προεπιλογές πινέλων δεν ήταν δυνατό να φορτωθούν
+	Retry saving presets	Επανάληψη αποθήκευσης προεπιλογών
+	Brush preset changes are not saved: {error}	Οι αλλαγές στις προεπιλογές πινέλων δεν αποθηκεύτηκαν: {error}
+	Keep this tab open to retain your brushes.	Κρατήστε αυτή την καρτέλα ανοιχτή για να διατηρήσετε τα πινέλα σας.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Ο χώρος αποθήκευσης του προγράμματος περιήγησης δεν είναι διαθέσιμος· τα πινέλα ισχύουν μόνο για αυτή την περίοδο λειτουργίας. Κρατήστε αυτή την καρτέλα ανοιχτή για να τα διατηρήσετε.
+	Saving brush presets… Keep this tab open until saving finishes.	Αποθήκευση προεπιλογών πινέλων… Κρατήστε αυτή την καρτέλα ανοιχτή μέχρι να ολοκληρωθεί η αποθήκευση.
+	Reflect	Αντανάκλαση
+	Glow	Λάμψη
+	Negation	Άρνηση
+	XOR	XOR
+	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
+	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+	Stroke Options	Επιλογές περιγράμματος
+	Solid	Συνεχές
+	Dashed	Διακεκομμένο
+	Dotted	Με τελείες
+	Caps	Άκρα
+	Butt / Flat	Επίπεδο
+	Miter	Οξεία
+	Round	Στρογγυλή
+	Bevel	Λοξή
+	Miter limit	Όριο οξείας γωνίας
+	Dashed line	Διακεκομμένη γραμμή
+	Dash	Παύλα
+	Gap	Κενό
+	Dash / gap lengths × stroke width	Μήκη παύλας / κενού × πλάτος περιγράμματος
+	Add pair	Προσθήκη ζεύγους
+	Remove pair	Αφαίρεση ζεύγους
+	Dash offset	Μετατόπιση παύλας
+	Open paths use centered strokes	Οι ανοικτές διαδρομές χρησιμοποιούν κεντραρισμένα περιγράμματα
+	Use finite lengths and a positive pattern total	Χρησιμοποιήστε πεπερασμένα μήκη και θετικό άθροισμα μοτίβου
+	No subject found — try Object Selection or the Lasso	Δεν βρέθηκε θέμα — δοκιμάστε την Επιλογή αντικειμένου ή το Λάσο
+	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
+	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
+	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο

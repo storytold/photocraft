@@ -113,7 +113,7 @@ fn fold_history(app: &mut PhotocraftApp, from: usize) {
 /// Rewrites a Move-tool pointer event for the held modifiers: ⇧ locks it to an axis, and the
 /// first real movement of an ⌥-drag duplicates the layers being moved. Other tools pass through.
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
-    if app.ui.tool != Tool::Move || app.ui.transform.is_some() {
+    if app.active_tool() != Tool::Move || app.ui.transform.is_some() {
         app.move_mods = MoveDrag::default();
         return ev;
     }
@@ -142,7 +142,7 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64;
         d = constrain(d, app.move_mods.last, if pixels { TRANSFORM_DIRECTIONS } else { MOVE_DIRECTIONS });
     }
     app.move_mods.last = Some(d);
-    let zoom = f64::from(app.current_zoom().max(0.01));
+    let zoom = f64::from(app.point_zoom().max(0.01));
     if app.move_mods.alt && !pixels && app.move_mods.dup_from.is_none() && d[0].hypot(d[1]) * zoom >= DUPLICATE_THRESHOLD {
         app.move_mods.dup_from = duplicate(app);
         // Only once per drag, even if duplicating failed.

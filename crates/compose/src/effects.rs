@@ -59,6 +59,23 @@ pub fn margin(layer: &Layer) -> i32 {
 /// Maximum distance (px) an effect is rendered from the layer's shape.
 pub const MAX_REACH: f32 = 512.0;
 
+/// Whether every enabled effect's maps are local: each map pixel depends only on the shape
+/// within [`margin`] of it (shifts, chamfer distances compared with a size, tent blurs), so
+/// maps built over a part of the layer's region padded by twice the margin equal the
+/// whole-region maps over that part (#1909). Not local: gradient strokes (laid out over the whole
+/// shape's extent), Precise glows and chiselled bevels (exact Euclidean distances, whose f32
+/// arithmetic depends on where the region starts) and noise (it speckles any coverage above
+/// zero, so it would pick up the blur's float noise, which depends on where the region starts).
+pub(crate) fn maps_are_local(layer: &Layer) -> bool {
+    layer.effects.items.iter().filter(|e| e.enabled()).all(|e| match e {
+        Effect::Stroke(s) => !matches!(s.paint, FxPaint::Gradient(_)),
+        Effect::DropShadow(s) | Effect::InnerShadow(s) => s.noise <= 0.0,
+        Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.technique != GlowTechnique::Precise && g.noise <= 0.0,
+        Effect::BevelEmboss(b) => b.technique == BevelTechnique::Smooth,
+        _ => true,
+    })
+}
+
 /// A single-channel map over a rectangle.
 #[derive(Clone)]
 struct Map {
@@ -150,33 +167,161 @@ fn edt(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
     edt_nearest(inside, w, h).0
 }
 
-/// [`edt`] plus the index of the nearest `inside` pixel.
-fn edt_nearest(inside: &[bool], w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
+/// Maps with fewer pixels (or other units of work) than this are not worth spawning threads for.
+const PAR_MIN: usize = 1 << 16;
+
+/// Most threads one pass uses (as for the blurs, [`rows_par`]).
+const PAR_THREADS: usize = 16;
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook: the thread count [`par_threads`] gives on this thread, whatever the work.
+    static THREADS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// How many threads a pass over `work` pixels (or similar units) uses.
+fn par_threads(work: usize) -> usize {
+    #[cfg(test)]
+    if let Some(n) = THREADS.with(std::cell::Cell::get) {
+        return n;
+    }
+    if cfg!(target_arch = "wasm32") || work < PAR_MIN { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, PAR_THREADS) }
+}
+
+/// Runs `f(scratch, u, a_u, b_u)` for every unit `u` of two slices: unit `u` of `a` is
+/// `a[u * unit_a..][..unit_a]` (the last may be shorter), the same of `b` with `unit_b`, which is 0
+/// when there is no second slice. `work` says how big the whole pass is ([`par_threads`]). Groups of
+/// units go to scoped OS threads, each with a scratch value from `init`; not to rayon, as for
+/// [`rows_par`]: maps are built from inside rayon tiles, where a waiting worker steals other tiles.
+/// A unit is computed from its own arguments alone, so the result does not depend on the threads.
+fn par_units<S, A: Send, B: Send>(
+    work: usize,
+    a: &mut [A],
+    unit_a: usize,
+    b: &mut [B],
+    unit_b: usize,
+    init: impl Fn() -> S + Sync,
+    f: impl Fn(&mut S, usize, &mut [A], &mut [B]) + Sync,
+) {
+    if unit_a == 0 {
+        return;
+    }
+    let units = a.len().div_ceil(unit_a);
+    let threads = par_threads(work).min(units);
+    if threads <= 1 {
+        run_units(&mut init(), 0, a, unit_a, b, unit_b, &f);
+        return;
+    }
+    // Many more groups than threads, so that a heavy one (an edge-rich stretch) does not hold the rest up.
+    let group = units.div_ceil(threads * 8).max(1);
+    let mut groups = Vec::new();
+    let (mut rest_a, mut rest_b, mut first) = (a, b, 0usize);
+    while !rest_a.is_empty() {
+        let (ga, na) = rest_a.split_at_mut((group * unit_a).min(rest_a.len()));
+        let (gb, nb) = rest_b.split_at_mut((group * unit_b).min(rest_b.len()));
+        groups.push((first, ga, gb));
+        (rest_a, rest_b, first) = (na, nb, first + group);
+    }
+    let queue = std::sync::Mutex::new(groups.into_iter());
+    let worker = || {
+        let mut scratch = init();
+        loop {
+            let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
+            let Some((first, ga, gb)) = next else { break };
+            run_units(&mut scratch, first, ga, unit_a, gb, unit_b, &f);
+        }
+    };
+    std::thread::scope(|sc| {
+        // A thread that cannot be spawned leaves its share to the others.
+        for _ in 1..threads {
+            let _ = std::thread::Builder::new().spawn_scoped(sc, worker);
+        }
+        worker();
+    });
+}
+
+fn run_units<S, A, B>(scratch: &mut S, first: usize, a: &mut [A], unit_a: usize, b: &mut [B], unit_b: usize, f: &impl Fn(&mut S, usize, &mut [A], &mut [B])) {
+    for (k, ua) in a.chunks_mut(unit_a).enumerate() {
+        let ub = b.get_mut(k * unit_b..((k + 1) * unit_b).min(b.len())).unwrap_or(&mut []);
+        f(scratch, first + k, ua, ub);
+    }
+}
+
+/// A `w × h` buffer of `fill`, then filled row by row through `f(y, row)`.
+fn par_fill<T: Clone + Send>(w: usize, h: usize, fill: T, f: impl Fn(usize, &mut [T]) + Sync) -> Vec<T> {
+    let mut out = vec![fill; w.saturating_mul(h)];
+    par_units(out.len(), &mut out, w.max(1), &mut [] as &mut [()], 0, || (), |_, y, row, _| f(y, row));
+    out
+}
+
+/// Working buffers of the 1D distance transform, for lines of up to `n` pixels.
+struct Dt1Scratch {
+    f: Vec<f32>,
+    o: Vec<f32>,
+    v: Vec<usize>,
+    z: Vec<f32>,
+    near: Vec<usize>,
+}
+
+impl Dt1Scratch {
+    fn new(n: usize) -> Self {
+        Dt1Scratch { f: vec![0.0; n], o: vec![0.0; n], v: vec![0; n], z: vec![0.0; n + 1], near: vec![0; n] }
+    }
+}
+
+/// [`edt`] plus the index of the nearest `inside` pixel (as `u32`: a map past 2³² pixels has no
+/// nearest pixel to give, and every distance is then "far").
+///
+/// Both passes run line by line in parallel: the columns, then the rows. The columns' results are
+/// kept column by column (`gc[x * h + y]`) so that each thread writes its own stretch of them.
+fn edt_nearest(inside: &[bool], w: usize, h: usize) -> (Vec<f32>, Vec<u32>) {
     const INF: f32 = 1e20;
-    let mut g: Vec<f32> = inside.iter().map(|&b| if b { 0.0 } else { INF }).collect();
-    let mut near_row = vec![0usize; w * h];
-    let mut nearest = vec![0usize; w * h];
+    let total = w.saturating_mul(h);
+    if total != inside.len() || total > u32::MAX as usize {
+        return (vec![INF; inside.len()], vec![0; inside.len()]);
+    }
     let n = w.max(h);
-    let (mut f, mut o, mut v, mut z, mut nr) = (vec![0.0; n], vec![0.0; n], vec![0usize; n], vec![0.0f32; n + 1], vec![0usize; n]);
-    for x in 0..w {
-        for y in 0..h {
-            f[y] = g[y * w + x];
-        }
-        dt1(&f[..h], &mut o[..h], &mut v, &mut z, &mut nr[..h]);
-        for y in 0..h {
-            g[y * w + x] = o[y];
-            near_row[y * w + x] = nr[y];
-        }
-    }
-    for y in 0..h {
-        f[..w].copy_from_slice(&g[y * w..(y + 1) * w]);
-        dt1(&f[..w], &mut o[..w], &mut v, &mut z, &mut nr[..w]);
-        for x in 0..w {
-            g[y * w + x] = o[x].sqrt();
-            let px = nr[x];
-            nearest[y * w + x] = near_row[y * w + px] * w + px;
-        }
-    }
+    let mut gc = vec![0.0f32; total];
+    let mut nc = vec![0u32; total];
+    par_units(
+        total,
+        &mut gc,
+        h.max(1),
+        &mut nc,
+        h.max(1),
+        || Dt1Scratch::new(n),
+        |t, x, g, near| {
+            for (y, f) in t.f[..h].iter_mut().enumerate() {
+                *f = if inside[y * w + x] { 0.0 } else { INF };
+            }
+            dt1(&t.f[..h], &mut t.o[..h], &mut t.v, &mut t.z, &mut t.near[..h]);
+            g.copy_from_slice(&t.o[..h]);
+            for (d, &p) in near.iter_mut().zip(&t.near[..h]) {
+                *d = p as u32;
+            }
+        },
+    );
+    let mut g = vec![0.0f32; total];
+    let mut nearest = vec![0u32; total];
+    par_units(
+        total,
+        &mut g,
+        w.max(1),
+        &mut nearest,
+        w.max(1),
+        || Dt1Scratch::new(n),
+        |t, y, out, near| {
+            for (x, f) in t.f[..w].iter_mut().enumerate() {
+                *f = gc[x * h + y];
+            }
+            dt1(&t.f[..w], &mut t.o[..w], &mut t.v, &mut t.z, &mut t.near[..w]);
+            for (x, (d, ne)) in out.iter_mut().zip(near.iter_mut()).enumerate() {
+                *d = t.o[x].sqrt();
+                let px = t.near[x];
+                *ne = (nc[px * h + y] as usize * w + px) as u32;
+            }
+        },
+    );
     (g, nearest)
 }
 
@@ -257,9 +402,23 @@ fn dist_outside_by(s: &Map, m: Metric) -> Vec<f32> {
         let (d, _) = chamfer_from(start, s.w, s.h);
         return d.iter().zip(&s.v).map(|(d, &a)| if a > INSIDE_EPS { -0.5 } else { d - 0.5 }).collect();
     }
-    let inside: Vec<bool> = s.v.iter().map(|&a| a > INSIDE_EPS).collect();
+    let inside = covered(s, |a| a > INSIDE_EPS);
     let (d, near) = edt_nearest(&inside, s.w, s.h);
-    (0..d.len()).map(|i| if inside[i] { -0.5 } else { d[i] - 0.5 + (1.0 - s.v[near[i]].min(1.0)) }).collect()
+    par_fill(s.w, s.h, 0.0f32, |y, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            let i = y * s.w + x;
+            *out = if inside[i] { -0.5 } else { d[i] - 0.5 + (1.0 - s.v[near[i] as usize].min(1.0)) };
+        }
+    })
+}
+
+/// Which pixels of `s` satisfy `test`, row by row in parallel.
+fn covered(s: &Map, test: impl Fn(f32) -> bool + Sync) -> Vec<bool> {
+    par_fill(s.w, s.h, false, |y, row| {
+        for (e, &a) in row.iter_mut().zip(s.v.get(y * s.w..).unwrap_or_default()) {
+            *e = test(a);
+        }
+    })
 }
 
 /// Distance from each pixel centre inside the shape to the shape's edge
@@ -289,9 +448,14 @@ fn dist_inside_by(s: &Map, m: Metric) -> Vec<f32> {
         let (d, _) = chamfer_from(start, s.w, s.h);
         return d.iter().zip(&s.v).map(|(d, &a)| if a <= INSIDE_EPS { -0.5 } else { d - 0.5 }).collect();
     }
-    let outside: Vec<bool> = s.v.iter().map(|&a| a <= INSIDE_EPS).collect();
+    let outside = covered(s, |a| a <= INSIDE_EPS);
     let (d, _) = edt_nearest(&outside, s.w, s.h);
-    d.iter().zip(&outside).map(|(d, o)| if *o { -0.5 } else { d - 0.5 }).collect()
+    par_fill(s.w, s.h, 0.0f32, |y, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            let i = y * s.w + x;
+            *out = if outside[i] { -0.5 } else { d[i] - 0.5 };
+        }
+    })
 }
 
 /// Alpha relative to the 3×3 neighbourhood maximum: separates edge coverage
@@ -315,6 +479,370 @@ fn local_coverage(s: &Map) -> Map {
     }
     out
 }
+
+/// Signed distance from the centre of a pixel of coverage `a` to the straight edge crossing it,
+/// positive when the centre is inside the shape. `n` is the edge's unit normal (its signs don't
+/// matter).
+///
+/// A unit pixel cut by a straight edge at distance `r` from its centre (on the side that holds at
+/// most half of the pixel) is covered `1/2 - r/u` while the edge crosses two opposite sides, and
+/// `((u + v)/2 - r)² / (2uv)` once it only cuts off a corner, with `u ≥ v` the larger and smaller
+/// component of the normal. Inverting that places the edge by its coverage at any angle. For an
+/// axis-aligned edge (`v = 0`) it is the `a - 1/2` that [`dist_outside`] assumes.
+fn edge_offset(n: [f32; 2], a: f32) -> f32 {
+    if !a.is_finite() {
+        return 0.0;
+    }
+    let (u, v) = (n[0].abs().max(n[1].abs()), n[0].abs().min(n[1].abs()));
+    let (c, inside) = if a > 0.5 { (1.0 - a, true) } else { (a, false) };
+    let c = c.clamp(0.0, 0.5);
+    // The coverage below which the edge only cuts off a corner.
+    let corner = if u > 0.0 { v / (2.0 * u) } else { 0.0 };
+    let r = if c >= corner { (0.5 - c) * u } else { 0.5 * (u + v) - (2.0 * u * v * c).sqrt() };
+    if inside { r } else { -r }
+}
+
+/// A sharp, anti-aliased edge pixel: where it puts the straight edge crossing it.
+#[derive(Clone, Copy)]
+struct SharpEdge {
+    /// Signed distance from the pixel's centre to the edge, positive inside ([`edge_offset`]).
+    offset: f32,
+    /// The edge's unit normal pointing into the shape (`[0, 0]` when the coverage gives no direction).
+    normal: [f32; 2],
+}
+
+/// Half the spacing of the edge pixels along an edge (at most √2 / 2, along a diagonal): a pixel
+/// within it of the foot of the perpendicular sees the edge as a line, one further out as its end.
+const EDGE_REACH: f32 = 0.75;
+
+impl SharpEdge {
+    /// Distance to the edge from the pixel `(dx, dy)` away from this one, positive on the shape's
+    /// side (`inside`) or on the empty side. It is the distance to the edge's line where the
+    /// perpendicular lands within [`EDGE_REACH`] of this pixel, and to the end of that stretch
+    /// beyond, so the distance to a straight edge is exact and does not follow the pixel staircase.
+    /// `None` when the edge has no direction or `(dx, dy)` is on the wrong side of it.
+    fn distance(&self, dx: f32, dy: f32, inside: bool) -> Option<f32> {
+        let [nx, ny] = self.normal;
+        if nx == 0.0 && ny == 0.0 {
+            return None;
+        }
+        let signed = self.offset + dx * nx + dy * ny;
+        let across = if inside { signed } else { -signed };
+        let along = (dx * -ny + dy * nx).abs();
+        (across > 0.0).then(|| across.hypot((along - EDGE_REACH).max(0.0)))
+    }
+}
+
+/// A sharp edge pixel and where it sits.
+#[derive(Clone, Copy)]
+struct EdgePixel {
+    /// Index of the pixel in the map.
+    at: u32,
+    /// The pixel's coverage ([`local_coverage`] of it).
+    cov: f32,
+    edge: SharpEdge,
+}
+
+/// The sharp edge pixels of a map: a short list, and for every pixel a 4 byte slot (0 = no edge, k =
+/// the k-th of the list). Maps are big and edge pixels few, so a per-pixel `Option<SharpEdge>` (16
+/// bytes) made every pass over it, and the copies the refinement needs, memory-bound.
+struct SharpEdges {
+    w: usize,
+    h: usize,
+    slot: Vec<u32>,
+    pixels: Vec<EdgePixel>,
+}
+
+impl SharpEdges {
+    fn empty(w: usize, h: usize) -> Self {
+        SharpEdges { w, h, slot: Vec::new(), pixels: Vec::new() }
+    }
+
+    /// The edge of pixel `i`, if it is a sharp edge pixel.
+    fn get(&self, i: usize) -> Option<SharpEdge> {
+        let k = (*self.slot.get(i)? as usize).checked_sub(1)?;
+        self.pixels.get(k).map(|p| p.edge)
+    }
+
+    /// The edge of pixel `(x, y)`, if it is a sharp edge pixel (`None` off the map).
+    fn at(&self, x: usize, y: usize) -> Option<SharpEdge> {
+        if x >= self.w || y >= self.h { None } else { self.get(y * self.w + x) }
+    }
+
+    fn has(&self, x: usize, y: usize) -> bool {
+        self.at(x, y).is_some()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pixels.is_empty()
+    }
+
+    /// Every sharp edge pixel, as (index in the map, its edge), in pixel order.
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = (usize, SharpEdge)> + '_ {
+        self.pixels.iter().map(|p| (p.at as usize, p.edge))
+    }
+}
+
+/// Where the sharp, anti-aliased edge pixels of `s` put the edge ([`edge_offset`], along the normal
+/// the coverage gradient gives). Sharp pixels are partly covered and touch both an empty and a full
+/// pixel; hard edges and soft ramps have none and keep the `alpha - 1/2` of [`dist_outside`].
+///
+/// An edge pixel is covered and has an empty neighbour, so a pass over which pixels are covered finds
+/// the few candidates without computing [`local_coverage`] of the whole map; the coverage is then
+/// worked out where it is needed, by the same formula. Rows are independent and go in parallel.
+fn sharp_edges(s: &Map) -> SharpEdges {
+    let (w, h) = (s.w, s.h);
+    if w == 0 || h == 0 || s.v.len() != w * h || s.v.len() >= u32::MAX as usize {
+        return SharpEdges::empty(w, h);
+    }
+    let (wi, hi) = (w as i64, h as i64);
+    // `local_coverage` of the pixel at (x, y), on the map.
+    let cov_at = |x: i64, y: i64| -> f32 {
+        let a = s.v[y as usize * w + x as usize];
+        if a <= INSIDE_EPS {
+            return a;
+        }
+        let mut mx = a;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                mx = mx.max(s.get(x + dx, y + dy));
+            }
+        }
+        (a / mx).min(1.0)
+    };
+    // The coverage with the map's border repeated, for the gradient.
+    let cov_clamped = |x: i64, y: i64| cov_at(x.max(0).min(wi - 1), y.max(0).min(hi - 1));
+    // Whether a pixel is not empty. Off the map counts as covered: only a neighbour on the map can be empty.
+    let solid = |x: i64, y: i64| -> bool {
+        if x < 0 || y < 0 || x >= wi || y >= hi {
+            return true;
+        }
+        let a = s.v[y as usize * w + x as usize];
+        a.is_nan() || a > INSIDE_EPS
+    };
+    let mut rows: Vec<Vec<EdgePixel>> = vec![Vec::new(); h];
+    par_units(
+        w * h,
+        &mut rows,
+        1,
+        &mut [] as &mut [()],
+        0,
+        || (),
+        |_, y, row, _| {
+            let Some(row) = row.first_mut() else { return };
+            let y = y as i64;
+            for x in 0..wi {
+                if !solid(x, y) || (-1..=1).all(|dy| (-1..=1).all(|dx| solid(x + dx, y + dy))) {
+                    continue;
+                }
+                let i = (y * wi + x) as usize;
+                let c = cov_at(x, y);
+                if s.v[i] <= INSIDE_EPS || c >= 1.0 - INSIDE_EPS {
+                    continue;
+                }
+                let (mut empty, mut full) = (false, false);
+                for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if (dx, dy) == (0, 0) || nx < 0 || ny < 0 || nx >= wi || ny >= hi {
+                        continue;
+                    }
+                    empty |= s.get(nx, ny) <= INSIDE_EPS;
+                    full |= cov_at(nx, ny) >= 1.0 - INSIDE_EPS;
+                }
+                if !(empty && full) {
+                    continue;
+                }
+                let at = &cov_clamped;
+                let gx = (at(x + 1, y - 1) + 2.0 * at(x + 1, y) + at(x + 1, y + 1)) - (at(x - 1, y - 1) + 2.0 * at(x - 1, y) + at(x - 1, y + 1));
+                let gy = (at(x - 1, y + 1) + 2.0 * at(x, y + 1) + at(x + 1, y + 1)) - (at(x - 1, y - 1) + 2.0 * at(x, y - 1) + at(x + 1, y - 1));
+                let len = gx.hypot(gy);
+                let (normal, n) = if len.is_finite() && len > 1e-6 { ([gx / len, gy / len], [gx / len, gy / len]) } else { ([0.0, 0.0], [1.0, 0.0]) };
+                row.push(EdgePixel { at: i as u32, cov: c, edge: SharpEdge { offset: edge_offset(n, c), normal } });
+            }
+        },
+    );
+    let mut pixels: Vec<EdgePixel> = Vec::with_capacity(rows.iter().map(Vec::len).sum());
+    for row in rows {
+        pixels.extend(row);
+    }
+    let mut slot = vec![0u32; w * h];
+    for (k, p) in pixels.iter().enumerate() {
+        if let Some(s) = slot.get_mut(p.at as usize) {
+            *s = k as u32 + 1;
+        }
+    }
+    refine_edge_normals(&mut pixels, &slot, w, h);
+    SharpEdges { w, h, slot, pixels }
+}
+
+/// How far (in pixels) around an edge pixel [`refine_edge_normals`] looks for its neighbours.
+const NORMAL_RADIUS: i64 = 3;
+
+/// The 3×3 gradient of the coverage gives an edge's direction to 1-2 degrees, and its error is
+/// systematic, so it tilts the distance of every pixel the same way and shows as a faint ripple.
+/// The edge points of a straight edge's pixels (each pixel's centre moved to its edge) lie on one
+/// line, and the line through the points of the pixels around one gives the direction to a fraction
+/// of a degree. Where those points are not on a line (corners, tight curves) the gradient's normal
+/// stays.
+fn refine_edge_normals(pixels: &mut [EdgePixel], slot: &[u32], w: usize, h: usize) {
+    let (wi, hi) = (w as i64, h as i64);
+    let points: Vec<[f32; 2]> = pixels
+        .iter()
+        .map(|p| [(p.at as i64 % wi) as f32 - p.edge.offset * p.edge.normal[0], (p.at as i64 / wi) as f32 - p.edge.offset * p.edge.normal[1]])
+        .collect();
+    let before: Vec<SharpEdge> = pixels.iter().map(|p| p.edge).collect();
+    // Every pixel reads the unrefined edges around it and writes its own, so they go in parallel.
+    let work = pixels.len().saturating_mul(32);
+    par_units(work, pixels, 1, &mut [] as &mut [()], 0, Vec::<[f32; 2]>::new, |near, k, pixel, _| {
+        let (Some(pixel), Some(&e)) = (pixel.first_mut(), before.get(k)) else { return };
+        let (x, y) = (pixel.at as i64 % wi, pixel.at as i64 / wi);
+        let (mut n, mut sum) = (0.0f32, [0.0f32; 2]);
+        near.clear();
+        for (dx, dy) in (-NORMAL_RADIUS..=NORMAL_RADIUS).flat_map(|dy| (-NORMAL_RADIUS..=NORMAL_RADIUS).map(move |dx| (dx, dy))) {
+            let (nx, ny) = (x + dx, y + dy);
+            if dx * dx + dy * dy > NORMAL_RADIUS * NORMAL_RADIUS || nx < 0 || ny < 0 || nx >= wi || ny >= hi {
+                continue;
+            }
+            let Some(j) = slot.get((ny * wi + nx) as usize).and_then(|&s| (s as usize).checked_sub(1)) else { continue };
+            let (Some(o), Some(&p)) = (before.get(j), points.get(j)) else { continue };
+            if o.normal[0] * e.normal[0] + o.normal[1] * e.normal[1] > 0.9 {
+                near.push(p);
+                sum = [sum[0] + p[0], sum[1] + p[1]];
+                n += 1.0;
+            }
+        }
+        if near.len() < 3 {
+            return;
+        }
+        let mean = [sum[0] / n, sum[1] / n];
+        let (mut sxx, mut sxy, mut syy) = (0.0f32, 0.0f32, 0.0f32);
+        for p in near.iter() {
+            let (dx, dy) = (p[0] - mean[0], p[1] - mean[1]);
+            sxx += dx * dx;
+            sxy += dx * dy;
+            syy += dy * dy;
+        }
+        // Spread along and across the best line through the points.
+        let half = 0.5 * (sxx + syy);
+        let root = (0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy).sqrt();
+        let (along, across) = (((half + root) / n).max(0.0).sqrt(), ((half - root) / n).max(0.0).sqrt());
+        if !(along > EDGE_LINE_MIN_SPREAD && across < EDGE_LINE_MAX_OFF) {
+            return;
+        }
+        let angle = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+        let mut normal = [-angle.sin(), angle.cos()];
+        if normal[0] * e.normal[0] + normal[1] * e.normal[1] < 0.0 {
+            normal = [-normal[0], -normal[1]];
+        }
+        pixel.edge.normal = normal;
+        pixel.edge.offset = edge_offset(normal, pixel.cov);
+    });
+}
+
+/// The edge points around a pixel must spread at least this far (px, standard deviation) along
+/// their line to give it a direction, and stay within [`EDGE_LINE_MAX_OFF`] of it.
+const EDGE_LINE_MIN_SPREAD: f32 = 0.7;
+const EDGE_LINE_MAX_OFF: f32 = 0.1;
+
+/// How far from the foot of the perpendicular (in pixels) [`edge_distance`] looks for edge pixels.
+const FOOT_RADIUS: i64 = 2;
+
+/// The distance from pixel `p` to the sharp edge whose pixel `q` is nearest to it, or `None` when
+/// `q` gives no usable distance. The nearest pixel by its centre is not the best one: it can sit a
+/// few pixels along the edge from the foot of the perpendicular and deeper than the edge, and the
+/// further `p` is from the edge the further, so its distance ripples along the edge. So this takes
+/// the smallest distance of the edge pixels around that foot, which is exact for a straight edge.
+fn edge_distance(sharp: &SharpEdges, p: [usize; 2], q: [usize; 2], inside: bool) -> Option<f32> {
+    let (px, py) = (p[0] as f32, p[1] as f32);
+    let e = sharp.at(q[0], q[1])?;
+    let mut best = e.distance(px - q[0] as f32, py - q[1] as f32, inside)?;
+    // Where p's perpendicular meets q's line.
+    let signed = e.offset + (px - q[0] as f32) * e.normal[0] + (py - q[1] as f32) * e.normal[1];
+    let (fx, fy) = ((px - signed * e.normal[0]).round() as i64, (py - signed * e.normal[1]).round() as i64);
+    for sy in (fy - FOOT_RADIUS).max(0)..=(fy + FOOT_RADIUS).min(sharp.h as i64 - 1) {
+        for sx in (fx - FOOT_RADIUS).max(0)..=(fx + FOOT_RADIUS).min(sharp.w as i64 - 1) {
+            if let Some(near) = sharp.at(sx as usize, sy as usize)
+                && let Some(d) = near.distance(px - sx as f32, py - sy as f32, inside)
+            {
+                best = best.min(d);
+            }
+        }
+    }
+    Some(best)
+}
+
+/// [`dist_inside`] for chiselled bevels. A sharp edge pixel puts the edge where its coverage says,
+/// at any angle, and the pixels near it measure to that edge ([`edge_distance`]), so the distance
+/// ramps stay planar along an oblique edge instead of following the pixel staircase. The plain
+/// distance (to the nearest empty pixel, less half a pixel) never falls short of the true one, so
+/// it caps the result where an edge lies exactly on a pixel boundary and has no sharp pixel; a mask
+/// without sharp pixels gives exactly [`dist_inside`]. Values past `reach` pixels are not refined.
+fn bevel_dist_inside(s: &Map, sharp: &SharpEdges, reach: f32) -> Vec<f32> {
+    let empty = covered(s, |a| a <= INSIDE_EPS);
+    let (d, near) = edt_nearest(&empty, s.w, s.h);
+    let at = |x: usize, y: usize| -> f32 {
+        let i = y * s.w + x;
+        if empty[i] {
+            return -0.5;
+        }
+        if let Some(e) = sharp.get(i) {
+            return e.offset;
+        }
+        let plain = d[i] - 0.5;
+        if d[i] > reach + EDGE_MARGIN || sharp.is_empty() {
+            return plain;
+        }
+        // The sharp pixel next to the nearest empty one that is nearest to this pixel.
+        let (px, py) = (x as i64, y as i64);
+        let (ox, oy) = ((near[i] as usize % s.w) as i64, (near[i] as usize / s.w) as i64);
+        let q = (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (ox + dx, oy + dy)))
+            .filter(|&(x, y)| x >= 0 && y >= 0 && sharp.has(x as usize, y as usize))
+            .min_by_key(|&(x, y)| (x - px) * (x - px) + (y - py) * (y - py));
+        match q.and_then(|(x, y)| edge_distance(sharp, [px as usize, py as usize], [x as usize, y as usize], true)) {
+            Some(refined) => refined.min(plain),
+            None => plain,
+        }
+    };
+    par_fill(s.w, s.h, 0.0f32, |y, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            *out = at(x, y);
+        }
+    })
+}
+
+/// [`dist_outside`] for chiselled bevels, with sharp edge pixels placed as in [`bevel_dist_inside`].
+fn bevel_dist_outside(s: &Map, sharp: &SharpEdges, reach: f32) -> Vec<f32> {
+    let inside = covered(s, |a| a > INSIDE_EPS);
+    let (d, near) = edt_nearest(&inside, s.w, s.h);
+    let at = |x: usize, y: usize| -> f32 {
+        let i = y * s.w + x;
+        if let Some(e) = sharp.get(i) {
+            return -e.offset;
+        }
+        if inside[i] {
+            return -0.5;
+        }
+        let q = near[i] as usize;
+        let Some(e) = sharp.get(q) else { return d[i] - (s.v[q].min(1.0) - 0.5) };
+        let (p, qp) = ([x, y], [q % s.w, q / s.w]);
+        let measured = if d[i] <= reach + EDGE_MARGIN {
+            edge_distance(sharp, p, qp, false)
+        } else {
+            e.distance(p[0] as f32 - qp[0] as f32, p[1] as f32 - qp[1] as f32, false)
+        };
+        measured.unwrap_or(d[i] - e.offset)
+    };
+    par_fill(s.w, s.h, 0.0f32, |y, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            *out = at(x, y);
+        }
+    })
+}
+
+/// Pixels past the reach that are still refined, so the value is right where the ramp ends.
+const EDGE_MARGIN: f32 = 2.0;
 
 /// Alpha above which a pixel belongs to the layer's shape (half an 8-bit step).
 const INSIDE_EPS: f32 = 0.5 / 255.0;
@@ -930,8 +1458,10 @@ pub fn bevel_geom(b: &Bevel) -> BevelGeom {
 }
 
 /// Bevel height map in `0..=1`. Smooth: the shape blurred by two box passes of the bevel
-/// width. Chisel: linear ramps of the exact distance to the edge (size wide; emboss styles
-/// straddle the edge), slightly blurred for Chisel Soft. Soften blurs the result.
+/// width. Chisel: linear ramps of the distance to the edge (size wide; emboss styles straddle the
+/// edge), slightly blurred for Chisel Soft. The distance puts the edge by the anti-aliased
+/// coverage of its pixels ([`bevel_dist_inside`]), so a facet is planar at any angle. Soften blurs
+/// the result.
 fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, patterns: &PreparedPatterns<'_>) -> Map {
     let size = b.size.max(1.0);
     let mut h = if b.technique == BevelTechnique::Smooth {
@@ -939,7 +1469,8 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
         tent(&mut h, g.width);
         h
     } else {
-        let (din, dout) = (dist_inside(shape), dist_outside(shape));
+        let sharp = sharp_edges(shape);
+        let (din, dout) = (bevel_dist_inside(shape, &sharp, size), bevel_dist_outside(shape, &sharp, size));
         let mut h = Map::new(shape.w, shape.h, 0.0);
         for i in 0..h.v.len() {
             h.v[i] = bevel_chisel_h(g.paint, size, din[i], dout[i]);
@@ -1194,6 +1725,16 @@ pub(crate) fn build_maps_prepared(
 /// Far outside any shape (distance fill for cropped distance fields).
 const FAR: f32 = 1.0e9;
 
+/// Keep an exterior effect behind the layer's shape when Fill is partly or wholly
+/// transparent. The visible part beneath a fully opaque fill is already covered by the
+/// layer, so avoid attenuating anti-aliased edges twice in that case.
+fn knock_out_exterior(map: &mut Map, shape: &Map, fill_opacity: f32) {
+    let see_through = 1.0 - fill_opacity.clamp(0.0, 1.0);
+    for (coverage, alpha) in map.v.iter_mut().zip(&shape.v) {
+        *coverage *= 1.0 - alpha * see_through;
+    }
+}
+
 /// Composites `content` (the layer's own pixels over `big`, alpha already
 /// masked, clipped layers applied) plus its effects into `backdrop`.
 pub fn composite_with_effects(layer: &Layer, content: &Buffer, backdrop: &mut Buffer, maps: &FxMaps, layer_bounds: Rect, patterns: &[Pattern]) {
@@ -1255,17 +1796,18 @@ pub(crate) fn composite_with_effects_prepared(
                 // The layer hides the shadow beneath it only where its fill is see-through: at
                 // 100 % fill the layer covers it anyway (and anti-aliased edges are not
                 // attenuated twice), at 0 % the shape shows the bare backdrop.
-                let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
-                for (v, a) in m.v.iter_mut().zip(&shape.v) {
-                    *v *= 1.0 - a * see_through;
-                }
+                knock_out_exterior(&mut m, &shape, layer.fill_opacity);
             }
             paint_color(&mut work, &m, rgb(&s.color), s.common.blend, s.common.opacity);
         }
     }
     for (i, e) in rev() {
         if let Effect::OuterGlow(g) = e {
-            paint_glow(&mut work, &fx(i, 0), g, sb, anchor, big, patterns);
+            let mut m = fx(i, 0);
+            // The glow is behind the shape, not painted across its interior when Fill is 0 %.
+            // Preserve the existing anti-aliased edge when the fill is fully opaque.
+            knock_out_exterior(&mut m, &shape, layer.fill_opacity);
+            paint_glow(&mut work, &m, g, sb, anchor, big, patterns);
         }
     }
 
@@ -1551,10 +2093,14 @@ fn mix_premul(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// `glow_map`, `bevel_maps` and `build_maps`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldKind {
-    /// `dist_outside` of the shape: precise outer glows, bevels.
+    /// `dist_outside` of the shape: precise outer glows.
     Outside,
-    /// `dist_inside` of the shape: precise inner glows, bevels.
+    /// `dist_inside` of the shape: precise inner glows.
     Inside,
+    /// `bevel_dist_outside` of the shape: the outside distance of chiselled bevels.
+    BevelOutside,
+    /// `bevel_dist_inside` of the shape: the inside distance of chiselled bevels.
+    BevelInside,
     /// Chamfer distance outside the shape: outside strokes, and the spread of drop shadows and
     /// softer outer glows ([`dilate`]).
     StrokeOutside,
@@ -1566,12 +2112,15 @@ pub enum FieldKind {
     StrokeOutsideVector,
 }
 
-/// The `kind` distance field of the shape `alpha` (row-major `w × h`).
-pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize) -> Vec<f32> {
+/// The `kind` distance field of the shape `alpha` (row-major `w × h`). Values past `reach` pixels
+/// from the shape's edge are only meant to be large (the bevel fields skip refining them).
+pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize, reach: f32) -> Vec<f32> {
     let s = Map { w, h, v: alpha };
     match kind {
         FieldKind::Outside => dist_outside(&s),
         FieldKind::Inside => dist_inside(&s),
+        FieldKind::BevelOutside => bevel_dist_outside(&s, &sharp_edges(&s), reach),
+        FieldKind::BevelInside => bevel_dist_inside(&s, &sharp_edges(&s), reach),
         FieldKind::StrokeOutside => dist_outside_by(&s, Metric::Chamfer),
         FieldKind::ChokeInside => dist_outside_by(&s.map(|a| 1.0 - a), Metric::Chamfer),
         FieldKind::StrokeInside => dist_inside_by(&s, Metric::Chamfer),
@@ -1582,6 +2131,22 @@ pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs `f` with every parallel pass on this thread using `n` threads (1 = in order), whatever its size.
+    fn with_threads<R>(n: usize, f: impl FnOnce() -> R) -> R {
+        struct Restore(Option<usize>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                THREADS.with(|t| t.set(self.0));
+            }
+        }
+        let _restore = Restore(THREADS.with(|t| t.replace(Some(n))));
+        f()
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
 
     #[test]
     fn edt_is_exact() {
@@ -1798,6 +2363,425 @@ mod tests {
         let row = 39 + reach + 1; // last shape row + reach + 1: height 0, neighbour above raised
         assert!(m[1].v[row * 60 + 30] > 0.0, "{}", m[1].v[row * 60 + 30]);
         assert_eq!(m[1].v[(row + 1) * 60 + 30], 0.0);
+    }
+
+    /// A `len` x `wid` bar through the middle of a `w` x `h` map at `deg` degrees, anti-aliased by
+    /// 16 x 16 supersampling (the coverage a scanline rasteriser gives).
+    fn aa_bar(w: usize, h: usize, deg: f32, len: f32, wid: f32) -> Map {
+        let (sn, cs) = deg.to_radians().sin_cos();
+        let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+        let mut m = Map::new(w, h, 0.0);
+        const N: usize = 16;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hit = 0;
+                for sy in 0..N {
+                    for sx in 0..N {
+                        let (px, py) = (x as f32 + (sx as f32 + 0.5) / N as f32 - cx, y as f32 + (sy as f32 + 0.5) / N as f32 - cy);
+                        let (u, v) = (px * cs + py * sn, -px * sn + py * cs);
+                        hit += usize::from(u.abs() <= len / 2.0 && v.abs() <= wid / 2.0);
+                    }
+                }
+                m.v[y * w + x] = hit as f32 / (N * N) as f32;
+            }
+        }
+        m
+    }
+
+    /// Ripple and bias of a distance field on an `aa_bar` (`inside` or outside it): the worst
+    /// standard deviation of the error among pixels at the same true distance from a long edge
+    /// (0.5 px bins, 0.6..8 px, away from the ends), and the worst mean error of a bin. A constant
+    /// offset is no ripple: only a field that varies along the edge shades in stripes.
+    fn bar_ripple(f: &[f32], w: usize, h: usize, deg: f32, wid: f32, inside: bool) -> (f32, f32) {
+        let (sn, cs) = deg.to_radians().sin_cos();
+        let mut bins: Vec<Vec<f32>> = vec![Vec::new(); 16];
+        for y in 0..h {
+            for x in 0..w {
+                let (px, py) = (x as f32 + 0.5 - w as f32 / 2.0, y as f32 + 0.5 - h as f32 / 2.0);
+                let (u, v) = (px * cs + py * sn, -px * sn + py * cs);
+                let truth = if inside { wid / 2.0 - v.abs() } else { v.abs() - wid / 2.0 };
+                if u.abs() < 40.0 && (0.6..8.0).contains(&truth) {
+                    bins[(truth * 2.0) as usize].push(f[y * w + x] - truth);
+                }
+            }
+        }
+        let (mut ripple, mut bias) = (0.0f32, 0.0f32);
+        for b in bins.iter().filter(|b| b.len() > 8) {
+            let mean = b.iter().sum::<f32>() / b.len() as f32;
+            let sd = (b.iter().map(|e| (e - mean) * (e - mean)).sum::<f32>() / b.len() as f32).sqrt();
+            ripple = ripple.max(sd);
+            bias = bias.max(mean.abs());
+        }
+        (ripple, bias)
+    }
+
+    /// The worst standard deviation of the chisel shading (highlight minus shadow) along lines
+    /// parallel to an `aa_bar` 2..6 px in from its edges, the way Issue #1926 measured stripes.
+    fn bar_shade_ripple(deg: f32, light: f32) -> f32 {
+        let (w, h) = (220usize, 220usize);
+        let bar = aa_bar(w, h, deg, 150.0, 16.0);
+        let mut b = bevel_of(BevelStyle::InnerBevel, BevelTechnique::ChiselHard);
+        (b.size, b.depth, b.angle, b.altitude) = (8.0, 2.2, light, 32.0);
+        let (m, _) = bevel_maps(&bar, &b, &GlobalLight::default(), &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES));
+        let (sn, cs) = deg.to_radians().sin_cos();
+        let mut worst = 0.0f32;
+        for o in [-6.0f32, -5.0, -4.0, -3.0, -2.0, 2.0, 3.0, 4.0, 5.0, 6.0] {
+            let line: Vec<f32> = (-60..=60)
+                .map(|k| {
+                    let t = k as f32 * 0.5;
+                    let (x, y) = (w as f32 / 2.0 + t * cs - o * sn, h as f32 / 2.0 + t * sn + o * cs);
+                    let i = y.floor() as usize * w + x.floor() as usize;
+                    m[0].v[i] - m[1].v[i]
+                })
+                .collect();
+            let mean = line.iter().sum::<f32>() / line.len() as f32;
+            worst = worst.max((line.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / line.len() as f32).sqrt());
+        }
+        worst
+    }
+
+    /// Coverage of a unit pixel by the half plane `n . p + s >= 0` (`p` from the pixel's centre),
+    /// by 64 x 64 supersampling.
+    fn half_plane_coverage(n: [f32; 2], s: f32) -> f32 {
+        const N: usize = 64;
+        let mut hit = 0;
+        for y in 0..N {
+            for x in 0..N {
+                let (px, py) = ((x as f32 + 0.5) / N as f32 - 0.5, (y as f32 + 0.5) / N as f32 - 0.5);
+                hit += usize::from(n[0] * px + n[1] * py + s >= 0.0);
+            }
+        }
+        hit as f32 / (N * N) as f32
+    }
+
+    #[test]
+    fn edge_offset_places_a_straight_edge_by_its_coverage() {
+        for step in 0..=12 {
+            let (sn, cs) = (step as f32 * 7.5).to_radians().sin_cos();
+            for k in -12..=12 {
+                let s = k as f32 * 0.05;
+                let a = half_plane_coverage([cs, sn], s);
+                // Where the edge only just touches the pixel the coverage hardly moves with it.
+                if !(0.03..=0.97).contains(&a) {
+                    continue;
+                }
+                let got = edge_offset([cs, sn], a);
+                assert!((got - s).abs() < 0.03, "{}deg s {s}: coverage {a} gave {got}", step as f32 * 7.5);
+            }
+        }
+        // Axis-aligned edges keep `alpha - 1/2`; a pixel no coverage says anything about is 0.
+        assert!((edge_offset([1.0, 0.0], 0.25) + 0.25).abs() < 1e-6);
+        assert!((edge_offset([0.0, 1.0], 0.9) - 0.4).abs() < 1e-6);
+        assert_eq!(edge_offset([0.6, 0.8], f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn bevel_distances_equal_the_plain_ones_without_anti_aliasing() {
+        // Hard edges (no partly covered pixel) and soft ramps (no sharp one) keep the plain fields.
+        let (w, h) = (96usize, 80usize);
+        let mut maps = Vec::new();
+        for kind in 0..4 {
+            let mut m = Map::new(w, h, 0.0);
+            let mut seed = 12345u32;
+            for y in 0..h {
+                for x in 0..w {
+                    let (dx, dy) = (x as f32 - 48.0, y as f32 - 40.0);
+                    m.v[y * w + x] = match kind {
+                        0 => f32::from((50.0..90.0).contains(&(x as f32 * 0.6 + y as f32))),
+                        1 => f32::from(dx * dx + dy * dy < 30.0 * 30.0),
+                        2 => {
+                            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                            f32::from(seed >> 28 < 5 && x > 10 && x < 80)
+                        }
+                        _ => ((20.0 - (dx * dx + dy * dy).sqrt()) / 8.0).clamp(0.0, 1.0),
+                    };
+                }
+            }
+            maps.push(m);
+        }
+        for (i, m) in maps.iter().enumerate() {
+            let sharp = sharp_edges(m);
+            assert!(sharp.is_empty(), "map {i} has no anti-aliased edge");
+            assert_eq!(bevel_dist_inside(m, &sharp, 1e9), dist_inside(m), "inside, map {i}");
+            assert_eq!(bevel_dist_outside(m, &sharp, 1e9), dist_outside(m), "outside, map {i}");
+        }
+    }
+
+    #[test]
+    fn chisel_distance_has_no_ripple_along_oblique_edges() {
+        // The plain distance to a pixel's centre ripples with the staircase of an oblique edge (the
+        // stripes of Issue #1926); at 0 and 45 degrees the staircase is regular and it does not.
+        let (w, h) = (160, 160);
+        for deg in [0.0f32, 30.0, 45.0, 60.0, 75.0, 120.0, 150.0] {
+            let bar = aa_bar(w, h, deg, 120.0, 40.0);
+            let sharp = sharp_edges(&bar);
+            let inside = bar_ripple(&bevel_dist_inside(&bar, &sharp, 40.0), w, h, deg, 40.0, true);
+            let outside = bar_ripple(&bevel_dist_outside(&bar, &sharp, 40.0), w, h, deg, 40.0, false);
+            for (what, (ripple, bias)) in [("inside", inside), ("outside", outside)] {
+                assert!(ripple < 0.008 && bias < 0.01, "{deg} deg {what}: ripple {ripple}, bias {bias}");
+            }
+        }
+        let plain = aa_bar(w, h, 60.0, 120.0, 40.0);
+        let (ripple, _) = bar_ripple(&dist_inside(&plain), w, h, 60.0, 40.0, true);
+        assert!(ripple > 0.1, "the plain field still ripples ({ripple}), so the test above means something");
+    }
+
+    #[test]
+    fn edge_normals_follow_straight_edges_to_a_fraction_of_a_degree() {
+        // The 3x3 gradient is 1-3 degrees off and the error is systematic; the line through the edge
+        // points of the pixels around one is not.
+        let (w, h, wid) = (160usize, 160usize, 40.0f32);
+        for deg in [30.0f32, 60.0, 75.0, 120.0, 150.0] {
+            let sharp = sharp_edges(&aa_bar(w, h, deg, 120.0, wid));
+            let (sn, cs) = deg.to_radians().sin_cos();
+            let (mut worst, mut seen) = (0.0f32, 0);
+            for (i, e) in sharp.iter() {
+                let (px, py) = ((i % w) as f32 + 0.5 - w as f32 / 2.0, (i / w) as f32 + 0.5 - h as f32 / 2.0);
+                let (u, v) = (px * cs + py * sn, -px * sn + py * cs);
+                if u.abs() > 40.0 || (wid / 2.0 - v.abs()).abs() > 1.5 {
+                    continue;
+                }
+                let into = if v > 0.0 { [sn, -cs] } else { [-sn, cs] };
+                worst = worst.max((e.normal[0] * into[0] + e.normal[1] * into[1]).clamp(-1.0, 1.0).acos().to_degrees());
+                seen += 1;
+            }
+            assert!(seen > 100 && worst < 0.6, "{deg} deg: {seen} edge pixels, normal off by up to {worst} deg");
+        }
+    }
+
+    #[test]
+    fn chisel_distance_is_close_on_round_shapes() {
+        // Circles (a hard stretch of edge at each pole, where the edge lies on a pixel boundary) and
+        // rounded rectangles on whole pixels (straight hard edges joined to anti-aliased arcs): the
+        // distance to the sharp pixels alone is up to 0.3 px too long there, so the plain distance
+        // caps it. Errors are against the exact distance to the shape, 0.6..8 px from its edge.
+        let worst = |f: &[f32], w: usize, h: usize, sdf: &dyn Fn(f32, f32) -> f32, inside: bool| {
+            let mut mx = 0.0f32;
+            for y in 0..h {
+                for x in 0..w {
+                    let t = sdf(x as f32 + 0.5, y as f32 + 0.5);
+                    let truth = if inside { -t } else { t };
+                    if (0.6..8.0).contains(&truth) {
+                        mx = mx.max((f[y * w + x] - truth).abs());
+                    }
+                }
+            }
+            mx
+        };
+        for r in [20.0f32, 40.0, 70.0] {
+            let (w, h) = (200usize, 200usize);
+            let m = aa_disc(w, h, r);
+            let sharp = sharp_edges(&m);
+            let sdf = |x: f32, y: f32| (x - 100.0).hypot(y - 100.0) - r;
+            let (i, o) = (worst(&bevel_dist_inside(&m, &sharp, 12.0), w, h, &sdf, true), worst(&bevel_dist_outside(&m, &sharp, 12.0), w, h, &sdf, false));
+            assert!(i < 0.05 && o < 0.07, "disc {r}: inside off by {i}, outside by {o}");
+        }
+        for rad in [6.0f32, 12.0, 24.0] {
+            let (w, h) = (200usize, 160usize);
+            let m = aa_round_rect(w, h, 20.0, 20.0, 180.0, 140.0, rad);
+            let sharp = sharp_edges(&m);
+            let sdf = |x: f32, y: f32| {
+                let (qx, qy) = ((x - 100.0).abs() - (80.0 - rad), (y - 80.0).abs() - (60.0 - rad));
+                qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad
+            };
+            let (i, o) = (worst(&bevel_dist_inside(&m, &sharp, 12.0), w, h, &sdf, true), worst(&bevel_dist_outside(&m, &sharp, 12.0), w, h, &sdf, false));
+            assert!(i < 0.08 && o < 0.2, "rounded rect, radius {rad}: inside off by {i}, outside by {o}");
+        }
+    }
+
+    #[test]
+    fn chisel_facets_are_flat_along_oblique_edges() {
+        // Issue #1926: the facets of a chiselled bar at 30, 60, 120, 150 degrees were striped.
+        for deg in [0.0f32, 30.0, 45.0, 60.0, 75.0, 120.0, 150.0] {
+            for light in [-90.0f32, 0.0, 45.0, 120.0] {
+                let ripple = bar_shade_ripple(deg, light);
+                assert!(ripple < 0.03, "{deg} deg bar, light {light}: shading ripple {ripple}");
+            }
+        }
+    }
+
+    #[test]
+    fn bevel_distances_survive_degenerate_maps() {
+        let cases: [(usize, usize, f32); 7] = [(0, 0, 0.0), (1, 1, 0.5), (1, 1, 1.0), (2, 2, 0.5), (3, 1, 0.3), (5, 5, f32::NAN), (4, 4, 1.0)];
+        for (w, h, a) in cases {
+            let m = Map::new(w, h, a);
+            let sharp = sharp_edges(&m);
+            for reach in [0.0, 8.0, f32::NAN, f32::INFINITY, -3.0] {
+                assert_eq!(bevel_dist_inside(&m, &sharp, reach).len(), w * h);
+                assert_eq!(bevel_dist_outside(&m, &sharp, reach).len(), w * h);
+            }
+        }
+        // A single partly covered pixel in an empty map, and an edge on the map's border.
+        let mut m = Map::new(5, 5, 0.0);
+        m.v[12] = 0.4;
+        let _ = (bevel_dist_inside(&m, &sharp_edges(&m), 4.0), bevel_dist_outside(&m, &sharp_edges(&m), 4.0));
+        let mut m = Map::new(8, 8, 0.0);
+        for y in 0..8 {
+            m.v[y * 8 + 7] = 1.0;
+            m.v[y * 8 + 6] = 0.5;
+        }
+        let _ = (bevel_dist_inside(&m, &sharp_edges(&m), 4.0), bevel_dist_outside(&m, &sharp_edges(&m), 4.0));
+    }
+
+    #[test]
+    fn par_units_visits_every_unit_once_with_its_own_slices() {
+        // Lengths that leave a short last unit, no second slice, units of different sizes, and nothing at all.
+        let cases: [(usize, usize, usize, usize); 8] =
+            [(0, 3, 0, 0), (1, 1, 1, 1), (10, 3, 0, 0), (64, 8, 64, 8), (65, 8, 13, 1), (200, 1, 200, 1), (7, 7, 14, 2), (9, 4, 0, 5)];
+        for (la, ua, lb, ub) in cases {
+            for threads in [1, 2, 3, 8, 64] {
+                let (mut a, mut b) = (vec![0u32; la], vec![0u32; lb]);
+                let calls = std::sync::atomic::AtomicUsize::new(0);
+                with_threads(threads, || {
+                    par_units(
+                        la,
+                        &mut a,
+                        ua,
+                        &mut b,
+                        ub,
+                        || (),
+                        |_, u, sa, sb| {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            assert!(sa.len() <= ua && sb.len() <= ub);
+                            for (k, v) in sa.iter_mut().enumerate() {
+                                *v = (u * ua + k) as u32 + 1;
+                            }
+                            for (k, v) in sb.iter_mut().enumerate() {
+                                *v = (u * ub + k) as u32 + 1;
+                            }
+                        },
+                    );
+                });
+                assert_eq!(calls.into_inner(), la.div_ceil(ua), "{la} {ua} {lb} {ub} on {threads}");
+                assert!(a.iter().enumerate().all(|(i, &v)| v == i as u32 + 1), "a: {la} {ua} {lb} {ub} on {threads}");
+                // `b` is written for the units that exist in `a` and no further.
+                let written = (la.div_ceil(ua) * ub).min(lb);
+                assert!(b.iter().enumerate().all(|(i, &v)| v == if i < written { i as u32 + 1 } else { 0 }), "b: {la} {ua} {lb} {ub} on {threads}");
+            }
+        }
+        // A unit size of 0 does nothing.
+        let mut a = vec![1u8; 4];
+        par_units(4, &mut a, 0, &mut [] as &mut [()], 0, || (), |_, _, _, _| panic!("no units"));
+    }
+
+    #[test]
+    fn nearest_distances_do_not_depend_on_the_threads() {
+        // Sizes that do not divide into the thread groups, lines of 1 pixel, and a noisy map where
+        // many pixels are equally far from two seeds (the nearest one must resolve the same way).
+        for (w, h) in [(37usize, 23usize), (1, 40), (40, 1), (2, 2), (101, 3), (64, 64)] {
+            let mut seed = 7u32;
+            let inside: Vec<bool> = (0..w * h)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (seed >> 24).is_multiple_of(11)
+                })
+                .collect();
+            let (d1, n1) = with_threads(1, || edt_nearest(&inside, w, h));
+            for threads in [2, 3, 8] {
+                let (d, n) = with_threads(threads, || edt_nearest(&inside, w, h));
+                assert_eq!((bits(&d), n), (bits(&d1), n1.clone()), "{w}x{h} on {threads} threads");
+            }
+            // And the nearest pixel is a seed at exactly that distance.
+            for (i, (&d, &q)) in d1.iter().zip(&n1).enumerate() {
+                if inside.iter().any(|&b| b) {
+                    let (dx, dy) = ((i % w) as f32 - (q as usize % w) as f32, (i / w) as f32 - (q as usize / w) as f32);
+                    assert!(inside[q as usize] && (dx.hypot(dy) - d).abs() < 1e-3, "{w}x{h} at {i}: {d} vs seed {q}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nearest_distances_survive_degenerate_sizes() {
+        // The slice does not match the size, or there is nothing: no panic, and a result per input pixel.
+        for (len, w, h) in [(0usize, 0usize, 0usize), (0, 5, 0), (0, 0, 5), (6, 2, 2), (6, 4, 2), (1, 0, 1)] {
+            let (d, n) = edt_nearest(&vec![true; len], w, h);
+            assert_eq!((d.len(), n.len()), (len, len), "{len} px as {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn chisel_fields_do_not_depend_on_the_threads() {
+        // Edge pixels at every angle, curves, patchy opacity and an edge along the border, on sizes that
+        // leave short last groups; one thread (in order) is the reference.
+        let mut maps = vec![
+            aa_disc(97, 83, 30.0),
+            aa_round_rect(131, 77, 9.0, 11.0, 120.0, 66.0, 14.0),
+            aa_bar(120, 120, 33.0, 100.0, 30.0),
+            aa_bar(90, 130, 60.0, 150.0, 25.0),
+        ];
+        let mut patchy = aa_disc(101, 101, 40.0);
+        for (i, v) in patchy.v.iter_mut().enumerate() {
+            if (i % 101 / 13 + i / 101 / 17) % 5 == 0 {
+                *v *= 0.6;
+            }
+        }
+        maps.push(patchy);
+        maps.push(aa_bar(64, 64, 40.0, 220.0, 30.0));
+        for (k, m) in maps.iter().enumerate() {
+            for reach in [3.0f32, 12.0] {
+                let one = with_threads(1, || (sharp_edges(m), distance_field_of(m, reach)));
+                for threads in [2, 5, 16] {
+                    let many = with_threads(threads, || (sharp_edges(m), distance_field_of(m, reach)));
+                    assert_eq!(one.0.slot, many.0.slot, "map {k} sharp slots on {threads} threads");
+                    let edges = |s: &SharpEdges| {
+                        s.pixels.iter().map(|p| (p.at, p.cov.to_bits(), p.edge.offset.to_bits(), p.edge.normal.map(f32::to_bits))).collect::<Vec<_>>()
+                    };
+                    assert_eq!(edges(&one.0), edges(&many.0), "map {k} sharp edges on {threads} threads");
+                    for (a, b) in one.1.iter().zip(&many.1) {
+                        assert_eq!(bits(a), bits(b), "map {k}, reach {reach} on {threads} threads");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The four fields that use the distance transform, of `m`.
+    fn distance_field_of(m: &Map, reach: f32) -> Vec<Vec<f32>> {
+        [FieldKind::Inside, FieldKind::Outside, FieldKind::BevelInside, FieldKind::BevelOutside]
+            .map(|k| distance_field(k, m.v.clone(), m.w, m.h, reach))
+            .to_vec()
+    }
+
+    fn aa_disc(w: usize, h: usize, r: f32) -> Map {
+        let mut m = Map::new(w, h, 0.0);
+        const N: usize = 16;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hit = 0;
+                for sy in 0..N {
+                    for sx in 0..N {
+                        let (px, py) = (x as f32 + (sx as f32 + 0.5) / N as f32 - w as f32 / 2.0, y as f32 + (sy as f32 + 0.5) / N as f32 - h as f32 / 2.0);
+                        hit += usize::from(px * px + py * py <= r * r);
+                    }
+                }
+                m.v[y * w + x] = hit as f32 / (N * N) as f32;
+            }
+        }
+        m
+    }
+
+    /// Integer-aligned rounded rectangle (x0..x1 x y0..y1, corner radius `rad`), anti-aliased by supersampling.
+    fn aa_round_rect(w: usize, h: usize, x0: f32, y0: f32, x1: f32, y1: f32, rad: f32) -> Map {
+        let sdf = |px: f32, py: f32| {
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let (qx, qy) = ((px - cx).abs() - ((x1 - x0) / 2.0 - rad), (py - cy).abs() - ((y1 - y0) / 2.0 - rad));
+            qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad
+        };
+        let mut m = Map::new(w, h, 0.0);
+        const N: usize = 16;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hit = 0;
+                for sy in 0..N {
+                    for sx in 0..N {
+                        hit += usize::from(sdf(x as f32 + (sx as f32 + 0.5) / N as f32, y as f32 + (sy as f32 + 0.5) / N as f32) <= 0.0);
+                    }
+                }
+                m.v[y * w + x] = hit as f32 / (N * N) as f32;
+            }
+        }
+        m
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use photocraft_doc::Document;
-use photocraft_engine::prefs::Unit;
+use photocraft_engine::prefs::{GuidesGridAndSlices, Unit};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -106,29 +106,39 @@ fn tick_step(zoom: f32) -> f64 {
     nice_step(60.0 / zoom.max(1e-4) as f64, true)
 }
 
+/// Grid spacing in document pixels. Percentages use each axis's own extent.
+pub(crate) fn grid_major_px(g: &GuidesGridAndSlices, dpi: f64, size: [f64; 2], ppi: f64) -> [f64; 2] {
+    size.map(|extent| g.major_px(dpi, extent, ppi))
+}
+
 /// View › Show › Grid, from Preferences › Guides, Grid & Slices (spacing, subdivisions, colour,
 /// style). Photoshop's default is a gridline every inch with 4 subdivisions.
 pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let g = &app.session.prefs().guides_grid_and_slices;
     let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-    let major = g.major_px(doc.resolution_dpi.max(1.0) as f64, doc.size.width as f64, ppi);
-    let minor = major / g.subdivisions.max(1) as f64;
-    let base = pref_color(&g.grid_color, Color32::from_gray(140));
     let (w, h) = (doc.size.width as f64, doc.size.height as f64);
-    for (step, alpha) in [(minor, 0.45f32), (major, 1.0)] {
-        if step * (xf.zoom as f64) < 6.0 || (alpha < 1.0 && g.subdivisions <= 1) {
+    let major = grid_major_px(g, doc.resolution_dpi.max(1.0) as f64, [w, h], ppi);
+    let minor = major.map(|step| step / g.subdivisions.max(1) as f64);
+    let base = pref_color(&g.grid_color, Color32::from_gray(140));
+    for (steps, alpha) in [(minor, 0.45f32), (major, 1.0)] {
+        if alpha < 1.0 && g.subdivisions <= 1 {
             continue;
         }
         let st = Stroke::new(1.0, base.gamma_multiply(alpha));
-        let mut x = step;
-        while x < w {
-            styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h as f32), st, g.grid_style);
-            x += step;
+        let [step_x, step_y] = steps;
+        if step_x * (xf.zoom as f64) >= 6.0 {
+            let mut x = step_x;
+            while x < w {
+                styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h as f32), st, g.grid_style);
+                x += step_x;
+            }
         }
-        let mut y = step;
-        while y < h {
-            styled_line(painter, xf.to_screen(0.0, y as f32), xf.to_screen(w as f32, y as f32), st, g.grid_style);
-            y += step;
+        if step_y * (xf.zoom as f64) >= 6.0 {
+            let mut y = step_y;
+            while y < h {
+                styled_line(painter, xf.to_screen(0.0, y as f32), xf.to_screen(w as f32, y as f32), st, g.grid_style);
+                y += step_y;
+            }
         }
     }
 }
@@ -170,7 +180,7 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
         return None;
     }
     let doc = &app.session.active()?.doc;
-    let tol = 4.0 / app.current_zoom().max(0.01) as f64;
+    let tol = 4.0 / app.point_zoom().max(0.01) as f64;
     for (i, g) in doc.guides.vertical.iter().enumerate() {
         if (*g as f64 - x).abs() <= tol {
             return Some((true, i));
@@ -312,6 +322,16 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentage_grid_spacing_uses_both_canvas_dimensions() {
+        let mut g = GuidesGridAndSlices { grid_unit: Unit::Percent, gridline_every: 20.0, subdivisions: 2, ..Default::default() };
+        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [256.0, 144.0]);
+        // Absolute units remain equal on both axes, irrespective of aspect ratio.
+        g.grid_unit = Unit::Pixels;
+        g.gridline_every = 100.0;
+        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [100.0, 100.0]);
+    }
 
     #[test]
     fn unit_steps_allow_fractions() {

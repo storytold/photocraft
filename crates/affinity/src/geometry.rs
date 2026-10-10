@@ -44,7 +44,7 @@ pub(crate) fn outline(r: &mut Reader, id: ObjId, class: Tag, world: Affine) -> O
                 }
             };
             let b = s.floats::<4>(box_owner, b"ShpB")?;
-            crate::shapes::shape(r, shape, b, world).map(|p| (p, false))
+            crate::shapes::shape(r, shape, b, world)
         }
     }
 }

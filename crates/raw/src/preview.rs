@@ -50,10 +50,9 @@ fn candidate(data: &[u8], offset: usize, len: usize) -> Option<Preview<'_>> {
 /// The largest embedded JPEG preview of a raw file (TIFF-based raws and RAF).
 pub fn embedded_preview(bytes: &[u8]) -> Option<Preview<'_>> {
     let mut found: Vec<Preview> = Vec::new();
-    if bytes.starts_with(b"FUJIFILMCCD-RAW") {
+    if bytes.starts_with(crate::raf::MAGIC) {
         // RAF header: big-endian JPEG offset and length at bytes 84 and 88.
-        let be = |o: usize| bytes.get(o..o + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
-        if let (Some(off), Some(len)) = (be(84), be(88)) {
+        if let Some((off, len)) = crate::raf::preview_range(bytes) {
             found.extend(candidate(bytes, off, len));
         }
     } else if let Some(t) = Tiff::new(bytes) {

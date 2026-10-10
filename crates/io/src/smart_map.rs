@@ -372,7 +372,7 @@ fn adjustments(p: &J, curves: bool) -> Result<Value, String> {
     let allowed: &[&str] =
         if curves { &["points", "red", "green", "blue"] } else { &["inBlack", "inWhite", "gamma", "outBlack", "outWhite", "red", "green", "blue"] };
     if let Some(k) = obj.keys().find(|k| !is_meta(k) && !allowed.contains(&k.as_str())) {
-        return Err(format!("setting `{k}` has no Photoshop equivalent"));
+        return Err(format!("setting `{k}` has no PSD equivalent"));
     }
     let mut list = Vec::new();
     for (code, key) in CHANNELS {
@@ -411,7 +411,7 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
     Ok(Some(match k.class {
         "GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm " => {
             if p.get("preserve").and_then(J::as_str).is_some_and(|s| s == "roundness") {
-                return Err("“preserve roundness” has no Photoshop equivalent".into());
+                return Err("“preserve roundness” has no PSD equivalent".into());
             }
             d.with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0)))
         }
@@ -434,7 +434,7 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
             }
             return Ok(None);
         }
-        _ => return Err("not a Photoshop filter".into()),
+        _ => return Err("not a recognized filter".into()),
     }))
 }
 
@@ -447,13 +447,13 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
         return Ok(d);
     }
     if f.command == UNSUPPORTED_FILTER {
-        let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its Photoshop data is missing")?;
-        let mut d = Descriptor::from_bytes(&raw).map_err(|e| format!("its Photoshop data is unreadable ({e})"))?;
+        let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its filter data is missing")?;
+        let mut d = Descriptor::from_bytes(&raw).map_err(|e| format!("its filter data is unreadable ({e})"))?;
         set(&mut d, "blendOptions", blend_options(f));
         set(&mut d, "enab", Value::Boolean(f.visible));
         return Ok(d);
     }
-    let k = known_by_command(&f.command).ok_or("Photoshop has no equivalent filter")?;
+    let k = known_by_command(&f.command).ok_or("this filter has no PSD equivalent")?;
     let fltr = fltr_for(k, &f.params)?;
     let mut d = Descriptor::new("filterFX")
         .with("Nm  ", Value::Text(UnicodeString::new_nul(k.name)))
@@ -597,13 +597,16 @@ fn pad4(mut v: Vec<u8>) -> Vec<u8> {
 }
 
 /// `SoLd` block data. With `template` (the imported descriptor) every key it has is kept and only
-/// the transform (when it moved), warp and filter stack are rewritten; otherwise a fresh
-/// descriptor in Photoshop's key order.
+/// the placed id (for a duplicate), transform (when it moved), warp and filter stack are rewritten;
+/// otherwise a fresh descriptor in Photoshop's key order.
 pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
     let warp = warp_desc(s.warp, s.size, warnings);
     let d = match template {
         Some(t) => {
             let mut d = t.clone();
+            if text_of(t, "placed").as_deref() != Some(s.placed) {
+                set(&mut d, "placed", Value::Text(UnicodeString::new_nul(s.placed)));
+            }
             if quad_moved(t, s) {
                 set(&mut d, "Trnf", quad(s));
                 set(&mut d, "nonAffineTransform", quad(s));
@@ -789,8 +792,7 @@ fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sa
     FilterEffectsItem { id: placed.to_string(), version: 1, rect, depth: u32::from(depth), max_channels: 24, slots: vec![None; 26], mask: Some((rect, plane)) }
 }
 
-/// A uuid-shaped id (8-4-4-4-12 hex digits) derived from `seed`: equal contents get equal ids, so
-/// identical smart objects share one embedded file, as Photoshop's instances do.
+/// A deterministic uuid-shaped id (8-4-4-4-12 hex digits) derived from `seed`.
 pub fn uuid_from(seed: &[u8]) -> String {
     let h = blake3::hash(seed);
     let x = to_hex(&h.as_bytes()[..16]);

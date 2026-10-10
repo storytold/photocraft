@@ -53,7 +53,7 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
     Size::new(nw as u32, nh as u32)
 }
 
-fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     let angle = f64::from(num(p, "angle", 0.0));
     if !angle.is_finite() || angle.abs() > 3600.0 {

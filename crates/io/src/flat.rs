@@ -51,7 +51,8 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
     image_to_document(name, &img.oriented(orientation)?)
 }
 
-/// A decoded flat image as a single-layer document.
+/// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
+/// normal "Layer 0" when it has transparency.
 pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
@@ -87,12 +88,18 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         }
     }
     s.prune();
-    let mut bg = Layer::new("Background", LayerContent::Raster(s));
-    if !img.layout().has_alpha() {
+    // As in Photoshop: an opaque image opens as the locked Background layer, one with
+    // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
+    // layer named "Layer 0", since a Background can't hold transparency.
+    let layer = if img.layout().has_alpha() {
+        Layer::new("Layer 0", LayerContent::Raster(s))
+    } else {
+        let mut bg = Layer::new("Background", LayerContent::Raster(s));
         bg.locks.transparency = true;
         bg.locks.position = true;
-    }
-    doc.layers.push(bg);
+        bg
+    };
+    doc.layers.push(layer);
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.clone();
@@ -316,7 +323,61 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
             warnings.push(format!("colours converted to sRGB; {format:?} can't embed the document's colour profile"));
         }
     }
+    if format == Format::Tga {
+        img = tga_alpha_channel(doc, img, &mut warnings)?;
+    }
     encode_image(&img, format, opts, warnings)
+}
+
+/// Photoshop's 32-bit Targa takes its alpha from the document's alpha channel, not from layer
+/// transparency: with exactly one alpha channel (spot channels don't count) an RGB file gets
+/// that channel's values as its alpha, and its colours are the composite over white. With two or
+/// more Photoshop writes no channel (an opaque alpha), so the image is left as it is. Grayscale
+/// Targas have no alpha in Photoshop either.
+fn tga_alpha_channel(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    if !img.layout().is_rgb() {
+        return Ok(img);
+    }
+    let mut alphas = doc.channels.iter().filter(|c| c.spot.is_none());
+    let channel = match (alphas.next(), alphas.next()) {
+        (Some(c), None) => c,
+        (Some(_), Some(_)) => {
+            warnings.push("Targa holds one alpha channel; with several, none was written (as in Photoshop)".into());
+            return Ok(img);
+        }
+        _ => return Ok(img),
+    };
+    let img = if img.layout().has_alpha() {
+        warnings.push("transparency composited over white; the alpha channel is the Targa's alpha".into());
+        matte_over_white(&img)?
+    } else {
+        img
+    };
+    let (w, h) = img.dimensions();
+    let canvas = doc.bounds();
+    if canvas.width() != w || canvas.height() != h {
+        return Err(IoError::Unsupported("the composite and the alpha channel differ in size".into()));
+    }
+    let sample = img.sample_type();
+    let row = img.data().len() / (h.max(1) as usize);
+    let band = (BAND_BYTES / row.max(1)).max(1);
+    let stride = channel.surface.channels().max(1);
+    let mut data = try_buffer(img.pixel_count(), ChannelLayout::Rgba.channels() * sample.bytes())?;
+    let mut y0 = canvas.y0;
+    for rows in img.data().chunks(row.max(1) * band) {
+        let n = (rows.len() / row.max(1)) as u32;
+        let y1 = y0.saturating_add(i32::try_from(n).unwrap_or(i32::MAX));
+        let alpha = channel.surface.read_region(Rect::new(canvas.x0, y0, canvas.x1, y1));
+        let rgb = Image::from_raw(w, n, img.layout(), sample, rows.to_vec())?.to_normalized();
+        let mut vals = Vec::with_capacity(rgb.len() / 3 * 4);
+        for (px, a) in rgb.as_chunks::<3>().0.iter().zip(alpha.chunks_exact(stride)) {
+            vals.extend_from_slice(px);
+            vals.push(a.first().copied().unwrap_or(1.0));
+        }
+        data.extend_from_slice(Image::from_normalized(w, n, ChannelLayout::Rgba, sample, &vals)?.data());
+        y0 = y1;
+    }
+    Ok(Image::from_raw(w, h, ChannelLayout::Rgba, sample, data)?.with_icc(img.icc.clone()).with_meta(img.meta.clone()))
 }
 
 /// Encodes a flat codec image as `format`: the fidelity warnings, then the codec. The end of

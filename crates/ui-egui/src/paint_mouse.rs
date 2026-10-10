@@ -34,6 +34,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
         None => BrushSettings { smoothing: first_smoothing(), ..current },
     };
+    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
+    // that preset with this tool's brush.
+    app.session.tools.current_preset = None;
     app.ui.brush_tool = tool;
 }
 
@@ -147,24 +150,43 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // end a rename in its rename bar.
     let key_close = app.ui.brush_picker_list.renaming.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
     let screen = ctx.content_rect();
-    // Keep the whole picker on screen: its last size, or about 320 × 480 points before it shows.
+    // The picker's content size: the one its grip was dragged to, or the one it last closed with
+    // (kept in egui's own memory, which outlives the app's), or the default. The frame's chrome
+    // sits around it, and together they keep the whole picker on screen.
     let id = egui::Id::new("canvas-brush-picker");
-    let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(324.0, 480.0), |r| r.size());
+    let size_id = id.with("content-size");
+    let content = app.ui.brush_picker_size.or_else(|| ctx.data_mut(|d| d.get_persisted::<[f32; 2]>(size_id))).map_or_else(
+        || egui::vec2(crate::brush_picker::DEFAULT_SIZE[0], crate::brush_picker::DEFAULT_SIZE[1]),
+        |s| crate::brush_picker::clamp_size(s, screen.size()),
+    );
+    // Remember it for the picker's next open, and — egui's memory being saved — the next run.
+    ctx.data_mut(|d| d.insert_persisted(size_id, [content.x, content.y]));
+    let style = ctx.global_style();
+    let size = content + style.spacing.menu_margin.sum() + egui::Vec2::splat(2.0 * style.visuals.window_stroke().width);
     let pos = egui::pos2(x.min(screen.right() - size.x).max(screen.left()), y.min(screen.bottom() - size.y).max(screen.top()));
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, list)).inner;
+        let frame = egui::Frame::popup(ui.style())
+            .show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content));
+        let picks = frame.inner;
+        // The corner grip resizes the picker, and the size is remembered across opens.
+        if let Some(new) = crate::brush_picker::resize_grip(ui, frame.response.rect, content) {
+            app.ui.brush_picker_size = Some([new.x, new.y]);
+        }
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
         let closes = picks.iter().any(crate::brush_picker::Pick::closes);
         crate::brush_picker::apply(app, ui.ctx(), picks);
         closes
     });
     // Not a press on a menu the picker opened (the gear, a preset's context menu), nor on the
-    // options-bar chip, whose click toggles the picker.
+    // options-bar chip, whose click toggles the picker. A menu floats over the picker in the
+    // foreground order, so the press is told apart by the layer it lands on, not by any popup
+    // just being open: a press elsewhere closes the picker in the same click that closes the menu.
     let press = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
-    let outside = press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !egui::Popup::is_any_open(ctx);
+    let on_menu = press.is_some_and(|p| ctx.layer_id_at(p).is_some_and(|l| l.order == egui::Order::Foreground));
+    let outside = press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !on_menu;
     if outside || key_close || area.inner {
         crate::brush_picker::close(&mut app.ui);
     }
@@ -273,9 +295,12 @@ mod tests {
         let strokes = strokes(&h);
         assert_eq!(strokes.len(), 2, "a Shift-click commits one connected stroke");
         let points = strokes[1]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 2, "a click has the previous endpoint and clicked endpoint");
+        // The previous endpoint, then the clicked one. While the button is held, smoothing that is
+        // still catching up repeats the clicked point with later times.
         assert_eq!(points[0][0], previous[0]);
         assert_eq!(points[0][1], previous[1]);
+        let clicked = &points[1];
+        assert!(points[1..].iter().all(|p| p[0] == clicked[0] && p[1] == clicked[1]), "{points:?}");
         assert!(alpha_at(&h, end + vec2(60.0, 40.0)) > 0.9, "the segment between the strokes is painted");
     }
 
@@ -415,15 +440,22 @@ mod tests {
         assert!(h.state().session.tools.presets.iter().any(|p| p.name == "Inky"), "renamed");
         assert!(h.state().ui.brush_picker_list.renaming.is_none());
         assert!(h.state().ui.brush_picker.is_some(), "Enter ended the rename, not the picker");
-        // The gear's view items switch the list between tips and names.
+        // The gear's boxes pick the card parts; the last one on can't be turned off.
         h.get_by_label("Brush Preset Options").click();
         h.run_steps(2);
-        h.get_by_label("List view").click();
+        h.get_by_label("Brush Tip").click();
         h.run_steps(2);
-        assert_eq!(h.state().ui.brush_picker_list.view, crate::brush_panel::BrushesView::List);
+        assert!(!h.state().ui.brush_picker_list.show_tip);
+        h.get_by_label("Brush Stroke").click();
+        h.run_steps(2);
+        h.get_by_label("Brush Name").click();
+        h.run_steps(2);
+        assert!(h.state().ui.brush_picker_list.show_name, "the last part on stays on");
+        assert!(!h.state().ui.brush_picker_list.show_stroke && !h.state().ui.brush_picker_list.show_tip);
         assert!(h.state().ui.brush_picker.is_some());
         // A rename left open goes with the picker.
-        h.state_mut().ui.brush_picker_list.renaming = Some(crate::brush_panel::Renaming { group: false, name: "Inky".into(), text: String::new() });
+        h.state_mut().ui.brush_picker_list.renaming =
+            Some(crate::brush_panel::Renaming { group: false, name: "Inky".into(), folder: Vec::new(), text: String::new() });
         h.run_steps(2);
         let far = c - vec2(300.0, 200.0);
         h.event(egui::Event::PointerMoved(far));

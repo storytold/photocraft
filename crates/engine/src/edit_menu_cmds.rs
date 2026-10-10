@@ -331,13 +331,14 @@ fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Delete and Fill Selection (#1286): Photoshop's one-click removal from the selection-tool
-/// context menu. Content-Aware Fill with its default settings into the layer, no dialog.
+/// context menu. Content-Aware Fill into the layer, no dialog, sampling as Edit › Fill does (the
+/// whole window, measured on Photoshop 25.4) with the default colour adaptation.
 fn delete_and_fill(s: &mut Session, _: &Value) -> Result<Value> {
-    content_aware_fill_as(s, &json!({}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
+    content_aware_fill_as(s, &json!({"sampling": "rectangular"}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
 }
 
 fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
-    use photocraft_algo::content_aware::{FillOptions, color_level, fill_with, rotation_level};
+    use photocraft_algo::content_aware::{FillOptions, auto_sampling, color_level, fill_with, rotation_level};
     let id = pixel_layer(s).map_err(EngineError::Other)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
@@ -346,14 +347,17 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     if hb.is_empty() {
         return Err(bad(cmd, "the selection is outside the canvas"));
     }
-    // The canvas is at most i32 wide, so the extent fits; saturate anyway rather than wrap (#963).
-    let ext = i32::try_from(hb.width().max(hb.height())).unwrap_or(i32::MAX);
     let sampling = str_or(p, "sampling", "auto").to_string();
     let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
     let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
+    // Photoshop's window (`content_aware::sampling_window`) for Auto and Rectangular; `margin`
+    // asks for a rectangle that far around the selection instead.
     let window = match sampling.as_str() {
-        "auto" => hb.inflate(crate::fill_cmds::sampling_margin(hb)),
-        "rectangular" => hb.inflate(int(p, "margin").map_or(ext.max(16), |m| m.clamp(0, 100_000) as i32)),
+        "auto" => crate::fill_cmds::sampling_window(hb, doc.bounds()),
+        "rectangular" => match int(p, "margin") {
+            Some(m) => hb.inflate(m.clamp(0, 100_000) as i32),
+            None => crate::fill_cmds::sampling_window(hb, doc.bounds()),
+        },
         "custom" => {
             let r = match (custom_rect, custom_mask.as_ref()) {
                 (Some(r), _) => r,
@@ -411,6 +415,11 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
                         };
                     }
                 }
+            }
+            ctx.check()?;
+            // Auto: only what looks like the selection's surroundings.
+            if sampling == "auto" {
+                source = auto_sampling(w, h, n, &img, &hole);
             }
             ctx.check()?;
             let filled = ctx.stage(0.05, 1.0, label, |ctl| fill_with(w, h, n, &img, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
@@ -893,7 +902,13 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 format: PRESET_FORMAT.into(),
                 version: 1,
                 brushes: if want("brushes") {
-                    s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect()
+                    let mut out: Vec<photocraft_paint::BrushPreset> =
+                        s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect();
+                    // The file embeds every bitmap: load the tips the preset store keeps (#1843).
+                    for b in &mut out {
+                        s.load_brush_tips(&mut b.brush).map_err(|e| bad(cmd, format!("brush preset `{}`: {e}", b.name)))?;
+                    }
+                    out
                 } else {
                     Vec::new()
                 },
@@ -913,7 +928,11 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (mut nb, mut ns) = (0, 0);
             if want("brushes") {
-                for b in file.brushes {
+                for mut b in file.brushes {
+                    // Nested folders as the commands bound them (a hand-edited file can't build an
+                    // absurd tree).
+                    b.folder.retain(|f| !f.trim().is_empty());
+                    b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
                     match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
                         None => s.tools.presets.push(b),

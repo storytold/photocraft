@@ -87,6 +87,7 @@ pub enum Tool {
     Hand,
     RotateView,
     Zoom,
+    Remove,
     SpotHealing,
     Healing,
     Patch,
@@ -117,7 +118,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 52] = [
+    pub const ALL: [Tool; 53] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -143,6 +144,7 @@ impl Tool {
         Tool::Hand,
         Tool::RotateView,
         Tool::Zoom,
+        Tool::Remove,
         Tool::SpotHealing,
         Tool::Healing,
         Tool::Patch,
@@ -201,6 +203,7 @@ impl Tool {
             Tool::Hand => "Hand Tool",
             Tool::RotateView => "Rotate View Tool",
             Tool::Zoom => "Zoom Tool",
+            Tool::Remove => "Remove Tool",
             Tool::SpotHealing => "Spot Healing Brush Tool",
             Tool::Healing => "Healing Brush Tool",
             Tool::Patch => "Patch Tool",
@@ -241,6 +244,7 @@ impl Tool {
                 | Tool::MixerBrush
                 | Tool::Eraser
                 | Tool::BackgroundEraser
+                | Tool::Remove
                 | Tool::SpotHealing
                 | Tool::Healing
                 | Tool::CloneStamp
@@ -270,7 +274,7 @@ impl Tool {
             Tool::Hand => 'H',
             Tool::RotateView => 'R',
             Tool::Zoom => 'Z',
-            Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
+            Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
@@ -336,6 +340,18 @@ pub struct Panels {
     /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_by_tab: Option<[bool; 3]>,
+    /// The right dock's icon rail. An app that embeds PhotoCraft's UI can hide it for a simpler view.
+    #[serde(default = "yes")]
+    pub rail: bool,
+    /// The title bar with the in-window menus. An app that embeds PhotoCraft's UI and draws its own
+    /// bar can hide it; the caption buttons of a custom title bar go with it.
+    #[serde(default = "yes")]
+    pub menu_bar: bool,
+    /// The Gradient tool's options-bar swatch opened the Gradient Editor window (`gradient_ui`).
+    /// Photoshop opens its Gradient Editor from that swatch; this is the same idea, drawn as a
+    /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
+    #[serde(default)]
+    pub gradient_editor: bool,
 }
 
 impl Default for Panels {
@@ -354,6 +370,9 @@ impl Default for Panels {
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
+            rail: true,
+            menu_bar: true,
+            gradient_editor: false,
         }
     }
 }
@@ -381,7 +400,9 @@ pub enum DialogKind {
 /// Per-document view (camera) state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
-    /// Screen pixels per document pixel.
+    /// Screen (device) pixels per document pixel: the user-facing zoom (`100%` is `1.0`).
+    /// Canvas geometry works in egui points and divides by `ctx.pixels_per_point`
+    /// (`PhotocraftApp::point_zoom`), so a scaled display doesn't magnify the image.
     pub zoom: f32,
     /// Document-space point shown at the canvas centre.
     pub center: [f32; 2],
@@ -457,6 +478,10 @@ pub struct ToolOptions {
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
     pub patch_mode: String,
+    /// Patch: Content-Aware instead of Normal, with its Structure 1..7 and Color 0..10.
+    pub patch_content_aware: bool,
+    pub patch_structure: f32,
+    pub patch_color: f32,
     /// Content-Aware Move: move | extend, Structure 1..7, Color 0..10.
     pub cam_mode: String,
     pub cam_structure: f32,
@@ -480,6 +505,8 @@ pub struct ToolOptions {
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
     pub stroke_width: f32,
+    #[serde(default)]
+    pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
@@ -504,6 +531,17 @@ pub struct ToolOptions {
     pub crop_ratio: String,
     #[serde(default = "yes")]
     pub crop_delete: bool,
+    /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
+    /// (Photoshop's defaults: Rule of Thirds, Auto Show Overlay). See `crop_overlay`.
+    #[serde(default)]
+    pub crop_overlay: crate::crop_overlay::CropOverlay,
+    #[serde(default)]
+    pub crop_overlay_show: crate::crop_overlay::OverlayShow,
+    #[serde(default)]
+    pub crop_overlay_orientation: u8,
+    /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
+    #[serde(default)]
+    pub crop_shield: crate::crop_shield::CropShield,
     /// Magic Eraser opacity % (tolerance, anti-alias, contiguous and sample-all are shared with the
     /// Magic Wand and Paint Bucket).
     pub magic_eraser_opacity: f32,
@@ -605,6 +643,9 @@ impl Default for ToolOptions {
             clone_sample: "current".into(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
+            patch_content_aware: false,
+            patch_structure: 4.0,
+            patch_color: 0.0,
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
@@ -620,6 +661,7 @@ impl Default for ToolOptions {
             vector_mode: "path".into(),
             shape_fill: true,
             stroke_width: 0.0,
+            shape_stroke: Default::default(),
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
@@ -631,6 +673,10 @@ impl Default for ToolOptions {
             move_show_transform: false,
             crop_ratio: String::new(),
             crop_delete: true,
+            crop_overlay: Default::default(),
+            crop_overlay_show: Default::default(),
+            crop_overlay_orientation: 0,
+            crop_shield: Default::default(),
             magic_eraser_opacity: 100.0,
             bg_sampling: "continuous".into(),
             bg_limits: "contiguous".into(),
@@ -812,6 +858,9 @@ pub struct UiState {
     /// Free Transform session, if any.
     #[serde(default)]
     pub transform: Option<TransformSession>,
+    /// Temporary symmetry-axis editing, exposed to automation but never restored from settings.
+    #[serde(default, skip_deserializing)]
+    pub symmetry_transform: Option<crate::symmetry_ui::Transform>,
     /// Clone Stamp / Healing source point (⌥-click) and the aligned offset once a stroke started.
     #[serde(default)]
     pub clone_source: Option<[f64; 2]>,
@@ -834,6 +883,10 @@ pub struct UiState {
     /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
     #[serde(default = "crate::brush_picker::list_state")]
     pub brush_picker_list: crate::brush_panel::BrushesPanelState,
+    /// The Brush Preset picker's content size, once its corner grip was dragged
+    /// ([`crate::brush_picker::DEFAULT_SIZE`] before that).
+    #[serde(default)]
+    pub brush_picker_size: Option<[f32; 2]>,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -851,6 +904,8 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    #[serde(default)]
+    pub stroke_editor: Option<crate::shape_stroke_ui::StrokeEditor>,
     /// Direct Selection tool: selected anchors and the drag in progress (#790).
     #[serde(default)]
     pub direct_selection: crate::direct_select::DirectSelection,
@@ -929,6 +984,10 @@ pub struct UiState {
     /// Crop tool rectangle being edited [x0, y0, x1, y1] (document coordinates).
     #[serde(default)]
     pub crop_rect: Option<[f64; 4]>,
+    /// The crop frame's turn in degrees, clockwise on screen about its centre (`crop_rect` is the
+    /// frame before the turn); 0 when upright. Committing passes it as `image.crop`'s `angle`.
+    #[serde(default)]
+    pub crop_angle: f64,
     pub next_id: u64,
     /// Last status message (errors from commands, hints).
     pub status: String,
@@ -941,6 +1000,9 @@ pub struct UiState {
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
+    /// A keyboard shortcut set found at first launch, waiting for Import / Don't Import.
+    #[serde(default)]
+    pub kys_offer: Option<crate::kys_import::Offer>,
     /// Documents (ids) whose slow full refresh on the CPU compositor has had its notice.
     #[serde(default)]
     pub slow_refresh_noticed: Vec<u64>,
@@ -962,10 +1024,12 @@ impl Default for UiState {
             type_transform: None,
             type_transform_pivot: None,
             transform: None,
+            symmetry_transform: None,
             mask_target: false,
             vector_mask_target: false,
             brush_picker: None,
             brush_picker_list: crate::brush_picker::list_state(),
+            brush_picker_size: None,
             layer_menu: None,
             canvas_tool_menu: None,
             brush_tool: Tool::Brush,
@@ -985,6 +1049,7 @@ impl Default for UiState {
             shell: Default::default(),
             layer_filter: Vec::new(),
             pen: None,
+            stroke_editor: None,
             direct_selection: Default::default(),
             selected_path: None,
             panels: Panels::default(),
@@ -1006,11 +1071,13 @@ impl Default for UiState {
             polygon_mode: String::new(),
             magnetic: Default::default(),
             crop_rect: None,
+            crop_angle: 0.0,
             next_id: 1,
             status: String::new(),
             status_error: false,
             notices: Vec::new(),
             gpu_fallback_notice: None,
+            kys_offer: None,
             slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
@@ -1065,7 +1132,10 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 52);
+        assert_eq!(Tool::ALL.len(), 53);
+        assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
+        assert_eq!(Tool::Remove.key(), 'J');
+        assert!(Tool::Remove.is_brushlike());
         assert_eq!(Tool::from_name("RotateView"), Some(Tool::RotateView));
         assert_eq!(Tool::from_name("Rotate View Tool"), Some(Tool::RotateView));
         assert_eq!(Tool::RotateView.key(), 'R');
