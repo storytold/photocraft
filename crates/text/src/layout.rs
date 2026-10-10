@@ -236,30 +236,41 @@ impl TextLayout {
 
     /// Byte offset of the caret nearest to a line-space point.
     pub fn hit_test_line(&self, x: f32, y: f32) -> usize {
-        let Some((li, line)) = self.lines.iter().enumerate().min_by(|a, b| {
-            let d = |l: &LineInfo| {
-                if y < l.baseline - l.ascent {
-                    l.baseline - l.ascent - y
-                } else if y > l.baseline + l.descent {
-                    y - l.baseline - l.descent
-                } else {
-                    0.0
-                }
-            };
-            d(a.1).total_cmp(&d(b.1))
-        }) else {
-            return 0;
+        self.nearest_line(y).map_or(0, |li| self.hit_in_line(li, x).0)
+    }
+
+    /// Index of the line nearest to a line-space y.
+    pub(crate) fn nearest_line(&self, y: f32) -> Option<usize> {
+        let d = |l: &LineInfo| {
+            if y < l.baseline - l.ascent {
+                l.baseline - l.ascent - y
+            } else if y > l.baseline + l.descent {
+                y - l.baseline - l.descent
+            } else {
+                0.0
+            }
         };
-        let mut best = (f32::MAX, line.range.end);
+        self.lines.iter().enumerate().min_by(|a, b| d(a.1).total_cmp(&d(b.1))).map(|(i, _)| i)
+    }
+
+    /// The caret nearest to line-space `x` on line `li`: (byte offset, upstream). Upstream means
+    /// the trailing edge of the cluster it was found on. A cluster under the point beats a
+    /// neighbour whose edge is as near, so a click where directions meet keeps the side clicked.
+    pub(crate) fn hit_in_line(&self, li: usize, x: f32) -> (usize, bool) {
+        let mut best = (f32::MAX, self.lines.get(li).map_or(0, |l| l.range.end), false);
         for c in self.clusters.iter().filter(|c| c.line == li) {
-            let mid = c.x + c.advance / 2.0;
-            let (before, after) = if c.rtl { (c.range.end, c.range.start) } else { (c.range.start, c.range.end) };
-            let (dist, off) = if x < mid { ((x - c.x).abs(), before) } else { ((x - c.x - c.advance).abs(), after) };
+            // A cluster's left edge is its start in LTR and its end (trailing edge) in RTL.
+            let (edge, off, upstream) = if x < c.x + c.advance / 2.0 {
+                (c.x, if c.rtl { c.range.end } else { c.range.start }, c.rtl)
+            } else {
+                (c.x + c.advance, if c.rtl { c.range.start } else { c.range.end }, !c.rtl)
+            };
+            let dist = if (c.x..c.x + c.advance).contains(&x) { -1.0 } else { (x - edge).abs() };
             if dist < best.0 {
-                best = (dist, off);
+                best = (dist, off, upstream);
             }
         }
-        best.1
+        (best.1, best.2)
     }
 
     /// The caret for a byte offset as a text-space segment (its two end points).
