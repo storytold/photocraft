@@ -112,8 +112,13 @@ fn cmyk_follows_the_working_space_not_a_formula() {
     assert!(black[3] > 60.0, "rich black uses K: {black:?}");
     // Saturated sRGB blue is outside the coated gamut; a muted blue is inside.
     assert!(sp.printable([0.0, 0.0, 1.0]).iter().zip([0.0, 0.0, 1.0]).any(|(a, b)| (a - b).abs() > 0.02));
+    assert!(sp.out_of_gamut([0.0, 0.0, 1.0]) && sp.out_of_gamut([0.0, 1.0, 0.0]));
     let muted = [0.4, 0.5, 0.6];
     assert!(close(&sp.printable(muted), &muted, 2.5 / 255.0));
+    // Black, white and greys print (the press's black is a little lighter, but close).
+    for c in [[0.0; 3], [1.0; 3], [0.5; 3], muted] {
+        assert!(!sp.out_of_gamut(c), "{c:?}");
+    }
 }
 
 #[test]
@@ -330,10 +335,184 @@ fn the_panel_menu_switches_modes() {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()),
     );
     h.run_steps(2);
-    for m in ColorPanelMode::ALL {
+    // The default last: with nothing saved yet, picking it has nothing to write.
+    for m in ColorPanelMode::ALL.into_iter().rev() {
         h.get_by_label(tl!(m.label())).click();
         h.run_steps(2);
         assert_eq!(h.state().ui.color_panel.mode, m);
         assert_eq!(h.state().session.prefs().dialogs.get(PREF_KEY), Some(&json!({"mode": m.key()})));
     }
+}
+
+fn bytes(h: &Harness<'static, PhotocraftApp>) -> [u8; 3] {
+    crate::panels::srgb_bytes(h.state().session.tools.foreground)
+}
+
+/// Click the readout's hex field (the last text field: Web Color Sliders have one per channel
+/// too), select its text and type `text` one key per frame.
+fn type_hex(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+    h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    for ch in text.chars() {
+        h.event(egui::Event::Text(ch.to_string()));
+        h.run_steps(1);
+    }
+}
+
+/// Type `text` into the `nth` spin button (number field) and leave it with Tab.
+fn type_number(h: &mut Harness<'static, PhotocraftApp>, nth: usize, text: &str) {
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(nth).unwrap().click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    for ch in text.chars() {
+        h.event(egui::Event::Text(ch.to_string()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+}
+
+/// Every mode keeps the editable hex readout, with or without the leading `#`.
+#[test]
+fn the_hex_readout_takes_a_typed_hex_in_every_mode() {
+    for mode in ColorPanelMode::ALL {
+        let mut h = harness(mode);
+        type_hex(&mut h, "003300");
+        assert_eq!(bytes(&h), [0x00, 0x33, 0x00], "{mode:?}");
+        type_hex(&mut h, "#ff8000");
+        assert_eq!(bytes(&h), [0xff, 0x80, 0x00], "{mode:?}");
+    }
+}
+
+/// An incomplete entry never changes the colour and the field snaps back when focus leaves.
+#[test]
+fn the_hex_readout_ignores_partial_input() {
+    let mut h = harness(ColorPanelMode::HueCube);
+    let before = h.state().session.tools.foreground;
+    type_hex(&mut h, "12zz");
+    assert_eq!(h.state().session.tools.foreground, before, "invalid input changes nothing");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("336699"), "snaps back to the colour");
+}
+
+/// The readout's R, G and B fields are editable too (in the field modes they are the only
+/// number fields).
+#[test]
+fn the_readout_rgb_fields_take_values() {
+    let mut h = harness(ColorPanelMode::HueCube);
+    h.state_mut().session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    h.run_steps(2);
+    type_number(&mut h, 1, "128");
+    assert_eq!(bytes(&h), [0x00, 0x80, 0x00]);
+}
+
+/// Black has no hue or saturation of its own: typing H, then S, then B must not reset the first
+/// two to 0 (which ended on white).
+#[test]
+fn hsb_fields_take_values_on_black() {
+    let mut h = harness(ColorPanelMode::Hsb);
+    h.state_mut().session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    h.run_steps(2);
+    for (field, typed) in [(0, "120"), (1, "100"), (2, "100")] {
+        type_number(&mut h, field, typed);
+    }
+    assert_eq!(bytes(&h), [0, 255, 0]);
+}
+
+/// A single click only picks the chip; a double-click opens the Color Picker on it. Where the
+/// chips overlap the foreground is on top.
+#[test]
+fn double_clicking_a_chip_opens_its_color_picker() {
+    let mut h = harness(ColorPanelMode::HueCube);
+    let r = last_rects(&h.ctx);
+    let (fg, bg) = (r.foreground.unwrap(), r.background.unwrap());
+    for (p, target) in [(bg.right_bottom() - vec2(2.0, 2.0), "background"), (bg.left_top() + vec2(2.0, 2.0), "foreground")] {
+        h.state_mut().ui.dialogs.clear();
+        // Past the last double-click, so this one isn't counted as a triple-click.
+        h.run_steps(40);
+        click(&mut h, p);
+        assert!(h.state().ui.dialogs.is_empty(), "a single click only picks the chip");
+        assert_eq!(h.state().ui.color_panel.background, target == "background");
+        click(&mut h, p);
+        let [d] = h.state().ui.dialogs.as_slice() else { panic!("one Color Picker") };
+        assert_eq!(d.fields.get("__colorPicker").and_then(serde_json::Value::as_str), Some(target));
+    }
+    assert!(fg.contains(bg.left_top() + vec2(2.0, 2.0)));
+}
+
+/// Black has no hue of its own, so each chip remembers the hue last picked for it.
+#[test]
+fn each_chip_keeps_its_own_hue_on_black() {
+    let mut h = harness(ColorPanelMode::HueCube);
+    h.state_mut().session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    h.state_mut().session.tools.background = [0.0, 0.0, 0.0, 1.0];
+    h.run_steps(2);
+    let r = last_rects(&h.ctx);
+    let (strip, field) = (r.strip.unwrap(), r.field.unwrap());
+    // The hue strip runs from red at the top through blue (a third down) and green (two thirds).
+    let green = Pos2::new(strip.center().x, strip.top() + strip.height() * 2.0 / 3.0);
+    let blue = Pos2::new(strip.center().x, strip.top() + strip.height() / 3.0);
+    click(&mut h, green);
+    click(&mut h, r.background.unwrap().right_bottom() - vec2(2.0, 2.0));
+    click(&mut h, blue);
+    click(&mut h, r.foreground.unwrap().left_top() + vec2(2.0, 2.0));
+    // The field's top-right: full saturation and brightness.
+    click(&mut h, Pos2::new(field.right() - 0.5, field.top() + 0.5));
+    let [r, g, b] = bytes(&h);
+    assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
+}
+
+/// Drawing never rewrites the colour: a round trip through HSB, CMYK or Lab isn't exact for every
+/// colour (#D8452E isn't), and a rewrite every frame would recolour selected type the moment it
+/// was selected. An edit does recolour it.
+#[test]
+fn idle_modes_leave_selected_type_alone_and_edits_recolour_it() {
+    for mode in ColorPanelMode::ALL {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let id = app.run("type.create", json!({"text": "Hello world", "size": 40, "x": 20, "y": 100, "color": "#ffffff"})).unwrap()["layer"].as_u64().unwrap();
+        app.run("tools.setColors", json!({"foreground": "#d8452e"})).unwrap();
+        let before = app.session.tools.foreground;
+        app.ui.tool = crate::state::Tool::Type;
+        app.ui.text_edit =
+            Some(crate::state::TextEdit { layer: id, caret: 0, anchor: 5, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
+        app.ui.color_panel.mode = mode;
+        let mut h = Harness::builder().with_size(vec2(300.0, 220.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        h.run_steps(4);
+        assert_eq!(h.state().session.tools.foreground, before, "{mode:?}");
+        let runs = |h: &Harness<'static, PhotocraftApp>| {
+            let st = h.state().session.active().unwrap();
+            let Some(photocraft_doc::LayerContent::Text(t)) = st.doc.layer(photocraft_doc::LayerId(id)).map(|l| &l.content) else { panic!("type layer") };
+            t.char_runs().len()
+        };
+        assert_eq!(runs(&h), 1, "{mode:?}: still one white run");
+        if mode == ColorPanelMode::Rgb {
+            let ramp = last_rects(&h.ctx).ramps[0];
+            click(&mut h, Pos2::new(ramp.left() + 0.5, ramp.center().y));
+            assert_eq!(runs(&h), 2, "the edit recolours the selected characters");
+        }
+    }
+}
+
+/// A mode set while the panel is hidden (the control channel) is remembered too, once the
+/// pointer is up.
+#[test]
+fn a_mode_set_by_automation_is_remembered() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let rev = app.session.prefs.rev();
+    app.ui.color_panel.mode = ColorPanelMode::HueCube;
+    persist(&mut app, &ctx);
+    assert_eq!(app.session.prefs.rev(), rev, "the default mode isn't written on a first launch");
+    app.ui.color_panel.mode = ColorPanelMode::Web;
+    persist(&mut app, &ctx);
+    assert_eq!(app.session.prefs().dialogs.get(PREF_KEY), Some(&json!({"mode": "web"})));
+    // Back to the default: saved, so it isn't lost to the stored Web.
+    app.ui.color_panel.mode = ColorPanelMode::HueCube;
+    persist(&mut app, &ctx);
+    assert_eq!(app.session.prefs().dialogs.get(PREF_KEY), Some(&json!({"mode": "hueCube"})));
 }

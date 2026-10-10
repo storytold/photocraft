@@ -15,6 +15,10 @@
 //! typed while the colour is unchanged (CMYK has more than one way to make a colour, and grey has
 //! no hue), instead of being recomputed from RGB every frame.
 //!
+//! Every mode shows the editable hex and R, G, B readout below its controls when the group has
+//! room for it. The foreground and background chips pick the colour the panel edits; a
+//! double-click opens the Color Picker on it.
+//!
 //! The mode and the edited chip are UI state (`UiState::color_panel`, drivable with `ui.set`).
 //! The mode is remembered across launches in the preferences (`dialogs["panel.color"]`).
 
@@ -140,14 +144,7 @@ pub struct Component {
     pub unit: &'static str,
 }
 
-/// Color panel UI state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ColorPanelState {
-    pub mode: ColorPanelMode,
-    /// The panel edits the background colour (its chip was clicked), not the foreground.
-    pub background: bool,
-}
+pub use crate::state::ColorPanelState;
 
 // ------------------------------------------------------------------ colour spaces
 
@@ -225,6 +222,15 @@ impl Spaces {
     /// The colour as printed in the working CMYK space and back (out-of-gamut check).
     pub fn printable(&self, rgb: [f32; 3]) -> [f32; 3] {
         self.cmyk_to_rgb(self.rgb_to_cmyk(rgb))
+    }
+
+    /// The colour can't be printed in the working CMYK space: its print round trip moves it by
+    /// more than View › Gamut Warning's ΔE76 threshold. Judged in Lab, not RGB, so the small
+    /// shift of a colour the press prints well (black through rich black) isn't flagged.
+    pub fn out_of_gamut(&self, rgb: [f32; 3]) -> bool {
+        let [a, b] = [rgb, self.printable(rgb)].map(|c| self.rgb_to_lab(c));
+        let de = a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f32>().sqrt();
+        de > photocraft_cms::gamut::DEFAULT_THRESHOLD
     }
 }
 
@@ -334,17 +340,17 @@ fn spaces(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Arc<Spaces>> {
 
 // ------------------------------------------------------------------ state
 
-/// Components as last typed or dragged, kept while the colour they made is unchanged.
+/// Components as last typed or dragged, kept while the colour they made is unchanged. Each chip
+/// has its own, so each keeps the hue last picked for it while it is grey.
 #[derive(Clone, Debug, Default)]
 struct Sticky {
     mode: Option<ColorPanelMode>,
-    background: bool,
     rgb: [f32; 3],
     comps: Vec<f32>,
 }
 
-fn sticky_id() -> egui::Id {
-    egui::Id::new("color-panel-sticky")
+fn sticky_id(background: bool) -> egui::Id {
+    egui::Id::new(("color-panel-sticky", background))
 }
 
 fn current(app: &PhotocraftApp) -> [f32; 3] {
@@ -352,20 +358,25 @@ fn current(app: &PhotocraftApp) -> [f32; 3] {
     [c[0], c[1], c[2]]
 }
 
+/// Set the edited colour. A new foreground also recolours selected type, as in Photoshop.
 fn set_current(app: &mut PhotocraftApp, rgb: [f32; 3]) {
-    let rgb = clamp3(rgb);
-    let c = if app.ui.color_panel.background { &mut app.session.tools.background } else { &mut app.session.tools.foreground };
-    *c = [rgb[0], rgb[1], rgb[2], 1.0];
+    let [r, g, b] = clamp3(rgb);
+    if app.ui.color_panel.background {
+        app.session.tools.background = [r, g, b, 1.0];
+    } else {
+        app.session.tools.foreground = [r, g, b, 1.0];
+        crate::type_tool::foreground_changed(app);
+    }
 }
 
 /// The components shown for the current colour: the remembered ones while it hasn't changed.
 fn components(app: &PhotocraftApp, ctx: &egui::Context, sp: &Spaces) -> Vec<f32> {
     let mode = app.ui.color_panel.mode;
     let rgb = current(app);
-    let s = ctx.data(|d| d.get_temp::<Sticky>(sticky_id())).unwrap_or_default();
+    let s = ctx.data(|d| d.get_temp::<Sticky>(sticky_id(app.ui.color_panel.background))).unwrap_or_default();
     let close = s.rgb.iter().zip(rgb).all(|(a, b)| (a - b).abs() < 1e-5);
     let same_kind = s.mode.is_some_and(|m| m.components() == mode.components());
-    if same_kind && s.background == app.ui.color_panel.background && close && s.comps.len() == mode.components().len() {
+    if same_kind && close && s.comps.len() == mode.components().len() {
         return s.comps;
     }
     let mut c = to_components(mode, rgb, sp);
@@ -385,21 +396,43 @@ fn commit(app: &mut PhotocraftApp, ctx: &egui::Context, sp: &Spaces, comps: Vec<
     let mode = app.ui.color_panel.mode;
     let rgb = from_components(mode, &comps, sp);
     set_current(app, rgb);
-    let sticky = Sticky { mode: Some(mode), background: app.ui.color_panel.background, rgb: current(app), comps };
-    ctx.data_mut(|d| d.insert_temp(sticky_id(), sticky));
+    remember(app, ctx, comps);
+}
+
+fn remember(app: &PhotocraftApp, ctx: &egui::Context, comps: Vec<f32>) {
+    let sticky = Sticky { mode: Some(app.ui.color_panel.mode), rgb: current(app), comps };
+    ctx.data_mut(|d| d.insert_temp(sticky_id(app.ui.color_panel.background), sticky));
+}
+
+/// Apply a colour picked as RGB (the spectrum, the readout): the mode's components are worked
+/// out from it, keeping the hue of a grey.
+fn pick(app: &mut PhotocraftApp, ctx: &egui::Context, sp: &Spaces, rgb: [f32; 3]) {
+    set_current(app, rgb);
+    let comps = components(app, ctx, sp);
+    remember(app, ctx, comps);
 }
 
 /// Switch mode (panel menu) and remember it in the preferences.
 pub fn set_mode(app: &mut PhotocraftApp, mode: ColorPanelMode) {
     app.ui.color_panel.mode = mode;
-    persist(app);
+    save_mode(app);
 }
 
 const PREF_KEY: &str = "panel.color";
 
-fn persist(app: &mut PhotocraftApp) {
+/// Remember the mode in the preferences once the pointer is up. Run every frame, so a mode set
+/// by the control channel while the panel is hidden is remembered too. Cheap: a string compare.
+pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !ctx.input(|i| i.pointer.any_down()) {
+        save_mode(app);
+    }
+}
+
+fn save_mode(app: &mut PhotocraftApp) {
     let key = app.ui.color_panel.mode.key();
-    if app.session.prefs().dialogs.get(PREF_KEY).and_then(|v| v.get("mode")).and_then(|v| v.as_str()) != Some(key) {
+    let saved = app.session.prefs().dialogs.get(PREF_KEY).and_then(|v| v.get("mode")).and_then(|v| v.as_str());
+    // Nothing saved means the default: a first launch doesn't write the preferences.
+    if saved.unwrap_or(ColorPanelMode::default().key()) != key {
         app.session.prefs.edit(|p| {
             p.dialogs.insert(PREF_KEY.into(), json!({"mode": key}));
         });
@@ -475,10 +508,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(tl!("Color management is unavailable."));
         return;
     };
-    persist(app);
     let mut rects = PanelRects { mode: Some(app.ui.color_panel.mode), ..Default::default() };
     let mode = app.ui.color_panel.mode;
-    // The controls shrink with the group (down to `min_room`); below that the panel scrolls.
+    // The controls shrink with the group (down to `min_room`); below that the panel scrolls. The
+    // readout goes below them once they have the room they look right in.
     let avail = ui.available_height();
     let need = min_room(mode);
     let mut draw = |app: &mut PhotocraftApp, ui: &mut egui::Ui, room: f32| {
@@ -488,7 +521,14 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             slider_modes(app, ui, &sp, &mut rects, room);
         }
     };
-    if avail.is_finite() && avail >= need {
+    // The readout folds onto a second line in a narrow dock: reserve what it took last frame.
+    let readout_h = ctx.data(|d| d.get_temp::<f32>(readout_id())).unwrap_or(READOUT) + 6.0;
+    if avail.is_finite() && avail >= comfortable_room(mode) + readout_h {
+        draw(app, ui, (avail - readout_h).min(MAX_ROOM));
+        ui.add_space(6.0);
+        let h = readout(app, ui, &sp);
+        ctx.data_mut(|d| d.insert_temp(readout_id(), h));
+    } else if avail.is_finite() && avail >= need {
         draw(app, ui, avail.min(MAX_ROOM));
     } else {
         egui::ScrollArea::vertical()
@@ -506,48 +546,67 @@ const FIELD_MIN: f32 = 56.0;
 const ROW_MIN: f32 = 18.0;
 const ROW_MAX: f32 = 26.0;
 const SPECTRUM: f32 = 24.0;
-const FOOTER: f32 = 24.0;
+/// The hex and R, G, B readout on one line.
+const READOUT: f32 = 24.0;
+const CHIPS_W: f32 = 38.0;
 
 /// The smallest height a mode's controls fit in without scrolling.
 fn min_room(mode: ColorPanelMode) -> f32 {
     if mode.is_field() { FIELD_MIN } else { ROW_MIN * mode.components().len() as f32 }
 }
 
-/// Foreground / background chips, Photoshop style: the edited one is framed. A click picks the
-/// chip the panel edits; a double-click opens the Color Picker.
+/// The height the controls need before the readout gets room below them: a field that reads as
+/// a field, or every slider plus the spectrum bar.
+fn comfortable_room(mode: ColorPanelMode) -> f32 {
+    if mode.is_field() { FIELD_MIN + 40.0 } else { ROW_MIN * mode.components().len() as f32 + SPECTRUM + 6.0 }
+}
+
+fn readout_id() -> egui::Id {
+    egui::Id::new("color-panel-readout-height")
+}
+
+/// The editable hex and R, G, B fields of the edited colour. Returns the height they took.
+fn readout(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces) -> f32 {
+    let bg = app.ui.color_panel.background;
+    let mut edited = if bg { app.session.tools.background } else { app.session.tools.foreground };
+    let resp = ui.horizontal(|ui| crate::panels::color_readout(ui, ui.id().with(("color-panel-readout", bg)), &mut edited));
+    if resp.inner {
+        pick(app, &ui.ctx().clone(), sp, [edited[0], edited[1], edited[2]]);
+    }
+    resp.response.rect.height()
+}
+
+/// The foreground and background chips. A click picks the colour the panel edits, framed; a
+/// double-click opens the Color Picker on it.
 fn chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32, rects: &mut PanelRects) {
     let t = Tokens::get(ui.ctx());
-    let (area, _) = ui.allocate_exact_size(vec2(36.0, height), Sense::hover());
-    let fg = Rect::from_min_size(area.min + vec2(1.0, 1.0), vec2(22.0, 22.0));
-    let bg = Rect::from_min_size(area.min + vec2(12.0, 12.0), vec2(22.0, 22.0));
-    let fresp = ui.interact(fg, ui.id().with("color-chip-fg"), Sense::click());
-    // The foreground chip sits on top, so the background one only takes clicks outside it.
-    let bresp = ui.interact(bg, ui.id().with("color-chip-bg"), Sense::click());
-    let bresp_hit = bresp.interact_pointer_pos().is_some_and(|p| !fg.contains(p));
+    let (area, _) = ui.allocate_exact_size(vec2(CHIPS_W, height), Sense::hover());
+    let bgr = Rect::from_min_size(area.min + vec2(13.0, 13.0), vec2(22.0, 22.0));
+    let fgr = Rect::from_min_size(area.min + vec2(3.0, 3.0), vec2(22.0, 22.0));
+    let frame = Stroke::new(1.0, t.text_dim);
+    let bg_active = app.ui.color_panel.background;
+    let [fg, bg] = [app.session.tools.foreground, app.session.tools.background].map(|c| c32([c[0], c[1], c[2]]));
     let p = ui.painter();
-    let frame = |r: Rect, on: bool| {
-        p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(20)), StrokeKind::Outside);
-        p.rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.0, if on { t.text } else { Color32::from_gray(140) }), StrokeKind::Outside);
-    };
-    let bgc = app.session.tools.background;
-    let fgc = app.session.tools.foreground;
-    p.rect_filled(bg, 1.0, c32([bgc[0], bgc[1], bgc[2]]));
-    frame(bg, app.ui.color_panel.background);
-    p.rect_filled(fg, 1.0, c32([fgc[0], fgc[1], fgc[2]]));
-    frame(fg, !app.ui.color_panel.background);
-    rects.foreground = Some(fg);
-    rects.background = Some(bg);
-    if fresp.clicked() {
-        app.ui.color_panel.background = false;
-    } else if bresp.clicked() && bresp_hit {
-        app.ui.color_panel.background = true;
+    p.rect_filled(bgr, 2.0, bg);
+    p.rect_stroke(bgr, 2.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    if bg_active {
+        p.rect_stroke(bgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
     }
-    if fresp.double_clicked() {
-        crate::color_picker_ui::open(app, "foreground");
-    } else if bresp.double_clicked() && bresp_hit {
-        crate::color_picker_ui::open(app, "background");
+    p.rect_filled(fgr, 2.0, fg);
+    p.rect_stroke(fgr, 2.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Outside);
+    if !bg_active {
+        p.rect_stroke(fgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
     }
-    fresp.on_hover_text(tl!("Foreground color"));
+    rects.foreground = Some(fgr);
+    rects.background = Some(bgr);
+    // The foreground is on top, so it takes the clicks where the two overlap.
+    let bg_resp = ui.interact(bgr, ui.id().with("field-bg"), Sense::click());
+    let fg_resp = ui.interact(fgr, ui.id().with("field-fg"), Sense::click());
+    let picked = if fg_resp.clicked() { false } else { bg_resp.clicked() || bg_active };
+    app.ui.color_panel.background = picked;
+    if fg_resp.double_clicked() || bg_resp.double_clicked() {
+        crate::color_picker_ui::open(app, if picked { "background" } else { "foreground" });
+    }
 }
 
 /// Fill `rect` with a `n`×`n` grid of colours from `f(fx, fy)` (0–1 across and down).
@@ -612,9 +671,7 @@ fn field_modes(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &
     let mut hsb = components(app, &ctx, sp);
     hsb.resize(3, 0.0);
     let (h, s, b) = (hsb[0], hsb[1], hsb[2]);
-    // Room for the hex readout below the field when the group is tall enough.
-    let show_hex = room >= FIELD_MIN + FOOTER + 40.0;
-    let height = (room - if show_hex { FOOTER } else { 2.0 }).clamp(FIELD_MIN, 170.0);
+    let height = (room - 2.0).clamp(FIELD_MIN, 170.0);
     let mut edited: Option<[f32; 3]> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -742,16 +799,6 @@ fn field_modes(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &
     if let Some(e) = edited {
         commit(app, &ctx, sp, e.to_vec());
     }
-    if !show_hex {
-        return;
-    }
-    let rgb = current(app);
-    let [r, g, bb] = clamp3(rgb).map(|v| (v * 255.0).round() as u8);
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(format!("#{}", hex(rgb))).font(theme::mono(12.0)).color(t.text));
-        ui.label(egui::RichText::new(format!("R {r}  G {g}  B {bb}")).font(theme::mono(11.0)).color(t.text_faint));
-    });
 }
 
 fn slider_modes(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &mut PanelRects, room: f32) {
@@ -846,7 +893,8 @@ fn ramp_row(ui: &mut egui::Ui, mode: ColorPanelMode, comp: &Component, v: &mut f
         if mode == ColorPanelMode::Web {
             // Two hex digits per channel.
             let id = ui.id().with(("web-hex", comp.label));
-            let shown = format!("{:02X}", web_safe(*v) as u8);
+            // The colour's own value: only edits snap to the web-safe cube.
+            let shown = format!("{:02X}", v.clamp(0.0, 255.0).round() as u8);
             let mut text = ui.data(|d| d.get_temp::<String>(id)).filter(|_| ui.memory(|m| m.has_focus(id))).unwrap_or(shown);
             let fh = (row_h - 2.0).min(22.0);
             let r = ui.add_sized(
@@ -909,8 +957,8 @@ fn spectrum(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &mut
     let ctx = ui.ctx().clone();
     let rgb = current(app);
     let printable = sp.printable(rgb);
-    let out_of_gamut = rgb.iter().zip(printable).any(|(a, b)| (a - b).abs() > 2.5 / 255.0);
-    let mut pick: Option<[f32; 3]> = None;
+    let out_of_gamut = sp.out_of_gamut(rgb);
+    let mut picked: Option<[f32; 3]> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.spacing_mut().interact_size.y = SPECTRUM;
@@ -925,7 +973,7 @@ fn spectrum(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &mut
             p.rect_filled(sw, 0.0, c32(printable));
             p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
             if wresp.clicked() {
-                pick = Some(printable);
+                picked = Some(printable);
             }
             wresp.on_hover_text(tl!("Out of gamut for printing: click to use the closest printable color"));
         }
@@ -962,7 +1010,7 @@ fn spectrum(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &mut
         if (resp.dragged() || resp.clicked())
             && let Some(q) = resp.interact_pointer_pos()
         {
-            pick = Some(if q.x >= spec.right() {
+            picked = Some(if q.x >= spec.right() {
                 if q.y < bar.center().y { [1.0; 3] } else { [0.0; 3] }
             } else {
                 let fx = ((q.x - spec.left()) / spec.width()).clamp(0.0, 1.0);
@@ -972,9 +1020,8 @@ fn spectrum(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: &mut
             });
         }
     });
-    if let Some(c) = pick {
-        set_current(app, c);
-        ctx.data_mut(|d| d.remove::<Sticky>(sticky_id()));
+    if let Some(c) = picked {
+        pick(app, &ctx, sp, c);
     }
 }
 

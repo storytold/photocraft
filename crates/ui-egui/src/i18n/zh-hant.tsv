@@ -2383,3 +2383,17 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+
+# Color panel modes (#294)
+	Hue Cube	色相立方體
+	Brightness Cube	亮度立方體
+	Color Wheel	色輪
+	Grayscale Sliders	灰階滑桿
+	RGB Sliders	RGB 滑桿
+	HSB Sliders	HSB 滑桿
+	CMYK Sliders	CMYK 滑桿
+	Lab Sliders	Lab 滑桿
+	Web Color Sliders	網頁色彩滑桿
+	Copy Color's Hex Code	拷貝顏色的十六進位碼
+	Color management is unavailable.	無法使用色彩管理。
+	Out of gamut for printing: click to use the closest printable color	超出列印色域：按一下以使用最接近的可列印顏色

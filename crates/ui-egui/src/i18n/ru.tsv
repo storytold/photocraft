@@ -2690,3 +2690,17 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+
+# Color panel modes (#294)
+	Hue Cube	Куб цветового тона
+	Brightness Cube	Куб яркости
+	Color Wheel	Цветовой круг
+	Grayscale Sliders	Ползунки оттенков серого
+	RGB Sliders	Ползунки RGB
+	HSB Sliders	Ползунки HSB
+	CMYK Sliders	Ползунки CMYK
+	Lab Sliders	Ползунки Lab
+	Web Color Sliders	Ползунки веб-цветов
+	Copy Color's Hex Code	Копировать шестнадцатеричный код цвета
+	Color management is unavailable.	Управление цветом недоступно.
+	Out of gamut for printing: click to use the closest printable color	Вне цветового охвата печати: щёлкните, чтобы взять ближайший печатаемый цвет

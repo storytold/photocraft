@@ -2812,3 +2812,17 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+
+# Color panel modes (#294)
+	Hue Cube	Kubus Hue
+	Brightness Cube	Kubus Kecerahan
+	Color Wheel	Roda Warna
+	Grayscale Sliders	Penggeser Grayscale
+	RGB Sliders	Penggeser RGB
+	HSB Sliders	Penggeser HSB
+	CMYK Sliders	Penggeser CMYK
+	Lab Sliders	Penggeser Lab
+	Web Color Sliders	Penggeser Warna Web
+	Copy Color's Hex Code	Salin Kode Hex Warna
+	Color management is unavailable.	Manajemen warna tidak tersedia.
+	Out of gamut for printing: click to use the closest printable color	Di luar gamut cetak: klik untuk memakai warna cetak terdekat

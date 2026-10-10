@@ -785,6 +785,16 @@ mod tests {
         }
     }
 
+    /// The Color panel's modes are dynamic labels too.
+    #[test]
+    fn color_panel_modes_are_translated() {
+        for lang in Lang::all().filter(|l| l.complete_menus()) {
+            for mode in crate::color_panel_ui::ColorPanelMode::ALL {
+                assert!(lang.0.catalog().plain(mode.label()).is_some(), "{} missing Color panel mode: {}", lang.code(), mode.label());
+            }
+        }
+    }
+
     #[test]
     fn layer_color_names_are_translated() {
         for lang in Lang::all().filter(|l| l.complete_menus()) {

@@ -3426,3 +3426,17 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+
+# Color panel modes (#294)
+	Hue Cube	色相キューブ
+	Brightness Cube	明るさキューブ
+	Color Wheel	カラーホイール
+	Grayscale Sliders	グレースケールスライダー
+	RGB Sliders	RGB スライダー
+	HSB Sliders	HSB スライダー
+	CMYK Sliders	CMYK スライダー
+	Lab Sliders	Lab スライダー
+	Web Color Sliders	Web カラースライダー
+	Copy Color's Hex Code	カラーの 16 進コードをコピー
+	Color management is unavailable.	カラーマネジメントを利用できません。
+	Out of gamut for printing: click to use the closest printable color	印刷の色域外です。クリックすると最も近い印刷可能な色を使用します

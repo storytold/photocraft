@@ -2406,3 +2406,17 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+
+# Color panel modes (#294)
+	Hue Cube	Krychle odstínu
+	Brightness Cube	Krychle jasu
+	Color Wheel	Barevné kolo
+	Grayscale Sliders	Jezdce stupňů šedi
+	RGB Sliders	Jezdce RGB
+	HSB Sliders	Jezdce HSB
+	CMYK Sliders	Jezdce CMYK
+	Lab Sliders	Jezdce Lab
+	Web Color Sliders	Jezdce webových barev
+	Copy Color's Hex Code	Kopírovat hexadecimální kód barvy
+	Color management is unavailable.	Správa barev není k dispozici.
+	Out of gamut for printing: click to use the closest printable color	Mimo tiskový gamut: klepnutím použijete nejbližší tisknutelnou barvu

@@ -2476,3 +2476,17 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+
+# Color panel modes (#294)
+	Hue Cube	Cubo tonalità
+	Brightness Cube	Cubo luminosità
+	Color Wheel	Ruota dei colori
+	Grayscale Sliders	Cursori scala di grigio
+	RGB Sliders	Cursori RGB
+	HSB Sliders	Cursori HSB
+	CMYK Sliders	Cursori CMYK
+	Lab Sliders	Cursori Lab
+	Web Color Sliders	Cursori colori Web
+	Copy Color's Hex Code	Copia codice esadecimale del colore
+	Color management is unavailable.	La gestione colore non è disponibile.
+	Out of gamut for printing: click to use the closest printable color	Fuori gamma di stampa: fai clic per usare il colore stampabile più vicino

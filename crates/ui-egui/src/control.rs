@@ -380,8 +380,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let selection_mode = uint_field(p, "selectionMode")?;
                 let dock_tabs = merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?;
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
-                // Which chip the Color panel edits.
-                let color_panel = whole_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
+                // The Color panel's mode and the chip it edits; a field left out keeps its value.
+                let color_panel = merged_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
                 let dock_width = num_field(p, "dockWidth")?;
                 let zoom = num_field(p, "zoom")?;
                 let rotation = num_field(p, "rotation")?;
@@ -1593,6 +1593,15 @@ mod tests {
         assert!(app.ui.color_panel.background);
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"background": "yes"}}))["ok"], false);
         assert!(app.ui.color_panel.background, "a bad value changes nothing");
+        // The mode (#294); each field leaves the other alone.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "lab"}}))["ok"], true);
+        assert_eq!(app.ui.color_panel.mode, crate::color_panel_ui::ColorPanelMode::Lab);
+        assert!(app.ui.color_panel.background);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"background": false}}))["ok"], true);
+        assert_eq!(app.ui.color_panel.mode, crate::color_panel_ui::ColorPanelMode::Lab);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "wheel"}}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"swatch": 1}}))["ok"], false);
+        assert_eq!(app.ui.color_panel.mode, crate::color_panel_ui::ColorPanelMode::Lab);
     }
 
     #[test]

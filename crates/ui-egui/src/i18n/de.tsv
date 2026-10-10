@@ -2445,3 +2445,17 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+
+# Color panel modes (#294)
+	Hue Cube	Farbtonwürfel
+	Brightness Cube	Helligkeitswürfel
+	Color Wheel	Farbrad
+	Grayscale Sliders	Graustufen-Regler
+	RGB Sliders	RGB-Regler
+	HSB Sliders	HSB-Regler
+	CMYK Sliders	CMYK-Regler
+	Lab Sliders	Lab-Regler
+	Web Color Sliders	Webfarben-Regler
+	Copy Color's Hex Code	Hex-Code der Farbe kopieren
+	Color management is unavailable.	Die Farbverwaltung ist nicht verfügbar.
+	Out of gamut for printing: click to use the closest printable color	Außerhalb des Druckfarbumfangs: Klicken Sie, um die nächstliegende druckbare Farbe zu verwenden
