@@ -410,23 +410,25 @@ fn alt_dragging_the_only_layer_drops_a_copy_on_itself() {
 fn dropping_below_the_bottom_row_lands_at_the_bottom_of_the_stack() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    // Nothing can go below a Background (#2626), so the bottom layer is a normal one here.
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
     for i in 0..2 {
         s.execute("layer.new.layer", json!({"name": format!("L{i}")})).unwrap();
     }
     let mut h = harness(s, 1.0, "promedium", 290.0);
     let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
-    // Rows top to bottom: L1, L0, Background. The empty space starts under Background.
+    // Rows top to bottom: L1, L0, Layer 0. The empty space starts under Layer 0.
     let top = recorded(&h.ctx)[0].row.center();
     let bottom = recorded(&h.ctx)[2].row;
     drag_from_to(&mut h, top, pos2(bottom.center().x, bottom.bottom() + 10.0), Modifiers::ALT);
-    assert_eq!(names(&h), ["L1 copy", "Background", "L0", "L1"]);
+    assert_eq!(names(&h), ["L1 copy", "Layer 0", "L0", "L1"]);
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
-    // Rows: L1, L0, Background, L1 copy. A plain drag of L0 to the empty space moves it to the
+    // Rows: L1, L0, Layer 0, L1 copy. A plain drag of L0 to the empty space moves it to the
     // very bottom.
     let grabbed = recorded(&h.ctx)[1].row.center();
     let bottom = recorded(&h.ctx)[3].row;
     drag_from_to(&mut h, grabbed, pos2(bottom.center().x, bottom.bottom() + 10.0), Modifiers::NONE);
-    assert_eq!(names(&h), ["L0", "L1 copy", "Background", "L1"]);
+    assert_eq!(names(&h), ["L0", "L1 copy", "Layer 0", "L1"]);
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Reorder Layers"));
 }
 
