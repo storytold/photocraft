@@ -396,3 +396,51 @@ fn blank_engine_text_is_not_rendered_on_import() {
     assert!(!photocraft_text::psd::engine_text_is_blank(&tysh("M", &[Run { len: 1, size: 24.0, leading: None }], None, Affine::IDENTITY, [0.0; 4])));
     assert!(!photocraft_text::psd::engine_text_is_blank(b"not a TySh"));
 }
+
+#[test]
+fn incomplete_type_data_stays_pixel_backed_and_preserves_tysh() {
+    let mut data = tysh(
+        "Keep my appearance",
+        &[Run { len: 18, size: 30.0, leading: None }],
+        None,
+        Affine::translate(20.0, 70.0),
+        [20.0, 30.0, 280.0, 90.0],
+    );
+    let mut parsed = photocraft_text::psd::parse_tysh(&data).unwrap();
+    parsed.text.items.retain(|(key, _)| !key.is("EngineData"));
+    data = write_tysh(&parsed);
+
+    // The descriptor text is readable, but the character/paragraph style data is not present.
+    let incomplete = photocraft_text::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+    assert_eq!(incomplete.text, "Keep my appearance");
+    assert!(incomplete.runs.is_empty());
+    assert!(incomplete.paragraphs.is_empty());
+
+    // Give the PSD an authoritative Photoshop-rendered preview.
+    let mut doc = Document::new("fallback", Size::new(320, 140), ColorMode::Rgb, SampleType::U8);
+    let mut cache = Surface::new(doc.pixel_format());
+    cache.fill_rect(Rect::new(20, 30, 280, 90), &[0.2, 0.4, 0.8, 1.0]);
+    let expected = cache.content_bounds();
+    let mut t = incomplete;
+    t.cache = Some(cache);
+    t.psd_raw = Some(std::sync::Arc::new(data.clone()));
+    doc.layers.push(Layer::new("Incomplete PSD text", LayerContent::Text(t)));
+
+    let first = photocraft_io::export(&doc, "fallback.psd", &Default::default()).unwrap();
+    let imported = photocraft_io::import("fallback.psd", &first.bytes).unwrap();
+    assert!(imported.warnings.iter().any(|w| w.contains("PSD text/style data could not be decoded safely")), "{:?}", imported.warnings);
+    let layer = &imported.document.layers[0];
+    assert!(matches!(&layer.content, LayerContent::Raster(_)));
+    assert_eq!(layer.surface().unwrap().content_bounds(), expected);
+    let raw = layer.psd_blocks.iter().find(|(key, _)| key == b"TySh").unwrap().1.as_ref();
+    assert_eq!(raw.as_slice(), data.as_slice());
+
+    // A PSD save/reload retains both the raster fallback and the untouched original TySh.
+    let saved = photocraft_io::export(&imported.document, "fallback.psd", &Default::default()).unwrap();
+    let reopened = photocraft_io::import("fallback.psd", &saved.bytes).unwrap().document;
+    let layer = &reopened.layers[0];
+    assert!(matches!(&layer.content, LayerContent::Raster(_)));
+    assert_eq!(layer.surface().unwrap().content_bounds(), expected);
+    let raw = layer.psd_blocks.iter().find(|(key, _)| key == b"TySh").unwrap().1.as_ref();
+    assert_eq!(raw.as_slice(), data.as_slice());
+}

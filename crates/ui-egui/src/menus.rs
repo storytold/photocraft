@@ -582,7 +582,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
             .session
             .active()
             .and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
-            .is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Text(_))),
+            .is_some_and(|l| {
+                matches!(&l.content, photocraft_doc::LayerContent::Text(_)) || crate::type_tool::is_psd_text_fallback(l)
+            }),
         "select.transformSelection" => app.ui.transform.is_none() && app.session.is_enabled("select.transformSelection"),
         // ⇧[ / ⇧] only step the hardness of a tool that paints with the brush tip, as in Photoshop.
         "tools.decreaseBrushHardness" | "tools.increaseBrushHardness" => app.ui.tool.is_brushlike(),
@@ -1734,4 +1736,4 @@ mod quick_export_label_tests {
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
     }
-}
+                        }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, ShapeLayer, SmartObject, SmartSource, TextLayer};
+use photocraft_doc::{AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, ShapeLayer, SmartObject, SmartSource};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_psd::layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK};
 use photocraft_psd::resources::ids;
@@ -295,26 +295,54 @@ impl Ctx<'_> {
             }
             LayerContent::Adjustment(adj)
         } else if rec.block(b"TySh").is_some() {
-            // Typed model from TySh/EngineData (photocraft-text); Photoshop's pixels stay the cache.
+            // Only make a PSD type layer live when EngineData contains the character and
+            // paragraph runs needed to preserve its appearance. A descriptor can still contain
+            // readable text when those style records are absent or malformed; treating that as a
+            // live TextLayer would make the first edit re-render it with default styling.
             let data = rec.block(b"TySh").map(|b| b.data.clone()).unwrap_or_default();
-            let mut t = photocraft_text::psd::text_layer_from_tysh(&data, self.dpi).unwrap_or_else(|| {
-                let (text, transform) = blocks::parse_tysh(&data).unwrap_or_default();
-                TextLayer { text, transform, ..Default::default() }
-            });
-            if let Some(txt2) = &self.txt2 {
-                photocraft_text::psd::apply_txt2(&mut t, &data, txt2);
-            }
-            // Photoshop's pixels are the cache only when the file has some: ag-psd, GIMP and
-            // other writers leave type layers without image data (Photoshop re-renders them on
-            // open), and an empty cache would show nothing until the layer is edited; the import
-            // renders such a layer from its model instead (`text_import::prepare`). When the
-            // engine text itself is blank, Photoshop draws nothing either: keep the empty pixels
-            // (corpus: text/path-wave-open.psd).
+            let complete = photocraft_text::psd::parse_tysh(&data)
+                .and_then(|t| photocraft_text::psd::engine_data(&t.text))
+                .is_some_and(|e| {
+                    let style_runs = e
+                        .path(&["EngineDict", "StyleRun", "RunArray"])
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| a.iter().any(|v| v.path(&["StyleSheet", "StyleSheetData"]).is_some()));
+                    let style_lengths = e
+                        .path(&["EngineDict", "StyleRun", "RunLengthArray"])
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| !a.is_empty());
+                    let paragraph_runs = e
+                        .path(&["EngineDict", "ParagraphRun", "RunArray"])
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| a.iter().any(|v| v.path(&["ParagraphSheet", "Properties"]).is_some()));
+                    let paragraph_lengths = e
+                        .path(&["EngineDict", "ParagraphRun", "RunLengthArray"])
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| !a.is_empty());
+                    style_runs && style_lengths && paragraph_runs && paragraph_lengths
+                });
             let cache = self.record_surface(rec, &name);
-            let drawn = !cache.content_bounds().is_empty() || photocraft_text::psd::engine_text_is_blank(&data);
-            t.cache = drawn.then_some(cache);
-            t.psd_raw = principal(b"TySh");
-            LayerContent::Text(t)
+            match complete.then(|| photocraft_text::psd::text_layer_from_tysh(&data, self.dpi)).flatten() {
+                Some(mut t) => {
+                    if let Some(txt2) = &self.txt2 {
+                        photocraft_text::psd::apply_txt2(&mut t, &data, txt2);
+                    }
+                    // Photoshop's pixels are the cache only when the file has some: ag-psd,
+                    // GIMP and other writers leave type layers without image data (Photoshop
+                    // re-renders them on open). When the engine text itself is blank,
+                    // Photoshop draws nothing either: keep the empty pixels.
+                    let drawn = !cache.content_bounds().is_empty() || photocraft_text::psd::engine_text_is_blank(&data);
+                    t.cache = drawn.then_some(cache);
+                    t.psd_raw = principal(b"TySh");
+                    LayerContent::Text(t)
+                }
+                None => {
+                    self.warn(format!(
+                        "layer \"{name}\": PSD text/style data could not be decoded safely; kept as pixels (original text data is preserved)"
+                    ));
+                    LayerContent::Raster(cache)
+                }
+            }
         } else if let Some(k) = smart_key {
             let (id, transform) = rec.block(k).map(|b| blocks::parse_smart(k, &b.data)).unwrap_or_default();
             // Smart filters (`filterFX` in the placed-layer data) and their mask (`FEid`).
@@ -820,4 +848,4 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     }
     ctl.progress(1.0);
     Some((doc, cx.warnings))
-}
+    }

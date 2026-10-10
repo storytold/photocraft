@@ -18,6 +18,15 @@ use crate::state::TextEdit;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
 
+pub(crate) const PSD_TEXT_FALLBACK_MESSAGE: &str =
+    "This PSD text layer could not be made editable because its text/style data is incomplete. Its raster preview and original PSD text data are preserved.";
+
+/// A PSD type layer whose TySh data was preserved but was not complete enough for safe live text.
+pub(crate) fn is_psd_text_fallback(layer: &photocraft_doc::Layer) -> bool {
+    matches!(&layer.content, LayerContent::Raster(_))
+        && layer.psd_blocks.iter().any(|(key, _)| key == b"TySh")
+}
+
 fn text_layer(doc: &Document, id: LayerId) -> Option<&TextLayer> {
     match &doc.layer(id)?.content {
         LayerContent::Text(t) => Some(t),
@@ -71,6 +80,23 @@ fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
     })
 }
 
+/// Does the pointer hit the active raster fallback for an incompletely decoded PSD type layer?
+fn hit_psd_text_fallback(app: &PhotocraftApp, x: f64, y: f64) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let Some(id) = st.active_layer else { return false };
+    let Some(layer) = st.doc.layer(id) else { return false };
+    if !is_psd_text_fallback(layer) {
+        return false;
+    }
+    let Some(surface) = layer.surface() else { return false };
+    let r = surface.content_bounds();
+    !r.is_empty()
+        && x >= f64::from(r.x0)
+        && x <= f64::from(r.x1)
+        && y >= f64::from(r.y0)
+        && y <= f64::from(r.y1)
+}
+
 /// True when the layer's pixels are what our engine draws for it. A PSD's type layer keeps
 /// Photoshop's pixels until it is edited, and with substituted fonts or a different line layout
 /// they sit somewhere else than the glyphs the caret and selection are placed on.
@@ -101,6 +127,10 @@ fn begin_edit(app: &mut PhotocraftApp, id: LayerId, key: &str) -> Result<(), Str
 pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     let st = app.session.active().ok_or("no document open")?;
     let id = st.active_layer.ok_or("no active layer")?;
+    let layer = st.doc.layer(id).ok_or("active layer no longer exists")?;
+    if is_psd_text_fallback(layer) {
+        return Err(PSD_TEXT_FALLBACK_MESSAGE.into());
+    }
     let n = text_layer(&st.doc, id).ok_or("active layer is not a type layer")?.text.chars().count();
     if app.ui.text_edit.as_ref().is_none_or(|ed| ed.layer != id.0) {
         commit(app);
@@ -227,6 +257,11 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> boo
         }
         let off = hit_offset(app, id, x, y);
         app.ui.text_edit = Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, dragging: true, resize: None, preedit: None });
+        return true;
+    }
+    if hit_psd_text_fallback(app, x, y) {
+        app.ui.status = PSD_TEXT_FALLBACK_MESSAGE.into();
+        app.ui.status_error = true;
         return true;
     }
     false
@@ -1679,4 +1714,4 @@ mod tests {
         assert_eq!(word_boundary("hello big world", 7, false), 6);
         assert_eq!(word_boundary("hello big world", 15, false), 10);
     }
-}
+                                           }

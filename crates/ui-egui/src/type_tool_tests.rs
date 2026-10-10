@@ -290,6 +290,114 @@ fn size_applies_at_layer_and_selection_scope() {
     }
 }
 
+#[test]
+fn psd_imported_text_edit_preserves_styles_undo_redo_and_resave() {
+    let mut source = new_app();
+    let id = LayerId(
+        source
+            .run("type.create", json!({"text": "Hello world", "size": 24, "x": 300, "y": 420}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    source
+        .run(
+            "type.setStyle",
+            json!({"layer": id.0, "range": [0, 5], "size": 30, "fauxBold": true, "color": "#3366cc", "tracking": 25, "align": "center"}),
+        )
+        .unwrap();
+    source
+        .run(
+            "type.setStyle",
+            json!({"layer": id.0, "range": [6, 11], "size": 17, "fauxItalic": true, "color": "#cc6633"}),
+        )
+        .unwrap();
+
+    let bytes = photocraft_io::export(&source.session.active().unwrap().doc, "styled.psd", &Default::default()).unwrap().bytes;
+    let imported = photocraft_io::import("styled.psd", &bytes).unwrap().document;
+    let mut app = new_app();
+    app.session.add_document(imported, None);
+    app.sync_views();
+    let id = app
+        .session
+        .active()
+        .unwrap()
+        .doc
+        .walk()
+        .into_iter()
+        .find(|(_, _, l)| matches!(&l.content, LayerContent::Text(_)))
+        .unwrap()
+        .2
+        .id;
+    app.session.select_layer(id).unwrap();
+
+    super::edit_active(&mut app).unwrap();
+    let before = text(&app, id);
+    let before_runs = before.char_runs();
+    let before_paragraphs = before.paragraph_runs();
+    assert!(before_runs.len() >= 2);
+    assert!(before_runs[0].style.faux_bold);
+    assert!(before_runs[1].style.faux_italic);
+    assert_eq!(before_paragraphs[0].style.align, photocraft_doc::text::TextAlign::Center);
+
+    let steps = app.session.active().unwrap().history.entries().len();
+    let edit = app.ui.text_edit.as_mut().unwrap();
+    edit.anchor = 2;
+    edit.caret = 2;
+    super::insert(&mut app, "X");
+    super::commit(&mut app);
+
+    let edited = text(&app, id);
+    assert_eq!(edited.text, "HeXllo world");
+    assert_eq!(edited.char_runs()[0].style, before_runs[0].style, "inserted text inherits the imported run");
+    assert_eq!(edited.paragraph_runs(), before_paragraphs, "paragraph styling stays intact");
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1);
+
+    assert!(app.session.undo());
+    let undone = text(&app, id);
+    assert_eq!(undone.text, before.text);
+    assert_eq!(undone.char_runs(), before_runs);
+    assert_eq!(undone.paragraph_runs(), before_paragraphs);
+
+    assert!(app.session.redo());
+    let redone = text(&app, id);
+    assert_eq!(redone.text, edited.text);
+    assert_eq!(redone.char_runs(), edited.char_runs());
+    assert_eq!(redone.paragraph_runs(), edited.paragraph_runs());
+
+    let saved = photocraft_io::export(&app.session.active().unwrap().doc, "styled.psd", &Default::default()).unwrap().bytes;
+    let reopened = photocraft_io::import("styled.psd", &saved).unwrap().document;
+    let LayerContent::Text(reloaded) = &reopened.walk().into_iter().find(|(_, _, l)| matches!(&l.content, LayerContent::Text(_))).unwrap().2.content else {
+        panic!("edited PSD text did not reopen as live text");
+    };
+    assert_eq!(reloaded.text, edited.text);
+    assert_eq!(reloaded.char_runs(), edited.char_runs());
+    assert_eq!(reloaded.paragraph_runs(), edited.paragraph_runs());
+}
+
+#[test]
+fn type_tool_reports_incomplete_psd_text_instead_of_creating_over_it() {
+    let mut app = new_app();
+    app.run("layer.new.layer", json!({"name": "PSD text fallback"})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    {
+        let st = app.session.active_mut().unwrap();
+        let mut doc = (*st.doc).clone();
+        let layer = doc.layer_mut(id).unwrap();
+        layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(20, 20, 180, 80), &[0.2, 0.4, 0.8, 1.0]);
+        layer.psd_blocks.push((*b"TySh", std::sync::Arc::new(vec![1, 2, 3])));
+        st.doc = std::sync::Arc::new(doc);
+        st.revision += 1;
+    }
+    let layers = app.session.active().unwrap().doc.layer_count();
+    app.ui.tool = crate::state::Tool::Type;
+    assert!(super::pointer_down(&mut app, 40.0, 40.0, false));
+    assert_eq!(app.ui.status, super::PSD_TEXT_FALLBACK_MESSAGE);
+    assert!(app.ui.status_error);
+    assert!(app.ui.text_edit.is_none());
+    assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
+}
+
 /// Scrubbing the options bar's size field previews live (the size changes every frame) and is
 /// one undo step per drag; each step only damages the type layer's area, not the whole canvas.
 #[test]
@@ -1193,4 +1301,4 @@ fn variable_faces_list_the_weights_of_their_axis() {
 fn the_font_menu_lists_served_families() {
     photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
     assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
-}
+        }

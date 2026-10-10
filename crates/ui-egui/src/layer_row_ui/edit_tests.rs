@@ -142,6 +142,34 @@ fn edit_type_command_rejects_missing_or_non_type_layers_without_changes() {
 }
 
 #[test]
+fn incomplete_psd_text_thumbnail_explains_the_raster_fallback() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({"name": "Imported PSD text"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    {
+        let st = s.active_mut().unwrap();
+        let mut doc = (*st.doc).clone();
+        doc.layer_mut(id)
+            .unwrap()
+            .psd_blocks
+            .push((*b"TySh", std::sync::Arc::new(vec![1, 2, 3])));
+        st.doc = std::sync::Arc::new(doc);
+        st.revision += 1;
+    }
+
+    let mut h = harness(s, 1.0);
+    assert!(crate::menus::is_enabled(h.state(), "type.editText"));
+    double_click(&mut h, thumbnail(&h, id.0));
+
+    assert!(h.state().ui.text_edit.is_none());
+    assert_eq!(h.state().ui.status, crate::type_tool::PSD_TEXT_FALLBACK_MESSAGE);
+    assert!(h.state().ui.status_error);
+    let layer = h.state().session.active().unwrap().doc.layer(id).unwrap();
+    assert!(matches!(&layer.content, LayerContent::Raster(_)));
+    assert!(layer.psd_blocks.iter().any(|(key, _)| key == b"TySh"));
+}
+
+#[test]
 fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
     let mut s = session();
     let id = s.execute("type.create", json!({"text": "Hello", "size": 48, "x": 100, "y": 180})).unwrap()["layer"].as_u64().unwrap();
