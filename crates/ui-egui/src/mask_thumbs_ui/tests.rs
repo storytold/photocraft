@@ -101,6 +101,7 @@ fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
             let at = h.get_by_label(label).rect().center();
             click_with(&mut h, at, Modifiers::NONE);
             let l = layer(&h, masked);
+            assert!(h.state().ui.dialogs.is_empty(), "mask deletion remains immediate");
             let original = before.layer(photocraft_doc::LayerId(masked)).unwrap();
             assert_eq!(l.content, original.content);
             assert_eq!(layer(&h, shape), *before.layer(photocraft_doc::LayerId(shape)).unwrap());
@@ -130,6 +131,23 @@ fn footer_trash_still_deletes_the_layer_when_its_content_is_targeted() {
     assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     let at = h.get_by_label("Delete layer").rect().center();
     click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_some());
+    assert!(h.state().ui.dialogs.iter().any(|d| crate::delete_layer_prompt::owns(&d.fields)));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+/// Like Photoshop, ⌥/Alt-clicking the trash deletes the layer without asking.
+#[test]
+fn alt_click_on_the_footer_trash_deletes_without_confirmation() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::ALT);
+    assert!(h.state().ui.dialogs.is_empty(), "no confirmation");
     assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
 }
 
@@ -140,7 +158,8 @@ fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
     h.state_mut().run("layer.new.layer", json!({"name": "Fresh mask"})).unwrap();
     let id = h.state().session.active().unwrap().active_layer.unwrap();
     h.run_steps(3);
-    let at = h.get_by_label("Add a mask  (from the selection; Alt inverts)").rect().center();
+    let label = format!("Add a mask  (from the selection; {} inverts)", crate::shortcuts::pretty("Alt"));
+    let at = h.get_by_label(&label).rect().center();
     click_with(&mut h, at, Modifiers::NONE);
     assert!(h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_some());

@@ -397,7 +397,14 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
     let vector = photocraft_io::svg::is_svg(&bytes);
-    let src = import(name, &bytes)?;
+    let max_svg_group_depth = s.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
+    let imported = photocraft_io::import_with_svg_group_depth(name, &bytes, max_svg_group_depth).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    if imported.preview_only {
+        return Err(EngineError::Other(format!(
+            "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
+        )));
+    }
+    let src = imported.document;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
@@ -539,23 +546,20 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
     Value::Object(m)
 }
 
-/// Rewrites the File Info fields of an XMP packet (creating one when there is none), keeping
-/// every other property. Edited properties move into their own `rdf:Description` (several
-/// descriptions per packet are valid XMP).
+/// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
+/// keeping the other properties verbatim. Edited properties move into their own
+/// `rdf:Description` (several descriptions per packet are valid XMP).
 pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
-    let mut cur = read_file_info(xmp);
-    if let (Some(c), Some(n)) = (cur.as_object_mut(), info.as_object()) {
-        for (k, v) in n {
-            if c.contains_key(k) {
-                c.insert(k.clone(), v.clone());
-            }
-        }
-    }
+    let cur = read_file_info(xmp);
+    // The dialog submits all fields, including unchanged language alternatives.
+    let changed = |key: &str| info.get(key).is_some_and(|v| cur.get(key) != Some(v));
     let mut x = xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
     });
-    let props: Vec<&str> = INFO_FIELDS.iter().map(|f| f.1).chain(["xmpRights:Marked", "xmpRights:WebStatement"]).collect();
-    for prop in &props {
+    for (key, prop, _) in INFO_FIELDS.into_iter().chain([("copyrightStatus", "xmpRights:Marked", ""), ("copyrightUrl", "xmpRights:WebStatement", "")]) {
+        if !changed(key) {
+            continue;
+        }
         while let Some((a, b, _)) = find_element(&x, prop) {
             x.replace_range(a..b, "");
         }
@@ -563,7 +567,7 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
             x.replace_range(a..b, "");
         }
     }
-    let get = |k: &str| cur.get(k).cloned().unwrap_or(Value::Null);
+    let get = |k: &str| info.get(k).filter(|_| changed(k)).cloned().unwrap_or(Value::Null);
     let mut body = String::new();
     for (key, prop, kind) in INFO_FIELDS {
         let vals: Vec<String> = match get(key) {

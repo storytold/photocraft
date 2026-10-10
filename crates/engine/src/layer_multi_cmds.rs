@@ -24,6 +24,33 @@ pub fn selected(s: &Session) -> Vec<LayerId> {
     s.active().map(DocState::selected_layers).unwrap_or_default()
 }
 
+/// The layers a layer command acts on: the `layer` param when given, else every selected layer
+/// (bottom-to-top), else the active layer. A single layer behaves exactly as before.
+pub(crate) fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+    if p.get("layer").is_some() {
+        return Ok(vec![crate::commands::layer_param(s, p)?]);
+    }
+    match selected(s) {
+        sel if sel.is_empty() => Ok(vec![crate::commands::layer_param(s, p)?]),
+        sel => Ok(sel),
+    }
+}
+
+/// [`targets`] for a command that adds a layer mask: with several layers selected, those that can
+/// take one (no layer mask yet, not the Background); one layer is taken as given.
+pub(crate) fn mask_targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+    let ids = targets(s, p)?;
+    if ids.len() < 2 {
+        return Ok(ids);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| l.mask.is_none() && !crate::extra_cmds::is_background(l))).collect();
+    if ids.is_empty() {
+        return Err(EngineError::Other("none of the selected layers can take a layer mask".into()));
+    }
+    Ok(ids)
+}
+
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
 /// selected children), bottom-to-top.
 pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
@@ -1121,23 +1148,45 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
     Ok(json!({ "layer": mid.0 }))
 }
 
+/// Next visible layer row below the deleted target, then rows above in reverse order.
+/// Group headers precede their children in the UI, unlike Document::walk's storage order.
+pub(crate) fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
+    let rows = |expand_all: bool| {
+        let mut stack: Vec<&Layer> = doc.layers.iter().collect();
+        let mut order = Vec::new();
+        while let Some(layer) = stack.pop() {
+            order.push(layer.id);
+            if let LayerContent::Group(group) = &layer.content
+                && (expand_all || group.expanded)
+            {
+                stack.extend(group.children.iter());
+            }
+        }
+        order
+    };
+    let mut order = rows(false);
+    if !order.contains(&target) {
+        order = rows(true);
+    }
+    let Some(index) = order.iter().position(|id| *id == target) else {
+        return Vec::new();
+    };
+    order.iter().skip(index + 1).chain(order.iter().take(index).rev()).copied().collect()
+}
+
 /// Delete Layer with several layers selected.
 pub fn delete_selected(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
-        let below = ids.first().and_then(|id| {
-            let order: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
-            let i = order.iter().position(|x| x == id)?;
-            order[..i].iter().rev().find(|x| !sel.contains(x)).copied()
-        });
+        let neighbours = active.map(|id| deletion_neighbours(doc, id)).unwrap_or_default();
         for id in &ids {
             doc.remove(*id).ok_or(EngineError::NoLayer(*id))?;
         }
         if doc.layers.is_empty() {
             return Err(EngineError::Other("a document must keep at least one layer".into()));
         }
-        *active = below.filter(|b| doc.layer(*b).is_some()).or_else(|| doc.top_layer());
+        *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
         Ok(())
     })?;
     Ok(json!({"deleted": sel.len()}))

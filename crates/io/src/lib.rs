@@ -177,20 +177,36 @@ pub fn is_psd(bytes: &[u8]) -> bool {
 /// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
 /// else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_with(name, bytes, &photocraft_raster::Interrupt::NONE)
+    import_with_svg_group_depth(name, bytes, photocraft_doc::MAX_GROUP_DEPTH)
 }
 
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and
 /// reports progress. A cancelled import fails with [`IoError::Cancelled`].
 pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    import_with_svg_group_depth_and_interrupt(name, bytes, photocraft_doc::MAX_GROUP_DEPTH, ctl)
+}
+
+/// Imports a file with a configurable SVG editability threshold. SVG groups deeper than this are
+/// rasterised during conversion; the XML parser safety cap and document nesting limit stay fixed.
+pub fn import_with_svg_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
+    import_with_svg_group_depth_and_interrupt(name, bytes, max_group_depth, &photocraft_raster::Interrupt::NONE)
+}
+
+/// [`import_with`] with the SVG editable-group threshold selected by the user.
+pub fn import_with_svg_group_depth_and_interrupt(
+    name: &str,
+    bytes: &[u8],
+    max_group_depth: usize,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = import_stages(name, bytes, ctl)?;
+    let r = import_stages(name, bytes, ctl, max_group_depth)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
 }
 
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, max_group_depth: usize) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
@@ -221,10 +237,22 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
-    if has_extension(name, "svg") || has_extension(name, "svgz") || svg::is_svg(bytes) {
-        return svg::import_svg(name, bytes);
+    if is_svg_input(name, bytes) {
+        return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
     flat::import_flat(name, bytes)
+}
+
+/// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
+/// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
+/// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
+fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
+    // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
+    // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
+    // suffix (for example, a WebP downloaded as Firefox_logo.svg).
+    svg::is_svg(bytes)
+        || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
+        || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -309,4 +337,18 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     let l = doc.layers.first().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     let s = l.surface().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     Ok(photocraft_compose::surface_to_buffer(s, doc.bounds()).px)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_svg_input;
+
+    #[test]
+    fn svg_extension_does_not_override_another_format_signature() {
+        let webp_header = b"RIFF\x04\0\0\0WEBP";
+        assert!(!is_svg_input("Firefox_logo,_2019.svg", webp_header));
+        assert!(is_svg_input("drawing.svg", b"<?xml version=\"1.0\"?><svg/>"));
+        assert!(is_svg_input("drawing.svgz", &[0x1f, 0x8b, 0, 0]));
+        assert!(!is_svg_input("drawing.svgz", webp_header));
+    }
 }

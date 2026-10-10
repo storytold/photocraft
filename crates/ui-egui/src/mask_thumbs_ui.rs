@@ -204,6 +204,18 @@ pub fn load_params(l: &Layer, kind: MaskKind, m: egui::Modifiers) -> Value {
     json!({"channel": channel, "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)})
 }
 
+/// What double-clicking a mask thumbnail does: pixel mask launches Select and Mask if preference is enabled.
+pub fn double_click_command(app: &PhotocraftApp, kind: MaskKind) -> Option<(&'static str, Value)> {
+    if kind == MaskKind::Pixel
+        && app.session.prefs().tools.double_click_layer_mask_launches_select_and_mask
+        && crate::menus::is_enabled(app, "select.selectAndMask")
+    {
+        Some(("select.selectAndMask", Value::Null))
+    } else {
+        None
+    }
+}
+
 /// The active layer of `st` has a vector mask (shape layers' paths are content, not masks).
 pub fn has_vector_mask(st: &photocraft_engine::DocState) -> bool {
     st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some() && !matches!(l.content, photocraft_doc::LayerContent::Shape(_)))

@@ -617,7 +617,7 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
-fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
+pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
     let wid = app.ui.alloc_id();
     let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
     view.fit_pending = offset > 0 || view.fit_pending;
@@ -761,7 +761,9 @@ mod label_tests {
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
-    let keys: Vec<String> = f.keys().filter(|k| !k.starts_with("__")).cloned().collect();
+    let warp_text = f.get("__command").and_then(Value::as_str) == Some("type.warpText");
+    let keys: Vec<String> =
+        f.keys().filter(|k| !(k.starts_with("__") || warp_text && matches!(k.as_str(), "layer" | "layers" | "range" | "coalesce"))).cloned().collect();
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
@@ -883,11 +885,13 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
         }
         "type.warpText" => {
             let styles: Vec<&str> = std::iter::once("none").chain(photocraft_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
-            dialog(
-                app,
-                json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0}),
-                json!({"style": styles, "orientation": ["horizontal", "vertical"]}),
-            )
+            let mut fields = json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0});
+            if let Some(Value::Object(target)) = crate::type_tool::formatting_params(app) {
+                for (key, value) in target {
+                    fields[key] = value;
+                }
+            }
+            dialog(app, fields, json!({"style": styles, "orientation": ["horizontal", "vertical"]}))
         }
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;

@@ -937,6 +937,17 @@
 	Delete current channel	Excluir o canal atual
 	Delete current state	Excluir o estado atual
 	Delete effect layer	Excluir camada de efeito
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Excluir a camada “{name}”?
+	Delete {count} layers? {names}	Excluir {count} camadas? {names}
+	Delete layer?	Excluir camada?
+	The document is closed	O documento está fechado
+	The document or selected layers changed. Please request deletion again.	O documento ou as camadas selecionadas mudaram. Solicite a exclusão novamente.
+	Missing delete command	Comando de exclusão ausente
+	Invalid delete command	Comando de exclusão inválido
+	Layer deleted, but confirmation preference could not be saved: {error}	A camada foi excluída, mas não foi possível salvar a preferência de confirmação: {error}
+
 	Delete layer	Excluir camada
 	Delete layer comp	Excluir composição de camadas
 	Delete note	Excluir anotação
@@ -1280,6 +1291,7 @@
 	Remove All Pins	Remover todos os alfinetes
 	Remove Background	Remover plano de fundo
 	Remove Planes	Remover planos
+	Remove Tool	Ferramenta Remover
 	Remove stop	Remover parada
 	Remove variable	Remover variável
 	Rename	Renomear
@@ -1295,6 +1307,11 @@
 	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
 	Keyboard shortcuts imported	Atalhos de teclado importados
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Seu conjunto de atalhos de teclado {set} está em uso aqui: {n} atalhos diferem dos padrões. Editar › Atalhos de teclado os mostra; Redefinir tudo para o padrão desfaz isso.
+	Import keyboard shortcuts?	Importar atalhos de teclado?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	O PhotoCraft encontrou neste computador seu conjunto de atalhos de teclado {set} de outro editor de imagens: {n} de seus atalhos diferem dos do PhotoCraft. Importá-lo?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Editar › Atalhos de teclado › Redefinir tudo para o padrão desfaz uma importação.
+	Don't Import	Não importar
+	The keyboard shortcut set was not imported: {error}	O conjunto de atalhos de teclado não foi importado: {error}
 	Reset Section	Redefinir seção
 	Reset Transform	Redefinir transformação
 	Reset to defaults	Redefinir para os padrões
@@ -1587,6 +1604,7 @@
 	Millimeters	Milímetros
 	Mobile	Dispositivos móveis
 	Move Tool	Ferramenta Mover
+	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -1631,6 +1649,7 @@
 	Quick Selection Tool	Ferramenta Seleção rápida
 	Radial	Radial
 	Rasterize Layer	Rasterizar camada
+	Rasterize Layers	Rasterizar camadas
 	Ratio	Proporção
 	Recent	Recentes
 	Rectangle Tool	Ferramenta Retângulo
@@ -1957,8 +1976,8 @@
 	Brush Preset Options	Opções de predefinições de pincel
 	Group name	Nome do grupo
 	Brush name	Nome do pincel
-	Grid view	Visualização em grade
-	List view	Visualização em lista
+	Brush Name	Nome do pincel
+	Brush Stroke	Traçado do pincel
 	Off: the speed of the pointer sets the spacing	Desativado: a velocidade do ponteiro define o espaçamento
 	Tilt Scale	Escala de inclinação
 	Brush Projection	Projeção do pincel
@@ -2733,6 +2752,9 @@ fontWeight	Italic	Itálico
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desativa este limite; grupos SVG aninhados em mais de 100 níveis são sempre rasterizados.
 	Rule of Thirds	Regra dos terços
 	Triangle	Triângulo
 	Golden Ratio	Proporção áurea
@@ -2773,6 +2795,8 @@ fontWeight	Italic	Itálico
 	Create Ellipse	Criar elipse
 	Create Triangle	Criar triângulo
 	Create Polygon	Criar polígono
+	Pressure curve	Curva de pressão
+	Click to add a point, right-click to remove	Clique para adicionar um ponto; clique com o botão direito para removê-lo
 	Some brush presets could not be loaded	Não foi possível carregar algumas predefinições de pincel
 	Retry saving presets	Tentar salvar as predefinições novamente
 	Brush preset changes are not saved: {error}	As alterações nas predefinições de pincel não foram salvas: {error}
@@ -2785,3 +2809,27 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+	Stroke Options	Opções de traçado
+	Solid	Contínuo
+	Dashed	Tracejado
+	Dotted	Pontilhado
+	Caps	Pontas
+	Butt / Flat	Plano
+	Corners	Cantos
+	Miter	Junção em ângulo
+	Round	Redondo
+	Bevel	Chanfrado
+	Miter limit	Limite da junção
+	Dashed line	Linha tracejada
+	Dash	Traço
+	Gap	Espaço
+	Dash / gap lengths × stroke width	Comprimentos de traço / espaço × largura do traçado
+	Add pair	Adicionar par
+	Remove pair	Remover par
+	Dash offset	Deslocamento do tracejado
+	Open paths use centered strokes	Caminhos abertos usam traçados centralizados
+	Use finite lengths and a positive pattern total	Use comprimentos finitos e um total de padrão positivo
+	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
+	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
+	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
+	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
