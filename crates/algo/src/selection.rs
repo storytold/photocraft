@@ -151,11 +151,12 @@ pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMo
 }
 
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
-    (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
+    (a[3] == 0.0 && b[3] == 0.0) || (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
 }
 
 /// Pixels similar to the seed pixel (per-channel difference ≤ `tolerance`
-/// levels, alpha included). `contiguous` limits to the 4-connected region
+/// levels, alpha included; fully transparent pixels match regardless of hidden RGB).
+/// `contiguous` limits to the 4-connected region
 /// around the seed. `px` covers `area`.
 pub fn magic_wand(px: &[[f32; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Vec<f32> {
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -252,7 +253,9 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
     let (w, h) = (area.width() as usize, area.height() as usize);
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
     let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    let similar = |p: [u8; 4]| (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
+    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    // split a transparent region into pieces, as if the copied source were still visible.
+    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
@@ -817,6 +820,32 @@ mod tests {
         let px = img(10, 1, |x, _| [x as f32 * 10.0 / 255.0, 0.0, 0.0, 1.0]);
         let m = magic_wand(&px, Rect::new(0, 0, 10, 1), (0, 0), 25.0, true, false);
         assert_eq!(m.iter().filter(|v| **v > 0.0).count(), 3);
+    }
+
+    #[test]
+    fn wand_ignores_hidden_rgb_only_when_both_pixels_are_fully_transparent() {
+        let area = Rect::new(0, 0, 6, 1);
+        let pixels = [[255, 0, 0, 0], [0, 255, 0, 0], [255, 0, 0, 128], [253, 0, 0, 128], [0, 0, 255, 0], [255, 0, 0, 255]];
+        let floats: Vec<_> = pixels.iter().map(|p| p.map(|v| f32::from(v) / 255.0)).collect();
+        for (seed, tolerance, contiguous, expected) in [
+            ((0, 0), 0.0, true, [1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+            ((0, 0), 0.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((4, 0), 32.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((2, 0), 0.0, false, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            ((2, 0), 2.0, true, [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]),
+            ((5, 0), 32.0, false, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        ] {
+            assert_eq!(magic_wand(&floats, area, seed, tolerance, contiguous, false), expected);
+            let region = wand_region(&pixels, area, seed, tolerance, contiguous, false).unwrap();
+            for (x, value) in expected.into_iter().enumerate() {
+                assert_eq!(region.at(x as i32, 0), value, "seed={seed:?}, tolerance={tolerance}, x={x}");
+            }
+        }
+        // Hidden RGB cannot introduce extra edges into the anti-aliased selection either.
+        let plain: Vec<_> = pixels.iter().map(|p| if p[3] == 0 { [0; 4] } else { *p }).collect();
+        for contiguous in [false, true] {
+            assert_eq!(wand_region(&pixels, area, (0, 0), 0.0, contiguous, true), wand_region(&plain, area, (0, 0), 0.0, contiguous, true));
+        }
     }
 
     #[test]

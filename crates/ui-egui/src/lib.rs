@@ -50,6 +50,7 @@ pub mod crop_overlay;
 pub mod crop_shield;
 pub mod crop_straighten;
 pub mod crop_ui;
+pub mod delete_layer_prompt;
 pub mod dialog_blend_ui;
 pub mod dialogs;
 pub mod direct_select;
@@ -115,6 +116,7 @@ pub mod point_curve;
 pub mod prefs_ui;
 pub mod preset_files_ui;
 pub mod preset_panels;
+pub mod press_menu;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
@@ -725,6 +727,9 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
+            return result;
+        }
         // Automation input also gates every step a command runs on its behalf (`actions.play`).
         let gate = if self.automation_input && self.session.authorize.is_none() { self.services.automation_authorize } else { None };
         if gate.is_some() {
@@ -784,6 +789,11 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
+        if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
+            // Adding a layer mask targets it, as in Photoshop (#2166).
+            self.ui.mask_target = true;
+            self.ui.vector_mask_target = false;
+        }
         if r.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
@@ -849,6 +859,14 @@ impl PhotocraftApp {
         }
         self.ui.views = views.into_iter().map(Option::unwrap_or_default).collect();
         self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
+        if !self.session.prefs().workspace.open_documents_as_tabs {
+            let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
+            for &idx in &new_docs {
+                if !self.ui.windows.iter().any(|w| w.document == idx) {
+                    crate::view_cmds::float_window(self, idx, idx);
+                }
+            }
+        }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
@@ -994,10 +1012,21 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         // PDN imports default to our native format, which preserves Paint.NET's blend modes.
-        // Other files keep their format when writable, otherwise switch to .psd.
+        // Other files keep their format only when it can retain their layers. A plain raster
+        // (including an unlocked transparent PNG) can keep its flat format; editable contents,
+        // masks and layer appearance settings need a layered format even with just one layer.
+        let plain_raster = matches!(st.doc.layers.as_slice(), [layer]
+            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
+                && layer.visible && layer.opacity >= 1.0 && layer.fill_opacity >= 1.0
+                && layer.mask.is_none() && layer.vector_mask.is_none()
+                && layer.effects.items.is_empty() && layer.effects.psd_raw.is_none()
+                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+                && photocraft_compose::channel_weights(layer, st.doc.mode).is_none()
+                && !photocraft_compose::blend_if_active(layer, st.doc.mode));
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
-            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
+            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
+                || (plain_raster && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
@@ -1122,6 +1151,8 @@ impl PhotocraftApp {
                     self.pending_screenshots.push((token, path, reply));
                 }
             }
+            // `ui.set` may have changed the edit target: the next request sees its colours.
+            self.sync_mask_targets();
         }
         self.control_rx = Some(rx);
     }
@@ -1379,12 +1410,7 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if !self.ui.mask_target || !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
-            return params;
-        }
-        let Some(st) = self.session.active() else { return params };
-        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
-        if !composite || st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) {
+        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() || !self.layer_mask_targeted() {
             return params;
         }
         match params {
@@ -1396,20 +1422,32 @@ impl PhotocraftApp {
         }
     }
 
+    /// The Layers panel targets the active layer's mask, and no alpha channel or Quick Mask
+    /// takes over (the engine routes those itself).
+    pub fn layer_mask_targeted(&self) -> bool {
+        let Some(st) = self.session.active().filter(|_| self.ui.mask_target) else { return false };
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        composite && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some())
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
-    /// active layer (a shape layer's path is its content, not a mask).
+    /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
+    /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
     fn sync_mask_targets(&mut self) {
-        let Some(st) = self.session.active() else { return };
-        if photocraft_engine::mask_view_cmds::current(st).is_some() {
-            self.ui.mask_target = true;
-            self.ui.vector_mask_target = false;
+        if let Some(st) = self.session.active() {
+            if photocraft_engine::mask_view_cmds::current(st).is_some() {
+                self.ui.mask_target = true;
+                self.ui.vector_mask_target = false;
+            }
+            if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
+                self.ui.vector_mask_target = false;
+            }
+            if self.ui.mask_target && !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) {
+                self.ui.mask_target = false;
+            }
         }
-        if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
-            self.ui.vector_mask_target = false;
-        }
-        if self.ui.mask_target && !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) {
-            self.ui.mask_target = false;
-        }
+        let mask = self.layer_mask_targeted();
+        self.session.tools.target_mask(mask);
     }
 
     fn prune_thumbs(&mut self) {
@@ -1511,9 +1549,14 @@ impl PhotocraftApp {
     }
 }
 
-/// Cheap identity of a surface's pixels: tile coordinates and `Arc` pointers.
+/// Cheap identity of a surface's pixels: its default (untouched) pixel, tile coordinates and
+/// `Arc` pointers. The default pixel matters: inverting or filling a tile-less mask only changes
+/// it (#2117).
 pub fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ s.tile_count() as u64;
+    for &b in s.default_bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+    }
     for (c, t) in s.tiles() {
         let p = std::sync::Arc::as_ptr(t) as usize as u64;
         h = (h ^ p ^ ((c.tx as u64) << 32 | c.ty as u32 as u64)).wrapping_mul(0x100_0000_01b3);
@@ -1679,6 +1722,15 @@ impl PhotocraftApp {
     }
 }
 
+/// Layer › Layer Mask commands that add a layer mask: Photoshop targets the new mask (#2166).
+const ADDS_LAYER_MASK: [&str; 5] = [
+    "layer.layerMask.revealAll",
+    "layer.layerMask.hideAll",
+    "layer.layerMask.revealSelection",
+    "layer.layerMask.hideSelection",
+    "layer.layerMask.fromTransparency",
+];
+
 /// The New Document dialog's key in the preferences' `dialogs` map.
 const NEW_DOCUMENT: &str = "file.new";
 
@@ -1812,6 +1864,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod mask_thumb_refresh_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
@@ -2026,6 +2081,49 @@ mod clipboard_tests {
         let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
         assert!((mask.value(32, 32) - 128.0 / 255.0).abs() < 2.0 / 255.0, "the grey, centred in the view: {}", mask.value(32, 32));
         assert_eq!(mask.value(0, 0), 0.0, "the rest of the mask is unchanged");
+    }
+
+    /// #2166, measured in Photoshop 25.1: adding a layer mask targets it with white/black, and
+    /// the pixels and the mask each keep their own foreground/background pair.
+    #[test]
+    fn targeting_a_mask_swaps_to_its_own_colour_pair() {
+        use serde_json::json;
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+        const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+        const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+        const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let masked = app.run("layer.new.layer", json!({})).unwrap()["layer"].clone();
+        app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+        let pair = |app: &PhotocraftApp| (app.session.tools.foreground, app.session.tools.background);
+        let target = |app: &mut PhotocraftApp, mask: bool| {
+            app.ui.mask_target = mask;
+            app.sync_views();
+        };
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        assert!(app.ui.mask_target, "the new mask is targeted");
+        assert_eq!(pair(&app), (WHITE, BLACK));
+        target(&mut app, false);
+        assert_eq!(pair(&app), (RED, BLUE), "the pixels get their colours back");
+        target(&mut app, true);
+        assert_eq!(pair(&app), (WHITE, BLACK));
+        target(&mut app, false);
+        app.run("tools.setColors", json!({"foreground": "#00ff00"})).unwrap();
+        target(&mut app, true);
+        assert_eq!(pair(&app), (WHITE, BLACK));
+        target(&mut app, false);
+        assert_eq!(pair(&app), (GREEN, BLUE));
+        // A layer without a mask edits its pixels: their pair.
+        target(&mut app, true);
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert_eq!(pair(&app), (GREEN, BLUE));
+        app.run("layer.select", json!({"layer": masked})).unwrap();
+        target(&mut app, true);
+        assert_eq!(pair(&app), (WHITE, BLACK));
+        app.run("layer.layerMask.delete", json!({})).unwrap();
+        assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
     }
 }
 

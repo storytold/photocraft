@@ -954,6 +954,17 @@
 	Delete current channel	刪除目前色版
 	Delete current state	刪除目前狀態
 	Delete effect layer	刪除效果圖層
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	刪除圖層「{name}」？
+	Delete {count} layers? {names}	刪除 {count} 個圖層？{names}
+	Delete layer?	刪除圖層？
+	The document is closed	文件已關閉
+	The document or selected layers changed. Please request deletion again.	文件或所選圖層已變更。請重新要求刪除。
+	Missing delete command	缺少刪除指令
+	Invalid delete command	無效的刪除指令
+	Layer deleted, but confirmation preference could not be saved: {error}	圖層已刪除，但無法儲存確認設定：{error}
+
 	Delete layer	刪除圖層
 	Delete layer comp	刪除圖層構圖
 	Delete note	刪除註解
@@ -2333,3 +2344,7 @@ fontWeight	Italic	斜體
 	XOR	XOR
 	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
 	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)
+	No subject found — try Object Selection or the Lasso	找不到主體 — 請嘗試物件選取工具或套索工具
+	Quick Selection found nothing there	快速選取在該處找不到任何內容
+	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
+	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形

@@ -947,6 +947,17 @@
 	Delete current channel	Aktuellen Kanal löschen
 	Delete current state	Aktuellen Status löschen
 	Delete effect layer	Effektebene löschen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Ebene „{name}“ löschen?
+	Delete {count} layers? {names}	{count} Ebenen löschen? {names}
+	Delete layer?	Ebene löschen?
+	The document is closed	Das Dokument ist geschlossen
+	The document or selected layers changed. Please request deletion again.	Das Dokument oder die ausgewählten Ebenen haben sich geändert. Bitte die Löschung erneut anfordern.
+	Missing delete command	Löschbefehl fehlt
+	Invalid delete command	Ungültiger Löschbefehl
+	Layer deleted, but confirmation preference could not be saved: {error}	Die Ebene wurde gelöscht, aber die Bestätigungseinstellung konnte nicht gespeichert werden: {error}
+
 	Delete layer	Ebene löschen
 	Delete layer comp	Ebenenkomposition löschen
 	Delete note	Notiz löschen
@@ -2395,3 +2406,7 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
+	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
+	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
+	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt

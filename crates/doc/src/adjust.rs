@@ -136,7 +136,8 @@ pub enum Adjustment {
         contrast: f32,
         legacy: bool,
     },
-    /// Composite channel first, then R, G, B (or the channels `space` names).
+    /// R, G, B (or the channels `space` names) first, then the master (composite) record.
+    /// In CMYK this also applies to `black`; in Lab the master is ignored.
     Levels {
         master: LevelsChannel,
         per_channel: [LevelsChannel; 3],
@@ -146,7 +147,8 @@ pub enum Adjustment {
         #[serde(default)]
         black: LevelsChannel,
     },
-    /// Master curve then R, G, B curves (or the channels `space` names).
+    /// R, G, B curves (or the channels `space` names) first, then the master (composite) curve.
+    /// In CMYK this also applies to `black`; in Lab the master is ignored.
     Curves {
         master: Vec<CurvePoint>,
         per_channel: [Vec<CurvePoint>; 3],
