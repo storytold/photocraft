@@ -12,43 +12,9 @@ const STYLES: [(GradientStyle, &str); 5] = [
 ];
 
 pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
-    let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
     let document = app.session.active().map(|s| s.doc.id);
     ui.push_id(("gradient-properties", document, layer.id.0), |ui| {
-        if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
-            ui.horizontal(|ui| {
-                row_label(ui, "Style");
-                ui.spacing_mut().item_spacing.x = 3.0;
-                for (value, name) in STYLES {
-                    if style_button(ui, value, value == style, name).clicked() {
-                        let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "style": cmds::style_name(value)}));
-                    }
-                }
-            });
-            if let Some(value) = numeric_row(ui, "angle", "Angle", angle, -180.0..=180.0, "°") {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "angle": value}));
-            }
-            if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, 10.0..=150.0, "%") {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
-            }
-            ui.horizontal_wrapped(|ui| {
-                let mut value = reverse;
-                if widgets::checkbox(ui, &mut value, "Reverse").changed() {
-                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "reverse": value}));
-                }
-                let mut value = dither;
-                if widgets::checkbox(ui, &mut value, "Dither").changed() {
-                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "dither": value}));
-                }
-            });
-            let mut value = align;
-            if widgets::checkbox(ui, &mut value, "Align with layer").changed() {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
-            }
-            if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
-            }
-        }
+        options(app, ui, layer);
         for (strip, title) in [(Strip::Color, "Color stops"), (Strip::Opacity, "Opacity stops")] {
             let section_id = if strip == Strip::Color { "gradient-fill-colors" } else { "gradient-fill-opacity" };
             if props_layout::section(ui, section_id, title) {
@@ -59,11 +25,61 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                         ui.data_mut(|d| d.insert_temp(key, if strip == Strip::Color { Marker::Color(0) } else { Marker::Opacity(0) }));
                     }
                     stop_strip(app, ui, Sink::Layer(layer.id), fill, strip);
-                    stop_fields(app, ui, layer.id, strip);
+                    stop_fields(app, ui, Sink::Layer(layer.id), strip);
                 }
             }
         }
     });
+}
+
+pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    let document = app.session.active().map(|s| s.doc.id);
+    ui.push_id(("gradient-editor-layer", document, layer.id.0), |ui| {
+        if props_layout::section(ui, "gradient-editor-stops", "Gradient")
+            && let Some(fill) = current_fill(app, layer.id)
+        {
+            stops_editor_for(app, ui, Sink::Layer(layer.id), fill);
+        }
+        options(app, ui, layer);
+    });
+}
+
+fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
+    if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
+        ui.horizontal(|ui| {
+            row_label(ui, "Style");
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for (value, name) in STYLES {
+                if style_button(ui, value, value == style, name).clicked() {
+                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "style": cmds::style_name(value)}));
+                }
+            }
+        });
+        if let Some(value) = numeric_row(ui, "angle", "Angle", angle, -180.0..=180.0, "°") {
+            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "angle": value}));
+        }
+        if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, 10.0..=150.0, "%") {
+            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
+        }
+        ui.horizontal_wrapped(|ui| {
+            let mut value = reverse;
+            if widgets::checkbox(ui, &mut value, "Reverse").changed() {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "reverse": value}));
+            }
+            let mut value = dither;
+            if widgets::checkbox(ui, &mut value, "Dither").changed() {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "dither": value}));
+            }
+        });
+        let mut value = align;
+        if widgets::checkbox(ui, &mut value, "Align with layer").changed() {
+            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
+        }
+        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
+            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
+        }
+    }
 }
 
 fn current_fill(app: &PhotocraftApp, id: LayerId) -> Option<Fill> {
@@ -127,19 +143,18 @@ fn style_button(ui: &mut egui::Ui, style: GradientStyle, selected: bool, name: &
     response.on_hover_text(tl!(name))
 }
 
-fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, strip: Strip) {
-    let Some(Fill::Gradient { mut stops, mut opacity_stops, midpoints, .. }) = current_fill(app, id) else { return };
+pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink, strip: Strip) {
+    let Some(Fill::Gradient { mut stops, mut opacity_stops, midpoints, .. }) = sink.fill(app) else { return };
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     if opacity_stops.is_empty() {
         opacity_stops = vec![(0.0, 1.0), (1.0, 1.0)];
     }
     opacity_stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let sink = Sink::Layer(id);
     let key = strip_key(app, sink, strip).with("selection");
-    let default = if strip == Strip::Color { Marker::Color(0) } else { Marker::Opacity(0) };
+    let default = if strip == Strip::Opacity { Marker::Opacity(0) } else { Marker::Color(0) };
     let selected = ui.data(|d| d.get_temp::<Marker>(key)).unwrap_or(default);
     let (index, location, count) = match selected {
-        Marker::Color(i) if strip == Strip::Color => {
+        Marker::Color(i) if strip != Strip::Opacity => {
             let Some((location, color)) = stops.get(i) else {
                 ui.data_mut(|d| d.remove::<Marker>(key));
                 return;
@@ -152,38 +167,41 @@ fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, strip: S
                 ui.painter().rect_stroke(rect, Tokens::get(ui.ctx()).radius_sm, Stroke::new(1.0, Tokens::get(ui.ctx()).field_border), StrokeKind::Inside);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Color")));
                 if response.on_hover_text(tl!("Color")).clicked() {
-                    edit_stop_color(app, id, i);
+                    match sink {
+                        Sink::Layer(id) => edit_stop_color(app, id, i),
+                        Sink::Preset => preset_stop_color(app, i),
+                    }
                 }
             });
             (i, *location, stops.len())
         }
-        Marker::Opacity(i) if strip == Strip::Opacity => {
+        Marker::Opacity(i) if strip != Strip::Color => {
             let Some((location, opacity)) = opacity_stops.get(i) else {
                 ui.data_mut(|d| d.remove::<Marker>(key));
                 return;
             };
             if let Some(value) = numeric_row(ui, &format!("opacity-{i}"), "Opacity", *opacity * 100.0, 0.0..=100.0, "%") {
-                let _ = app.run(cmds::STOP, sink.params(json!({"action": "opacity", "kind": "opacity", "index": i, "opacity": value})));
+                let _ = app.run(sink.cmd(), sink.params(json!({"action": "opacity", "kind": "opacity", "index": i, "opacity": value})));
             }
             (i, *location, opacity_stops.len())
         }
-        Marker::Mid(i) if strip == Strip::Color => {
+        Marker::Mid(i) if strip != Strip::Opacity => {
             if stops.get(i).is_none() || stops.get(i.saturating_add(1)).is_none() {
                 ui.data_mut(|d| d.remove::<Marker>(key));
                 return;
             }
             if let Some(value) = numeric_row(ui, &format!("midpoint-{i}"), "Midpoint", midpoints.get(i).copied().unwrap_or(0.5) * 100.0, 5.0..=95.0, "%") {
-                let _ = app.run(cmds::STOP, sink.params(json!({"action": "midpoint", "index": i, "location": value / 100.0})));
+                let _ = app.run(sink.cmd(), sink.params(json!({"action": "midpoint", "index": i, "location": value / 100.0})));
             }
             return;
         }
         _ => return,
     };
-    let kind = if strip == Strip::Opacity { "opacity" } else { "color" };
+    let kind = if matches!(selected, Marker::Opacity(_)) { "opacity" } else { "color" };
     if let Some(value) = numeric_row(ui, &format!("{kind}-location-{index}"), "Location", location * 100.0, 0.0..=100.0, "%") {
         let p = sink.params(json!({"action": "move", "kind": kind, "index": index, "location": value / 100.0}));
-        let selection = current_fill(app, id).and_then(|f| selection_after_edit(&f, &p, Some(selected)));
-        if app.run(cmds::STOP, p).is_ok() {
+        let selection = sink.fill(app).and_then(|f| selection_after_edit(&f, &p, Some(selected)));
+        if app.run(sink.cmd(), p).is_ok() {
             if let Some(marker) = selection {
                 ui.data_mut(|d| d.insert_temp(key, marker));
             }
@@ -197,7 +215,7 @@ fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, strip: S
             let response = icons::button(ui, "trash", 24.0, false, "Delete");
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Delete")));
             if response.clicked() {
-                let _ = app.run(cmds::STOP, sink.params(json!({"action": "delete", "kind": kind, "index": index})));
+                let _ = app.run(sink.cmd(), sink.params(json!({"action": "delete", "kind": kind, "index": index})));
                 ui.data_mut(|d| d.remove::<Marker>(key));
             }
         });

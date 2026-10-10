@@ -26,6 +26,8 @@ use crate::state::Tool;
 use crate::theme::Tokens;
 use crate::widgets;
 
+#[cfg(test)]
+mod editor_tests;
 mod properties_panel;
 
 /// Id of the temporary layer previewing a new gradient while it is drawn.
@@ -599,10 +601,9 @@ fn selected_gradient(app: &PhotocraftApp) -> Option<Layer> {
 }
 
 /// The Gradient Editor window the options-bar swatch opens, standing in for Photoshop's Gradient
-/// Editor. A selected gradient fill layer gets the full editor — the same "Gradient" (stops) and
-/// "Gradient Options" sections the Properties panel shows. With no gradient fill layer selected
-/// there is nothing to edit yet (a live gradient is created by dragging on the canvas, and a
-/// classic one is a preset), so the window says so and offers the Gradients panel.
+/// Editor. A selected gradient fill layer gets a combined ramp, with opacity above and colour
+/// below, selected-stop fields and Gradient Options. Without a gradient fill layer, the same
+/// stop controls edit the tool's current gradient and offer saving it as a preset.
 pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.panels.gradient_editor {
         return;
@@ -618,7 +619,7 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .resizable(true)
         .default_width(330.0)
         .show(ctx, |ui| match &layer {
-            Some(l) => properties(app, ui, l),
+            Some(l) => properties_panel::editor(app, ui, l),
             None => {
                 // Photoshop's editor edits the gradient the tool paints with, so with no gradient
                 // fill layer around the strip edits the current gradient in place.
@@ -715,6 +716,12 @@ enum Sink {
 }
 
 impl Sink {
+    fn fill(self, app: &PhotocraftApp) -> Option<Fill> {
+        match self {
+            Sink::Layer(id) => fill_of(app.session.active()?.doc.layer(id)?).cloned(),
+            Sink::Preset => preset_fill(app),
+        }
+    }
     /// Uniqueness for the drag state.
     fn key(self) -> egui::Id {
         match self {
@@ -783,7 +790,12 @@ fn preset_stop_color(app: &mut PhotocraftApp, i: usize) {
 }
 
 fn stops_editor_for(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink, f: Fill) {
+    let key = strip_key(app, sink, Strip::Combined).with("selection");
+    if ui.data(|d| d.get_temp::<Marker>(key)).is_none() {
+        ui.data_mut(|d| d.insert_temp(key, Marker::Color(0)));
+    }
     stop_strip(app, ui, sink, f, Strip::Combined);
+    properties_panel::stop_fields(app, ui, sink, Strip::Combined);
 }
 
 /// Keep selection on a stop after the engine sorts its new position.
@@ -839,10 +851,8 @@ fn stop_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink, f: Fill, s
     let shown = pending.as_ref().and_then(|p| cmds::apply_stop(&f, p, fg, bg).ok()).unwrap_or_else(|| f.clone());
     let mut track_fill = shown.clone();
     if let Fill::Gradient { stops, opacity_stops, reverse, .. } = &mut track_fill {
-        if !combined {
-            // Markers address un-reversed stop positions. Each track shows only its own data.
-            *reverse = false;
-        }
+        // All markers address un-reversed positions; Reverse applies to the canvas output.
+        *reverse = false;
         match strip {
             Strip::Color => opacity_stops.clear(),
             Strip::Opacity => {
@@ -1334,7 +1344,7 @@ mod tests {
         assert!(app.ui.panels.gradient_editor, "the window stays open");
 
         // A committed live gradient fill layer: `selected_gradient` finds it, so the full editor
-        // (the same sections the Properties panel shows) is what gets built.
+        // (combined stops and Gradient Options) is what gets built.
         let mut app = app_with_gradient("linear");
         drag(&mut app, [10.0, 10.0], [150.0, 90.0]);
         assert!(selected_gradient(&app).is_some(), "the drag left a gradient fill layer selected");
