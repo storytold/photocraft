@@ -20,9 +20,6 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::{ThemeKind, Tokens};
 
-#[cfg(test)]
-mod recovery_tests;
-
 /// Shell runtime state for preferences, autosave and snapping (not serialised).
 #[derive(Default)]
 pub struct Runtime {
@@ -1564,6 +1561,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         _ => Err("unknown dialog".into()),
     }
 }
+
+// Test modules stay after the production code: the prefs_usage test reads each file up to
+// its first `#[cfg(test)] mod`.
+#[cfg(test)]
+mod recovery_tests;
 
 #[cfg(test)]
 #[path = "shortcut_capture_tests.rs"]
