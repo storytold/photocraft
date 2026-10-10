@@ -42,6 +42,11 @@
 	Open…	Открыть…
 	Open	Открыть
 	Open As…	Открыть как…
+	Open EXR Parts…	Открыть части EXR…
+	Add beauty precomp from the AOVs	Добавить предкомпозит красоты из AOV
+	Both	Оба
+	Left	Левый
+	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
 	Close	Закрыть
@@ -164,6 +169,8 @@
 	Rasterize	Растрировать
 	Rasterize Type	Растрировать текст
 	Rasterize Shape	Растрировать фигуру
+	Rasterize Layer	Растрировать слой
+	Rasterize Layers	Растрировать слои
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
@@ -547,6 +554,11 @@
 	{n} commands are not in PhotoCraft.	Команд, которых нет в PhotoCraft: {n}.
 	Keyboard shortcuts imported	Сочетания клавиш импортированы
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Здесь используется ваш набор сочетаний клавиш {set}: сочетаний, отличных от стандартных: {n}. Их показывает Редактирование › Сочетания клавиш; «Сбросить всё к значениям по умолчанию» отменяет импорт.
+	Import keyboard shortcuts?	Импортировать сочетания клавиш?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft нашёл на этом компьютере ваш набор сочетаний клавиш {set} из другого графического редактора: сочетаний, отличных от PhotoCraft: {n}. Импортировать его?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Редактирование › Сочетания клавиш › «Сбросить всё к значениям по умолчанию» отменяет импорт.
+	Don't Import	Не импортировать
+	The keyboard shortcut set was not imported: {error}	Набор сочетаний клавиш не импортирован: {error}
 	Defaults restored.	Значения по умолчанию восстановлены.
 	Restore Defaults	Восстановить по умолчанию
 	Restore original size	Восстановить исходный размер
@@ -967,8 +979,8 @@
 	Rename Brush…	Переименовать кисть…
 	Delete Brush	Удалить кисть
 	Import Brushes…	Импортировать кисти…
-	List view	Вид списком
-	Grid view	Вид сеткой
+	Brush Name	Имя кисти
+	Brush Stroke	Мазок кисти
 	New Brush Preset…	Новый набор параметров кисти…
 	Brush Preset Options	Параметры наборов кистей
 	New Brush	Новая кисть
@@ -1071,8 +1083,6 @@
 	Single Word Justification	Выключка одного слова
 	Alignment	Выравнивание
 	Indent First	Отступ первой строки
-	Left	По левому краю
-	Right	По правому краю
 	Center	По центру
 	Justify	По ширине
 
@@ -1500,6 +1510,8 @@
 	Adjustment Layer	Корректирующий слой
 	{name} Properties	Свойства: {name}
 	Move Tool	Перемещение
+	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
+	Could not complete the Free Transform command because the layer is locked.	Не удалось выполнить команду «Свободное трансформирование», потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Brush Tool	Кисть
@@ -1605,6 +1617,8 @@
 	Open a document to select a colour range.	Откройте документ, чтобы выбрать цветовой диапазон.
 	Saved	Сохранено
 	Reveal in Finder	Показать в Finder
+	Show in Explorer	Показать в Проводнике
+	Show in Folder	Показать в папке
 	Before (Y)	До (Y)
 	After (X)	После (X)
 	Original	Оригинал
@@ -1657,6 +1671,7 @@
 	Add Pins	Добавить булавки
 	Delete Pins	Удалить булавки
 	Remove All Pins	Удалить все булавки
+	Remove Tool	Инструмент «Удаление»
 	Pin Depth:	Глубина булавки:
 	Bring the selected pin forward	Переместить выбранную булавку вперёд
 	Send the selected pin backward	Переместить выбранную булавку назад
@@ -1919,7 +1934,6 @@
 	Bilinear	Билинейная
 	Black, White	Чёрный, белый
 	Blue, Red, Yellow	Синий, красный, жёлтый
-	Both	Оба
 	Bottom	Снизу
 	Brightness Jitter	Колебание яркости
 	Brush Reconstruct Options	Параметры восстановления кисти
@@ -2067,6 +2081,7 @@
 	Quality	Качество
 	Recent	Недавние
 	Reconstruct	Восстановление
+	Refine	Уточнение
 	Registration Marks	Кресты приводки
 	Regular	Обычный
 	Remove stop	Удалить ограничитель
@@ -2489,6 +2504,7 @@ cameraRaw	Roughness	Неровность
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Палитра цветов (Цвет текста)
+	Color Picker ({name})	Палитра цветов ({name})
 	Color Picker (Fill Color)	Палитра цветов (Цвет заливки)
 	Fill color	Цвет заливки
 	Color Picker (Stroke Color)	Палитра цветов (Цвет обводки)
@@ -2588,6 +2604,9 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+
+	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.
 	Rule of Thirds	Правило третей
 	Triangle	Треугольник
 	Golden Ratio	Золотое сечение
@@ -2628,6 +2647,10 @@ fontWeight	Italic	Курсив
 	Create Ellipse	Создать эллипс
 	Create Triangle	Создать треугольник
 	Create Polygon	Создать многоугольник
+	Pressure curve	Кривая нажима
+	Click to add a point, right-click to remove	Щёлкните, чтобы добавить точку; щелчок правой кнопкой удаляет её
+	Soft	Мягкая
+	Hard	Жёсткая
 	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
 	Retry saving presets	Повторить сохранение наборов
 	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}
@@ -2640,6 +2663,26 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+	Stroke Options	Параметры обводки
+	Solid	Сплошная
+	Dashed	Штриховая
+	Dotted	Пунктирная
+	Caps	Концы
+	Butt / Flat	Плоские
+	Corners	Углы
+	Miter	Острые
+	Round	Круглые
+	Bevel	Скошенные
+	Miter limit	Предел острого угла
+	Dashed line	Штриховая линия
+	Dash	Штрих
+	Gap	Пробел
+	Dash / gap lengths × stroke width	Длины штриха / пробела × ширина обводки
+	Add pair	Добавить пару
+	Remove pair	Удалить пару
+	Dash offset	Смещение штрихов
+	Open paths use centered strokes	Открытые контуры используют обводку по центру
+	Use finite lengths and a positive pattern total	Используйте конечные длины и положительную сумму шаблона
 	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
 	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
 	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
@@ -2654,3 +2697,10 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+	Use Classic Mode	Использовать классический режим
+	Auto Center Preview	Автоматически центрировать просмотр
+	Next Document	Следующий документ
+	Previous Document	Предыдущий документ
+	W x H x Resolution	Ш x В x Разрешение
+	Front Image	Изображение переднего плана
+	Swaps height and width	Меняет местами высоту и ширину

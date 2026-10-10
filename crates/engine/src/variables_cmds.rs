@@ -62,7 +62,7 @@ fn kind_json(k: &VarKind) -> Value {
             let align = a[..1].to_lowercase() + &a[1..];
             json!({
                 "type": "pixelReplacement",
-                "method": format!("{method:?}").to_lowercase(),
+                "method": method,
                 "align": align,
                 "clip": clip,
             })
@@ -363,7 +363,6 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
 fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad("file.export.dataSetsAsFiles", "need `dir`"))?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
-    std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
     let vars = original.variables.clone();
@@ -375,17 +374,29 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
     let doc_stem = original.name.rsplit_once('.').map_or(original.name.as_str(), |(a, _)| a).to_string();
+    // Plan the whole batch before writing: sanitised names or a constant template may collide.
+    // Match the case-insensitive comparison used by the other batch exporters.
+    let mut claimed = std::collections::HashMap::new();
     let mut files = Vec::new();
     for (n, set) in sets.iter().enumerate() {
-        let mut doc = (*original).clone();
-        apply_to_doc(&mut doc, &vars, set)?;
         let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
         let path = format!("{dir}/{stem}.{format}");
+        if let Some(first) = claimed.insert(path.to_lowercase(), &set.name) {
+            return Err(bad(
+                "file.export.dataSetsAsFiles",
+                format!("data sets `{first}` and `{}` resolve to the same output `{path}`; include {{index}} in `naming` to use distinct filenames", set.name),
+            ));
+        }
+        files.push(path);
+    }
+    std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
+    for (set, path) in sets.iter().zip(&files) {
+        let mut doc = (*original).clone();
+        apply_to_doc(&mut doc, &vars, set)?;
         let opts = photocraft_io::ExportOptions::default();
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
-        crate::file_cmds::write_file(&path, &bytes)?;
-        files.push(path);
+        crate::file_cmds::write_file(path, &bytes)?;
     }
     Ok(json!({"files": files, "count": files.len()}))
 }
@@ -446,7 +457,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document",
+            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document; colliding filenames are rejected before writing (include {index} to disambiguate)",
             |s, p| export_as_files(s, p)
         ),
         CommandSpec {

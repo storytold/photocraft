@@ -14,7 +14,7 @@ use photocraft_text::render::PathEl;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
-use crate::type_cmds::{is_auto_named, layer_name, refresh, replace_text, style_paragraphs, style_range};
+use crate::type_cmds::{format_targets, has_format_target, is_auto_named, layer_name, refresh, replace_text, style_paragraphs, style_range, with_text_targets};
 use crate::{EngineError, Result, Session};
 
 /// Photoshop's Paste Lorem Ipsum filler.
@@ -58,7 +58,7 @@ fn any_text(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn has_defaults(s: &Session) -> std::result::Result<(), String> {
-    has_text(s)?;
+    has_format_target(s)?;
     s.type_defaults.as_ref().map(|_| ()).ok_or_else(|| "no default type styles have been saved".into())
 }
 
@@ -121,7 +121,7 @@ pub fn aa_name(a: AntiAlias) -> &'static str {
 }
 
 fn set_aa(s: &mut Session, p: &Value, aa: AntiAlias) -> Result<Value> {
-    with_text(s, p, "Anti-Alias", |t, _| {
+    with_text_targets(s, p, "Anti-Alias", |t, _| {
         t.antialias = aa;
         Ok(())
     })?;
@@ -129,7 +129,7 @@ fn set_aa(s: &mut Session, p: &Value, aa: AntiAlias) -> Result<Value> {
 }
 
 fn set_orientation(s: &mut Session, p: &Value, o: Orientation) -> Result<Value> {
-    with_text(s, p, "Change Text Orientation", |t, _| {
+    with_text_targets(s, p, "Change Text Orientation", |t, _| {
         t.orientation = o;
         Ok(())
     })?;
@@ -334,8 +334,8 @@ fn warp_text(s: &mut Session, p: &Value) -> Result<Value> {
         horizontal: p.get("orientation").and_then(Value::as_str) != Some("vertical"),
     });
     let out = json!({"warp": warp});
-    with_text(s, p, "Warp Text", |t, _| {
-        t.warp = warp;
+    with_text_targets(s, p, "Warp Text", |t, _| {
+        t.warp = warp.clone();
         Ok(())
     })?;
     Ok(out)
@@ -366,13 +366,14 @@ fn set_feature(st: &mut photocraft_doc::text::CharStyle, tag: &str, on: bool) {
 }
 
 fn toggle_opentype(s: &mut Session, p: &Value, tag: &'static str) -> Result<Value> {
-    let cur = active_text(s).ok().and_then(|t| t.char_runs().first().map(|r| feature_on(&r.style, tag))).unwrap_or(false);
+    let ids = format_targets(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let representative = st.active_layer.filter(|id| ids.contains(id)).or_else(|| ids.first().copied());
+    let cur = representative
+        .and_then(|id| st.doc.layer(id))
+        .is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if t.char_runs().first().is_some_and(|r| feature_on(&r.style, tag))));
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(!cur);
-    with_text(s, p, "Change OpenType Feature", |t, _| {
-        let (a, b) = match p.get("range").and_then(Value::as_array) {
-            Some(r) if r.len() == 2 => (byte_index(&t.text, r[0].as_u64().unwrap_or(0) as usize), byte_index(&t.text, r[1].as_u64().unwrap_or(0) as usize)),
-            _ => (0, t.text.len()),
-        };
+    with_text_targets(s, p, "Change OpenType Feature", |t, (a, b)| {
         style_range(t, a.min(b), a.max(b), &|st| set_feature(st, tag, on));
         Ok(())
     })?;
@@ -496,7 +497,7 @@ fn save_defaults(s: &mut Session) -> Result<Value> {
 
 fn load_defaults(s: &mut Session, p: &Value) -> Result<Value> {
     let (c, pp) = s.type_defaults.clone().ok_or(EngineError::Other("no default type styles have been saved".into()))?;
-    with_text(s, p, "Load Default Type Styles", |t, _| {
+    with_text_targets(s, p, "Load Default Type Styles", |t, _| {
         let n = t.text.len();
         style_range(t, 0, n, &|st| *st = c.clone());
         style_paragraphs(t, 0, n, &|st| *st = pp.clone());
@@ -514,27 +515,36 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     const LP: &str = r##"{"layer":id?}"##;
-    const OT: &str = r##"{"layer":id?,"on":bool? (default: toggle),"range":[startChar,endChar]? (default all)}"##;
+    const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
+    const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
     vec![
-        spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::None)),
-        spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::Sharp)),
-        spec!("type.antiAlias.crisp", "Crisp", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::Crisp)),
-        spec!("type.antiAlias.strong", "Strong", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::Strong)),
-        spec!("type.antiAlias.smooth", "Smooth", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::Smooth)),
-        spec!("type.antiAlias.windowsLcd", "Windows LCD", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::WindowsLcd)),
-        spec!("type.antiAlias.windows", "Windows", &["Type", "Anti-Alias"], LP, has_text, |s, p| set_aa(s, p, AntiAlias::Windows)),
-        spec!("type.orientation.horizontal", "Horizontal", &["Type", "Orientation"], LP, has_text, |s, p| set_orientation(s, p, Orientation::Horizontal)),
-        spec!("type.orientation.vertical", "Vertical", &["Type", "Orientation"], LP, has_text, |s, p| set_orientation(s, p, Orientation::Vertical)),
-        spec!("type.openType.standardLigatures", "Standard Ligatures", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "liga")),
-        spec!("type.openType.contextualAlternates", "Contextual Alternates", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "calt")),
-        spec!("type.openType.discretionaryLigatures", "Discretionary Ligatures", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "dlig")),
-        spec!("type.openType.swash", "Swash", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "swsh")),
-        spec!("type.openType.oldstyle", "Oldstyle", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "onum")),
-        spec!("type.openType.stylisticAlternates", "Stylistic Alternates", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "salt")),
-        spec!("type.openType.titlingAlternates", "Titling Alternates", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "titl")),
-        spec!("type.openType.ornaments", "Ornaments", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "ornm")),
-        spec!("type.openType.ordinals", "Ordinals", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "ordn")),
-        spec!("type.openType.fractions", "Fractions", &["Type", "OpenType"], OT, has_text, |s, p| toggle_opentype(s, p, "frac")),
+        spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::None)),
+        spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Sharp)),
+        spec!("type.antiAlias.crisp", "Crisp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Crisp)),
+        spec!("type.antiAlias.strong", "Strong", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Strong)),
+        spec!("type.antiAlias.smooth", "Smooth", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Smooth)),
+        spec!("type.antiAlias.windowsLcd", "Windows LCD", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::WindowsLcd)),
+        spec!("type.antiAlias.windows", "Windows", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Windows)),
+        spec!("type.orientation.horizontal", "Horizontal", &["Type", "Orientation"], FP, has_format_target, |s, p| set_orientation(
+            s,
+            p,
+            Orientation::Horizontal
+        )),
+        spec!("type.orientation.vertical", "Vertical", &["Type", "Orientation"], FP, has_format_target, |s, p| set_orientation(s, p, Orientation::Vertical)),
+        spec!("type.openType.standardLigatures", "Standard Ligatures", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "liga")),
+        spec!("type.openType.contextualAlternates", "Contextual Alternates", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(
+            s, p, "calt"
+        )),
+        spec!("type.openType.discretionaryLigatures", "Discretionary Ligatures", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(
+            s, p, "dlig"
+        )),
+        spec!("type.openType.swash", "Swash", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "swsh")),
+        spec!("type.openType.oldstyle", "Oldstyle", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "onum")),
+        spec!("type.openType.stylisticAlternates", "Stylistic Alternates", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "salt")),
+        spec!("type.openType.titlingAlternates", "Titling Alternates", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "titl")),
+        spec!("type.openType.ornaments", "Ornaments", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ornm")),
+        spec!("type.openType.ordinals", "Ordinals", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ordn")),
+        spec!("type.openType.fractions", "Fractions", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "frac")),
         spec!("type.createWorkPath", "Create Work Path", &["Type"], LP, has_text, create_work_path),
         spec!("type.convertToShape", "Convert to Shape", &["Type"], LP, has_text, convert_to_shape),
         spec!("type.rasterizeTypeLayer", "Rasterize Type Layer", &["Type"], LP, has_text, |s, p| s.execute("type.rasterize", p.clone())),
@@ -544,8 +554,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "type.warpText",
             "Warp Text…",
             &["Type"],
-            r##"{"layer":id?,"style":"none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist"="arc","bend":-100..100=50,"horizontalDistortion":-100..100=0,"verticalDistortion":-100..100=0,"orientation":"horizontal|vertical"="horizontal"}"##,
-            has_text,
+            r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"style":"none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist"="arc","bend":-100..100=50,"horizontalDistortion":-100..100=0,"verticalDistortion":-100..100=0,"orientation":"horizontal|vertical"="horizontal"}"##,
+            has_format_target,
             warp_text
         ),
         spec!("type.updateAllTextLayers", "Update All Text Layers", &["Type"], "{}", any_text, |s, _| update_all(s)),
@@ -578,7 +588,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_text,
             |s, _| save_defaults(s)
         ),
-        spec!("type.loadDefaultTypeStyles", "Load Default Type Styles", &["Type"], LP, has_defaults, load_defaults),
+        spec!("type.loadDefaultTypeStyles", "Load Default Type Styles", &["Type"], FP, has_defaults, load_defaults),
     ]
 }
 

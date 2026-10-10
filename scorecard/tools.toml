@@ -78,9 +78,9 @@ note = "brush_resize.rs (#297, #370): Alt+right-drag, or Control+Option-drag on 
 [[item]]
 id = "TOOL-213-11"
 target = "Editable pressure curve, global and per control"
-status = "missing"
+status = "partial"
 issue = 213
-note = "No pressure curve in engine, paint or ui-egui"
+note = "Global: Preferences › Tools › Pressure Curve (prefs tools.pressureCurve; monotone cubic, engine prefs::PressureCurve; applied to every pen sample in ui-egui stylus.rs before any brush; editor pressure_curve_ui.rs with Linear/Soft/Hard presets). Missing: per-control curves (each brush dynamic's own response to pressure, tilt, rotation)"
 
 [[item]]
 id = "TOOL-213-12"
@@ -171,7 +171,7 @@ id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
 status = "partial"
 issue = 214
-note = "Ratio dropdown and fields, Straighten (TOOL-214-21); no W x H x Resolution with units or saved presets"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); no New/Delete Crop Preset"
 
 [[item]]
 id = "TOOL-214-10"
@@ -255,7 +255,7 @@ id = "TOOL-214-18"
 target = "Crop: drag outside the frame to rotate it (Shift 15 deg steps, angle readout); Enter rotates and crops in one step"
 status = "done"
 issue = 1792
-note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode visuals); UiState.crop_angle"
+note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode; default mode turns the image instead, TOOL-214-23); UiState.crop_angle"
 
 [[item]]
 id = "TOOL-214-19"
@@ -276,4 +276,25 @@ id = "TOOL-214-22"
 target = "Crop gear menu: Show Cropped Area (H), Enable Crop Shield with Match Canvas / custom colour, opacity and Auto Adjust Opacity"
 status = "done"
 issue = 1919
-note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"
+note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. Use Classic Mode / Auto Center Preview: TOOL-214-23"
+
+[[item]]
+id = "TOOL-214-23"
+target = "Crop: Photoshop's default mode (the image turns and moves behind an upright box, Auto Center Preview keeps a resized box's centre in place and centres a drawn one) and Use Classic Mode (P) in the gear menu"
+status = "done"
+issue = 1919
+note = "crop_mode.rs: the crop model (crop_rect + crop_angle) and image.crop are shared by both modes; default mode sets the view's rotation to -crop_angle while the tool shows a frame (picking the tool, in either mode, turns a Rotate View turn upright about the view centre, not restored after Enter/Esc or by P; Classic Mode keeps the camera upright with the frame drawn turned; as Photoshop 25.1), pivoting so the box stays put, moves view and frame together for drags inside and arrow keys, keeps a resized box's centre in place live (Auto Center Preview; a drawn box is centred on release, a moved one never), readout = the image's turn; gear menu order and Classic Mode greying as Photoshop 25.1; CropShield classic_mode / auto_center_preview (ui.set cropShield), P ahead of the Pen key"
+
+[[item]]
+id = "TOOL-1053-1"
+target = "Shape stroke controls: solid/dashed/dotted, custom dash/gap/offset, caps, joins, alignment, miter limit and opacity"
+status = "done"
+issue = 1053
+note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; existing shape.create/edit/info; serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Gradient fill UI and saved stroke libraries remain open; Line retains filled-bar geometry"
+
+[[item]]
+id = "TOOL-213-19"
+target = "Remove tool: paint over an object (or circle it) and it is filled from its surroundings"
+status = "partial"
+issue = 213
+note = "paint.remove (retouch_cmds/remove.rs, background job) + Tool::Remove in the J flyout; loops close over what they enclose; fill by non-local patch completion with texture features, onion-peel start, best-patch copy and gradient-domain seam hiding (algo/nonlocal.rs, Newson et al. IPOL 2017); sparse holes in tiles (algo/remove.rs). remove_quality on 20 holes in public-domain photos: the fill keeps 0.89 of the texture it replaces (0.54 with Content-Aware Fill's completion), edge gradient 1.03 of the original's; remove_bench 24 MP: 100 px ring 120 ms, 1000 px ring 2.5 s, 3000 px line 1.7 s. Missing: generative AI mode, Remove after each stroke off, live preview of the result"

@@ -15,8 +15,9 @@ use crate::theme::Tokens;
 pub const BUTTON_WIDTH: f32 = 46.0;
 /// The three caption buttons together.
 pub const WIDTH: f32 = 3.0 * BUTTON_WIDTH;
-/// Resize zone thickness along an edge, and the side of a corner zone.
-const EDGE: f32 = 5.0;
+/// Resize zone thickness along an edge, and the side of a corner zone. 5 pt was hard to find
+/// (#1581); 8 pt is about a native resize border, and only trims the toolbar buttons' outer 3 pt.
+const EDGE: f32 = 8.0;
 const CORNER: f32 = 12.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -112,15 +113,19 @@ fn paint_glyph(ui: &Ui, c: Caption, maximized: bool, at: egui::Pos2, s: Stroke) 
 }
 
 /// The edge and corner zones of a window with content rect `w`: (zone, direction, cursor). Corners
-/// come last so they win where they overlap the edges.
+/// come last so they win where they overlap the edges. Edges use the one-sided cursors
+/// (`w-resize`, …), as GTK and KDE window borders do: some cursor themes ship no `ew-resize` /
+/// `ns-resize`, and then X11 showed the core font's arrow and Wayland no resize cursor (#1581).
+/// Corners keep the diagonal ones (`nwse-resize`), which those themes draw like the edges; their
+/// one-sided corner names can be a different style (`top_left_corner`).
 fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
     use ResizeDirection::*;
     let (e, c) = (EDGE, CORNER);
     [
-        (Rect::from_min_max(w.left_top(), pos2(w.right(), w.top() + e)), North, CursorIcon::ResizeVertical),
-        (Rect::from_min_max(pos2(w.left(), w.bottom() - e), w.right_bottom()), South, CursorIcon::ResizeVertical),
-        (Rect::from_min_max(w.left_top(), pos2(w.left() + e, w.bottom())), West, CursorIcon::ResizeHorizontal),
-        (Rect::from_min_max(pos2(w.right() - e, w.top()), w.right_bottom()), East, CursorIcon::ResizeHorizontal),
+        (Rect::from_min_max(w.left_top(), pos2(w.right(), w.top() + e)), North, CursorIcon::ResizeNorth),
+        (Rect::from_min_max(pos2(w.left(), w.bottom() - e), w.right_bottom()), South, CursorIcon::ResizeSouth),
+        (Rect::from_min_max(w.left_top(), pos2(w.left() + e, w.bottom())), West, CursorIcon::ResizeWest),
+        (Rect::from_min_max(pos2(w.right() - e, w.top()), w.right_bottom()), East, CursorIcon::ResizeEast),
         (Rect::from_min_size(w.left_top(), vec2(c, c)), NorthWest, CursorIcon::ResizeNwSe),
         (Rect::from_min_size(w.right_top() - vec2(c, 0.0), vec2(c, c)), NorthEast, CursorIcon::ResizeNeSw),
         (Rect::from_min_size(w.left_bottom() - vec2(0.0, c), vec2(c, c)), SouthWest, CursorIcon::ResizeNeSw),
@@ -128,11 +133,57 @@ fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
     ]
 }
 
+fn resize_handed_off_id() -> Id {
+    Id::new("titlebar-resize-handed-off")
+}
+
+/// An OS resize started at `pass`; `released` is the pass whose input ended the press
+/// ([`release_after_os_resize`]).
+#[derive(Clone, Copy, Debug)]
+struct HandOff {
+    pass: u64,
+    released: Option<u64>,
+}
+
+/// The compositor takes the button release of an OS resize (KDE Wayland), so egui kept the edge
+/// pressed: the zones stopped hovering until the next click, every other resize (#1581). End the
+/// press ourselves on the input after the hand-off, but only while egui still has it down and this
+/// input brings no release of its own: where the OS does send it (Windows, X11), nothing is added,
+/// so no second release can turn into a click. Call from `raw_input_hook`.
+pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
+    if h.released.is_some() || h.pass >= ctx.cumulative_pass_nr() {
+        return;
+    }
+    let os_released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }));
+    if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| !os_released && ctx.input(|i| i.pointer.primary_down())) {
+        raw.events.push(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: ctx.input(|i| i.modifiers) });
+    }
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { released: Some(pass), ..h }));
+}
+
+/// The compositor owns the pointer during an OS resize: it sets its own cursor, and the button
+/// release goes to it, not to us. egui-winit only re-sends a cursor that changed, so afterwards the
+/// window kept the compositor's arrow until the next press (KDE Wayland, #1581). On the first
+/// pointer motion after the hand-off, show the default cursor for one frame so the resize cursor is
+/// sent again on the next.
+fn reshow_cursor_after_os_resize(ctx: &egui::Context) {
+    // Only motion after the press was ended means the compositor gave the pointer back.
+    let Some(HandOff { released: Some(pass), .. }) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
+    if pass < ctx.cumulative_pass_nr() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)))) {
+        ctx.data_mut(|d| d.remove::<HandOff>(resize_handed_off_id()));
+        ctx.set_cursor_icon(CursorIcon::Default);
+        ctx.request_repaint();
+    }
+}
+
 /// Invisible resize zones along the window's edges, above everything else; a press in one starts
 /// an OS resize in that direction. None while the window is maximized or full screen.
 pub fn resize_zones(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     if maximized(&ctx) || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+        reshow_cursor_after_os_resize(&ctx);
         return;
     }
     let w = ctx.content_rect();
@@ -142,8 +193,12 @@ pub fn resize_zones(ui: &mut Ui) {
         let resp = zui.interact(r, Id::new(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
         if resp.drag_started_by(PointerButton::Primary) {
             ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+            let pass = ctx.cumulative_pass_nr();
+            ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
         }
     }
+    // After the zones, so its one-frame cursor wins over theirs.
+    reshow_cursor_after_os_resize(&ctx);
 }
 
 #[cfg(test)]
@@ -177,6 +232,8 @@ mod tests {
             if let Some(v) = input.viewports.get_mut(&ViewportId::ROOT) {
                 v.maximized = Some(self.maximized);
             }
+            // What `PhotocraftApp::raw_input_hook` does.
+            release_after_os_resize(&self.ctx, &mut input);
             let app = &mut self.app;
             let mut out = self.ctx.run_ui(input, |ui| {
                 crate::panels::title_bar(app, ui);
@@ -314,6 +371,54 @@ mod tests {
         assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
     }
 
+    /// #1581: KDE Wayland keeps the button release of an OS resize. egui then kept the edge
+    /// pressed (no hover until the next click) and egui-winit never re-sent the resize cursor that
+    /// the compositor had replaced: the cursor came back only on every other press.
+    #[test]
+    fn after_an_os_resize_the_edge_hovers_and_shows_its_cursor_again() {
+        let mut w = Win::new(1000.0);
+        w.frame(vec![]);
+        let p = pos2(3.0, 300.0);
+        // Press and drag; the compositor takes over, so no release ever arrives.
+        let mut cmds = vec![];
+        for e in [vec![Event::PointerMoved(p)], vec![button(p, true)], vec![Event::PointerMoved(p + vec2(6.0, 0.0))]] {
+            cmds.extend(w.frame(e).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default());
+        }
+        assert!(cmds.contains(&ViewportCommand::BeginResize(ResizeDirection::West)), "{cmds:?}");
+        w.frame(vec![]);
+        assert!(!w.ctx.input(|i| i.pointer.primary_down()), "the press ends with the hand-off");
+        // The pointer comes back: one frame of the default cursor, so the next one is re-sent.
+        let out = w.frame(vec![Event::PointerMoved(p)]);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::Default);
+        let out = w.frame(vec![Event::PointerMoved(p + vec2(1.0, 0.0))]);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeWest);
+        // And the next press resizes again (it alternated before).
+        assert!(w.gesture(&[p, p + vec2(6.0, 0.0)]).contains(&ViewportCommand::BeginResize(ResizeDirection::West)));
+    }
+
+    /// Where the OS does send the release of a resize (Windows, X11), no second one is added: a
+    /// release right after it could count as a click on what lies under the edge.
+    #[test]
+    fn a_release_the_os_sends_is_not_doubled() {
+        let mut w = Win::new(1000.0);
+        w.frame(vec![]);
+        let p = pos2(3.0, 300.0);
+        w.frame(vec![Event::PointerMoved(p)]);
+        w.frame(vec![button(p, true)]);
+        w.frame(vec![Event::PointerMoved(p + vec2(6.0, 0.0))]);
+        // The release arrives with the next input.
+        let mut raw = RawInput { events: vec![button(p + vec2(6.0, 0.0), false)], ..Default::default() };
+        release_after_os_resize(&w.ctx, &mut raw);
+        assert_eq!(raw.events.len(), 1, "{:?}", raw.events);
+        // Or it already arrived in an earlier input: egui has the button up, nothing to end.
+        let mut w = Win::new(1000.0);
+        w.frame(vec![]);
+        w.gesture(&[p, p + vec2(6.0, 0.0)]);
+        let mut raw = RawInput::default();
+        release_after_os_resize(&w.ctx, &mut raw);
+        assert!(raw.events.is_empty(), "{:?}", raw.events);
+    }
+
     #[test]
     fn edge_zones_resize_unless_maximized() {
         use ResizeDirection::*;
@@ -332,8 +437,28 @@ mod tests {
             let cmds = w.gesture(&[p, p + vec2(6.0, 6.0)]);
             assert_eq!(cmds, vec![ViewportCommand::BeginResize(dir)], "at {p:?}");
         }
-        let out = w.frame(vec![Event::PointerMoved(pos2(1.0, 300.0))]);
-        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeHorizontal);
+        // The first motion after those resizes shows the default cursor for a frame (see
+        // `reshow_cursor_after_os_resize`).
+        w.frame(vec![Event::PointerMoved(pos2(500.0, 300.0))]);
+        // One-sided cursors, which every cursor theme has (#1581), anywhere in the 8 pt edge.
+        for (p, cursor) in [
+            (pos2(7.0, 300.0), CursorIcon::ResizeWest),
+            (pos2(993.0, 300.0), CursorIcon::ResizeEast),
+            (pos2(500.0, 7.0), CursorIcon::ResizeNorth),
+            (pos2(500.0, 593.0), CursorIcon::ResizeSouth),
+            (pos2(2.0, 2.0), CursorIcon::ResizeNwSe),
+            (pos2(997.0, 3.0), CursorIcon::ResizeNeSw),
+            (pos2(3.0, 597.0), CursorIcon::ResizeNeSw),
+            (pos2(998.0, 598.0), CursorIcon::ResizeNwSe),
+        ] {
+            let out = w.frame(vec![Event::PointerMoved(p)]);
+            assert_eq!(out.platform_output.cursor_icon, cursor, "at {p:?}");
+        }
+        let cmds = w.gesture(&[pos2(7.0, 300.0), pos2(13.0, 306.0)]);
+        assert_eq!(cmds, vec![ViewportCommand::BeginResize(West)], "the edge zone is 8 pt deep");
+        // Clear of the zone and of egui's interact radius around it.
+        let cmds = w.gesture(&[pos2(20.0, 300.0), pos2(26.0, 306.0)]);
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::BeginResize(_))), "{cmds:?}");
         // Maximized: no zones, and the window's top-right corner is Close.
         w.maximized = true;
         let cmds = w.gesture(&[pos2(1.0, 300.0), pos2(8.0, 300.0)]);

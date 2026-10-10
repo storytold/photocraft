@@ -250,6 +250,52 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments targets: a pixel layer, a smart object (the adjustment is recorded as a
+/// smart filter, as in Photoshop), or a targeted alpha channel / Quick Mask.
+pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    let d = s.active().ok_or("no document open")?;
+    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    match &l.content {
+        LayerContent::Raster(_) => Ok(()),
+        LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
+        other => Err(format!("active layer is {} {} layer, not a pixel layer", other.article(), other.kind_name())),
+    }
+}
+
+/// Image › Adjustments on a smart object record `image.adjustments.<kind>` as a smart filter
+/// (Photoshop): the adjustment re-runs from the source whenever the object re-renders, through
+/// [`adjust_as_filter`]. `Ok(true)` when it was recorded (one history step, the selection becomes
+/// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
+/// target, or the active layer is not a smart object).
+pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
+    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) {
+        return Ok(false);
+    }
+    let Some(id) = s.active().and_then(|d| d.active_layer) else { return Ok(false) };
+    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
+    if !smart {
+        return Ok(false);
+    }
+    // The recorded params are the command's own, minus the engine's private `__kind` key.
+    let mut params = p.clone();
+    if let Value::Object(m) = &mut params {
+        m.remove("__kind");
+    }
+    let sf = photocraft_doc::SmartFilter {
+        command: format!("image.adjustments.{kind}"),
+        params,
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    };
+    let sel = s.active().and_then(|d| d.doc.selection.clone());
+    s.edit(label, |doc, _| crate::smart_cmds::add_smart_filter(doc, id, sf, sel.as_ref()))?;
+    Ok(true)
+}
+
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
@@ -273,6 +319,9 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
 }
 
 fn shadows_highlights(s: &mut Session, p: &Value) -> Result<Value> {
+    if adjust_as_smart_filter(s, "shadowsHighlights", "Shadows/Highlights", p)? {
+        return Ok(Value::Null);
+    }
     let sh = shadows_highlights_params(p);
     rgba_edit(s, "Shadows/Highlights", p, |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh))
 }
@@ -406,7 +455,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Shadows/Highlights…",
             ["Image", "Adjustments"],
             r##"{"shadowAmount":0..100=35,"shadowTone":0..100=50,"shadowRadius":0..2500=30,"highlightAmount":0..100=0,"highlightTone":0..100=50,"highlightRadius":0..2500=30,"color":-100..100=20,"midtone":-100..100=0,"blackClip":0..50=0.01,"whiteClip":0..50=0.01}"##,
-            has_pixels,
+            has_adjustable,
             shadows_highlights
         ),
         spec!(

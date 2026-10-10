@@ -1,7 +1,9 @@
 //! Filters refuse a pixel-locked (or fully locked) layer and leave it unchanged, as painting
 //! does (#1102).
 
+use photocraft_doc::LayerId;
 use photocraft_engine::Session;
+use photocraft_geom::Rect;
 use serde_json::json;
 
 fn layered() -> Session {
@@ -48,6 +50,37 @@ fn render_filters_and_fill_path_refuse_a_locked_layer() {
         assert!(r.is_err(), "{cmd} drew on a locked layer: {r:?}");
         assert_eq!(px(&s), before);
     }
+}
+
+#[test]
+fn stroke_path_refuses_a_locked_layer_or_group() {
+    for tool in ["brush", "pencil", "eraser"] {
+        for lock in [json!({"pixels": true}), json!({"all": true})] {
+            for on_group in [false, true] {
+                let mut s = layered();
+                s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[2, 6], [38, 6]]}]}})).unwrap();
+                let layer = s.active().unwrap().active_layer.unwrap().0;
+                if on_group {
+                    s.execute("layer.new.groupFromLayers", json!({})).unwrap();
+                }
+                s.execute("layer.lockLayers", lock.clone()).unwrap();
+                let row = |s: &Session| s.active().unwrap().doc.layer(LayerId(layer)).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 40, 30));
+                let before = row(&s);
+                let r = s.execute("path.stroke", json!({"layer": layer, "tool": tool, "size": 6, "color": "#0000ff"}));
+                assert!(r.is_err(), "{tool} stroked a layer locked with {lock} (group: {on_group}): {r:?}");
+                assert_eq!(row(&s), before, "{tool} {lock} group: {on_group}");
+            }
+        }
+    }
+}
+
+#[test]
+fn stroke_path_still_runs_on_an_unlocked_layer() {
+    let mut s = layered();
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[2, 6], [38, 6]]}]}})).unwrap();
+    let before = px(&s);
+    s.execute("path.stroke", json!({"tool": "pencil", "size": 6, "color": "#0000ff"})).unwrap();
+    assert_ne!(px(&s), before);
 }
 
 #[test]

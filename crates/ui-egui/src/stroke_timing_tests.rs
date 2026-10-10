@@ -163,3 +163,21 @@ fn moves_in_one_frame_take_the_pressures_the_pen_reported_between_them() {
     let tail: Vec<f64> = pts.iter().filter(|p| p[0] >= 29.0).map(|p| (p[2] * 100.0).round() / 100.0).collect();
     assert_eq!(tail.get(..3), Some(&[0.4, 0.6, 0.8][..]), "each move keeps its own pressure: {pts:?}");
 }
+
+#[test]
+fn the_pressure_curve_shapes_the_committed_stroke() {
+    use crate::stylus::PenSample;
+    let mut h = harness();
+    h.state_mut().run("prefs.set", json!({"path": "tools.pressureCurve", "value": [[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]})).unwrap();
+    h.state().stylus.feed.set(Some(PenSample { pressure: 0.3, ..Default::default() }));
+    move_to(&mut h, 20.0, 50.0);
+    button(&mut h, 20.0, 50.0, true);
+    for x in [40.0, 60.0] {
+        h.state().stylus.feed.set(Some(PenSample { pressure: 0.3, ..Default::default() }));
+        move_to(&mut h, x, 50.0);
+    }
+    button(&mut h, 60.0, 50.0, false);
+    h.run_steps(2);
+    let pts = committed_points(&h);
+    assert!(pts.iter().all(|p| (p[2] - 0.6).abs() < 1e-3), "pen 0.3 through the curve is 0.6: {pts:?}");
+}

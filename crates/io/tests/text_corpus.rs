@@ -144,6 +144,31 @@ fn corpus_tysh_lossless() {
     assert_eq!(find(&bytes), find(&out));
 }
 
+/// An unedited save of a Photoshop-authored type file writes its `Txt2` back byte-for-byte
+/// (#2374: a regenerated `Txt2` made Photoshop refuse the re-saved file).
+#[cfg(feature = "corpus")]
+#[test]
+fn corpus_photoshop_txt2_survives_an_unedited_save() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/text");
+    assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --photoshop`", root.display());
+    let mut files = Vec::new();
+    collect(&root, &mut files);
+    files.sort();
+    let txt2 = |doc: &photocraft_doc::Document| doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").map(|b| b.2.clone());
+    let mut checked = 0;
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        let doc = photocraft_io::import(&name, &std::fs::read(f).unwrap()).unwrap().document;
+        let Some(before) = txt2(&doc) else { continue };
+        let out = photocraft_io::export(&doc, &name, &Default::default()).unwrap().bytes;
+        let back = photocraft_io::import(&name, &out).unwrap().document;
+        assert!(txt2(&back) == Some(before), "{name}: Txt2 changed on an unedited save");
+        checked += 1;
+    }
+    assert!(checked > 0, "no Photoshop type files with Txt2 in {}", root.display());
+    println!("Txt2 kept byte-for-byte in {checked} Photoshop type files");
+}
+
 /// A text layer created in Photocraft (no PSD data) exports as an editable type layer and
 /// imports back with the same model.
 #[test]

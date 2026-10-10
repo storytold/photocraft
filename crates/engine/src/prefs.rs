@@ -149,12 +149,15 @@ impl Unit {
             Unit::Percent => "%",
         }
     }
-    /// Decimal places a readout in this unit needs.
+    /// Decimal places a readout in this unit needs, following Photoshop: whole pixels, one place
+    /// for points and percent, two for millimetres, centimetres and picas, three for inches
+    /// (#2434). [`fmt_decimals`] rounds to this many places and drops trailing zeros.
     pub fn decimals(self) -> usize {
         match self {
             Unit::Pixels => 0,
-            Unit::Points | Unit::Percent | Unit::Millimeters => 1,
-            _ => 2,
+            Unit::Points | Unit::Percent => 1,
+            Unit::Millimeters | Unit::Centimeters | Unit::Picas => 2,
+            Unit::Inches => 3,
         }
     }
 }
@@ -314,6 +317,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
+    /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
+    pub pressure_curve: Vec<[f32; 2]>,
 }
 
 impl Default for Tools {
@@ -330,7 +336,103 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
         }
+    }
+}
+
+/// Preferences › Tools › Pressure Curve, ready to evaluate: a monotone cubic (Fritsch–Carlson)
+/// through the control points, so a firmer press never gives less pressure. The points are
+/// sanitised here, not trusted: a whole-section update or a hand-edited preferences file can store
+/// anything. Non-finite points are dropped, the rest clamped to 0..1, sorted by input (one point
+/// per input), capped at [`Self::MAX_POINTS`], and their outputs made non-decreasing; before the
+/// first point and after the last the curve stays flat. Fewer than two usable points is linear.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PressureCurve {
+    xs: Vec<f32>,
+    ys: Vec<f32>,
+    /// Tangents at the points.
+    ms: Vec<f32>,
+}
+
+impl PressureCurve {
+    pub const MAX_POINTS: usize = 16;
+
+    pub fn new(points: &[[f32; 2]]) -> Self {
+        let mut pts: Vec<[f32; 2]> =
+            points.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]).collect();
+        pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        pts.dedup_by(|b, a| {
+            // Same input: keep the later point's output.
+            let same = (a[0] - b[0]).abs() < 1e-6;
+            if same {
+                a[1] = b[1];
+            }
+            same
+        });
+        pts.truncate(Self::MAX_POINTS);
+        if pts.len() < 2 {
+            pts = vec![[0.0, 0.0], [1.0, 1.0]];
+        }
+        let xs: Vec<f32> = pts.iter().map(|p| p[0]).collect();
+        let mut ys: Vec<f32> = pts.iter().map(|p| p[1]).collect();
+        for i in 1..ys.len() {
+            ys[i] = ys[i].max(ys[i - 1]);
+        }
+        // Fritsch–Carlson tangents: secant averages, zero at flat steps, limited so the cubic
+        // never overshoots (which keeps it monotone).
+        let n = xs.len();
+        let d: Vec<f32> = (0..n - 1).map(|k| (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k])).collect();
+        let mut ms = vec![0.0f32; n];
+        ms[0] = d[0];
+        ms[n - 1] = d[n - 2];
+        for k in 1..n - 1 {
+            ms[k] = if d[k - 1] * d[k] <= 0.0 { 0.0 } else { (d[k - 1] + d[k]) / 2.0 };
+        }
+        for k in 0..n - 1 {
+            if d[k] == 0.0 {
+                ms[k] = 0.0;
+                ms[k + 1] = 0.0;
+                continue;
+            }
+            let (a, b) = (ms[k] / d[k], ms[k + 1] / d[k]);
+            let s = a * a + b * b;
+            if s > 9.0 {
+                let t = 3.0 / s.sqrt();
+                ms[k] = t * a * d[k];
+                ms[k + 1] = t * b * d[k];
+            }
+        }
+        Self { xs, ys, ms }
+    }
+
+    /// The curve's output for pen pressure `x` (0..1; anything else is clamped, NaN reads as 0).
+    pub fn eval(&self, x: f32) -> f32 {
+        let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
+        let n = self.xs.len();
+        let (Some(&x0), Some(&xn)) = (self.xs.first(), self.xs.last()) else { return x };
+        if x <= x0 {
+            return self.ys.first().copied().unwrap_or(x);
+        }
+        if x >= xn {
+            return self.ys.last().copied().unwrap_or(x);
+        }
+        let k = self.xs.partition_point(|&v| v <= x).saturating_sub(1).min(n.saturating_sub(2));
+        let (Some(&xa), Some(&xb), Some(&ya), Some(&yb), Some(&ma), Some(&mb)) =
+            (self.xs.get(k), self.xs.get(k + 1), self.ys.get(k), self.ys.get(k + 1), self.ms.get(k), self.ms.get(k + 1))
+        else {
+            return x;
+        };
+        let h = xb - xa;
+        let t = (x - xa) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb;
+        y.clamp(ya.min(yb), ya.max(yb))
+    }
+
+    /// The identity (the default curve): pressure passes through unchanged.
+    pub fn is_linear(&self) -> bool {
+        self.xs == [0.0, 1.0] && self.ys == [0.0, 1.0]
     }
 }
 
@@ -365,6 +467,8 @@ pub struct FileHandling {
     pub ignore_exif_profile_tag: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
+    /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
+    pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
@@ -382,6 +486,7 @@ impl Default for FileHandling {
             ignore_exif_profile_tag: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
+            rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
         }
@@ -596,11 +701,27 @@ impl Default for UnitsAndRulers {
     }
 }
 
+/// Rounds `v` to `decimals` places (half away from zero) and drops trailing zeros, so a readout
+/// never shows more precision than it has: 0.7995 at three places is `0.8`, never `0.799` or
+/// `0.800`, and a whole number keeps no `.0` (#2434).
+pub fn fmt_decimals(v: f64, decimals: usize) -> String {
+    let p = 10f64.powi(decimals as i32);
+    let r = (v * p).round() / p;
+    // -0.0 would format as "-0".
+    let r = if r == 0.0 { 0.0 } else { r };
+    let s = format!("{r:.*}", decimals);
+    // Only a fractional part may lose zeros: "550" must not become "55".
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 impl UnitsAndRulers {
-    /// Format a length in document pixels in the ruler unit, e.g. `"2.50 in"`.
+    /// Format a length in document pixels in the ruler unit, e.g. `"2.5 in"`.
     pub fn format(&self, px: f64, dpi: f64, extent: f64) -> String {
         let v = self.rulers.from_px(px, dpi, extent, self.point_size.per_inch());
-        format!("{:.*}", self.rulers.decimals(), v)
+        fmt_decimals(v, self.rulers.decimals())
     }
 }
 
@@ -812,6 +933,10 @@ pub struct Preferences {
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,
+    /// The Brush Preset picker's remembered view: which card parts show (name, stroke, tip) and
+    /// the footer slider's card scale, saved as the user changes them and restored at launch.
+    /// JSON owned by the shell.
+    pub brush_picker: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
 }
@@ -875,7 +1000,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "plugIns.generatorEnabled",
-    "type.smartQuotes",
     "type.missingGlyphProtection",
     "type.showFontNamesInEnglish",
     "type.textEngine",
@@ -950,6 +1074,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
         "fileHandling.autosaveMinutes" => (1.0, 240.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
+        "fileHandling.rasterizeSvgGroupsDeeperThan" => (0.0, photocraft_doc::MAX_GROUP_DEPTH as f64),
         "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
@@ -1069,6 +1194,18 @@ fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
     }
     if is_color(path) && v.as_str().and_then(parse_hex).is_none() {
         return Err(format!("`{path}` must be a #rrggbb colour"));
+    }
+    if path == "tools.pressureCurve" {
+        let pts = v.as_array().ok_or("`tools.pressureCurve` must be a list of [input, output] points")?;
+        if !(2..=PressureCurve::MAX_POINTS).contains(&pts.len()) {
+            return Err(format!("`tools.pressureCurve` needs 2..={} points (got {})", PressureCurve::MAX_POINTS, pts.len()));
+        }
+        for p in pts {
+            let ok = p.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|x| x.as_f64().is_some_and(|x| (0.0..=1.0).contains(&x))));
+            if !ok {
+                return Err(format!("`tools.pressureCurve` points are [input, output] pairs within 0..1 (got {p})"));
+            }
+        }
     }
     if let Some(sc) = path.strip_prefix("shortcuts.") {
         let s = v.as_str().ok_or_else(|| format!("shortcut for `{sc}` must be a string"))?;
@@ -1536,6 +1673,38 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
             _ => {}
         }
     }
+    // A Photoshop `.kys` set (`importKys`, its XML text) becomes `set` entries, matched by label
+    // (`crate::kys`); a key equal to the command's default restores the default, and keys given
+    // in `set` as well win over the file's.
+    let imported;
+    let mut import = None;
+    let p = match p.get("importKys") {
+        Some(xml) => {
+            let xml = xml.as_str().ok_or_else(|| bad(cmd, "`importKys` is the text of a .kys file"))?;
+            let set = crate::kys::parse(xml).map_err(|e| bad(cmd, e))?;
+            let plan = crate::kys::plan(crate::kys::command_candidates(), &set);
+            let mut merged = serde_json::Map::new();
+            for (id, sc) in &plan.set {
+                let default = crate::command_specs().iter().find(|c| c.id == id).and_then(|c| c.shortcut).and_then(normalize_shortcut);
+                merged.insert(id.clone(), if default.as_deref() == Some(sc.as_str()) { Value::Null } else { json!(sc) });
+            }
+            merged.extend(p.get("set").and_then(Value::as_object).cloned().unwrap_or_default());
+            import = Some(json!({
+                "name": set.name,
+                "imported": plan.set.len(),
+                "set": plan.set,
+                "unknown": plan.unknown,
+                "unreadable": plan.unreadable,
+                "alternates": plan.alternates,
+                "toolKeys": set.tool_keys,
+            }));
+            let mut next = p.clone();
+            next["set"] = Value::Object(merged);
+            imported = next;
+            &imported
+        }
+        None => p,
+    };
     if let Some(m) = p.get("set").and_then(Value::as_object) {
         let mut next = s.prefs().clone();
         for (id, v) in m {
@@ -1583,7 +1752,11 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let bindings: Vec<(&str, &str)> = bindable().filter_map(|(id, def)| Some((id, prefs.shortcut(id, def)?))).collect();
     let conflicts: Vec<Value> = conflicts(bindings).into_iter().map(|(sc, ids)| json!({"shortcut": sc, "commands": ids})).collect();
-    Ok(json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts}))
+    let mut out = json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts});
+    if let Some(import) = import {
+        out["import"] = import;
+    }
+    Ok(out)
 }
 
 /// Edit › Menus: hide/show items and give them colours.
@@ -1708,7 +1881,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false}"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"?}"##,
             keyboard_shortcuts,
             true
         ),
