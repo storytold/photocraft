@@ -14,9 +14,9 @@ note = "doc text.rs:209 TextShape has Point and Box only"
 [[item]]
 id = "TYPE-218-2"
 target = "Paragraph direction (Auto/LTR/RTL) in the panel and options bar; visual RTL caret"
-status = "missing"
+status = "done"
 issue = 218
-note = "Engine has TextDirection (text.rs:155); no UI"
+note = "type_tool.rs direction dropdowns (options bar: tool default with no layer; Paragraph panel); text navigate.rs visual caret with affinity; type.navigate left/right/wordLeft/wordRight"
 
 [[item]]
 id = "TYPE-218-3"

@@ -46,6 +46,32 @@ pub struct FontVariation {
     pub value: f32,
 }
 
+/// Which digit shapes the text shows. Display only: the text keeps its ASCII digits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Digits {
+    /// 0123456789, as typed.
+    #[default]
+    Western,
+    /// Arabic-Indic digits (U+0660..U+0669).
+    ArabicIndic,
+    /// Persian (Extended Arabic-Indic) digits (U+06F0..U+06F9).
+    Persian,
+}
+
+impl Digits {
+    /// The digit shown for the ASCII digit `ascii`, or `None` for Western digits and for any
+    /// other character.
+    pub fn shape(self, ascii: char) -> Option<char> {
+        let base = match self {
+            Self::Western => return None,
+            Self::ArabicIndic => 0x0660,
+            Self::Persian => 0x06F0,
+        };
+        let d = ascii.to_digit(10).filter(|_| ascii.is_ascii_digit())?;
+        char::from_u32(base + d)
+    }
+}
+
 /// Character style (Photoshop's Character panel).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -89,6 +115,8 @@ pub struct CharStyle {
     pub variations: Vec<FontVariation>,
     /// BCP-47 language tag (affects shaping and line breaking).
     pub language: Option<String>,
+    /// Digit shapes shown for ASCII digits (display only).
+    pub digits: Digits,
     /// Applied character style (id in [`crate::TextStyles`]); `None` = "None". Attributes above
     /// stay fully resolved; differences from the style are local overrides.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +150,7 @@ impl Default for CharStyle {
             features: Vec::new(),
             variations: Vec::new(),
             language: None,
+            digits: Digits::Western,
             style_sheet: None,
         }
     }
@@ -179,6 +208,8 @@ pub struct ParagraphStyle {
     pub auto_leading: f32,
     pub direction: TextDirection,
     pub hyphenate: bool,
+    /// Stretch letter connections (kashida) before word gaps on justified lines of Arabic text.
+    pub kashida: bool,
     /// Applied paragraph style (id in [`crate::TextStyles`]); `None` = Basic Paragraph.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
@@ -196,6 +227,7 @@ impl Default for ParagraphStyle {
             auto_leading: 1.2,
             direction: TextDirection::Auto,
             hyphenate: false,
+            kashida: false,
             style_sheet: None,
         }
     }
@@ -306,5 +338,18 @@ mod tests {
         // Missing keys take defaults.
         let p: ParagraphStyle = serde_json::from_str(r#"{"align":"Center"}"#).unwrap();
         assert_eq!((p.align, p.auto_leading), (TextAlign::Center, 1.2));
+        assert!(!p.kashida);
+        let c: CharStyle = serde_json::from_str(r#"{"size_pt":9.0}"#).unwrap();
+        assert_eq!(c.digits, Digits::Western);
+    }
+
+    #[test]
+    fn digits_shape_ascii_digits_only() {
+        assert_eq!(Digits::Western.shape('5'), None);
+        assert_eq!(Digits::ArabicIndic.shape('0'), Some('\u{660}'));
+        assert_eq!(Digits::ArabicIndic.shape('9'), Some('\u{669}'));
+        assert_eq!(Digits::Persian.shape('4'), Some('\u{6F4}'));
+        assert_eq!(Digits::Persian.shape('a'), None);
+        assert_eq!(Digits::Persian.shape('\u{661}'), None, "already shaped");
     }
 }

@@ -3514,3 +3514,20 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Right-to-left	Από δεξιά προς αριστερά
+	Left-to-right	Από αριστερά προς δεξιά
+	Kashida	Κασίντα
+	Western	Δυτικά
+	Arabic-Indic	Αραβικά-ινδικά
+	Persian	Περσικά
+	Keep Selection Left-to-Right	Διατήρηση επιλογής από αριστερά προς δεξιά
+	Keep Selection Right-to-Left	Διατήρηση επιλογής από δεξιά προς αριστερά
+	Keep Selection in Its Own Direction	Διατήρηση επιλογής στη δική της κατεύθυνση
+	Insert End of Isolate	Εισαγωγή τέλους απομόνωσης
+	Insert Left-to-Right Mark	Εισαγωγή σήματος από αριστερά προς δεξιά
+	Insert Right-to-Left Mark	Εισαγωγή σήματος από δεξιά προς αριστερά
+	Insert Arabic Letter Mark	Εισαγωγή αραβικού σήματος γράμματος
+	Insert Zero-Width Joiner	Εισαγωγή συνδέτη μηδενικού πλάτους
+	Insert Zero-Width Non-Joiner	Εισαγωγή μη συνδέτη μηδενικού πλάτους
+	Insert Tatweel	Εισαγωγή Tatweel
+	Insert Control Character	Εισαγωγή χαρακτήρα ελέγχου

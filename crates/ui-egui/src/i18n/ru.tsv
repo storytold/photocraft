@@ -2690,3 +2690,21 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+	Right-to-left	Справа налево
+	Left-to-right	Слева направо
+	Direction	Направление
+	Kashida	Кашида
+	Western	Западные
+	Arabic-Indic	Арабо-индийские
+	Persian	Персидские
+	Keep Selection Left-to-Right	Сохранить выделение слева направо
+	Keep Selection Right-to-Left	Сохранить выделение справа налево
+	Keep Selection in Its Own Direction	Сохранить выделение в собственном направлении
+	Insert End of Isolate	Вставить конец изолята
+	Insert Left-to-Right Mark	Вставить метку «слева направо»
+	Insert Right-to-Left Mark	Вставить метку «справа налево»
+	Insert Arabic Letter Mark	Вставить арабскую буквенную метку
+	Insert Zero-Width Joiner	Вставить соединитель нулевой ширины
+	Insert Zero-Width Non-Joiner	Вставить разъединитель нулевой ширины
+	Insert Tatweel	Вставить татвил
+	Insert Control Character	Вставить управляющий символ

@@ -6,8 +6,8 @@
 //!
 //! Case rules follow common spell checkers: a lowercase dictionary word may be written
 //! capitalised or in all caps; a capitalised entry (proper noun) must keep its capital. Trailing
-//! possessive `'s` is ignored, typographic apostrophes count as `'`, and tokens containing digits
-//! are skipped.
+//! possessive `'s` is ignored, typographic apostrophes count as `'`, and tokens containing digits,
+//! or letters outside the Latin script, are skipped.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -91,6 +91,11 @@ impl Dictionary {
         let w = w.strip_suffix("'s").filter(|b| !b.is_empty()).unwrap_or(&w);
         let w = w.trim_matches('\'');
         if w.is_empty() || w.chars().any(|c| c.is_numeric()) || !w.chars().any(char::is_alphabetic) {
+            return true;
+        }
+        // The only dictionary is English: a word with letters of another script (Arabic, Hebrew,
+        // Cyrillic, CJK…) has no dictionary to check against, so it is never flagged.
+        if w.chars().filter(|c| c.is_alphabetic()).any(|c| !crate::segment::is_latin(c)) {
             return true;
         }
         let lower = w.to_lowercase();
@@ -318,5 +323,21 @@ mod tests {
         assert_eq!(distance(&c("teh"), &c("the"), 2, &mut r), Some(1));
         assert_eq!(distance(&c("teh"), &c("toe"), 2, &mut r), Some(2));
         assert_eq!(distance(&c("teh"), &c("banana"), 2, &mut r), None);
+    }
+
+    /// Spec 5.1.7: the only dictionary is English, so words in other scripts are never flagged.
+    #[test]
+    fn words_outside_the_dictionary_script_are_never_flagged() {
+        let d = Dictionary::from_list(
+            "#10
+hello
+",
+        );
+        let text = "hello wrld مرحبا كَتَبَ שלום привет 你好 Ελλάδα";
+        let m: Vec<String> = d.misspellings(text, &none()).into_iter().map(|m| m.word).collect();
+        assert_eq!(m, vec!["wrld"]);
+        assert!(d.check("مرحبا", &none()));
+        assert!(!d.check("wrld", &none()));
+        assert!(!d.check("café", &none()), "Latin letters with accents are still checked");
     }
 }

@@ -143,6 +143,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
     }
+    // The palette's bidi controls (and `ui.menu.invoke`) act on the type being edited: its caret
+    // or selection, in the session's history step (spec 5.1.8).
+    if id == "type.insertControl" && app.ui.text_edit.is_some() && params.get("at").is_none() && params.get("range").is_none() {
+        return crate::type_tool::insert_control(app, &params);
+    }
     // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard.
     if id == "edit.undo" && crate::vector_ui::pen_undo_last_point(app) {
         return Ok(Value::Null);

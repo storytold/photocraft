@@ -319,9 +319,16 @@ fn multicolor_runs() {
 fn hit_test_and_caret() {
     let mut e = TextEngine::new();
     let l = e.layout(&point("abc\ndef", 20.0), 72.0);
-    assert_eq!(l.hit_test(-5.0, -5.0), 0);
-    assert_eq!(l.hit_test(1000.0, -5.0), 3);
-    assert_eq!(l.hit_test(-5.0, 24.0), 4);
+    let at = |x: f32, y: f32| {
+        crate::navigate::hit(
+            &l, "abc
+def", x, y,
+        )
+        .byte
+    };
+    assert_eq!(at(-5.0, -5.0), 0);
+    assert_eq!(at(1000.0, -5.0), 3);
+    assert_eq!(at(-5.0, 24.0), 4);
     let (x, top, bottom) = l.caret(1);
     assert!(x > 0.0 && top < 0.0 && bottom > 0.0);
     let (x2, ..) = l.caret(2);
@@ -887,8 +894,8 @@ fn clusters_sit_on_rendered_glyphs() {
             );
             assert!(alpha_sum(&r.surface, col) > 1.0, "{name}: no ink under cluster {:?} ({col:?})", c.range);
             let y = ln.baseline - ln.ascent * 0.4;
-            assert_eq!(l.hit_test(c.x + c.advance * 0.2, y), c.range.start, "{name}: left part of {:?}", c.range);
-            assert_eq!(l.hit_test(c.x + c.advance * 0.8, y), c.range.end, "{name}: right part of {:?}", c.range);
+            assert_eq!(crate::navigate::hit(&l, &t.text, c.x + c.advance * 0.2, y).byte, c.range.start, "{name}: left part of {:?}", c.range);
+            assert_eq!(crate::navigate::hit(&l, &t.text, c.x + c.advance * 0.8, y).byte, c.range.end, "{name}: right part of {:?}", c.range);
             let (cx, top, bottom) = l.caret(c.range.start);
             assert!((cx - c.x).abs() < 1e-3 && top < y && bottom > y, "{name}: caret at {:?}", c.range);
         }
@@ -1087,7 +1094,8 @@ fn works_without_craft_fonts() {
 
 #[test]
 fn word_and_line_navigation() {
-    use crate::layout::{byte_index, char_index, hit_char, line_edge, line_index, line_step, word_boundary};
+    use crate::layout::{byte_index, char_index, line_index, word_boundary};
+    use crate::navigate::{Caret, adjacent_line, caret_segment, hit, home_end};
     assert_eq!(word_boundary("hello big world", 0, true), 5);
     assert_eq!(word_boundary("hello big world", 7, false), 6);
     assert_eq!(word_boundary("hello big world", 15, false), 10);
@@ -1110,32 +1118,34 @@ fn word_and_line_navigation() {
         let n = text.chars().count();
         for i in 0..=n {
             let b = byte_index(text, i);
-            let [(x0, y0), (x1, y1)] = l.caret_segment(b);
-            let (idx, line) = hit_char(&l, text, (x0 + x1) / 2.0, (y0 + y1) / 2.0);
-            assert_eq!(idx, i, "vertical {vertical} index {i}");
-            assert_eq!(line, line_index(&l, b), "vertical {vertical} index {i}");
+            let [(x0, y0), (x1, y1)] = caret_segment(&l, text, Caret::new(b, false));
+            let clicked = hit(&l, text, (x0 + x1) / 2.0, (y0 + y1) / 2.0).byte;
+            assert_eq!(char_index(text, clicked), i, "vertical {vertical} index {i}");
+            assert_eq!(line_index(&l, clicked), line_index(&l, b), "vertical {vertical} index {i}");
         }
         assert!(l.lines.len() >= 2, "vertical {vertical}");
         let end0 = char_index(text, l.lines[0].range.end);
         let start1 = char_index(text, l.lines[1].range.start);
-        assert_eq!(line_edge(&l, text, 1, true), end0, "vertical {vertical}");
-        assert_eq!(line_edge(&l, text, 1, false), 0, "vertical {vertical}");
-        assert_eq!(line_edge(&l, text, start1, false), start1, "vertical {vertical}");
-        assert_eq!(line_edge(&l, text, start1, true), n, "vertical {vertical}");
+        let edge = |idx: usize, end: bool| char_index(text, home_end(&l, text, Caret::new(byte_index(text, idx), false), end).byte);
+        assert_eq!(edge(1, true), end0, "vertical {vertical}");
+        assert_eq!(edge(1, false), 0, "vertical {vertical}");
+        assert_eq!(edge(start1, false), start1, "vertical {vertical}");
+        assert_eq!(edge(start1, true), n, "vertical {vertical}");
         let x = l.caret(byte_index(text, 0)).0;
-        let next = line_step(&l, text, 0, x, 1);
+        let line_step = |idx: usize, x: f32, dir: i32| char_index(text, adjacent_line(&l, text, Caret::new(byte_index(text, idx), false), x, dir).byte);
+        let next = line_step(0, x, 1);
         assert!((start1..=n).contains(&next), "vertical {vertical} line_step -> {next}");
-        assert_eq!(line_step(&l, text, 0, x, -1), 0, "vertical {vertical}");
-        assert_eq!(line_step(&l, text, n, x, 1), n, "vertical {vertical}");
+        assert_eq!(line_step(0, x, -1), 0, "vertical {vertical}");
+        assert_eq!(line_step(n, x, 1), n, "vertical {vertical}");
     }
 
     // A remembered column stays on the short line's start; the caret's own x falls off its end.
     let text = "WWWWWW\nI";
     let l = e.layout(&point(text, 30.0), 72.0);
-    let end0 = line_edge(&l, text, 0, true);
-    // end0 is the first line's end, which is not the second line. Step from there.
-    let kept = line_step(&l, text, end0, l.caret(0).0, 1);
-    let jumped = line_step(&l, text, end0, l.caret(byte_index(text, end0)).0, 1);
+    let end0 = l.lines[0].range.end;
+    // The first line's end (upstream: drawn on that line) is not on the second line. Step from there.
+    let down = |x: f32| adjacent_line(&l, text, Caret::new(end0, true), x, 1).byte;
+    let (kept, jumped) = (char_index(text, down(l.caret(0).0)), char_index(text, down(l.caret(end0).0)));
     assert_eq!(kept, char_index(text, l.lines[1].range.start), "kept column");
     assert_eq!(jumped, char_index(text, l.lines[1].range.end), "own column");
     assert!(jumped > kept);

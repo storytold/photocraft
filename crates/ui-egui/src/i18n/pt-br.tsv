@@ -2833,3 +2833,20 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	Right-to-left	Da direita para a esquerda
+	Left-to-right	Da esquerda para a direita
+	Kashida	Kashida
+	Western	Ocidentais
+	Arabic-Indic	Indo-arábicos
+	Persian	Persas
+	Keep Selection Left-to-Right	Manter a seleção da esquerda para a direita
+	Keep Selection Right-to-Left	Manter a seleção da direita para a esquerda
+	Keep Selection in Its Own Direction	Manter a seleção na própria direção
+	Insert End of Isolate	Inserir fim de isolamento
+	Insert Left-to-Right Mark	Inserir marca da esquerda para a direita
+	Insert Right-to-Left Mark	Inserir marca da direita para a esquerda
+	Insert Arabic Letter Mark	Inserir marca de letra árabe
+	Insert Zero-Width Joiner	Inserir junção de largura zero
+	Insert Zero-Width Non-Joiner	Inserir não junção de largura zero
+	Insert Tatweel	Inserir tatweel
+	Insert Control Character	Inserir caractere de controle

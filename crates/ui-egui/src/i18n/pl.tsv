@@ -3426,3 +3426,20 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Right-to-left	Od prawej do lewej
+	Left-to-right	Od lewej do prawej
+	Kashida	Kaszida
+	Western	Zachodnie
+	Arabic-Indic	Arabsko-indyjskie
+	Persian	Perskie
+	Keep Selection Left-to-Right	Zachowaj zaznaczenie od lewej do prawej
+	Keep Selection Right-to-Left	Zachowaj zaznaczenie od prawej do lewej
+	Keep Selection in Its Own Direction	Zachowaj zaznaczenie we własnym kierunku
+	Insert End of Isolate	Wstaw koniec izolacji
+	Insert Left-to-Right Mark	Wstaw znak od lewej do prawej
+	Insert Right-to-Left Mark	Wstaw znak od prawej do lewej
+	Insert Arabic Letter Mark	Wstaw arabski znak litery
+	Insert Zero-Width Joiner	Wstaw łącznik o zerowej szerokości
+	Insert Zero-Width Non-Joiner	Wstaw rozłącznik o zerowej szerokości
+	Insert Tatweel	Wstaw tatwil
+	Insert Control Character	Wstaw znak sterujący

@@ -27,6 +27,9 @@ use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
 
+mod digits;
+mod kashida_justify;
+
 /// Photoshop synthesizes small caps for faces without an OpenType `smcp` table. Keep the same
 /// readable hierarchy for every font instead of silently rendering lowercase text unchanged.
 const SYNTHETIC_SMALL_CAPS_SCALE: f32 = 0.7;
@@ -167,6 +170,8 @@ pub struct LineInfo {
     pub ascent: f32,
     pub descent: f32,
     pub paragraph: usize,
+    /// The paragraph's resolved base direction is right-to-left.
+    pub rtl: bool,
 }
 
 /// A grapheme cluster (caret stops, hit testing, selection), in line space.
@@ -193,6 +198,8 @@ pub struct TextLayout {
     pub px_per_pt: f32,
     /// Vertical type: line space is turned 90° clockwise into text space.
     pub vertical: bool,
+    /// Each laid-out paragraph's parley layout, in order, for caret movement ([`crate::navigate`]).
+    pub(crate) paragraphs: Vec<crate::navigate::ParagraphNav>,
 }
 
 impl TextLayout {
@@ -224,48 +231,42 @@ impl TextLayout {
         })
     }
 
-    /// Byte offset of the caret nearest to a text-space point.
-    pub fn hit_test(&self, x: f32, y: f32) -> usize {
-        let (x, y) = self.to_line(x, y);
-        self.hit_test_line(x, y)
+    /// Index of the line nearest to a line-space y.
+    pub(crate) fn nearest_line(&self, y: f32) -> Option<usize> {
+        let d = |l: &LineInfo| {
+            if y < l.baseline - l.ascent {
+                l.baseline - l.ascent - y
+            } else if y > l.baseline + l.descent {
+                y - l.baseline - l.descent
+            } else {
+                0.0
+            }
+        };
+        self.lines.iter().enumerate().min_by(|a, b| d(a.1).total_cmp(&d(b.1))).map(|(i, _)| i)
     }
 
-    /// Byte offset of the caret nearest to a line-space point.
-    pub fn hit_test_line(&self, x: f32, y: f32) -> usize {
-        let Some((li, line)) = self.lines.iter().enumerate().min_by(|a, b| {
-            let d = |l: &LineInfo| {
-                if y < l.baseline - l.ascent {
-                    l.baseline - l.ascent - y
-                } else if y > l.baseline + l.descent {
-                    y - l.baseline - l.descent
-                } else {
-                    0.0
-                }
-            };
-            d(a.1).total_cmp(&d(b.1))
-        }) else {
-            return 0;
-        };
-        let mut best = (f32::MAX, line.range.end);
+    /// The caret nearest to line-space `x` on line `li`: (byte offset, upstream). Upstream means
+    /// the trailing edge of the cluster it was found on. A cluster under the point beats a
+    /// neighbour whose edge is as near, so a click where directions meet keeps the side clicked.
+    pub(crate) fn hit_in_line(&self, li: usize, x: f32) -> (usize, bool) {
+        let mut best = (f32::MAX, self.lines.get(li).map_or(0, |l| l.range.end), false);
         for c in self.clusters.iter().filter(|c| c.line == li) {
-            let mid = c.x + c.advance / 2.0;
-            let (before, after) = if c.rtl { (c.range.end, c.range.start) } else { (c.range.start, c.range.end) };
-            let (dist, off) = if x < mid { ((x - c.x).abs(), before) } else { ((x - c.x - c.advance).abs(), after) };
+            // A cluster's left edge is its start in LTR and its end (trailing edge) in RTL.
+            let (edge, off, upstream) = if x < c.x + c.advance / 2.0 {
+                (c.x, if c.rtl { c.range.end } else { c.range.start }, c.rtl)
+            } else {
+                (c.x + c.advance, if c.rtl { c.range.start } else { c.range.end }, !c.rtl)
+            };
+            let dist = if (c.x..c.x + c.advance).contains(&x) { -1.0 } else { (x - edge).abs() };
             if dist < best.0 {
-                best = (dist, off);
+                best = (dist, off, upstream);
             }
         }
-        best.1
-    }
-
-    /// The caret for a byte offset as a text-space segment (its two end points).
-    pub fn caret_segment(&self, offset: usize) -> [(f32, f32); 2] {
-        let (x, top, bottom) = self.caret(offset);
-        [self.to_text(x, top), self.to_text(x, bottom)]
+        (best.1, best.2)
     }
 
     /// Caret geometry for a byte offset: (x, top, bottom) in line space (the same as text space
-    /// for horizontal type; see [`Self::caret_segment`]).
+    /// for horizontal type).
     pub fn caret(&self, offset: usize) -> (f32, f32, f32) {
         for c in &self.clusters {
             if c.range.start == offset
@@ -274,6 +275,13 @@ impl TextLayout {
                 let x = if c.rtl { c.x + c.advance } else { c.x };
                 return (x, l.baseline - l.ascent, l.baseline + l.descent);
             }
+        }
+        // Inside a grapheme (an offset before a mark): after the whole cluster.
+        if let Some(c) = self.clusters.iter().find(|c| c.range.start < offset && offset < c.range.end)
+            && let Some(l) = self.lines.get(c.line)
+        {
+            let x = if c.rtl { c.x } else { c.x + c.advance };
+            return (x, l.baseline - l.ascent, l.baseline + l.descent);
         }
         // End of a line (or empty line): after the last cluster of the line containing it.
         let li = self.lines.iter().position(|l| offset >= l.range.start && offset <= l.range.end).unwrap_or(self.lines.len().saturating_sub(1));
@@ -312,12 +320,6 @@ pub fn line_index(layout: &TextLayout, byte: usize) -> usize {
     layout.lines.iter().position(|ln| byte >= ln.range.start && byte <= ln.range.end).unwrap_or_else(|| layout.lines.len().saturating_sub(1))
 }
 
-/// Nearest caret to a text-space point: character index and the line it sits on.
-pub fn hit_char(layout: &TextLayout, text: &str, x: f32, y: f32) -> (usize, usize) {
-    let byte = layout.hit_test(x, y);
-    (char_index(text, byte), line_index(layout, byte))
-}
-
 /// Text-space point inside the laid-out line boxes, expanded by `slop` px on every side.
 pub fn text_point_inside(layout: &TextLayout, x: f32, y: f32, slop: f32) -> bool {
     let slop = if slop.is_finite() { slop.max(0.0) } else { 0.0 };
@@ -348,33 +350,14 @@ pub fn word_boundary(text: &str, idx: usize, forward: bool) -> usize {
     i
 }
 
-/// Caret on the neighbouring line (`dir` < 0 previous, otherwise next), keeping `x`
-/// (line space: the position along the line). Past the first or last line the caret
-/// goes to the start or end of the text. Line space is the same for both orientations,
-/// so a column of vertical type steps the same way a line of horizontal type does.
-pub fn line_step(layout: &TextLayout, text: &str, idx: usize, x: f32, dir: i32) -> usize {
-    let n = text.chars().count();
-    let idx = idx.min(n);
-    let (_, top, bottom) = layout.caret(byte_index(text, idx));
-    let h = (bottom - top).max(1.0);
-    let y = if dir < 0 { top - h * 0.5 } else { bottom + h * 0.5 };
-    let Some(bounds) = layout.line_bounds() else { return idx };
-    if y < bounds[1] {
-        return 0;
-    }
-    if y > bounds[3] {
-        return n;
-    }
-    char_index(text, layout.hit_test_line(x, y))
-}
-
-/// Line start (`end` false) or end for the line containing `idx`, as a character index.
-pub fn line_edge(layout: &TextLayout, text: &str, idx: usize, end: bool) -> usize {
-    let n = text.chars().count();
-    let idx = idx.min(n);
+/// Character index of the grapheme boundary after (`forward`) or before `idx`, so the caret
+/// steps over a letter and its marks together (UAX #29).
+pub fn grapheme_step(text: &str, idx: usize, forward: bool) -> usize {
     let byte = byte_index(text, idx);
-    let line = layout.lines.iter().find(|ln| byte >= ln.range.start && byte <= ln.range.end).or(layout.lines.last());
-    line.map_or(idx, |ln| char_index(text, if end { ln.range.end } else { ln.range.start }))
+    let bounds = crate::segment::grapheme_boundaries(text);
+    let to =
+        if forward { bounds.iter().copied().find(|&b| b > byte).unwrap_or(text.len()) } else { bounds.iter().rev().copied().find(|&b| b < byte).unwrap_or(0) };
+    char_index(text, to)
 }
 
 const LRM: &str = "\u{200E}";
@@ -385,6 +368,7 @@ pub(crate) const FORCED_LINE_BREAK: char = '\u{3}';
 pub(crate) struct Layouter {
     lcx: LayoutContext<RunBrush>,
     optical: crate::optical::Cache,
+    kashida_probes: kashida_justify::ProbeCache,
 }
 
 /// A cluster of a line in visual order, for kerning.
@@ -402,11 +386,13 @@ struct KernSlot {
     blank: bool,
     /// Vertical type, upright glyph (its outline doesn't run along the column).
     upright: bool,
+    /// The cluster is one ASCII digit shown with another digit's glyph.
+    digit: Option<digits::DigitSwap>,
 }
 
 impl Layouter {
     pub fn new() -> Self {
-        Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
+        Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default(), kashida_probes: kashida_justify::ProbeCache::default() }
     }
 
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
@@ -470,6 +456,8 @@ impl Layouter {
             let ps = para_style_at(prange.start).clone();
             let content_end = strip_break(text, &prange);
             let content = &text[prange.start..content_end];
+            // Caret stops: the grapheme boundaries of this paragraph, as layer offsets.
+            let graphemes: Vec<usize> = crate::segment::grapheme_boundaries(content).into_iter().map(|b| prange.start + b).collect();
             let prefix = match ps.direction {
                 TextDirection::Auto => "",
                 TextDirection::Ltr => LRM,
@@ -523,6 +511,10 @@ impl Layouter {
             // fetches it (`served`); it joins the fallback stack once it arrives.
             crate::served::request_for_text(&ptext);
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
+            // Cursive words of this paragraph (byte ranges in `ptext`).
+            let words = crate::segment::cursive_words(&ptext);
+            // Grapheme boundaries of `ptext`: kerning goes between graphemes, never inside one.
+            let pgraphemes = crate::segment::grapheme_boundaries(&ptext);
             let mut layout: Layout<RunBrush> = {
                 let mut b = self.lcx.ranged_builder(&mut fonts.fcx, &ptext, 1.0, false);
                 // Paragraph-start style as the default (covers the direction mark and empty
@@ -571,11 +563,17 @@ impl Layouter {
                         }
                     }
                 }
+                // Tracking would tear joined letters apart: none inside cursive words (CSS Text 3
+                // §7.2.1), set over whole words so a shaping run never splits inside one.
+                for w in &words {
+                    b.push(StyleProperty::LetterSpacing(0.0), w.clone());
+                }
                 for (range, size) in synthetic_small_caps {
                     b.push(StyleProperty::FontSize(size), range);
                 }
                 b.build(&ptext)
             };
+            let rtl = layout.is_rtl();
             let indent_start = ps.start_indent_pt * k;
             let indent_end = ps.end_indent_pt * k;
             if ps.first_line_indent_pt != 0.0 {
@@ -585,11 +583,15 @@ impl Layouter {
             let (line_origin, line_len) = if vertical { (box_rect.1, box_rect.3) } else { (box_rect.0, box_rect.2) };
             let avail = if is_box { Some((line_len - indent_start - indent_end).max(1.0)) } else { None };
             layout.break_all_lines(avail);
+            let kashida_para = is_box && ps.kashida && !vertical && ps.align.is_justified();
+            let kashida_cands = if kashida_para { kashida_justify::candidates(&ptext, &words, &pgraphemes) } else { Vec::new() };
             let alignment = if is_box {
                 match ps.align {
                     TextAlign::Left => Alignment::Left,
                     TextAlign::Center => Alignment::Center,
                     TextAlign::Right => Alignment::Right,
+                    // Kashida lines are justified below, so parley must not spread the gaps.
+                    _ if kashida_para => Alignment::Start,
                     _ => Alignment::Justify,
                 }
             } else {
@@ -669,10 +671,21 @@ impl Layouter {
                         continue;
                     }
                     line_runs.push(run.index());
+                    let digit_font = if vertical { None } else { digits::DigitFont::new(run.font(), run.normalized_coords(), run.font_size()) };
                     for c in run.visual_clusters() {
                         let mut gl = c.glyphs();
                         let first = gl.next().map(|g| g.id);
                         let last = gl.last().map(|g| g.id).or(first);
+                        let digit = digit_font.as_ref().and_then(|f| {
+                            let r = c.text_range();
+                            let ch = ptext.get(r.clone()).filter(|s| s.len() == 1)?.chars().next()?;
+                            let mut glyphs = c.glyphs();
+                            let (g, None) = (glyphs.next()?, glyphs.next()) else { return None };
+                            let st = &out.styles[style_at(map(r.start))];
+                            let swap = f.swap(st.digits, ch, g.advance)?;
+                            let hs = if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 };
+                            Some(digits::DigitSwap { delta: swap.delta * hs, ..swap })
+                        });
                         slots.push(KernSlot {
                             run: run.index(),
                             start: c.text_range().start,
@@ -684,17 +697,32 @@ impl Layouter {
                             rtl: c.is_rtl(),
                             blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= prefix.len(),
                             upright: vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                            digit,
                         });
                     }
                 }
                 let mut kern_px: Vec<f32> = vec![0.0; slots.len()];
                 for j in 0..slots.len().saturating_sub(1) {
                     let (a, b) = (&slots[j], &slots[j + 1]);
-                    if a.start < prefix.len() {
+                    if a.start < prefix.len() || b.start < prefix.len() {
                         continue;
                     }
-                    let st = &out.styles[style_at(map(a.start))];
-                    let next = &out.styles[style_at(map(b.start))];
+                    // The pieces of one grapheme (a letter and its marks) never move apart.
+                    let grapheme = |o: usize| pgraphemes.partition_point(|&g| g <= o);
+                    if grapheme(a.start) == grapheme(b.start) {
+                        continue;
+                    }
+                    // Joined letters never move apart (alreq): no kerning inside a cursive word.
+                    if let (Some(wa), Some(wb)) = (crate::segment::word_at(&words, a.start), crate::segment::word_at(&words, b.start))
+                        && wa == wb
+                    {
+                        continue;
+                    }
+                    // A kern is space after the logically first character of the pair: in RTL text
+                    // that is the visually right one.
+                    let (first, second) = if a.rtl && b.rtl { (b, a) } else { (a, b) };
+                    let st = &out.styles[style_at(map(first.start))];
+                    let next = &out.styles[style_at(map(second.start))];
                     let mut units = if st.kern.is_finite() { st.kern } else { 0.0 };
                     // Optical pairs: both characters optical (a mode change splits shaping
                     // runs, which ends automatic kerning, as with Metrics).
@@ -720,7 +748,12 @@ impl Layouter {
                             units += k + crate::optical::size_adjust(st.size_pt);
                         }
                     }
-                    kern_px[j] = units / 1000.0 * a.size;
+                    kern_px[j] = units / 1000.0 * first.size;
+                }
+                // A swapped digit changes its cluster's advance: the glyphs after it move by the
+                // difference, like kerning, so alignment and carets follow (review finding 7).
+                for (kern, slot) in kern_px.iter_mut().zip(&slots) {
+                    *kern += slot.digit.map_or(0.0, |d| d.delta);
                 }
                 let line_kern: f32 = kern_px.iter().sum();
                 // Per run on the line: (run index, glyph → slot, glyphs emitted, first slot whose
@@ -741,6 +774,10 @@ impl Layouter {
                     }
                     cursors.push((run.index(), g2s, 0, base));
                 }
+                // Spec 6.1: kashida stretches justified lines only, never a last line (except with
+                // "Justify all"); a forced line break ends a line like the paragraph's last one.
+                let ends_forced = ptext.get(line.text_range()).is_some_and(|s| s.ends_with('\n'));
+                let kashida_line = kashida_para && !ends_forced && (!last_line || ps.align == TextAlign::JustifyAll);
                 // Parley aligned box lines without the kerning.
                 let kern_align = if is_box {
                     match ps.align {
@@ -752,30 +789,40 @@ impl Layouter {
                     0.0
                 };
                 let dx = if is_box {
-                    let base = line_origin + indent_start - kern_align;
+                    // The start indent is on the paragraph's start side (the right in RTL).
+                    let base = line_origin + if rtl { indent_end } else { indent_start } - kern_align;
                     let slack = avail.unwrap_or(0.0) - adv - line_kern;
-                    base + if last_line {
+                    base + if kashida_line && rtl {
+                        // Justified from the left edge, past the whitespace hung there.
+                        -m.offset - m.trailing_whitespace
+                    } else if last_line {
                         match ps.align {
                             TextAlign::JustifyCenter => slack * 0.5 - m.offset,
                             TextAlign::JustifyRight => slack - m.offset,
+                            // Parley start-aligns a last line, which in RTL is the right: put it
+                            // back on the left edge, past the whitespace hung there.
+                            TextAlign::JustifyLeft | TextAlign::JustifyAll if rtl => -m.offset - m.trailing_whitespace,
                             _ => 0.0,
                         }
                     } else {
                         0.0
                     }
                 } else {
+                    // The start indent pushes the text away from the anchor on its start side.
                     let target = match ps.align {
                         TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
-                        TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
+                        TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern) - if rtl { indent_start } else { 0.0 },
+                        _ if rtl => 0.0,
                         _ => indent_start,
                     };
                     target - m.offset
                 };
-                let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll;
+                let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll && !kashida_line;
                 let line_index = out.lines.len();
                 let lr = line.text_range();
                 let g0 = out.glyphs.len();
                 let c0 = out.clusters.len();
+                let d0 = out.decorations.len();
                 let mut vinfo: Vec<VGlyph> = Vec::new();
                 let mut extra = 0.0f32; // horizontal-scale growth and kerning along the line
                 let mut seen_runs: Vec<usize> = Vec::new();
@@ -821,6 +868,7 @@ impl Layouter {
                     let mut pen = gr.offset();
                     let mut cursor = cursors.iter_mut().find(|c| c.0 == run.index());
                     for g in gr.glyphs() {
+                        let swap = cursor.as_deref().and_then(|c| c.1.get(c.2)).and_then(|&slot| slots.get(slot)).and_then(|s| s.digit);
                         // Kerning of the clusters before this glyph's cluster.
                         if let Some(c) = cursor.as_deref_mut() {
                             if let Some(&slot) = c.1.get(c.2) {
@@ -833,7 +881,7 @@ impl Layouter {
                         }
                         out.glyphs.push(PlacedGlyph {
                             face,
-                            id: g.id,
+                            id: swap.map_or(g.id, |d| d.id),
                             x: dx + pen + g.x + extra,
                             y: baseline + g.y,
                             style: si,
@@ -887,23 +935,41 @@ impl Layouter {
                         out.decorations.push(DecorationRect { x0: run_x0, y0, x1: run_x1, y1: y0 + rm.strikethrough_size.max(1.0), style: si });
                     }
                 }
+                fold_graphemes(&mut out.clusters, c0, |o| graphemes.binary_search(&o).is_ok());
                 if vertical {
                     extra -= squeeze_punctuation(text, &mut out.clusters[c0..], &mut out.glyphs[g0..]);
                 }
+                let mut line_shift = 0.0f32;
+                if kashida_line {
+                    let slack = avail.unwrap_or(0.0) - (adv + extra);
+                    if slack > 0.0 {
+                        let cx = kashida_justify::LineText {
+                            ptext: &ptext,
+                            prange_start: prange.start,
+                            prefix: prefix.len(),
+                            k,
+                            fallback: &fallback,
+                            small_caps: &small_caps,
+                            styles: &out.styles,
+                            run_starts: &run_starts,
+                        };
+                        let joins = self.plan_joins(fonts, &cx, &line, &kashida_cands);
+                        let ap = kashida_justify::Apply { text, rtl, baseline, spread_all: ps.align == TextAlign::JustifyAll && last_line };
+                        let mut parts =
+                            JustifyLine { clusters: &mut out.clusters[c0..], glyphs: &mut out.glyphs, g0, decorations: &mut out.decorations[d0..], vertical };
+                        let (added, shift) = kashida_justify::justify_line(&mut parts, &joins, slack, &ap);
+                        extra += added;
+                        line_shift = shift;
+                    }
+                }
                 if justify_all {
                     let slack = avail.unwrap_or(0.0) - (adv + extra);
-                    let n = out.clusters.len() - c0;
-                    if n > 1 && slack > 0.0 {
-                        let step = slack / (n - 1) as f32;
-                        let starts: Vec<f32> = out.clusters[c0..].iter().map(|c| c.x).collect();
-                        for (i, c) in out.clusters[c0..].iter_mut().enumerate() {
-                            c.x += step * i as f32;
-                        }
-                        for g in &mut out.glyphs[g0..] {
-                            let i = starts.iter().rposition(|&s| s <= g.x + 1e-3).unwrap_or(0);
-                            g.x += step * i as f32;
-                        }
-                        extra += slack;
+                    if slack > 0.0 {
+                        let mut parts =
+                            JustifyLine { clusters: &mut out.clusters[c0..], glyphs: &mut out.glyphs, g0, decorations: &mut out.decorations[d0..], vertical };
+                        let (added, shift) = justify_all_line(&mut parts, text, slack, rtl);
+                        extra += added;
+                        line_shift = shift;
                     }
                 }
                 if vertical {
@@ -921,7 +987,7 @@ impl Layouter {
                         }
                     }
                 }
-                let x0 = dx + m.offset;
+                let x0 = dx + m.offset + line_shift;
                 out.lines.push(LineInfo {
                     range: map(lr.start)..map(lr.end).min(content_end),
                     baseline,
@@ -930,8 +996,11 @@ impl Layouter {
                     ascent,
                     descent,
                     paragraph: pi,
+                    rtl,
                 });
             }
+            // Kept for caret movement (`navigate`), hidden lines of an overflowing box included.
+            out.paragraphs.push(crate::navigate::ParagraphNav { layout, start: prange.start, end: content_end, prefix: prefix.len() });
             pending_space += ps.space_after_pt * k;
         }
         out
@@ -963,6 +1032,27 @@ pub fn split_paragraphs(text: &str) -> Vec<Range<usize>> {
     }
     v.push(start..b.len());
     v
+}
+
+/// Merges the neighbouring pieces of one grapheme, from `from` on, into one cluster spanning
+/// the union of their x extents. Parley splits a multi-character shaping cluster (a letter with
+/// its harakat) into one piece per character, placed next to each other: logically adjacent
+/// pieces, in either visual order (RTL puts the mark's piece first). Carets, hit tests and
+/// selections must stop only at grapheme boundaries. لا stays two clusters: ل and ا are two
+/// graphemes. A piece with no neighbour in its grapheme stays separate: parley 0.11 can wrap a
+/// line inside an RTL grapheme, leaving a mark at the start of the next line.
+fn fold_graphemes(clusters: &mut Vec<ClusterInfo>, from: usize, starts_grapheme: impl Fn(usize) -> bool) {
+    let mut line = clusters.split_off(from.min(clusters.len()));
+    line.dedup_by(|c, p| {
+        let joins = (c.range.start == p.range.end && !starts_grapheme(c.range.start)) || (c.range.end == p.range.start && !starts_grapheme(p.range.start));
+        if joins {
+            let (x0, x1) = (p.x.min(c.x), (p.x + p.advance).max(c.x + c.advance));
+            p.range = p.range.start.min(c.range.start)..p.range.end.max(c.range.end);
+            (p.x, p.advance) = (x0, x1 - x0);
+        }
+        joins
+    });
+    clusters.append(&mut line);
 }
 
 fn strip_break(text: &str, r: &Range<usize>) -> usize {
@@ -1212,10 +1302,148 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
     best
 }
 
+/// Indices of the line's word gaps: blank clusters between its first and last visible ones.
+fn word_gap_indices(clusters: &[ClusterInfo], text: &str) -> Vec<usize> {
+    let blank = |c: &ClusterInfo| text.get(c.range.clone()).is_some_and(|s| !s.is_empty() && s.chars().all(char::is_whitespace));
+    let (lo, hi) = clusters.iter().filter(|c| !blank(c)).fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+    clusters.iter().enumerate().filter(|(_, c)| blank(c) && c.x > lo && c.x < hi).map(|(i, _)| i).collect()
+}
+
+/// The placed parts of one line that justification moves. `clusters` and `decorations` start at
+/// the line's first entry; the line's glyphs start at `g0` in `glyphs` (kashida appends tatweel
+/// copies to it).
+struct JustifyLine<'a> {
+    clusters: &'a mut [ClusterInfo],
+    glyphs: &'a mut Vec<PlacedGlyph>,
+    g0: usize,
+    decorations: &'a mut [DecorationRect],
+    /// Vertical type: decorations run along `y`.
+    vertical: bool,
+}
+
+/// Moves the ends of the line's underlines and strikethroughs along the line: `by(x, is_end)` is
+/// how far the point at `x` moves, with the same "width added before this x" rule as the clusters.
+fn shift_decorations(decorations: &mut [DecorationRect], vertical: bool, by: impl Fn(f32, bool) -> f32) {
+    for d in decorations {
+        let (start, end) = if vertical { (&mut d.y0, &mut d.y1) } else { (&mut d.x0, &mut d.x1) };
+        *start += by(*start, false);
+        *end += by(*end, true);
+    }
+}
+
+/// Spreads the slack of a "Justify all" last line over its word gaps (Photoshop's default letter
+/// spacing is 0%). A line without gaps is letter-spaced instead, except cursive text, which
+/// can't be: it moves whole to its start edge. The line's underlines and strikethroughs follow
+/// its clusters. Returns (width added to the line, shift of the whole line).
+fn justify_all_line(line: &mut JustifyLine<'_>, text: &str, slack: f32, rtl: bool) -> (f32, f32) {
+    let JustifyLine { clusters, glyphs, g0, decorations, vertical } = line;
+    let glyphs = glyphs.get_mut(*g0..).unwrap_or_default();
+    let vertical = *vertical;
+    let gaps = word_gap_indices(clusters, text);
+    if !gaps.is_empty() {
+        let step = slack / gaps.len() as f32;
+        let gap_x: Vec<f32> = gaps.iter().filter_map(|&i| clusters.get(i)).map(|c| c.x).collect();
+        let before = |x: f32| gap_x.iter().filter(|&&g| g < x - 1e-3).count() as f32;
+        for (i, c) in clusters.iter_mut().enumerate() {
+            c.x += step * before(c.x);
+            if gaps.contains(&i) {
+                c.advance += step;
+            }
+        }
+        for g in glyphs.iter_mut() {
+            g.x += step * before(g.x);
+        }
+        shift_decorations(decorations, vertical, |x, _| step * before(x));
+        return (slack, 0.0);
+    }
+    let cursive = clusters.iter().any(|c| text.get(c.range.clone()).is_some_and(|s| s.chars().any(crate::segment::is_cursive_letter)));
+    if cursive {
+        if !rtl {
+            return (0.0, 0.0);
+        }
+        for c in clusters.iter_mut() {
+            c.x += slack;
+        }
+        for g in glyphs.iter_mut() {
+            g.x += slack;
+        }
+        shift_decorations(decorations, vertical, |_, _| slack);
+        return (0.0, slack);
+    }
+    let n = clusters.len();
+    if n < 2 {
+        return (0.0, 0.0);
+    }
+    let step = slack / (n - 1) as f32;
+    let starts: Vec<f32> = clusters.iter().map(|c| c.x).collect();
+    for (i, c) in clusters.iter_mut().enumerate() {
+        c.x += step * i as f32;
+    }
+    for g in glyphs.iter_mut() {
+        let i = starts.iter().rposition(|&s| s <= g.x + 1e-3).unwrap_or(0);
+        g.x += step * i as f32;
+    }
+    // A start moves with the cluster it opens, an end with the last cluster that begins before it.
+    shift_decorations(decorations, vertical, |x, is_end| {
+        let at = if is_end { starts.iter().rposition(|&s| s < x - 1e-3) } else { starts.iter().rposition(|&s| s <= x + 1e-3) };
+        step * at.unwrap_or(0) as f32
+    });
+    (slack, 0.0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SmallCapsMode, feature_list, small_caps_mode};
+    use super::{ClusterInfo, SmallCapsMode, feature_list, fold_graphemes, grapheme_step, small_caps_mode};
     use photocraft_doc::text::{Caps, CharStyle};
+
+    fn piece(range: std::ops::Range<usize>, x: f32, advance: f32) -> ClusterInfo {
+        ClusterInfo { range, x, advance, line: 0, rtl: false }
+    }
+
+    fn fold(mut v: Vec<ClusterInfo>, from: usize, boundaries: &[usize]) -> Vec<ClusterInfo> {
+        fold_graphemes(&mut v, from, |o| boundaries.contains(&o));
+        v
+    }
+
+    fn ranges(v: &[ClusterInfo]) -> Vec<std::ops::Range<usize>> {
+        v.iter().map(|c| c.range.clone()).collect()
+    }
+
+    #[test]
+    fn fold_merges_a_mark_into_the_preceding_base_in_ltr_order() {
+        let out = fold(vec![piece(0..1, 0.0, 10.0), piece(1..3, 10.0, 10.0), piece(3..4, 20.0, 10.0)], 0, &[0, 3, 4]);
+        assert_eq!(ranges(&out), vec![0..3, 3..4]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 20.0));
+    }
+
+    #[test]
+    fn fold_merges_rtl_pieces_when_the_mark_comes_first_visually() {
+        let out = fold(vec![piece(4..6, 0.0, 5.0), piece(0..4, 5.0, 5.0)], 0, &[0, 6]);
+        assert_eq!(ranges(&out), vec![0..6]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 10.0));
+    }
+
+    #[test]
+    fn fold_chains_a_base_and_two_marks() {
+        let out = fold(vec![piece(0..2, 0.0, 4.0), piece(2..4, 4.0, 4.0), piece(4..6, 8.0, 4.0)], 0, &[0, 6]);
+        assert_eq!(ranges(&out), vec![0..6]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 12.0));
+    }
+
+    #[test]
+    fn fold_leaves_clusters_before_from_untouched() {
+        let v = vec![piece(0..1, 0.0, 5.0), piece(1..2, 5.0, 5.0), piece(2..3, 10.0, 5.0)];
+        // Offset 1 is not a boundary, but the piece at 0 is before `from`.
+        let out = fold(v, 1, &[0, 2, 3]);
+        assert_eq!(ranges(&out), vec![0..1, 1..2, 2..3]);
+    }
+
+    #[test]
+    fn fold_keeps_a_mark_with_no_neighbouring_host() {
+        let out = fold(vec![piece(5..7, 0.0, 5.0), piece(8..9, 5.0, 5.0)], 0, &[8, 9]);
+        assert_eq!(ranges(&out), vec![5..7, 8..9]);
+        assert!(fold(Vec::new(), 3, &[]).is_empty());
+    }
 
     #[test]
     fn uses_real_small_caps_only_when_the_selected_face_supports_smcp() {
@@ -1227,5 +1455,22 @@ mod tests {
         assert!(feature_list(&style, real).iter().any(|feature| feature == "\"smcp\" 1"));
         assert_eq!(synthetic, SmallCapsMode::Synthetic);
         assert!(!feature_list(&style, synthetic).iter().any(|feature| feature == "\"smcp\" 1"));
+    }
+
+    #[test]
+    fn grapheme_step_moves_over_a_letter_and_its_marks() {
+        let t = "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}";
+        assert_eq!(grapheme_step(t, 0, true), 2);
+        assert_eq!(grapheme_step(t, 2, true), 4);
+        assert_eq!(grapheme_step(t, 6, true), 6);
+        assert_eq!(grapheme_step(t, 6, false), 4);
+        assert_eq!(grapheme_step(t, 0, false), 0);
+        assert_eq!(grapheme_step(t, 1, true), 2);
+        assert_eq!(grapheme_step(t, 1, false), 0);
+        assert_eq!(grapheme_step(t, 99, false), 4);
+        assert_eq!(grapheme_step("e\u{301}x", 0, true), 2);
+        assert_eq!(grapheme_step("\u{644}\u{627}", 0, true), 1);
+        assert_eq!(grapheme_step("", 0, true), 0);
+        assert_eq!(grapheme_step("", 0, false), 0);
     }
 }

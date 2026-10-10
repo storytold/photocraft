@@ -19,7 +19,19 @@ photocraft-psd = { workspace = true }
 # directories ourselves (native) and always register the bundled fonts (native + web).
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.44"
+# Grapheme boundaries (caret stops) and Script_Extensions / General_Category (cursive words).
+# No new crates or features (parley already depends on both with exactly these features); this
+# links the General_Category and Script_Extensions tables (tens of KB).
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 flate2 = { workspace = true }
+
+# Kashida candidates (arabic-naskh rules, MIT, Khaled Hosny): plain text in, joins with priorities
+# out, no font data. Only its built-in pattern sets are used, never its pattern compiler. Pinned: the
+# pattern sets and priorities decide where a justified line stretches. It depends on icu_segmenter
+# with default features (`auto`, `lstm`), but only calls the grapheme segmenter, so the neural
+# line-break models are not linked into the web build (a standalone wasm with it grew by 56 KB).
+raqim-kashida = "=0.3.0"
 
 # ICU dictionary data for Japanese word boundaries and complex-script (Thai, Lao, Khmer, Burmese)
 # line breaking. Native only: the CJK dictionary alone is 3.8 MB of wasm, and the web build must

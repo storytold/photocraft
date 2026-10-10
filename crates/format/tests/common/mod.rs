@@ -125,10 +125,10 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             psd_raw: Some(blob(9, 100)),
             runs: vec![
                 TextRun { len: 1, style: CharStyle { kerning: text::Kerning::Off, kern: 120.0, ..CharStyle::default() } },
-                TextRun { len: 5, style: CharStyle::default() },
+                TextRun { len: 5, style: CharStyle { digits: text::Digits::Persian, ..CharStyle::default() } },
                 TextRun { len: 9, style: CharStyle { kerning: text::Kerning::Optical, ..CharStyle::default() } },
             ],
-            paragraphs: vec![ParagraphRun { len: 15, style: ParagraphStyle::default() }],
+            paragraphs: vec![ParagraphRun { len: 15, style: ParagraphStyle { kashida: true, ..ParagraphStyle::default() } }],
             shape: TextShape::Box { x: 1.0, y: 2.0, width: 100.0, height: 50.0 },
             orientation: text::Orientation::Vertical,
             antialias: text::AntiAlias::Crisp,

@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use photocraft_color::Color;
 use photocraft_doc::text::{
-    AntiAlias, Caps, CharStyle, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape,
+    AntiAlias, Caps, CharStyle, Digits, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun,
+    TextShape,
 };
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
@@ -231,6 +232,11 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
         }
         _ => {}
     }
+    // An unknown name changes nothing, so a typo can't silently reset the digits.
+    if let Some(v) = p.get("digits").and_then(Value::as_str).and_then(parse_digits) {
+        s.digits = v;
+        hit(true);
+    }
     if let Some(v) = p.get("caps").and_then(Value::as_str) {
         s.caps = match v {
             "small" | "smallCaps" => Caps::SmallCaps,
@@ -303,7 +309,21 @@ pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
         s.hyphenate = v;
         any = true;
     }
+    if let Some(v) = p.get("kashida").and_then(Value::as_bool) {
+        s.kashida = v;
+        any = true;
+    }
     any
+}
+
+/// `"western" | "arabicIndic" | "persian"` (any case).
+fn parse_digits(v: &str) -> Option<Digits> {
+    match v.to_ascii_lowercase().as_str() {
+        "western" => Some(Digits::Western),
+        "arabicindic" => Some(Digits::ArabicIndic),
+        "persian" => Some(Digits::Persian),
+        _ => None,
+    }
 }
 
 fn push_merge<S: PartialEq>(out: &mut Vec<(usize, S)>, len: usize, st: S) {
@@ -426,7 +446,12 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 
 /// Runs `f` on a type layer as one undo step. `f` may set an explicit layer name (`type.edit`'s
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
-fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>) -> Result<R> {
+pub(crate) fn with_text_layer<R>(
+    s: &mut Session,
+    p: &Value,
+    label: &str,
+    f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>,
+) -> Result<R> {
     let id = layer_id(s, p)?;
     let (r, damage) = s.edit(label, |doc, _| {
         let snapshot = doc.clone();
@@ -555,6 +580,18 @@ pub fn layer_name(text: &str) -> String {
     if name.is_empty() { "Type Layer".into() } else { name }
 }
 
+/// The alignment text starts with by its direction (spec 5.1.1): `Right` when the paragraph is
+/// RTL, or when the direction is Auto and the first strong character is R or AL; `Left` for
+/// LTR; `None` while no strong character decides (Arabic-Indic digits typed first stay put).
+pub fn natural_align(text: &str, direction: TextDirection) -> Option<TextAlign> {
+    let rtl = match direction {
+        TextDirection::Rtl => true,
+        TextDirection::Ltr => false,
+        TextDirection::Auto => photocraft_text::navigate::first_strong_rtl(text)?,
+    };
+    Some(if rtl { TextAlign::Right } else { TextAlign::Left })
+}
+
 fn info(s: &Session, p: &Value) -> Result<Value> {
     let id = layer_id(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -606,7 +643,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
     }))
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str,"digits":"western|arabicIndic|persian" (display only; the text keeps ASCII digits)"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -615,7 +652,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"? (absent: right for text whose first strong character is right-to-left, or with "direction":"rtl"),"direction":"auto|ltr|rtl"?,"kashida":bool?,"digits":"western|arabicIndic|persian"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
@@ -635,6 +672,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 style.color = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
                 apply_char_props(&mut style, p);
                 apply_para_props(&mut para, p);
+                // New Arabic text right-aligns itself (spec 5.1.1), when the caller gave no
+                // alignment and the starting style is the default Left (RTL vertical type is a
+                // non-goal).
+                if p.get("align").is_none()
+                    && orientation == Orientation::Horizontal
+                    && para.align == TextAlign::Left
+                    && natural_align(&text, para.direction) == Some(TextAlign::Right)
+                {
+                    para.align = TextAlign::Right;
+                }
                 let (shape, transform) = match p.get("box").and_then(Value::as_array) {
                     Some(b) if b.len() == 4 => {
                         let v: Vec<f32> = b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
@@ -719,7 +766,7 @@ pub fn specs() -> Vec<CommandSpec> {
                             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
                             eng.pair_kerning(t, doc.resolution_dpi, a)
                         }
-                        .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break or line end)"))?;
+                        .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break, line end, or joined letters)"))?;
                         let value = (f64::from(now.round()) + by).clamp(KERN_MIN, KERN_MAX) as f32;
                         style_range(t, a, b, &|st| {
                             st.kerning = Kerning::Off;
@@ -792,7 +839,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading include each layer's transform scale), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading include each layer's transform scale), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll" (absolute; for RTL paragraphs, justifyRight puts the last line at the start),"firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"kashida":bool (stretch letter joins before word gaps on justified Arabic lines)}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
@@ -888,6 +935,50 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
         s
+    }
+
+    #[test]
+    fn natural_align_follows_the_first_strong_character_and_the_direction() {
+        assert_eq!(natural_align("مرحبا", TextDirection::Auto), Some(TextAlign::Right));
+        assert_eq!(natural_align("١٢٣ مرحبا", TextDirection::Auto), Some(TextAlign::Right));
+        assert_eq!(natural_align("١٢٣", TextDirection::Auto), None, "digits alone decide nothing");
+        assert_eq!(natural_align("Galaxy S24 شاشة", TextDirection::Auto), Some(TextAlign::Left));
+        assert_eq!(natural_align("Galaxy S24 شاشة", TextDirection::Rtl), Some(TextAlign::Right));
+        assert_eq!(natural_align("مرحبا", TextDirection::Ltr), Some(TextAlign::Left));
+        assert_eq!(natural_align("", TextDirection::Auto), None);
+    }
+
+    #[test]
+    fn create_right_aligns_rtl_text_only_without_an_align() {
+        let mut s = session();
+        let make = |s: &mut Session, p: Value| s.execute("type.create", p).unwrap()["layer"].as_u64().unwrap();
+        let para = |s: &Session, id: u64| text_layer(s, id).paragraph_runs()[0].style.clone();
+        let id = make(&mut s, json!({"x": 190, "y": 20, "text": "مرحبا"}));
+        assert_eq!(para(&s, id).align, TextAlign::Right);
+        let id = make(&mut s, json!({"x": 190, "y": 40, "text": "مرحبا", "align": "left"}));
+        assert_eq!(para(&s, id).align, TextAlign::Left, "an explicit align wins");
+        let id = make(&mut s, json!({"x": 190, "y": 60, "text": "Galaxy S24 شاشة"}));
+        assert_eq!(para(&s, id).align, TextAlign::Left);
+        let id = make(&mut s, json!({"x": 190, "y": 80, "text": "Galaxy S24 شاشة", "direction": "rtl"}));
+        assert_eq!((para(&s, id).align, para(&s, id).direction), (TextAlign::Right, TextDirection::Rtl));
+        let id = make(&mut s, json!({"x": 190, "y": 20, "text": "مرحبا", "orientation": "vertical"}));
+        assert_eq!(para(&s, id).align, TextAlign::Left, "not in vertical type");
+    }
+
+    #[test]
+    fn kashida_and_digits_set_through_create_and_set_style_and_ignore_bad_values() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 10, "y": 20, "text": "a1", "kashida": true, "digits": "persian"})).unwrap()["layer"].as_u64().unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (true, Digits::Persian));
+        s.execute("type.setStyle", json!({"layer": id, "digits": "arabicIndic", "kashida": false})).unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (false, Digits::ArabicIndic));
+        s.execute("type.setStyle", json!({"layer": id, "digits": "klingon", "kashida": "yes", "size": 30})).unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (false, Digits::ArabicIndic), "bad values change nothing");
+        s.execute("type.setStyle", json!({"layer": id, "digits": "western"})).unwrap();
+        assert_eq!(text_layer(&s, id).char_runs()[0].style.digits, Digits::Western);
     }
 
     fn text_layer(s: &Session, id: u64) -> TextLayer {
@@ -1225,6 +1316,22 @@ mod tests {
         assert_eq!(kerning_of(&s, id)[3], (Kerning::Off, 0.0));
         let info = s.execute("type.info", json!({"layer": id})).unwrap();
         assert_eq!(info["runs"][1]["style"]["kern"], json!(-50.0));
+    }
+
+    /// The kern lands on the last character of a grapheme: a caret after "e" + accent kerns the accent.
+    #[test]
+    fn kern_pair_after_a_combining_mark_kerns_the_mark() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "e\u{301}x", "size": 30})).unwrap()["layer"].as_u64().unwrap();
+        let shown = {
+            let t = text_layer(&s, id);
+            let mut eng = photocraft_text::shared().lock().unwrap();
+            eng.pair_kerning(&t, s.active().unwrap().doc.resolution_dpi, 1).unwrap()
+        };
+        s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 2, "by": 20}})).unwrap();
+        let k = kerning_of(&s, id);
+        assert_eq!(k[1], (Kerning::Off, shown.round() + 20.0));
+        assert_eq!((k[0], k[2]), ((Kerning::Metrics, 0.0), (Kerning::Metrics, 0.0)));
     }
 
     /// Bad kerning params are errors, never panics, and leave the layer alone.

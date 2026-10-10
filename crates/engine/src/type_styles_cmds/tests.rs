@@ -243,3 +243,17 @@ fn preview_options_validates_without_mutating_source() {
     assert_ne!(shown.text_styles, before);
     assert_eq!(doc.text_styles, before);
 }
+
+#[test]
+fn style_sheets_carry_digits_and_kashida_and_reject_bad_values_gracefully() {
+    use photocraft_doc::text::Digits;
+    let (mut s, id) = session("Hello world");
+    let cs = s.execute("type.characterStyle.new", json!({"attrs": {"digits": "persian"}, "fromSelection": false})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": id})).unwrap();
+    assert_eq!(run_at(&layer(&s, id), 0).digits, Digits::Persian);
+    let ps = s.execute("type.paragraphStyle.new", json!({"attrs": {"kashida": true}, "fromSelection": false})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.paragraphStyle.apply", json!({"id": ps, "layer": id})).unwrap();
+    assert!(layer(&s, id).paragraph_runs()[0].style.kashida);
+    assert!(s.execute("type.characterStyle.new", json!({"attrs": {"digits": "klingon"}, "fromSelection": false})).is_err());
+    assert!(s.execute("type.paragraphStyle.new", json!({"attrs": {"kashida": "maybe"}, "fromSelection": false})).is_err());
+}

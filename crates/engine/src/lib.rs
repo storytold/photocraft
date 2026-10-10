@@ -96,6 +96,7 @@ pub mod transform_cmds;
 mod trap_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
+pub mod type_control_cmds;
 pub mod type_extra_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;

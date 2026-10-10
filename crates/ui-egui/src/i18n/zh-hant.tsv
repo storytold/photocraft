@@ -2383,3 +2383,21 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Right-to-left	從右到左
+	Left-to-right	從左到右
+	Kashida	Kashida
+	Digits	數字
+	Western	西方
+	Arabic-Indic	阿拉伯-印度
+	Persian	波斯
+	Keep Selection Left-to-Right	保持選取範圍從左到右
+	Keep Selection Right-to-Left	保持選取範圍從右到左
+	Keep Selection in Its Own Direction	保持選取範圍為其自身方向
+	Insert End of Isolate	插入隔離結束符
+	Insert Left-to-Right Mark	插入從左到右標記
+	Insert Right-to-Left Mark	插入從右到左標記
+	Insert Arabic Letter Mark	插入阿拉伯字母標記
+	Insert Zero-Width Joiner	插入零寬連接符
+	Insert Zero-Width Non-Joiner	插入零寬非連接符
+	Insert Tatweel	插入延長符 (Tatweel)
+	Insert Control Character	插入控制字元

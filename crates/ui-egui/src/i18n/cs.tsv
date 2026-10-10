@@ -2406,3 +2406,21 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+	Right-to-left	Zprava doleva
+	Left-to-right	Zleva doprava
+	Kashida	Kašida
+	Digits	Číslice
+	Western	Západní
+	Arabic-Indic	Arabsko-indické
+	Persian	Perské
+	Keep Selection Left-to-Right	Ponechat výběr zleva doprava
+	Keep Selection Right-to-Left	Ponechat výběr zprava doleva
+	Keep Selection in Its Own Direction	Ponechat výběr ve vlastním směru
+	Insert End of Isolate	Vložit konec izolace
+	Insert Left-to-Right Mark	Vložit značku zleva doprava
+	Insert Right-to-Left Mark	Vložit značku zprava doleva
+	Insert Arabic Letter Mark	Vložit arabskou značku písmene
+	Insert Zero-Width Joiner	Vložit spojovač nulové šířky
+	Insert Zero-Width Non-Joiner	Vložit nespojovač nulové šířky
+	Insert Tatweel	Vložit tatwíl
+	Insert Control Character	Vložit řídicí znak

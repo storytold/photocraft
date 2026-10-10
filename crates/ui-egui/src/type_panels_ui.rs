@@ -580,6 +580,7 @@ pub fn insert_glyph(app: &mut PhotocraftApp, g: &str) -> bool {
     if let (Some(e), Some(c)) = (app.ui.text_edit.as_mut(), r["caret"].as_u64()) {
         e.caret = c as usize;
         e.anchor = e.caret;
+        e.upstream = true;
     }
     let rec = &mut app.ui.type_panels.glyph_recent;
     rec.retain(|x| x != g);

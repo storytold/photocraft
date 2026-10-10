@@ -3426,3 +3426,20 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Right-to-left	右から左
+	Left-to-right	左から右
+	Kashida	カシーダ
+	Western	西洋
+	Arabic-Indic	アラビア・インド数字
+	Persian	ペルシア
+	Keep Selection Left-to-Right	選択範囲を左から右に固定
+	Keep Selection Right-to-Left	選択範囲を右から左に固定
+	Keep Selection in Its Own Direction	選択範囲を固有の方向に固定
+	Insert End of Isolate	分離終了を挿入
+	Insert Left-to-Right Mark	左から右マークを挿入
+	Insert Right-to-Left Mark	右から左マークを挿入
+	Insert Arabic Letter Mark	アラビア文字マークを挿入
+	Insert Zero-Width Joiner	ゼロ幅接合子を挿入
+	Insert Zero-Width Non-Joiner	ゼロ幅非接合子を挿入
+	Insert Tatweel	タトウィールを挿入
+	Insert Control Character	制御文字を挿入

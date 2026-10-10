@@ -9,6 +9,7 @@ use photocraft_geom::Affine;
 
 use crate::TextEngine;
 use crate::layout::{GlyphOrient, VClass, vertical_class};
+use crate::navigate::Caret;
 
 fn vertical(text: &str, family: &str, size_pt: f32) -> TextLayer {
     TextLayer {
@@ -92,14 +93,31 @@ fn caret_hit_test_and_arrow_geometry_follow_columns() {
     let mut e = TextEngine::new();
     let l = e.layout(&vertical("abc\ndef", "Inter", 20.0), 72.0);
     // Above the first column's top → offset 0; below it → end of the first line.
-    assert_eq!(l.hit_test(0.0, -5.0), 0);
-    assert_eq!(l.hit_test(0.0, 1000.0), 3);
+    let at = |x: f32, y: f32| {
+        crate::navigate::hit(
+            &l, "abc
+def", x, y,
+        )
+        .byte
+    };
+    assert_eq!(at(0.0, -5.0), 0);
+    assert_eq!(at(0.0, 1000.0), 3);
     // Left of the anchor is the second column.
-    assert_eq!(l.hit_test(-24.0, -5.0), 4);
+    assert_eq!(at(-24.0, -5.0), 4);
     // The caret is a horizontal segment across the column, lower for later offsets.
-    let [(x0, y0), (x1, y1)] = l.caret_segment(1);
+    let [(x0, y0), (x1, y1)] = crate::navigate::caret_segment(
+        &l,
+        "abc
+def",
+        Caret::new(1, false),
+    );
     assert!((y0 - y1).abs() < 1e-4 && x0 > x1 && (x0 - x1 - 20.0).abs() < 1e-3, "{x0} {y0} {x1} {y1}");
-    let [(_, y2), _] = l.caret_segment(2);
+    let [(_, y2), _] = crate::navigate::caret_segment(
+        &l,
+        "abc
+def",
+        Caret::new(2, false),
+    );
     assert!(y2 > y0);
     // Round trip through line space.
     let (u, v) = l.to_line(-7.0, 33.0);
@@ -272,7 +290,7 @@ fn hostile_vertical_input_does_not_panic() {
         {
             let t = TextLayer { shape, ..vertical(text, "Inter", 12.0) };
             let (l, _) = e.render(&t, 72.0, PixelFormat::RGBA8);
-            let _ = (l.bounds(), l.hit_test(1.0, 2.0), l.caret_segment(1));
+            let _ = (l.bounds(), crate::navigate::hit(&l, text, 1.0, 2.0), crate::navigate::caret_segment(&l, text, Caret::new(1, false)));
         }
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Every edit is an engine `type.*` command carrying the session's `coalesce` key, so a whole
 //! typing session is one "Edit Type" history step and automation sees exactly what the user does.
-//! Offsets in [`TextEdit`] are character indices (the engine's unit); the layout works in bytes.
+//! Offsets in [`TextEdit`] are character indices (the engine's unit) plus the caret's side (`upstream`); the layout works in bytes. Carets move and draw through `photocraft_text::navigate`.
 
 use std::sync::{Arc, PoisonError};
 
@@ -10,6 +10,7 @@ use egui::{Color32, Pos2, Stroke};
 use photocraft_doc::{Document, LayerContent, LayerId, TextLayer};
 use photocraft_geom::{Affine, Point};
 use photocraft_text::TextLayout;
+use photocraft_text::navigate::{self, Caret, Dir, Unit};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -106,7 +107,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
         commit(app);
         let key = session_key(app);
         begin_edit(app, id, &key)?;
-        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, ..Default::default() });
     } else if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 0;
         ed.caret = n;
@@ -118,10 +119,12 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     Ok(())
 }
 
-fn hit_offset(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64) -> usize {
-    let Some((l, aff, text)) = layout(app, id) else { return 0 };
+/// The caret under a document point, as a character index and its side.
+fn hit_caret(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64) -> (usize, bool) {
+    let Some((l, aff, text)) = layout(app, id) else { return (0, false) };
     let (tx, ty) = to_text(&aff, x, y);
-    photocraft_text::hit_char(&l, &text, tx, ty).0
+    let c = navigate::hit(&l, &text, tx, ty);
+    (photocraft_text::char_index(&text, c.byte), c.upstream)
 }
 
 fn hex(c: [f32; 4]) -> String {
@@ -206,9 +209,10 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> boo
             return true;
         }
         if hit_layer(app, x, y) == Some(id) {
-            let off = hit_offset(app, id, x, y);
+            let (off, upstream) = hit_caret(app, id, x, y);
             if let Some(e) = app.ui.text_edit.as_mut() {
                 e.caret = off;
+                e.upstream = upstream;
                 if !shift {
                     e.anchor = off;
                 }
@@ -225,8 +229,8 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> boo
         if begin_edit(app, id, &key).is_err() {
             return true;
         }
-        let off = hit_offset(app, id, x, y);
-        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, dragging: true, resize: None, preedit: None });
+        let (off, upstream) = hit_caret(app, id, x, y);
+        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: off, anchor: off, upstream, session: key, dragging: true, ..Default::default() });
         return true;
     }
     false
@@ -239,9 +243,10 @@ pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64) {
         return;
     }
     if ed.dragging {
-        let off = hit_offset(app, LayerId(ed.layer), x, y);
+        let (off, upstream) = hit_caret(app, LayerId(ed.layer), x, y);
         if let Some(e) = app.ui.text_edit.as_mut() {
             e.caret = off;
+            e.upstream = upstream;
         }
     }
 }
@@ -258,13 +263,20 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let o = app.ui.tool_options.clone();
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default).
     let text = if app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
+    let vertical = app.ui.tool == crate::state::Tool::VerticalType;
+    // The tool default direction (spec 5.1.2); RTL in vertical type is a non-goal. With RTL and
+    // the default Left alignment, new text is right-aligned.
+    let direction = if vertical { photocraft_doc::text::TextDirection::Auto } else { direction_of(&o.type_direction) };
+    let natural = photocraft_engine::type_cmds::natural_align(text, direction) == Some(photocraft_doc::text::TextAlign::Right);
+    let align = if o.type_align == "left" && natural { "right" } else { o.type_align.as_str() };
     let mut p = json!({
         "text": text,
-        "orientation": if app.ui.tool == crate::state::Tool::VerticalType { "vertical" } else { "horizontal" },
+        "orientation": if vertical { "vertical" } else { "horizontal" },
         "font": o.type_font,
         "fontStyle": o.type_style,
         "size": o.type_size,
-        "align": o.type_align,
+        "align": align,
+        "direction": direction_key(direction),
         "color": hex(app.session.tools.foreground),
     });
     if w >= min && h >= min {
@@ -283,7 +295,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
-        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, ..Default::default() });
     }
 }
 
@@ -304,11 +316,82 @@ fn insert(app: &mut PhotocraftApp, s: &str) {
         return;
     }
     crate::type_transform::finish(app);
-    if app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": a, "end": b, "text": s}, "coalesce": ed.session})).is_ok()
-        && let Some(e) = app.ui.text_edit.as_mut()
-    {
+    if app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": a, "end": b, "text": s}, "coalesce": ed.session})).is_err() {
+        return;
+    }
+    if let Some(e) = app.ui.text_edit.as_mut() {
         e.caret = a + s.chars().count();
         e.anchor = e.caret;
+        // A typed character keeps the caret on its side where directions meet (spec 5.1.4).
+        e.upstream = !s.is_empty();
+    }
+    if !s.is_empty() {
+        auto_align(app);
+    }
+}
+
+/// `type.insertControl` on the type being edited (spec 5.1.8): at the caret, or over the
+/// selection (an isolate wraps it), in the editing session's history step. The palette's bidi
+/// rows and `ui.menu.invoke` come here (see `menus::invoke_unguarded`).
+pub fn insert_control(app: &mut PhotocraftApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let ed = app.ui.text_edit.clone().ok_or_else(|| "Start editing type to insert a control character".to_string())?;
+    let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
+    let char_name = params.get("char").cloned().unwrap_or(serde_json::Value::Null);
+    let p = json!({"layer": ed.layer, "char": char_name, "range": [a, b], "coalesce": ed.session});
+    crate::type_transform::finish(app);
+    let v = app.run("type.insertControl", p)?;
+    let at = |i: usize| v.get("selection").and_then(|s| s.get(i)).and_then(serde_json::Value::as_u64).and_then(|n| usize::try_from(n).ok());
+    if let (Some(s0), Some(s1)) = (at(0), at(1))
+        && let Some(e) = app.ui.text_edit.as_mut()
+    {
+        // The caret stays at the end of the selection it was on.
+        if ed.caret < ed.anchor {
+            (e.caret, e.anchor) = (s0, s1);
+        } else {
+            (e.anchor, e.caret) = (s0, s1);
+        }
+        e.upstream = s0 == s1;
+        e.preedit = None;
+    }
+    Ok(v)
+}
+
+/// Spec 5.1.1: new Arabic text right-aligns itself. After typing into a layer this session
+/// created, the caret's paragraph becomes right-aligned when three things hold: it is still at
+/// the default Left, nobody picked an alignment in the session, and its first strong character
+/// is right-to-left (or its direction is RTL). A paragraph whose first strong letter is Latin
+/// stays Left, so this happens at most once per paragraph, at its first strong character.
+fn auto_align(app: &mut PhotocraftApp) {
+    use photocraft_doc::text::{Orientation, TextAlign};
+    let Some(ed) = app.ui.text_edit.clone() else { return };
+    if !ed.created || ed.align_picked {
+        return;
+    }
+    let right = {
+        let Some(t) = app.session.active().and_then(|st| text_layer(&st.doc, LayerId(ed.layer))) else { return };
+        if t.orientation == Orientation::Vertical {
+            return;
+        }
+        let at = byte_of(&t.text, ed.caret);
+        let Some(pr) = photocraft_text::layout::split_paragraphs(&t.text).into_iter().rfind(|r| r.start <= at) else { return };
+        let runs = t.paragraph_runs();
+        let mut end = 0;
+        let Some(style) = runs
+            .iter()
+            .find(|r| {
+                end += r.len;
+                pr.start < end
+            })
+            .or(runs.last())
+            .map(|r| r.style.clone())
+        else {
+            return;
+        };
+        let content = t.text.get(pr).unwrap_or("").trim_end_matches(['\r', '\n']);
+        style.align == TextAlign::Left && photocraft_engine::type_cmds::natural_align(content, style.direction) == Some(TextAlign::Right)
+    };
+    if right {
+        let _ = app.run("type.setStyle", json!({"layer": ed.layer, "range": [ed.caret, ed.caret], "align": "right", "coalesce": ed.session}));
     }
 }
 
@@ -355,13 +438,21 @@ fn ime_update(app: &mut PhotocraftApp, s: &str, commit: bool) {
     {
         e.caret = start + len;
         e.anchor = e.caret;
+        e.upstream = len > 0;
         e.preedit = if commit || len == 0 { None } else { Some((start, len)) };
+    }
+    if len > 0 {
+        auto_align(app);
     }
 }
 
 /// Character index of the previous / next word boundary (shared with `type.navigate`).
 fn word_boundary(text: &str, from: usize, forward: bool) -> usize {
     photocraft_text::word_boundary(text, from, forward)
+}
+
+fn grapheme_step(text: &str, from: usize, forward: bool) -> usize {
+    photocraft_text::grapheme_step(text, from, forward)
 }
 
 /// Double-click: select the word under the caret.
@@ -378,15 +469,17 @@ pub fn select_word(app: &mut PhotocraftApp) {
     }
     if let Some(e) = app.ui.text_edit.as_mut() {
         (e.anchor, e.caret) = (a, b);
+        e.upstream = b > a;
     }
 }
 
-/// Caret on the neighbouring line (±1; a column in vertical type), keeping the position
-/// along the line. Works in line space, so it serves both orientations.
-fn line_step(app: &mut PhotocraftApp, id: LayerId, caret: usize, dir: i32) -> usize {
-    let Some((l, _, text)) = layout(app, id) else { return caret };
-    let x = l.caret(byte_of(&text, caret)).0;
-    photocraft_text::line_step(&l, &text, caret, x, dir)
+/// Caret on the neighbouring line (±1; a column in vertical type), keeping the caret's own x.
+/// Works in line space, so it serves both orientations.
+fn line_step(app: &mut PhotocraftApp, id: LayerId, ed: &TextEdit, dir: i32) -> (usize, bool) {
+    let Some((l, _, text)) = layout(app, id) else { return (ed.caret, ed.upstream) };
+    let from = Caret::new(byte_of(&text, ed.caret), ed.upstream);
+    let to = navigate::adjacent_line(&l, &text, from, navigate::caret_geometry(&l, &text, from).x, dir);
+    (photocraft_text::char_index(&text, to.byte), to.upstream)
 }
 
 fn is_vertical(app: &PhotocraftApp, id: LayerId) -> bool {
@@ -410,10 +503,24 @@ pub(crate) fn flow_key(key: egui::Key, vertical: bool) -> egui::Key {
     }
 }
 
-/// Line start / end for the caret's line.
-fn line_edge(app: &mut PhotocraftApp, id: LayerId, caret: usize, end: bool) -> usize {
-    let Some((l, _, text)) = layout(app, id) else { return caret };
-    photocraft_text::line_edge(&l, &text, caret, end)
+/// Line start / end (Home / End) for the caret's line, keeping End on a wrapped line's own line.
+fn line_edge(app: &mut PhotocraftApp, id: LayerId, ed: &TextEdit, end: bool) -> (usize, bool) {
+    let Some((l, _, text)) = layout(app, id) else { return (ed.caret, ed.upstream) };
+    let to = navigate::home_end(&l, &text, Caret::new(byte_of(&text, ed.caret), ed.upstream), end);
+    (photocraft_text::char_index(&text, to.byte), to.upstream)
+}
+
+/// ←/→ by grapheme and ⌘/Ctrl+←/→ by word, visually (spec 5.1.3). Without Shift a selection
+/// collapses to its end on the arrow's side. Vertical type keeps moving in text order.
+fn arrow(app: &mut PhotocraftApp, id: LayerId, ed: &TextEdit, dir: Dir, unit: Unit, extend: bool) -> (usize, bool) {
+    let Some((l, _, text)) = layout(app, id) else { return (ed.caret, ed.upstream) };
+    let caret = Caret::new(byte_of(&text, ed.caret), ed.upstream);
+    let to = if ed.caret != ed.anchor && !extend && unit == Unit::Grapheme {
+        navigate::collapse(&l, &text, Caret::new(byte_of(&text, ed.anchor), false), caret, dir)
+    } else {
+        navigate::step(&l, &text, caret, dir, unit)
+    };
+    (photocraft_text::char_index(&text, to.byte), to.upstream)
 }
 
 /// Keyboard input while editing. Returns true when a type edit session is active (single-key
@@ -444,9 +551,10 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
         let text = current_text(app, id).unwrap_or_default();
         let n = text.chars().count();
-        let set = |app: &mut PhotocraftApp, caret: usize, extend: bool| {
+        let set = |app: &mut PhotocraftApp, caret: usize, upstream: bool, extend: bool| {
             if let Some(e) = app.ui.text_edit.as_mut() {
                 e.caret = caret.min(n);
+                e.upstream = upstream;
                 if !extend {
                     e.anchor = e.caret;
                 }
@@ -476,17 +584,21 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                         if a == b {
                             let fwd = *key == Key::Delete;
                             let to = match (fwd, m.alt, m.command) {
-                                (false, _, true) => line_edge(app, id, a, false),
+                                (false, _, true) => line_edge(app, id, &ed, false).0,
                                 (false, true, _) => word_boundary(&text, a, false),
                                 (false, _, _) => a.saturating_sub(1),
                                 (true, true, _) => word_boundary(&text, a, true),
-                                (true, _, _) => (a + 1).min(n),
+                                (true, _, _) => grapheme_step(&text, a, true),
                             };
                             if to != a {
                                 if let Some(e) = app.ui.text_edit.as_mut() {
                                     e.anchor = to;
                                 }
                                 insert(app, "");
+                                // Backspace: the caret stays with the character before it.
+                                if !fwd && let Some(e) = app.ui.text_edit.as_mut() {
+                                    e.upstream = e.caret > 0;
+                                }
                             }
                         } else {
                             insert(app, "");
@@ -499,31 +611,24 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                         kern_pair(app, id, ed.caret, if *key == Key::ArrowRight { step } else { -step });
                     }
                     Key::ArrowLeft | Key::ArrowRight => {
-                        let fwd = *key == Key::ArrowRight;
+                        let dir = if *key == Key::ArrowRight { Dir::Right } else { Dir::Left };
                         // Word movement: ⌘/Ctrl (Photoshop's; Alt is kerning), and Alt+Shift
                         // extends the selection by words; Home/End go to the line edges.
-                        let to = if m.command || m.alt {
-                            word_boundary(&text, ed.caret, fwd)
-                        } else if a != b && !m.shift {
-                            if fwd { b } else { a }
-                        } else if fwd {
-                            ed.caret + 1
-                        } else {
-                            ed.caret.saturating_sub(1)
-                        };
-                        set(app, to, m.shift);
+                        let unit = if m.command || m.alt { Unit::Word } else { Unit::Grapheme };
+                        let (to, up) = arrow(app, id, &ed, dir, unit, m.shift);
+                        set(app, to, up, m.shift);
                     }
                     Key::ArrowUp | Key::ArrowDown => {
-                        let to = if m.command {
-                            if *key == Key::ArrowUp { 0 } else { n }
+                        let (to, up) = if m.command {
+                            (if *key == Key::ArrowUp { 0 } else { n }, false)
                         } else {
-                            line_step(app, id, ed.caret, if *key == Key::ArrowUp { -1 } else { 1 })
+                            line_step(app, id, &ed, if *key == Key::ArrowUp { -1 } else { 1 })
                         };
-                        set(app, to, m.shift);
+                        set(app, to, up, m.shift);
                     }
                     Key::Home | Key::End => {
-                        let to = line_edge(app, id, ed.caret, *key == Key::End);
-                        set(app, to, m.shift);
+                        let (to, up) = line_edge(app, id, &ed, *key == Key::End);
+                        set(app, to, up, m.shift);
                     }
                     Key::Enter if m.command => commit(app),
                     Key::Enter => insert(app, "\n"),
@@ -604,7 +709,8 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     };
     // Tell the OS where the caret is: this is what enables the IME and places its candidate window.
     {
-        let (x, top, bot) = l.caret(byte_of(&text, ed.caret));
+        let g = navigate::caret_geometry(&l, &text, Caret::new(byte_of(&text, ed.caret), ed.upstream));
+        let (x, top, bot) = (g.x, g.top, g.bottom);
         let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
         let r = egui::Rect::from_two_pos(scr(x, top), scr(x, bot)).expand(1.0);
         painter.ctx().output_mut(|o| {
@@ -637,42 +743,31 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             }
         }
     }
-    // Uncommitted IME text is underlined.
+    // Uncommitted IME text is underlined, one stroke per visual piece.
     if let Some((ps, pl)) = ed.preedit {
         let (a, b) = (byte_of(&text, ps), byte_of(&text, ps + pl));
-        for (li, ln) in l.lines.iter().enumerate() {
-            let xs: Vec<(f32, f32)> =
-                l.clusters.iter().filter(|c| c.line == li && c.range.start >= a && c.range.end <= b).map(|c| (c.x, c.x + c.advance)).collect();
-            let (x0, x1) = xs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), (p, q)| (lo.min(*p), hi.max(*q)));
-            if x0 < x1 {
-                let y = ln.baseline + ln.descent * 0.5;
-                painter.line_segment([scr(x0, y), scr(x1, y)], Stroke::new(1.5, t.accent));
-            }
+        for s in navigate::selection_segments(&l, &text, a, b).into_iter().filter(|s| !s.line_break) {
+            let Some(ln) = l.lines.get(s.line) else { continue };
+            let y = ln.baseline + ln.descent * 0.5;
+            painter.line_segment([scr(s.x0, y), scr(s.x1, y)], Stroke::new(1.5, t.accent));
         }
     }
-    // Selection: per line, the clusters inside [a, b).
+    // Selection: one rectangle per visual piece of each line, and a selected line break on the
+    // paragraph's end side, the left in RTL (spec 5.1.6).
     let (a, b) = (byte_of(&text, ed.caret.min(ed.anchor)), byte_of(&text, ed.caret.max(ed.anchor)));
     if a < b {
         let fill = Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110);
-        for (li, ln) in l.lines.iter().enumerate() {
-            let xs: Vec<(f32, f32)> =
-                l.clusters.iter().filter(|c| c.line == li && c.range.start >= a && c.range.end <= b).map(|c| (c.x, c.x + c.advance)).collect();
-            let (mut x0, mut x1) = xs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), (p, q)| (lo.min(*p), hi.max(*q)));
-            // A selected line break shows as a small sliver past the line end.
-            if b > ln.range.end && a <= ln.range.end {
-                x1 = x1.max(ln.x1 + (ln.ascent + ln.descent) * 0.25);
-                x0 = x0.min(ln.x1);
-            }
-            if x0 < x1 {
-                let (top, bot) = (ln.baseline - ln.ascent, ln.baseline + ln.descent);
-                painter.add(egui::Shape::convex_polygon(vec![scr(x0, top), scr(x1, top), scr(x1, bot), scr(x0, bot)], fill, Stroke::NONE));
-            }
+        for s in navigate::selection_segments(&l, &text, a, b) {
+            let Some(ln) = l.lines.get(s.line) else { continue };
+            let (top, bot) = (ln.baseline - ln.ascent, ln.baseline + ln.descent);
+            painter.add(egui::Shape::convex_polygon(vec![scr(s.x0, top), scr(s.x1, top), scr(s.x1, bot), scr(s.x0, bot)], fill, Stroke::NONE));
         }
     } else {
         // Blinking caret (Photoshop's ~0.53 s rhythm), solid while dragging.
         let time = painter.ctx().input(|i| i.time);
         if ed.dragging || (time * 1000.0 / 530.0) as i64 % 2 == 0 {
-            let (x, top, bot) = l.caret(a);
+            let g = navigate::caret_geometry(&l, &text, Caret::new(a, ed.upstream));
+            let (x, top, bot) = (g.x, g.top, g.bottom);
             let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
             let c = if crate::theme::Tokens::get(painter.ctx()).pro { Color32::WHITE } else { Color32::BLACK };
             painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(1.5, c));
@@ -929,6 +1024,12 @@ fn drag_key(ctx: &egui::Context) -> Option<String> {
 /// Apply only the supplied properties to the text-edit scope or selected type layers.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
     let Some(mut p) = formatting_params(app) else { return };
+    // A picked alignment ends the session's automatic right alignment (spec 5.1.1).
+    if props.get("align").is_some()
+        && let Some(ed) = app.ui.text_edit.as_mut()
+    {
+        ed.align_picked = true;
+    }
     if let Some(props) = props.as_object() {
         for (key, value) in props {
             p[key] = value.clone();
@@ -938,6 +1039,74 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value)
         p["coalesce"] = json!(key);
     }
     let _ = app.run("type.setStyle", p);
+}
+
+fn direction_key(d: photocraft_doc::text::TextDirection) -> &'static str {
+    use photocraft_doc::text::TextDirection as D;
+    match d {
+        D::Auto => "auto",
+        D::Ltr => "ltr",
+        D::Rtl => "rtl",
+    }
+}
+
+fn direction_of(key: &str) -> photocraft_doc::text::TextDirection {
+    use photocraft_doc::text::TextDirection as D;
+    match key {
+        "rtl" => D::Rtl,
+        "ltr" => D::Ltr,
+        _ => D::Auto,
+    }
+}
+
+/// Spec 5.1.2: a direction for the targeted type: the selected paragraphs, or the caret's
+/// paragraph (Photoshop's Paragraph panel), or the whole layer when not editing. With no type
+/// layer targeted, it is the tool default for new layers.
+pub(crate) fn set_direction(app: &mut PhotocraftApp, ctx: &egui::Context, dir: &str) {
+    let Some((layer, range)) = target(app) else {
+        app.ui.tool_options.type_direction = dir.into();
+        return;
+    };
+    let mut p = json!({"layer": layer, "direction": dir});
+    if let Some(r) = range.or_else(|| app.ui.text_edit.as_ref().map(|e| [e.caret, e.caret])) {
+        p["range"] = json!(r);
+    }
+    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
+        p["coalesce"] = json!(key);
+    }
+    let _ = app.run("type.setStyle", p);
+}
+
+/// The paragraph-direction dropdown shared by the options bar and the Paragraph panel: shows the
+/// target's direction, else the tool default.
+fn direction_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width: f32) {
+    let mut cur = match target(app) {
+        Some(_) => styles_at(app).map_or("auto", |(_, p)| direction_key(p.direction)).to_string(),
+        None => app.ui.tool_options.type_direction.clone(),
+    };
+    let opts = [("auto".to_string(), tl!("Auto")), ("rtl".to_string(), tl!("Right-to-left")), ("ltr".to_string(), tl!("Left-to-right"))];
+    if crate::widgets::dropdown(ui, id, &mut cur, &opts, width) {
+        let ctx = ui.ctx().clone();
+        set_direction(app, &ctx, &cur);
+    }
+}
+
+fn digits_key(d: photocraft_doc::text::Digits) -> &'static str {
+    use photocraft_doc::text::Digits as D;
+    match d {
+        D::Western => "western",
+        D::ArabicIndic => "arabicIndic",
+        D::Persian => "persian",
+    }
+}
+
+/// The digit-shape dropdown of the Character panel (display only: the text keeps ASCII digits).
+fn digits_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width: f32, current: photocraft_doc::text::Digits) {
+    let mut cur = digits_key(current).to_string();
+    let opts = [("western".to_string(), tl!("Western")), ("arabicIndic".to_string(), tl!("Arabic-Indic")), ("persian".to_string(), tl!("Persian"))];
+    if crate::widgets::dropdown(ui, id, &mut cur, &opts, width) {
+        apply(app, ui.ctx(), json!({"digits": cur}));
+    }
 }
 
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
@@ -1033,6 +1202,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.spacing_mut().item_spacing.x = 8.0;
+    crate::widgets::vline(ui, 22.0);
+    // Paragraph direction (spec 5.1.2): the target's paragraphs, else the default for new type.
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "¶", egui::FontId::proportional(13.0), t.icon);
+    resp.on_hover_text(tl!("Direction"));
+    direction_picker(app, ui, "type-direction", 130.0);
     crate::widgets::vline(ui, 22.0);
     // Text colour swatch with a picker popup.
     let c = shown
@@ -1406,6 +1581,16 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 }
             }
         });
+        row(ui, &mut |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                let g = ui.painter().layout_no_wrap(tl!("Digits").into(), egui::FontId::proportional(12.0), t.text_dim);
+                let lw = g.size().x.max(LABEL_W);
+                let (lr, _) = ui.allocate_exact_size(egui::vec2(lw, 22.0), egui::Sense::hover());
+                ui.painter().galley(egui::pos2(lr.left(), lr.center().y - g.size().y / 2.0), g, t.text_dim);
+                digits_picker(app, ui, "props-type-digits", (full - lw - LABEL_GAP).max(80.0), c.digits);
+            });
+        });
         ui.add_space(ROW_GAP);
     }
     if paragraph && section(ui, "paragraph", tl!("Paragraph")) {
@@ -1437,6 +1622,15 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         ui.add_space(ROW_GAP);
         row(ui, &mut |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(LABEL_W, 22.0), egui::Sense::hover());
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "¶", egui::FontId::proportional(13.0), t.text_dim);
+                resp.on_hover_text(tl!("Direction"));
+                direction_picker(app, ui, "props-type-direction", (full - LABEL_W - LABEL_GAP).max(80.0));
+            });
+        });
+        row(ui, &mut |ui| {
             if let Some(v) = num_field(ui, "→|", "Indent left margin", para.start_indent_pt, -1296.0..=1296.0, "pt", w) {
                 apply(app, ui.ctx(), json!({"startIndent": v}));
             }
@@ -1460,6 +1654,10 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let mut hy = para.hyphenate;
         if crate::widgets::checkbox(ui, &mut hy, "Hyphenate").changed() {
             apply(app, ui.ctx(), json!({"hyphenate": hy}));
+        }
+        let mut kashida = para.kashida;
+        if crate::widgets::checkbox(ui, &mut kashida, "Kashida").changed() {
+            apply(app, ui.ctx(), json!({"kashida": kashida}));
         }
         ui.add_space(ROW_GAP);
     }
@@ -1565,6 +1763,31 @@ mod tests {
     fn layer_text(app: &PhotocraftApp) -> String {
         let ed = app.ui.text_edit.as_ref().unwrap();
         current_text(app, LayerId(ed.layer)).unwrap()
+    }
+
+    /// Spec 5.1.8: the palette's "Keep Selection Left-to-Right" wraps the selection in LRI…PDI in
+    /// one step and keeps the same text selected; at a caret the control goes in after it.
+    #[test]
+    fn insert_control_wraps_the_selection_and_moves_the_caret() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let id = a.run("type.create", json!({"x": 50, "y": 50, "text": "رقم 0551234567 فقط"})).unwrap()["layer"].as_u64().unwrap();
+        a.ui.text_edit = Some(TextEdit { layer: id, caret: 14, anchor: 4, session: "k".into(), ..Default::default() });
+        let steps = a.session.active().unwrap().history.entries().len();
+        crate::menus::invoke(&mut a, &ctx, "type.insertControl", json!({"char": "lri"})).unwrap();
+        assert_eq!(layer_text(&a), "رقم \u{2066}0551234567\u{2069} فقط");
+        let ed = a.ui.text_edit.clone().unwrap();
+        assert_eq!((ed.anchor, ed.caret), (5, 15), "the same digits stay selected");
+        assert_eq!(a.session.active().unwrap().history.entries().len(), steps + 1, "one step");
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer_text(&a), "رقم 0551234567 فقط");
+        a.ui.text_edit = Some(TextEdit { layer: id, caret: 3, anchor: 3, session: "k2".into(), ..Default::default() });
+        insert_control(&mut a, &json!({"char": "tatweel"})).unwrap();
+        assert_eq!(layer_text(&a), "رقم\u{640} 0551234567 فقط");
+        assert_eq!(a.ui.text_edit.as_ref().map(|e| (e.caret, e.anchor, e.upstream)), Some((4, 4, true)));
+        assert!(insert_control(&mut a, &json!(["not", "an", "object"])).is_err(), "no char: an error, not a crash");
+        a.ui.text_edit = None;
+        assert!(insert_control(&mut a, &json!({"char": "rlm"})).is_err(), "not editing");
     }
 
     #[test]
@@ -1687,5 +1910,102 @@ mod tests {
         assert_eq!(word_boundary("hello big world", 0, true), 5);
         assert_eq!(word_boundary("hello big world", 7, false), 6);
         assert_eq!(word_boundary("hello big world", 15, false), 10);
+    }
+
+    /// Spec 5.1.2: with no type layer the toggle sets the tool default (RTL new text is RTL and
+    /// right-aligned); while editing it sets the caret's or selection's paragraphs only.
+    #[test]
+    fn direction_sets_the_tool_default_or_the_selected_paragraphs() {
+        use photocraft_doc::text::{TextAlign, TextDirection};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        set_direction(&mut a, &ctx, "rtl");
+        assert_eq!(a.ui.tool_options.type_direction, "rtl");
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        let paras = |a: &PhotocraftApp| text_layer(&a.session.active().unwrap().doc, id).unwrap().paragraph_runs();
+        assert_eq!((paras(&a)[0].style.direction, paras(&a)[0].style.align), (TextDirection::Rtl, TextAlign::Right));
+        insert(
+            &mut a, "one
+two",
+        );
+        set_direction(&mut a, &ctx, "ltr");
+        let p = paras(&a);
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert_eq!((p[0].style.direction, p[1].style.direction), (TextDirection::Rtl, TextDirection::Ltr));
+        assert_eq!(a.ui.tool_options.type_direction, "rtl", "the tool default is untouched while a layer is targeted");
+    }
+
+    /// Spec 6: the Digits dropdown and the Kashida checkbox go through `apply` to `type.setStyle`;
+    /// a bad value is refused without changing the type.
+    #[test]
+    fn digits_and_kashida_apply_through_set_style() {
+        use photocraft_doc::text::Digits;
+        let ctx = egui::Context::default();
+        let mut a = app();
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        insert(&mut a, "عدد 123");
+        let layer = |a: &PhotocraftApp| text_layer(&a.session.active().unwrap().doc, id).unwrap().clone();
+        for d in [Digits::ArabicIndic, Digits::Persian, Digits::Western] {
+            apply(&mut a, &ctx, json!({"digits": digits_key(d)}));
+            let t = layer(&a);
+            assert!(t.char_runs().iter().all(|r| r.style.digits == d), "{d:?}");
+        }
+        apply(&mut a, &ctx, json!({"digits": "persian", "kashida": true}));
+        let t = layer(&a);
+        assert!(t.paragraph_runs().iter().all(|p| p.style.kashida));
+        assert!(t.char_runs().iter().all(|r| r.style.digits == Digits::Persian));
+        apply(&mut a, &ctx, json!({"digits": "klingon", "kashida": "yes"}));
+        let t = layer(&a);
+        assert!(t.paragraph_runs().iter().all(|p| p.style.kashida), "a bad value changes nothing");
+        assert!(t.char_runs().iter().all(|r| r.style.digits == Digits::Persian));
+        assert_eq!(t.text, "عدد 123", "display only");
+    }
+
+    /// Spec 5.1.1: in a layer this session created, the first strong Arabic letter typed into a
+    /// Left paragraph right-aligns it, once, unless an alignment was picked in the session.
+    #[test]
+    fn new_arabic_text_right_aligns_itself_once() {
+        use photocraft_doc::text::TextAlign;
+        let align = |a: &PhotocraftApp| {
+            let ed = a.ui.text_edit.as_ref().unwrap();
+            text_layer(&a.session.active().unwrap().doc, LayerId(ed.layer)).unwrap().paragraph_runs()[0].style.align
+        };
+        // Digits first decide nothing; the first Arabic letter does. Point text then ends at its
+        // anchor, so it grows leftward from the click.
+        let mut a = app();
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut a, "١٢٣ ");
+        assert_eq!(align(&a), TextAlign::Left);
+        insert(&mut a, "مرحبا");
+        assert_eq!(align(&a), TextAlign::Right);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        let (l, _, _) = layout(&mut a, id).unwrap();
+        assert!(l.lines[0].x1.abs() < 1.0, "ends at the anchor: {:?}", l.lines[0]);
+        assert_eq!(a.session.active().unwrap().history.entries(), ["Open", "New Type Layer"], "inside the typing step");
+        // Latin first: stays left.
+        let mut b = app();
+        pointer_up(&mut b, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut b, "Galaxy S24 شاشة");
+        assert_eq!(align(&b), TextAlign::Left);
+        // An alignment picked in the session wins.
+        let ctx = egui::Context::default();
+        let mut c = app();
+        pointer_up(&mut c, [200.0, 100.0], [200.0, 100.0]);
+        apply(&mut c, &ctx, json!({"align": "left"}));
+        insert(&mut c, "مرحبا");
+        assert_eq!(align(&c), TextAlign::Left);
+        // A layer this session didn't create, and vertical type: unchanged.
+        let mut d = app();
+        let id = d.run("type.create", json!({"x": 50, "y": 50, "text": "abc", "align": "left"})).unwrap()["layer"].as_u64().unwrap();
+        d.ui.text_edit = Some(TextEdit { layer: id, caret: 0, anchor: 3, session: "k".into(), ..Default::default() });
+        insert(&mut d, "مرحبا");
+        assert_eq!(align(&d), TextAlign::Left);
+        let mut v = app();
+        v.ui.tool = crate::state::Tool::VerticalType;
+        pointer_up(&mut v, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut v, "مرحبا");
+        assert_eq!(align(&v), TextAlign::Left);
     }
 }
