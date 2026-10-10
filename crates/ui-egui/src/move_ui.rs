@@ -17,15 +17,11 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
-/// rather than the whole layer? With a selection, as in Photoshop; a layer whose pixels can't
-/// float (type, shape, Smart Object, group, position-locked), a hidden layer or several selected
-/// layers still move whole, as without one.
-pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
-    // The Move tool, or ⌘ held with a painting tool (`hold_keys::cmd_moves`).
-    moves_selected_pixels_with(app, app.active_tool())
-}
-
-/// [`moves_selected_pixels`] with `tool` in effect (the canvas cursor asks before the press).
+/// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
+/// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
+/// several selected layers still move whole, as without one. The canvas cursor asks before the
+/// press, and a pointer event passes `canvas::event_tool`, which also sees a ⌘ sent with the event
+/// (#2768).
 pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
     let Some(st) = app.session.active() else { return false };
     tool == Tool::Move
@@ -406,6 +402,23 @@ mod tests {
             assert!(app.session.undo());
             assert_eq!(alpha(&app, id, 35, 35), 0.0, "{depth}-bit: undone");
         }
+    }
+
+    /// ⌘-drag with a painting tool drags the selected pixels as the Move tool does, also when ⌘
+    /// comes with the event (control channel, MCP) rather than as the held-key override.
+    #[test]
+    fn command_drag_with_a_painting_tool_moves_only_the_selected_pixels() {
+        let (mut app, id) = selected_pixels(8);
+        app.ui.tool = Tool::Brush;
+        app.ui.tool_options.move_auto_select = false;
+        let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+        drag(&mut app, [50.0, 40.0], [60.0, 45.0], cmd);
+        assert_eq!(offset(&app), Some((10, 5)), "the selected pixels float");
+        drag(&mut app, [50.0, 40.0], [60.0, 45.0], cmd);
+        assert_eq!(offset(&app), Some((20, 10)), "a second drag moves the same floating piece");
+        app.run("select.drop", json!({})).unwrap();
+        assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 40, 30) == 1.0, "the red square moved");
+        assert_eq!(alpha(&app, id, 48, 16), 1.0, "the unselected blue one stayed");
     }
 
     /// A click moves nothing and leaves nothing floating (Undo isn't spent putting it back).

@@ -45,6 +45,8 @@
 	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
+	Remove from Recent	Retirer des fichiers récents
+	Remove {name} from Recent	Retirer {name} des fichiers récents
 	Close	Fermer
 	Minimize	Réduire
 	Maximize	Agrandir
@@ -582,6 +584,10 @@
 	100%	100 %
 	200%	200 %
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %

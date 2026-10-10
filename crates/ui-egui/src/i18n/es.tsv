@@ -39,6 +39,8 @@
 	Right	Derecha
 	Open Recent	Archivos recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Remove from Recent	Quitar de recientes
+	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
 	Minimize	Minimizar
 	Maximize	Maximizar
@@ -590,6 +592,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%

@@ -43,6 +43,8 @@
 	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
+	Remove from Recent	最近使ったファイルから削除
+	Remove {name} from Recent	{name} を最近使ったファイルから削除
 	Close	閉じる
 	Minimize	最小化
 	Maximize	最大化
@@ -594,6 +596,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
