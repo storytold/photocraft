@@ -1,4 +1,4 @@
-//! Photoshop blend modes (scalar reference implementation).
+//! Photoshop and Paint.NET blend modes (scalar reference implementation).
 //!
 //! Formulas follow the public PDF / ISO 32000-2 and W3C Compositing definitions,
 //! with Photoshop's variants where they differ (Soft Light, Hard Mix, Darker/Lighter Color,
@@ -38,10 +38,27 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
+    Reflect,
+    Glow,
+    Negation,
+    Xor,
+    PaintNetColorBurn,
+    PaintNetColorDodge,
 }
 
 impl BlendMode {
-    /// All modes except PassThrough, in Photoshop menu order.
+    /// Paint.NET modes without an exact Photoshop equivalent.
+    pub const PAINT_NET_MODES: [BlendMode; 6] = [Self::Reflect, Self::Glow, Self::Negation, Self::Xor, Self::PaintNetColorBurn, Self::PaintNetColorDodge];
+
+    /// All editable layer modes, with Paint.NET modes after Photoshop's menu order.
+    pub fn layer_modes() -> impl Iterator<Item = Self> {
+        Self::LAYER_MODES.into_iter().chain(Self::PAINT_NET_MODES)
+    }
+
+    pub fn has_psd_equivalent(self) -> bool {
+        !Self::PAINT_NET_MODES.contains(&self)
+    }
+    /// Photoshop modes except PassThrough, in Photoshop menu order.
     pub const LAYER_MODES: [BlendMode; 27] = [
         BlendMode::Normal,
         BlendMode::Dissolve,
@@ -102,10 +119,17 @@ impl BlendMode {
             BlendMode::Saturation => "Saturation",
             BlendMode::Color => "Color",
             BlendMode::Luminosity => "Luminosity",
+            BlendMode::Reflect => "Reflect",
+            BlendMode::Glow => "Glow",
+            BlendMode::Negation => "Negation",
+            BlendMode::Xor => "XOR",
+            BlendMode::PaintNetColorBurn => "Color Burn (Paint.NET)",
+            BlendMode::PaintNetColorDodge => "Color Dodge (Paint.NET)",
         }
     }
 
-    /// PSD 4-character blend key.
+    /// PSD 4-character blend key. Modes without an equivalent fall back to Normal;
+    /// exporters must report that loss using [`Self::has_psd_equivalent`].
     pub fn psd_key(self) -> [u8; 4] {
         *match self {
             BlendMode::PassThrough => b"pass",
@@ -136,6 +160,9 @@ impl BlendMode {
             BlendMode::Saturation => b"sat ",
             BlendMode::Color => b"colr",
             BlendMode::Luminosity => b"lum ",
+            BlendMode::Reflect | BlendMode::Glow | BlendMode::Negation | BlendMode::Xor | BlendMode::PaintNetColorBurn | BlendMode::PaintNetColorDodge => {
+                b"norm"
+            }
         }
     }
 
@@ -151,6 +178,20 @@ impl BlendMode {
 /// Separable per-channel blend function `B(cb, cs)`.
 #[inline]
 pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    channel(mode, cb, cs, 1.0)
+}
+
+/// [`blend_channel`] for 32-bit float documents, whose values may exceed 1: Linear Dodge (Add)
+/// and Divide don't clip at 1 there (Photoshop's 32-bit Add is how light is added in HDR), only
+/// at `f32::MAX`, so they stay finite. Every other mode is [`blend_channel`].
+#[inline]
+pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    channel(mode, cb, cs, f32::MAX)
+}
+
+/// `B(cb, cs)` with Linear Dodge and Divide clipped at `hi` (1 at integer depths).
+#[inline]
+fn channel(mode: BlendMode, cb: f32, cs: f32, hi: f32) -> f32 {
     match mode {
         BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough => cs,
         BlendMode::Darken => cb.min(cs),
@@ -160,7 +201,7 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         BlendMode::Lighten => cb.max(cs),
         BlendMode::Screen => cb + cs - cb * cs,
         BlendMode::ColorDodge => color_dodge(cb, cs),
-        BlendMode::LinearDodge => (cb + cs).min(1.0),
+        BlendMode::LinearDodge => (cb + cs).min(hi),
         BlendMode::Overlay => hard_light(cs, cb),
         BlendMode::SoftLight => soft_light_ps(cb, cs),
         BlendMode::HardLight => hard_light(cb, cs),
@@ -195,12 +236,39 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
             if cs <= 0.0 {
                 if cb <= 0.0 { 0.0 } else { 1.0 }
             } else {
-                (cb / cs).min(1.0)
+                (cb / cs).min(hi)
+            }
+        }
+        BlendMode::Reflect => reflect(cb, cs),
+        BlendMode::Glow => reflect(cs, cb),
+        BlendMode::Negation => 1.0 - (1.0 - cb - cs).abs(),
+        BlendMode::Xor => {
+            // Paint.NET's XOR is defined on 8-bit channels even in a floating-point compositor.
+            let b = (cb.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let s = (cs.clamp(0.0, 1.0) * 255.0).round() as u8;
+            f32::from(b ^ s) / 255.0
+        }
+        BlendMode::PaintNetColorBurn => {
+            if cs <= 0.0 {
+                0.0
+            } else {
+                (1.0 - (1.0 - cb) / cs).max(0.0)
+            }
+        }
+        BlendMode::PaintNetColorDodge => {
+            if cs >= 1.0 {
+                1.0
+            } else {
+                (cb / (1.0 - cs)).min(1.0)
             }
         }
         // Non-separable modes are handled by `blend_rgb`; fall back to source.
         BlendMode::DarkerColor | BlendMode::LighterColor | BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => cs,
     }
+}
+
+fn reflect(cb: f32, cs: f32) -> f32 {
+    if cs >= 1.0 { 1.0 } else { (cb * cb / (1.0 - cs)).min(1.0) }
 }
 
 #[inline]
@@ -337,6 +405,11 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// [`blend_rgb`] for 32-bit float documents: separable modes use [`blend_channel_hdr`].
+pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    if mode.is_separable() { std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i])) } else { blend_rgb(mode, cb, cs) }
+}
+
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.
 ///
 /// Uses the W3C/PDF general formula:
@@ -384,6 +457,34 @@ mod tests {
         }
         assert_eq!(BlendMode::from_psd_key(*b"zzzz"), None);
         assert_eq!(seen.len(), 28);
+    }
+
+    #[test]
+    fn paint_net_modes_keep_their_math_and_distinct_psd_status() {
+        assert!(close(blend_channel(BlendMode::Reflect, 0.5, 0.5), 0.5));
+        assert!(close(blend_channel(BlendMode::Reflect, 0.2, 0.0), 0.04));
+        assert!(close(blend_channel(BlendMode::Glow, 0.5, 0.2), 0.08));
+        assert!(close(blend_channel(BlendMode::Negation, 0.2, 0.7), 0.9));
+        assert_eq!(blend_channel(BlendMode::Reflect, 0.0, 1.0), 1.0);
+        assert_eq!(blend_channel(BlendMode::Glow, 1.0, 0.0), 1.0);
+        assert_eq!(blend_channel(BlendMode::PaintNetColorBurn, 1.0, 0.0), 0.0);
+        assert_eq!(blend_channel(BlendMode::PaintNetColorDodge, 0.0, 1.0), 1.0);
+        for b in 0..=255u8 {
+            for s in 0..=255u8 {
+                assert!(close(blend_channel(BlendMode::Xor, f32::from(b) / 255.0, f32::from(s) / 255.0), f32::from(b ^ s) / 255.0));
+            }
+        }
+        for mode in BlendMode::PAINT_NET_MODES {
+            assert!(!mode.has_psd_equivalent());
+            assert_eq!(mode.psd_key(), *b"norm");
+            for b in [0.0, 0.1, 0.5, 1.0] {
+                for s in [0.0, 0.1, 0.5, 1.0] {
+                    let v = blend_channel(mode, b, s);
+                    assert!(v.is_finite() && (0.0..=1.0).contains(&v), "{mode:?}");
+                }
+            }
+        }
+        assert_eq!(BlendMode::layer_modes().count(), 33);
     }
 
     #[test]
@@ -474,6 +575,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn add_and_divide_clip_at_integer_depths_but_not_in_float() {
+        // Integer depths: Photoshop clips Linear Dodge (Add) and Divide at 1.
+        assert_eq!(blend_channel(BlendMode::LinearDodge, 2.0, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::LinearDodge, 0.75, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::Divide, 2.0, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::Divide, 0.5, 0.25), 1.0);
+        // 32-bit float: light adds up past 1 (adding light never darkens).
+        assert!(close(blend_channel_hdr(BlendMode::LinearDodge, 2.0, 0.5), 2.5));
+        assert!(close(blend_channel_hdr(BlendMode::LinearDodge, 0.75, 0.5), 1.25));
+        assert!(close(blend_channel_hdr(BlendMode::Divide, 2.0, 0.5), 4.0));
+        assert!(close(blend_channel_hdr(BlendMode::Divide, 0.5, 0.25), 2.0));
+        assert_eq!(blend_rgb_hdr(BlendMode::LinearDodge, [2.0, 0.5, 4.0], [0.5, 0.25, 0.5]), [2.5, 0.75, 4.5]);
+        assert_eq!(blend_rgb_hdr(BlendMode::Divide, [2.0, 0.5, 4.0], [0.5, 0.25, 0.5]), [4.0, 2.0, 8.0]);
+        // Divide by zero keeps its guard; overflow stays finite.
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 0.0, 0.0), 0.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 3.0, 0.0), 1.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 3.0, -1.0), 1.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, f32::MAX, 1e-30), f32::MAX);
+        assert_eq!(blend_channel_hdr(BlendMode::LinearDodge, f32::MAX, f32::MAX), f32::MAX);
+        assert!(blend_channel_hdr(BlendMode::LinearDodge, f32::INFINITY, 1.0).is_finite());
+        // Every other mode is unchanged, and the in-range results agree.
+        for m in BlendMode::LAYER_MODES.into_iter().filter(|m| !matches!(m, BlendMode::LinearDodge | BlendMode::Divide)) {
+            for (cb, cs) in [(0.2, 0.3), (0.9, 0.05), (2.0, 0.5), (0.4, 1.5)] {
+                assert_eq!(blend_rgb(m, [cb, cs, 0.5], [cs, cb, 0.25]), blend_rgb_hdr(m, [cb, cs, 0.5], [cs, cb, 0.25]), "{m:?} cb={cb} cs={cs}");
+            }
+        }
+        let (cb, cs) = ([0.2, 0.3, 0.1], [0.3, 0.4, 0.4]);
+        assert_eq!(blend_rgb_hdr(BlendMode::LinearDodge, cb, cs), blend_rgb(BlendMode::LinearDodge, cb, cs));
+        assert_eq!(blend_rgb_hdr(BlendMode::Divide, cb, cs), blend_rgb(BlendMode::Divide, cb, cs));
     }
 
     #[test]

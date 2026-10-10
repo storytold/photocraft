@@ -1,10 +1,14 @@
 //! Design system: themes, colour tokens, radii, typography.
 //!
-//! - **Studio** (default): near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
+//! - **Studio**: near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
 //!   accent. Modelled on the look of modern pro editors (such as Photoshop 2025).
 //! - **Studio Light**: the same system on light surfaces.
 //! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
 //!   for people who prefer it.
+//! - **Adwaita** (Light and Dark): the Studio layout in GNOME's libadwaita palette, so the app sits
+//!   with the rest of a GNOME desktop.
+//! - **Solarized Dark**: Ethan Schoonover's Solarized palette (base03/base02 surfaces, base0 text,
+//!   Solarized blue accent) with the Studio layout.
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
@@ -23,10 +27,26 @@ pub enum ThemeKind {
     Studio,
     StudioLight,
     Classic,
+    /// GNOME's libadwaita light style.
+    Adwaita,
+    /// GNOME's libadwaita dark style.
+    AdwaitaDark,
+    /// Solarized Dark (Ethan Schoonover's palette): the base03 background, base02 panels and
+    /// base0 body text, with the Solarized blue accent.
+    SolarizedDark,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 5] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic];
+    pub const ALL: [ThemeKind; 8] = [
+        ThemeKind::Pro,
+        ThemeKind::ProMedium,
+        ThemeKind::Studio,
+        ThemeKind::StudioLight,
+        ThemeKind::Classic,
+        ThemeKind::SolarizedDark,
+        ThemeKind::Adwaita,
+        ThemeKind::AdwaitaDark,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
@@ -34,6 +54,9 @@ impl ThemeKind {
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
+            ThemeKind::Adwaita => "Adwaita (Light)",
+            ThemeKind::AdwaitaDark => "Adwaita (Dark)",
+            ThemeKind::SolarizedDark => "Solarized Dark",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -45,6 +68,9 @@ impl ThemeKind {
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
+            ThemeKind::Adwaita => "adwaita",
+            ThemeKind::AdwaitaDark => "adwaitaDark",
+            ThemeKind::SolarizedDark => "solarizedDark",
         }
     }
     pub fn next(self) -> Self {
@@ -58,6 +84,9 @@ impl ThemeKind {
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" | "light" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
+            "adwaita" | "adwaitalight" | "gnome" | "gnomelight" => Some(ThemeKind::Adwaita),
+            "adwaitadark" | "gnomedark" => Some(ThemeKind::AdwaitaDark),
+            "solarizeddark" | "solarized" => Some(ThemeKind::SolarizedDark),
             _ => None,
         }
     }
@@ -104,6 +133,8 @@ pub struct Tokens {
     pub bevel: bool,
     /// Pro (Photoshop-grammar) layout: tab strips, flat panels, checkboxes, pill buttons.
     pub pro: bool,
+    /// Toolbar colour chips are large and round, stacked, with the colour buttons below (Studio).
+    pub round_chips: bool,
     /// Panel tab-strip background (Pro).
     pub tab_strip: Color32,
     /// Selected list row (layers, history).
@@ -120,6 +151,11 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
+    pub(crate) fn cursor_outline() -> [Color32; 2] {
+        [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).
@@ -174,6 +210,7 @@ impl Tokens {
                 radius_lg: 6.0,
                 bevel: false,
                 pro: true,
+                round_chips: false,
                 tab_strip: Color32::from_rgb(38, 38, 38),
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
@@ -213,6 +250,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
@@ -252,6 +290,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
@@ -291,12 +330,139 @@ impl Tokens {
                 radius_lg: 0.0,
                 bevel: true,
                 pro: false,
+                round_chips: false,
                 tab_strip: Color32::from_rgb(212, 208, 200),
                 row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
+            },
+            // libadwaita's named colours (window, sidebar, card, view, accent, destructive) and
+            // radii (6 px buttons, 12 px cards), mapped onto the Studio layout. GNOME's close
+            // button is a neutral circle, not a red one, so the caption colours stay grey.
+            ThemeKind::Adwaita => Tokens {
+                kind,
+                chrome: Color32::WHITE,
+                canvas: Color32::from_rgb(222, 222, 223),
+                canvas_dot: Color32::from_rgb(222, 222, 223),
+                dock: Color32::from_rgb(235, 235, 237),
+                card: Color32::WHITE,
+                card_border: Color32::from_rgb(218, 218, 221),
+                field: Color32::from_rgb(235, 235, 237),
+                field_border: Color32::from_rgb(218, 218, 221),
+                hover: Color32::from_rgb(226, 226, 229),
+                pressed: Color32::from_rgb(212, 212, 216),
+                text: Color32::from_rgb(50, 50, 54),
+                text_dim: Color32::from_rgb(100, 100, 104),
+                text_faint: Color32::from_rgb(155, 155, 160),
+                icon: Color32::from_rgb(56, 56, 60),
+                accent: Color32::from_rgb(53, 132, 228),
+                accent_soft: Color32::from_rgba_unmultiplied(53, 132, 228, 40),
+                accent_border: Color32::from_rgba_unmultiplied(53, 132, 228, 130),
+                accent_text: Color32::from_rgb(28, 113, 216),
+                separator: Color32::from_rgb(222, 222, 225),
+                shadow: Color32::from_black_alpha(45),
+                primary_bg: Color32::from_rgb(53, 132, 228),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(192, 28, 40),
+                warning: Color32::from_rgb(156, 110, 3),
+                radius_sm: 6.0,
+                radius: 9.0,
+                radius_lg: 12.0,
+                bevel: false,
+                pro: false,
+                round_chips: true,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_gray(40),
+                histogram_level: 240,
+                caption_close: Color32::from_rgb(212, 212, 216),
+                caption_close_text: Color32::from_rgb(50, 50, 54),
+                scrim: Color32::from_black_alpha(110),
+            },
+            ThemeKind::AdwaitaDark => Tokens {
+                kind,
+                chrome: Color32::from_rgb(46, 46, 50),
+                canvas: Color32::from_rgb(29, 29, 32),
+                canvas_dot: Color32::from_rgb(29, 29, 32),
+                dock: Color32::from_rgb(34, 34, 38),
+                card: Color32::from_rgb(54, 54, 58),
+                card_border: Color32::from_rgb(64, 64, 68),
+                field: Color32::from_rgb(64, 64, 68),
+                field_border: Color32::from_rgb(76, 76, 80),
+                hover: Color32::from_rgb(72, 72, 76),
+                pressed: Color32::from_rgb(86, 86, 90),
+                text: Color32::WHITE,
+                text_dim: Color32::from_rgb(192, 192, 194),
+                text_faint: Color32::from_rgb(145, 145, 148),
+                icon: Color32::from_rgb(235, 235, 237),
+                accent: Color32::from_rgb(53, 132, 228),
+                accent_soft: Color32::from_rgba_unmultiplied(53, 132, 228, 60),
+                accent_border: Color32::from_rgba_unmultiplied(120, 174, 237, 140),
+                accent_text: Color32::from_rgb(120, 174, 237),
+                separator: Color32::from_rgb(24, 24, 27),
+                shadow: Color32::from_black_alpha(140),
+                primary_bg: Color32::from_rgb(53, 132, 228),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(255, 123, 99),
+                warning: Color32::from_rgb(248, 228, 92),
+                radius_sm: 6.0,
+                radius: 9.0,
+                radius_lg: 12.0,
+                bevel: false,
+                pro: false,
+                round_chips: true,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(29, 29, 32),
+                histogram_level: 225,
+                caption_close: Color32::from_rgb(72, 72, 76),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
+            },
+            // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
+            // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
+            // (MIT; see LICENSE-solarized.txt)
+            ThemeKind::SolarizedDark => Tokens {
+                kind,
+                chrome: Color32::from_rgb(7, 54, 66),
+                canvas: Color32::from_rgb(0, 43, 54),
+                canvas_dot: Color32::from_rgb(10, 61, 74),
+                dock: Color32::from_rgb(0, 37, 47),
+                card: Color32::from_rgb(7, 54, 66),
+                card_border: Color32::from_rgb(0, 37, 47),
+                field: Color32::from_rgb(0, 37, 47),
+                field_border: Color32::from_rgb(21, 80, 95),
+                hover: Color32::from_rgb(14, 74, 90),
+                pressed: Color32::from_rgb(18, 89, 107),
+                text: Color32::from_rgb(131, 148, 150),
+                text_dim: Color32::from_rgb(101, 123, 131),
+                text_faint: Color32::from_rgb(88, 110, 117),
+                icon: Color32::from_rgb(147, 161, 161),
+                accent: Color32::from_rgb(38, 139, 210),
+                accent_soft: Color32::from_rgba_unmultiplied(38, 139, 210, 46),
+                accent_border: Color32::from_rgba_unmultiplied(38, 139, 210, 120),
+                accent_text: Color32::from_rgb(253, 246, 227),
+                separator: Color32::from_rgb(0, 37, 47),
+                shadow: Color32::from_black_alpha(150),
+                primary_bg: Color32::from_rgb(38, 139, 210),
+                primary_text: Color32::from_rgb(253, 246, 227),
+                danger: Color32::from_rgb(220, 50, 47),
+                warning: Color32::from_rgb(181, 137, 0),
+                radius_sm: 6.0,
+                radius: 8.0,
+                radius_lg: 12.0,
+                bevel: false,
+                pro: false,
+                round_chips: true,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(0, 43, 54),
+                histogram_level: 225,
+                caption_close: Color32::from_rgb(220, 50, 47),
+                caption_close_text: Color32::from_rgb(253, 246, 227),
                 scrim: Color32::from_black_alpha(110),
             },
         }
@@ -357,7 +523,7 @@ impl Tokens {
     }
 
     pub fn dark(&self) -> bool {
-        matches!(self.kind, ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium)
+        matches!(self.kind, ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::SolarizedDark | ThemeKind::AdwaitaDark)
     }
 }
 
@@ -369,19 +535,30 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// [`install_fonts`] with the CJK fallback fonts taken from `cjk` (tests swap the sources).
 pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let mut fonts = FontDefinitions::default();
-    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
+    // The bundled fonts are inflated on first use (photocraft_text::fonts). Should one ever fail
+    // to inflate (empty bytes), it is left out and egui's default fonts draw that text.
+    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| -> Option<String> {
+        if bytes.is_empty() {
+            log::error!("bundled font {name} is unavailable; using the default UI font");
+            return None;
+        }
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+        Some(name.to_owned())
     };
-    add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR);
-    add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM);
-    add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD);
-    add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR);
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
+    let inter = add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR.as_slice());
+    let medium = add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM.as_slice());
+    let semibold = add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD.as_slice());
+    let mono = add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR.as_slice());
+    if let Some(inter) = inter {
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, inter);
+    }
+    if let Some(mono) = mono {
+        fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
+    }
     // Named weights fall back to the default stack for missing glyphs.
-    let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
-    for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
-        let mut stack = vec![primary.to_owned()];
+    let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (fam, primary) in [("medium", medium), ("semibold", semibold)] {
+        let mut stack: Vec<String> = primary.into_iter().collect();
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
@@ -675,8 +852,12 @@ mod tests {
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::Pro));
         assert_eq!(ThemeKind::from_name("studio"), Some(ThemeKind::Studio));
         assert_eq!(ThemeKind::from_name("Pro (Medium Gray)"), Some(ThemeKind::ProMedium));
+        assert_eq!(ThemeKind::from_name("Solarized Dark"), Some(ThemeKind::SolarizedDark));
+        assert_eq!(ThemeKind::from_name("solarized"), Some(ThemeKind::SolarizedDark));
         let m = Tokens::for_kind(ThemeKind::ProMedium);
         assert!(m.pro && m.dark() && m.kind == ThemeKind::ProMedium && m.card == Color32::from_rgb(83, 83, 83));
+        let s = Tokens::for_kind(ThemeKind::SolarizedDark);
+        assert!(s.dark() && !s.bevel && s.kind == ThemeKind::SolarizedDark && s.card == Color32::from_rgb(7, 54, 66));
         assert_eq!(ThemeKind::from_name("neon"), None);
     }
 
@@ -688,6 +869,36 @@ mod tests {
         let lum = |c: Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
         assert!(lum(t.text) - lum(t.card) > 180.0);
         assert!(lum(t.text_dim) - lum(t.card) > 90.0);
+    }
+
+    /// WCAG 2 contrast ratio, the measure libadwaita's own palette is held to.
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let lin = |v: u8| {
+            let c = f32::from(v) / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        let lum = |c: Color32| 0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b());
+        let (hi, lo) = if lum(a) > lum(b) { (lum(a), lum(b)) } else { (lum(b), lum(a)) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn adwaita_themes_parse_and_meet_text_contrast() {
+        for kind in [ThemeKind::Adwaita, ThemeKind::AdwaitaDark] {
+            assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
+            assert_eq!(ThemeKind::from_name(kind.label()), Some(kind));
+            let t = Tokens::for_kind(kind);
+            assert_eq!(t.kind, kind);
+            assert_eq!(t.dark(), kind == ThemeKind::AdwaitaDark);
+            assert!(!t.pro && !t.bevel, "{kind:?} uses the Studio layout");
+            // AA body text (4.5:1) on every surface that carries labels.
+            for surface in [t.chrome, t.dock, t.card, t.field] {
+                assert!(contrast(t.text, surface) >= 7.0, "{kind:?}: text on {surface:?}");
+                assert!(contrast(t.text_dim, surface) >= 4.5, "{kind:?}: dim text on {surface:?}");
+            }
+            assert!(contrast(t.primary_text, t.primary_bg) >= 3.0, "{kind:?}: suggested-action button label");
+        }
+        assert_eq!(ThemeKind::from_name("gnome dark"), Some(ThemeKind::AdwaitaDark));
     }
 }
 

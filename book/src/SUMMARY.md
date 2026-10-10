@@ -22,6 +22,7 @@
 - [PSD and PSB](formats/psd-psb.md)
 - [Raster formats](formats/raster-formats.md)
 - [SVG](formats/svg.md)
+- [Affinity documents](formats/affinity.md)
 - [The `.pcraft` format](formats/pcraft.md)
 
 # Automation

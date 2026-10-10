@@ -230,6 +230,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     scribble(&mut sel, 14, false);
     d.selection = Some(sel);
     d.metadata.xmp = Some("<x:xmpmeta/>".into());
+    d.metadata.text = vec![("Author".into(), "Synthetic é 雪".into()), ("Comment".into(), "first".into()), ("Comment".into(), "second".into())];
     d.metadata.exif = Some(blob(15, 64));
     d.metadata.psd_resources.push((1036, "thumb".into(), blob(16, 20)));
     d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", blob(17, 50)));

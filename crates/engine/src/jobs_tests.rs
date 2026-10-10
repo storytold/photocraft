@@ -127,6 +127,23 @@ fn a_panic_in_the_worker_becomes_an_error_and_the_document_is_unchanged() {
 }
 
 #[test]
+fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
+    // REL-3: the last-resort guard in `jobs::dispatch` catches a panic that escapes `run`,
+    // reports it as an error and leaves the document (and its history) untouched.
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let msg = s.execute("test.panic", json!({})).unwrap_err().to_string();
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(msg.contains("test.panic"), "{msg}");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");
@@ -218,6 +235,58 @@ fn a_running_job_locks_its_document_but_not_others() {
     assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
     assert_eq!(s.active_index(), Some(1));
     assert_eq!(s.documents()[0].history.past_len(), 3);
+}
+
+#[test]
+fn background_job_finishes_bookkeeping_on_edited_document_after_tab_switch() {
+    let mut s = session(64, 64);
+    let edited_doc = s.active().unwrap().doc.id;
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_gate = Arc::clone(&gate);
+    // Hold a fadeable filter job until another document is the active tab.
+    // A deterministic gate avoids relying on the filter being sufficiently slow.
+    let id = job(s
+        .start_job(
+            "filter.blur.gaussianBlur",
+            json!({"radius": 2}),
+            "Deferred Blur",
+            true,
+            move |ctx| {
+                while !worker_gate.load(std::sync::atomic::Ordering::Relaxed) {
+                    ctx.check()?;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |s, ()| {
+                s.edit("Deferred Blur", |doc, active| {
+                    let layer = active.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+                    let surface = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?.surface_mut().ok_or(EngineError::NoLayer(layer))?;
+                    surface.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.4, 0.3, 0.2, 1.0]);
+                    Ok(())
+                })?;
+                Ok(json!({"filter": {"radius": 2}}))
+            },
+        )
+        .unwrap());
+
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let viewed_doc = s.active().unwrap().doc.id;
+    let viewed_revision = s.active().unwrap().revision;
+    assert_eq!(s.active_index(), Some(1));
+
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    let event = wait_event(&mut s, id);
+    assert!(matches!(event.outcome, JobOutcome::Done(_)), "{event:?}");
+    assert_eq!(s.active_index(), Some(1), "the user stays on the selected document");
+    assert_eq!(s.documents()[1].revision, viewed_revision, "the viewed document is unchanged");
+    assert_eq!(s.documents()[1].doc.id, viewed_doc);
+    assert_eq!(s.edit_state.fade.as_ref().map(|fade| fade.doc), Some(edited_doc), "Fade belongs to the edited document");
+    assert!(!s.is_enabled("edit.fade"), "Fade must not target the viewed document");
+
+    assert!(s.set_active(0));
+    assert!(s.is_enabled("edit.fade"), "Fade must be available on the document that was edited");
 }
 
 #[test]
@@ -384,4 +453,27 @@ fn cancel_takes_effect_within_200_ms_on_24_mp() {
         eprintln!("{cmd}: worst cancel latency {worst:.1} ms");
         assert!(worst < 200.0, "{cmd}: cancel took {worst:.1} ms");
     }
+}
+
+#[test]
+fn an_inline_job_ctx_lets_another_thread_cancel_inline_work() {
+    // A live filter preview runs the filter inline in a private session; when the dialog's
+    // parameters change, the stale computation is cancelled through this context.
+    let mut s = session(96, 64);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let ctx = JobCtx::new();
+    ctx.cancel();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    for (id, p) in [("filter.blur.gaussianBlur", json!({"radius": 40})), ("filter.blur.motionBlur", json!({"distance": 40}))] {
+        assert!(matches!(s.execute(id, p), Err(EngineError::Cancelled)), "{id}");
+        assert_eq!(pixels(&s), before, "{id}: the document is unchanged");
+        assert_eq!(s.active().unwrap().revision, revision, "{id}: no edit recorded");
+    }
+    // Not cancelled: the same session runs as before.
+    s.set_inline_job_ctx(Some(JobCtx::new()));
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.set_inline_job_ctx(None);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
 }

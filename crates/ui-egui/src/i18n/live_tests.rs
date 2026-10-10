@@ -10,12 +10,27 @@ fn lang(code: &str) -> Lang {
 
 #[test]
 fn requested_languages_resolve_regional_preferences() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr"), ("id-ID", "id")] {
+    for (tag, code) in
+        [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr"), ("id-ID", "id")]
+    {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
     assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
     assert_eq!(lang_from_tag("FR-fr"), Some(lang("fr")));
     assert_eq!(lang_from_tag("ko"), Some(lang("ko")));
+}
+
+#[test]
+fn ukrainian_native_app_menu_keeps_product_and_language_names() {
+    with_language(Lang::EN, || {
+        let h = harness();
+        let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(h.state()), lang("uk"), "uk");
+        for (id, label) in [("help.about", "Про PhotoCraft"), (crate::native_menu::HIDE, "Приховати PhotoCraft"), ("file.exit", "Вийти з PhotoCraft")]
+        {
+            assert_eq!(layout.bar.find(id).map(|item| item.label.as_str()), Some(label), "{id}");
+        }
+        assert_eq!(layout.bar.find("app.language.uk").map(|item| (item.label.as_str(), item.checked)), Some(("Українська", Some(true))));
+    });
 }
 
 #[test]
@@ -119,7 +134,7 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     }
     with_language(Lang::EN, || {
         let mut h = harness();
-        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.source.chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
+        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.text().chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
         for code in ["zh-hans", "ja", "ko", "fr", "ko"] {
             h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("language");
             h.run_steps(12);
@@ -154,7 +169,7 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, P
 
 #[test]
 fn first_launch_renders_the_system_language_without_overwriting_auto() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr")] {
+    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr")] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
                 let h = harness();
@@ -221,7 +236,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "fr", "id", "en"] {
+        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control_rx = Some(rx);
             let (request, reply) =
@@ -248,7 +263,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         dialog.fields.get_mut("values").expect("values")["interface"]["language"] = json!("fr");
         h.run_steps(3);
         let text = drawn_text(&h);
-        assert!(text.iter().any(|text| text == "Langue"), "the draft language must translate the actual dialog");
+        assert!(text.iter().any(|text| text == "Apparence"), "the draft language must translate the visible dialog");
         assert!(text.iter().any(|text| text == "Annuler"), "the dialog buttons must preview the language too");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");

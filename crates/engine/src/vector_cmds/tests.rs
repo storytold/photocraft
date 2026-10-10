@@ -369,6 +369,65 @@ fn path_fill_handles_extreme_coordinates_and_feather() {
 }
 
 #[test]
+fn rasterizing_a_vector_mask_keeps_what_the_masks_show() {
+    // #992: the vector mask's feather (and a pixel mask's feather or density) shape the rendered
+    // edge, so the rasterized pixel mask must hold the mask the compositor showed.
+    // (vector feather, vector enabled, pixel mask (feather, density))
+    let cases = [
+        (8.0, true, None),
+        (8.0, true, Some((0.0, 1.0))),
+        (0.0, true, Some((4.0, 1.0))),
+        (0.0, true, Some((0.0, 0.5))),
+        (6.0, true, Some((3.0, 0.7))),
+        // Controls: hard masks were already exact; a disabled vector mask shows nothing.
+        (0.0, true, None),
+        (0.0, true, Some((0.0, 1.0))),
+        (8.0, false, Some((4.0, 1.0))),
+    ];
+    for depth in [8, 16, 32] {
+        for (vf, enabled, pm) in cases {
+            let what = format!("{depth}-bit, vector feather {vf} enabled {enabled}, pixel mask {pm:?}");
+            let mut s = session(64, 64, depth);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            s.execute("path.set", json!({"name": "all", "path": {"subpaths": [{"knots": [[0, 0], [64, 0], [64, 64], [0, 64]]}]}})).unwrap();
+            s.execute("path.fill", json!({"name": "all", "color": "#000000"})).unwrap();
+            if let Some((feather, density)) = pm {
+                s.execute("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 64})).unwrap();
+                s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+                s.execute("select.deselect", json!({})).unwrap();
+                s.edit("mask settings", |doc, _| {
+                    let m = doc.layer_mut(id).unwrap().mask.as_mut().unwrap();
+                    (m.feather, m.density) = (feather, density);
+                    Ok(())
+                })
+                .unwrap();
+            }
+            s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[16, 16], [48, 16], [48, 48], [16, 48]]}]}})).unwrap();
+            s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
+            s.execute("layer.vectorMask.edit", json!({"feather": vf, "enabled": enabled})).unwrap();
+            let before = photocraft_compose::flatten(doc(&s));
+            let steps = s.active().unwrap().history.past_len();
+            s.execute("layer.rasterize.vectorMask", json!({})).unwrap();
+            let l = doc(&s).layer(id).unwrap();
+            assert!(l.vector_mask.is_none() && l.mask.is_some(), "{what}");
+            // An integer mask stores the soft values rounded to its depth (a mask made from a
+            // selection is 8-bit at every document depth).
+            let tol = match l.mask.as_ref().unwrap().surface.format().sample {
+                photocraft_color::SampleType::U8 => 1.5 / 255.0,
+                _ => 1e-3,
+            };
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{what}: one history step");
+            let after = photocraft_compose::flatten(doc(&s));
+            let worst = before.px.iter().zip(&after.px).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            assert!(worst <= tol, "{what}: the composite changed by {worst}");
+            s.undo();
+            assert!(doc(&s).layer(id).unwrap().vector_mask.is_some(), "{what}: undo brings the vector mask back");
+        }
+    }
+}
+
+#[test]
 fn vector_mask_commands_and_compositing() {
     let mut s = session(100, 100, 8);
     s.execute("layer.new.layer", json!({})).unwrap();

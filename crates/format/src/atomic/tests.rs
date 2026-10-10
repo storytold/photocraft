@@ -210,3 +210,40 @@ fn directory_target_or_bare_root_is_an_error_not_a_panic() {
     assert!(atomic_write(Path::new("/"), b"x").is_err());
     assert!(atomic_write(Path::new(""), b"x").is_err());
 }
+
+/// A share that refuses the full flush (`F_FULLFSYNC`, #1336) still saves through a plain fsync on
+/// Apple platforms; every other sync error still fails the save.
+#[test]
+fn a_refused_full_flush_falls_back_to_a_plain_fsync_on_apple_only() {
+    let refused = |errno| Err(io::Error::from_raw_os_error(errno));
+    for (errno, name) in [(45, "ENOTSUP, SMB"), (25, "ENOTTY")] {
+        let fsynced = Cell::new(false);
+        let r = or_plain_fsync(refused(errno), || {
+            fsynced.set(true);
+            Ok(())
+        });
+        let apple = cfg!(target_vendor = "apple");
+        assert_eq!(r.is_ok(), apple, "{name}");
+        assert_eq!(fsynced.get(), apple, "{name}: the plain fsync runs only on Apple platforms");
+    }
+    // The plain fsync's own failure is reported.
+    if cfg!(target_vendor = "apple") {
+        let r = or_plain_fsync(refused(45), || Err(io::Error::from_raw_os_error(5)));
+        assert_eq!(r.map_err(|e| e.raw_os_error()), Err(Some(5)));
+    }
+    // Real errors (EIO, ENOSPC, EACCES) never fall back, and success needs no fallback.
+    for errno in [5, 28, 13] {
+        let r = or_plain_fsync(refused(errno), || panic!("no fallback for errno {errno}"));
+        assert_eq!(r.map_err(|e| e.raw_os_error()), Err(Some(errno)));
+    }
+    assert!(or_plain_fsync(Ok(()), || panic!("no fallback after a full flush")).is_ok());
+}
+
+#[test]
+fn sync_file_flushes_a_local_file() {
+    let dir = TempDir::new("sync");
+    let path = dir.0.join("f.bin");
+    // Opened for writing, as the saves do: Windows can't flush a read-only handle.
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    sync_file(&file).unwrap();
+}

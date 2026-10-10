@@ -3,7 +3,7 @@
 use crate::color::ColorInfo;
 use crate::error::{RawError, Result};
 use crate::tiff::{Ifd, Tiff, tag};
-use crate::{Limits, RawFormat, ljpeg, par};
+use crate::{Limits, RawFormat, jxl, ljpeg, par};
 
 /// A rectangle in sensor-data pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +153,10 @@ pub struct Sensor {
     pub baseline_exposure: f64,
     /// DNG OpcodeList2 gain maps (lens shading), applied to the normalized data.
     pub gain_maps: Vec<crate::opcodes::GainMap>,
+    /// The camera profile's default tone curve (like DNG ProfileToneCurve): increasing `[input,
+    /// output]` pairs in linear ProPhoto, applied per channel after the colour conversion and
+    /// exposure. Below the first point the curve is a line through 0; empty: no curve.
+    pub tone_curve: Vec<[f32; 2]>,
     pub warnings: Vec<String>,
 }
 
@@ -185,7 +189,10 @@ pub(crate) enum JpegLayout {
     Quads,
 }
 
-/// Reads the (uncompressed or lossless-JPEG) image of a raw IFD.
+/// DNG 1.7 JPEG XL compression.
+const JPEG_XL: u32 = 52546;
+
+/// Reads the (uncompressed, lossless-JPEG or JPEG XL) image of a raw IFD.
 pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayout) -> Result<Plane> {
     let width = t.tag_uint(ifd, tag::IMAGE_WIDTH).ok_or_else(|| RawError::malformed("raw image has no width"))? as usize;
     let height = t.tag_uint(ifd, tag::IMAGE_LENGTH).ok_or_else(|| RawError::malformed("raw image has no height"))? as usize;
@@ -205,10 +212,8 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         return Err(RawError::unsupported("planar raw data"));
     }
     match compression {
-        1 | 7 => {}
-        8 => return Err(RawError::unsupported("Deflate-compressed (floating-point) DNG")),
+        1 | 7 | 8 | JPEG_XL => {}
         34892 => return Err(RawError::unsupported("lossy-compressed DNG")),
-        52546 => return Err(RawError::unsupported("JPEG XL-compressed DNG")),
         34713 => return Err(RawError::unsupported("Nikon compressed NEF")),
         32767 => return Err(RawError::unsupported("Sony compressed ARW")),
         65535 => return Err(RawError::unsupported("Pentax compressed PEF")),
@@ -223,6 +228,33 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         let src = t.bytes(s.offset, s.len).ok_or_else(|| RawError::malformed("raw data lies outside the file"))?;
         match compression {
             1 => unpack(src, s.w, rows, samples, bits, le),
+            8 => {
+                // Adobe DNG compression 8: zlib streams (RFC 1950). The output is capped at the
+                // tile's size in whole bytes per sample, so a bomb cannot grow past the tile;
+                // `unpack` then reads it bit-packed or in 16-bit containers by its length.
+                let too_big = || RawError::malformed("deflate tile is too large");
+                let need =
+                    s.w.checked_mul(rows).and_then(|n| n.checked_mul(samples)).and_then(|n| n.checked_mul((bits as usize).div_ceil(8))).ok_or_else(too_big)?;
+                let mut out = vec![0u8; need];
+                let mut d = flate2::Decompress::new(true);
+                d.decompress(src, &mut out, flate2::FlushDecompress::Finish).map_err(|_| RawError::malformed("deflate tile does not decompress"))?;
+                out.truncate(usize::try_from(d.total_out()).unwrap_or(need).min(need));
+                let v = unpack(&out, s.w, rows, samples, bits, le)?;
+                // The TIFF predictor runs after unpacking, per row, per sample plane.
+                match t.tag_uint(ifd, tag::PREDICTOR).unwrap_or(1) {
+                    1 => Ok(v),
+                    2 => Ok(undelta(&v, samples, s.w * samples, rows, bits)),
+                    3 => Err(RawError::unsupported("floating-point predictor (compression 8, predictor 3)")),
+                    p => Err(RawError::malformed(format!("unknown predictor {p}"))),
+                }
+            }
+            // A JPEG XL segment codes only the rows inside the image (strips) or the whole tile.
+            JPEG_XL => {
+                let coded_rows = if t.tag_uint(ifd, tag::TILE_WIDTH).is_some() { s.h } else { rows };
+                let mut v = jxl::decode(src, s.w, coded_rows, samples, bits, limits)?;
+                v.resize(s.w * s.h * samples, 0);
+                Ok(v)
+            }
             _ => {
                 let need = s.w * rows * samples;
                 let max = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
@@ -300,6 +332,21 @@ pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Resu
         }
     }
     Ok(out)
+}
+
+/// Reverses TIFF predictor 2 (horizontal differencing) on interleaved samples: each sample
+/// gains its channel's predecessor in the row, wrapping at the sample's container (8 or 16 bits).
+fn undelta(v: &[u16], plane: usize, row_samples: usize, rows: usize, bits: u32) -> Vec<u16> {
+    let mask: u16 = if bits <= 8 { 0xFF } else { 0xFFFF };
+    let mut out = v.to_vec();
+    for row in out.chunks_mut(row_samples.max(1)).take(rows) {
+        for i in plane..row.len() {
+            if let (Some(&prev), Some(&cur)) = (row.get(i - plane), row.get(i)) {
+                row[i] = cur.wrapping_add(prev) & mask;
+            }
+        }
+    }
+    out
 }
 
 /// Unpacks uncompressed samples: 8-bit, 16-bit in the file's byte order, or

@@ -13,22 +13,23 @@ use crate::AutomationError;
 pub struct Opened {
     pub document: Document,
     pub warnings: Vec<String>,
+    pub source_read_only: bool,
 }
 
 /// Decode a document that was read through a filesystem capability.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        return Ok(Opened { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new() });
+        return Ok(Opened { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false });
     }
     let r = photocraft_io::import(name, bytes)?;
-    Ok(Opened { document: r.document, warnings: r.warnings })
+    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
     if path.is_dir() {
-        return Ok(Opened { document: photocraft_format::load_path(path)?, warnings: Vec::new() });
+        return Ok(Opened { document: photocraft_format::load_path(path)?, warnings: Vec::new(), source_read_only: false });
     }
     let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

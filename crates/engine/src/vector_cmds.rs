@@ -503,7 +503,7 @@ fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Shape(sh) = &l.content else {
-        return Err(EngineError::Other(format!("layer {} is a {} layer, not a shape layer", id.0, l.content.kind_name())));
+        return Err(EngineError::Other(format!("layer {} is {} {} layer, not a shape layer", id.0, l.content.article(), l.content.kind_name())));
     };
     let bounds = sh.cache.as_ref().map(|c| c.content_bounds()).filter(|r| !r.is_empty()).map(|r| json!([r.x0, r.y0, r.width(), r.height()]));
     Ok(json!({
@@ -523,7 +523,7 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if !matches!(l.content, LayerContent::Shape(_)) {
-            return Err(EngineError::Other(format!("layer {} is a {} layer, not a shape layer", id.0, l.content.kind_name())));
+            return Err(EngineError::Other(format!("layer {} is {} {} layer, not a shape layer", id.0, l.content.article(), l.content.kind_name())));
         }
         let LayerContent::Shape(mut sh) = std::mem::replace(&mut l.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
@@ -674,7 +674,7 @@ fn shape_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
 // Document paths
 // ---------------------------------------------------------------------------
 
-fn is_work(name: Option<&str>) -> bool {
+pub(crate) fn is_work(name: Option<&str>) -> bool {
     name.is_none_or(|n| n.is_empty() || n.eq_ignore_ascii_case("work") || n == "Work Path")
 }
 
@@ -1144,21 +1144,38 @@ fn vector_mask_delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Layer › Rasterize › Vector Mask: multiplies the vector mask into the pixel mask.
+/// Layer › Rasterize › Vector Mask: multiplies the vector mask into the pixel mask. When a feather
+/// (either mask's) or the pixel mask's density shapes the rendered edge, the pixel mask instead
+/// becomes exactly what the compositor showed, with those settings baked in (#992).
 fn vector_mask_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
+    use photocraft_compose::masks::{combined_mask, feather_sigma};
     let id = layer_id(s, p)?;
     s.edit("Rasterize Vector Mask", |doc, _| {
         let area = doc.bounds();
         let depth = doc.depth;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        let soft = l.vector_mask.as_ref().is_some_and(|v| v.enabled)
+            && (l.vector_mask.as_ref().is_some_and(|v| feather_sigma(v.feather) > 0.0)
+                || l.mask.as_ref().is_some_and(|m| m.enabled && (feather_sigma(m.feather) > 0.0 || m.density < 1.0)));
+        let shown = if soft { combined_mask(l, area) } else { None };
         let vm = l.vector_mask.take().ok_or_else(|| EngineError::Other("layer has no vector mask".into()))?;
-        let vals = vector::vector_mask_values(&vm, area);
         let mut mask = l.mask.take().unwrap_or_else(|| {
             let mut m = photocraft_doc::LayerMask::reveal_all();
             m.surface =
                 photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, depth, false), &[1.0]);
             m
         });
+        if let Some(shown) = shown {
+            // Past the canvas the pixel mask keeps its own (density-applied) default, as below.
+            let d = mask.surface.default_pixel().first().copied().unwrap_or(1.0);
+            let mut surface = photocraft_raster::Surface::with_default(mask.surface.format(), &[1.0 - mask.density * (1.0 - d)]);
+            surface.write_region(area, &shown.read_region(area));
+            surface.prune();
+            (mask.surface, mask.feather, mask.density) = (surface, 0.0, 1.0);
+            l.mask = Some(mask);
+            return Ok(());
+        }
+        let vals = vector::vector_mask_values(&vm, area);
         // Outside the canvas the vector mask is 0 unless it is empty/inverted; keep the old default there.
         let old = mask.surface.read_region(area);
         let merged: Vec<f32> = old.iter().zip(&vals).map(|(a, b)| a * b).collect();

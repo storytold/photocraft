@@ -195,7 +195,7 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
     match &l.content {
         LayerContent::Raster(_) => Ok(()),
         LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
-        other => Err(format!("filters need a pixel layer (active layer is a {} layer)", other.kind_name())),
+        other => Err(format!("filters need a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),
     }
 }
 
@@ -240,10 +240,19 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 *surf = filter(surf, &fp, area, bounds, selection.as_ref(), doc_bounds.union(&content))?;
                 return Ok(fp.clone());
             }
+            // Filters that make pixels transparent (Color to Alpha) turn the Background into a
+            // normal layer first, as the erasers do: it can't hold transparency.
+            if fp.makes_transparency() {
+                crate::extra_cmds::background_to_layer_for_mask(doc, layer);
+            }
             let locks = doc.effective_locks(layer);
             let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
             if locks.pixels || locks.all {
                 return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+            }
+            // Putting the old alpha back (below) would leave unmixed colours fully opaque.
+            if locks.transparency && fp.makes_transparency() && matches!(l.content, LayerContent::Raster(_)) {
+                return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
             }
             let mut fp = fp.clone();
             crate::filters_ext::resolve_in_layer(&mut fp, l, bounds);

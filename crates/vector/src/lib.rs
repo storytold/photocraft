@@ -107,12 +107,33 @@ impl CompiledVectorMask {
             MaskGeometry::Constant(value) => vec![*value; rect.width() as usize * rect.height() as usize],
             MaskGeometry::Path(rasterizer) => rasterizer.render(rect),
         };
+        self.apply_density(&mut v);
+        v
+    }
+
+    /// Effective mask values without entering a thread pool. Use this while
+    /// initializing a shared result that other Rayon workers may wait for.
+    pub fn render_sequential(&self, rect: Rect) -> Vec<f32> {
+        let mut v = match &self.geometry {
+            MaskGeometry::Constant(value) => vec![*value; rect.width() as usize * rect.height() as usize],
+            MaskGeometry::Path(rasterizer) => {
+                let mut v = vec![0.0; rect.width() as usize * rect.height() as usize];
+                if !v.is_empty() {
+                    rasterizer.render_into(rect, &mut v);
+                }
+                v
+            }
+        };
+        self.apply_density(&mut v);
+        v
+    }
+
+    fn apply_density(&self, v: &mut [f32]) {
         if let Some(d) = self.density {
-            for x in &mut v {
+            for x in v {
                 *x = 1.0 - d * (1.0 - *x);
             }
         }
-        v
     }
 }
 

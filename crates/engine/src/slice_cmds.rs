@@ -378,6 +378,11 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": n}))
 }
 
+/// The most parts one Divide Slice makes. Resolving the slice list is quadratic in the slice count
+/// (`slices::resolve`), so a 1000 x 1000 division, a million slices, left every later list or
+/// export with ~5e11 steps of work (#1020).
+const MAX_DIVIDE_PARTS: i32 = 10_000;
+
 fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.divide";
     let t = find(s, p, cmd)?;
@@ -385,6 +390,9 @@ fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let across = crate::commands::int(p, "vertical").unwrap_or(1).clamp(1, 1000) as i32;
     if down == 1 && across == 1 {
         return Err(bad(cmd, "give \"horizontal\" (slices down) and/or \"vertical\" (slices across) > 1"));
+    }
+    if down * across > MAX_DIVIDE_PARTS {
+        return Err(bad(cmd, format!("{down} x {across} = {} parts is more than one division makes ({MAX_DIVIDE_PARTS})", down * across)));
     }
     let r = match t {
         Target::Auto(r) => r,
@@ -517,7 +525,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "slice.divide",
             "Divide Slice…",
             &[],
-            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across)} → {slices}"##,
+            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
             unlocked,
             divide
         ),

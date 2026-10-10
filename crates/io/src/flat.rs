@@ -51,7 +51,8 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
     image_to_document(name, &img.oriented(orientation)?)
 }
 
-/// A decoded flat image as a single-layer document.
+/// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
+/// normal "Layer 0" when it has transparency.
 pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
@@ -87,22 +88,27 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         }
     }
     s.prune();
-    let mut bg = Layer::new("Background", LayerContent::Raster(s));
-    if !img.layout().has_alpha() {
+    // As in Photoshop: an opaque image opens as the locked Background layer, one with
+    // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
+    // layer named "Layer 0", since a Background can't hold transparency.
+    let layer = if img.layout().has_alpha() {
+        Layer::new("Layer 0", LayerContent::Raster(s))
+    } else {
+        let mut bg = Layer::new("Background", LayerContent::Raster(s));
         bg.locks.transparency = true;
         bg.locks.position = true;
-    }
-    doc.layers.push(bg);
+        bg
+    };
+    doc.layers.push(layer);
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.clone();
-    if let Some((x, _)) = img.meta.dpi {
+    doc.metadata.text = img.meta.text.clone();
+    if let Some((x, y)) = img.meta.dpi {
         doc.resolution_dpi = x;
+        warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
     }
-    if !img.meta.text.is_empty() {
-        warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
-    }
-    Ok(ImportResult { document: doc, warnings })
+    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// `Some(surface)` when the document is exactly one visible, unmasked,
@@ -233,6 +239,7 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
     let meta = codecs::Metadata {
         exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
         xmp: doc.metadata.xmp.clone(),
+        text: doc.metadata.text.clone(),
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         ..Default::default()
     };
@@ -291,6 +298,8 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
         // Export As's Metadata: None: the packet lists the text of every type layer and one id
         // per placed document (#647).
         img.meta.xmp = None;
+        // Free-form descriptions can contain the same sensitive text as an XMP packet.
+        img.meta.text.clear();
     }
     if img.layout().has_alpha() && !format.caps().alpha {
         // Flattened over white, as saving a transparent document without transparency does.
@@ -451,7 +460,11 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 Ok(())
             });
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent)?;
-            Ok(Some(ExportResult { bytes, warnings: vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())] }))
+            let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
+            if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
+                warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
+            }
+            Ok(Some(ExportResult { bytes, warnings }))
         }
         ColorMode::Duotone => {
             let Some(d) = doc.duotone.as_ref() else { return Ok(None) };

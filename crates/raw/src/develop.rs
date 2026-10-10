@@ -3,7 +3,7 @@
 //! exposure, gamma 1.8 encode to 16 bits, orientation.
 
 use crate::color::{self, Mat3};
-use crate::demosaic::{Demosaic, PAD, Padded, demosaic};
+use crate::demosaic::{Demosaic, PAD, Padded, Pattern, demosaic, demosaic_cfa};
 use crate::error::{RawError, Result};
 use crate::sensor::Sensor;
 use crate::{Limits, RawFormat, par};
@@ -47,7 +47,9 @@ pub struct RawInfo {
     /// Sensor data size.
     pub sensor_width: usize,
     pub sensor_height: usize,
-    /// CFA pattern at the crop origin, e.g. `"RGGB"`; `None` for LinearRaw.
+    /// CFA pattern at the crop origin: `"RGGB"` for Bayer; other patterns list
+    /// their whole repeat row by row, rows separated by `/` (X-Trans:
+    /// `"GGRGGB/GGBGGR/…"`); `None` for LinearRaw.
     pub cfa: Option<String>,
     /// White-balance multipliers used (R, G, B, normalized to a minimum of 1).
     pub wb_multipliers: [f64; 3],
@@ -157,8 +159,10 @@ pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option
     if s.samples != 1 && s.samples != 3 {
         return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
     }
-    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel.
-    opts.limits.check(c.width as u64, c.height as u64, 4 + 12 + 6)?;
+    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel, and
+    // a green plane for non-Bayer patterns.
+    let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
+    opts.limits.check(c.width as u64, c.height as u64, if bayer { 4 + 12 + 6 } else { 4 + 4 + 12 + 6 })?;
     let mut warnings = s.warnings.clone();
     let sc = Scale { s, lin: s.linearization.as_deref() };
 
@@ -201,39 +205,42 @@ pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option
     let (w, h) = (c.width, c.height);
     let band = par::band_rows(w);
     let mut rgb: Vec<f32>;
-    let phase;
+    let pattern: Option<String>;
     match &s.cfa {
         Some(cfa) => {
             // Normalized, balanced, clipped CFA plane.
             let mut plane = Padded::new(w, h);
             let stride = plane.stride;
-            // Fast path: black varies at most per 2×2 position (the Bayer period).
+            // Fast path: black varies at most per 2×2 position, so black and gain
+            // repeat every `period` columns (the CFA width, made even).
             let bl = &s.black;
-            let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2);
+            let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && cfa.width <= 16;
+            let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
             plane.fill_rows(band, |y0, chunk| {
                 for (r, prow) in chunk.chunks_exact_mut(stride).enumerate() {
                     let row = &mut prow[PAD..PAD + w];
                     let y = c.y + y0 + r;
                     if periodic {
-                        // Per column parity: black and the combined scale × white-balance gain.
-                        let k: [(f32, f32); 2] = std::array::from_fn(|p| {
-                            let x = c.x + p;
-                            let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
-                            let range = s.white[0] - black;
-                            let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
-                            (black, gain)
-                        });
+                        // Per column of the period: black and the combined scale × white-balance gain.
+                        let k: Vec<(f32, f32)> = (0..period)
+                            .map(|p| {
+                                let x = c.x + p;
+                                let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
+                                let range = s.white[0] - black;
+                                let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
+                                (black, gain)
+                            })
+                            .collect();
                         let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+                        let ks = k.iter().cycle();
                         match &sc.lin {
                             None => {
-                                for (i, (v, &raw)) in row.iter_mut().zip(src).enumerate() {
-                                    let (black, gain) = k[i & 1];
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
                                     *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
                                 }
                             }
                             Some(l) => {
-                                for (i, (v, &raw)) in row.iter_mut().zip(src).enumerate() {
-                                    let (black, gain) = k[i & 1];
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
                                     let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
                                     *v = ((lin - black) * gain).clamp(0.0, 1.0);
                                 }
@@ -256,13 +263,20 @@ pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option
                 }
             });
             plane.fill_borders();
-            let p = cfa.phase(c.x, c.y);
-            phase = Some(p);
-            rgb = demosaic(&plane, p, opts.demosaic, &to_xyz);
+            let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
+            if bayer {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                rgb = demosaic(&plane, p, opts.demosaic, &to_xyz);
+            } else {
+                let pat = Pattern::of(cfa, c.x, c.y);
+                pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
+                rgb = demosaic_cfa(&plane, &pat);
+            }
             drop(plane);
         }
         None => {
-            phase = None;
+            pattern = None;
             rgb = vec![0.0f32; w * h * 3];
             par::chunks_mut(&mut rgb, band * w * 3, |b, chunk| {
                 for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
@@ -284,9 +298,9 @@ pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option
         }
     }
 
-    // Camera → ProPhoto, exposure, gamma 1.8, 16 bits.
+    // Camera → ProPhoto, exposure, the profile's tone curve, gamma 1.8, 16 bits.
     let mut out = vec![0u16; w * h * 3];
-    let lut = GammaLut::new();
+    let lut = GammaLut::with_curve(&s.tone_curve);
     par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
         let start = b * band * w * 3;
         let src = &rgb[start..start + chunk.len()];
@@ -316,7 +330,7 @@ pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option
             model: s.model.clone(),
             sensor_width: s.width,
             sensor_height: s.height,
-            cfa: phase.map(|p| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect()),
+            cfa: pattern,
             wb_multipliers: mult.map(|m| f64::from(m / nmax)),
             orientation: s.orientation,
             baseline_exposure: s.baseline_exposure,
@@ -362,8 +376,20 @@ struct GammaLut {
 const GAMMA_STEPS: usize = 4096;
 
 impl GammaLut {
+    #[cfg(test)]
     fn new() -> Self {
-        GammaLut { table: (0..=GAMMA_STEPS + 1).map(|i| ((i as f32 / GAMMA_STEPS as f32).min(1.0)).powf(2.0 / 1.8) * 65535.0).collect() }
+        Self::with_curve(&[])
+    }
+
+    /// The gamma-1.8 encoding after a tone curve (see [`Sensor::tone_curve`]; empty: none).
+    fn with_curve(curve: &[[f32; 2]]) -> Self {
+        let table = (0..=GAMMA_STEPS + 1)
+            .map(|i| {
+                let s = (i as f32 / GAMMA_STEPS as f32).min(1.0);
+                tone(curve, s * s).clamp(0.0, 1.0).powf(1.0 / 1.8) * 65535.0
+            })
+            .collect();
+        GammaLut { table }
     }
 
     #[inline]
@@ -375,6 +401,22 @@ impl GammaLut {
         let (a, b) = (self.table[i], self.table[i + 1]);
         (a + (b - a) * f + 0.5) as u16
     }
+}
+
+/// `curve` at linear `v`: linear interpolation between the points in log₂ of the input, a line
+/// through 0 below the first point, the last output beyond the last.
+fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
+    let (Some(first), Some(last)) = (curve.first(), curve.last()) else { return v };
+    if v <= first[0] {
+        return if first[0] > 0.0 { v * first[1] / first[0] } else { first[1] };
+    }
+    if v >= last[0] {
+        return last[1];
+    }
+    let i = curve.partition_point(|p| p[0] <= v).clamp(1, curve.len() - 1);
+    let ([x0, y0], [x1, y1]) = (curve[i - 1], curve[i]);
+    let f = (v.log2() - x0.log2()) / (x1.log2() - x0.log2());
+    y0 + (y1 - y0) * f
 }
 
 /// Applies a TIFF orientation (1–8) to interleaved RGB.
@@ -422,6 +464,22 @@ mod tests {
         assert_eq!(lut.encode(-1.0), 0);
         assert_eq!(lut.encode(2.0), 65535);
         assert_eq!(lut.encode(f32::NAN), 0);
+    }
+
+    #[test]
+    fn tone_curve_is_folded_into_the_gamma_table() {
+        let code = |v: f32| v.powf(1.0 / 1.8) * 65535.0;
+        let lut = GammaLut::with_curve(&[[0.25, 0.5], [1.0, 1.0]]);
+        let near = |got: u16, want: f32| (f32::from(got) - want).abs() <= 2.0;
+        // On a point, between points (linear in log2 of the input), on the line through 0 below the first.
+        assert!(near(lut.encode(0.25), code(0.5)));
+        assert!(near(lut.encode(0.5), code(0.75)), "{} vs {}", lut.encode(0.5), code(0.75));
+        assert!(near(lut.encode(0.125), code(0.25)));
+        assert_eq!(lut.encode(0.0), 0);
+        assert_eq!(lut.encode(1.0), 65535);
+        assert!((0..1000).map(|i| lut.encode(i as f32 / 999.0)).collect::<Vec<_>>().windows(2).all(|w| w[1] >= w[0]));
+        // No curve: the plain gamma 1.8.
+        assert!(near(GammaLut::with_curve(&[]).encode(0.25), code(0.25)));
     }
 
     #[test]

@@ -18,8 +18,12 @@ fn err(e: impl std::fmt::Display) -> CodecError {
 }
 
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
-    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    let mut input = Cursor::new(bytes);
+    let mut decoder = png::Decoder::new_with_limits(&mut input, png::Limits { bytes: limits.alloc_usize() });
     decoder.set_transformations(png::Transformations::EXPAND);
+    // png's lazy text get_text() inflates without consulting its allocation limit.
+    // Read text separately below, without retaining compressed copies in the decoder.
+    decoder.set_ignore_text_chunk(true);
     {
         let info = decoder.read_header_info().map_err(map_png_err)?;
         let (w, h) = info.size();
@@ -46,9 +50,11 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     let mut buf = vec![0u8; size];
     let out = reader.next_frame(&mut buf).map_err(map_png_err)?;
     buf.truncate(out.buffer_size());
-    // Collect chunks after IDAT (text may live there). Errors here are
-    // tolerated: pixel data is already complete.
-    let _ = reader.finish();
+    // Collect ancillary chunks after IDAT. Tolerate malformed tails once pixels
+    // are complete, but never swallow an allocation-limit failure.
+    if let Err(e @ png::DecodingError::LimitsExceeded) = reader.finish() {
+        return Err(map_png_err(e));
+    }
     if sample == SampleType::U16 {
         for c in buf.as_chunks_mut::<2>().0 {
             let v = u16::from_be_bytes([c[0], c[1]]);
@@ -66,23 +72,10 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     {
         meta.dpi = Some((d.xppu as f32 * METERS_PER_INCH, d.yppu as f32 * METERS_PER_INCH));
     }
-    for t in &info.uncompressed_latin1_text {
-        meta.text.push((t.keyword.clone(), t.text.clone()));
-    }
-    for t in &info.compressed_latin1_text {
-        if let Ok(s) = t.get_text() {
-            meta.text.push((t.keyword.clone(), s));
-        }
-    }
-    for t in &info.utf8_text {
-        if let Ok(s) = t.get_text() {
-            if t.keyword == XMP_KEYWORD {
-                meta.xmp = Some(s);
-            } else {
-                meta.text.push((t.keyword.clone(), s));
-            }
-        }
-    }
+    drop(reader);
+    let end = usize::try_from(input.position()).map_err(|_| err("invalid PNG reader position"))?;
+    let consumed = bytes.get(..end).ok_or_else(|| err("invalid PNG reader position"))?;
+    read_text_metadata(consumed, limits.alloc_usize(), &mut meta)?;
     img.meta = meta;
     if images > 1 {
         img.warnings.push(DecodeWarning::MoreFrames { total: u32::try_from(images).ok() });
@@ -95,6 +88,139 @@ fn map_png_err(e: png::DecodingError) -> CodecError {
         png::DecodingError::LimitsExceeded => CodecError::LimitExceeded("PNG decoder memory limit".into()),
         e => err(e),
     }
+}
+
+fn text_limit() -> CodecError {
+    CodecError::LimitExceeded("PNG decoded text metadata exceeds max_alloc".into())
+}
+
+fn split_nul(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let at = bytes.iter().position(|&b| b == 0)?;
+    Some((bytes.get(..at)?, bytes.get(at.checked_add(1)?..)?))
+}
+
+fn latin1_len(bytes: &[u8]) -> Option<usize> {
+    bytes.len().checked_add(bytes.iter().filter(|&&b| b >= 128).count())
+}
+
+/// Read only CRC-valid text chunks, including those after IDAT, with one shared
+/// budget for decoded UTF-8 keywords and values (including overwritten XMP).
+/// Invalid ancillary text stays optional, as it was with png's text decoder.
+fn read_text_metadata(bytes: &[u8], mut remaining: usize, meta: &mut Metadata) -> Result<(), CodecError> {
+    let Some(mut rest) = bytes.get(8..) else { return Ok(()) };
+    let (mut plain, mut compressed, mut international) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some((length, tail)) = rest.split_first_chunk::<4>() {
+        let Some((kind, tail)) = tail.split_first_chunk::<4>() else { break };
+        let length = u32::from_be_bytes(*length);
+        // PNG chunk lengths are at most 2^31-1. Broken tails remain tolerated.
+        if length > i32::MAX as u32 {
+            break;
+        }
+        let Ok(length) = usize::try_from(length) else { break };
+        let Some(data) = tail.get(..length) else { break };
+        let Some((checksum, next)) = tail.get(length..).and_then(|t| t.split_first_chunk::<4>()) else { break };
+        rest = next;
+        if kind == b"IEND" {
+            break;
+        }
+        if !matches!(kind, b"tEXt" | b"zTXt" | b"iTXt") {
+            continue;
+        }
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        if crc.sum() != u32::from_be_bytes(*checksum) {
+            continue;
+        }
+        let Some((keyword, value)) = split_nul(data) else { continue };
+        if keyword.is_empty() || keyword.len() > 79 {
+            continue;
+        }
+        let (value, deflated, latin1) = match kind {
+            b"tEXt" => (value, false, true),
+            b"zTXt" => {
+                let Some((&0, value)) = value.split_first() else { continue };
+                (value, true, true)
+            }
+            _ => {
+                let Some(([flag, method], value)) = value.split_first_chunk::<2>() else { continue };
+                if *flag > 1 || (*flag == 1 && *method != 0) {
+                    continue;
+                }
+                let Some((language, value)) = split_nul(value) else { continue };
+                let Some((translated, value)) = split_nul(value) else { continue };
+                if !language.is_ascii() || std::str::from_utf8(translated).is_err() {
+                    continue;
+                }
+                (value, *flag == 1, false)
+            }
+        };
+        let keyword_len = latin1_len(keyword).ok_or_else(text_limit)?;
+        let limit = remaining.saturating_sub(keyword_len);
+        let Some(text) = bounded_text(value, deflated, latin1, limit)? else { continue };
+        remaining = remaining.checked_sub(keyword_len).and_then(|left| left.checked_sub(text.len())).ok_or_else(text_limit)?;
+        let keyword: String = keyword.iter().map(|&b| char::from(b)).collect();
+        match kind {
+            // Some writers put XMP in Latin-1 text chunks instead of the usual iTXt.
+            // Treat the reserved keyword consistently, after the same budget checks.
+            _ if keyword == XMP_KEYWORD => meta.xmp = Some(text),
+            b"tEXt" => plain.push((keyword, text)),
+            b"zTXt" => compressed.push((keyword, text)),
+            _ => international.push((keyword, text)),
+        }
+    }
+    // Preserve the previous decoder's grouping of text entries by chunk type.
+    meta.text.extend(plain);
+    meta.text.extend(compressed);
+    meta.text.extend(international);
+    Ok(())
+}
+
+/// No input-sized allocation until its decoded size fits. Inflation uses a
+/// fixed scratch buffer and checks each batch before growing the output.
+fn bounded_text(input: &[u8], compressed: bool, latin1: bool, limit: usize) -> Result<Option<String>, CodecError> {
+    let mut output = Vec::new();
+    let mut append = |bytes: &[u8]| -> Result<(), CodecError> {
+        let added = if latin1 { latin1_len(bytes).ok_or_else(text_limit)? } else { bytes.len() };
+        if output.len().checked_add(added).is_none_or(|len| len > limit) {
+            return Err(text_limit());
+        }
+        output.try_reserve(added).map_err(|_| text_limit())?;
+        if latin1 {
+            // Every Latin-1 code point fits in at most two UTF-8 bytes.
+            let mut utf8 = [0; 2];
+            for &b in bytes {
+                output.extend_from_slice(char::from(b).encode_utf8(&mut utf8).as_bytes());
+            }
+        } else {
+            output.extend_from_slice(bytes);
+        }
+        Ok(())
+    };
+    if compressed {
+        let mut decoder = flate2::Decompress::new(true);
+        let mut scratch = [0; 8192];
+        loop {
+            let start_in = decoder.total_in();
+            let start_out = decoder.total_out();
+            let Some(tail) = usize::try_from(start_in).ok().and_then(|at| input.get(at..)) else { return Ok(None) };
+            let Ok(status) = decoder.decompress(tail, &mut scratch, flate2::FlushDecompress::None) else { return Ok(None) };
+            let Some(batch) = usize::try_from(decoder.total_out() - start_out).ok().and_then(|len| scratch.get(..len)) else { return Ok(None) };
+            append(batch)?;
+            if status == flate2::Status::StreamEnd {
+                break;
+            }
+            if start_in == decoder.total_in() && start_out == decoder.total_out() {
+                return Ok(None); // Truncated stream: never keep partial text.
+            }
+        }
+    } else {
+        if !latin1 && std::str::from_utf8(input).is_err() {
+            return Ok(None);
+        }
+        append(input)?;
+    }
+    Ok(String::from_utf8(output).ok())
 }
 
 fn is_latin1_keyword(k: &str) -> bool {
@@ -137,7 +263,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     if opts.embed_metadata {
         if let Some(exif) = &img.meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::orientation::upright_exif(exif).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, img.meta.dpi).into_owned().into());
         }
         if let Some((x, y)) = img.meta.dpi
             && x > 0.0
@@ -170,7 +296,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
                 res.map_err(|e| CodecError::encode(F, e))?;
             }
             if let Some(xmp) = &img.meta.xmp {
-                encoder.add_itxt_chunk(XMP_KEYWORD.into(), crate::orientation::upright_xmp(xmp).into_owned()).map_err(|e| CodecError::encode(F, e))?;
+                encoder
+                    .add_itxt_chunk(XMP_KEYWORD.into(), crate::resolution::export_xmp(xmp, img.meta.dpi).into_owned())
+                    .map_err(|e| CodecError::encode(F, e))?;
             }
         }
         let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
@@ -235,11 +363,17 @@ fn parallel_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompress
         return None;
     }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32);
-    if threads < 2 {
-        return None;
-    }
+    banded_idat(data, w, h, bpp, level, threads)
+}
+
+/// Filtered bytes per deflate band. The bands depend only on the image, never on the number of
+/// threads, so the same image and options give the same bytes whatever the machine's core count.
+const BAND_BYTES: usize = 512 << 10;
+
+/// [`parallel_idat`] on `threads` worker threads.
+fn banded_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression, threads: usize) -> Option<Vec<u8>> {
     let stride = w * bpp;
-    let band_rows = h.div_ceil(threads * 4).max(1);
+    let band_rows = (BAND_BYTES / stride.saturating_add(1)).max(1);
     let bands: Vec<(usize, usize)> = (0..h).step_by(band_rows).map(|y| (y, (y + band_rows).min(h))).collect();
     let lvl = match level {
         PngCompression::Fast => flate2::Compression::fast(),
@@ -249,7 +383,7 @@ fn parallel_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompress
     let next = std::sync::atomic::AtomicUsize::new(0);
     type Band = (usize, Vec<u8>, u32, usize);
     let mut parts: Vec<Band> = std::thread::scope(|sc| {
-        let workers: Vec<_> = (0..threads.min(bands.len()))
+        let workers: Vec<_> = (0..threads.min(bands.len()).max(1))
             .map(|_| {
                 sc.spawn(|| {
                     let mut out: Vec<Band> = Vec::new();
@@ -467,6 +601,28 @@ mod parallel_tests {
                 d.decompress_vec(&z, &mut back, flate2::FlushDecompress::Sync).unwrap();
                 assert!(back == data, "k {k} len {len} last {last}: {} of {len} bytes", back.len());
             }
+        }
+    }
+
+    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
+    /// (and the machine's own count, through `encode`) give the same stream.
+    #[test]
+    fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
+        let (w, h, bpp) = (1201usize, 1013usize, 4usize);
+        let px: Vec<u8> =
+            (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
+        assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
+        for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
+            let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
+            for threads in [2, 7, 32] {
+                assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
+            }
+            assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
+            let img = Image::from_raw(w as u32, h as u32, ChannelLayout::Rgba, SampleType::U8, px.clone()).unwrap();
+            let opts = EncodeOptions { png_compression: level, ..Default::default() };
+            let png = crate::encode(&img, Format::Png, &opts).unwrap();
+            assert!(png.windows(one.len()).any(|c| c == one.as_slice()), "{level:?}: the file carries the stream");
+            assert_eq!(decode(&png, &Limits::default()).unwrap().data(), img.data());
         }
     }
 

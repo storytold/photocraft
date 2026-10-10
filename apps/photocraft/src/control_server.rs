@@ -5,7 +5,7 @@ use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use photocraft_automation::budgets::write_reply;
 use photocraft_automation::security::{
@@ -83,12 +83,14 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                 let id = msg.get("id").cloned().unwrap_or(Value::Null);
                 let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
-                let (req, rrx) = ControlRequest::new(method, params);
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let (mut req, rrx) = ControlRequest::new(method, params);
+                req.deadline = Some(deadline);
                 if tx.send(req).is_err() {
                     break;
                 }
                 ctx.request_repaint();
-                let mut r = rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
+                let mut r = rrx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
                 if let Some(o) = r.as_object_mut() {
                     o.insert("id".into(), id);
                 }
@@ -124,6 +126,7 @@ mod tests {
         let handler = std::thread::spawn(move || {
             let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
             assert_eq!(first.method, "test.large");
+            assert!(first.deadline.is_some_and(|deadline| deadline > std::time::Instant::now()), "native requests carry their reply deadline");
             first.reply.send(json!({"ok": true, "result": "x".repeat(MAX_RESPONSE_BYTES)})).unwrap();
             let second = rx.recv_timeout(Duration::from_secs(5)).unwrap();
             assert_eq!(second.method, "test.small");

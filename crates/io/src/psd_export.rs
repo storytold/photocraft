@@ -51,6 +51,10 @@ struct Ex {
     next_id: u32,
     /// PSD ids assigned to document layers (kept from `psd_id` when unique).
     layer_ids: std::collections::HashMap<photocraft_doc::LayerId, u32>,
+    /// The generated `Txt2` object number of each type layer (a preserved `TySh` keeps its own
+    /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
+    /// written into the `TySh` data this export re-serializes.
+    text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -60,6 +64,8 @@ struct Ex {
     comps: Option<(Vec<photocraft_doc::LayerComp>, Option<photocraft_doc::LayerComp>)>,
     /// Smart objects: embedded files and filter caches for the global blocks.
     smart: SmartOut,
+    /// The document's patterns, which Pattern Fill layers are rendered from.
+    patterns: Vec<photocraft_doc::Pattern>,
 }
 
 /// How deep embedded documents are exported inside each other before a smart object is written
@@ -366,6 +372,29 @@ impl Ex {
         // Effects: the original lfx2 while the effects are unchanged (or
         // could not be decoded at all); otherwise regenerated.
         let fx = &l.effects;
+        for effect in &fx.items {
+            use photocraft_doc::effects::Effect;
+            let modes = match effect {
+                Effect::DropShadow(s) | Effect::InnerShadow(s) => [Some(s.common.blend), None],
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => [Some(g.common.blend), None],
+                Effect::Stroke(s) => [Some(s.common.blend), None],
+                Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => {
+                    [Some(common.blend), None]
+                }
+                Effect::Satin(s) => [Some(s.common.blend), None],
+                Effect::BevelEmboss(b) => [Some(b.highlight.blend), Some(b.shadow.blend)],
+            };
+            for mode in modes.into_iter().flatten() {
+                if !mode.has_psd_equivalent() {
+                    self.warnings.push(format!(
+                        "layer \"{}\", {}: {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                        l.name,
+                        effect.label(),
+                        mode.label()
+                    ));
+                }
+            }
+        }
         let lfx2 = match effects_unchanged(l) {
             Some(true) | None if fx.psd_raw.is_some() => fx.psd_raw.as_ref().map(|r| r.to_vec()),
             _ => (!fx.items.is_empty()).then(|| crate::effects_map::write_lfx2(fx.enabled, &fx.items)),
@@ -382,6 +411,13 @@ impl Ex {
             if b.data.len() % 2 == 1 && b.padding.is_none() {
                 b.data.push(0);
             }
+        }
+        if !l.blend.has_psd_equivalent() {
+            self.warnings.push(format!(
+                "layer \"{}\": {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                l.name,
+                l.blend.label()
+            ));
         }
         LayerRecord {
             rect,
@@ -437,12 +473,26 @@ impl Ex {
                     _ => adjust_map::Channels::Other,
                 };
                 let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
-                let keep = raw.iter().any(|(k, d)| adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a);
+                let keep = raw.iter().any(|(k, d)| {
+                    // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
+                    // It parses here, but Photoshop requires four-byte alignment, so repair
+                    // that legacy record on re-save rather than preserving the broken bytes.
+                    let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
+                    !legacy_phfl && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
+                });
                 if !keep {
                     raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd");
                     let w = adjust_map::write(a);
                     if w.is_empty() {
                         self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
+                    }
+                    // Photoshop's `clrL` descriptor has no interpolation setting, so the
+                    // reopened layer renders trilinear.
+                    if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
+                        self.warnings.push(format!(
+                            "layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)",
+                            l.name
+                        ));
                     }
                     regenerated.extend(w);
                 }
@@ -461,7 +511,16 @@ impl Ex {
                 let src = t.psd_raw.as_ref().or(generated.as_ref());
                 // Character/paragraph style sheets from the document's styles.
                 let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
-                set_principal(&mut raw, &[b"TySh"], styled.as_ref().or(src));
+                // `TextIndex` names the layer's object in the document's `Txt2` (where the
+                // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
+                // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
+                // Duplicate or out-of-range file TextIndex values must be renumbered,
+                // however, even when no style sheet needed rebuilding: otherwise two
+                // layers may read the same Txt2 object and acquire the wrong kerning.
+                let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
+                let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
+                let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
+                set_principal(&mut raw, &[b"TySh"], fresh.as_ref().or(styled.as_ref().or(src)));
                 if !raw.iter().any(|(k, _)| k == b"TySh") {
                     self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
                 }
@@ -749,7 +808,9 @@ impl Ex {
             return c.surface.clone();
         }
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &[]);
+        // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
+        // fill must be rendered from the document's patterns, not left transparent (#1907).
+        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
         let mut s = Surface::new(self.fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
         s.write_region(self.canvas, &vals);
@@ -1105,6 +1166,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         fmt,
         dpi: doc.resolution_dpi,
         text_styles: doc.text_styles.clone(),
+        text_index: Default::default(),
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, sample, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
@@ -1117,6 +1179,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         guides: doc.guides.clone(),
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
+        patterns: doc.patterns.clone(),
     };
     if big && !opts.force_psb {
         ex.warnings.push("document exceeds 30000 px; written as PSB".into());
@@ -1149,6 +1212,29 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
             }
         }
         ex.next_id = used.iter().copied().max().unwrap_or(0);
+        // Text objects' number in the generated `Txt2` (#1348): a preserved `TySh` keeps the
+        // number it already names — its `Txt2` object must sit at that slot for `apply_txt2` —
+        // and new layers get the next free number.
+        let mut used_txt = std::collections::HashSet::new();
+        let mut next_txt = 0i32;
+        ex.text_index = Default::default();
+        for (_, _, l) in &walk {
+            let LayerContent::Text(t) = &l.content else {
+                continue;
+            };
+            let kept = t.psd_raw.as_deref().and_then(|d| photocraft_text::psd::text_index(d));
+            let index = match kept {
+                Some(i) if used_txt.insert(i) => i,
+                _ => {
+                    while used_txt.contains(&next_txt) {
+                        next_txt += 1;
+                    }
+                    used_txt.insert(next_txt);
+                    next_txt
+                }
+            };
+            ex.text_index.insert(l.id, index);
+        }
     }
     ex.emit(&doc.layers);
 
@@ -1257,21 +1343,48 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
     if let Some(groups) = link_group_resource(&doc.layers) {
         resources.push(ImageResource::new(ids::LAYER_GROUP_INFO, groups));
     }
+    // The pixels are saved as they are shown: never let a reader rotate them again. The XMP and
+    // EXIF resolution follow the ResolutionInfo resource, so no copy contradicts it (#1691).
+    let ppi = Some((doc.resolution_dpi, doc.resolution_dpi)).filter(|d| d.0 > 0.0);
     if let Some(x) = &doc.metadata.xmp {
-        // The pixels are saved as they are shown: never let a reader rotate them again.
-        resources.push(ImageResource::new(ids::XMP, photocraft_codecs::upright_xmp(x).as_bytes().to_vec()));
+        resources.push(ImageResource::new(ids::XMP, photocraft_codecs::export_xmp(x, ppi).as_bytes().to_vec()));
     }
     if let Some(e) = &doc.metadata.exif {
-        resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::upright_exif(e).into_owned()));
+        resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::export_exif(e, ppi).into_owned()));
     }
     let mut global_blocks = Vec::new();
-    for (sig, key, data) in &ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc))) {
-        let mut tb = TaggedBlock::new(*key, data.to_vec());
-        tb.signature = *sig;
+    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc)));
+    // The type layers' `Txt2` is regenerated (the auto-kern modes live there, and a preserved
+    // block goes stale as text is edited): one object per `TextIndex`, at the slot each layer's
+    // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block
+    // it replaces is handed over so a kept object keeps everything the file held beyond its text
+    // and style runs (Photoshop's `/21 /1` glyph pen positions, …).
+    let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = doc
+        .walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), t)),
+            _ => None,
+        })
+        .collect();
+    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
+    let txt2 = (!text_layers.is_empty()).then(|| photocraft_text::psd::build_txt2(&text_layers, previous.as_deref()));
+    for (sig, key, data) in preserved {
+        if txt2.is_some() && key == *b"Txt2" {
+            continue;
+        }
+        let mut tb = TaggedBlock::new(key, data.to_vec());
+        tb.signature = sig;
         // Photoshop pads document-level (global) blocks to a multiple of 4, and readers such as
         // psd-tools step to the next block that way: an even pad after `CAI ` (77 bytes)
         // misaligned every block after it (#200).
         tb.padding = Some(vec![0; (4 - data.len() % 4) % 4]);
+        global_blocks.push(tb);
+    }
+    if let Some(txt2) = txt2 {
+        let mut tb = TaggedBlock::new(*b"Txt2", txt2.clone());
+        tb.signature = *b"8BIM";
+        tb.padding = Some(vec![0; (4 - txt2.len() % 4) % 4]);
         global_blocks.push(tb);
     }
     let comps_resource = ex.comps.is_some().then(|| crate::comps_map::write_comps_resource(doc));
@@ -1367,6 +1480,45 @@ mod tests {
 
     fn document(width: u32, height: u32) -> Document {
         Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
+    }
+
+    #[test]
+    fn photo_filter_psd_is_four_byte_aligned_and_round_trips() {
+        let color = [60000u16, 30000, 0].map(|x| x as f32 / 65535.0);
+        let adjustment = photocraft_doc::Adjustment::PhotoFilter { color, density: 0.14, preserve_luminosity: true };
+        let mut doc =
+            Document::with_background("Photo Filter PSD", photocraft_geom::Size::new(32, 24), ColorMode::Rgb, SampleType::U8, photocraft_doc::Color::WHITE);
+        let mut layer = Layer::new("Warming Filter", LayerContent::Adjustment(adjustment.clone()));
+        doc.layers.push(layer.clone());
+
+        let assert_phfl = |file: &PsdFile| {
+            let records = &file.layer_info.as_ref().unwrap().layers;
+            let data =
+                records.iter().flat_map(|r| r.blocks.iter()).find(|b| b.key == *b"phfl").map(|b| b.data.as_slice()).expect("Photo Filter adjustment data");
+            assert_eq!(data.len(), 20, "PSD layer block length includes four-byte padding");
+            assert_eq!(&data[0..2], &[0, 2], "version 2 RGB Photo Filter");
+            assert_eq!(&data[17..], &[0, 0, 0], "three padding bytes after the 17-byte payload");
+        };
+
+        let exported = document_to_psd(&doc);
+        assert_phfl(&exported);
+        let encoded = exported.to_bytes().unwrap();
+        let parsed = PsdFile::from_bytes(&encoded).unwrap();
+        assert_phfl(&parsed);
+        let (restored, _) = crate::psd_import::psd_to_document(&parsed);
+        assert!(restored.layers.iter().any(|l| l.content == LayerContent::Adjustment(adjustment.clone())));
+
+        // Importing a legacy 18-byte block must still work; saving it again should repair it
+        // even when the adjustment values have not changed (normally raw blocks are reused).
+        let mut legacy = crate::adjust_map::write(&adjustment)[0].1.clone();
+        legacy.truncate(18);
+        layer.psd_blocks = vec![(*b"phfl", std::sync::Arc::new(legacy))];
+        doc.layers.pop();
+        doc.layers.push(layer);
+        let repaired = document_to_psd(&doc);
+        assert_phfl(&repaired);
+        let repaired_bytes = repaired.to_bytes().unwrap();
+        assert_phfl(&PsdFile::from_bytes(&repaired_bytes).unwrap());
     }
 
     #[test]

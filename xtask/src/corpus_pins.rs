@@ -26,6 +26,18 @@ pub const PILLOW_HEIF_COMMIT: &str = "b16be1196dfa465a342d68894696e685ca3655cb";
 /// https://github.com/AcademySoftwareFoundation/openexr (BSD-3-Clause): `src/test/bin/test_images`
 /// at the v3.5.2 tag (2026-10-03).
 pub const OPENEXR_COMMIT: &str = "69b2604fc76e370615438bdc8d2cd95b9349c12e";
+/// https://github.com/samuel-etver/vector-art (CC0-1.0): `simple/`, four Affinity 3 `.af` files and
+/// Designer `.afdesign` files (main, 2026-04-22).
+pub const VECTOR_ART_COMMIT: &str = "255f8add3c8f0740196e22bd59502b811b532f0b";
+/// https://github.com/NickBeeuwsaert/AFDesignLoad (MIT): `testDesigns/`, purpose-made Designer files.
+pub const AFDESIGNLOAD_COMMIT: &str = "a18dd50a7079fb861a28835eeefa0d015f03f4a1";
+/// https://github.com/Jac21/Branding (MIT): Designer logos with artboards and placed images.
+pub const JAC21_BRANDING_COMMIT: &str = "57ae3f45bf4637f6927c0b07de25b922c55f944f";
+/// https://github.com/eviltwo/AssetStoreTemplate (MIT): an Affinity template with artboards.
+pub const ASSET_STORE_TEMPLATE_COMMIT: &str = "f671981ee89d15526285b3cc87b4393d3defe644";
+/// https://github.com/satoshoe-dev/affinity-samples (CC0-1.0): purpose-made Affinity 3 documents
+/// and exported PNG references for the gaps tracked in #1606.
+pub const AFFINITY_SAMPLES_COMMIT: &str = "96aca6bd86bbe7a677f1cf0630bd832d23943be8";
 /// PngSuite (public domain), a fixed release archive.
 pub const PNGSUITE_URL: &str = "http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz";
 
@@ -163,5 +175,82 @@ The `*.deep.exr` files of https://github.com/AcademySoftwareFoundation/openexr/t
     },
 };
 
+/// `corpus/affinity`: public Affinity documents saved by Affinity 1.x to 3.x, chosen for having no
+/// personal paths in their metadata. Each embeds Affinity's own render of itself (its thumbnail),
+/// the oracle `photocraft-io`'s corpus test compares the imported document against. The manifest
+/// selects the files.
+pub const AFFINITY: PinnedCorpus = PinnedCorpus {
+    name: "affinity",
+    dest: "affinity",
+    upstreams: &[
+        Upstream {
+            prefix: "vector-art/",
+            repo: "samuel-etver/vector-art",
+            commit: VECTOR_ART_COMMIT,
+            subdir: "simple",
+            extras: &[("LICENSE", "vector-art/LICENSE")],
+        },
+        Upstream {
+            prefix: "afdesignload/",
+            repo: "NickBeeuwsaert/AFDesignLoad",
+            commit: AFDESIGNLOAD_COMMIT,
+            subdir: "testDesigns",
+            extras: &[("LICENSE", "afdesignload/LICENSE")],
+        },
+        Upstream {
+            prefix: "jac21/",
+            repo: "Jac21/Branding",
+            commit: JAC21_BRANDING_COMMIT,
+            subdir: "Logos/JC/DesignerFiles/Affinity",
+            extras: &[("LICENSE.md", "jac21/LICENSE.md")],
+        },
+        Upstream {
+            prefix: "asset-store-template/",
+            repo: "eviltwo/AssetStoreTemplate",
+            commit: ASSET_STORE_TEMPLATE_COMMIT,
+            subdir: "AssetStoreTemplate",
+            extras: &[("LICENSE", "asset-store-template/LICENSE")],
+        },
+        Upstream {
+            prefix: "affinity-samples/",
+            repo: "satoshoe-dev/affinity-samples",
+            commit: AFFINITY_SAMPLES_COMMIT,
+            subdir: "",
+            extras: &[("LICENSE", "affinity-samples/LICENSE"), ("README.md", "affinity-samples/README.md")],
+        },
+    ],
+    manifest: "xtask/affinity-corpus.sha256",
+    exts: &["af", "afdesign", "aftemplate", "png"],
+    subset: true,
+    sources_md: |c| {
+        format!(
+            "# Affinity test corpus\n\nPublic Affinity documents, unmodified, with their licences next to them: \
+             https://github.com/samuel-etver/vector-art/tree/{VECTOR_ART_COMMIT}/simple (`vector-art/`, CC0-1.0), \
+             https://github.com/NickBeeuwsaert/AFDesignLoad/tree/{AFDESIGNLOAD_COMMIT}/testDesigns (`afdesignload/`, MIT, Copyright (c) 2015 Nick Beeuwsaert), \
+             https://github.com/Jac21/Branding/tree/{JAC21_BRANDING_COMMIT}/Logos/JC/DesignerFiles/Affinity (`jac21/`, MIT, Copyright (c) 2018 Jeremy Cantu) and \
+             https://github.com/eviltwo/AssetStoreTemplate/tree/{ASSET_STORE_TEMPLATE_COMMIT}/AssetStoreTemplate (`asset-store-template/`, MIT) and \
+             https://github.com/satoshoe-dev/affinity-samples/tree/{AFFINITY_SAMPLES_COMMIT} (`affinity-samples/`, CC0-1.0; includes PNG references for issue #1606). \
+             Selected by and sha256-verified against `{}` by `cargo xtask corpus --affinity`. Gitignored; never commit these files.\n",
+            c.manifest
+        )
+    },
+};
 /// Every pinned corpus, in fetch order.
-pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF, &EXR];
+pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF, &EXR, &AFFINITY];
+
+/// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
+/// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
+/// `photocraft-raw` supports, plus the packed-ORF known-unsupported oracle. Fetched as single
+/// files (the server 301-redirects `/data/` to `/download/`), verified against
+/// `xtask/pixls.sha256`.
+pub const PIXLS_BASE: &str = "https://raw.pixls.us/data/";
+/// (url path, file name in `corpus/pixls`)
+pub const PIXLS_FILES: &[(&str, &str)] = &[
+    ("Canon/PowerShot%20SX50%20HS/IMG_4059.CR2", "IMG_4059.CR2"),
+    ("Canon/PowerShot%20SX50%20HS/CRW_4061.DNG", "CRW_4061.DNG"),
+    ("Nikon/D3/JD1_8203.NEF", "JD1_8203.NEF"),
+    ("Sony/DSC-RX0/DSC00009.ARW", "DSC00009.ARW"),
+    ("Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
+    ("Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
+    ("Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
+];

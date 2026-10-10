@@ -19,7 +19,7 @@ is based on each profile's own declaration, not inferred from the repository's p
 These profiles provide independent camera colour calibration. They **do not guarantee the camera's
 JPEG appearance, Picture Control processing, or Adobe Camera Raw's default rendering**.
 A listed camera has a redistributable calibration profile; this does not mean that its RAW format
-or every compression mode can be decoded. For example, CR3 and RAF decoding remain separate work.
+or every compression mode can be decoded. For example, CR3 and compressed RAF decoding remain separate work.
 The web build does not currently include this native profile bundle.
 
 Matching uses the model identifier stored in the profile, with normalization of case, spaces,

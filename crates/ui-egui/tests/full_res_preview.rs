@@ -87,7 +87,10 @@ fn row(h: &mut Harness) -> Vec<i32> {
         let app = h.state();
         photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect)
     };
-    let img = h.render().expect("render");
+    // egui_kittest waits 10 s for the GPU. Windows CI renders on WARP, a software rasterizer,
+    // where the first full-resolution composite of this 6 MP document can take longer; the
+    // submitted work still finishes, so wait for it again instead of failing.
+    let img = (0..3).find_map(|_| h.render().ok()).expect("render");
     let (x0, y) = (canvas.min.x as u32 + 20, canvas.min.y as u32 + 40);
     (x0..x0 + 300)
         .map(|x| {

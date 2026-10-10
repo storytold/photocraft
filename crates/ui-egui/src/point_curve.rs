@@ -163,6 +163,9 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     // Arrows edit this graph rather than navigating to another widget on the next frame.
     ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
     // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: ×10).
+    if resp.has_focus() {
+        crate::shortcut_dispatch::claim_delete_keys(ui.ctx(), resp.id);
+    }
     if resp.has_focus()
         && let Some(i) = state.selected.filter(|i| *i < pts.len())
     {

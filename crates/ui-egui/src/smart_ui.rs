@@ -25,7 +25,7 @@ pub fn thumb_badge(ui: &egui::Ui, l: &Layer, thumb: Rect) {
 fn filter_label(f: &photocraft_doc::SmartFilter) -> String {
     let command = f.command.as_str();
     if command == photocraft_engine::smart_cmds::UNSUPPORTED_FILTER {
-        let name = f.params.get("name").and_then(Value::as_str).unwrap_or("Photoshop filter");
+        let name = f.params.get("name").and_then(Value::as_str).unwrap_or("Smart filter");
         return format!("{} (kept, not editable)", name.trim_end_matches("...").trim_end_matches('…'));
     }
     photocraft_engine::commands::find(command)

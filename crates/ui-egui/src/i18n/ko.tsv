@@ -13,6 +13,8 @@
 	Layer	레이어
 	Type	문자
 	Select	선택
+	Selected	선택됨
+	Scope	범위
 	Filter	필터
 	View	보기
 	Window	창
@@ -648,7 +650,11 @@
 	Pro Medium Gray Theme	프로 중간 회색 테마
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
+	Adwaita Light Theme	Adwaita 밝은 테마
+	Adwaita Dark Theme	Adwaita 어두운 테마
 	Classic Theme	클래식 테마
+	Solarized dark	Solarized 어두움
+	Solarized Dark Theme	Solarized 어두운 테마
 	Next Theme	다음 테마
 	Actions	액션
 	Brush Settings	브러시 설정
@@ -732,7 +738,7 @@
 	All Caps	모두 대문자
 	All Slices	모든 분할 영역
 	All User Slices	모든 사용자 분할 영역
-	All shortcuts reset to Photoshop defaults.	모든 단축키를 Photoshop 기본값으로 초기화했습니다.
+	All shortcuts reset to PhotoCraft defaults.	모든 단축키를 PhotoCraft 기본값으로 초기화했습니다.
 	Alt	Alt
 	Alt-click to define a source point to clone from	Alt 키를 누른 채 클릭하여 복제 원본 지점 지정
 	Always use pressure for opacity	불투명도에 항상 필압 사용
@@ -1051,7 +1057,7 @@
 	Ignore All	모두 무시
 	Image Size	이미지 크기
 	Import Brushes…	브러시 가져오기…
-	Import Photoshop brushes (.abr)	Photoshop 브러시 가져오기(.abr)
+	Import brushes (.abr)	브러시 가져오기(.abr)
 	Import Presets	사전 설정 가져오기
 	Imported	가져옴
 	Indent First	첫 줄 들여쓰기
@@ -1101,7 +1107,6 @@
 	Liquify is not open	픽셀 유동화가 열려 있지 않습니다
 	Load	불러오기
 	Load 3D LUT…	3D LUT 불러오기…
-	Load Photoshop brushes (.abr)	Photoshop 브러시 불러오기(.abr)
 	Load channel as selection	채널을 선택 영역으로 불러오기
 	Load…	불러오기…
 	Localized Color Clusters	지역화된 색상 군집
@@ -1277,6 +1282,12 @@
 	Rename…	이름 바꾸기…
 	Resample	리샘플링
 	Reset All to Defaults	모두 기본값으로 초기화
+	Import Shortcuts…	단축키 가져오기…
+	Load a keyboard shortcut set saved as .kys	.kys로 저장된 키보드 단축키 세트 불러오기
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file}에서 단축키 {n}개를 가져왔습니다. 유지하려면 확인을 클릭하세요.
+	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
+	Keyboard shortcuts imported	키보드 단축키를 가져왔습니다
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	키보드 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 재설정으로 되돌릴 수 있습니다.
 	Reset Section	섹션 초기화
 	Reset Transform	변형 초기화
 	Reset to defaults	기본값으로 초기화
@@ -1368,6 +1379,9 @@
 	Stroke	획
 	Stroke Catch-up	획 따라잡기
 	Stroke:	획:
+	Location	위치
+	Location:	위치:
+	Preserve Transparency	투명도 유지
 	Style	스타일
 	Style Options	스타일 옵션
 	Style Options…	스타일 옵션…
@@ -1446,6 +1460,10 @@
 	↑↓ navigate   {key} run   esc close	↑↓ 이동   {key} 실행   esc 닫기
 	Version {version}	버전 {version}
 	New Document	새 문서
+	Saved	저장됨
+	Save Preset…	사전 설정 저장…
+	Preset Name	사전 설정 이름
+	No saved presets yet.	저장된 사전 설정이 없습니다.
 	Error	오류
 	Command	명령
 	Adjustment layers have nothing to transform	조정 레이어에는 변형할 내용이 없습니다
@@ -1489,7 +1507,7 @@
 	Current Tool	현재 도구
 	Custom Shape Tool	사용자 정의 모양 도구
 	Cyans	사이안 계열
-	Default Photoshop Size	Photoshop 기본 크기
+	Default PhotoCraft Size	PhotoCraft 기본 크기
 	Delete Workspace	작업 영역 삭제
 	Diamond	다이아몬드
 	Dimensions:	치수:
@@ -1830,6 +1848,8 @@
 	Standard	표준
 	Studio	스튜디오
 	Studio light	스튜디오 밝게
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita 어둡게
 	Subdivisions	하위 분할
 	System	시스템
 	Text engine	텍스트 엔진
@@ -1879,6 +1899,7 @@
 	Collapse group  ({key}-click: all groups)	그룹 접기  ({key} 키를 누른 채 클릭: 모든 그룹)
 	Create new brush from the current settings	현재 설정으로 새 브러시 만들기
 	Create new brush from these settings	이 설정으로 새 브러시 만들기
+	Update the current brush with these settings	이 설정으로 현재 브러시 업데이트
 	Delete brush	브러시 삭제
 	Drag the arrow to set the angle, the dots to set the roundness	화살표를 드래그하여 각도를, 점을 드래그하여 원형률을 설정하세요
 	Expand	펼치기
@@ -1955,6 +1976,13 @@
 	Centre the gradient (offset 0, 0)	그레이디언트를 중앙에 배치(오프셋 0, 0)
 	The current gradient (pick one in Window › Gradients)	현재 그레이디언트(창 › 그레이디언트에서 선택)
 	Select a type layer to edit its character and paragraph settings.	문자 및 단락 설정을 편집하려면 문자 레이어를 선택하세요.
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	그라디언트 편집기
+	Gradient picker	그라디언트 선택기
+	Save As Preset	프리셋으로 저장
+	The gradient the Gradient tool paints with	그라디언트 도구가 칠하는 그라디언트입니다
+	Adds the current gradient to the Gradients panel	현재 그라디언트를 그라디언트 패널에 추가합니다
+	Gradient stops	그라디언트 스톱
 	Text color	텍스트 색상
 	Type Options	문자 옵션
 	Anti-aliasing method	앤티 앨리어스 방식
@@ -1971,6 +1999,8 @@
 	CPU (no GPU acceleration)	CPU(GPU 가속 없음)
 	DirectX 12	DirectX 12
 	GPU backend	GPU 백엔드
+	Linux display server	Linux 디스플레이 서버
+	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	태블릿 필압 사용
@@ -1982,6 +2012,9 @@
 	Cancelled {label}	{label} 작업을 취소했습니다
 	Esc to cancel	Esc 키로 취소
 	Opening {name}	{name} 여는 중
+	Saving {name}	{name} 저장 중
+	A save to {name} is still running; try again when it finishes	{name}에 저장하는 작업이 아직 진행 중입니다. 완료된 후 다시 시도하세요
+	{label} is writing the file and can no longer be cancelled	{label}: 파일을 쓰는 중이므로 더 이상 취소할 수 없습니다
 	Opening {name}…	{name} 여는 중…
 	Opening…	여는 중…
 	Reading…	읽는 중…
@@ -1995,8 +2028,11 @@
 	Floating point	부동 소수점
 	Use Global Light	전체 조명 사용
 	Native file drag-and-drop is unavailable	파일 드래그 앤 드롭을 사용할 수 없습니다
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나 `WAYLAND_DISPLAY= photocraft`로 XWayland에서 PhotoCraft를 실행하세요.
-	Use File › Open to open an image.	파일 › 열기에서 이미지를 여세요.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나, 파일 관리자에서 이미지를 복사한 뒤 {paste}(으)로 붙여넣으세요.
+	To drop files, start PhotoCraft under XWayland: `{command}`	파일을 끌어다 놓으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	또는 환경 설정 › 성능 › Linux 디스플레이 서버를 X11로 설정하면 PhotoCraft가 항상 XWayland에서 시작됩니다.
+	Edit › Paste	편집 › 붙여넣기
+	Use File › Open, or paste a copied image with {paste}.	파일 › 열기를 사용하거나, 복사한 이미지를 {paste}(으)로 붙여넣으세요.
 	Invalid {mode} profile	유효하지 않은 {mode} 프로파일
 	Unnamed {mode} profile	이름 없는 {mode} 프로파일
 	Show bounding box when dragging layer	레이어를 드래그할 때 테두리 상자 표시
@@ -2036,6 +2072,7 @@ cameraRaw	Color	색상
 	Patch Tool	패치 도구
 	Patch:	패치:
 	Lasso around an area, then drag the selection	올가미로 영역을 둘러싼 다음 선택 영역을 드래그하세요
+	Now drag the selection onto another area	이제 선택 영역을 다른 영역으로 드래그하세요
 
 # Warp grid presets merged on main in #388.
 	3 x 3	3 × 3
@@ -2751,6 +2788,22 @@ cameraRaw	Color	색상
 	Channels:	채널:
 	Knockout	녹아웃
 	Apply At Canvas Bounds	캔버스 경계에 효과 적용
+
+# Shared screen eyedropper and text Color Picker (#1128).
+	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
+	Color Picker (Fill Color)	색상 선택기 (채우기 색상)
+	Fill color	채우기 색상
+	Color Picker (Stroke Color)	색상 선택기 (획 색상)
+	Stroke color	획 색상
+	Pick screen color	화면 색상 선택
+	Sample a pixel anywhere on the screen	화면의 아무 픽셀에서 색상 추출
+	Click to pick · Esc to cancel	클릭하여 선택 · Esc로 취소
+	Pick a screen pixel or press Esc to cancel	화면 픽셀을 선택하거나 Esc를 눌러 취소
+	Scroll to zoom	스크롤하여 확대/축소
+	Show/Hide All Panels	모든 패널 표시/숨기기
+	Show/Hide Panels	패널 표시/숨기기
+	Could not open	열 수 없음
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: 경로가 올바른 유니코드가 아닙니다. 파일 이름을 바꾼 뒤 다시 여세요.
 	Good	좋음
 	Best	최적
 
@@ -2802,3 +2855,83 @@ fontWeight	Italic	기울임
 	Pattern Stamp Tool	패턴 스탬프 도구
 	Pattern Stamp	패턴 스탬프
 	Impressionist	인상파
+	Rotate View	보기 회전
+	Rotate View Tool	보기 회전 도구
+	Reset View	보기 재설정
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기를 회전합니다  ·  Shift는 15°로 제한
+
+# Painting symmetry presets.
+	Dual Axis	이중 축
+	Diagonal	대각선
+	Transform Symmetry	대칭 변형
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	포인트 샘플
+	3 by 3 Average	3 × 3 평균
+	5 by 5 Average	5 × 5 평균
+	11 by 11 Average	11 × 11 평균
+	31 by 31 Average	31 × 31 평균
+	51 by 51 Average	51 × 51 평균
+	101 by 101 Average	101 × 101 평균
+	Sample Size:	샘플 크기:
+	All Layers No Adjustments	모든 레이어(조정 제외)
+	Current & Below No Adjustments	현재 및 이하(조정 제외)
+	Show Sampling Ring	샘플링 링 표시
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다
+	Not a web colour: click for the nearest web colour	웹 색상이 아님: 클릭하면 가장 가까운 웹 색상으로 바뀝니다
+	Color to Alpha…	색상을 알파로…
+	Transparency Threshold	투명도 한계값
+	Opacity Threshold	불투명도 한계값
+	Rule of Thirds	삼등분 법칙
+	Golden Ratio	황금 비율
+	Golden Spiral	황금 나선
+	Auto Show Overlay	오버레이 자동 표시
+	Always Show Overlay	오버레이 항상 표시
+	Never Show Overlay	오버레이 표시 안 함
+	Cycle Overlay	오버레이 순환
+	Cycle Orientation	방향 순환
+	Set the overlay options for the Crop tool	자르기 도구의 오버레이 옵션 설정
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 클릭이 데스크톱으로 전달되었습니다. 데스크톱이 Alt 드래그로 창을 이동합니다. 창 이동 키를 Super로 바꾸거나 창 › 보조 키에서 Alt를 고정하세요.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	색상 피커 (레이어 스타일 색상)
+	Auto Hide Notifications	알림 자동 숨기기
+	Notification Duration (seconds)	알림 지속 시간(초)
+	Appearance Mode	화면 모드
+	Dark Theme	어두운 테마
+	Light Theme	밝은 테마
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	다음 화면 모드
+	Sync with system	시스템과 동기화
+	Active	활성
+	Color Picker (Solid Color)	색상 피커 (단색)
+	Straighten the image by drawing a line on it	이미지에 선을 그려 수평 맞추기
+	Set additional Crop options	추가 자르기 옵션 설정
+	Show Cropped Area	잘린 영역 표시
+	Enable Crop Shield	자르기 방패 사용
+	Match Canvas	캔버스와 일치
+	Auto Adjust Opacity	자동으로 불투명도 조정
+	Crop Shield color	자르기 방패 색상
+	Color Picker (Crop Shield Color)	색상 선택기 (자르기 방패 색상)
+	From Center	중앙에서
+	Link radii	반경 연결
+	Star Ratio:	별 비율:
+	Create Rectangle	사각형 만들기
+	Create Ellipse	타원 만들기
+	Create Triangle	삼각형 만들기
+	Create Polygon	다각형 만들기
+	Some brush presets could not be loaded	일부 브러시 사전 설정을 불러오지 못했습니다
+	Retry saving presets	사전 설정 저장 다시 시도
+	Brush preset changes are not saved: {error}	브러시 사전 설정 변경 내용이 저장되지 않았습니다: {error}
+	Keep this tab open to retain your brushes.	브러시를 유지하려면 이 탭을 열어 두세요.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	브라우저 저장소를 사용할 수 없어 브러시는 이 세션에서만 유지됩니다. 유지하려면 이 탭을 열어 두세요.
+	Saving brush presets… Keep this tab open until saving finishes.	브러시 사전 설정 저장 중… 저장이 끝날 때까지 이 탭을 열어 두세요.
+	Reflect	반사
+	Glow	광선
+	Negation	부정
+	XOR	XOR
+	Color Burn (Paint.NET)	색상 번 (Paint.NET)
+	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)

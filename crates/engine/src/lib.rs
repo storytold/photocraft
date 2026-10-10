@@ -22,11 +22,13 @@ pub mod camera_raw_auto_cmds;
 mod canvas_geom;
 pub mod channel_cmds;
 pub mod color_cmds;
+pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod comps_cmds;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;
+pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
 pub mod eraser_cmds;
@@ -39,10 +41,12 @@ pub mod filters_ext;
 pub mod float_cmds;
 mod frame_cmds;
 pub mod fx_view_cmds;
+pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod hidden_target;
+pub mod history_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
@@ -76,12 +80,14 @@ pub mod raw_profile_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
+pub mod sample_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
+pub mod solid_fill_cmds;
 pub mod stamp_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
@@ -96,6 +102,7 @@ pub mod type_styles_cmds;
 mod variables_cmds;
 pub mod vector_cmds;
 mod video_cmds;
+pub use video_cmds::render_video_with;
 pub mod vp_cmds;
 pub mod warp_cmds;
 pub mod web_cmds;
@@ -156,11 +163,13 @@ pub struct DocState {
     pub active_layer: Option<LayerId>,
     /// Every selected layer in the Layers panel (⌘/⇧-click), in selection order. Like
     /// `active_layer`, selecting is not a history step, but undo and redo restore the layers each
-    /// state targeted when it was created; see [`DocState::selected_layers`].
+    /// state targeted when the next step was taken; see [`DocState::selected_layers`].
     pub selected_layers: Vec<LayerId>,
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    /// An Affinity document (or its preview) must not acquire the native source as its Save path.
+    pub source_read_only: bool,
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
@@ -172,8 +181,8 @@ pub struct DocState {
     pub channel_view: channel_cmds::ChannelView,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
-    /// Painting symmetry axis made from the selected path (tool state, not document pixels).
-    pub symmetry_path: Option<symmetry_cmds::SymmetryAxis>,
+    /// Painting symmetry preset or sampled path (tool state, not document pixels).
+    pub symmetry: Option<symmetry_cmds::PaintingSymmetry>,
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
@@ -197,13 +206,14 @@ impl DocState {
             selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
+            source_read_only: false,
             revision: 1,
             saved_revision: 1,
             last_damage: None,
             coalesce: None,
             channel_view: Default::default(),
             isolated_layers: Vec::new(),
-            symmetry_path: None,
+            symmetry: None,
             fx_collapsed: Vec::new(),
             show_only: None,
             floating: None,
@@ -245,6 +255,10 @@ pub struct ToolState {
     /// The coalescing key of the running `tools.setBrush` gesture and the brush before it, so the
     /// gesture journals as one call ([`brush_cmds::coalesce_journal`]).
     pub brush_gesture: Option<(String, photocraft_paint::BrushSettings)>,
+    /// Name of the preset the current brush was last picked from. Kept across later edits (the
+    /// preset stays "the current brush" so `brush.presets.update` can overwrite it); cleared when
+    /// the brush is reset or the preset is gone.
+    pub current_preset: Option<String>,
 }
 
 impl Default for ToolState {
@@ -261,6 +275,7 @@ impl Default for ToolState {
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
+            current_preset: None,
         }
     }
 }
@@ -453,6 +468,9 @@ impl Session {
         let restrict = self.color_restrict;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
+        // Selecting layers is not a step, so the state this edit leaves behind targets what was
+        // selected just before it (#1356): undoing a stroke keeps the painted layer active.
+        let prior = st.layer_target();
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
@@ -463,10 +481,16 @@ impl Session {
         st.active_layer = active;
         fix_selection(st);
         channel_cmds::fix_view(st);
+        // An edit that changes no pixels (a selection, guides, a layer's name) leaves the canvas
+        // as it is; anything else recomposites the whole document unless the command reports
+        // its own damage after this. A new lasso selection on a large document used to cost a
+        // full recomposite (seconds on the CPU path, #1773).
+        let unchanged = layer_multi_cmds::same_pixels(&before, &st.doc);
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
+            st.history.set_current_layers(prior);
             st.history.record(label, before, layers);
             st.history.trim(&st.doc);
         } else {
@@ -474,7 +498,7 @@ impl Session {
         }
         st.coalesce = key;
         st.revision += 1;
-        st.last_damage = None;
+        st.last_damage = unchanged.then_some(photocraft_geom::Rect::EMPTY);
         Ok(r)
     }
 
@@ -497,6 +521,48 @@ impl Session {
         Ok(())
     }
 
+    /// Re-renders the pixels of type layers whose font arrived after they were drawn (the web
+    /// build fetches served fonts on demand, `photocraft_text::served`). The layers' model is
+    /// unchanged, so this is no history step and leaves a clean document clean. Unknown documents
+    /// and layers are skipped. A document a background job is computing from must not move under
+    /// it: its layers are returned, to try again later.
+    pub fn refresh_type_layers(&mut self, layers: &[(photocraft_doc::DocId, LayerId)]) -> Vec<(photocraft_doc::DocId, LayerId)> {
+        let mut busy = Vec::new();
+        let mut docs: Vec<photocraft_doc::DocId> = Vec::new();
+        for (d, _) in layers {
+            if !docs.contains(d) {
+                docs.push(*d);
+            }
+        }
+        for doc_id in docs {
+            let mine = layers.iter().filter(|(d, _)| *d == doc_id);
+            if self.job_on(doc_id).is_some() {
+                busy.extend(mine);
+                continue;
+            }
+            let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc_id) else { continue };
+            let snapshot = st.doc.clone();
+            let mut doc = (*snapshot).clone();
+            let mut changed = false;
+            for (_, id) in mine {
+                if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = doc.layer_mut(*id) {
+                    type_cmds::refresh(&snapshot, t);
+                    changed = true;
+                }
+            }
+            if changed {
+                let clean = st.saved_revision == st.revision;
+                st.doc = Arc::new(doc);
+                st.revision += 1;
+                if clean {
+                    st.saved_revision = st.revision;
+                }
+                st.last_damage = None;
+            }
+        }
+        busy
+    }
+
     pub fn undo(&mut self) -> bool {
         // A background job is computing from the current state: it must not move under it.
         if self.active_job().is_some() {
@@ -505,7 +571,11 @@ impl Session {
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
         match st.history.undo(st.doc.clone()) {
-            Some((d, layers)) => {
+            Some((mut d, layers)) => {
+                // Save As changes file identity outside history, just like the saved path.
+                if d.name != st.doc.name {
+                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
+                }
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
@@ -526,7 +596,10 @@ impl Session {
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
         match st.history.redo(st.doc.clone()) {
-            Some((d, layers)) => {
+            Some((mut d, layers)) => {
+                if d.name != st.doc.name {
+                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
+                }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
                 st.doc = d;
                 restore_target(st, layers);
@@ -577,4 +650,11 @@ pub(crate) fn fix_selection(st: &mut DocState) {
 }
 
 #[cfg(test)]
+mod fill_layer_mode_tests;
+#[cfg(test)]
+mod pattern_mode_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fx_mode_tests;

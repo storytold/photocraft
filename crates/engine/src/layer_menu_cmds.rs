@@ -5,7 +5,7 @@
 
 use photocraft_algo::selection::Region;
 use photocraft_color::{BlendMode, ColorMode};
-use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
+use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Effects, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -38,7 +38,11 @@ fn has_layer(s: &Session) -> Enabled {
 
 fn has_raster(s: &Session) -> Enabled {
     let l = active_layer(s)?;
-    if matches!(l.content, LayerContent::Raster(_)) { Ok(()) } else { Err(format!("active layer is a {} layer, not a pixel layer", l.content.kind_name())) }
+    if matches!(l.content, LayerContent::Raster(_)) {
+        Ok(())
+    } else {
+        Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()))
+    }
 }
 
 fn has_raster_with_mask(s: &Session) -> Enabled {
@@ -346,8 +350,15 @@ fn reveal_in_finder(s: &mut Session, p: &Value) -> Result<Value> {
     let SmartSource::Linked { path } = &sm.source else {
         return Err(other("embedded smart objects have no file to reveal"));
     };
+    reveal(path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// Show `path` in the platform file manager ([`reveal_command`] + [`spawn`]); `dry_run` answers
+/// the program and arguments instead (tests). Shared by the smart-object command and the document
+/// tab's Reveal in Finder (UI-217-6).
+pub(crate) fn reveal(path: &str, dry_run: bool) -> Result<Value> {
     let (program, args) = reveal_command(path);
-    if p.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+    if dry_run {
         return Ok(json!({"program": program, "args": args}));
     }
     spawn(program, &args)?;
@@ -601,6 +612,68 @@ fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Dragging a layer's fx onto another layer in the Layers panel: all its effects (or just the one
+/// at `effect`) move there, or with `copy` are copied. Moving all effects replaces the target's
+/// style, as pasting a layer style does; a single effect replaces the target's effect of the same
+/// kind, else is added.
+fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.layerStyle.transferEffects";
+    let id_of = |key: &str| p.get(key).and_then(Value::as_u64).map(LayerId).ok_or_else(|| bad(CMD, format!("`{key}` must be a layer id")));
+    let from = id_of("from")?;
+    let to = id_of("to")?;
+    if from == to {
+        return Err(bad(CMD, "the effects are already on that layer"));
+    }
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let index = match p.get("effect") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(CMD, "`effect` must be an effect index"))?),
+    };
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let src = d.doc.layer(from).ok_or(EngineError::NoLayer(from))?;
+    d.doc.layer(to).ok_or(EngineError::NoLayer(to))?;
+    let payload = match index {
+        Some(i) => {
+            let e = src.effects.items.get(i).cloned().ok_or_else(|| bad(CMD, format!("the layer has no effect {i}")))?;
+            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None }
+        }
+        None => Effects { psd_raw: None, ..src.effects.clone() },
+    };
+    if payload.items.is_empty() {
+        return Err(bad(CMD, "the layer has no layer effects"));
+    }
+    let label = if copy { "Copy Layer Effects" } else { "Move Layer Effects" };
+    s.edit(label, |doc, _| {
+        let dst = doc.layer_mut(to).ok_or(EngineError::NoLayer(to))?;
+        dst.effects.psd_raw = None;
+        if index.is_some() {
+            dst.effects.enabled = true;
+            for e in payload.items {
+                let same = dst.effects.items.iter().position(|x| std::mem::discriminant(x) == std::mem::discriminant(&e));
+                match same.and_then(|i| dst.effects.items.get_mut(i)) {
+                    Some(slot) => *slot = e,
+                    None => dst.effects.items.push(e),
+                }
+            }
+        } else {
+            dst.effects = payload;
+        }
+        if !copy {
+            let src = doc.layer_mut(from).ok_or(EngineError::NoLayer(from))?;
+            match index {
+                Some(i) if i < src.effects.items.len() => {
+                    src.effects.items.remove(i);
+                    src.effects.psd_raw = None;
+                }
+                Some(_) => {}
+                None => src.effects = Effects::default(),
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({"from": from.0, "to": to.0}))
+}
+
 /// Effects drawn beneath the layer (they become separate layers below it, unclipped).
 fn is_below(e: &Effect) -> bool {
     match e {
@@ -843,7 +916,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.blendingOptions",
             "Blending Options…",
             ["Layer", "Layer Style"],
-            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); Photoshop's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
+            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); PhotoCraft's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
             has_layer,
             blending_options
         ),
@@ -857,6 +930,14 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
         spec!("layer.layerStyle.scaleEffects", "Scale Effects…", ["Layer", "Layer Style"], r##"{"scale":1..1000=100}"##, has_effects, scale_effects),
+        spec!(
+            "layer.layerStyle.transferEffects",
+            "Move Layer Effects",
+            [],
+            r##"{"from":id,"to":id,"effect":index? (default: all effects),"copy":bool=false}"##,
+            has_doc,
+            transfer_effects
+        ),
         CommandSpec {
             id: "layer.layerContentOptions",
             label: "Layer Content Options…",

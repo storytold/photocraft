@@ -1,6 +1,6 @@
 //! Client for the desktop app's JSON-lines control protocol
 //! (`docs/control-protocol.md`): one JSON request per line, replies matched
-//! by `id`. Keeps one connection and reconnects on failure.
+//! by `id`. Keeps one connection and reconnects for the next call after a failure.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -50,58 +50,55 @@ impl BridgeClient {
     /// Call a control method; returns its `result` or the app's error.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, AutomationError> {
         let mut guard = self.conn.lock().await;
-        // One retry with a fresh connection (the app may have restarted).
-        for attempt in 0..2 {
-            if guard.is_none() {
-                let s = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
-                    .await
-                    .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
-                    .map_err(|e| {
-                        AutomationError::Bridge(format!(
-                            "cannot connect to {} ({e}); start the app with `photocraft --control <port>` and matching control credentials",
-                            self.addr
-                        ))
-                    })?;
-                let (r, w) = s.into_split();
-                let mut conn = (BufReader::new(r), w);
-                let auth_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let auth = tokio::time::timeout(Duration::from_secs(5), exchange(&mut conn, auth_id, AUTH_METHOD, &json!({"token": self.token})))
-                    .await
-                    .map_err(|_| AutomationError::Bridge("control authentication timed out".into()))??;
-                auth?;
-                *guard = Some(conn);
+        if guard.is_none() {
+            let s = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
+                .await
+                .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
+                .map_err(|e| {
+                    AutomationError::Bridge(format!(
+                        "cannot connect to {} ({e}); start the app with `photocraft --control <port>` and matching control credentials",
+                        self.addr
+                    ))
+                })?;
+            let (r, w) = s.into_split();
+            let mut conn = (BufReader::new(r), w);
+            let auth_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let auth = tokio::time::timeout(Duration::from_secs(5), exchange(&mut conn, auth_id, AUTH_METHOD, &json!({"token": self.token})))
+                .await
+                .map_err(|_| AutomationError::Bridge("control authentication timed out".into()))??;
+            auth?;
+            *guard = Some(conn);
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let Some(conn) = guard.as_mut() else {
+            return Err(AutomationError::Bridge(format!("not connected to {}", self.addr)));
+        };
+        match tokio::time::timeout(self.timeout, exchange(conn, id, method, &params)).await {
+            Ok(Ok(Err(error @ AutomationError::BadRequest(_)))) => {
+                // An oversized frame leaves unread bytes. Drop this connection and
+                // report the budget failure without retrying a possibly completed edit.
+                *guard = None;
+                Err(error)
             }
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            let Some(conn) = guard.as_mut() else {
-                return Err(AutomationError::Bridge(format!("not connected to {}", self.addr)));
-            };
-            match tokio::time::timeout(self.timeout, exchange(conn, id, method, &params)).await {
-                Ok(Ok(Err(error @ AutomationError::BadRequest(_)))) => {
-                    // An oversized frame leaves unread bytes. Drop this connection and
-                    // report the budget failure without retrying a possibly completed edit.
-                    *guard = None;
-                    return Err(error);
-                }
-                Ok(Ok(v)) => return v,
-                Ok(Err(e)) if attempt == 0 => {
-                    *guard = None;
-                    let _ = e;
-                }
-                Ok(Err(e)) => {
-                    *guard = None;
-                    return Err(e);
-                }
-                Err(_) => {
-                    *guard = None;
-                    return Err(AutomationError::Bridge(format!("`{method}` timed out after {:?}", self.timeout)));
-                }
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                // A failed write or lost reply does not prove the edit was not applied.
+                // Reconnect on the next call, but never resend this operation (#1007).
+                *guard = None;
+                Err(AutomationError::Bridge(format!("`{method}` failed: {e}; operation may have completed; inspect state before retrying")))
+            }
+            Err(_) => {
+                *guard = None;
+                Err(AutomationError::Bridge(format!(
+                    "`{method}` timed out after {:?}; operation may have completed; inspect state before retrying",
+                    self.timeout
+                )))
             }
         }
-        Err(AutomationError::Bridge("unreachable".into()))
     }
 }
 
-/// Outer `Err` = transport failure (retryable); inner = app-level result.
+/// Outer `Err` = transport failure with an uncertain outcome; inner = app-level result.
 async fn exchange(conn: &mut Conn, id: u64, method: &str, params: &Value) -> Result<Result<Value, AutomationError>, AutomationError> {
     let mut line = serde_json::to_string(&json!({"id": id, "method": method, "params": params})).map_err(|e| AutomationError::Other(e.to_string()))?;
     line.push('\n');
@@ -115,7 +112,7 @@ async fn exchange(conn: &mut Conn, id: u64, method: &str, params: &Value) -> Res
     loop {
         buf.clear();
         // Read raw bytes so truncation inside a UTF-8 character still reports the
-        // budget error instead of a retryable decoding/transport error.
+        // budget error instead of a decoding/transport error.
         let n = (&mut conn.0).take((MAX_RESPONSE_BYTES + 1) as u64).read_until(b'\n', &mut buf).await.map_err(io)?;
         if n > MAX_RESPONSE_BYTES {
             return Ok(Err(AutomationError::BadRequest(format!("bridge response exceeds {MAX_RESPONSE_BYTES} bytes; operation may have completed"))));

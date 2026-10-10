@@ -207,7 +207,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Vec<Sur
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
-        let doc = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?.document;
+        let doc = crate::file_cmds::import(&name, &bytes)?;
         frames.push(crate::file_cmds::flattened(&doc, fmt));
     }
     Ok(frames)
@@ -320,8 +320,20 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
 /// sequence (`{dir}/{stem}_NNNN.{format}`). Clean-room; no proprietary codec.
 fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg: "need `dir`".into() })?;
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
     std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
+    render_video_with(s, p, |name, bytes| crate::file_cmds::write_file(&format!("{dir}/{name}"), bytes), |_, _| true)
+}
+
+/// Render through a caller-owned writer. The writer receives one filename, never an ambient
+/// directory. Returning false from progress stops at a frame boundary; the caller owns cleanup.
+pub fn render_video_with(
+    s: &Session,
+    p: &Value,
+    mut write: impl FnMut(&str, &[u8]) -> Result<()>,
+    mut progress: impl FnMut(usize, usize) -> bool,
+) -> Result<Value> {
+    let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
@@ -331,6 +343,11 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
     let fmt = base.pixel_format();
     let bounds = base.bounds();
     let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+
+    let cancelled = || EngineError::Other("render cancelled".into());
+    if !progress(0, frames) {
+        return Err(cancelled());
+    }
 
     // Animated GIF: one file, every frame quantised to its own palette.
     if format.eq_ignore_ascii_case("gif") {
@@ -349,10 +366,18 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
             let pal = quantize::build_palette(&px, PaletteKind::Adaptive, 256, Forced::None).map_err(EngineError::Other)?;
             let idx = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, None);
             gframes.push(photocraft_codecs::web::GifFrame { indices: idx, palette: pal, transparent: None, delay_cs: delay });
+            // The final report follows encoding/writing, so total means the output exists.
+            if !progress((f + 1).min(frames.saturating_sub(1)), frames) {
+                return Err(cancelled());
+            }
         }
         let gif = photocraft_codecs::web::encode_gif_animated(w as u32, h as u32, &gframes, true).map_err(|e| EngineError::Other(e.to_string()))?;
-        let path = format!("{dir}/{stem}.gif");
-        crate::file_cmds::write_file(&path, &gif)?;
+        let name = format!("{stem}.gif");
+        write(&name, &gif)?;
+        if !progress(frames, frames) {
+            return Err(cancelled());
+        }
+        let path = format!("{dir}/{name}");
         return Ok(json!({"frames": frames, "file": path}));
     }
 
@@ -365,10 +390,13 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
             t.current = f;
         }
         sync(&mut doc);
-        let path = format!("{dir}/{stem}_{f:04}.{format}");
+        let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
-        crate::file_cmds::write_file(&path, &bytes)?;
+        write(&path, &bytes)?;
         files.push(path);
+        if !progress(f + 1, frames) {
+            return Err(cancelled());
+        }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
 }

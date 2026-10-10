@@ -15,6 +15,23 @@
 //! `phase` gives the colours (0 = R, 1 = G, 2 = B) of the 2×2 cell at the
 //! image origin, row major. Output is interleaved RGB. Work is split in row
 //! bands run in parallel.
+//!
+//! Other periodic CFAs (Fujifilm X-Trans' 6×6 pattern) go through
+//! [`demosaic_cfa`], a pattern-agnostic edge-directed interpolation:
+//!
+//! 1. Green at non-green sites: per axis (horizontal, vertical), the mean of
+//!    the green neighbours on that axis, weighted by the inverse square of the
+//!    local gradient along it (mean absolute difference of same-colour sample
+//!    pairs on the axis within a 5×5 window), as in gradient-weighted
+//!    interpolation (e.g. W. Lu, Y.-P. Tan, "Color filter array demosaicking:
+//!    new method and performance measures", IEEE TIP 12(10), 2003).
+//! 2. Red and blue everywhere from colour differences: the green estimate plus
+//!    the weighted mean of (sample − green) at the same-colour sites of the 5×5
+//!    window, weighted by inverse squared distance and by green similarity (so
+//!    differences are not carried across edges).
+//!
+//! The pattern breaks under mirror padding when its period is not 2, so this
+//! path reads only interior samples and drops taps outside the image.
 
 use crate::color::Mat3;
 use crate::par;
@@ -219,6 +236,195 @@ pub(crate) fn demosaic(p: &Padded, phase: [u8; 4], method: Demosaic, to_xyz: &Ma
     });
     out
 }
+
+/// A CFA repeat as seen from the plane's origin: colour of plane pixel
+/// (x, y) is `colors[(y % h) * w + x % w]`.
+#[derive(Debug, Clone)]
+pub(crate) struct Pattern {
+    pub w: usize,
+    pub h: usize,
+    pub colors: Vec<u8>,
+}
+
+impl Pattern {
+    /// The repeat of `cfa` starting at data coordinates (`x0`, `y0`).
+    pub fn of(cfa: &crate::sensor::Cfa, x0: usize, y0: usize) -> Self {
+        let (w, h) = (cfa.width.clamp(1, 16), cfa.height.clamp(1, 16));
+        Pattern { w, h, colors: (0..w * h).map(|i| cfa.color(x0 + i % w, y0 + i / w).min(2)).collect() }
+    }
+
+    fn at(&self, x: isize, y: isize) -> u8 {
+        let (w, h) = (self.w.max(1) as isize, self.h.max(1) as isize);
+        self.colors.get((y.rem_euclid(h) * w + x.rem_euclid(w)) as usize).copied().unwrap_or(1)
+    }
+}
+
+/// Tap radius of the generic demosaic (a 5×5 window).
+const RADIUS: isize = 2;
+
+type Off = (isize, isize);
+
+/// One interpolation axis at a non-green site.
+#[derive(Default)]
+struct Axis {
+    /// Green neighbours at distance 1 on the axis.
+    near: Vec<Off>,
+    /// Same-colour sample pairs along the axis (a, b, 1 / distance).
+    pairs: Vec<(Off, Off, f32)>,
+}
+
+/// The taps of one CFA phase.
+struct Taps {
+    own: u8,
+    axes: [Axis; 2],
+    /// Greens of the 3×3 (or 5×5) window, when no axis has a green neighbour.
+    greens: Vec<Off>,
+    /// Per colour, its sites in the window with weight 1 / distance².
+    sites: [Vec<(Off, f32)>; 3],
+}
+
+fn phase_taps(pat: &Pattern, px: isize, py: isize) -> Taps {
+    let col = |dx: isize, dy: isize| pat.at(px + dx, py + dy);
+    let window: Vec<Off> = (-RADIUS..=RADIUS).flat_map(|dy| (-RADIUS..=RADIUS).map(move |dx| (dx, dy))).collect();
+    let axes = [(1isize, 0isize), (0, 1)].map(|(ax, ay)| {
+        let near = [(ax, ay), (-ax, -ay)].into_iter().filter(|&(dx, dy)| col(dx, dy) == 1).collect();
+        let mut pairs = Vec::new();
+        for &(dx, dy) in &window {
+            // Pairs on the axis line or the lines next to it.
+            if (ax == 1 && dy.abs() > 1) || (ay == 1 && dx.abs() > 1) {
+                continue;
+            }
+            for k in 1..=2 {
+                let (bx, by) = (dx + k * ax, dy + k * ay);
+                if bx.abs() <= RADIUS && by.abs() <= RADIUS && col(dx, dy) == col(bx, by) {
+                    pairs.push(((dx, dy), (bx, by), 1.0 / k as f32));
+                }
+            }
+        }
+        Axis { near, pairs }
+    });
+    let ring = |r: isize| -> Vec<Off> {
+        window.iter().copied().filter(|&(dx, dy)| dx.abs() <= r && dy.abs() <= r && (dx, dy) != (0, 0) && col(dx, dy) == 1).collect()
+    };
+    let greens = Some(ring(1)).filter(|g| !g.is_empty()).unwrap_or_else(|| ring(RADIUS));
+    let sites = [0u8, 1, 2].map(|c| {
+        window.iter().filter(|&&(dx, dy)| (dx, dy) != (0, 0) && col(dx, dy) == c).map(|&(dx, dy)| ((dx, dy), 1.0 / (dx * dx + dy * dy) as f32)).collect()
+    });
+    Taps { own: col(0, 0), axes, greens, sites }
+}
+
+/// Demosaics a padded plane with any periodic CFA (see the module docs) into
+/// interleaved RGB. There is one algorithm for every [`Demosaic`] choice:
+/// without the edge-directed weights it is no faster and leaves zipper
+/// artefacts along every edge of an X-Trans image.
+pub(crate) fn demosaic_cfa(p: &Padded, pat: &Pattern) -> Vec<f32> {
+    let (w, h, s) = (p.w, p.h, p.stride);
+    let mut out = vec![0.0f32; w * h * 3];
+    if w == 0 || h == 0 || pat.w == 0 || pat.h == 0 || pat.colors.len() < pat.w * pat.h || p.data.len() < s * (h + 2 * PAD) {
+        return out;
+    }
+    let taps: Vec<Taps> = (0..pat.w * pat.h).map(|i| phase_taps(pat, (i % pat.w) as isize, (i / pat.w) as isize)).collect();
+    let tap_at = |x: usize, y: usize| &taps[(y % pat.h) * pat.w + x % pat.w];
+    let d = &p.data;
+    // Sample at (x + dx, y + dy), or None outside the image.
+    let get = |plane: &[f32], stride: usize, pad: usize, x: usize, y: usize, (dx, dy): Off| -> Option<f32> {
+        let (xx, yy) = (x.checked_add_signed(dx)?, y.checked_add_signed(dy)?);
+        (xx < w && yy < h).then(|| plane.get((yy + pad) * stride + pad + xx).copied()).flatten()
+    };
+    let raw = |x: usize, y: usize, o: Off| get(d, s, PAD, x, y, o);
+    let band = par::band_rows(w);
+
+    // 1. Green everywhere.
+    let mut green = vec![0.0f32; w * h];
+    par::chunks_mut(&mut green, band * w, |b, chunk| {
+        for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+            let y = b * band + r;
+            for (x, g) in row.iter_mut().enumerate() {
+                let t = tap_at(x, y);
+                let v = raw(x, y, (0, 0)).unwrap_or(0.0);
+                if t.own == 1 {
+                    *g = v;
+                    continue;
+                }
+                let (mut num, mut den) = (0.0f32, 0.0f32);
+                for a in &t.axes {
+                    let (mut sum, mut n) = (0.0f32, 0u32);
+                    for &o in &a.near {
+                        if let Some(v) = raw(x, y, o) {
+                            sum += v;
+                            n += 1;
+                        }
+                    }
+                    if n == 0 {
+                        continue;
+                    }
+                    let (mut grad, mut m) = (0.0f32, 0.0f32);
+                    for &(oa, ob, k) in &a.pairs {
+                        if let (Some(va), Some(vb)) = (raw(x, y, oa), raw(x, y, ob)) {
+                            grad += (va - vb).abs() * k;
+                            m += 1.0;
+                        }
+                    }
+                    let grad = if m > 0.0 { grad / m } else { 0.0 };
+                    let wt = 1.0 / ((GRAD_EPS + grad) * (GRAD_EPS + grad));
+                    num += wt * sum / n as f32;
+                    den += wt;
+                }
+                *g = if den > 0.0 {
+                    num / den
+                } else {
+                    let (mut sum, mut n) = (0.0f32, 0u32);
+                    for &o in &t.greens {
+                        if let Some(v) = raw(x, y, o) {
+                            sum += v;
+                            n += 1;
+                        }
+                    }
+                    if n > 0 { sum / n as f32 } else { v }
+                };
+            }
+        }
+    });
+
+    // 2. Red and blue from colour differences.
+    let gref = &green;
+    let gat = |x: usize, y: usize, o: Off| get(gref, w, 0, x, y, o);
+    par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
+        for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
+            let y = b * band + r;
+            for (x, o) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+                let t = tap_at(x, y);
+                let g = gref.get(y * w + x).copied().unwrap_or(0.0);
+                let v = raw(x, y, (0, 0)).unwrap_or(0.0);
+                o[1] = g;
+                for c in [0usize, 2] {
+                    if usize::from(t.own) == c {
+                        o[c] = v;
+                        continue;
+                    }
+                    let (mut num, mut den) = (0.0f32, 0.0f32);
+                    for &(off, base) in &t.sites[c] {
+                        if let (Some(vq), Some(gq)) = (raw(x, y, off), gat(x, y, off)) {
+                            let wt = base / (DIFF_EPS + (gq - g).abs());
+                            num += wt * (vq - gq);
+                            den += wt;
+                        }
+                    }
+                    o[c] = if den > 0.0 { g + num / den } else { g };
+                }
+                for v in o.iter_mut() {
+                    *v = v.clamp(0.0, 1.0);
+                }
+            }
+        }
+    });
+    out
+}
+
+/// Regularizes the inverse-gradient weights (normalized units, about 1/256 of full scale).
+const GRAD_EPS: f32 = 1.0 / 256.0;
+/// Regularizes the green-similarity weights of the colour differences.
+const DIFF_EPS: f32 = 1.0 / 64.0;
 
 /// CIE f(t) for L*a*b*, tabulated on 0..2 with linear interpolation.
 struct LabF {
@@ -486,6 +692,104 @@ mod tests {
             let t = i as f32 / 4000.0;
             assert!((l.f(t) - LabF::exact(t)).abs() < 2e-4, "{t}");
         }
+    }
+
+    /// The X-Trans repeat as observed at a sensor's data origin.
+    const XTRANS: [&str; 6] = ["GGRGGB", "GGBGGR", "BRGRBG", "GGBGGR", "GGRGGB", "RBGBRG"];
+
+    fn pattern(rows: &[&str]) -> Pattern {
+        let colors = rows
+            .concat()
+            .chars()
+            .map(|c| match c {
+                'R' => 0,
+                'G' => 1,
+                _ => 2,
+            })
+            .collect();
+        Pattern { w: rows[0].len(), h: rows.len(), colors }
+    }
+
+    fn mosaic_pat(rgb: &[[f32; 3]], w: usize, pat: &Pattern) -> Vec<f32> {
+        (0..rgb.len()).map(|i| rgb[i][usize::from(pat.at((i % w) as isize, (i / w) as isize))]).collect()
+    }
+
+    #[test]
+    fn xtrans_flat_colour_is_exact() {
+        let (w, h) = (25, 19);
+        let rgb = vec![[0.2f32, 0.5, 0.8]; w * h];
+        let pat = pattern(&XTRANS);
+        // Every phase of the pattern at the plane origin.
+        for (sx, sy) in [(0, 0), (1, 0), (2, 3), (5, 5)] {
+            let shifted = Pattern { colors: (0..36).map(|i| pat.at((i % 6 + sx) as isize, (i / 6 + sy) as isize)).collect(), ..pat.clone() };
+            let out = demosaic_cfa(&Padded::from_plane(&mosaic_pat(&rgb, w, &shifted), w, h), &shifted);
+            for (i, v) in out.as_chunks::<3>().0.iter().enumerate() {
+                for c in 0..3 {
+                    assert!((v[c] - rgb[i][c]).abs() < 1e-5, "shift ({sx},{sy}) px {i} c {c}: {}", v[c]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn xtrans_quality() {
+        let pat = pattern(&XTRANS);
+        // A smooth colour field.
+        let (w, h) = (66, 48);
+        let rgb: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+                [0.2 + 0.6 * x, 0.3 + 0.4 * (x * y), 0.8 - 0.5 * y]
+            })
+            .collect();
+        let out = demosaic_cfa(&Padded::from_plane(&mosaic_pat(&rgb, w, &pat), w, h), &pat);
+        let smooth = psnr(&out, &rgb, w, h, 2);
+        assert!(smooth > 40.0, "smooth field {smooth:.1} dB");
+        // Grey stripes 3 pixels wide, vertical then horizontal: the edge-directed
+        // green must beat a plain neighbour average by a wide margin.
+        let (w, h) = (48, 48);
+        let rgb: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let v = if y < h / 2 { ((x / 3) % 2) as f32 } else { ((y / 3) % 2) as f32 };
+                [0.1 + 0.8 * v; 3]
+            })
+            .collect();
+        let cfa = mosaic_pat(&rgb, w, &pat);
+        let adaptive = psnr(&demosaic_cfa(&Padded::from_plane(&cfa, w, h), &pat), &rgb, w, h, 3);
+        // Plain average of the 3×3 greens, colour differences unweighted.
+        let plain: Vec<f32> = (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = ((i % w) as isize, (i / w) as isize);
+                let mean = |c: u8| {
+                    let v: Vec<f32> = (-1..=1)
+                        .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
+                        .filter(|&(xx, yy)| xx >= 0 && yy >= 0 && xx < w as isize && yy < h as isize && pat.at(xx, yy) == c)
+                        .map(|(xx, yy)| cfa[yy as usize * w + xx as usize])
+                        .collect();
+                    if v.is_empty() { 0.5 } else { v.iter().sum::<f32>() / v.len() as f32 }
+                };
+                [mean(0), mean(1), mean(2)]
+            })
+            .collect();
+        let plain = psnr(&plain, &rgb, w, h, 3);
+        assert!(adaptive > plain + 6.0, "adaptive {adaptive:.1} dB vs plain {plain:.1} dB");
+    }
+
+    #[test]
+    fn odd_patterns_do_not_panic() {
+        // A 3×3 pattern without blue, a 1×1 all-green one, and a 2×2 non-Bayer one.
+        for rows in [&["RGG", "GGR", "GRG"][..], &["G"][..], &["RG", "BR"][..]] {
+            let pat = pattern(rows);
+            for (w, h) in [(1, 1), (2, 3), (7, 5), (13, 1)] {
+                let out = demosaic_cfa(&Padded::from_plane(&vec![0.5; w * h], w, h), &pat);
+                assert_eq!(out.len(), w * h * 3);
+                assert!(out.iter().all(|v| v.is_finite()));
+            }
+        }
+        // A degenerate pattern is rejected, not indexed out of range.
+        let bad = Pattern { w: 6, h: 6, colors: vec![1; 4] };
+        assert!(demosaic_cfa(&Padded::from_plane(&[0.5; 4], 2, 2), &bad).iter().all(|v| *v == 0.0));
     }
 
     #[test]

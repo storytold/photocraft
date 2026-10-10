@@ -211,6 +211,33 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
 }
 
 #[test]
+fn a_single_tab_click_expands_a_collapsed_panel() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        for tab_index in [0, 1] {
+            let (mut app, _, _) = app_with_layers();
+            app.ui.dock_tabs.color = 0;
+            app.ui.dock.set_collapsed(Group::Color, true);
+            // Locking prevents rearrangement, not opening an existing panel.
+            app.session.prefs.edit(|p| p.workspace_locked = true);
+            let mut h = harness(app, vec2(1200.0, 800.0), theme);
+            let collapsed_height = rect_of(&h, Group::Color).height();
+            let strips = last_strips(&h.ctx);
+            let strip = strips.iter().find(|s| s.group == Group::Color).unwrap();
+            let tab = strip.tabs.iter().find(|(i, _)| *i == tab_index).unwrap().1.center();
+            h.event(egui::Event::PointerMoved(tab));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+            assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}: tab {tab_index}");
+            assert_eq!(h.state().ui.dock_tabs.color, tab_index);
+            assert!(rect_of(&h, Group::Color).height() > collapsed_height);
+        }
+    }
+}
+
+#[test]
 fn double_clicking_a_tab_collapses_and_dragging_a_strip_reorders() {
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
@@ -348,6 +375,88 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
             assert_eq!(last_rects(&h.ctx), rects, "click at {p:?} moved the dock groups");
         }
         h.state_mut().ui.dialogs.clear();
+    }
+}
+
+#[test]
+fn closing_tabs_keeps_stable_names_across_themes_and_workspace_round_trips() {
+    let mut dock = DockLayout::default();
+    // In Pro the first Color group tab is Color; in Studio it is Swatches.
+    dock.hide_tab(Group::Color, 0, true);
+    assert_eq!(dock.visible_tabs(Group::Color, true).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns"]);
+    assert_eq!(dock.visible_tabs(Group::Color, false).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns"]);
+    dock.hide_tab(Group::Color, 999, true);
+    assert_eq!(dock.hidden_tabs[&Group::Color], vec!["Color"]);
+    let saved = serde_json::to_value(&dock).unwrap();
+    let mut restored: DockLayout = serde_json::from_value(saved).unwrap();
+    assert_eq!(restored, dock);
+    // Window › Color (Studio index 1) brings back precisely that tab.
+    restored.show_tab(Group::Color, 1, false);
+    assert!(restored.hidden_tabs.is_empty());
+    assert_eq!(restored.visible_tabs(Group::Color, false).len(), 4);
+}
+
+fn right_click_tab(h: &mut Harness<'static, PhotocraftApp>, group: Group, original_index: usize) {
+    let p = last_strips(&h.ctx)
+        .into_iter()
+        .find(|s| s.group == group)
+        .and_then(|s| s.tabs.into_iter().find(|(i, _)| *i == original_index))
+        .map(|(_, r)| r.center())
+        .unwrap_or_else(|| panic!("requested dock tab visible: {:?}", last_strips(&h.ctx).iter().map(|s| (s.group, s.tabs.clone())).collect::<Vec<_>>()));
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// #1753: both themes offer Close for the clicked tab and Close Tab Group independently.
+/// Closing the last tab hides its group; Window restores a hidden tab. (Studio floats
+/// Properties outside the dock, so it closes Layers tabs instead.)
+#[test]
+fn panel_tab_context_menu_closes_one_tab_or_its_group() {
+    use egui_kittest::kittest::Queryable;
+
+    for (theme, g, window) in [(ThemeKind::ProMedium, Group::Properties, "window.panel.properties"), (ThemeKind::Studio, Group::Layers, "window.panel.layers")]
+    {
+        let pro = is_pro(theme);
+        let names = g.tabs(pro);
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1300.0, 850.0), theme);
+        // Close the first tab: the group stays, showing (and selecting) the next one.
+        right_click_tab(&mut h, g, 0);
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(g.shown(&h.state().ui.panels), "{theme:?}: closing one tab keeps the group");
+        assert_eq!(*g.tab_mut(&mut h.state_mut().ui.dock_tabs), 1);
+        let rest: Vec<(usize, &str)> = names.iter().copied().enumerate().skip(1).collect();
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), rest);
+        let strip: Vec<usize> = last_strips(&h.ctx).iter().find(|s| s.group == g).unwrap().tabs.iter().map(|(i, _)| *i).collect();
+        assert_eq!(strip, rest.iter().map(|(i, _)| *i).collect::<Vec<_>>());
+
+        // Close the remaining tabs: the last one hides this group, not the other dock groups.
+        for i in 1..names.len() {
+            right_click_tab(&mut h, g, i);
+            h.get_by_label("Close").click();
+            h.run_steps(3);
+        }
+        assert!(!g.shown(&h.state().ui.panels), "{theme:?}");
+        assert!(h.state().ui.panels.color, "{theme:?}");
+
+        // The Window menu reopens only the requested tab; hidden tabs stay hidden.
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, window, json!({})).unwrap();
+        h.run_steps(3);
+        assert!(g.shown(&h.state().ui.panels) && !h.state().ui.dock.is_collapsed(g));
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
+
+        // A tab's Close Tab Group closes the entire group without hiding its one tab.
+        right_click_tab(&mut h, g, 0);
+        h.get_by_label("Close Tab Group").click();
+        h.run_steps(3);
+        assert!(!g.shown(&h.state().ui.panels));
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
     }
 }
 
@@ -565,4 +674,36 @@ fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
     h.get_by_label("Patterns").click();
     h.run_steps(3);
     assert_eq!(*h.state(), 3, "Patterns chosen from the chevron menu");
+}
+
+#[test]
+fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
+    // #1313: Photoshop's Tab hides the Tools panel, the options bar and the panel dock (Tab again
+    // brings back what it hid); ⇧Tab hides and shows the dock alone.
+    let (mut app, _, _) = app_with_layers();
+    let ctx = egui::Context::default();
+    let run = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
+    app.ui.panels.options_bar = false;
+    run(&mut app, "window.togglePanels");
+    let p = &app.ui.panels;
+    assert!(!p.toolbar && !p.options_bar && !p.dock);
+    run(&mut app, "window.togglePanels");
+    let p = &app.ui.panels;
+    assert!(p.toolbar && !p.options_bar && p.dock, "Tab brings back only what it hid");
+    run(&mut app, "window.toggle.dock");
+    assert!(!app.ui.panels.dock && app.ui.panels.toolbar, "⇧Tab hides only the dock");
+    run(&mut app, "window.toggle.dock");
+    assert!(app.ui.panels.dock);
+    // Everything hidden by hand: Tab shows it all.
+    (app.ui.panels.toolbar, app.ui.panels.options_bar, app.ui.panels.dock) = (false, false, false);
+    run(&mut app, "window.togglePanels");
+    assert!(app.ui.panels.toolbar && app.ui.panels.options_bar && app.ui.panels.dock);
+    // The keys are Photoshop's.
+    let bound = |key: &str| crate::shortcut_dispatch::bindings(&app).into_iter().find(|(_, sc)| Some(*sc) == crate::shortcuts::parse(key)).map(|(id, _)| id);
+    assert_eq!(bound("Tab").as_deref(), Some("window.togglePanels"));
+    assert_eq!(bound("Shift+Tab").as_deref(), Some("window.toggle.dock"));
+    // An older saved UI state without the field shows the dock.
+    let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
+    v.as_object_mut().unwrap().remove("dock");
+    assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
 }

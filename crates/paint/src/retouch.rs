@@ -240,13 +240,21 @@ pub fn apply_dab_stroke(
     for (i, d) in ds.iter().enumerate() {
         effect(&mut work, &ctx.footprint(d, i));
     }
+    mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
+    bounds
+}
+
+/// Mix a sequential-dab stroke's working pixels `work` back over the original `orig` at
+/// `opacity × selection` inside `rect`, and write that area to `target`: the last step of
+/// [`apply_dab_stroke`], shared with live previews that run the dabs as they come.
+pub fn mix_back(target: &mut Surface, orig: &Region, work: &Region, rect: Rect, opacity: f32, selection: Option<&Surface>, lock_transparency: bool) {
     let fmt = target.format();
     let a = alpha_index(&fmt);
-    let mut out = orig.crop(bounds);
+    let mut out = orig.crop(rect);
     let n = out.ch;
-    let opacity = stroke.brush.opacity.clamp(0.0, 1.0);
-    for y in bounds.y0..bounds.y1 {
-        for x in bounds.x0..bounds.x1 {
+    let opacity = opacity.clamp(0.0, 1.0);
+    for y in rect.y0..rect.y1 {
+        for x in rect.x0..rect.x1 {
             let k = opacity * selection.map_or(1.0, |s| s.sample_channel(x, y, 0));
             if k <= 0.0 {
                 continue;
@@ -269,7 +277,6 @@ pub fn apply_dab_stroke(
         }
     }
     out.write(target);
-    bounds
 }
 
 /// `dst ← lerp(dst, src, k)` in premultiplied space (straight in, straight out; `a` = alpha index).

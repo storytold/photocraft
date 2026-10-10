@@ -172,14 +172,16 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 }
 
 /// Run several commands as one history step labelled `label`.
-fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (before, history) = (st.doc.clone(), st.history.clone());
+    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
     let r = f(s);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
     match r {
         Ok(v) => {
+            // As in `Session::edit`: undo targets what was selected just before the step (#1356).
+            st.history.set_current_layers(prior);
             st.history.record(label, before, st.layer_target());
             st.history.trim(&st.doc);
             st.coalesce = None;

@@ -107,6 +107,44 @@ fn every_compression_keeps_the_layers() {
     }
 }
 
+/// The Artist tag's text, and the bytes every EXIF assertion looks for.
+const ARTIST: &[u8] = b"fixture-artist";
+
+/// A minimal little-endian EXIF (TIFF) block with a single Artist tag and no Orientation, so
+/// `upright_exif` passes it through untouched.
+fn exif() -> Vec<u8> {
+    let mut artist = ARTIST.to_vec();
+    artist.push(0); // ASCII NUL terminator
+    let mut v = b"II*\0\x08\0\0\0".to_vec(); // TIFF header, first IFD at 8
+    v.extend_from_slice(&1u16.to_le_bytes()); // one entry
+    v.extend_from_slice(&0x013bu16.to_le_bytes()); // Artist
+    v.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    v.extend_from_slice(&(artist.len() as u32).to_le_bytes());
+    v.extend_from_slice(&26u32.to_le_bytes()); // value offset: 8 + 2 + 12 + 4
+    v.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+    v.extend_from_slice(&artist);
+    v
+}
+
+/// #1545: a layered TIFF carries EXIF as Photoshop resource 1058 and reads it back, so it must
+/// not report a loss it never makes. A flat TIFF really does lose the tags and still says so.
+#[test]
+fn layered_tiff_keeps_exif_without_claiming_a_loss() {
+    let mut d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
+    d.metadata.exif = Some(std::sync::Arc::new(exif()));
+
+    let r = tiff(&d, true);
+    assert!(!r.warnings.iter().any(|w| w.contains("EXIF")), "a layered TIFF keeps EXIF, so it must not claim to drop it: {:?}", r.warnings);
+    // ...and the tags really are in the file, so the missing warning is a true absence of loss.
+    let back = import("x.tif", &r.bytes).unwrap().document;
+    let kept = back.metadata.exif.as_deref().expect("EXIF survives the layered export");
+    assert!(kept.windows(ARTIST.len()).any(|w| w == ARTIST), "the Artist tag did not survive: {kept:?}");
+
+    // The control from the issue: the flat path drops it for real, and keeps reporting that.
+    let flat = tiff(&d, false);
+    assert!(flat.warnings.iter().any(|w| w.contains("EXIF")), "a flat TIFF really does lose EXIF: {:?}", flat.warnings);
+}
+
 #[test]
 fn discard_layers_writes_a_flat_file() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);

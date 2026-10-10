@@ -1,6 +1,6 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
@@ -40,6 +40,27 @@ fn bundled_fonts_cover_latin() {
 }
 
 #[test]
+fn registering_fonts_moves_the_generation() {
+    let mut e = TextEngine::new();
+    let g = fonts::generation();
+    e.fonts.register_font_data(fonts::INTER_REGULAR.to_vec());
+    assert!(fonts::generation() > g);
+}
+
+#[test]
+fn literal_psd_tabs_shape_as_whitespace_without_shifting_text_offsets() {
+    let mut e = TextEngine::new();
+    let src = "A\tB";
+    let l = e.layout(&point(src, 20.0), 72.0);
+    let plain = e.layout(&point("AB", 20.0), 72.0);
+    assert_eq!(l.lines.len(), 1);
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "a tab must not render a tofu glyph");
+    assert!(width(&l) > width(&plain), "the tab reserves whitespace");
+    assert!(l.clusters.iter().all(|c| c.range.end <= src.len()), "the source byte offsets stay valid");
+    assert!(l.caret(2).0 > l.caret(1).0, "caret moves across the tab");
+}
+
+#[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
     let a = e.layout(&point("Hamburgefonstiv", 12.0), 72.0);
@@ -53,6 +74,20 @@ fn metrics_are_stable_and_scale_with_dpi() {
     // Point text: first baseline at the anchor.
     assert_eq!(a.lines[0].baseline, 0.0);
     assert!(a.lines[0].ascent > 8.0 && a.lines[0].ascent < 13.0);
+}
+
+#[test]
+fn small_caps_are_synthesized_when_the_font_has_no_small_caps_feature() {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 40.0, caps: Caps::SmallCaps, ..Default::default() };
+    let mut engine = TextEngine::new();
+    let small = engine.layout(&styled("aA", style), 72.0);
+    let upper = engine.layout(&styled("AA", CharStyle { font_family: "Inter".into(), size_pt: 40.0, ..Default::default() }), 72.0);
+    assert_eq!(small.glyphs.len(), 2);
+    assert_eq!(small.glyphs[0].id, upper.glyphs[0].id, "lowercase uses the uppercase glyph");
+    assert_eq!(small.glyphs[1].id, upper.glyphs[1].id, "uppercase remains uppercase");
+    let size = |layout: &crate::TextLayout, glyph: usize| layout.faces[layout.glyphs[glyph].face as usize].size_px;
+    assert!((size(&small, 0) - 28.0).abs() < 0.01, "{}", size(&small, 0));
+    assert!((size(&small, 1) - 40.0).abs() < 0.01, "{}", size(&small, 1));
 }
 
 #[test]
@@ -176,7 +211,7 @@ fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn truetype_collections_load() {
-    let ttc = make_ttc(&[fonts::BUNDLED[0].1, fonts::BUNDLED[3].1]);
+    let ttc = make_ttc(&[fonts::BUNDLED[0].1.as_slice(), fonts::BUNDLED[3].1.as_slice()]);
     assert_eq!(fonts::face_count(&ttc), 2);
     let mut db = fonts::FontDb::new();
     // A fresh DB without the bundled mono font would miss it; register the collection anyway
@@ -545,6 +580,96 @@ fn txt2_carries_optical_kerning() {
     assert!(l.char_runs().iter().all(|r| r.style.kerning == Kerning::Optical));
 }
 
+/// A `Txt2` written by [`crate::psd::build_txt2`] (what PSD export writes for the type layers)
+/// restores every auto-kern mode on import (#1348: a new Optical layer used to reopen as
+/// Metrics, because EngineData's `AutoKerning true` covers both).
+#[test]
+fn build_txt2_round_trips_kerning_modes() {
+    use photocraft_doc::text::Kerning;
+    let style = |kerning: Kerning, kern: f32| CharStyle { kerning, kern, ..Default::default() };
+    let t = runs_of("AVAT", &[(2, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0)), (1, style(Kerning::Off, 0.0))]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    assert!(
+        back.char_runs().iter().all(|r| r.style.kerning != Kerning::Optical),
+        "EngineData alone can't say Optical: {:?}",
+        back.char_runs().iter().map(|r| r.style.kerning).collect::<Vec<_>>()
+    );
+    let txt2 = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], None)).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(2, Kerning::Optical), (1, Kerning::Metrics), (1, Kerning::Off)]);
+    // A manual kern (a nonzero pair value) is the manual mode, as in the EngineData pair fields.
+    let manual = runs_of("AB", &[(1, style(Kerning::Metrics, 50.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&manual, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    let txt2 = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &manual)], None)).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(1, Kerning::Off), (1, Kerning::Metrics)]);
+}
+
+/// A kept `Txt2` object — same text, so its extras are still true — keeps everything the file
+/// held beyond the regenerated keys (Photoshop stores glyph pen positions under `/21 /1`), and a
+/// changed text drops those extras with the stale runs. The block's own extras always survive.
+#[test]
+fn txt2_keeps_a_kept_objects_extras_and_drops_them_with_its_text() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let style = |kerning: Kerning, kern: f32| CharStyle { kerning, kern, ..Default::default() };
+    // The file's block: object 0 with `/21 /1` pen positions, a model extra, and a block extra.
+    let obj = E::Dict(vec![
+        (
+            "0".into(),
+            E::Dict(vec![("0".into(), E::String("AB\r".into())), ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![]))])), ("keep".into(), E::Int(7))]),
+        ),
+        ("21".into(), E::Dict(vec![("1".into(), E::Array(vec![E::Real(1.5), E::Real(2.5)]))])),
+    ]);
+    let prev = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("1".into(), E::Dict(vec![("1".into(), E::Array(vec![obj]))])),
+        ("extra".into(), E::Int(3)),
+    ]);
+    // Same text: the extras survive, the style runs are ours.
+    let t = runs_of("AB", &[(1, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    assert_eq!(out.get("extra").and_then(E::as_i64), Some(3), "block extras survive");
+    let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert_eq!(object.path(&["21", "1"]).and_then(E::as_array).map(|items| items.len()), Some(2), "pen positions survive an unchanged text");
+    assert_eq!(object.path(&["0", "keep"]).and_then(E::as_i64), Some(7), "model extras survive");
+    assert_eq!(object.path(&["0", "6", "0"]).and_then(E::as_array).map(|items| items.len()), Some(2), "the style runs are regenerated");
+    // Changed text: the extras go stale with the old runs and are dropped.
+    let t = runs_of("XY", &[(1, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    assert_eq!(out.get("extra").and_then(E::as_i64), Some(3), "block extras survive a text change too");
+    let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert!(object.get("21").is_none(), "pen positions of another text are dropped: {:?}", object.get("21"));
+    assert!(object.path(&["0", "keep"]).is_none(), "model extras of another text are dropped");
+}
+
+/// A file-controlled `TextIndex` must not size the save: out-of-range numbers are ignored (the
+/// slot array is sized by real text objects, never by a file's numbers) and reading one back is
+/// a no-op, so a hostile file degrades instead of allocating gigabytes on export.
+#[test]
+fn hostile_text_index_is_ignored_not_sized() {
+    use crate::engine_data::Value as E;
+    let t = runs_of("AB", &[(2, CharStyle::default())]);
+    let tysh = crate::psd::build_tysh(&t, 72.0, None);
+    assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, 0).unwrap()), Some(0));
+    assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, crate::psd::MAX_TEXT_INDEX).unwrap()), Some(crate::psd::MAX_TEXT_INDEX));
+    for hostile in [crate::psd::MAX_TEXT_INDEX + 1, i32::MAX] {
+        assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, hostile).unwrap()), None, "{hostile}");
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(hostile, &t)], None)).unwrap();
+        let slots = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+        assert!(slots.is_empty(), "{hostile} sized {} slots", slots.len());
+    }
+    // The bound is real but generous: the last honoured number lands at its slot.
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(crate::psd::MAX_TEXT_INDEX, &t)], None)).unwrap();
+    let slots = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert_eq!(slots.len(), crate::psd::MAX_TEXT_INDEX as usize + 1);
+}
+
 /// Photopea needs an enabled fill, not just FillColor, to paint text after an edit. Inspect the
 /// serialized TySh rather than our renderer, which does not consume the PSD fill flag.
 #[test]
@@ -666,6 +791,48 @@ fn psd_round_trips_antialias_opentype_and_warp() {
         let mut tags: Vec<&str> = st.features.iter().map(|f| f.tag.as_str()).collect();
         tags.sort_unstable();
         assert_eq!(tags, ["frac", "swsh"]);
+    }
+}
+
+/// #1469: Some older PSD writers combine a zero PointBase with an enormous local ink origin.
+/// The TySh transform cancels that origin, so importing it as a zero-based layout puts text far
+/// off-canvas. Fold the descriptor origin into the imported transform and preserve it on a TySh
+/// round trip so every editing and export path uses the same position.
+#[test]
+fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
+    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+
+    let source = styled("Name", CharStyle { font_family: "Inter".into(), size_pt: 120.0, ..Default::default() });
+    let mut tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&source, 72.0, None)).unwrap();
+    tysh.transform = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
+    let ink = [8050.0, 8160.0, 8220.0, 8300.0];
+    let rect = |class| {
+        D::Descriptor(
+            Descriptor::new(class)
+                .with("Left", D::UnitFloat { unit: *b"#Pnt", value: ink[0] })
+                .with("Top ", D::UnitFloat { unit: *b"#Pnt", value: ink[1] })
+                .with("Rght", D::UnitFloat { unit: *b"#Pnt", value: ink[2] })
+                .with("Btom", D::UnitFloat { unit: *b"#Pnt", value: ink[3] }),
+        )
+    };
+    tysh.text.items.retain(|(key, _)| !key.is("bounds") && !key.is("boundingBox"));
+    tysh.text.items.push((Id::new("bounds"), rect("bounds")));
+    tysh.text.items.push((Id::new("boundingBox"), rect("boundingBox")));
+    let data = crate::psd::write_tysh(&tysh);
+
+    let imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+    let expected = [4.1667, 0.0, 0.0, 4.1667, 1166.935, 1112.772];
+    for (got, want) in imported.transform.m.iter().zip(expected) {
+        assert!((got - want).abs() < 0.001, "{:?}", imported.transform.m);
+    }
+    let (_, rendered) = TextEngine::new().render(&imported, 72.0, PixelFormat::RGBA8);
+    let placed = rendered.surface.content_bounds();
+    assert!(!placed.is_empty(), "the normalized layer renders");
+    assert!((1000..3000).contains(&placed.x0) && (500..2000).contains(&placed.y0), "{placed:?}");
+
+    let round_trip = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&imported, 72.0, Some(ink.map(|v| v as f32))), 72.0).unwrap();
+    for (got, want) in round_trip.transform.m.iter().zip(expected) {
+        assert!((got - want).abs() < 0.001, "{:?}", round_trip.transform.m);
     }
 }
 
@@ -972,4 +1139,53 @@ fn word_and_line_navigation() {
     assert_eq!(kept, char_index(text, l.lines[1].range.start), "kept column");
     assert_eq!(jumped, char_index(text, l.lines[1].range.end), "own column");
     assert!(jumped > kept);
+}
+
+/// Thai text sample with above/below marks (sara i, mai ek, mai tho, mai han-akat, sara u).
+const THAI_SAMPLE: &str = "ภาษาไทย สวัสดีครับ ผู้ที่น้ำ";
+
+#[test]
+fn thai_in_latin_font_falls_back_to_installed_thai_font() {
+    // #1909: Thai typed in a Latin-only font (a newly chosen font has no PostScript name to find
+    // the original Thai face) must fall back to an installed Thai-capable font, not .notdef.
+    let mut e = TextEngine::with_system_fonts();
+    let Some(thai) = fonts::THAI_FAMILIES.iter().find(|f| e.fonts.has_family(f)) else {
+        eprintln!("skipped: no Thai-capable font installed");
+        return;
+    };
+    let l = e.layout(&point(THAI_SAMPLE, 24.0), 72.0);
+    assert!(!l.glyphs.is_empty());
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "Thai drawn with .notdef although {thai} is installed");
+    // Latin next to Thai keeps the chosen font; only the Thai clusters fall back.
+    let l = e.layout(&point("Thai ไทย", 24.0), 72.0);
+    assert!(l.glyphs.iter().all(|g| g.id != 0));
+    let (first, last) = (l.glyphs.first().map(|g| g.face), l.glyphs.last().map(|g| g.face));
+    assert_ne!(first, last, "Latin and Thai drawn with the same face");
+}
+
+#[test]
+fn thai_fallback_candidates_cover_every_platform() {
+    // Logic-level half of #1909 (runs without Thai fonts): Windows, macOS and Linux each have a
+    // Thai-capable family in the fallback candidates, ahead of the broad last-resort fonts.
+    for order in [crate::cjk::script_order(None), crate::cjk::script_order(Some("ja"))] {
+        let fb = fonts::fallback_candidates(&order);
+        let last = fb.iter().position(|f| *f == "Arial Unicode MS").unwrap();
+        for fam in ["Leelawadee UI", "Tahoma", "Thonburi", "Noto Sans Thai"] {
+            let i = fb.iter().position(|f| *f == fam).unwrap_or_else(|| panic!("{fam} missing from {fb:?}"));
+            assert!(i < last, "{fam} after the last-resort fonts");
+        }
+    }
+}
+
+#[test]
+fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
+    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    };
+    crate::served::add_fonts(&crate::served::parse_manifest("Cairo | Regular | fonts/cairo/Cairo.ttf | Arab,Latn\n").0);
+    let mut db = fonts::FontDb::new();
+    assert!(!db.fallback_stack().any(|f| f == "Cairo"), "not before it arrives");
+    db.register_font_data(cairo.bytes.to_vec());
+    assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
 }

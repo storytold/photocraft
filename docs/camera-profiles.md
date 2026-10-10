@@ -11,7 +11,7 @@ These profiles provide independent camera colour calibration. They are **not fac
 JPEG/Picture Control looks**, and do not promise pixel-identical ACR output. Nikon Auto,
 custom manual offsets and toning are recorded but not reproduced by the bundled profiles.
 No JPEG fitting is used. A profile on this list does not add support for its RAW format;
-CR3, RAF and other unsupported compression variants remain separate decoder work.
+CR3, compressed RAF and other unsupported compression variants remain separate decoder work.
 
 ## Selection and coverage
 

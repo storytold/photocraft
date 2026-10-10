@@ -182,7 +182,11 @@ impl PinnedCorpus {
             let mut tar = Command::new("tar");
             tar.arg("-xzf").arg(&tgz).arg("-C").arg(&out).arg(format!("{top}/{}", up.subdir));
             for (from, _) in up.extras {
-                tar.arg(format!("{top}/{from}"));
+                // A root-level corpus selection (`subdir == ""`) already extracts the whole repo
+                // root; adding the same root files as individual tar selectors fails on GNU tar.
+                if !up.subdir.is_empty() {
+                    tar.arg(format!("{top}/{from}"));
+                }
             }
             run(tar, &format!("tar -xzf {}", tgz.display()))?;
             let _ = std::fs::remove_file(&tgz);
@@ -262,4 +266,53 @@ impl PinnedCorpus {
         let extras: Vec<(PathBuf, String)> = up.extras.iter().map(|(from, to)| (clone.join(from), (*to).to_string())).collect();
         self.install(&found, |f| Some(src.join(&f[up.prefix.len()..])), &extras, true, &format!("copied from the local clone {}", clone.display()))
     }
+}
+
+/// Hex sha256 of a corpus file (reused by every corpus fetch, `xtask/pixls.sha256` included).
+fn file_hex(path: &std::path::Path) -> Option<String> {
+    std::fs::read(path).ok().map(|b| crate::sha256::hex(&b))
+}
+
+/// Fetches `corpus/pixls` — the raw.pixls.us camera files pinned in `corpus_pins::PIXLS_FILES` —
+/// and verifies them against `xtask/pixls.sha256`, the same manifest form every corpus uses.
+/// raw.pixls.us serves single files and redirects `/data/` to `/download/`, so this is a plain
+/// per-file download rather than a git upstream; the manifest discipline is the same
+/// (`--update-manifest` re-pins). Opt-in: not part of `--all` or CI until a maintainer says so.
+pub fn fetch_pixls(update: bool) -> Result<(), String> {
+    let dest = crate::root().join("corpus").join("pixls");
+    std::fs::create_dir_all(&dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let manifest = crate::root().join("xtask").join("pixls.sha256");
+    if update {
+        let mut names: Vec<&str> = crate::corpus_pins::PIXLS_FILES.iter().map(|(_, n)| *n).collect();
+        names.sort_unstable();
+        let mut out = String::new();
+        for name in names {
+            let sum = file_hex(&dest.join(name)).ok_or_else(|| format!("pixls {name}: not downloaded yet"))?;
+            out.push_str(&format!("{sum}  {name}\n"));
+        }
+        std::fs::write(&manifest, out).map_err(|e| format!("write {}: {e}", manifest.display()))?;
+        println!("pixls: re-hashed {} files into {}", crate::corpus_pins::PIXLS_FILES.len(), manifest.display());
+        return Ok(());
+    }
+    let want: std::collections::HashMap<String, String> = std::fs::read_to_string(&manifest)
+        .map_err(|e| format!("read {}: {e} (run `cargo xtask corpus --pixls` once)", manifest.display()))?
+        .lines()
+        .filter_map(|l| l.split_once("  ").map(|(s, n)| (n.to_string(), s.to_string())))
+        .collect();
+    for (path, name) in crate::corpus_pins::PIXLS_FILES {
+        let file = dest.join(name);
+        if file_hex(&file).as_deref() == want.get(*name).map(String::as_str) {
+            continue;
+        }
+        let url = format!("{}{}", crate::corpus_pins::PIXLS_BASE, path);
+        let mut curl = Command::new("curl");
+        curl.args(["-fsSL", "--retry", "3", "-A", USER_AGENT, "-o"]).arg(&file).arg(&url);
+        run(curl, &format!("curl {url}"))?;
+        let got = file_hex(&file).ok_or_else(|| format!("pixls {name}: unreadable"))?;
+        if Some(got.as_str()) != want.get(*name).map(String::as_str) {
+            return Err(format!("pixls {name}: sha256 mismatch (pin the file you meant, then --update-manifest)"));
+        }
+    }
+    println!("pixls: {} files verified in {}", crate::corpus_pins::PIXLS_FILES.len(), dest.display());
+    Ok(())
 }

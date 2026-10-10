@@ -85,7 +85,10 @@ pub(super) fn load(sensor: &Sensor, settings: Option<&CameraSettings>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_raw::{Limits, RawFormat, decode, testgen::DngSpec};
+    use photocraft_raw::{
+        Limits, RawFormat, decode,
+        testgen::{DngSpec, RafSpec, XTRANS, mosaic_cfa, scene},
+    };
 
     #[test]
     fn entire_bundle_is_parseable_model_bound_and_explicitly_licensed() {
@@ -121,5 +124,22 @@ mod tests {
         assert_eq!(rendered.rgb.len(), 8 * 8 * 3);
         sensor.model = Some("NIKON Z f fictional successor".into());
         assert!(load(&sensor, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn uncompressed_xtrans_raf_uses_its_matching_bundled_profile() {
+        let (w, h) = (36, 24);
+        let mut spec = RafSpec::new(w, h, mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 256, 16383), XTRANS.to_vec());
+        spec.black = vec![256; 36];
+        let mut sensor = decode(&spec.build(), &Limits::default()).unwrap();
+        assert_eq!(sensor.format, RawFormat::Raf);
+        assert!(!sensor.cfa.as_ref().unwrap().is_bayer());
+        sensor.model = Some("FUJIFILM X-T3".into());
+        let loaded = load(&sensor, None).unwrap().unwrap();
+        assert_eq!(loaded.report["source"], "bundled-dcp");
+        assert_eq!(loaded.report["cameraModel"], "FUJIFILM X-T3");
+        let developed = photocraft_raw::develop_sensor_profile(&sensor, &Default::default(), Some(&loaded.profile)).unwrap();
+        assert_eq!((developed.width, developed.height), (36, 24));
+        assert_eq!(developed.rgb.len(), w * h * 3);
     }
 }

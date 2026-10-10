@@ -13,6 +13,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | 日本語 | `ja` | one form |
 | 한국어 | `ko` | one form |
 | Русский | `ru` | one / few / many |
+| Українська | `uk` | one / few / many (teens use many) |
 | Français | `fr` | singular for 0 and 1 / plural for 2+ |
 | 繁體中文 | `zh-hant` | one form |
 | Español | `es` | one / other |
@@ -22,6 +23,8 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Português (Brasil) | `pt-br` | singular for 0 and 1 / plural for 2+ |
 | Italiano | `it` | one / other |
 | Polski | `pl` | one / few (2–4, not 12–14) / many |
+| Ελληνικά | `el` | one / other |
+| Nederlands | `nl` | one / other |
 
 Every non-English catalog covers the current menu labels, `tl!` literals, blend mode names,
 and generated preference labels. Tests enforce that coverage. This does not include every

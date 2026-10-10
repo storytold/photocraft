@@ -48,6 +48,10 @@ struct Job {
     opts: SaveOptions,
 }
 
+/// One completed revision's disk-write outcome (distinct from enqueue success).
+type SaveOutcome = (u64, std::result::Result<(), String>);
+type CompletedWrites = Arc<Mutex<Vec<SaveOutcome>>>;
+
 /// Background autosaver for one document. Requests are coalesced: if saves
 /// arrive faster than they complete, only the newest snapshot is written.
 pub struct Autosaver {
@@ -56,6 +60,8 @@ pub struct Autosaver {
     tx: Option<Sender<Job>>,
     handle: Option<JoinHandle<()>>,
     last: Arc<Mutex<Option<Result<SaveStats>>>>,
+    /// Per-request write outcomes, delivered to the desktop without blocking its frame.
+    completed: CompletedWrites,
 }
 
 fn sanitize(key: &str) -> String {
@@ -70,12 +76,14 @@ impl Autosaver {
         let key = sanitize(key);
         let (tx, rx) = mpsc::channel::<Job>();
         let last = Arc::new(Mutex::new(None));
+        let completed = Arc::new(Mutex::new(Vec::new()));
         let bundle = dir.join(format!("{key}.pcraft"));
         let sidecar = dir.join(format!("{key}.json"));
         let last2 = last.clone();
+        let completed2 = completed.clone();
         // A thread that never started must not look like a working autosave: record the
         // failure where `last_result`/`flush` report it, so recovery health checks see it.
-        let spawned = std::thread::Builder::new().name(format!("autosave-{key}")).spawn(move || worker(rx, bundle, sidecar, last2));
+        let spawned = std::thread::Builder::new().name(format!("autosave-{key}")).spawn(move || worker(rx, bundle, sidecar, last2, completed2));
         let handle = match spawned {
             Ok(h) => Some(h),
             Err(e) => {
@@ -83,15 +91,22 @@ impl Autosaver {
                 None
             }
         };
-        Autosaver { dir, key, tx: Some(tx), handle, last }
+        Autosaver { dir, key, tx: Some(tx), handle, last, completed }
     }
 
     pub fn bundle_path(&self) -> PathBuf {
         self.dir.join(format!("{}.pcraft", self.key))
     }
 
-    /// Queue a snapshot for saving (returns immediately).
+    /// Queue a snapshot for saving (returns immediately). Existing callers that only
+    /// need best-effort autosaving can use this; the app uses `request_checked`.
     pub fn request(&self, snapshot: Arc<Document>, revision: u64, original_path: Option<String>, opts: SaveOptions) {
+        let _ = self.request_checked(snapshot, revision, original_path, opts);
+    }
+
+    /// Queue a snapshot, reporting a worker that could not start or has stopped.
+    /// Success here means queued, not written: use `take_completed` for write outcomes.
+    pub fn request_checked(&self, snapshot: Arc<Document>, revision: u64, original_path: Option<String>, opts: SaveOptions) -> std::result::Result<(), String> {
         let info = RecoveryInfo {
             key: self.key.clone(),
             document_name: snapshot.name.clone(),
@@ -99,9 +114,16 @@ impl Autosaver {
             saved_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             revision,
         };
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(Job { snapshot, info, opts });
-        }
+        self.tx
+            .as_ref()
+            .ok_or_else(|| "autosave worker is stopped".to_string())?
+            .send(Job { snapshot, info, opts })
+            .map_err(|_| self.last_result().and_then(std::result::Result::err).unwrap_or_else(|| "autosave worker is unavailable".to_string()))
+    }
+
+    /// Drain completed write results without waiting for the worker.
+    pub fn take_completed(&self) -> Vec<(u64, std::result::Result<(), String>)> {
+        self.completed.lock().map(|mut results| std::mem::take(&mut *results)).unwrap_or_default()
     }
 
     /// Result of the most recent completed save.
@@ -136,7 +158,7 @@ impl Drop for Autosaver {
     }
 }
 
-fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<Option<Result<SaveStats>>>>) {
+fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<Option<Result<SaveStats>>>>, completed: CompletedWrites) {
     let mut writer = PcraftWriter::new();
     while let Ok(mut job) = rx.recv() {
         // Coalesce: skip to the newest queued snapshot.
@@ -149,6 +171,9 @@ fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<
             write_atomic(&sidecar, &serde_json::to_vec_pretty(&job.info)?)?;
             Ok(stats)
         })();
+        if let Ok(mut results) = completed.lock() {
+            results.push((job.info.revision, r.as_ref().map(|_| ()).map_err(ToString::to_string)));
+        }
         if let Ok(mut g) = last.lock() {
             *g = Some(r);
         }
@@ -231,12 +256,22 @@ impl RecoveryStore {
 
     /// Queue an autosave of `doc` (returns immediately; see [`Autosaver::request`]).
     pub fn autosave(&mut self, doc: &Arc<Document>, revision: u64, original_path: Option<String>) {
+        let _ = self.autosave_checked(doc, revision, original_path);
+    }
+
+    /// Queue a snapshot, reporting enqueue failures to the application.
+    pub fn autosave_checked(&mut self, doc: &Arc<Document>, revision: u64, original_path: Option<String>) -> std::result::Result<(), String> {
         let id = doc.id.0;
         let saver = self.savers.entry(id).or_insert_with(|| {
             let key = self.adopted.get(&id).cloned().unwrap_or_else(|| format!("doc-{}-{id}", self.session));
             Autosaver::new(&self.dir, &key)
         });
-        saver.request(doc.clone(), revision, original_path, SaveOptions::default());
+        saver.request_checked(doc.clone(), revision, original_path, SaveOptions::default())
+    }
+
+    /// Return completed write outcomes as (document id, revision, outcome), without blocking.
+    pub fn take_completed(&mut self) -> Vec<(u64, u64, std::result::Result<(), String>)> {
+        self.savers.iter().flat_map(|(&id, saver)| saver.take_completed().into_iter().map(move |(revision, result)| (id, revision, result))).collect()
     }
 
     /// Document `doc_id` was saved or closed: remove its recovery data, both its own autosaves

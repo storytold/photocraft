@@ -10,21 +10,21 @@ id = "UI-217-1"
 target = "Tool options, last Export As / Save for Web / Fill settings and font recents persist"
 status = "partial"
 issue = 217
-note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their settings in Preferences (prefs.dialogs); no tool_options/export fields in Preferences; export_dialog.rs:21 png/85"
+note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their settings in Preferences (prefs.dialogs); no tool_options/export fields in Preferences; export_dialog.rs:21 png/85. Each painting tool keeps its own brush (paint_mouse.rs sync_tool_brush, #218), but those live in UiState, so they are lost at quit like the other tool options"
 
 [[item]]
 id = "UI-217-2"
 target = "Window size and dock width remembered across restarts"
-status = "missing"
+status = "done"
 issue = 217
-note = "main.rs:46 native_options(): fixed 1440x900, centred on the main monitor (#419); dock.rs:529 snapshot omits the width"
+note = "eframe persistence (ui.ron): persist_window for the window, egui memory for the dock panel width; window_and_panel_geometry_survive_a_restart asserts the round trip (apps/photocraft/src/main.rs; b07a2e5b, #587)"
 
 [[item]]
 id = "UI-217-3"
 target = "File > Open starts in the last-used folder"
-status = "missing"
+status = "done"
 issue = 217
-note = "services.rs:110 FileDialog::new() without set_directory"
+note = "file_dialog.rs last_used_dir: open dialogs ask with initial_dir (the most recent file's folder) and apps services.rs passes it to rfd set_directory; open_starts_in_the_last_used_folder + last_used_dir_takes_the_most_recent_parent"
 
 [[item]]
 id = "UI-217-4"
@@ -43,16 +43,16 @@ note = "No floating groups in dock.rs/panels.rs"
 [[item]]
 id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
-status = "partial"
+status = "done"
 issue = 217
-note = "canvas.rs: Close/Others/All context menu with unsaved prompt; overflow, Reveal, drag reorder still missing"
+note = "canvas.rs: Close/Others/All menu with unsaved prompt; Reveal reuses file.revealInFinder (engine layer_menu_cmds::reveal); the » chevron (tab_strip) lists overflow; dragging a tab reorders via document.move"
 
 [[item]]
 id = "UI-217-7"
 target = "Command palette shows recently run commands on an empty query"
-status = "missing"
+status = "done"
 issue = 217
-note = "palette.rs:83-108 fuzzy hits only"
+note = "palette.rs: note_recent from menus::invoke keeps the last 8 commands (dedup, newest first); an empty query lists them via recent_hits; the_palette_records_and_replays_recent_commands_on_an_empty_query covers record -> empty query -> replay"
 
 [[item]]
 id = "UI-217-8"
@@ -85,9 +85,9 @@ note = "theme.rs:28 five themes"
 [[item]]
 id = "UI-217-12"
 target = "Save custom New Document presets; a real Recent category"
-status = "missing"
+status = "partial"
 issue = 217
-note = "new_doc_ui.rs:17 'Recent' is a static list"
+note = "document_preset_cmds.rs and new_doc_ui.rs: named presets save/select/delete through preferences; Recent remains a static list plus Clipboard"
 
 [[item]]
 id = "UI-217-13"
@@ -99,9 +99,9 @@ note = "widgets.rs:132 DragValue scrubs and takes + - * / arithmetic; no units i
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
-status = "missing"
+status = "partial"
 issue = 217
-note = "panels.rs:1108 plain dropdown; trash is click-only (panels.rs:1213)"
+note = "panels.rs: the wheel steps the blend-mode dropdown (widgets::dropdown_wheel_hovered, #1747); trash is click-only, no drop on New/Trash, no checker behind art"
 
 [[item]]
 id = "UI-217-15"
@@ -113,9 +113,9 @@ note = "adjust_dialog.rs adds black/gray/white eyedroppers; smoothing and pencil
 [[item]]
 id = "UI-217-16"
 target = "Hue/Saturation: Saturation and Lightness sliders get hue-following colour tracks"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only the Hue slider has a gradient"
+note = "saturation_track/lightness_track (adjust_editors.rs): grey -> the hue and black -> the hue -> white, recolouring as the Hue slider moves; saturation_and_lightness_tracks_follow_the_hue"
 
 [[item]]
 id = "UI-217-17"

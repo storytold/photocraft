@@ -39,6 +39,23 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     Some(p)
 }
 
+/// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
+/// Blur, Sharpen, Smudge, Dodge, Burn, Sponge. Shared by the live preview and the commit.
+pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
+    let o = &app.ui.tool_options;
+    Some(match tool {
+        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Dodge | Tool::Burn => (
+            if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
+            json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
+        ),
+        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        _ => return None,
+    })
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
@@ -78,14 +95,10 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
         Tool::HistoryBrush => ("paint.historyBrush", json!({})),
-        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Dodge | Tool::Burn => (
-            if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
-            json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
-        ),
-        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
+            Some(cp) => cp,
+            None => return false,
+        },
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
@@ -141,10 +154,19 @@ pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> 
     [clamp(dx, canvas.x0 - b.x0, canvas.x1 - b.x1), clamp(dy, canvas.y0 - b.y0, canvas.y1 - b.y1)]
 }
 
+/// Status-bar hint for the Patch and Content-Aware Move tools: the selection is the patch and it
+/// has to be dragged somewhere. Without it a lasso, or a click inside the selection, changes
+/// nothing on the canvas and the tool looks dead (#1715).
+pub fn patch_hint(app: &mut PhotocraftApp) {
+    app.ui.status = tl!("Now drag the selection onto another area").into();
+    app.ui.status_error = false;
+}
+
 /// Patch Tool: the patch was dragged from `start` to `end`.
 pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let off = patch_offset(app, start, end);
     if off == [0, 0] {
+        patch_hint(app);
         return;
     }
     let preview = crate::patch_preview::take(app);
@@ -163,6 +185,7 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
 pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let off = patch_offset(app, start, end);
     if off == [0, 0] {
+        patch_hint(app);
         return;
     }
     let o = &app.ui.tool_options;
@@ -633,6 +656,28 @@ mod tests {
         h.get_by_label("Darken Amount");
         assert_eq!(h.state().ui.tool_options.red_eye_pupil_size, 50.0);
         assert_eq!(h.state().ui.tool_options.red_eye_darken, 50.0);
+    }
+
+    #[test]
+    fn patch_tool_says_to_drag_the_selection_after_the_lasso_and_after_a_click() {
+        let hint = tl!("Now drag the selection onto another area");
+        let m = egui::Modifiers::NONE;
+        let mut app = app();
+        app.ui.tool = Tool::Patch;
+        app.ui.status.clear();
+        // No selection yet: the drag is a lasso, which outlines the patch and says what comes next.
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 10.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 10.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 30.0 }, m);
+        assert!(app.session.active().is_some_and(|st| st.doc.selection.is_some()), "the lasso made a selection");
+        assert_eq!((app.ui.status.as_str(), app.ui.status_error), (hint, false));
+        // A press and release inside the selection moves nothing: it says so instead of staying silent.
+        app.ui.status.clear();
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 20.0 }, m);
+        assert_eq!((app.ui.status.as_str(), app.ui.status_error), (hint, false));
+        assert!(app.session.active().is_some_and(|st| st.doc.selection.is_some()), "the selection stays");
     }
 
     #[test]

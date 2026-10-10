@@ -106,6 +106,15 @@ the same.
   size (5–8 swap width and height), and the rotated buffer is allocated fallibly.
   `Image::oriented` turns any layout and depth in parallel bands (about 10 ms for 24 MP RGB8 in
   release).
+* **Resolution** (#1691, module `resolution`): a file without a resolution of its own format
+  (no PNG `pHYs`, a WebP, HEIF, …) takes it from its XMP `tiff:XResolution` / `YResolution` /
+  `ResolutionUnit`, else from EXIF IFD0 (RATIONAL X/YResolution, unit 2 inch — the default when
+  absent — or 3 cm; unit 1 or anything malformed counts as no resolution). A JPEG uses, like
+  Photoshop, the first usable of: APP13 Photoshop ResolutionInfo (0x03ED), XMP, EXIF, and only
+  then the JFIF density (cameras write EXIF only, many tools write a default JFIF 72). On export
+  the EXIF and XMP resolution are rewritten to the image's (`export_exif`, `export_xmp`): the
+  RATIONAL values in place, ResolutionUnit set to 2, an entry that can't be rewritten removed
+  from IFD0 without moving any other data. IFD1 (the thumbnail's) is left as it is.
 * **JPEG**
   * 8-bit only. Neither decoder backend supports 12-bit.
   * A file cut off inside its image data decodes leniently (a baseline JPEG's missing rows come
@@ -114,8 +123,12 @@ the same.
   * CMYK is always written 4:4:4 (subsampled CMYK is not portable) as Adobe-inverted CMYK with an
     APP14 marker.
   * Text is not written because there is no COM-segment support.
-  * EXIF and XMP must each fit in one 64 KiB APP1 segment, otherwise the encoder returns an error.
-    Extended XMP is not written.
+  * EXIF and XMP must each fit in one APP1 segment (65 533 bytes with its header). Metadata that
+    doesn't fit is dropped and the export still succeeds, with a
+    `MetadataTooLarge` warning ("EXIF (… bytes) is too large for the format; it will be dropped").
+    Before dropping XMP, the encoder first removes the layered-document properties
+    (`DocumentAncestors`, `TextLayers`) that mean nothing in a flat JPEG. Extended XMP is not
+    written.
 * **TIFF decode**
   * Classic TIFF and BigTIFF (version 43, 8-byte offsets), both byte orders, strips or tiles,
     planar configuration 1 or 2.
@@ -138,9 +151,19 @@ the same.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
   the file could pass 4 GiB.
 * **EXR**
-  * Reads the first valid layer at full resolution, from its data window.
+  * Multi-part files (a Maya/Arnold render writes one part per AOV) open the part that
+    looks most like a colour image — RGBA beats RGB beats YA beats a single channel, so a
+    depth-only part no longer fails the file — with `DecodeWarning::MoreParts` naming how
+    many parts exist. `exr_info` lists every part (name, view, size, channels, deep/tiled)
+    without decoding pixels, and `decode_exr_part` decodes a chosen one. Deep parts stay
+    with the deep decoder: a file that has any is refused here with a pointer to it.
+  * Reads at full resolution, from the data window.
   * Channel names are matched by suffix, so `layer.R` counts as `R`.
-  * Subsampled channels and deep data are unsupported.
+  * Subsampled channels are unsupported.
+  * Deep data (scanlines or single-level tiles, compressed NONE, RLE or ZIPS) opens as a flat
+    image: each pixel's samples are composited into one, with
+    `DecodeWarning::DeepFlattened` because per-pixel depth is not kept. Deep ZIP (16-line
+    blocks) and deep mip-map or rip-map tiles return `Unsupported`.
   * Only lossless compressions are offered for writing: None, RLE, ZIP1, ZIP16 and PIZ.
 * **Netpbm writing** picks the subtype from the image: float gives PFM, gray gives P5, RGB gives
   P6, and anything with alpha or CMYK gives P7 (PAM). Writing a `.pbm` file therefore produces
@@ -154,6 +177,8 @@ the same.
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
 defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
+including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 
 ## Tests
 

@@ -101,7 +101,7 @@ fn mosaic_preserves_depth_color_alpha_and_tile_independence() {
                 input.write_region(b, &pattern.data);
                 let src = Image::read(&input, b);
                 let ctx = Ctx { bounds: b, mode, alpha };
-                for cell_size in [6.0, 50.0, 180.0] {
+                for cell_size in [6.0, 13.0, 50.0, 180.0] {
                     let params = FilterParams::Mosaic { cell_size };
                     let mut expected = Surface::new(fmt);
                     expected.write_region(b, &legacy_mosaic(&src, b, &ctx, cell_size));
@@ -129,6 +129,29 @@ fn mosaic_handles_zero_channels() {
     for alpha in [false, true] {
         let ctx = Ctx { bounds: rect, mode: ColorMode::Rgb, alpha };
         assert!(stylize::mosaic(&src, rect, &ctx, 2.0).is_empty());
+    }
+}
+
+#[test]
+fn mosaic_row_reads_preserve_hdr_alpha_and_partial_source_bits() {
+    let bounds = Rect::new(-7, 3, 30, 26);
+    for rect in [bounds, Rect::new(-3, 7, 23, 21)] {
+        let mut src = image_pattern(rect, 4);
+        for (i, pixel) in src.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            pixel[0] = pixel[0] * 8.0 - 4.0;
+            pixel[1] = if i.is_multiple_of(3) { -0.0 } else { pixel[1] * 16.0 };
+            pixel[2] = if i.is_multiple_of(7) { f32::MIN_POSITIVE } else { -pixel[2] };
+            pixel[3] = if i.is_multiple_of(5) { 0.0 } else { pixel[3] };
+        }
+        for alpha in [false, true] {
+            let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha };
+            for cell in [2.0, 4.0, 10.0, 50.0, 180.0] {
+                let expected = legacy_mosaic(&src, bounds, &ctx, cell);
+                let got = stylize::mosaic(&src, bounds, &ctx, cell);
+                assert_eq!(got.len(), expected.len());
+                assert!(got.iter().zip(&expected).all(|(a, b)| a.to_bits() == b.to_bits()));
+            }
+        }
     }
 }
 

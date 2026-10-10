@@ -69,7 +69,7 @@ struct Frame {
 fn frame(doc: &Document, id: LayerId, cmd: &str) -> Result<Frame> {
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Text(t) = &layer.content else {
-        return Err(bad(cmd, format!("layer {} is a {} layer, not a type layer", id.0, layer.content.kind_name())));
+        return Err(bad(cmd, format!("layer {} is {} {} layer, not a type layer", id.0, layer.content.article(), layer.content.kind_name())));
     };
     let text = t.text.clone();
     let transform = t.transform;

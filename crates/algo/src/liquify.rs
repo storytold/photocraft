@@ -320,7 +320,10 @@ impl LiquifyField {
         let r = (s.size / 2.0).max(0.5);
         let spacing = (r * 0.2).max(0.5);
         let steps = (len / spacing).ceil().max(1.0) as usize;
-        for k in 1..=steps {
+        // Walk only the steps whose dab can reach a field node: the rest return from `dab` before
+        // touching anything, and a segment to a far-off point has trillions of them (#937).
+        let Some((k0, k1)) = self.reachable_steps(a, b, steps, r, s.tool.is_stationary()) else { return dirty };
+        for k in k0..=k1 {
             let t0 = (k - 1) as f64 / steps as f64;
             let t1 = k as f64 / steps as f64;
             let c = [a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
@@ -331,6 +334,39 @@ impl LiquifyField {
             dirty = dirty.union(&self.dab(s, centre, delta, pr));
         }
         dirty
+    }
+
+    /// The steps `k0..=k1` of a segment walked in `steps` whose dab can touch a field node, or
+    /// `None` when none can. Step `k` centres its dab at `a + (b - a)·(k - o)/steps`, with `o` = 1
+    /// for the dragging tools and 0 for the stationary ones (see `stroke_segment`). A dab reaches a
+    /// node only when its centre is within `r` plus a node of the node grid, so the window below
+    /// pads that by another node and a step: the dabs it leaves out would each change nothing.
+    fn reachable_steps(&self, a: [f64; 3], b: [f64; 3], steps: usize, r: f64, stationary: bool) -> Option<(usize, usize)> {
+        if self.w == 0 || self.h == 0 {
+            return None;
+        }
+        let pad = r + 2.0 * self.cell;
+        let lo = [f64::from(self.bounds.x0) + 0.5 - pad, f64::from(self.bounds.y0) + 0.5 - pad];
+        let hi = [lo[0] + (self.w - 1) as f64 * self.cell + 2.0 * pad, lo[1] + (self.h - 1) as f64 * self.cell + 2.0 * pad];
+        let (n, o) = (steps as f64, if stationary { 0.0 } else { 1.0 });
+        let (mut k0, mut k1) = (1.0f64, n);
+        for ax in 0..2 {
+            let d = b[ax] - a[ax];
+            if d == 0.0 {
+                if a[ax].is_nan() || a[ax] < lo[ax] || a[ax] > hi[ax] {
+                    return None;
+                }
+                continue;
+            }
+            let (u0, u1) = ((lo[ax] - a[ax]) / d, (hi[ax] - a[ax]) / d);
+            k0 = k0.max((u0.min(u1) * n + o).floor() - 1.0);
+            k1 = k1.min((u0.max(u1) * n + o).ceil() + 1.0);
+        }
+        // NaN: a segment whose length overflowed.
+        if k0.is_nan() || k1.is_nan() || k0 > k1 {
+            return None;
+        }
+        Some((k0 as usize, k1 as usize))
     }
 
     /// One dab at `c` with brush motion `delta`. Returns the document rect it affected.
@@ -741,6 +777,70 @@ impl ProxyImage {
 mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
+
+    /// The segment walk before #937: every step, whether or not its dab can reach the field.
+    fn full_walk(f: &mut LiquifyField, s: &LiquifyStroke, a: [f64; 3], b: [f64; 3]) -> Rect {
+        let mut dirty = Rect::EMPTY;
+        let (pa, pb) = (a[2].clamp(0.0, 1.0), b[2].clamp(0.0, 1.0));
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let r = (s.size / 2.0).max(0.5);
+        let steps = (len / (r * 0.2).max(0.5)).ceil().max(1.0) as usize;
+        for k in 1..=steps {
+            let (t0, t1) = ((k - 1) as f64 / steps as f64, k as f64 / steps as f64);
+            let c = [a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
+            let delta = [(b[0] - a[0]) * (t1 - t0), (b[1] - a[1]) * (t1 - t0)];
+            let centre = if s.tool.is_stationary() { c } else { [c[0] - delta[0], c[1] - delta[1]] };
+            dirty = dirty.union(&f.dab(s, centre, delta, pa + (pb - pa) * t1));
+        }
+        dirty
+    }
+
+    #[test]
+    fn a_segment_walks_only_the_dabs_that_can_reach_the_field() {
+        // #937: a segment to a far-off point walked one dab per spacing step along its whole
+        // length (~3e14 for 1e15 px). Skipping the dabs that can't reach a field node must leave
+        // every result bit-identical to the full walk.
+        use LiquifyTool::*;
+        let bounds = Rect::new(-7, 3, 89, 67);
+        let segments: [([f64; 3], [f64; 3]); 9] = [
+            ([10.0, 20.0, 1.0], [70.0, 50.0, 0.5]),        // inside
+            ([-900.0, 30.0, 1.0], [40.0, 31.0, 1.0]),      // in from far left
+            ([40.0, 30.0, 1.0], [40.0, 4000.0, 0.2]),      // out downwards
+            ([-500.0, -500.0, 1.0], [600.0, 600.0, 1.0]),  // diagonal through
+            ([-300.0, -9.0, 1.0], [300.0, -9.0, 1.0]),     // parallel, just above (the brush reaches)
+            ([-300.0, -400.0, 1.0], [300.0, -400.0, 1.0]), // parallel, far above (reaches nothing)
+            ([88.5, -50.0, 1.0], [88.5, 120.0, 1.0]),      // vertical, along the right edge
+            ([200.0, 200.0, 1.0], [201.0, 900.0, 1.0]),    // entirely outside
+            ([0.0, 0.0, 1.0], [0.25, 0.1, 1.0]),           // shorter than one step
+        ];
+        for tool in [ForwardWarp, PushLeft, Reconstruct, Smooth, TwirlCw, TwirlCcw, Pucker, Bloat, Freeze, Thaw] {
+            for size in [6.0, 40.0] {
+                for (a, b) in segments {
+                    let s = LiquifyStroke::new(tool, size);
+                    let (mut fast, mut full) = (LiquifyField::new(bounds, 2.0), LiquifyField::new(bounds, 2.0));
+                    // Some displacement first, so Reconstruct and Smooth have something to undo.
+                    for f in [&mut fast, &mut full] {
+                        f.stroke_segment(&LiquifyStroke::new(ForwardWarp, 30.0), [20.0, 20.0, 1.0], [60.0, 40.0, 1.0]);
+                    }
+                    let dirty = fast.stroke_segment(&s, a, b);
+                    assert_eq!(dirty, full_walk(&mut full, &s, a, b), "{tool:?} {size} {a:?} {b:?}");
+                    assert!(fast.d == full.d && fast.freeze == full.freeze, "{tool:?} {size} {a:?} {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_segment_to_a_far_off_point_returns() {
+        // The issue's request: about 3.3e14 steps before the fix. Also a segment whose length
+        // overflows f64.
+        let mut f = LiquifyField::new(Rect::new(0, 0, 24, 16), 2.0);
+        let s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0);
+        let dirty = f.stroke_segment(&s, [0.0, 0.0, 1.0], [1e15, 0.0, 1.0]);
+        assert!(!dirty.is_empty() && dirty.x1 <= 64, "{dirty:?}");
+        f.stroke_segment(&s, [-1e308, 5.0, 1.0], [1e308, 5.0, 1.0]);
+        f.stroke_segment(&LiquifyStroke::new(LiquifyTool::Bloat, 30.0), [5.0, -1e15, 1.0], [5.0, 1e15, 1.0]);
+    }
 
     fn sample(st: SampleType) -> Surface {
         let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, st, true));

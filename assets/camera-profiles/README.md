@@ -3,7 +3,7 @@
 The native app embeds 55 DCPs (55 exact model identifiers), compressed losslessly with gzip.
 No Adobe installation is needed. These are independent camera calibrations, not manufacturer
 Picture Control presets or a promise of matching camera JPEGs. RAW decoder support is separate:
-for example, a listed CR3/RAF model does not add a decoder for that format. The web build does
+for example, a listed CR3 or compressed RAF model does not add a decoder for that format. The web build does
 not embed this native bundle.
 
 Source: [RawTherapee profile data at the pinned revision](https://github.com/RawTherapee/RawTherapee/tree/5f486d3678b34c74ba0c63571c17babe20935019/rtdata/dcpprofiles).

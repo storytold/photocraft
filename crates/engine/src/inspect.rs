@@ -1,6 +1,6 @@
 //! JSON views of engine state for automation, tests and debugging.
 
-use photocraft_doc::{Layer, LayerContent};
+use photocraft_doc::{Layer, LayerContent, SmartSource};
 use serde_json::{Value, json};
 
 use crate::{DocState, Session};
@@ -45,6 +45,7 @@ pub fn document(d: &DocState) -> Value {
         "revision": d.revision,
         "channels": crate::channel_cmds::channels_json(d),
         "quickMask": doc.quick_mask.is_some(),
+        "symmetry": d.symmetry.as_ref().map(|s| s.inspect()),
         "layerMaskView": crate::mask_view_cmds::view_json(d),
         "layerComps": doc.layer_comps.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
         "lastAppliedComp": doc.last_applied_comp,
@@ -104,6 +105,13 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId]) -> Value {
                     .collect(),
             );
             v["smartFiltersEnabled"] = json!(sm.filters_enabled);
+            // Where the contents come from. A PSD placed layer (embedded or linked in Photoshop) is
+            // `linked` to the `Idnt` uuid of its file, which its duplicates share; New Smart Object
+            // via Copy embeds its own copy of the file instead.
+            v["smartSource"] = match &sm.source {
+                SmartSource::Embedded { file_name, .. } => json!({"kind": "embedded", "fileName": file_name}),
+                SmartSource::Linked { path } => json!({"kind": "linked", "path": path}),
+            };
         }
         LayerContent::Text(t) => {
             v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});

@@ -31,42 +31,77 @@ fn num(p: &Value, key: &str, default: f32) -> f32 {
     p.get(key).and_then(Value::as_f64).map_or(default, |v| v as f32)
 }
 
+/// `key`'s value; a null counts as missing (as in `adjust_params`).
+fn given<'a>(p: &'a Value, key: &str) -> Option<&'a Value> {
+    p.get(key).filter(|v| !v.is_null())
+}
+
+fn opt_str<'a>(cmd: &str, p: &'a Value, key: &str) -> Result<Option<&'a str>> {
+    match given(p, key) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be a string"))),
+    }
+}
+
+fn opt_bool(cmd: &str, p: &Value, key: &str) -> Result<Option<bool>> {
+    match given(p, key) {
+        None => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be true or false"))),
+    }
+}
+
+/// A percentage in -100..100 (clamped); anything but a finite number is an error.
+fn percent(cmd: &str, key: &str, v: &Value) -> Result<f32> {
+    let x = v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` must be a number")))?;
+    Ok((x as f32).clamp(-100.0, 100.0))
+}
+
 /// Selective Color from params. Accepts per-range arrays (`"reds":[c,m,y,k]` in percent) and the
 /// dialog's single-range form (`"colors":"reds","cyan":…,"magenta":…,"yellow":…,"black":…`);
-/// `"method":"relative|absolute"`. Unspecified ranges keep `base`'s values.
-pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Adjustment {
+/// `"method":"relative|absolute"`. Unspecified ranges keep `base`'s values; a key of the wrong
+/// type is an error.
+pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
+    const CMD: &str = "selectiveColor";
     let (mut relative, mut adj) = match base {
         Some(Adjustment::SelectiveColor { relative, adjustments }) => (*relative, *adjustments),
         _ => (true, [[0.0; 4]; 9]),
     };
-    if let Some(m) = p.get("method").and_then(Value::as_str) {
-        relative = m != "absolute";
+    match opt_str(CMD, p, "method")? {
+        None => {}
+        Some("relative") => relative = true,
+        Some("absolute") => relative = false,
+        Some(m) => return Err(bad(CMD, format!("`method` must be \"relative\" or \"absolute\", not `{m}`"))),
     }
-    if let Some(b) = p.get("relative").and_then(Value::as_bool) {
+    if let Some(b) = opt_bool(CMD, p, "relative")? {
         relative = b;
     }
-    for (i, key) in RANGES.iter().enumerate() {
-        if let Some(a) = p.get(*key).and_then(Value::as_array) {
-            for (k, v) in a.iter().take(4).enumerate() {
-                adj[i][k] = (v.as_f64().unwrap_or(0.0) as f32).clamp(-100.0, 100.0);
+    for (row, key) in adj.iter_mut().zip(RANGES) {
+        let Some(v) = given(p, key) else { continue };
+        let a = v.as_array().filter(|a| a.len() == 4).ok_or_else(|| bad(CMD, format!("`{key}` must be an array of 4 numbers [c, m, y, k]")))?;
+        for (slot, x) in row.iter_mut().zip(a) {
+            *slot = percent(CMD, key, x)?;
+        }
+    }
+    if let Some(c) = opt_str(CMD, p, "colors")? {
+        let Some((row, _)) = adj.iter_mut().zip(RANGES).find(|(_, r)| *r == c) else {
+            return Err(bad(CMD, format!("unknown range `{c}` (ranges: {})", RANGES.join(", "))));
+        };
+        for (slot, key) in row.iter_mut().zip(["cyan", "magenta", "yellow", "black"]) {
+            if let Some(v) = given(p, key) {
+                *slot = percent(CMD, key, v)?;
             }
         }
     }
-    let range = p.get("colors").and_then(Value::as_str).and_then(|c| RANGES.iter().position(|r| *r == c));
-    if let Some(i) = range {
-        for (k, key) in ["cyan", "magenta", "yellow", "black"].iter().enumerate() {
-            if let Some(v) = p.get(*key).and_then(Value::as_f64) {
-                adj[i][k] = (v as f32).clamp(-100.0, 100.0);
-            }
-        }
-    }
-    Adjustment::SelectiveColor { relative, adjustments: adj }
+    Ok(Adjustment::SelectiveColor { relative, adjustments: adj })
 }
 
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
 /// .look path, native only) or `"data"` (the file's text, with `"fileName"` naming its format),
 /// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
-/// layer, as Photoshop does. Unspecified fields keep `base`'s values.
+/// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
+/// error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
     let (mut name, mut lut, mut size, mut tetrahedral, mut dither) = match base {
@@ -74,7 +109,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         _ => (String::new(), None, 0, false, false),
     };
     let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String)> = None;
-    if let Some(id) = p.get("lut").and_then(Value::as_str) {
+    if let Some(id) = opt_str(CMD, p, "lut")? {
         if id == "none" || id.is_empty() {
             name.clear();
             lut = None;
@@ -85,12 +120,13 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             loaded = Some((f, label));
         }
     }
-    if let Some(text) = p.get("data").and_then(Value::as_str) {
-        let file_name = p.get("fileName").and_then(Value::as_str).unwrap_or("lut.cube");
+    let file_name = opt_str(CMD, p, "fileName")?;
+    if let Some(text) = opt_str(CMD, p, "data")? {
+        let file_name = file_name.unwrap_or("lut.cube");
         let f = photocraft_cms::lutfile::parse(file_name, text.as_bytes()).map_err(|e| bad(CMD, e.0))?;
         loaded = Some((f, base_name(file_name)));
     }
-    if let Some(path) = p.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+    if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
         let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
         let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
         loaded = Some((f, base_name(path)));
@@ -109,13 +145,16 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         size = f.size as u32;
         lut = Some(std::sync::Arc::new(f.data));
     }
-    if let Some(i) = p.get("interpolation").and_then(Value::as_str) {
-        tetrahedral = i == "tetrahedral";
+    match opt_str(CMD, p, "interpolation")? {
+        None => {}
+        Some("trilinear") => tetrahedral = false,
+        Some("tetrahedral") => tetrahedral = true,
+        Some(i) => return Err(bad(CMD, format!("`interpolation` must be \"trilinear\" or \"tetrahedral\", not `{i}`"))),
     }
-    if let Some(b) = p.get("tetrahedral").and_then(Value::as_bool) {
+    if let Some(b) = opt_bool(CMD, p, "tetrahedral")? {
         tetrahedral = b;
     }
-    if let Some(b) = p.get("dither").and_then(Value::as_bool) {
+    if let Some(b) = opt_bool(CMD, p, "dither")? {
         dither = b;
     }
     Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither })
@@ -143,7 +182,7 @@ fn read_file(_: &str) -> Option<Vec<u8>> {
 pub fn update_adjustment(existing: &Adjustment, p: &Value) -> Option<Result<Adjustment>> {
     let empty = p.as_object().is_none_or(|o| o.keys().all(|k| matches!(k.as_str(), "layer" | "coalesce" | "__kind")));
     match existing {
-        Adjustment::SelectiveColor { .. } => Some(Ok(selective_from_params(p, (!empty).then_some(existing)))),
+        Adjustment::SelectiveColor { .. } => Some(selective_from_params(p, (!empty).then_some(existing))),
         Adjustment::ColorLookup { .. } => Some(lookup_from_params(p, (!empty).then_some(existing))),
         _ => None,
     }
@@ -204,7 +243,11 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
     }
     let d = s.active().ok_or("no document open")?;
     let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
-    if matches!(l.content, LayerContent::Raster(_)) { Ok(()) } else { Err(format!("active layer is a {} layer, not a pixel layer", l.content.kind_name())) }
+    if matches!(l.content, LayerContent::Raster(_)) {
+        Ok(())
+    } else {
+        Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()))
+    }
 }
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {

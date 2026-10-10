@@ -12,14 +12,15 @@ use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
-use super::{decode_source, detach_psd, other, placement, shift_layer, smart, source_bytes};
+use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
 /// The smart object's contents as layers in `doc`'s colour model, profile and depth, still in
 /// source pixel coordinates. A Background becomes a normal layer (it can't sit above others).
-fn contents(doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
-    let (name, bytes) = source_bytes(&doc.metadata, &sm.source).ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
+fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
+    let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
+        .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
     let mut src = decode_source(&name, &bytes)?;
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
@@ -63,7 +64,7 @@ fn embed_nested(meta: &Metadata, l: &mut Layer) {
 /// Moves unpacked layers from source pixels to where the smart object placed them: an exact
 /// shift for whole-pixel moves, else its transform (type, shapes and nested smart objects stay
 /// live; Distort and Perspective need them rasterized, as Free Transform does).
-fn place(doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
+fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
     if sm.warp.as_ref().is_some_and(|w| !w.is_identity()) {
         return Err(other("a warped smart object can't be converted to layers; rasterize it instead (Layer › Smart Objects › Rasterize)"));
     }
@@ -73,6 +74,17 @@ fn place(doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
         // Saturating casts: a placement that far out moves the layers off any canvas either way.
         layers.iter_mut().for_each(|l| shift_layer(l, e.round() as i32, f.round() as i32));
         return Ok(());
+    }
+    // Unlike a whole-pixel shift, this path re-renders nested smart objects from their sources.
+    // Check every read before transforming anything; refresh_text keeps errors as fallback pixels.
+    if s.authorize.is_some() {
+        let mut pending: Vec<&Layer> = layers.iter().collect();
+        while let Some(l) = pending.pop() {
+            if let LayerContent::Smart(sm) = &l.content {
+                authorize_source(s, "layer.smartObjects.convertToLayers", doc, &sm.source)?;
+            }
+            pending.extend(l.children().into_iter().flatten());
+        }
     }
     let h = placement(sm);
     let affine = sm.perspective.is_none().then_some(sm.transform);
@@ -160,8 +172,8 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let sm = smart(doc, id)?;
-    let mut layers = contents(doc, sm, intent, bpc)?;
-    place(doc, sm, &mut layers)?;
+    let mut layers = contents(s, doc, sm, intent, bpc)?;
+    place(s, doc, sm, &mut layers)?;
     let discarded = sm.smart_filters.len();
     let out = unpacked(so, layers);
     let (new_id, group) = (out.id, out.is_group());

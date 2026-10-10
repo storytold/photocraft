@@ -48,7 +48,13 @@ fn new_app() -> PhotocraftApp {
 
 fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
-    ViewXform { rect: crate::rulers::content_rect(app, app.last_canvas_rect), zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal }
+    ViewXform {
+        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
+        zoom: v.zoom / app.canvas_ppp(),
+        center: v.center,
+        flip: app.ui.view.flip_horizontal,
+        rotation: v.rotation,
+    }
 }
 
 /// Screen position of a text-space point of layer `id`.
@@ -202,6 +208,26 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     click(&mut h, p);
     assert_eq!(selection(&h), (3, 3));
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+}
+
+/// Preferences ▸ Type ▸ Use Escape to Commit (default on): with it off, Escape cancels the
+/// session like the Cancel button instead of committing.
+#[test]
+fn use_escape_to_commit_off_makes_escape_cancel_the_session() {
+    for (use_esc_to_commit, expected) in [(true, "HOxHOHO"), (false, "HOHOHO")] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": "HOHOHO", "size": 120, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+        app.run("prefs.set", json!({"path": "type.useEscToCommit", "value": use_esc_to_commit})).unwrap();
+        let mut h = harness(1.0, app);
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        super::insert(h.state_mut(), "x");
+        assert_eq!(text(h.state(), id).text, "HOxHOHO", "typing goes into the session");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.text_edit.is_none(), "the session ends either way (useEscToCommit={use_esc_to_commit})");
+        assert_eq!(text(h.state(), id).text, expected, "useEscToCommit={use_esc_to_commit}");
+    }
 }
 
 fn size_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> f32 {
@@ -459,6 +485,57 @@ fn command_t_while_typing_toggles_the_character_panel() {
     assert_ne!(crate::view_cmds::checked(h.state(), "window.panel.character"), before, "the Character panel toggled");
 }
 
+#[test]
+fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text":"Hello world","size":40,"color":"#000000"})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 11,
+        anchor: 6,
+        session: "text-color-dialog-test".into(),
+        created: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let foreground = app.session.tools.foreground;
+    let before = app.session.active().unwrap().history.entries().len();
+    let selection = app.ui.text_edit.clone();
+    let dialog = super::open_color_picker(&mut app, [0.0; 3]);
+    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#ff0000"));
+    app.ui.close_dialog(dialog).unwrap();
+    assert_eq!(rgb_at(&app, id, 6), [0, 0, 0, 255]);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), before);
+    assert_eq!(app.ui.text_edit, selection);
+    let dialog = super::open_color_picker(&mut app, [0.0; 3]);
+    assert_eq!(app.ui.dialogs.last().unwrap().fields["__label"], "Color Picker (Text Color)");
+    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#00ff00"));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(rgb_at(&app, id, 0), [0, 0, 0, 255]);
+    assert_eq!(rgb_at(&app, id, 5), [0, 0, 0, 255]);
+    assert_eq!(rgb_at(&app, id, 6), [0, 255, 0, 255]);
+    assert_eq!(rgb_at(&app, id, 10), [0, 255, 0, 255]);
+    assert_eq!(app.session.tools.foreground, foreground, "text-only picker leaves the foreground alone");
+    assert_eq!(app.ui.text_edit, selection, "dialog preserves the caret and selection");
+    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1);
+    let dialog = super::open_color_picker(&mut app, [0.0, 1.0, 0.0]);
+    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#0000ff"));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one editing-session undo step");
+}
+
+#[test]
+fn text_color_dialog_without_a_selection_edits_the_whole_layer() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text":"Hello","color":"#000000"})).unwrap()["layer"].as_u64().unwrap());
+    let dialog = super::open_color_picker(&mut app, [0.0; 3]);
+    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#ff8800"));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(rgb_at(&app, id, 0), [255, 136, 0, 255]);
+    assert_eq!(rgb_at(&app, id, 4), [255, 136, 0, 255]);
+}
+
 /// #1381: on Wayland the input method sends an empty preedit (and sometimes an empty commit)
 /// whenever the caret rectangle moves, e.g. while ⌘A, ⇧-arrows or a drag select text. With
 /// nothing being composed that must leave the text and the selection alone; a real composition
@@ -539,7 +616,8 @@ fn frame_point(app: &PhotocraftApp, p: [f64; 2]) -> Pos2 {
 
 fn assert_affine(a: Affine, b: Affine) {
     for (x, y) in a.m.into_iter().zip(b.m) {
-        assert!((x - y).abs() < 2e-4, "{a:?} != {b:?}");
+        // Translations around 500 doc px at a scaled ppp cancel to ~2.7e-4 in f32 rounding.
+        assert!((x - y).abs() < 1e-3, "{a:?} != {b:?}");
     }
 }
 
@@ -1066,4 +1144,53 @@ fn temporary_type_transform_large_document_preview() {
         command_times[29], command_times[56], command_times[59]
     );
     crate::type_transform::cancel_drag(&mut app);
+}
+
+#[test]
+fn font_styles_keep_metadata_names_and_numeric_labels() {
+    let styles = super::styles("Inter");
+    assert!(styles.contains(&"Regular".into()));
+    assert!(styles.contains(&"SemiBold".into()));
+    assert_eq!(super::style_label("20"), "20");
+    assert_eq!(super::style_label("30"), "30");
+    assert_eq!(super::styles("Missing test family"), ["Regular"]);
+}
+
+#[test]
+fn postscript_only_style_shows_actual_subfamily() {
+    let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&style), "SemiBold");
+}
+
+/// A variable face lists every standard weight of its `wght` axis, not only its default instance
+/// (Montserrat from Google Fonts: its default instance is Thin).
+#[test]
+fn variable_faces_list_the_weights_of_their_axis() {
+    let face = |weight: f32, italic: bool, axes: Vec<(String, f32, f32, f32)>| {
+        let base = match weight as i32 {
+            100 => "Thin",
+            300 => "Light",
+            _ => "Bold",
+        };
+        let style = if italic { format!("{base} Italic") } else { base.to_string() };
+        photocraft_text::FaceInfo { family: "Montserrat".into(), style, postscript_name: None, weight, italic, axes }
+    };
+    let full = || vec![("wght".to_string(), 100.0, 100.0, 900.0)];
+    let names = super::style_names(&[face(100.0, false, full()), face(100.0, true, full())]);
+    assert_eq!(names.len(), 18, "{names:?}");
+    assert_eq!(names.first().map(String::as_str), Some("Thin"));
+    for s in ["Regular", "Italic", "Bold", "Bold Italic", "Black Italic"] {
+        assert!(names.iter().any(|n| n == s), "{s}: {names:?}");
+    }
+    // A narrower axis lists only its range; a static face only itself.
+    let names = super::style_names(&[face(300.0, false, vec![("wght".into(), 300.0, 400.0, 700.0)])]);
+    assert_eq!(names, ["Light", "Regular", "Medium", "SemiBold", "Bold"]);
+    assert_eq!(super::style_names(&[face(700.0, false, Vec::new())]), ["Bold"]);
+}
+
+/// Families the host serves are in the font menu before they are fetched.
+#[test]
+fn the_font_menu_lists_served_families() {
+    photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
+    assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
 }

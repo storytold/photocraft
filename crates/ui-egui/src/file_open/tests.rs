@@ -81,6 +81,29 @@ fn open_file_sets_name_path_and_recent() {
 }
 
 #[test]
+fn affinity_preview_does_not_acquire_the_source_path_even_when_renamed() {
+    for automation in [false, true] {
+        for path in ["/pics/source.af", "/pics/renamed.psd"] {
+            let (mut app, written) = app_with(vec![None]);
+            // The fake importer supplies the preview; its source signature controls path policy.
+            if automation {
+                app.open_automation_bytes(&display_name(path), b"\x00\xffKA").unwrap();
+                app.opened_from(path);
+            } else {
+                app.open_file(path, b"\x00\xffKA").unwrap();
+            }
+            assert!(app.session.active().unwrap().source_read_only);
+            assert!(app.session.active().unwrap().path.is_none());
+            assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(path));
+            // Save asks for a new file (cancelled here) instead of writing over the source.
+            assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+            answer(&mut app);
+            assert!(written.borrow().is_empty());
+        }
+    }
+}
+
+#[test]
 fn file_open_dialog_sets_path_so_save_writes_in_place() {
     // The dialog returns a full path: the document is named after the file, not the path.
     let (dir, paths) = files("in-place", &["cat.psd"], b"x");

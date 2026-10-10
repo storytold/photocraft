@@ -337,6 +337,17 @@ impl Fill {
     pub fn gradient(stops: Vec<(f32, Color)>, angle: f32, scale: f32, style: GradientStyle, reverse: bool) -> Fill {
         Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops: Vec::new(), midpoints: Vec::new(), offset: (0.0, 0.0), dither: false, align: true }
     }
+
+    /// This fill with its colours in `mode`'s model (see [`Color::in_mode`]): a fill layer's
+    /// colours are in its document's mode, which the compositors read them as.
+    pub fn in_mode(mut self, mode: ColorMode) -> Fill {
+        match &mut self {
+            Fill::Solid(c) => *c = c.in_mode(mode),
+            Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|(_, c)| *c = c.in_mode(mode)),
+            Fill::Pattern { .. } => {}
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -543,6 +554,14 @@ impl LayerContent {
             LayerContent::Smart(_) => "Smart Object",
         }
     }
+
+    /// English indefinite article for this layer kind ("an" for Adjustment, "a" for all others).
+    pub fn article(&self) -> &'static str {
+        match self {
+            LayerContent::Adjustment(_) => "an",
+            _ => "a",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -731,6 +750,8 @@ pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 pub struct Metadata {
     pub xmp: Option<String>,
     pub exif: Option<Arc<Vec<u8>>>,
+    /// Free-form image text (PNG tEXt/zTXt/iTXt, TIFF ASCII tags), including duplicate keys.
+    pub text: Vec<(String, String)>,
     /// Raw PSD image resources we don't model yet: (id, name, data), for lossless round-trip.
     pub psd_resources: Vec<(u16, String, Arc<Vec<u8>>)>,
     /// Raw PSD global additional-layer-info blocks: (signature, key, data),
@@ -1223,6 +1244,14 @@ mod tests {
         let bg = d.layers[0].id;
         d.layer_mut(bg).unwrap().surface_mut().unwrap().write_pixel(0, 0, &[0.0, 0.0, 0.0, 1.0]);
         assert_eq!(snap.layers[0].surface().unwrap().pixel(0, 0), vec![1.0; 4]);
+    }
+
+    #[test]
+    fn layer_content_article_and_kind_name() {
+        assert_eq!(LayerContent::Adjustment(Adjustment::Invert).article(), "an");
+        assert_eq!(LayerContent::Adjustment(Adjustment::Invert).kind_name(), "Adjustment");
+        assert_eq!(LayerContent::Raster(Surface::new(PixelFormat::RGBA8)).article(), "a");
+        assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None }).article(), "a");
     }
 }
 
