@@ -1,4 +1,6 @@
 //! One integration-test process keeps its global mask cache isolated from parallel unit tests.
+//! It stays out of the shared `tests/it` binary on purpose: other integration tests composite
+//! masked layers concurrently, which would fill the process-wide mask cache this test counts.
 use std::sync::Arc;
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};

@@ -68,7 +68,7 @@ sampled gamut boundary. `profiles/photocraft-coated-cmyk.icc` (237 KB, AToB 11‚Å
 21¬≥ lut16) is that output, dedicated to the public domain (CC0-1.0). Regenerate with
 
 ```sh
-PHOTOCRAFT_REGEN_PROFILES=1 cargo test -p photocraft-cms --release --test regen
+PHOTOCRAFT_REGEN_PROFILES=1 cargo test -p photocraft-cms --release --test it regen::
 ```
 
 It is a plausible coated-offset profile, not a measured characterisation: use your printer's

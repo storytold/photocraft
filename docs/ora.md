@@ -45,7 +45,7 @@ are covered by tests.
 
 Unit tests (`crates/io/src/ora/tests.rs`) round-trip layers, groups, pass-through, offsets,
 opacity, visibility, locks and every blend mode at 8 and 16 bit, check masks, rendered layer
-kinds, the archive layout and malformed input. `crates/automation/tests/openraster.rs` saves,
+kinds, the archive layout and malformed input. `crates/automation/tests/it/openraster.rs` saves,
 reopens, edits and saves in place through the agent surface; the CLI test converts both ways.
 
 Real-file checks use Krita-authored oracles from
@@ -54,11 +54,11 @@ Real-file checks use Krita-authored oracles from
 `mergedimage.png`:
 
 ```sh
-KRITA_TEST_DIR=/path/to/photocraft-corpus/krita cargo test -p photocraft-io --test krita_corpus -- --ignored --nocapture
+KRITA_TEST_DIR=/path/to/photocraft-corpus/krita cargo test -p photocraft-io --test it krita_corpus -- --ignored --nocapture
 ```
 
 2026-10-09, Krita 5.2.9: 30 of 34 `.ora` files render within 3/255 of Krita's merged image; the
-other four differ for known reasons listed in `crates/io/tests/krita_corpus.rs` (Krita's
+other four differ for known reasons listed in `crates/io/tests/it/krita_corpus.rs` (Krita's
 tie-break in Darker and Lighter Color, Hard Mix at a channel sum of exactly 1, and a
 linear-light 16-bit document that Krita blends in linear light). In the other direction,
 Krita opened every PhotoCraft re-export of those files and rendered 33 of them identically to

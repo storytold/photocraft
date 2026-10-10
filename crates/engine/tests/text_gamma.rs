@@ -5,8 +5,8 @@
 //! the gamma away from the default changes how every type layer composites, so running it next
 //! to the engine's unit tests let a concurrent test flatten one document under two gammas
 //! (`canvas_geom::tests::turns_at_every_depth_and_mode` compares the composite before an edit
-//! with the one after its undo, and failed on Windows CI that way). Keep any other test that
-//! changes the gamma in this file.
+//! with the one after its undo, and failed on Windows CI that way). It stays out of the shared
+//! `tests/it` binary for the same reason. Keep any other test that changes the gamma in this file.
 
 use photocraft_engine::Session;
 use serde_json::json;

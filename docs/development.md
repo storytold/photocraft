@@ -222,7 +222,7 @@ bounds, masks, selection, effects (`effects.items[].kind`), smart filters (`smar
 object sources (`smartSource`: `embedded` with its file name, or `linked` with a file path or, for a
 PSD placed layer, the `Idnt` uuid its duplicates share), type
 text, adjustment settings, channels and history, so agents can verify what they did without a
-screenshot. `crates/automation/tests/agent_tasks.rs` is the reference: ten realistic edit tasks
+screenshot. `crates/automation/tests/it/agent_tasks.rs` is the reference: ten realistic edit tasks
 (title card, colour grade, undo/redo, editable smart blur, masks, saved selections, align,
 capability-scoped export, resize/crop, CMYK + native save) driven purely over MCP.
 
@@ -273,6 +273,7 @@ translations do not affect the denominator. Unregistered locale TSV files are ig
 - **Real-file corpora** in `corpus/` (gitignored, fetched at pinned commits, sha256-verified): opt-in locally through the `corpus` cargo feature, always run in CI. See [Test corpora](#test-corpora).
 - **Composite oracle:** a PSD's embedded merged image is compared with our compositor's output. The pass rate is tracked in the roadmap.
 - **UI:** unit tests for widgets and state, plus screenshot checks through the control channel.
+- **One integration-test binary per crate** ([#2204](https://github.com/storytold/photocraft/issues/2204)): `crates/<crate>/tests/it/main.rs` declares one module per area (`tests/it/<name>.rs`), so a crate links one test binary instead of one per file (linking was ~13 s of CPU per io binary, ~39 s per ui-egui binary). Run one area with a name filter: `cargo test -p photocraft-io --test it psd_structure::` (test names carry their module prefix). Shared helpers are modules of that binary (`tests/it/common`, `tests/it/support`); tests that create wgpu devices take `support::gpu_lock()`, since concurrent devices in one process crash some drivers. A test that changes process-wide state keeps its own top-level `tests/<name>.rs` binary (engine: `text_gamma.rs`, `mask_cache_purge.rs`).
 
 ## Performance notes
 
@@ -313,7 +314,7 @@ cargo xtask perf --update-baseline   # also write perf/baseline.json from this r
 - `perf/baseline.json`: the numbers the scorecard shows, written only by
   `cargo xtask perf --update-baseline`, with the machine (CPU, RAM, GPU adapter, OS), its machine
   class, commit, date and load average.
-- `crates/io/tests/corpus.rs`: the corpus floors (every `Source { .. }` constant).
+- `crates/io/tests/it/corpus.rs`: the corpus floors (every `Source { .. }` constant).
 - The prefs audit: `Preferences` fields that no code reads (target 0, #204), plus counts taken
   from the tree (never-crash attribute coverage, `docs/parity-checklist.md`).
 
@@ -506,12 +507,12 @@ per source with its own floors: `corpus/psd`, the psd-tools set (also a truncati
 over every file that must never panic) and our Photoshop set `corpus/photoshop` (per-feature-group
 totals: `smart-filters`, `effects`, `text`, `adjustments/<mode><bits>`). Smart objects and type
 layers composite Photoshop's cached pixels there; `cargo xtask test-corpus -p engine -- --nocapture`
-(`crates/engine/tests/photoshop_oracles.rs`) re-renders them with our smart-filter stack and text
+(`crates/engine/tests/it/photoshop_oracles.rs`) re-renders them with our smart-filter stack and text
 engine and is the failure map for both. A panic is reported as `CRASH` and fails the run. Files without a real merged image (Maximize Compatibility off)
 are judged against their embedded thumbnail instead (`PASS (thumbnail)`, a strict low-resolution
-check); a file only SKIPs when it has no oracle at all. Raise the floors in `crates/io/tests/corpus.rs` when they
+check); a file only SKIPs when it has no oracle at all. Raise the floors in `crates/io/tests/it/corpus.rs` when they
 improve; never lower them. Synthetic reproductions of corpus findings live in
-`crates/io/tests/corpus_regressions.rs` (corpus files are never committed). To dig into one file:
+`crates/io/tests/it/corpus_regressions.rs` (corpus files are never committed). To dig into one file:
 
 ```sh
 cargo run --release -p photocraft-io --example oracle_diff -- corpus/psd/<file>.psd 0 png /tmp/diff.png

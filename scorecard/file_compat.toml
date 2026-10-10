@@ -1,5 +1,5 @@
 # Scorecard checklist: file compatibility (#215 formats, #216 measurement).
-# Corpus numbers come from crates/io/tests/corpus.rs, not from here.
+# Corpus numbers come from crates/io/tests/it/corpus.rs, not from here.
 # Statuses must be true on main. Verified against 4b53f62 on 2026-10-05 (smart objects: #215 PR).
 area = "file"
 title = "File compatibility"
@@ -10,14 +10,14 @@ id = "FILE-215-1"
 target = "Smart Objects export as embedded Smart Objects (SoLd + lnk2), not flat pixels"
 status = "done"
 issue = 215
-note = "psd_export.rs smart_blocks: PlLd + SoLd, source in lnk2 (.pcraft -> PSB); engine tests/smart_psd.rs; Photoshop 2026 opens 8/16-bit exports as live smart objects. Linked files are embedded"
+note = "psd_export.rs smart_blocks: PlLd + SoLd, source in lnk2 (.pcraft -> PSB); engine tests/it/smart_psd.rs; Photoshop 2026 opens 8/16-bit exports as live smart objects. Linked files are embedded"
 
 [[item]]
 id = "FILE-215-2"
 target = "Smart Filters survive PSD save and re-open (filterFX descriptor read and written)"
 status = "partial"
 issue = 215
-note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
+note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/it/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
 
 [[item]]
 id = "FILE-215-3"
@@ -94,7 +94,7 @@ id = "FILE-215-13"
 target = "Video layer frames persist in .pcraft; PSD video layers mapped"
 status = "partial"
 issue = 215
-note = "format convert.rs:89 + tests/roundtrip.rs:282 persist frames; no PSD video mapping"
+note = "format convert.rs:89 + tests/it/roundtrip.rs:282 persist frames; no PSD video mapping"
 
 [[item]]
 id = "FILE-215-14"
@@ -164,14 +164,14 @@ id = "FILE-216-2"
 target = "Large-file fixtures: 20 MP, 150-layer, generated 2 GB PSD and 4-5 GB PSB stress tests"
 status = "partial"
 issue = 216
-note = "4-5 GB PSB fixtures: psd example big_psb writes them (raw and RLE, planes past 2 GiB), io example big_psb_check opens and checks them; opt-in io tests/large_psb.rs (2.5 GB merged image). No 2 GB PSD, 150-layer or 20 MP fixture, nothing in CI"
+note = "4-5 GB PSB fixtures: psd example big_psb writes them (raw and RLE, planes past 2 GiB), io example big_psb_check opens and checks them; opt-in io tests/it/large_psb.rs (2.5 GB merged image). No 2 GB PSD, 150-layer or 20 MP fixture, nothing in CI"
 
 [[item]]
 id = "FILE-216-3"
 target = "TIFF, RAW and EXR corpora read by tests; per-camera RAW coverage reported"
 status = "partial"
 issue = 216
-note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. corpus/tiff and corpus/raw are still copied in by hand and no test reads them; no per-camera RAW report"
+note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/it/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. corpus/tiff and corpus/raw are still copied in by hand and no test reads them; no per-camera RAW report"
 
 [[item]]
 id = "FILE-216-4"
@@ -192,4 +192,4 @@ id = "FILE-216-6"
 target = "30-50 end-to-end workflow acceptance tasks driven through MCP or commands"
 status = "partial"
 issue = 216
-note = "automation/tests/agent_tasks.rs: 10 MCP tasks"
+note = "automation/tests/it/agent_tasks.rs: 10 MCP tasks"

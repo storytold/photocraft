@@ -1,7 +1,7 @@
 //! Frame times of the whole app on a designer's layout document (#125, #128): ~175 layers in
 //! nested groups (pass-through and isolated), 60 text layers in several fonts and sizes, stroked
 //! shapes, smart objects, drop shadows / strokes / gradient overlays, adjustment layers and masks,
-//! 4000×3000 8-bit RGB (`tests/support/layout_doc.rs`), saved as PSD and reopened through the real
+//! 4000×3000 8-bit RGB (`tests/it/support/layout_doc.rs`), saved as PSD and reopened through the real
 //! import path.
 //!
 //! ```sh
@@ -19,7 +19,7 @@
 //! pixel|move-text|move-shape|move-group|move-smart|move-headline` repeats one interaction for 20 s
 //! for a sampling profiler.
 
-#[path = "../tests/support/layout_doc.rs"]
+#[path = "../tests/it/support/layout_doc.rs"]
 mod layout_doc;
 
 use std::time::Instant;
