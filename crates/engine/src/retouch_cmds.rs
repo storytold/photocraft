@@ -66,6 +66,23 @@ fn point(p: &Value, k: &str) -> Option<(f64, f64)> {
     Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }
 
+/// The brush a retouching stroke paints with: the tool's brush (`base`, its tip, hardness and
+/// shape dynamics) with the shared params of `p` applied. UI previews of a stroke (the Spot Healing
+/// Brush's trail) render their coverage with it, so they match what the command changes.
+pub fn stroke_brush(base: &BrushSettings, p: &Value) -> BrushSettings {
+    let pct = |k: &str, d: f32, lo: f32, hi: f32| num(p, k, d).clamp(lo, hi) / 100.0;
+    BrushSettings {
+        size: num(p, "size", base.size).max(1.0),
+        hardness: pct("hardness", base.hardness * 100.0, 0.0, 100.0),
+        opacity: pct("opacity", 100.0, 1.0, 100.0),
+        flow: pct("flow", 100.0, 1.0, 100.0),
+        // Brush Settings › Brush Tip Shape › Spacing, as the Brush uses it (#2140).
+        spacing: pct("spacing", base.spacing * 100.0, 1.0, 1000.0),
+        erase: false,
+        ..base.clone()
+    }
+}
+
 /// Parse the shared brush params into a stroke on a layer (`None` when an alpha channel or the
 /// Quick Mask is targeted).
 fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<LayerId>)> {
@@ -83,18 +100,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         return Err(bad(cmd, "`points` is empty"));
     }
     crate::brush_cmds::check_coords(&pts, cmd)?;
-    let base = s.tools.brush.clone();
-    let pct = |k: &str, d: f32, lo: f32, hi: f32| num(p, k, d).clamp(lo, hi) / 100.0;
-    let brush = BrushSettings {
-        size: num(p, "size", base.size).max(1.0),
-        hardness: pct("hardness", base.hardness * 100.0, 0.0, 100.0),
-        opacity: pct("opacity", 100.0, 1.0, 100.0),
-        flow: pct("flow", 100.0, 1.0, 100.0),
-        // Brush Settings › Brush Tip Shape › Spacing, as the Brush uses it (#2140).
-        spacing: pct("spacing", base.spacing * 100.0, 1.0, 1000.0),
-        erase: false,
-        ..base
-    };
+    let brush = stroke_brush(&s.tools.brush, p);
     crate::brush_cmds::validate_brush(&brush, cmd)?;
     if crate::channel_cmds::is_channel_target(p) {
         return Ok((Stroke { brush, points: pts }, None));

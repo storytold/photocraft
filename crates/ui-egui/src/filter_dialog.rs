@@ -155,34 +155,81 @@ fn is_pixel_param(key: &str) -> bool {
             | "size"
             | "blur"
             | "speed"
+            | "shadowRadius"
+            | "highlightRadius"
     )
 }
 
+/// [`is_pixel_param`] for `key` of `command`. Some commands use those names for relative values:
+/// Tree's and Picture Frame's `size` (a fraction of the canvas, an ornament scale) and Lens
+/// Correction's perspective `horizontal` / `vertical` (-100..100). Scaled by the proxy factor,
+/// their preview drew a quarter-size tree and a quarter of the perspective (#2063).
+fn is_pixel_param_of(command: &str, key: &str) -> bool {
+    is_pixel_param(key)
+        && !matches!((command, key), ("filter.render.tree" | "filter.render.pictureFrame", "size") | ("filter.lensCorrection", "horizontal" | "vertical"))
+}
+
 /// Filters whose features have a fixed size in document pixels that no dialog parameter scales:
-/// per-pixel noise and dots (Diffuse, Mezzotint, Fibers), fixed wavelengths and brush widths
-/// (Ripple, Oil Paint) and pixel-sized geometry (Flame's length, width and interval). On a
-/// reduced proxy those features come out k times too large, so these preview at full resolution:
-/// what the preview shows is what OK applies, as in Photoshop (#2063).
-const FULL_RESOLUTION_PREVIEW: &[&str] =
-    &["filter.distort.ripple", "filter.stylize.diffuse", "filter.stylize.oilPaint", "filter.render.flame", "filter.render.fibers", "filter.pixelate.mezzotint"];
+/// per-pixel noise and dots (Add Noise, Diffuse, Mezzotint, Fibers), pixel kernels and scan lines
+/// (Custom, Reduce Noise, De-Interlace, Trace Contour's one-pixel lines), fixed lengths and
+/// widths (Ripple, Oil Paint, Wind's streaks, Extrude's depth, Flame's length, width and
+/// interval) and Tree, whose branches are built from 6 px segments. On a reduced proxy those
+/// features come out k times too large (or a different tree grows), so these preview at full
+/// resolution: what the preview shows is what OK applies, as in Photoshop (#2063).
+const FULL_RESOLUTION_PREVIEW: &[&str] = &[
+    "filter.distort.ripple",
+    "filter.stylize.diffuse",
+    "filter.stylize.oilPaint",
+    "filter.render.flame",
+    "filter.render.fibers",
+    "filter.pixelate.mezzotint",
+    "filter.noise.addNoise",
+    "filter.noise.reduceNoise",
+    "filter.other.custom",
+    "filter.video.deInterlace",
+    "filter.stylize.traceContour",
+    "filter.stylize.wind",
+    "filter.stylize.extrude",
+    "filter.render.tree",
+];
+
+/// Whether `command` with `params` previews at full resolution: [`FULL_RESOLUTION_PREVIEW`], every
+/// Filter Gallery filter (its strokes, grain and textures are sized in pixels; the settings are
+/// abstract levels, not lengths) and the dithered colour-mode conversions (Indexed Color, Bitmap).
+fn full_resolution_preview(command: &str, params: &Value) -> bool {
+    let choice = |key: &str| params.get(key).and_then(Value::as_str);
+    FULL_RESOLUTION_PREVIEW.contains(&command)
+        || command.starts_with("filter.gallery.")
+        || (command == "image.mode.indexedColor" && choice("dither") != Some("none"))
+        || (command == "image.mode.bitmap" && !matches!(choice("method"), Some("threshold" | "threshold50")))
+}
 
 /// Proxy factor for a live preview of `command` with `params`, given the document's reduced factor
-/// `k`: 1 for [`FULL_RESOLUTION_PREVIEW`] filters, otherwise the largest factor up to `k` at which
+/// `k`: 1 for [`full_resolution_preview`] commands, otherwise the largest factor up to `k` at which
 /// no pixel-sized parameter, divided by it, drops below the command's minimum. A clamped value
 /// would change the feature size: Pointillize's 5 px cells at k = 4 became the 3 px minimum, i.e.
 /// 12 px cells in the preview (#2063).
 pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
-    if k <= 1 || FULL_RESOLUTION_PREVIEW.contains(&command) {
+    if k <= 1 || full_resolution_preview(command, params) {
         return 1;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return k };
-    parse_spec(spec.params).into_iter().fold(k, |k, p| match p.kind {
-        Kind::Range { min, .. } if min > 0.0 && is_pixel_param(&p.key) => match params.get(&p.key).and_then(Value::as_f64) {
+    let k = parse_spec(spec.params).into_iter().fold(k, |k, p| match p.kind {
+        Kind::Range { min, .. } if min > 0.0 && is_pixel_param_of(command, &p.key) => match params.get(&p.key).and_then(Value::as_f64) {
             Some(v) if v.is_finite() => k.min((v / f64::from(min)).floor().clamp(1.0, f64::from(k)) as u32),
             _ => k,
         },
         _ => k,
-    })
+    });
+    // Mosaic rounds its cells to whole pixels: 10 px cells at k = 4 became 3 proxy px = 12 px.
+    // Divide the cell size evenly instead.
+    match params.get("cellSize").and_then(Value::as_f64) {
+        Some(v) if command == "filter.pixelate.mosaic" && v.is_finite() && v >= 1.0 => {
+            let cell = v.round().min(f64::from(u32::MAX)) as u32;
+            (1..=k).rev().find(|d| cell.is_multiple_of(*d)).unwrap_or(1)
+        }
+        _ => k,
+    }
 }
 
 /// Commands outside `filter.*` that get the schema dialog *with* live preview.
@@ -200,6 +247,7 @@ pub const PREVIEWED: &[&str] = &[
     "layer.matting.defringe",
     "layer.matting.colorDecontaminate",
     "layer.layerStyle.scaleEffects",
+    "type.warpText",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
@@ -292,6 +340,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut fields);
     }
+    if command == "type.warpText" {
+        warp_defaults(app, &mut fields);
+    }
     // Photoshop's Pattern Name dialog starts from the name the pattern would get anyway.
     if command == "edit.definePattern" {
         fields.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
@@ -315,6 +366,28 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
     fields.insert("angle".into(), json!(rot.abs()));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
+}
+
+/// Warp Text edits the type layers it opened on (the selected ones, or the one being edited) and
+/// starts from the warp the shown layer has, or None, never from remembered values (#218).
+fn warp_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    if let Some(Value::Object(targets)) = crate::type_tool::formatting_params(app) {
+        fields.extend(targets);
+    }
+    let warp = crate::type_tool::target_text(app).and_then(|t| t.warp.clone());
+    let w = warp.unwrap_or(photocraft_doc::text::TextWarp {
+        style: "warpNone".into(),
+        value: 50.0,
+        horizontal_distortion: 0.0,
+        vertical_distortion: 0.0,
+        horizontal: true,
+    });
+    // A style without a short id (from a PSD) shows as None, with the layer's values.
+    fields.insert("style".into(), json!(photocraft_text::warp::short_style(&w.style).unwrap_or("none")));
+    fields.insert("bend".into(), json!(w.value));
+    fields.insert("horizontalDistortion".into(), json!(w.horizontal_distortion));
+    fields.insert("verticalDistortion".into(), json!(w.vertical_distortion));
+    fields.insert("orientation".into(), json!(if w.horizontal { "horizontal" } else { "vertical" }));
 }
 
 /// A filter dialog with live preview for `command` whose parameters follow `spec` (registry
@@ -390,7 +463,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.insert(p.key, json!(count));
                     continue;
                 }
-                let unit = if is_pixel_param(&p.key) {
+                let unit = if is_pixel_param_of(&cmd, &p.key) {
                     "px"
                 } else if p.key == "angle" {
                     "°"
@@ -484,19 +557,25 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
                 let rgb = set.or(default).unwrap_or([0.0; 3]);
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let mut bytes = rgb.map(q);
-                let mut changed = false;
+                let bytes = rgb.map(q);
+                let name = label(&p.key);
+                let mut clicked = false;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.label(egui::RichText::new(&name).color(t.text_dim));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        changed = crate::widgets::color_edit_button_srgb(ui, &mut bytes).changed();
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
                     });
                 });
-                if changed {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(bytes.map(|b| f32::from(b) / 255.0))));
-                } else if set.is_none() && default.is_some() {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(rgb)));
+                if set.is_none() && default.is_some() {
+                    f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                }
+                if clicked {
+                    if !f.contains_key(&p.key) {
+                        f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                    }
+                    crate::color_picker_ui::request_field(f, &p.key, &crate::color_picker_ui::title_for(&name));
                 }
             }
             Kind::Int { default } => {
@@ -543,7 +622,10 @@ pub fn preview_document_with(
     k: u32,
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
-    let proxy = crate::proxy::proxy_document(doc, k);
+    // Warp Text renders the type again from the layer model (font size, position), which a
+    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
+    let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
+    let proxy = crate::proxy::proxy_document(doc, run_k);
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());
     s.add_document(proxy, None);
@@ -551,12 +633,12 @@ pub fn preview_document_with(
         s.select_layer(id).ok()?;
     }
     let mut p = params.clone();
-    if k > 1
+    if run_k > 1
         && let Some(o) = p.as_object_mut()
     {
         let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
         for (key, v) in o.iter_mut() {
-            if is_pixel_param(key)
+            if is_pixel_param_of(command, key)
                 && let Some(x) = v.as_f64()
             {
                 // Match the engine's minimum after scaling (e.g. Box Blur 1, Mosaic 2).
@@ -566,12 +648,15 @@ pub fn preview_document_with(
                     _ => None,
                 });
                 let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
-                *v = json!((x / k as f64).max(floor));
+                // Negative lengths (Offset's left/up shift, Displace's inverted scale) keep their
+                // sign: the floor that keeps a radius positive turned them into +0.1 (#2063).
+                let x = x / run_k as f64;
+                *v = json!(if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) });
             }
         }
     }
     s.execute(command, p).ok()?;
-    s.active().map(|d| (*d.doc).clone())
+    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
 }
 
 /// Cached preview state on the app.
@@ -803,6 +888,53 @@ mod tests {
         }
     }
 
+    /// A serde type error from numbers the dialog sends as JSON floats (`1.0`) for an integer
+    /// field ("invalid type: floating point `1.0`, expected u32"), as opposed to a legitimate
+    /// refusal such as "no selection" or "needs a map".
+    fn float_type_error(e: &str) -> bool {
+        e.contains("invalid type: floating point")
+    }
+
+    /// #2501: every schema dialog, opened with its default fields and drawn once, runs its command
+    /// (OK) and its live preview without a type error from integer fields sent as floats.
+    #[test]
+    fn every_dialog_default_runs_without_float_type_errors() {
+        let ids: Vec<&str> = photocraft_engine::command_specs().iter().map(|c| c.id).filter(|id| has_dialog(id)).collect();
+        assert!(ids.len() > 100, "{} dialogs", ids.len());
+        let mut failures = Vec::new();
+        for id in ids {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 24, "height": 24})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            let Some(dialog) = open(&mut app, id) else { continue };
+            let mut f = app.ui.dialogs.iter().find(|d| d.id == dialog).unwrap().fields.clone();
+            egui::Context::default().run_ui(Default::default(), |ui| body(ui, &mut f)).textures_delta.clear();
+            let params = params_of(&f);
+            let st = app.session.active().unwrap();
+            let (doc, active) = ((*st.doc).clone(), st.active_layer);
+            if let Err(e) = app.session.execute(id, params.clone()) {
+                let e = e.to_string();
+                if float_type_error(&e) {
+                    failures.push(format!("{id} OK {params}: {e}"));
+                }
+            }
+            // The preview swallows the error; rerun its params at full size to see it.
+            if preview_document(&doc, active, id, &params, 1).is_none() {
+                let mut s = photocraft_engine::Session::new();
+                s.add_document(doc, None);
+                if let Some(a) = active {
+                    s.select_layer(a).unwrap();
+                }
+                if let Err(e) = s.execute(id, params.clone()).map_err(|e| e.to_string())
+                    && float_type_error(&e)
+                {
+                    failures.push(format!("{id} preview {params}: {e}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn colour_params_parse_with_and_without_a_default() {
         let p = parse_spec(r##"{"color":color=#ffffff,"vineColor":color,"bad":color=#zz}"##);
@@ -949,13 +1081,15 @@ mod tests {
         a.px.iter().zip(&b.px).map(|(p, q)| (0..3).map(|c| (p[c] - q[c]).abs()).sum::<f32>() / 3.0).sum::<f32>() / a.px.len() as f32
     }
 
-    /// #2063: Ripple, Diffuse, Oil Paint, Flame, Fibers and Mezzotint drew their features in
-    /// proxy pixels, so a 1/4 preview showed them 4x larger than OK applied them. Their preview
-    /// now runs at full resolution and matches the applied result.
+    /// #2063: these filters drew their features in proxy pixels (noise, dots, dither, strokes,
+    /// kernels, scan lines, contour lines, streaks, depths, a tree's segments), so a 1/4 preview
+    /// showed them 4x larger than OK applied them. Their preview now runs at full resolution and
+    /// matches the applied result.
     #[test]
     fn fixed_size_filters_preview_at_the_scale_they_apply() {
-        let doc = waves(256);
-        let bg = doc.layers[0].id;
+        let doc = sharp(256);
+        let gray = grayscale(&doc);
+        let edge = json!([0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, -1, 4, -1, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0]);
         for (cmd, p) in [
             ("filter.distort.ripple", json!({"amount": 300.0, "size": "large"})),
             ("filter.stylize.diffuse", json!({"mode": "normal"})),
@@ -963,15 +1097,92 @@ mod tests {
             ("filter.render.flame", json!({})),
             ("filter.render.fibers", json!({})),
             ("filter.pixelate.mezzotint", json!({"type": "mediumDots"})),
+            ("filter.noise.addNoise", json!({"amount": 12.5})),
+            ("filter.noise.reduceNoise", json!({})),
+            ("filter.other.custom", json!({"kernel": edge})),
+            ("filter.video.deInterlace", json!({})),
+            ("filter.stylize.traceContour", json!({})),
+            ("filter.stylize.wind", json!({"method": "blast"})),
+            ("filter.stylize.extrude", json!({})),
+            ("filter.render.tree", json!({"baseTreeType": 1})),
+            ("filter.gallery.graphicPen", json!({})),
+            ("filter.gallery.stainedGlass", json!({"cellSize": 10})),
+            ("image.mode.indexedColor", json!({"colors": 16})),
+            ("image.mode.bitmap", json!({"method": "diffusion"})),
         ] {
-            let applied = preview_document(&doc, Some(bg), cmd, &p, 1).unwrap();
-            let old = preview_document(&doc, Some(bg), cmd, &p, 4).unwrap();
+            let doc = if cmd == "image.mode.bitmap" { &gray } else { &doc };
+            let bg = doc.layers[0].id;
+            let applied = preview_document(doc, Some(bg), cmd, &p, 1).unwrap();
+            let old = preview_document(doc, Some(bg), cmd, &p, 4).unwrap();
             assert!(diff_at_quarter(&applied, &old) > 0.005, "{cmd}: a 1/4 proxy differs from the result");
             let k = preview_factor(cmd, &p, 4);
             assert_eq!(k, 1, "{cmd}");
-            let shown = preview_document(&doc, Some(bg), cmd, &p, k).unwrap();
+            let shown = preview_document(doc, Some(bg), cmd, &p, k).unwrap();
             assert!(diff_at_quarter(&applied, &shown) < 1e-4, "{cmd}: the preview is what OK applies");
         }
+        // Without dithering, the colour-mode conversions keep the proxy.
+        assert_eq!(preview_factor("image.mode.indexedColor", &json!({"dither": "none"}), 4), 4);
+        assert_eq!(preview_factor("image.mode.bitmap", &json!({"method": "threshold"}), 4), 4);
+    }
+
+    /// #2063: proxy previews scaled what isn't a length (Tree's canvas fraction, Lens Correction's
+    /// perspective), clamped negative lengths to +0.1 (Offset left/up), left Shadows/Highlights'
+    /// radii in document pixels and rounded Mosaic's 10 px cells to 3 proxy px (12 px).
+    #[test]
+    fn proxy_previews_scale_only_lengths() {
+        let doc = waves(256);
+        let bg = doc.layers[0].id;
+        let error = |cmd: &str, p: Value| {
+            let k = preview_factor(cmd, &p, 4);
+            let applied = preview_document(&doc, Some(bg), cmd, &p, 1).unwrap();
+            let shown = preview_document(&doc, Some(bg), cmd, &p, k).unwrap();
+            (k, mean_abs(&every_kth(&applied, k), &every_kth(&shown, 1)))
+        };
+        for (cmd, p) in [
+            ("filter.lensCorrection", json!({"vertical": -100.0, "horizontal": 60.0})),
+            ("filter.other.offset", json!({"horizontal": -40, "vertical": -24, "undefinedAreas": "wrap"})),
+            (
+                "image.adjustments.shadowsHighlights",
+                json!({"shadowAmount": 50.0, "shadowRadius": 30.0, "highlightAmount": 50.0, "highlightRadius": 30.0, "blackClip": 0.0, "whiteClip": 0.0}),
+            ),
+        ] {
+            let (k, diff) = error(cmd, p);
+            assert_eq!(k, 4, "{cmd} keeps the proxy");
+            assert!(diff < 0.01, "{cmd}: the preview shows what OK applies ({diff})");
+        }
+        // Mosaic's cells divide evenly: 10 px at k = 2 is 5 proxy px; 40 px keeps k = 4.
+        assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": 10.0}), 4), 2);
+        assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": 40.0}), 4), 4);
+        assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": 7.0}), 4), 1);
+        assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": "x"}), 4), 4);
+        let (k, diff) = error("filter.pixelate.mosaic", json!({"cellSize": 10.0}));
+        assert!(k == 2 && diff < 0.01, "Mosaic: {diff}");
+        // Tree's and Picture Frame's sizes are relative, not pixels (and not shown as "px").
+        assert!(!is_pixel_param_of("filter.render.tree", "size") && !is_pixel_param_of("filter.render.pictureFrame", "size"));
+        assert!(is_pixel_param_of("filter.stylize.extrude", "size"));
+    }
+
+    /// #218: Warp Text renders the type again from the layer model, which a reduced proxy doesn't
+    /// scale: the preview showed the text k times too large. It is the full-size result, reduced.
+    #[test]
+    fn warp_text_preview_matches_the_full_size_result_on_a_reduced_proxy() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 4000, "height": 3000})).unwrap();
+        s.execute("type.create", json!({"x": 300, "y": 1600, "text": "Warp", "size": 400})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, layer) = ((*st.doc).clone(), st.active_layer.unwrap());
+        let p = json!({"style": "arc", "bend": 40.0});
+        let k = preview_factor("type.warpText", &p, crate::proxy::preview_factor(&doc, true));
+        assert!(k > 1, "the preview runs on a reduced proxy");
+        let cache = |d: &Document| match &d.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => t.cache.clone().unwrap(),
+            _ => panic!("a type layer"),
+        };
+        let full = crate::proxy::proxy_document(&preview_document(&doc, Some(layer), "type.warpText", &p, 1).unwrap(), k);
+        let shown = preview_document(&doc, Some(layer), "type.warpText", &p, k).unwrap();
+        assert_eq!(shown.size, full.size);
+        assert_eq!(cache(&shown).content_bounds(), cache(&full).content_bounds());
+        assert_eq!(photocraft_compose::flatten(&shown).px, photocraft_compose::flatten(&full).px);
     }
 
     /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's
@@ -994,12 +1205,251 @@ mod tests {
         for c in previewed {
             for p in parse_spec(c.params) {
                 let Kind::Range { min, default, .. } = p.kind else { continue };
-                if min <= 0.0 || !is_pixel_param(&p.key) {
+                if min <= 0.0 || !is_pixel_param_of(c.id, &p.key) {
                     continue;
                 }
                 for v in [f64::from(min), f64::from(default), f64::from(min) * 2.5] {
                     let k = preview_factor(c.id, &json!({ p.key.clone(): v }), 4);
                     assert!(v / f64::from(k) >= f64::from(min) - 1e-9, "{} {}={v}: k={k} clamps to {min}", c.id, p.key);
+                }
+            }
+        }
+    }
+
+    /// Sharp structure at every scale: [`waves`] with hard squares from 2 to 32 px, a fine
+    /// per-pixel texture and an interlaced band (odd rows inverted) at the bottom.
+    fn sharp(n: u32) -> Document {
+        let mut doc = waves(n);
+        let s = doc.layers[0].surface_mut().unwrap();
+        let mut x0 = 4;
+        for (i, size) in [2, 3, 4, 6, 8, 12, 16, 24, 32].into_iter().enumerate() {
+            for y0 in (4..n as i32 * 3 / 4 - size).step_by((size * 3) as usize) {
+                let v = if (i + y0 as usize / 7).is_multiple_of(2) { 0.05 } else { 0.95 };
+                s.fill_rect(photocraft_geom::Rect::new(x0, y0, x0 + size, y0 + size), &[v, v * 0.8, 1.0 - v, 1.0]);
+            }
+            x0 += size + 6;
+        }
+        for y in 0..n as i32 {
+            for x in 0..n as i32 {
+                let mut px = s.pixel(x, y);
+                if (x * 7 + y * 13) % 5 == 0 {
+                    px.iter_mut().take(3).for_each(|c| *c = (*c + 0.08).min(1.0));
+                }
+                if y >= n as i32 * 3 / 4 && y % 2 == 1 {
+                    px[0] = 1.0 - px[0];
+                }
+                s.fill_rect(photocraft_geom::Rect::new(x, y, x + 1, y + 1), &px);
+            }
+        }
+        doc
+    }
+
+    /// [`waves`] with strong per-pixel noise, the input of noise reduction.
+    fn noisy(n: u32) -> Document {
+        let mut doc = waves(n);
+        let s = doc.layers[0].surface_mut().unwrap();
+        let hash = |x: i32, y: i32| ((x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663)).wrapping_mul(2_654_435_761) >> 8;
+        for y in 0..n as i32 {
+            for x in 0..n as i32 {
+                let mut px = s.pixel(x, y);
+                for (c, v) in px.iter_mut().take(3).enumerate() {
+                    *v = (*v + (hash(x * 3 + c as i32, y) as f32 / (1u32 << 24) as f32 - 0.5) * 0.3).clamp(0.0, 1.0);
+                }
+                s.fill_rect(photocraft_geom::Rect::new(x, y, x + 1, y + 1), &px);
+            }
+        }
+        doc
+    }
+
+    /// How a preview at factor `k` compares with what OK applies (factor 1) on a document.
+    #[derive(Debug)]
+    struct PreviewError {
+        /// Mean absolute RGB difference at the pixels the proxy samples.
+        diff: f32,
+        /// Feature scale of the preview shown at document size, relative to the result: 1 when
+        /// the features match, 1/k when the preview draws them k times too large.
+        scale: f32,
+        /// How much the preview changes the image relative to how much OK does (sampled); NaN
+        /// when OK barely changes it.
+        change: f32,
+    }
+
+    /// Mean absolute difference of neighbouring pixels at the document's own resolution.
+    fn detail(d: &Document) -> f32 {
+        let b = photocraft_compose::flatten(d);
+        let w = b.rect.width() as usize;
+        let mut sum = 0.0;
+        for (i, p) in b.px.iter().enumerate() {
+            for q in [b.px.get(i + 1).filter(|_| (i + 1) % w != 0), b.px.get(i + w)].into_iter().flatten() {
+                sum += (0..3).map(|c| (p[c] - q[c]).abs()).sum::<f32>() / 3.0;
+            }
+        }
+        sum / b.px.len().max(1) as f32
+    }
+
+    /// Pixels of `d` at every `k`-th row and column: the document pixels a factor-`k` proxy
+    /// samples, so a preview at `k` compares with them one to one.
+    fn every_kth(d: &Document, k: u32) -> Vec<[f32; 4]> {
+        let b = photocraft_compose::flatten(d);
+        let w = b.rect.width() as usize;
+        let k = k as usize;
+        let h = b.px.len() / w.max(1);
+        (0..h.div_ceil(k))
+            .flat_map(|y| (0..w.div_ceil(k)).map(move |x| (x * k, y * k)))
+            .map(|(x, y)| b.px.get(y * w + x).copied().unwrap_or([f32::NAN; 4]))
+            .collect()
+    }
+
+    fn mean_abs(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
+        a.iter().zip(b).map(|(p, q)| (0..3).map(|c| (p[c] - q[c]).abs()).sum::<f32>() / 3.0).sum::<f32>() / a.len().max(1) as f32
+    }
+
+    /// `None` when the command can't run on `doc` at all (e.g. Displace without a map).
+    fn preview_error(doc: &Document, command: &str, p: &Value, k: u32) -> Option<PreviewError> {
+        let bg = doc.layers[0].id;
+        let applied = preview_document(doc, Some(bg), command, p, 1)?;
+        let shown = preview_document(doc, Some(bg), command, p, k).unwrap_or_else(|| panic!("{command} {p}: the k = {k} preview failed"));
+        let (a, s) = (every_kth(&applied, k), every_kth(&shown, 1));
+        let (src, src_k) = (every_kth(doc, k), every_kth(&crate::proxy::proxy_document(doc, k), 1));
+        let applied_change = mean_abs(&a, &src);
+        Some(PreviewError {
+            diff: mean_abs(&a, &s),
+            scale: detail(&shown) / k as f32 / detail(&applied).max(1e-5),
+            change: if applied_change > 0.01 { mean_abs(&s, &src_k) / applied_change } else { f32::NAN },
+        })
+    }
+
+    /// The parameter sets to preview `command` with: the dialog's defaults, and each pixel-sized
+    /// value at its minimum and at a large value (whole numbers as integers: Tree and Picture
+    /// Frame read some ranges as `u32`).
+    fn sweep_params(app: &mut PhotocraftApp, command: &str) -> Vec<(String, Value)> {
+        let Some(id) = open(app, command) else { return Vec::new() };
+        let base = params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        let mut out = vec![("default".to_string(), base.clone())];
+        for p in parse_spec(photocraft_engine::commands::find(command).unwrap().params) {
+            if !is_pixel_param_of(command, &p.key) {
+                continue;
+            }
+            let values = match p.kind {
+                Kind::Int { .. } => vec![-40.0, 40.0],
+                Kind::Range { min, max, default } => [min, (default * 4.0).clamp(min, max.min(64.0))].into_iter().filter(|v| *v != default).collect(),
+                _ => continue,
+            };
+            for v in values {
+                let mut q = base.clone();
+                q[p.key.as_str()] = json!(v);
+                out.push((format!("{}={v}", p.key), q));
+            }
+        }
+        for (_, p) in &mut out {
+            for v in p.as_object_mut().into_iter().flat_map(|o| o.values_mut()) {
+                if let Some(x) = v.as_f64().filter(|x| x.fract() == 0.0 && x.abs() < 1e9) {
+                    *v = json!(x as i64);
+                }
+            }
+        }
+        out
+    }
+
+    /// Every previewed command with its parameter sets.
+    fn previewed_cases() -> Vec<(&'static str, String, Value)> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ids: Vec<&'static str> = photocraft_engine::command_specs()
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| has_dialog(id) && (id.starts_with("filter.") || PREVIEWED.contains(id)))
+            .collect();
+        ids.into_iter().flat_map(|id| sweep_params(&mut app, id).into_iter().map(move |(label, p)| (id, label, p))).collect()
+    }
+
+    fn grayscale(d: &Document) -> Document {
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(d.clone(), None);
+        s.execute("image.mode.grayscale", json!({})).unwrap();
+        s.active().map(|d| (*d.doc).clone()).unwrap()
+    }
+
+    /// Smooth, sharp and noisy test images, each in RGB and grayscale (for the modes that need it).
+    fn test_images(n: u32) -> [(&'static str, Document, Document); 3] {
+        let with_gray = |d: Document| (grayscale(&d), d);
+        let ((ws, w), (ss, s), (ns, no)) = (with_gray(waves(n)), with_gray(sharp(n)), with_gray(noisy(n)));
+        [("smooth", w, ws), ("sharp", s, ss), ("noisy", no, ns)]
+    }
+
+    fn image_for<'a>(command: &str, rgb: &'a Document, gray: &'a Document) -> &'a Document {
+        if command == "image.mode.bitmap" || command == "image.mode.duotone" { gray } else { rgb }
+    }
+
+    /// Previews that only approximate the result at a proxy although their features have the
+    /// right size: dots and cells placed on the proxy's pixel grid (Color Halftone, Pointillize)
+    /// and tile edges resampled (Tiles). Two more only differ on a proxy as small as this test's
+    /// (64 x 64 px): Picture Frame's minimum line widths, and Shadows/Highlights' 0.01 % black and
+    /// white clips, which pick single pixels out of 4096 (its radii are checked in
+    /// `proxy_previews_scale_only_lengths`).
+    const APPROXIMATE_AT_PROXY: &[&str] = &[
+        "filter.pixelate.colorHalftone",
+        "filter.pixelate.pointillize",
+        "filter.stylize.tiles",
+        "filter.render.pictureFrame",
+        "image.adjustments.shadowsHighlights",
+    ];
+
+    /// Why a preview doesn't show what OK applies, if it doesn't: a clearly different result or
+    /// features at another size on the smooth image, or (on the sharp and noisy images, where a
+    /// sub-pixel radius can't show on a proxy) a filter that acts more strongly in the preview,
+    /// i.e. over a k times larger area.
+    fn mismatch(image: &str, e: &PreviewError) -> Option<String> {
+        let off = if image == "smooth" { e.diff > 0.03 || (!(0.6..=1.6).contains(&e.scale) && e.diff > 0.002) } else { e.change > 1.25 };
+        off.then(|| format!("{e:?}"))
+    }
+
+    /// #2063, every previewed command: the live preview at the factor [`preview_factor`] picks
+    /// for a 1/4 proxy shows what OK applies: the same features at the same size, on smooth,
+    /// sharp and noisy images, at the defaults and at small and large pixel sizes.
+    #[test]
+    fn every_preview_shows_what_ok_applies() {
+        let cases: Vec<_> = previewed_cases().into_iter().filter(|(id, _, p)| preview_factor(id, p, 4) > 1 && !APPROXIMATE_AT_PROXY.contains(id)).collect();
+        // One thread per test image: about 270 filter runs at 256 x 256.
+        let bad: Vec<String> = std::thread::scope(|scope| {
+            let runs: Vec<_> = test_images(256)
+                .into_iter()
+                .map(|(image, rgb, gray)| {
+                    let cases = &cases;
+                    scope.spawn(move || {
+                        let mut bad = Vec::new();
+                        for (id, label, p) in cases {
+                            let k = preview_factor(id, p, 4);
+                            if let Some(why) = preview_error(image_for(id, &rgb, &gray), id, p, k).and_then(|e| mismatch(image, &e)) {
+                                bad.push(format!("{id} ({label}) at k = {k} on the {image} image: {why}"));
+                            }
+                        }
+                        bad
+                    })
+                })
+                .collect();
+            runs.into_iter().flat_map(|r| r.join().unwrap()).collect()
+        });
+        assert!(bad.is_empty(), "previews that differ from the result:\n{}", bad.join("\n"));
+    }
+
+    /// The table behind [`every_preview_shows_what_ok_applies`]: every previewed command at a
+    /// plain 1/4 proxy and at its chosen factor, on each test image.
+    /// `cargo test -p photocraft-ui-egui --lib filter_dialog::tests::sweep_all_previews -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn sweep_all_previews() {
+        let images = test_images(256);
+        println!("command | params | image | k | diff k=4 | scale k=4 | change k=4 | diff k | scale k | change k");
+        for (id, label, p) in previewed_cases() {
+            let k = preview_factor(id, &p, 4);
+            for (image, rgb, gray) in &images {
+                let doc = image_for(id, rgb, gray);
+                match (preview_error(doc, id, &p, 4), preview_error(doc, id, &p, k)) {
+                    (Some(a), Some(b)) => println!(
+                        "{id} | {label} | {image} | {k} | {:.4} | {:.2} | {:.2} | {:.4} | {:.2} | {:.2}",
+                        a.diff, a.scale, a.change, b.diff, b.scale, b.change
+                    ),
+                    _ => println!("{id} | {label} | {image} | {k} | fails"),
                 }
             }
         }
