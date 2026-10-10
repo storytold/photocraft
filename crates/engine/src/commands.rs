@@ -397,9 +397,14 @@ fn build() -> Vec<CommandSpec> {
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
-        cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{} (a targeted colour channel clears that channel only)", has_pixel_layer, |s, p| {
-            let id = layer_param(s, p)?;
+        cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{} (a targeted channel or Quick Mask is cleared alone)", has_pixel_or_channel, |s, p| {
             let bg = s.tools.background;
+            // A targeted alpha channel or Quick Mask is filled instead (#2734).
+            if let Some(t) = crate::channel_cmds::targeted_channel(s) {
+                s.edit("Clear", |doc, _| crate::channel_cmds::clear_channel(doc, &t, bg))?;
+                return Ok(Value::Null);
+            }
+            let id = layer_param(s, p)?;
             // A targeted colour channel clears that channel only (#2720).
             if let Some(k) = crate::channel_cmds::targeted_color(s) {
                 s.edit("Clear", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, k, bg))?;

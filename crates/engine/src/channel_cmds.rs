@@ -686,6 +686,32 @@ pub(crate) fn clear_color_channel(doc: &mut Document, id: LayerId, k: usize, bac
     Ok(())
 }
 
+/// The alpha channel or Quick Mask the Channels panel targets, as `"target"` params: Clear
+/// (Delete) fills it instead of the layer (#2734).
+pub(crate) fn targeted_channel(s: &Session) -> Option<Value> {
+    let st = s.active()?;
+    let t = match st.channel_view.target {
+        ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        _ => return None,
+    };
+    Some(json!({ "target": t }))
+}
+
+/// Clear (Delete) with an alpha channel or the Quick Mask targeted (`target` from
+/// [`targeted_channel`]): fill the selected area (or the canvas) of it with the background colour,
+/// as gray, as Photoshop does. Partly selected pixels blend.
+pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32; 4]) -> Result<()> {
+    let canvas = doc.bounds();
+    let sel = doc.selection.clone();
+    let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    if area.is_empty() {
+        return Ok(());
+    }
+    let (surf, _) = target_surface(doc, None, target)?;
+    crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
+}
+
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands
 /// work without a pixel layer.
 pub(crate) fn edits_channel(s: &Session) -> bool {
