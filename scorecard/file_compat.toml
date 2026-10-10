@@ -143,7 +143,7 @@ id = "FILE-215-20"
 target = "Artboard tool with handles and + buttons, Duplicate Artboard beside, vector PDF pages"
 status = "partial"
 issue = 215
-note = "artboard_ui.rs:1 names/properties only; no tool, + buttons or duplicate"
+note = "artboard_tool.rs: Artboard tool draws, selects, moves and resizes boards by their handles; Duplicate Artboard places the copy beside (#1584); no + buttons, raster PDF pages only"
 
 [[item]]
 id = "FILE-215-21"
