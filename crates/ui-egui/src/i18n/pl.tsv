@@ -2621,6 +2621,9 @@ cameraRaw	Roughness	Chropowatość
 	Structure:	Struktura:
 	Content-Aware Move Tool	Narzędzie Przesunięcie z uwzględnieniem zawartości
 	TIFF Options	Opcje TIFF
+	Targa Options	Opcje Targa
+	24 bits/pixel	24 bity/piksel
+	32 bits/pixel	32 bity/piksel
 	Including layers will increase file size.	Dołączenie warstw zwiększy rozmiar pliku.
 	Discard Layers and Save a Copy	Odrzuć warstwy i zapisz kopię
 	Don't show again	Nie pokazuj ponownie

@@ -2422,6 +2422,9 @@ cameraRaw	Roughness	Шорсткість
 	Structure:	Структура:
 	Content-Aware Move Tool	Інструмент «Переміщення з урахуванням вмісту»
 	TIFF Options	Параметри TIFF
+	Targa Options	Параметри Targa
+	24 bits/pixel	24 біт/піксель
+	32 bits/pixel	32 біт/піксель
 	Including layers will increase file size.	Додавання шарів збільшить розмір файлу.
 	Discard Layers and Save a Copy	Відкинути шари та зберегти копію
 	Don't show again	Більше не показувати

@@ -2172,6 +2172,9 @@ cameraRaw	Color	Barvy
 	Structure:	Struktura:
 	Content-Aware Move Tool	Nástroj přesun s ohledem na obsah
 	TIFF Options	Možnosti TIFF
+	Targa Options	Možnosti Targa
+	24 bits/pixel	24 bitů/pixel
+	32 bits/pixel	32 bitů/pixel
 	Including layers will increase file size.	Zahrnutí vrstev zvětší velikost souboru.
 	Discard Layers and Save a Copy	Zahodit vrstvy a uložit kopii
 	Don't show again	Příště nezobrazovat

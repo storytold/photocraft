@@ -2447,6 +2447,9 @@ cameraRaw	Roughness	Неровность
 	Structure:	Структура:
 	Content-Aware Move Tool	Перемещение с учётом содержимого
 	TIFF Options	Параметры TIFF
+	Targa Options	Параметры Targa
+	24 bits/pixel	24 бит/пиксел
+	32 bits/pixel	32 бит/пиксел
 	Including layers will increase file size.	Включение слоёв увеличит размер файла.
 	Discard Layers and Save a Copy	Удалить слои и сохранить копию
 	Don't show again	Больше не показывать

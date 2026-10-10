@@ -192,7 +192,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
         return false;
     }
     match saved {
-        Ok(_) => app.tiff_options.is_none() && !app.saving(),
+        Ok(_) => !app.save_options_open() && !app.saving(),
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -208,7 +208,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 /// Copies and failed writes leave the doc dirty.
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
-    if app.tiff_options.is_none()
+    if !app.save_options_open()
         && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
         && index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty())
     {
@@ -222,9 +222,9 @@ fn couldnt_save(e: String) -> String {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Save can ask for a path and then TIFF Options, and then write in the background. Wait for
-    // all three; cancellation or a failed save brings us back.
-    if app.file_dialog_open() || app.tiff_options.is_some() || app.saving() {
+    // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
+    // Wait for all three; cancellation or a failed save brings us back.
+    if app.file_dialog_open() || app.save_options_open() || app.saving() {
         return;
     }
     let Some(p) = &app.discard else { return };
@@ -727,6 +727,9 @@ mod tests {
 
     #[path = "tiff_tests.rs"]
     mod tiff_tests;
+
+    #[path = "targa_tests.rs"]
+    mod targa_tests;
 
     /// One frame with the window's close button pressed; the commands the guard sent.
     fn window_close_commands(app: &mut PhotocraftApp) -> Vec<egui::ViewportCommand> {

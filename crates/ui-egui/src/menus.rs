@@ -269,11 +269,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         "file.save" => {
             // Writes back only to a layered file; a flat one goes through Save As.
+            let tga_bits = crate::targa_options_ui::bits_param(&params, id)?;
             match params.get("path").and_then(Value::as_str) {
-                Some(path) => app.save_as(Some(path.to_string())),
+                Some(path) => app.save_as_with(Some(path.to_string()), tga_bits),
                 None => match app.session.active().and_then(|d| d.path.clone()).filter(|p| photocraft_engine::file_cmds::saves_in_place(p)) {
                     Some(path) => app.save_in_place(path),
-                    None => app.save_as(None),
+                    None => app.save_as_with(None, tga_bits),
                 },
             }
         }
@@ -299,7 +300,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 Err("Open Recent is unavailable on the web".to_string())
             }
         }
-        "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)),
+        "file.saveAs" => {
+            let tga_bits = crate::targa_options_ui::bits_param(&params, id)?;
+            app.save_as_with(params.get("path").and_then(Value::as_str).map(str::to_string), tga_bits)
+        }
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
         "window.newWindowForDocument" => {
             let doc = app.session.active_index().ok_or("no document")?;

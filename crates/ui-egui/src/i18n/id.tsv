@@ -2585,6 +2585,9 @@ cameraRaw	Blending	Pembauran
 	Structure:	Struktur:
 	Content-Aware Move Tool	Alat Content-Aware Move
 	TIFF Options	Opsi TIFF
+	Targa Options	Opsi Targa
+	24 bits/pixel	24 Bit/Piksel
+	32 bits/pixel	32 Bit/Piksel
 	Including layers will increase file size.	Menyertakan layer akan memperbesar ukuran file.
 	Discard Layers and Save a Copy	Buang Layer dan Simpan Salinan
 	Don't show again	Jangan tampilkan lagi

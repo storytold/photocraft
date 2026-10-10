@@ -612,15 +612,205 @@ fn tga_alpha_channel_wins_over_transparency_and_skips_spot_channels() {
     }
 }
 
-/// #2124: Photoshop writes no channel as the alpha when there are several, and grayscale Targas
-/// have no alpha at all.
+/// #2124: Photoshop writes no channel as the alpha when there are several (measured again in
+/// #2482: the file is still 32-bit, fully opaque), and grayscale Targas have no alpha at all.
 #[test]
 fn tga_ignores_several_alpha_channels_and_grayscale() {
     let d = with_alpha_channel(with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, false), "Alpha 1"), "Alpha 2");
     let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
-    assert_eq!(tga(&r.bytes).0, 24);
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (32, 8));
+    assert!(img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255), "no channel is the alpha");
     assert!(r.warnings.iter().any(|w| w.contains("one alpha channel")), "{:?}", r.warnings);
     let d = with_alpha_channel(single(ColorMode::Grayscale, SampleType::U8, false), "Alpha 1");
     let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
     assert_eq!(tga(&r.bytes).0, 8);
+    // Bits per pixel apply to RGB only: an explicit choice is reported, not applied.
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits32)).unwrap();
+    assert_eq!(tga(&r.bytes).0, 8);
+    assert!(r.warnings.iter().any(|w| w.contains("grayscale")), "{:?}", r.warnings);
+}
+
+const TGA_W: u32 = 300;
+const TGA_H: u32 = 270;
+
+fn tga_opts(bits: TgaBits) -> ExportOptions {
+    ExportOptions { tga_bits: Some(bits), ..ExportOptions::default() }
+}
+
+/// A `TGA_W`×`TGA_H` 8-bit RGB document (more than one tile each way) whose opaque Background
+/// reaches every byte value in each channel, and its colours as interleaved RGB bytes.
+fn tga_rgb_doc() -> (photocraft_doc::Document, Vec<u8>) {
+    let mut d = photocraft_doc::Document::new("t", photocraft_geom::Size::new(TGA_W, TGA_H), ColorMode::Rgb, SampleType::U8);
+    let (mut rgb, mut rgba) = (Vec::new(), Vec::new());
+    for y in 0..TGA_H {
+        for x in 0..TGA_W {
+            let px = [((x + 3 * y) & 255) as u8, ((7 * x + y) & 255) as u8, ((x * y + 11) & 255) as u8];
+            rgb.extend_from_slice(&px);
+            rgba.extend_from_slice(&px);
+            rgba.push(255);
+        }
+    }
+    let s = photocraft_raster::Surface::from_interleaved(d.pixel_format(), d.bounds(), &rgba);
+    let mut bg = photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(s));
+    bg.locks.transparency = true;
+    bg.locks.position = true;
+    d.layers.push(bg);
+    (d, rgb)
+}
+
+/// `d` with an 8-bit "Alpha 1" channel holding `alpha` (one byte per pixel, row-major).
+fn with_alpha_bytes(mut d: photocraft_doc::Document, alpha: &[u8]) -> photocraft_doc::Document {
+    let mut s = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::GRAY8, d.bounds(), alpha);
+    s.prune();
+    d.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", s));
+    d
+}
+
+/// A left-to-right gradient through every alpha value, 0 to 255.
+fn gradient_alpha() -> Vec<u8> {
+    (0..TGA_H).flat_map(|_| (0..TGA_W).map(|x| (x * 255 / (TGA_W - 1)) as u8)).collect()
+}
+
+/// A decoded Targa's interleaved RGB and alpha bytes.
+fn rgb_and_alpha(img: &photocraft_codecs::Image) -> (Vec<u8>, Vec<u8>) {
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba);
+    let px = img.data().as_chunks::<4>().0;
+    (px.iter().flat_map(|p| [p[0], p[1], p[2]]).collect(), px.iter().map(|p| p[3]).collect())
+}
+
+/// A reopened document's Background colours (interleaved RGB bytes) and its "Alpha 1" bytes.
+fn reopened(bytes: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
+    let d = import("a.tga", bytes).unwrap().document;
+    let [bg] = &d.layers[..] else { panic!("one layer, got {}", d.layers.len()) };
+    assert_eq!(bg.name, "Background");
+    let px = bg.surface().unwrap().to_interleaved(d.bounds());
+    assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "the Background is opaque");
+    let rgb = px.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let alpha = match &d.channels[..] {
+        [] => None,
+        [ch] => {
+            assert_eq!(ch.name, "Alpha 1");
+            Some(ch.surface.to_interleaved(d.bounds()))
+        }
+        more => panic!("{} channels", more.len()),
+    };
+    (rgb, alpha)
+}
+
+/// A 32-bit Targa holds the document's colours and its alpha channel exactly (straight, never
+/// premultiplied), and reopens as the same Background and "Alpha 1", byte for byte.
+#[test]
+fn tga_32_bit_round_trip_keeps_rgb_and_alpha_channel_byte_identical() {
+    let (d, rgb) = tga_rgb_doc();
+    let alpha = gradient_alpha();
+    let d = with_alpha_bytes(d, &alpha);
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits32)).unwrap();
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (32, 8));
+    let (file_rgb, file_alpha) = rgb_and_alpha(&img);
+    assert!(file_rgb == rgb, "the file's colours are the document's");
+    assert!(file_alpha == alpha, "the file's alpha is the alpha channel");
+    let (back_rgb, back_alpha) = reopened(&r.bytes);
+    assert!(back_rgb == rgb, "the reopened colours are the document's");
+    assert!(back_alpha.as_deref() == Some(alpha.as_slice()), "the reopened Alpha 1 is the alpha channel");
+}
+
+/// An all-black alpha channel (a texture's empty mask) is written as alpha 0 everywhere, and the
+/// colours under it are kept exactly: nothing is cleared or premultiplied.
+#[test]
+fn tga_32_bit_all_black_alpha_channel_keeps_every_colour() {
+    let (d, rgb) = tga_rgb_doc();
+    let black = vec![0u8; (TGA_W * TGA_H) as usize];
+    let d = with_alpha_bytes(d, &black);
+    for opts in [tga_opts(TgaBits::Bits32), ExportOptions::default()] {
+        let r = export(&d, "a.tga", &opts).unwrap();
+        let (bpp, alpha_bits, img) = tga(&r.bytes);
+        assert_eq!((bpp, alpha_bits), (32, 8), "{:?}", opts.tga_bits);
+        let (file_rgb, file_alpha) = rgb_and_alpha(&img);
+        assert!(file_alpha.iter().all(|&a| a == 0), "alpha 0 everywhere");
+        assert!(file_rgb == rgb, "{:?}: the colours under alpha 0 are unchanged", opts.tga_bits);
+        let (back_rgb, back_alpha) = reopened(&r.bytes);
+        assert!(back_rgb == rgb, "the reopened colours are unchanged");
+        assert!(back_alpha.as_deref() == Some(black.as_slice()), "Alpha 1 reopens black");
+    }
+}
+
+/// A 24-bit Targa has no alpha: the alpha channel is left out (and named in a warning), the
+/// colours are kept exactly, and the file reopens without a channel.
+#[test]
+fn tga_24_bit_writes_no_alpha() {
+    let (d, rgb) = tga_rgb_doc();
+    let d = with_alpha_bytes(d, &gradient_alpha());
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits24)).unwrap();
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (24, 0));
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgb);
+    assert!(img.data() == rgb.as_slice(), "the colours are the document's");
+    assert!(r.warnings.iter().any(|w| w.contains("24-bit") && w.contains("\"Alpha 1\"")), "{:?}", r.warnings);
+    let (back_rgb, back_alpha) = reopened(&r.bytes);
+    assert!(back_rgb == rgb);
+    assert_eq!(back_alpha, None, "no alpha channel");
+}
+
+/// A 24-bit Targa of a transparent layer is the layer composited over white.
+#[test]
+fn tga_24_bit_composites_transparency_over_white() {
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits24)).unwrap();
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (24, 0));
+    assert!(r.warnings.iter().any(|w| w.contains("composited over white")), "{:?}", r.warnings);
+    let src = d.layers[0].surface().unwrap().read_region(d.bounds());
+    for (i, (px, s)) in img.data().as_chunks::<3>().0.iter().zip(src.as_chunks::<4>().0.iter()).enumerate() {
+        let over_white = s[0] * s[3] + 1.0 - s[3];
+        assert!((f32::from(px[0]) / 255.0 - over_white).abs() <= 1.0 / 255.0, "red {i}: {} vs {over_white}", px[0]);
+    }
+}
+
+/// 32 bits without an alpha channel: the layer's transparency is the alpha (as before Targa
+/// Options), and an opaque image gets a fully opaque alpha, its colours unchanged.
+#[test]
+fn tga_32_bit_without_alpha_channel_writes_transparency_or_opaque() {
+    let (d, rgb) = tga_rgb_doc();
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits32)).unwrap();
+    let (bpp, alpha_bits, img) = tga(&r.bytes);
+    assert_eq!((bpp, alpha_bits), (32, 8));
+    let (file_rgb, file_alpha) = rgb_and_alpha(&img);
+    assert!(file_rgb == rgb);
+    assert!(file_alpha.iter().all(|&a| a == 255));
+    // Without Targa Options an opaque document stays 24-bit.
+    assert_eq!(tga(&export(&d, "a.tga", &ExportOptions::default()).unwrap().bytes).0, 24);
+
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    let r = export(&d, "a.tga", &tga_opts(TgaBits::Bits32)).unwrap();
+    let (_, file_alpha) = rgb_and_alpha(&tga(&r.bytes).2);
+    let src = d.layers[0].surface().unwrap().to_interleaved(d.bounds());
+    let src_alpha: Vec<u8> = src.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+    assert!(file_alpha == src_alpha, "the transparency is the alpha");
+}
+
+/// 16-bit documents are written as 8-bit Targas at either depth.
+#[test]
+fn tga_bits_apply_to_16_bit_documents() {
+    let d = with_alpha_channel(single(ColorMode::Rgb, SampleType::U16, false), "Alpha 1");
+    for (bits, want) in [(TgaBits::Bits24, (24, 0)), (TgaBits::Bits32, (32, 8))] {
+        let r = export(&d, "a.tga", &tga_opts(bits)).unwrap();
+        let (bpp, alpha_bits, _) = tga(&r.bytes);
+        assert_eq!((bpp, alpha_bits), want, "{bits:?}");
+    }
+}
+
+/// Targa Options starts at 32 bits with an alpha channel (spot channels don't count), else 24.
+#[test]
+fn tga_default_bits_follow_the_alpha_channels() {
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    assert_eq!(tga_default_bits(&d), TgaBits::Bits24, "transparency alone");
+    let mut spot = d.clone();
+    let s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+    spot.channels
+        .push(photocraft_doc::AlphaChannel { spot: Some((photocraft_color::Color::rgb(1.0, 0.0, 0.0), 1.0)), ..photocraft_doc::AlphaChannel::new("Spot", s) });
+    assert_eq!(tga_default_bits(&spot), TgaBits::Bits24, "spot channel");
+    assert_eq!(tga_default_bits(&with_alpha_channel(d, "Alpha 1")), TgaBits::Bits32);
+    assert_eq!((TgaBits::from_bits(24), TgaBits::from_bits(32), TgaBits::from_bits(16)), (Some(TgaBits::Bits24), Some(TgaBits::Bits32), None));
 }

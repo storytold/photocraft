@@ -135,6 +135,42 @@ fn save_a_copy_keeps_path_and_dirty_state() {
     assert!(s.execute("file.saveACopy", json!({})).is_err());
 }
 
+/// `tgaBits` picks the Targa's bits per pixel (byte 16 of the header); unset, a document with an
+/// alpha channel is written as 32-bit, with the channel as the alpha.
+#[test]
+fn save_a_copy_writes_the_targa_bits_asked_for() {
+    let dir = tmp("tga-bits");
+    let mut s = session(20, 10, 8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    for (params, bpp) in [(json!({}), 32), (json!({"tgaBits": 24}), 24), (json!({"tgaBits": 32}), 32), (json!({"tgaBits": null}), 32)] {
+        let out = join(&dir, "a.tga");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(bytes[16], bpp, "{params}");
+        let back = photocraft_io::import("a.tga", &bytes).unwrap().document;
+        assert_eq!(back.channels.len(), usize::from(bpp == 32), "{params}: the selection reopens as Alpha 1");
+    }
+}
+
+/// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
+#[test]
+fn bad_targa_bits_are_refused_before_writing() {
+    let dir = tmp("tga-bad");
+    let mut s = session(8, 8, 8);
+    for bad in [json!(16), json!(0), json!(-32), json!(32.5), json!("32"), json!(true), json!([32])] {
+        let out = join(&dir, "a.tga");
+        let r = s.execute("file.saveACopy", json!({"path": out, "tgaBits": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": "tga", "tgaBits": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "{bad}: no layer written");
+    }
+}
+
 #[test]
 fn open_as_forces_the_decoder() {
     let dir = tmp("openas");

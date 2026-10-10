@@ -466,7 +466,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.ui.brush_picker.is_some()
         || app.ui.tool == Tool::RotateView
         || app.wide_angle.is_some()
-        || app.tiff_options.is_some()
+        || app.save_options_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout")).is_some());

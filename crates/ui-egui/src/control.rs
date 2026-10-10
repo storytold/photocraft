@@ -960,7 +960,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             None => err("missing `path`"),
         },
-        "app.save" => wrap(app.save_automation(s("path").map(str::to_string)).map(|(p, w)| json!({"path": p, "warnings": w}))),
+        "app.save" => wrap(
+            crate::targa_options_ui::bits_param(p, "app.save")
+                .and_then(|tga_bits| app.save_automation_with(s("path").map(str::to_string), tga_bits))
+                .map(|(p, w)| json!({"path": p, "warnings": w})),
+        ),
         "app.quit" => {
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1743,6 +1747,41 @@ mod tests {
         app.automation_input = true;
         let error = crate::menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap_err();
         assert_eq!(error, "filesystem command denied");
+    }
+
+    /// `app.save` takes the Targa bits per pixel (`tgaBits`) and never stops at Targa Options.
+    #[test]
+    fn automation_save_passes_targa_bits_without_asking() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        // The bits each export was asked for, and each path written.
+        let asked: Rc<RefCell<Vec<Option<u8>>>> = Rc::default();
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (a, w) = (asked.clone(), written.clone());
+        let services = crate::Services {
+            export: Some(Box::new(move |_d: &photocraft_doc::Document, _p: &str, s: &crate::ExportSettings| {
+                a.borrow_mut().push(s.tga_bits.map(photocraft_io::TgaBits::bits));
+                Ok((b"out".to_vec(), Vec::new()))
+            })),
+            automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+                w.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        for params in [json!({"path": "a.tga"}), json!({"path": "b.tga", "tgaBits": 24}), json!({"path": "c.tga", "tgaBits": 32})] {
+            let r = call(&mut app, &ctx, "app.save", params.clone());
+            assert_eq!(r["result"]["path"], params["path"], "{r}");
+            assert!(app.targa_options.is_none(), "automation saves never prompt");
+        }
+        assert_eq!(*asked.borrow(), [None, Some(24), Some(32)]);
+        assert_eq!(*written.borrow(), ["a.tga", "b.tga", "c.tga"]);
+        let r = call(&mut app, &ctx, "app.save", json!({"path": "d.tga", "tgaBits": 16}));
+        assert!(r["error"].as_str().unwrap().contains("tgaBits"), "{r}");
+        assert_eq!(written.borrow().len(), 3, "a bad tgaBits writes nothing");
     }
 
     #[test]

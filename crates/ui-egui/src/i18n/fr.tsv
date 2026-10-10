@@ -2598,6 +2598,9 @@ cameraRaw	Blending	Fusion
 	Structure:	Structure :
 	Content-Aware Move Tool	Outil Déplacement selon le contenu
 	TIFF Options	Options TIFF
+	Targa Options	Options Targa
+	24 bits/pixel	24 bits/pixel
+	32 bits/pixel	32 bits/pixel
 	Including layers will increase file size.	L'inclusion des calques augmentera la taille du fichier.
 	Discard Layers and Save a Copy	Supprimer les calques et enregistrer une copie
 	Don't show again	Ne plus afficher

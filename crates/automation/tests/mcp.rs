@@ -359,6 +359,49 @@ async fn bridge_doc_save_without_path_forwards_app_save_for_write_back() {
     app.abort();
 }
 
+/// `tgaBits` reaches the app's `app.save` through the bridge; a value other than 24 or 32 is
+/// refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_forwards_targa_bits() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let saved = json_of(&call(&client, "doc_save", json!({"path": "out.tga", "tgaBits": 24})).await);
+    assert_eq!(saved, json!({"saved": {"path": "out.tga", "tgaBits": 24}}));
+    let r = call(&client, "doc_save", json!({"path": "out.tga", "tgaBits": 16})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(text(&r).contains("24 or 32"), "{}", text(&r));
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
+/// Headless `doc_save`/`doc_export` write the TGA bits per pixel asked for (byte 16 of the
+/// header); unset, a document with an alpha channel is written as 32-bit.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_save_writes_targa_bits() {
+    let dir = tmp("tga-bits");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 16, "height": 8, "background": "white"})).await;
+    for id in ["select.all", "select.saveSelection"] {
+        let r = call(&client, "command_run", json!({"id": id, "params": {}})).await;
+        assert_ne!(r.is_error, Some(true), "{}", text(&r));
+    }
+    for (tool, params, bpp) in [
+        ("doc_export", json!({"path": "auto.tga"}), 32),
+        ("doc_export", json!({"path": "flat.tga", "tgaBits": 24}), 24),
+        ("doc_save", json!({"path": "alpha.tga", "tgaBits": 32}), 32),
+    ] {
+        let r = call(&client, tool, params.clone()).await;
+        assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
+        let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
+        assert_eq!(bytes[16], bpp, "{params}");
+    }
+    let r = call(&client, "doc_export", json!({"path": "bad.tga", "tgaBits": 8})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(!dir.join("bad.tga").exists());
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_response_budget_drops_connection_without_retrying_the_operation() {
     use photocraft_automation::{BridgeClient, budgets::MAX_RESPONSE_BYTES};

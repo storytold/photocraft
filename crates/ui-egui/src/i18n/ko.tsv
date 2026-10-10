@@ -2760,6 +2760,9 @@ cameraRaw	Color	색상
 	Structure:	구조:
 	Content-Aware Move Tool	내용 인식 이동 도구
 	TIFF Options	TIFF 옵션
+	Targa Options	Targa 옵션
+	24 bits/pixel	24비트/픽셀
+	32 bits/pixel	32비트/픽셀
 	Including layers will increase file size.	레이어를 포함하면 파일 크기가 커집니다.
 	Discard Layers and Save a Copy	레이어를 삭제하고 사본 저장
 	Don't show again	다시 표시 안 함

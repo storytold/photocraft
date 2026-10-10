@@ -197,6 +197,7 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
     }
     opts.tiff_layers = settings.tiff_layers;
     opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    opts.tga_bits = settings.tga_bits;
     opts
 }
 

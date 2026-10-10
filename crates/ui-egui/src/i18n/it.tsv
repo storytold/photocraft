@@ -2239,6 +2239,9 @@ cameraRaw	Amount	Quantità
 	Hold Alt while drawing for straight segments	Tieni premuto Alt mentre disegni per segmenti dritti
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Trascina o fai clic sui punti del poligono · tieni premuto Alt durante il lazo per segmenti dritti · {add} aggiunge · {sub} prima di disegnare sottrae
 	TIFF Options	Opzioni TIFF
+	Targa Options	Opzioni Targa
+	24 bits/pixel	24 bit/pixel
+	32 bits/pixel	32 bit/pixel
 	Including layers will increase file size.	Includere i livelli aumenterà le dimensioni del file.
 	Discard Layers and Save a Copy	Elimina i livelli e salva una copia
 	Don't show again	Non mostrare più
