@@ -443,6 +443,7 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     h.state_mut().ui.pen = Some(crate::vector_ui::PenPath {
         knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]],
         unlinked: Vec::new(),
+        resume: None,
         dragging: false,
         adjusting_last: false,
     });

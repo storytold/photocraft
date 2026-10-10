@@ -167,6 +167,65 @@ pub fn bend_segment(path: &mut Path, knot: [usize; 2], t: f64, d: [f64; 2]) -> R
     Ok(())
 }
 
+fn lerp(a: Point, b: Point, t: f64) -> Point {
+    Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+}
+
+/// Splits a cubic at `t` into the left out-handle, the new knot's in-handle, the new anchor,
+/// the new knot's out-handle and the right in-handle (de Casteljau).
+fn split_cubic(seg: [Point; 4], t: f64) -> (Point, Point, Point, Point, Point) {
+    let p01 = lerp(seg[0], seg[1], t);
+    let p12 = lerp(seg[1], seg[2], t);
+    let p23 = lerp(seg[2], seg[3], t);
+    let p012 = lerp(p01, p12, t);
+    let p123 = lerp(p12, p23, t);
+    (p01, p012, lerp(p012, p123, t), p123, p23)
+}
+
+/// Inserts an anchor on the segment leaving `seg` at parameter `t`, keeping the curve.
+/// A straight segment gains a corner on the line; a curve gains a smooth knot at the split.
+/// `t` on an existing anchor is refused.
+pub fn insert_anchor(path: &mut Path, seg: [usize; 2], t: f64) -> Result<[usize; 2], String> {
+    if !t.is_finite() || !(1e-4..=1.0 - 1e-4).contains(&t) {
+        return Err("t must be between 0 and 1, off the existing anchors".into());
+    }
+    let end = segment_end(path, seg)?;
+    let a = *knot_mut(path, seg)?;
+    let b = *knot_mut(path, end)?;
+    let (out_a, inn, at, out_n, inn_b) = split_cubic([a.anchor, a.out_ctrl, b.in_ctrl, b.anchor], t);
+    let straight = dist(a.out_ctrl, a.anchor) < 1e-9 && dist(b.in_ctrl, b.anchor) < 1e-9;
+    knot_mut(path, seg)?.out_ctrl = if straight { a.anchor } else { out_a };
+    knot_mut(path, end)?.in_ctrl = if straight { b.anchor } else { inn_b };
+    let new_k = if straight { Knot::corner(at.x, at.y) } else { Knot::smooth(at, inn, out_n) };
+    let sp = path.subpaths.get_mut(seg[0]).ok_or_else(|| format!("no subpath {}", seg[0]))?;
+    let at_index = seg[1].saturating_add(1);
+    sp.knots.insert(at_index, new_k);
+    Ok([seg[0], at_index])
+}
+
+/// Removes one anchor. A closed subpath opens once fewer than three anchors remain.
+/// The only anchor of a subpath stays: a path needs a point to come back to.
+pub fn delete_anchor(path: &mut Path, [s, k]: [usize; 2]) -> Result<(), String> {
+    let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+    if k >= sp.knots.len() {
+        return Err(format!("no knot {k} in subpath {s}"));
+    }
+    if sp.knots.len() < 2 {
+        return Err("can't delete the only anchor".into());
+    }
+    sp.knots.remove(k);
+    if sp.closed && sp.knots.len() < 3 {
+        sp.closed = false;
+    }
+    Ok(())
+}
+
+/// An open subpath's first or last anchor: the Pen continues from it. Closed paths have none.
+pub fn is_endpoint(path: &Path, [s, k]: [usize; 2]) -> bool {
+    let Some(sp) = path.subpaths.get(s) else { return false };
+    !sp.closed && !sp.knots.is_empty() && k < sp.knots.len() && (k == 0 || k + 1 == sp.knots.len())
+}
+
 /// Every anchor of subpath `s` (⌥-click with Direct Selection selects the whole subpath).
 pub fn subpath_anchors(path: &Path, s: usize) -> Vec<[usize; 2]> {
     path.subpaths.get(s).map_or_else(Vec::new, |sp| (0..sp.knots.len()).map(|k| [s, k]).collect())
@@ -209,12 +268,14 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
     if let Some(h) = nearest(&mut anchors.into_iter()) {
         return Some(h);
     }
-    // Segments: the nearest of 64 samples, refined once around it (plenty at screen tolerances).
-    const N: usize = 64;
+    // Sample each segment finely enough that a point on the curve is within `tol` of a sample.
+    // A fixed count misses the middle of a long segment once the gap exceeds the grab radius.
     let mut segs = path.subpaths.iter().enumerate().flat_map(|(s, sp)| {
         sp.segments().into_iter().enumerate().map(move |(k, seg)| {
-            let best = (0..=N).map(|i| i as f64 / N as f64).map(|t| (dist(eval(&seg, t), p), t)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap_or((f64::MAX, 0.5));
-            let step = 1.0 / N as f64;
+            let len = dist(seg[0], seg[1]) + dist(seg[1], seg[2]) + dist(seg[2], seg[3]);
+            let n = ((len / tol.max(0.5)).ceil() as usize).clamp(16, 4096);
+            let best = (0..=n).map(|i| i as f64 / n as f64).map(|t| (dist(eval(&seg, t), p), t)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap_or((f64::MAX, 0.5));
+            let step = 1.0 / n as f64;
             let fine = (0..=16)
                 .map(|i| (best.1 - step + 2.0 * step * i as f64 / 16.0).clamp(0.0, 1.0))
                 .map(|t| (dist(eval(&seg, t), p), t))
@@ -329,6 +390,54 @@ mod tests {
         assert_eq!(r, [0, 0]);
         assert!((t - 0.5).abs() < 0.02, "{t}");
         assert_eq!(hit(&tri(), Point::new(50.0, 40.0), 3.0, &[]), None);
+        // A straight cubic is slow at the ends and fastest in the middle, so a fixed sample count
+        // leaves a gap wider than the grab radius. A click in that gap is still the segment.
+        let long = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (2000.0, 0.0)])]);
+        let gap = 32.5 / 64.0;
+        let q = eval(&long.subpaths[0].segments()[0], gap);
+        let Some(Hit::Segment(r, t)) = hit(&long, q, 4.0, &[]) else { panic!("long segment at {q:?}") };
+        assert_eq!(r, [0, 0]);
+        assert!((t - gap).abs() < 0.02, "{t}");
+    }
+
+    #[test]
+    fn inserting_an_anchor_keeps_the_curve_and_a_straight_segment_stays_straight() {
+        let mut curved = curve();
+        let seg = curved.subpaths[0].segments()[0];
+        let on_curve = eval(&seg, 0.4);
+        let left = eval(&seg, 0.2);
+        let right = eval(&seg, 0.7);
+        let id = insert_anchor(&mut curved, [0, 0], 0.4).unwrap();
+        assert_eq!(id, [0, 1]);
+        assert_eq!(curved.subpaths[0].knots.len(), 4);
+        assert!(dist(at(&curved, 0, 1).anchor, on_curve) < 1e-9);
+        assert!(at(&curved, 0, 1).smooth);
+        assert!(dist(eval(&curved.subpaths[0].segments()[0], 0.5), left) < 1e-6);
+        assert!(dist(eval(&curved.subpaths[0].segments()[1], 0.5), right) < 1e-6);
+        // The closing edge of a triangle, split in the middle, is still the same straight line.
+        let mut p = tri();
+        insert_anchor(&mut p, [0, 2], 0.5).unwrap();
+        let k = at(&p, 0, 3);
+        assert_eq!(k, Knot::corner(25.0, 40.0));
+        assert!(p.subpaths[0].closed && p.subpaths[0].knots.len() == 4);
+        assert!(insert_anchor(&mut p, [0, 0], 0.0).is_err());
+        assert!(insert_anchor(&mut p, [0, 9], 0.5).is_err());
+        assert!(insert_anchor(&mut p, [0, 0], f64::NAN).is_err());
+    }
+
+    #[test]
+    fn deleting_an_anchor_opens_a_closed_path_once_two_remain() {
+        let mut p = tri();
+        delete_anchor(&mut p, [0, 1]).unwrap();
+        assert_eq!(p.subpaths[0].knots.len(), 2);
+        assert!(!p.subpaths[0].closed);
+        assert!(delete_anchor(&mut p, [0, 5]).is_err());
+        let mut lone = Path::new(vec![Subpath::polyline(&[(1.0, 2.0)])]);
+        assert!(delete_anchor(&mut lone, [0, 0]).is_err());
+        assert_eq!(lone.subpaths[0].knots.len(), 1);
+        assert!(is_endpoint(&curve(), [0, 0]) && is_endpoint(&curve(), [0, 2]));
+        assert!(!is_endpoint(&curve(), [0, 1]));
+        assert!(!is_endpoint(&tri(), [0, 0]));
     }
 
     #[test]

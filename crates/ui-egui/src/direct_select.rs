@@ -144,6 +144,20 @@ fn shown_handles(ds: &DirectSelection, path: &Path) -> Vec<([usize; 2], Handle)>
     out
 }
 
+/// What Direct Selection (or the Pen with ⌘/Ctrl) would press: handles of the selected path, then
+/// anchors, then segments.
+pub(crate) fn cursor_hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<Hit> {
+    if !p[0].is_finite() || !p[1].is_finite() {
+        return None;
+    }
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let ds = &app.ui.direct_selection;
+    candidates(app).into_iter().find_map(|(r, path)| {
+        let handles = if ds.target == Some(r) { shown_handles(ds, &path) } else { Vec::new() };
+        edit::hit(&path, Point::new(p[0], p[1]), tol, &handles)
+    })
+}
+
 /// Canvas pointer events for Direct Selection and the Pen's ⌘ / ⌥ modes; false when the event is
 /// not theirs.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
