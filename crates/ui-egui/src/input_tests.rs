@@ -478,6 +478,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
         anchor: 1,
         session: "kern-test".into(),
         created: false,
+        mask: false,
         dragging: false,
         resize: None,
         preedit: None,

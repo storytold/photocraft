@@ -112,6 +112,8 @@ fn is_point_tool(t: Tool) -> bool {
             | Tool::Line
             | Tool::Type
             | Tool::VerticalType
+            | Tool::HorizontalTypeMask
+            | Tool::VerticalTypeMask
     )
 }
 

@@ -55,8 +55,14 @@ fn to_text(aff: &Affine, x: f64, y: f64) -> (f32, f32) {
 fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
     let doc = app.session.active()?.doc.clone();
     let slop = 6.0 / app.point_zoom().max(0.01);
-    let mut ids: Vec<LayerId> =
-        doc.walk().into_iter().filter(|(_, _, l)| l.visible && matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    // A Type Mask session's text is a hidden layer; it is still the text being edited.
+    let editing = app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| LayerId(ed.layer));
+    let mut ids: Vec<LayerId> = doc
+        .walk()
+        .into_iter()
+        .filter(|(_, _, l)| (l.visible || editing == Some(l.id)) && matches!(l.content, LayerContent::Text(_)))
+        .map(|(_, _, l)| l.id)
+        .collect();
     ids.reverse(); // walk() is bottom-up; hit the topmost first
     ids.into_iter().find(|id| {
         // The pixels shown count too: a PSD's type keeps Photoshop's rendering until edited,
@@ -106,7 +112,8 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
         commit(app);
         let key = session_key(app);
         begin_edit(app, id, &key)?;
-        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit =
+            Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
     } else if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 0;
         ed.caret = n;
@@ -219,6 +226,10 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> boo
         commit(app);
         return true; // Photoshop: a click outside commits without starting new text
     }
+    // The Type Mask tools always start new text: existing type layers are just pixels to them.
+    if app.ui.tool.is_type_mask() {
+        return false;
+    }
     if let Some(id) = hit_layer(app, x, y) {
         let _ = app.session.select_layer(id);
         let key = session_key(app);
@@ -226,7 +237,8 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> boo
             return true;
         }
         let off = hit_offset(app, id, x, y);
-        app.ui.text_edit = Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, dragging: true, resize: None, preedit: None });
+        app.ui.text_edit =
+            Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: true, resize: None, preedit: None });
         return true;
     }
     false
@@ -256,11 +268,13 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let min = 4.0 / app.point_zoom().max(0.01) as f64;
     let o = app.ui.tool_options.clone();
-    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default).
-    let text = if app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
+    let mask = app.ui.tool.is_type_mask();
+    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The Type
+    // Mask tools start empty, as Photoshop's do.
+    let text = if !mask && app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
     let mut p = json!({
         "text": text,
-        "orientation": if app.ui.tool == crate::state::Tool::VerticalType { "vertical" } else { "horizontal" },
+        "orientation": if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" },
         "font": o.type_font,
         "fontStyle": o.type_style,
         "size": o.type_size,
@@ -281,9 +295,14 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         if o.type_aa != "sharp" {
             let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
         }
+        // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
+        // instead, and committing turns it into the selection.
+        if mask {
+            let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
+        }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
-        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
     }
 }
 
@@ -596,6 +615,8 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                     Key::Enter if m.command => commit(app),
                     Key::Enter => insert(app, "\n"),
                     Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
+                    // The Type Mask tools: Escape always cancels, leaving the selection as it was.
+                    Key::Escape if ed.mask => cancel(app),
                     // Preferences ▸ Type: with "Use Escape to Commit" off, Escape cancels the
                     // session (undoes it, removing a just-created layer) like the Cancel button.
                     Key::Escape if app.session.prefs().type_.use_esc_to_commit => commit(app),
@@ -646,6 +667,20 @@ pub fn commit(app: &mut PhotocraftApp) {
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
+    if ed.mask {
+        // Type Mask: the text's glyphs replace the selection and the working layer goes, all in
+        // the session's one history step. No text: nothing changes.
+        if !text.trim().is_empty()
+            && let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "coalesce": ed.session}))
+        {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        if current_text(app, LayerId(ed.layer)).is_some() {
+            undo_session(app, &ed);
+        }
+        return;
+    }
     if text.trim().is_empty() && ed.created {
         let _ = app.run("layer.delete", json!({"layer": ed.layer}));
     } else if ed.created {
@@ -659,6 +694,9 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     let Some(ed) = app.ui.text_edit.clone() else { return };
     let id = LayerId(ed.layer);
     let Some((l, aff, text)) = layout(app, id) else { return };
+    if ed.mask {
+        draw_mask_overlay(app, painter, xf, id);
+    }
     let t = crate::theme::Tokens::get(painter.ctx());
     // Text space → screen.
     let scr_t = |x: f32, y: f32| -> Pos2 {
@@ -747,6 +785,76 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(0.75, Color32::BLACK));
         }
     }
+}
+
+/// The Type Mask tools while typing: Quick Mask's colour over the canvas with the glyphs clear,
+/// as Photoshop shows the selection-to-be. The glyphs come from the hidden working layer's pixels.
+fn draw_mask_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, id: LayerId) {
+    let Some(st) = app.session.active() else { return };
+    let canvas = st.doc.bounds();
+    let opts = app.session.quick_mask_options;
+    let rgb = opts.color.to_rgb();
+    let tint = |a: f32| {
+        let a = (a * opts.opacity).clamp(0.0, 1.0);
+        let q = |v: f32| (v.clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
+        Color32::from_rgba_premultiplied(q(rgb[0]), q(rgb[1]), q(rgb[2]), (a * 255.0 + 0.5) as u8)
+    };
+    let corners = |r: photocraft_geom::Rect| -> Vec<Pos2> {
+        let (x0, y0, x1, y1) = (r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32);
+        vec![xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x1, y1), xf.to_screen(x0, y1)]
+    };
+    let surface = text_layer(&st.doc, id).and_then(|t| t.cache.as_ref());
+    let area = surface.map(|s| s.content_bounds().intersect(&canvas)).unwrap_or(photocraft_geom::Rect::EMPTY);
+    // One unfeathered mesh, so the bands and the text's box meet without seams.
+    let mut bands = egui::Mesh::default();
+    let mut band = |x0: i32, y0: i32, x1: i32, y1: i32| {
+        let r = photocraft_geom::Rect { x0, y0, x1, y1 };
+        if !r.is_empty() {
+            let base = bands.vertices.len() as u32;
+            for p in corners(r) {
+                bands.colored_vertex(p, tint(1.0));
+            }
+            bands.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    };
+    let Some(surface) = surface.filter(|_| !area.is_empty()) else {
+        band(canvas.x0, canvas.y0, canvas.x1, canvas.y1);
+        painter.add(egui::Shape::mesh(bands));
+        return;
+    };
+    band(canvas.x0, canvas.y0, canvas.x1, area.y0);
+    band(canvas.x0, area.y1, canvas.x1, canvas.y1);
+    band(canvas.x0, area.y0, area.x0, area.y1);
+    band(area.x1, area.y0, canvas.x1, area.y1);
+    painter.add(egui::Shape::mesh(bands));
+    // The text's box: a texture of the tint where there is no glyph, cached per revision.
+    let ctx = painter.ctx();
+    let key = (st.doc.id.0, st.revision, id.0);
+    let cache = egui::Id::new("pc-type-mask-overlay");
+    let tex = ctx.data(|d| d.get_temp::<((u64, u64, u64), egui::TextureHandle)>(cache)).filter(|(k, _)| *k == key).map(|(_, t)| t);
+    let tex = tex.unwrap_or_else(|| {
+        let max = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, 4096);
+        let factor = area.width().max(area.height()).div_ceil(max).max(1);
+        let (w, h) = (area.width().div_ceil(factor) as usize, area.height().div_ceil(factor) as usize);
+        let mut row = vec![[0.0f32; 4]; area.width() as usize];
+        let mut px = Vec::with_capacity(w * h);
+        for y in (area.y0..area.y1).step_by(factor as usize) {
+            surface.read_rgba_into(photocraft_geom::Rect { x0: area.x0, y0: y, x1: area.x1, y1: y + 1 }, &mut row);
+            px.extend(row.iter().step_by(factor as usize).take(w).map(|p| tint(1.0 - p[3])));
+        }
+        px.resize(w * h, tint(1.0));
+        let img = egui::ColorImage::new([w, h], px);
+        let t = ctx.load_texture("type-mask-overlay", img, egui::TextureOptions::LINEAR);
+        ctx.data_mut(|d| d.insert_temp(cache, (key, t.clone())));
+        t
+    });
+    let c = corners(area);
+    let mut mesh = egui::Mesh::with_texture(tex.id());
+    for (p, uv) in c.iter().zip([egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)]) {
+        mesh.vertices.push(egui::epaint::Vertex { pos: *p, uv, color: Color32::WHITE });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Font families: bundled, system, and those the host serves (`photocraft_text::served`, fetched
@@ -1610,6 +1718,11 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    undo_session(app, &ed);
+}
+
+/// Undo the session's history step, if it is still the latest.
+fn undo_session(app: &mut PhotocraftApp, ed: &TextEdit) {
     let coalesced = app.session.active().is_some_and(|s| s.coalesce.as_deref() == Some(ed.session.as_str()));
     if coalesced {
         let _ = app.run("edit.undo", json!({}));

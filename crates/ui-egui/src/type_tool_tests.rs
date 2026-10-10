@@ -281,6 +281,7 @@ fn size_applies_at_layer_and_selection_scope() {
             anchor: 6,
             session: "s".into(),
             created: false,
+            mask: false,
             dragging: false,
             resize: None,
             preedit: None,
@@ -427,6 +428,7 @@ fn foreground_colour_recolours_only_selected_type() {
         anchor,
         session: "s".into(),
         created: false,
+        mask: false,
         dragging: false,
         resize: None,
         preedit: None,
@@ -497,6 +499,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
         anchor: 6,
         session: "text-color-dialog-test".into(),
         created: false,
+        mask: false,
         dragging: false,
         resize: None,
         preedit: None,
@@ -547,8 +550,17 @@ fn text_color_dialog_without_a_selection_edits_the_whole_layer() {
 fn empty_ime_events_never_delete_the_selection() {
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
-    app.ui.text_edit =
-        Some(crate::state::TextEdit { layer: id.0, caret: 5, anchor: 0, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 5,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
     let mut h = harness(1.0, app);
     let ime = |h: &mut Harness<'static, PhotocraftApp>, e: egui::ImeEvent| {
         h.event(egui::Event::Ime(e));
@@ -1271,6 +1283,7 @@ mod multi_layer_formatting {
             anchor: 1,
             session: "batch-type-edit".into(),
             created: false,
+            mask: false,
             dragging: false,
             resize: None,
             preedit: None,
@@ -1462,4 +1475,67 @@ mod multi_layer_formatting {
             assert_eq!(style(h.state(), id, 0), expected);
         }
     }
+}
+
+fn selection_bounds(app: &PhotocraftApp) -> Option<photocraft_geom::Rect> {
+    app.session.active().unwrap().doc.selection.as_ref().map(|m| m.content_bounds())
+}
+
+/// Click with `tool` at (200, 300), type `text` and commit.
+fn type_with(app: &mut PhotocraftApp, tool: crate::state::Tool, text: &str) {
+    use crate::canvas::{ToolEvent, tool_event};
+    app.ui.tool = tool;
+    tool_event(app, ToolEvent::Down { x: 200.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: 200.0, y: 300.0 }, Modifiers::NONE);
+    super::insert(app, text); // replaces the Type tool's selected placeholder
+    super::commit(app);
+}
+
+/// #1055: the Type Mask tools type a selection in the shape of the glyphs, the same pixels the
+/// Type tool's layer covers, as one history step that adds no layer. Vertical runs down a column.
+#[test]
+fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
+    use crate::state::Tool;
+    let mut app = new_app();
+    type_with(&mut app, Tool::Type, "I");
+    let glyphs = app.session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().content_bounds();
+
+    let mut app = new_app();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    let steps = app.session.active().unwrap().history.entries().len();
+    type_with(&mut app, Tool::HorizontalTypeMask, "I");
+    assert!(app.ui.text_edit.is_none());
+    assert_eq!(selection_bounds(&app), Some(glyphs));
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layers.len(), layers, "no layer is left behind");
+    assert_eq!(st.history.entries().len(), steps + 1);
+    assert_eq!(st.history.entries().last().map(String::as_str), Some("Type Mask"));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(selection_bounds(&app), None, "one undo restores the selection");
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
+
+    let mut app = new_app();
+    type_with(&mut app, Tool::VerticalTypeMask, "HELLO");
+    let v = selection_bounds(&app).unwrap();
+    assert!(v.height() > 2 * v.width(), "{v:?}");
+}
+
+/// #1055: Escape cancels a Type Mask session whatever "Use Escape to Commit" says: the selection
+/// and the layers stay as they were.
+#[test]
+fn type_mask_escape_leaves_the_selection_unchanged() {
+    let mut app = new_app();
+    app.run("select.all", json!({})).unwrap();
+    let (before, layers) = (selection_bounds(&app), app.session.active().unwrap().doc.layers.len());
+    app.ui.tool = crate::state::Tool::HorizontalTypeMask;
+    let mut h = harness(1.0, app);
+    let p = xf(h.state()).to_screen(200.0, 300.0);
+    click(&mut h, p);
+    assert!(h.state().ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
+    super::insert(h.state_mut(), "I");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.text_edit.is_none());
+    assert_eq!(selection_bounds(h.state()), before);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
 }
