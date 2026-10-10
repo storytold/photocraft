@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent};
+use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, XmpEmbed};
+use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -418,29 +418,62 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
         }
     }
     if format == Format::Tga {
-        img = tga_alpha_channel(doc, img, &mut warnings)?;
+        img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
     encode_image(&img, format, opts, warnings)
 }
 
-/// Photoshop's 32-bit Targa takes its alpha from the document's alpha channel, not from layer
-/// transparency: with exactly one alpha channel (spot channels don't count) an RGB file gets
-/// that channel's values as its alpha, and its colours are the composite over white. With two or
-/// more Photoshop writes no channel (an opaque alpha), so the image is left as it is. Grayscale
-/// Targas have no alpha in Photoshop either.
-fn tga_alpha_channel(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+/// What Targa Options offers first, as Photoshop does: 32 bits per pixel when the document has an
+/// alpha channel (spot channels don't count), else 24.
+pub fn tga_default_bits(doc: &Document) -> TgaBits {
+    if doc.channels.iter().any(|c| c.spot.is_none()) { TgaBits::Bits32 } else { TgaBits::Bits24 }
+}
+
+/// The RGB image a Targa of `bits` per pixel holds (`None`: 32 with an alpha channel or
+/// transparency, else 24). 24 bits are the colours alone, composited over white where the layers
+/// are transparent. 32 add an alpha: as in Photoshop, the document's alpha channel when it has
+/// exactly one (spot channels don't count); with none, or several (Photoshop then writes none of
+/// them), the layers' transparency, fully opaque without any. Colours are written as they are,
+/// never premultiplied or cleared under a zero alpha: Targa alphas often hold data such as a
+/// game texture's specular mask. Grayscale Targas have no alpha channel in Photoshop and are left
+/// as they are.
+fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     if !img.layout().is_rgb() {
+        if let Some(bits) = bits {
+            warnings.push(format!("{}-bit Targa applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        }
         return Ok(img);
     }
-    let mut alphas = doc.channels.iter().filter(|c| c.spot.is_none());
-    let channel = match (alphas.next(), alphas.next()) {
-        (Some(c), None) => c,
-        (Some(_), Some(_)) => {
-            warnings.push("Targa holds one alpha channel; with several, none was written (as in Photoshop)".into());
-            return Ok(img);
+    let alphas: Vec<&AlphaChannel> = doc.channels.iter().filter(|c| c.spot.is_none()).collect();
+    let bits = bits.unwrap_or(if !alphas.is_empty() || img.layout().has_alpha() { TgaBits::Bits32 } else { TgaBits::Bits24 });
+    match (bits, alphas.as_slice()) {
+        (TgaBits::Bits24, alphas) => {
+            if !alphas.is_empty() {
+                let names: Vec<String> = alphas.iter().map(|c| format!("\"{}\"", c.name)).collect();
+                warnings.push(format!("a 24-bit Targa has no alpha; not saved: {}", names.join(", ")));
+            }
+            if !img.layout().has_alpha() {
+                return Ok(img);
+            }
+            warnings.push("transparency composited over white; a 24-bit Targa has no alpha".into());
+            matte_over_white(&img)
         }
-        _ => return Ok(img),
-    };
+        (TgaBits::Bits32, [channel]) => tga_with_alpha_channel(doc, img, channel, warnings),
+        (TgaBits::Bits32, alphas) => {
+            if !alphas.is_empty() {
+                warnings.push("Targa holds one alpha channel; with several, none was written (as in Photoshop)".into());
+            }
+            if img.layout().has_alpha() {
+                return Ok(img);
+            }
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+    }
+}
+
+/// A 32-bit Targa's image: the colours (composited over white where the layers are transparent)
+/// and `channel`'s values as the alpha.
+fn tga_with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     let img = if img.layout().has_alpha() {
         warnings.push("transparency composited over white; the alpha channel is the Targa's alpha".into());
         matte_over_white(&img)?

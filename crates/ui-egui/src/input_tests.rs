@@ -693,3 +693,16 @@ fn escape_with_the_palette_open_does_not_deselect() {
     h.run_steps(2);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
 }
+
+/// Targa Options owns Esc (it cancels the save), so the selection stays.
+#[test]
+fn escape_with_targa_options_open_does_not_deselect() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().save_as(Some("t.tga".into())).unwrap();
+    assert!(h.state().targa_options.is_some());
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to Targa Options");
+}

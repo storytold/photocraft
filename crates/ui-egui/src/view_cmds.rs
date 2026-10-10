@@ -1121,6 +1121,17 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let suggested = format!("{stem} copy.psd");
     // The copy is of the document as it was when asked.
     app.pick_save(&suggested, move |app, path| {
+        // An RGB Targa asks for its bits per pixel first; the copy is written from the prompt.
+        let parked = app.with_document(doc.id, |app| {
+            let ask = crate::targa_options_ui::wants_prompt(app, &path);
+            if ask {
+                crate::targa_options_ui::park(app, path.clone(), true, false)?;
+            }
+            Ok(ask)
+        })?;
+        if parked {
+            return Ok(json!({"path": path, "warnings": []}));
+        }
         let export = app.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&doc, &path, &crate::ExportSettings::default())?;
         let write = app.services.write.as_mut().ok_or("no writer configured")?;

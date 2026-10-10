@@ -24,6 +24,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
     f.insert("metadata".into(), json!("none"));
+    f.insert("tgaBits".into(), json!("auto"));
     f.insert("__w".into(), json!(st.doc.size.width));
     f.insert("__h".into(), json!(st.doc.size.height));
     Ok(app.ui.open_dialog(DialogKind::Command, f))
@@ -126,6 +127,12 @@ fn lossless(f: &Map<String, Value>) -> bool {
     f.get("lossless").and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// TGA bits per pixel: `"24"` or `"32"`; `"auto"` (the default) is 32 with an alpha channel or
+/// transparency, else 24, as Export As wrote before it offered the choice.
+fn tga_bits(f: &Map<String, Value>) -> Option<photocraft_io::TgaBits> {
+    s(f, "tgaBits").parse().ok().and_then(photocraft_io::TgaBits::from_bits)
+}
+
 fn settings(f: &Map<String, Value>) -> ExportSettings {
     let fmt = s_fmt(f);
     let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
@@ -134,6 +141,7 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: s(f, "metadata") == "all",
+        tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
         ..Default::default()
     }
 }
@@ -176,6 +184,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
             }
+            if fmt == "tga" {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Resolution")).color(t.text_dim));
+                    let mut bits = s(f, "tgaBits");
+                    let opts: Vec<(String, &str)> =
+                        vec![("auto".into(), tl!("Auto")), ("24".into(), tl!("24 bits/pixel")), ("32".into(), tl!("32 bits/pixel"))];
+                    if crate::widgets::dropdown(ui, "export-tga-bits", &mut bits, &opts, 130.0) {
+                        f.insert("tgaBits".into(), json!(bits));
+                    }
+                });
+            }
             if fmt != "jpg" {
                 let mut tr = f.get("transparency").and_then(Value::as_bool).unwrap_or(true);
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
@@ -207,13 +226,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
-                "{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}",
                 s_fmt(f),
                 n(f, "quality", 85.0),
                 lossless(f),
                 f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
                 n(f, "scale", 100.0),
-                s(f, "metadata")
+                s(f, "metadata"),
+                s(f, "tgaBits")
             );
             let cached: Option<(String, Option<u64>, Arc<egui::TextureHandle>)> = ui.data(|d| d.get_temp(key));
             let (size, tex) = match cached.filter(|c| c.0 == sig) {
@@ -429,5 +449,21 @@ mod tests {
         assert_eq!(s.webp_quality, None);
         f.insert("format".into(), json!("png"));
         assert!(settings(&f).webp_lossless, "other formats leave the WebP default alone");
+    }
+
+    /// TGA's Resolution (bits per pixel): Auto leaves the choice to the export; 24 and 32 force it, and only
+    /// for TGA.
+    #[test]
+    fn tga_settings_follow_the_bits_per_pixel() {
+        use photocraft_io::TgaBits;
+        let mut f = Map::new();
+        f.insert("format".into(), json!("tga"));
+        assert_eq!(settings(&f).tga_bits, None, "no choice made");
+        for (v, want) in [("auto", None), ("24", Some(TgaBits::Bits24)), ("32", Some(TgaBits::Bits32)), ("16", None)] {
+            f.insert("tgaBits".into(), json!(v));
+            assert_eq!(settings(&f).tga_bits, want, "{v}");
+        }
+        f.insert("format".into(), json!("png"));
+        assert_eq!(settings(&f).tga_bits, None, "only TGA has bits per pixel");
     }
 }
