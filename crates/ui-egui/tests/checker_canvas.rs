@@ -20,8 +20,12 @@ fn harness() -> Option<Harness> {
 
 /// The app with the GPU canvas (`gpu`), or without it: the CPU fallback path.
 fn harness_with(gpu: bool) -> Option<Harness> {
+    harness_with_scale(gpu, 1.0)
+}
+
+fn harness_with_scale(gpu: bool, ppp: f32) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
-        egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 800.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 800.0)).with_pixels_per_point(ppp).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref().filter(|_| gpu) {
@@ -232,6 +236,57 @@ fn cpu_pixel_grid_is_not_drawn_over_empty_checker() {
         for y in y0..y0 + 64 {
             for x in x0..x0 + 64 {
                 assert_eq!(with.at(x, y), without.at(x, y), "zoom {zoom}: the grid changed empty checker at ({x}, {y})");
+            }
+        }
+    }
+}
+
+#[test]
+fn pixel_grid_preserves_a_smooth_mid_gray_ramp_on_both_canvases() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Document, Layer, LayerContent, Size};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    for gpu in [true, false] {
+        for ppp in [1.0, 2.0] {
+            let Some(mut h) = harness_with_scale(gpu, ppp) else { return };
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let mut doc = Document::new("mid-gray ramp", Size::new(64, 16), ColorMode::Rgb, depth);
+                let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+                for x in 0..64 {
+                    let v = 0.5 + 0.1 * x as f32 / 63.0;
+                    surface.fill_rect(Rect::new(x, 0, x + 1, 16), &[v, v, v, 1.0]);
+                }
+                doc.layers.push(Layer::new("ramp", LayerContent::Raster(surface)));
+                let app = h.state_mut();
+                app.session.add_document(doc, None);
+                app.sync_views();
+                app.ui.view.show.pixel_grid = true;
+                for zoom in [7.119, 8.0] {
+                    control(&mut h, "ui.set", json!({"zoom": zoom, "center": [32.0, 8.0]}));
+                    assert_eq!(h.ctx.pixels_per_point(), ppp);
+                    assert_eq!(h.state().perf.gpu, gpu);
+                    let img = h.render().expect("render ramp");
+                    let center = h.state().last_canvas_rect.center() * ppp;
+                    let x0 = center.x - 32.0 * zoom;
+                    let y = (center.y + 3.5 * zoom).floor() as u32;
+                    let mut previous = 0u8;
+                    for x in 2..62 {
+                        let edge = (x0 + x as f32 * zoom).floor() as u32;
+                        // Include both pixels a subpixel-positioned line can cover.
+                        let line = (edge..=edge + 1).map(|sx| img.get_pixel(sx, y)[0]).max().expect("line");
+                        let inside = img.get_pixel((x0 + (x as f32 + 0.5) * zoom).floor() as u32, y)[0];
+                        assert!(line >= inside, "{gpu:?}/{depth:?}, scale {ppp}, zoom {zoom}, x {x}: grid darkened {inside} to {line}");
+                        if zoom == 8.0 {
+                            assert!(
+                                line.saturating_add(3) >= previous,
+                                "{gpu:?}/{depth:?}, scale {ppp}, zoom {zoom}, x {x}: false contour {previous} -> {line}"
+                            );
+                        }
+                        previous = line;
+                    }
+                }
             }
         }
     }
