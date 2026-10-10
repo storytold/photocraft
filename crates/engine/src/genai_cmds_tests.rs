@@ -350,3 +350,24 @@ fn a_failed_variation_is_dropped_when_others_succeed() {
     assert_eq!(r["variations"].as_array().unwrap().len(), 2);
     assert_eq!(rgb_at(&s, 16, 16), [0, 200, 0]);
 }
+
+#[test]
+fn the_selected_pixels_are_never_sent() {
+    // A red square under the selection on white: the provider sees grey there, so it can't paint
+    // the object back, and the surroundings as they are.
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 40, "y": 40, "width": 40, "height": 40})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let fake = Fake::new([0, 0, 255]);
+    s.set_image_provider(Some(fake.clone()));
+    let r = s.execute(FILL, json!({"variations": 1})).unwrap();
+    let sent = fake.sent.lock().unwrap();
+    let img = codecs::decode(&sent[0].image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+    let (x0, y0) = (r["bounds"][0].as_i64().unwrap() as i32, r["bounds"][1].as_i64().unwrap() as i32);
+    let at = |x: i32, y: i32| {
+        let i = ((y - y0) as usize * img.width() as usize + (x - x0) as usize) * 4;
+        [img.data()[i], img.data()[i + 1], img.data()[i + 2]]
+    };
+    assert_eq!(at(60, 60), [128, 128, 128], "cleared to grey");
+    assert_eq!(at(30, 30), [255, 255, 255], "the context is sent as it is");
+}

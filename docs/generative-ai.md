@@ -37,7 +37,10 @@ variation (so three requests by default, each billed to the user's key):
 
 - the selection's bounds plus a margin of context (half the selection's longer side, 64 to
   1024 px), grown toward the provider's output shape and kept inside the canvas, rendered
-  from all visible layers in sRGB and scaled to at most 2048 px on the long side;
+  from all visible layers in sRGB and scaled to at most 2048 px on the long side, with the
+  selection itself cleared to flat grey. The provider never sees what is being replaced, as
+  Photoshop's fill doesn't, so it can't paint it back: an empty prompt removes what was selected
+  and continues the surroundings, including anything that crosses the selection's edge;
 - a black-and-white PNG mask of the selection at the same size (white = fill);
 - the prompt.
 

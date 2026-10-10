@@ -138,24 +138,37 @@ fn scaled(s: &Surface, area: Rect, w: u32, h: u32) -> Surface {
     photocraft_algo::resample::resize_surface(&local, sx, sy, photocraft_algo::resample::Resample::Bicubic)
 }
 
-fn encode_png(s: &Surface, w: u32, h: u32) -> Result<Vec<u8>> {
-    let r = Rect::from_xywh(0, 0, w, h);
-    let rgba = s.convert(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
-    let img = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.to_interleaved(r)).map_err(other)?;
+/// Grey the selected part of the image is cleared to before it is sent.
+const HOLE: f32 = 128.0;
+
+fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
+    let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).map_err(other)?;
     codecs::encode(&img, Format::Png, &Default::default()).map_err(other)
 }
 
-/// The selection over `area`, scaled to `w`×`h`, as an opaque black-and-white PNG (white = fill).
-fn mask_png(sel: &Surface, area: Rect, w: u32, h: u32) -> Result<Vec<u8>> {
-    let gray = scaled(sel, area, w, h);
-    let values = gray.read_region(Rect::from_xywh(0, 0, w, h));
-    let mut px = Vec::with_capacity(values.len() * 4);
-    for v in values {
-        let g = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        px.extend_from_slice(&[g, g, g, 255]);
+/// The image and mask sent, both `w`×`h`: `image` (sRGB, already scaled) with the selection
+/// cleared to flat grey, and an opaque black-and-white PNG of the selection (white = fill). The
+/// provider never sees what is being replaced, as Photoshop's fill doesn't, so it can't paint it
+/// back: an empty prompt removes the selected object and continues what lies around it.
+fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) -> Result<(Vec<u8>, Vec<u8>)> {
+    let r = Rect::from_xywh(0, 0, w, h);
+    let rgba = image.convert(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true)).to_interleaved(r);
+    let coverage = scaled(sel, area, w, h).read_region(r);
+    let mut cleared = Vec::with_capacity(rgba.len());
+    let mut mask = Vec::with_capacity(rgba.len());
+    for (px, v) in rgba.as_chunks::<4>().0.iter().zip(coverage) {
+        let m = v.clamp(0.0, 1.0);
+        let a = f32::from(px[3]) / 255.0;
+        // Composite over the hole grey too, so transparent areas read as cleared, not black.
+        for &c in &px[..3] {
+            let c = f32::from(c) * a + HOLE * (1.0 - a);
+            cleared.push((c * (1.0 - m) + HOLE * m).round() as u8);
+        }
+        cleared.push(255);
+        let g = (m * 255.0).round() as u8;
+        mask.extend_from_slice(&[g, g, g, 255]);
     }
-    let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).map_err(other)?;
-    codecs::encode(&img, Format::Png, &Default::default()).map_err(other)
+    Ok((encode_rgba(cleared, w, h)?, encode_rgba(mask, w, h)?))
 }
 
 /// Decode a provider's PNG or JPEG into 8-bit sRGB, with its size.
@@ -286,8 +299,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.05, "Preparing image");
-            let image = encode_png(&scaled(&srgb_composite(&doc, area)?, area, w, h), w, h)?;
-            let mask = mask_png(&sel, area, w, h)?;
+            let (image, mask) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
             ctx.check()?;
             let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;

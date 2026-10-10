@@ -144,8 +144,9 @@ pub struct GenerateRequest {
     pub size: ImageSize,
 }
 
-/// Change the masked part of `image` (Generative Fill). An empty prompt asks the provider to
-/// remove what is under the mask and continue the surroundings.
+/// Change the masked part of `image` (Generative Fill). The engine sends `image` with the masked
+/// area already cleared to flat grey, so the provider fills a hole rather than repainting what
+/// was there. An empty prompt asks it to continue the surroundings through the hole.
 #[derive(Debug, Clone)]
 pub struct EditRequest {
     pub image: Vec<u8>,
