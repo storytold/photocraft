@@ -388,3 +388,5 @@ pub fn strict_block_errors(bytes: &[u8]) -> Vec<String> {
     }
     errs
 }
+
+pub mod current_affinity;

@@ -3,10 +3,13 @@
 //! not into a new top-level `tests/*.rs` file (each of those links a binary of its own).
 
 mod affinity;
+mod background_layer_consistency;
 mod brush_smoothing;
 mod camera_raw_noise_clamp;
 mod close_document;
 mod command_lookup;
+mod current_affinity_artboards;
+mod duplicate_layer_comps;
 mod empty_selection_combine;
 mod eraser_locked;
 mod fill_lock_transparency;

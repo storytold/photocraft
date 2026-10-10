@@ -7,3 +7,4 @@ mod inactive_save;
 mod layered_save_dirty;
 mod mcp;
 mod mcp_wire;
+mod openraster;

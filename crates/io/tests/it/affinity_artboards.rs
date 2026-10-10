@@ -1,8 +1,7 @@
 //! Current .af artboards stay separate, editable and clipped through native/PSD saves.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-#[path = "support/current_affinity.rs"]
-mod fixture;
+use crate::common::current_affinity as fixture;
 
 use fixture::{Marker, document};
 use photocraft_affinity::synth::Method;

@@ -1,7 +1,7 @@
 //! Artboards recognized from current .af properties move with their children and undo together.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-#[path = "../../io/tests/support/current_affinity.rs"]
+#[path = "../../../io/tests/it/common/current_affinity.rs"]
 mod fixture;
 
 use fixture::{Marker, document};
