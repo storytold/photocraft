@@ -1002,7 +1002,9 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 let open = title_press(ui.ctx(), &title);
                 // The release ending the press that opened this menu is a click "outside" the
                 // popup: it must not close it again.
-                let opening = title.clicked() && ui.ctx().data(|d| d.get_temp::<bool>(press_gesture_id())).unwrap_or(false);
+                let opening = title.clicked()
+                    && (cfg!(target_os = "android")
+                        || ui.ctx().data(|d| d.get_temp::<bool>(press_gesture_id())).unwrap_or(false));
                 let close = if opening {
                     egui::PopupCloseBehavior::IgnoreClicks
                 } else if top == "Help" {
@@ -1075,6 +1077,11 @@ fn press_gesture_id() -> egui::Id {
 /// starts a press-drag gesture: releasing on an item runs it) or closes an open one; the release
 /// never toggles, so the menu doesn't blink.
 fn title_press(ctx: &egui::Context, title: &egui::Response) -> Option<egui::SetOpenCommand> {
+    // A touch is a completed tap, not a desktop mouse press-drag. Waiting
+    // for egui's click also works when Android delivers down/up in one frame.
+    if cfg!(target_os = "android") {
+        return title.clicked().then_some(egui::SetOpenCommand::Toggle);
+    }
     // A press this frame on the title (still down, or a whole click within one frame).
     let pressed = ctx.input(|i| i.pointer.primary_pressed()) && (title.is_pointer_button_down_on() || title.clicked());
     if !pressed {
@@ -1105,6 +1112,11 @@ fn pointer_reaches_title(ctx: &egui::Context, response: &egui::Response, p: egui
 /// Like a native menu bar (Windows, macOS): while one top-level menu is open, hovering another
 /// top-level title opens that menu instead.
 fn switch_on_hover(ctx: &egui::Context, buttons: &[egui::Response]) {
+    // Touch dragging across the bar must not switch menus as though a mouse
+    // were hovering. On Android each menu changes only when its title is tapped.
+    if cfg!(target_os = "android") {
+        return;
+    }
     let ids: Vec<egui::Id> = buttons.iter().map(egui::Popup::default_response_id).collect();
     let Some(open) = ids.iter().position(|id| egui::Popup::is_id_open(ctx, *id)) else { return };
     // `Response::hovered` is false while the menu's popup layer is open. Hit-test the title

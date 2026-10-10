@@ -171,7 +171,7 @@ pub struct DockLayout {
 }
 
 /// Gap between groups; it is also the splitter's grab area.
-pub const GAP: f32 = 6.0;
+pub const GAP: f32 = if cfg!(target_os = "android") { 24.0 } else { 6.0 };
 /// Upper bound on a stored height (guards against absurd values from `ui.set`).
 const MAX_HEIGHT: f32 = 4000.0;
 

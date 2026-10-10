@@ -162,7 +162,11 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     let rounding = if collapsed { CornerRadius::same(3) } else { CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 } };
     ui.painter().rect_filled(strip, rounding, t.tab_strip);
     // Panel menu (hamburger); the tabs stay left of it, eliding or overflowing (#151).
-    let menu = Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0));
+    let menu = if cfg!(target_os = "android") {
+        Rect::from_center_size(pos2(strip.right() - 22.0, strip.center().y), vec2(40.0, 26.0))
+    } else {
+        Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0))
+    };
     let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed);
     let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click());
     let c = if mresp.hovered() { t.text } else { t.text_faint };

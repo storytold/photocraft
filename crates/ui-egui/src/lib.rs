@@ -14,6 +14,8 @@ macro_rules! tl {
     };
 }
 
+#[cfg(target_os = "android")]
+pub mod android_touch;
 pub mod actions;
 pub mod adjust_dialog;
 pub mod adjust_editors;

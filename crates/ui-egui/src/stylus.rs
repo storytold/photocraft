@@ -7,6 +7,9 @@
 //!   normalised force (`POINTER_PEN_INFO::pressure / 1024`); egui-winit forwards it as
 //!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
 //!   winit drops the pen's tilt and rotation, so those stay 0.
+//! - **Android**: winit forwards touch pressure; the optional NativeActivity JNI bridge
+//!   supplies tilt and eraser metadata through the feed without injecting duplicate pointers.
+//!   When the Java dispatch callback is not invoked, pressure-only input remains supported.
 //! - **Web**: eframe forwards touch force but not pen pointer events, so the web runner listens
 //!   to `pointerdown`/`pointermove` itself and writes `pressure`, `tiltX`, `tiltY`, `twist` and
 //!   the eraser button of `pointerType == "pen"` events into the [`StylusFeed`].
@@ -181,6 +184,11 @@ impl Stylus {
             self.prev = Some(*last);
         }
         self.frame = self.feed.drain();
+        // Android's input arrives through both winit touch-force and the
+        // optional JNI pen feed. Prefer the richer pen samples when present:
+        // appending default-tilt touch samples would otherwise erase tilt
+        // interpolation and introduce a duplicate pressure reading.
+        let android_pen_feed = cfg!(target_os = "android") && !self.frame.is_empty();
         self.current = None;
         for e in events {
             if let egui::Event::Touch { phase, force, .. } = e {
@@ -188,7 +196,9 @@ impl Stylus {
                     egui::TouchPhase::Start | egui::TouchPhase::Move => {
                         if let Some(f) = force.filter(|f| f.is_finite()) {
                             self.touch = Some(f.clamp(0.0, 1.0));
-                            self.frame.push(PenSample { pressure: f.clamp(0.0, 1.0), ..Default::default() });
+                            if !android_pen_feed {
+                                self.frame.push(PenSample { pressure: f.clamp(0.0, 1.0), ..Default::default() });
+                            }
                         }
                     }
                     egui::TouchPhase::End | egui::TouchPhase::Cancel => self.lifted = true,
