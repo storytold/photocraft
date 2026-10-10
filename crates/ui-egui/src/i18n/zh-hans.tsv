@@ -32,8 +32,15 @@
 	New from Clipboard	从剪贴板新建
 	Open…	打开…
 	Open As…	打开为…
+	Open EXR Parts…	打开 EXR 分段…
+	Add beauty precomp from the AOVs	从 AOV 预合成美丽通道
+	Both	两者
+	Left	左
+	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
+	Remove from Recent	从最近文件中移除
+	Remove {name} from Recent	从最近文件中移除 {name}
 	Close	关闭
 	Minimize	最小化
 	Maximize	最大化
@@ -81,6 +88,8 @@
 	Import	导入
 	Browse…	浏览…
 	Reveal in Finder	在 Finder 中显示
+	Show in Explorer	在文件资源管理器中显示
+	Show in Folder	在文件夹中显示
 	File Info…	文件信息…
 	Print…	打印…
 	Print One Copy	打印一份
@@ -587,6 +596,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -812,7 +825,6 @@
 	Blending Options	混合选项
 	Blue	蓝色
 	Blue, Red, Yellow	蓝色、红色、黄色
-	Both	两者
 	Both Axes	双轴
 	Bottom	底部
 	Brightness	亮度
@@ -1134,7 +1146,6 @@
 	Leading	行距
 	Leading (set to the font size × auto-leading when Auto)	行距（自动时为字号 × 自动行距系数）
 	Leave as is (don't color manage)	保持原样（不进行色彩管理）
-	Left	左
 	Left align text	文字左对齐
 	Length:	长度：
 	Level	级别
@@ -1308,6 +1319,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	录制 ● 一系列编辑，然后在任意文档上播放 ▶。
 	Red	红色
 	Redefine style by current selection	用当前选区重新定义样式
+	Refine	调整
 	Reflected Gradient	对称渐变
 	Registration Marks	套准标记
 	Regular	常规
@@ -1346,7 +1358,6 @@
 	Restore All	全部还原
 	Restore Defaults	还原默认值
 	Restrictive (Web)	限定（Web）
-	Right	右
 	Right align text	文字右对齐
 	Rigid	刚性
 	Rotate:	旋转：
@@ -1640,6 +1651,7 @@
 	Mobile	移动设备
 	Move Tool	移动工具
 	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
+	Could not complete the Free Transform command because the layer is locked.	无法完成“自由变换”命令，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -2232,6 +2244,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker ({name})	拾色器（{name}）
 	Color Picker (Fill Color)	拾色器（填充颜色）
 	Fill color	填充颜色
 	Color Picker (Stroke Color)	拾色器（描边颜色）
@@ -2414,3 +2427,9 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Use Classic Mode	使用经典模式
+	Auto Center Preview	自动居中预览
+	Next Document	下一个文档
+	Previous Document	上一个文档
+	W x H x Resolution	宽 x 高 x 分辨率
+	Front Image	前面的图像

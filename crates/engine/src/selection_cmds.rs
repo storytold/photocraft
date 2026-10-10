@@ -386,9 +386,10 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     let at_bounds = op == "border" || b(p, "applyAtCanvasBounds", false);
     let (area, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // Feather reaches 3σ = 1.5 r; the others reach r. A margin past that keeps the canvas edge out of
-    // reach. A selection clear of the canvas edge needs none: both readings agree there.
-    let reach = if op == "feather" { r * 1.5 } else { r };
+    // Feather reaches 3σ = 3 r (σ = r, as in Photoshop); the others reach r. A margin past that
+    // keeps the canvas edge out of reach. A selection clear of the canvas edge needs none: both
+    // readings agree there.
+    let reach = if op == "feather" { r * 3.0 } else { r };
     let pad = if touches_edge(&m, w, h) { reach.ceil() as usize + 2 } else { 0 };
     let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
     let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {

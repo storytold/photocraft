@@ -36,8 +36,15 @@
 	New from Clipboard	Neu aus Zwischenablage
 	Open…	Öffnen…
 	Open As…	Öffnen als…
+	Open EXR Parts…	EXR-Teile öffnen…
+	Add beauty precomp from the AOVs	Schönheits-Vorkomposition aus den AOVs hinzufügen
+	Both	Beide
+	Left	Links
+	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
+	Remove from Recent	Aus zuletzt geöffneten Dateien entfernen
+	Remove {name} from Recent	{name} aus zuletzt geöffneten Dateien entfernen
 	Close	Schließen
 	Minimize	Minimieren
 	Maximize	Maximieren
@@ -85,6 +92,8 @@
 	Import	Importieren
 	Browse…	Durchsuchen…
 	Reveal in Finder	Im Finder anzeigen
+	Show in Explorer	Im Explorer anzeigen
+	Show in Folder	Im Ordner anzeigen
 	File Info…	Dateiinformationen…
 	Print…	Drucken…
 	Print One Copy	Eine Kopie drucken
@@ -804,7 +813,6 @@
 	Blending Options	Fusionsoptionen
 	Blue	Blau
 	Blue, Red, Yellow	Blau, Rot, Gelb
-	Both	Beide
 	Both Axes	Beide Achsen
 	Bottom	Unten
 	Brightness	Helligkeit
@@ -1126,7 +1134,6 @@
 	Leading	Zeilenabstand
 	Leading (set to the font size × auto-leading when Auto)	Zeilenabstand (bei „Automatisch“ auf Schriftgröße × automatischer Zeilenabstand gesetzt)
 	Leave as is (don't color manage)	Unverändert lassen (keine Farbverwaltung)
-	Left	Links
 	Left align text	Text links ausrichten
 	Length:	Länge:
 	Level	Stufe
@@ -1298,6 +1305,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Zeichne ● eine Folge von Bearbeitungen auf und gib sie ▶ auf jedem Dokument wieder.
 	Red	Rot
 	Redefine style by current selection	Stil anhand der aktuellen Auswahl neu definieren
+	Refine	Verfeinern
 	Reflected Gradient	Reflektierter Verlauf
 	Registration Marks	Passmarken
 	Regular	Regulär
@@ -1336,7 +1344,6 @@
 	Restore All	Alle wiederherstellen
 	Restore Defaults	Standardwerte wiederherstellen
 	Restrictive (Web)	Restriktiv (Web)
-	Right	Rechts
 	Right align text	Text rechts ausrichten
 	Rigid	Starr
 	Rotate:	Drehen:
@@ -1623,6 +1630,7 @@
 	Mobile	Mobil
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
+	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -2184,6 +2192,10 @@
 	Show Vectorscope	Vektorskop anzeigen
 	Tone Histogram	Tonwerthistogramm
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %
@@ -2263,6 +2275,7 @@
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Farbwähler (Textfarbe)
+	Color Picker ({name})	Farbwähler ({name})
 	Color Picker (Fill Color)	Farbwähler (Füllfarbe)
 	Fill color	Füllfarbe
 	Color Picker (Stroke Color)	Farbwähler (Konturfarbe)
@@ -2445,3 +2458,9 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	Use Classic Mode	Classic-Modus verwenden
+	Auto Center Preview	Automatische zentrierte Vorschau
+	Next Document	Nächstes Dokument
+	Previous Document	Vorheriges Dokument
+	W x H x Resolution	B x H x Auflösung
+	Front Image	Vorderes Bild

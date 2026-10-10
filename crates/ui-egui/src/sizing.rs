@@ -28,7 +28,7 @@ fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
 }
 
 /// Image Size resampling for Preferences › General › Image Interpolation.
-fn pref_resample(i: photocraft_engine::prefs::Interpolation) -> &'static str {
+pub(crate) fn pref_resample(i: photocraft_engine::prefs::Interpolation) -> &'static str {
     use photocraft_engine::prefs::Interpolation;
     match i {
         Interpolation::Nearest => "nearest",
@@ -142,7 +142,8 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     let px = num(f, key);
     let mut v = to_unit(px, &unit, orig, res) as f32;
     let range = if unit == "px" { -300000.0..=300000.0 } else { -30000.0..=30000.0 };
-    let changed = crate::widgets::value_field(ui, &mut v, range, "", 90.0).changed();
+    // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
+    let changed = crate::widgets::value_field_prec(ui, &mut v, range, "", 90.0, crate::widgets::unit_decimals(&unit)).changed();
     if changed {
         let px = from_unit(v as f64, &unit, orig, res);
         f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
@@ -442,13 +443,8 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let id = open(h.state_mut(), "image.imageSize").unwrap();
         h.run_steps(3);
-        let width = h.query_all_by_role(Role::SpinButton).next().map(|n| n.rect()).expect("the Width field");
-        h.hover_at(width.center());
-        h.run_steps(1);
-        h.drag_at(width.center());
-        h.run_steps(1);
-        h.drop_at(width.center());
-        h.run_steps(2);
+        // The dialog opens on Width, selected (#2329): the typed 0 replaces the 4.
+        assert!(h.query_all_by_role(Role::SpinButton).next().expect("the Width field").is_focused());
         h.event(egui::Event::Text("0".into()));
         h.run_steps(1);
         h.key_press(egui::Key::Tab);
@@ -526,5 +522,30 @@ mod tests {
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!(doc.size, photocraft_doc::Size::new(100, 50));
         assert!((doc.resolution_dpi - 50.0).abs() < 1e-3, "{}", doc.resolution_dpi);
+    }
+
+    /// #2329: Image Size and Canvas Size open on Width with its value selected, as in Photoshop:
+    /// typing replaces it and Enter applies it.
+    #[test]
+    fn sizing_dialogs_open_on_width_selected() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            open(h.state_mut(), command).unwrap();
+            h.run_steps(3);
+            assert!(h.query_all_by_role(Role::SpinButton).next().expect("the Width field").is_focused(), "{command}: Width has focus");
+            h.event(egui::Event::Text("50".into()));
+            h.run_steps(1);
+            let f = h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open");
+            assert_eq!(num(&f, "width"), 50.0, "{command}: typing replaced the selected 200");
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().ui.dialogs.is_empty(), "{command}: Enter is OK");
+            assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
+        }
     }
 }

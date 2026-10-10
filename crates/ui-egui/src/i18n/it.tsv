@@ -32,8 +32,15 @@
 	New from Clipboard	Nuovo dagli appunti
 	Open…	Apri…
 	Open As…	Apri come…
+	Open EXR Parts…	Apri parti EXR…
+	Add beauty precomp from the AOVs	Aggiungi la precomposizione della bellezza dagli AOV
+	Both	Entrambe
+	Left	Sinistra
+	Right	Destra
 	Open Recent	Apri recenti
 	Clear Recent Files	Cancella file recenti
+	Remove from Recent	Rimuovi dai recenti
+	Remove {name} from Recent	Rimuovi {name} dai recenti
 	Close	Chiudi
 	Minimize	Riduci a icona
 	Maximize	Ingrandisci
@@ -81,6 +88,8 @@
 	Import	Importa
 	Browse…	Sfoglia…
 	Reveal in Finder	Mostra nel Finder
+	Show in Explorer	Mostra in Esplora file
+	Show in Folder	Mostra nella cartella
 	File Info…	Info file…
 	Print…	Stampa…
 	Print One Copy	Stampa una copia
@@ -581,6 +590,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -806,7 +819,6 @@
 	Blending Options	Opzioni di fusione
 	Blue	Blu
 	Blue, Red, Yellow	Blu, rosso, giallo
-	Both	Entrambi
 	Both Axes	Entrambi gli assi
 	Bottom	In basso
 	Brightness	Luminosità
@@ -1126,7 +1138,6 @@
 	Leading	Interlinea
 	Leading (set to the font size × auto-leading when Auto)	Interlinea (impostata a dimensione font × interlinea auto quando Auto)
 	Leave as is (don't color manage)	Lascia com'è (non gestire colore)
-	Left	Sinistra
 	Left align text	Allinea testo a sinistra
 	Length:	Lunghezza:
 	Level	Livello
@@ -1298,6 +1309,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Registra ● una sequenza di modifiche, poi riproduci ▶ su qualsiasi documento.
 	Red	Rosso
 	Redefine style by current selection	Ridefinisci stile con selezione corrente
+	Refine	Rifinisci
 	Reflected Gradient	Sfumatura riflessa
 	Registration Marks	Crocini di registro
 	Regular	Normale
@@ -1336,7 +1348,6 @@
 	Restore All	Ripristina tutto
 	Restore Defaults	Ripristina predefiniti
 	Restrictive (Web)	Restrittivo (web)
-	Right	Destra
 	Right align text	Allinea testo a destra
 	Rigid	Rigido
 	Rotate:	Rotazione:
@@ -1625,6 +1636,7 @@
 	Mobile	Mobile
 	Move Tool	Strumento Sposta
 	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
+	Could not complete the Free Transform command because the layer is locked.	Impossibile completare il comando Trasformazione libera perché il livello è bloccato.
 	Multiply	Moltiplica
 	My Brushes	I miei pennelli
 	Neutrals	Neutri
@@ -2297,6 +2309,7 @@ cameraRaw	Amount	Quantità
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selettore colore (Colore del testo)
+	Color Picker ({name})	Selettore colore ({name})
 	Color Picker (Fill Color)	Selettore colore (Colore di riempimento)
 	Fill color	Colore di riempimento
 	Color Picker (Stroke Color)	Selettore colore (Colore della traccia)
@@ -2476,3 +2489,9 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+	Use Classic Mode	Usa modalità classica
+	Auto Center Preview	Centra anteprima automaticamente
+	Next Document	Documento successivo
+	Previous Document	Documento precedente
+	W x H x Resolution	L x A x Risoluzione
+	Front Image	Immagine in primo piano

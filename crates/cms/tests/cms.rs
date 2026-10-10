@@ -699,3 +699,56 @@ fn windows_srgb_is_the_builtin_srgb() {
     assert_ne!(p.content_hash(), srgb().content_hash());
     assert!(p.same_colors(srgb()));
 }
+
+/// A minimal DeviceLink: header plus one `A2B0` (`mft2`, 2-point grid) mapping `inputs` channels
+/// of `space` to `outputs` channels of `out_space`, which the header stores in the PCS field.
+fn device_link(space: &[u8; 4], out_space: &[u8; 4], inputs: usize, outputs: usize) -> Vec<u8> {
+    let mut lut = b"mft2\0\0\0\0".to_vec();
+    lut.extend_from_slice(&[inputs as u8, outputs as u8, 2, 0]);
+    for k in 0..9 {
+        let v: i32 = if k % 4 == 0 { 0x10000 } else { 0 };
+        lut.extend_from_slice(&v.to_be_bytes()); // identity matrix
+    }
+    lut.extend_from_slice(&[0, 2, 0, 2]); // 2-entry input and output tables
+    for _ in 0..inputs {
+        lut.extend_from_slice(&[0, 0, 0xff, 0xff]);
+    }
+    for _ in 0..(1 << inputs) * outputs {
+        lut.extend_from_slice(&[0x80, 0]);
+    }
+    for _ in 0..outputs {
+        lut.extend_from_slice(&[0, 0, 0xff, 0xff]);
+    }
+    let mut icc = vec![0u8; 128];
+    icc[8] = 4;
+    icc[9] = 0x30;
+    icc[12..16].copy_from_slice(b"link");
+    icc[16..20].copy_from_slice(space);
+    icc[20..24].copy_from_slice(out_space);
+    icc[36..40].copy_from_slice(b"acsp");
+    icc.extend_from_slice(&1u32.to_be_bytes());
+    icc.extend_from_slice(b"A2B0");
+    icc.extend_from_slice(&144u32.to_be_bytes());
+    icc.extend_from_slice(&(lut.len() as u32).to_be_bytes());
+    icc.extend_from_slice(&lut);
+    let size = icc.len() as u32;
+    icc[..4].copy_from_slice(&size.to_be_bytes());
+    icc
+}
+
+/// Regression (#2337): DeviceLinks whose output isn't a 3-channel space were rejected as
+/// invalid, because the LUT check assumed every AToB tag ends in the PCS. They parse now and
+/// get the clear "unsupported" error when used for a conversion, including a Lab→CMYK link,
+/// which must not pass for a Lab-to-Lab one.
+#[test]
+fn device_links_parse_and_are_reported_unsupported() {
+    for (space, out_space, inputs, outputs) in [(b"CMYK", b"CMYK", 4, 4), (b"RGB ", b"CMYK", 3, 4), (b"Lab ", b"CMYK", 3, 4), (b"RGB ", b"RGB ", 3, 3)] {
+        let p = Profile::parse(&device_link(space, out_space, inputs, outputs)).unwrap();
+        assert_eq!(p.color_space.channels(), inputs);
+        for err in [Transform::new(&p, srgb(), Intent::Perceptual, false).err(), Transform::new(srgb(), &p, Intent::Perceptual, false).err()] {
+            assert!(matches!(err, Some(photocraft_cms::CmsError::Unsupported(_))), "{err:?}");
+        }
+    }
+    // The output space still bounds the tag: a CMYK→CMYK link with a 4→3 table is malformed.
+    assert!(matches!(Profile::parse(&device_link(b"CMYK", b"CMYK", 4, 3)), Err(photocraft_cms::CmsError::Invalid(_))));
+}
