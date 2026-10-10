@@ -9,8 +9,8 @@
 //!
 //! No `dlopen` here (that needs `unsafe`): we read the dynamic linker's cache (`ldconfig -p`) and
 //! look in `LD_LIBRARY_PATH` and the usual library directories. Only the cache is conclusive: if
-//! it can't be read (NixOS, some containers) and a library isn't found in the directories, we
-//! warn and start anyway. `PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
+//! it can't be read (musl, NixOS, some containers) and a library isn't found in the directories,
+//! that proves nothing, so we start silently. `PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
 //!
 //! The parsing and decision logic is pure and tested on every platform; only [`preflight`]
 //! and [`available`] touch the system, and they are only called on Linux.
@@ -200,7 +200,7 @@ fn install_command(packages: &[&str], distro: Distro) -> String {
 }
 
 /// The message for missing libraries: what's missing, and the command that installs it.
-pub fn missing_message(session: DisplaySession, missing: &[AnyOf], distro: Distro, conclusive: bool) -> String {
+pub fn missing_message(session: DisplaySession, missing: &[AnyOf], distro: Distro) -> String {
     let session_name = match session {
         DisplaySession::Wayland => "Wayland",
         DisplaySession::X11 => "X11",
@@ -214,19 +214,13 @@ pub fn missing_message(session: DisplaySession, missing: &[AnyOf], distro: Distr
             packages.push(p);
         }
     }
-    let mut msg = if conclusive {
-        format!("photocraft: cannot start: the {session_name} session needs libraries that are not installed: {}.\n", names.join(", "))
-    } else {
-        format!("photocraft: warning: could not find these libraries the {session_name} session needs: {}. Starting anyway.\n", names.join(", "))
-    };
+    let mut msg = format!("photocraft: cannot start: the {session_name} session needs libraries that are not installed: {}.\n", names.join(", "));
     msg.push_str(&format!("Install them with:\n  {}\n", install_command(&packages, distro)));
     if distro == Distro::Unknown {
         let fedora: Vec<&str> = missing.iter().filter_map(|any| any.first()).map(|l| l.fedora).collect();
         msg.push_str(&format!("  Fedora: sudo dnf install {}\n", fedora.join(" ")));
     }
-    if conclusive {
-        msg.push_str("(Set PHOTOCRAFT_SKIP_LIB_CHECK=1 to start anyway.)\n");
-    }
+    msg.push_str("(Set PHOTOCRAFT_SKIP_LIB_CHECK=1 to start anyway.)\n");
     msg
 }
 
@@ -269,8 +263,7 @@ pub fn available(session: DisplaySession) -> bool {
 }
 
 /// Run the check for the display server the window opens on against this system. `Err` carries
-/// the message to print before exiting with a non-zero status; a warning is printed here and the
-/// app starts.
+/// the message to print before exiting with a non-zero status.
 pub fn preflight(session: DisplaySession) -> Result<(), String> {
     if std::env::var_os("PHOTOCRAFT_SKIP_LIB_CHECK").is_some_and(|v| !v.is_empty() && v != "0") {
         return Ok(());
@@ -278,18 +271,17 @@ pub fn preflight(session: DisplaySession) -> Result<(), String> {
     if session == DisplaySession::None {
         return Ok(());
     }
-    match check(session, &system_probe(), |p| p.exists()) {
-        Verdict::Ok => Ok(()),
-        Verdict::Missing { missing, conclusive } => {
-            let distro = std::fs::read_to_string("/etc/os-release").map(|t| distro_from_os_release(&t)).unwrap_or(Distro::Unknown);
-            let msg = missing_message(session, &missing, distro, conclusive);
-            if conclusive {
-                Err(msg)
-            } else {
-                eprint!("{msg}");
-                Ok(())
-            }
-        }
+    let verdict = check(session, &system_probe(), |p| p.exists());
+    decide(session, verdict, || std::fs::read_to_string("/etc/os-release").map(|t| distro_from_os_release(&t)).unwrap_or(Distro::Unknown))
+}
+
+/// `Err` with the message to print only when the linker cache was read and the libraries are
+/// really absent. Without the cache (musl has no `ldconfig -p`; NixOS, AppImages that ship their
+/// own libraries) not finding a file proves nothing, so we start without a misleading warning.
+fn decide(session: DisplaySession, verdict: Verdict, distro: impl FnOnce() -> Distro) -> Result<(), String> {
+    match verdict {
+        Verdict::Missing { missing, conclusive: true } => Err(missing_message(session, &missing, distro())),
+        Verdict::Missing { conclusive: false, .. } | Verdict::Ok => Ok(()),
     }
 }
 
@@ -362,7 +354,7 @@ mod tests {
         assert!(conclusive);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0][0].soname, "libxkbcommon-x11.so.0");
-        let msg = missing_message(DisplaySession::X11, &missing, Distro::Debian, conclusive);
+        let msg = missing_message(DisplaySession::X11, &missing, Distro::Debian);
         assert!(msg.contains("libxkbcommon-x11.so.0"), "{msg}");
         assert!(msg.contains("sudo apt install libxkbcommon-x11-0"), "{msg}");
         assert!(msg.contains("PHOTOCRAFT_SKIP_LIB_CHECK"), "{msg}");
@@ -384,13 +376,13 @@ mod tests {
         let probe = Probe { ldconfig: Some(cache_for_this_arch(&["libwayland-client.so.0", "libxkbcommon.so.0"])), dirs: vec![] };
         let Verdict::Missing { missing, .. } = check(DisplaySession::Wayland, &probe, |_| false) else { panic!("expected missing") };
         assert_eq!(missing.len(), 1);
-        let msg = missing_message(DisplaySession::Wayland, &missing, Distro::Fedora, true);
+        let msg = missing_message(DisplaySession::Wayland, &missing, Distro::Fedora);
         assert!(msg.contains("libvulkan.so.1 or libEGL.so.1"), "{msg}");
         assert!(msg.contains("sudo dnf install vulkan-loader"), "{msg}");
     }
 
     #[test]
-    fn library_dirs_count_and_unread_cache_only_warns() {
+    fn library_dirs_count_and_unread_cache_is_inconclusive() {
         let dirs = search_dirs(Some("/opt/x/lib::/nix/store/abc/lib"));
         assert_eq!(dirs[0], PathBuf::from("/opt/x/lib"));
         assert_eq!(dirs[1], PathBuf::from("/nix/store/abc/lib"));
@@ -398,14 +390,27 @@ mod tests {
         let probe = Probe { ldconfig: None, dirs: vec![PathBuf::from("/nix/lib")] };
         let present = ["/nix/lib/libwayland-client.so.0", "/nix/lib/libxkbcommon.so.0", "/nix/lib/libEGL.so.1"];
         assert_eq!(check(DisplaySession::Wayland, &probe, |p| present.iter().any(|q| Path::new(q) == p)), Verdict::Ok);
-        // Not found and no cache to confirm it: inconclusive, so a warning rather than an exit.
+        // Not found and no cache to confirm it: inconclusive (the app starts, see #1144).
         let v = check(DisplaySession::Wayland, &probe, |_| false);
         let Verdict::Missing { missing, conclusive } = v else { panic!("expected missing") };
         assert!(!conclusive);
-        let msg = missing_message(DisplaySession::Wayland, &missing, Distro::Unknown, conclusive);
-        assert!(msg.contains("Starting anyway"), "{msg}");
+        let msg = missing_message(DisplaySession::Wayland, &missing, Distro::Unknown);
         assert!(msg.contains("apt install libwayland-client0 libxkbcommon0 libvulkan1"), "{msg}");
         assert!(msg.contains("dnf install libwayland-client libxkbcommon vulkan-loader"), "{msg}");
+    }
+
+    #[test]
+    fn unreadable_cache_never_warns_or_fails() {
+        // Issue #1144: Alpine (musl) has no `ldconfig -p`, so a library that exists was reported missing.
+        let probe = Probe { ldconfig: None, dirs: vec![] };
+        let verdict = check(DisplaySession::X11, &probe, |_| false);
+        assert_eq!(decide(DisplaySession::X11, verdict, || Distro::Debian), Ok(()));
+        // A readable cache that lacks a library is still an error.
+        let names: Vec<&str> = ALL_X11.iter().copied().filter(|n| *n != "libxkbcommon-x11.so.0").collect();
+        let probe = Probe { ldconfig: Some(cache_for_this_arch(&names)), dirs: vec![] };
+        let verdict = check(DisplaySession::X11, &probe, |_| false);
+        let Err(msg) = decide(DisplaySession::X11, verdict, || Distro::Debian) else { panic!("expected an error") };
+        assert!(msg.contains("libxkbcommon-x11.so.0"), "{msg}");
     }
 
     #[test]

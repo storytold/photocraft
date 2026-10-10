@@ -1,5 +1,7 @@
 # Context-menu inventory and parity contract
 
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (status line added; the inventory is the 2026-10-06 branch-point snapshot, current status lives in context-menu-parity.md) · **Target:** Adobe Photoshop 2026
+
 This is the source-code inventory of PhotoCraft's right-click behavior at the branch point, captured 2026-10-06. It distinguishes a menu from another secondary-button gesture. The initial selection, Paths row, and document-tab menus added by this PR are called out separately. Photoshop comparison should be checked against an identified Photoshop version and platform before claiming exact parity; the current Layers menu explicitly targets Photoshop 2026 order.
 
 ## Canvas: every tool
@@ -50,3 +52,10 @@ Canvas invariant: secondary click must not accidentally start a paint stroke, co
 3. Prioritize shared canvas menus, then high-value tool-specific interactions (path, selection, type, crop/zoom), then panel and tab gaps. Reuse Layers/Channels implementations where their command contract already exists. Preserve the existing Move/layer pick, brush picker, erase preference, Alt/Option brush resize, and toolbar flyout gestures.
 4. Test each descriptor's item order and enablement, dispatch with expected params, empty/invalid states, modifiers, and action result. Add UI gesture tests for right-click opening, target selection, Escape/outside dismissal, and the absence of accidental edits. Validate native and web builds.
 5. Capture screenshots from the running app for representative tool groups and panel states, with test fixture documents rather than personal photos. A screenshot proves visible menu composition; command tests prove its behavior.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-10 | trivial | Status line, revision history; marked as the branch-point snapshot |
+| 2026-10-06 | major | Source inventory of right-click behaviour |

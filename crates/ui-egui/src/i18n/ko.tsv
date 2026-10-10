@@ -24,8 +24,15 @@
 	New from Clipboard	클립보드에서 새로 만들기
 	Open…	열기…
 	Open As…	형식을 지정하여 열기…
+	Open EXR Parts…	EXR 파트 열기…
+	Add beauty precomp from the AOVs	AOV에서 뷰티 프리컴포지션 추가
+	Both	양쪽
+	Left	왼쪽
+	Right	오른쪽
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
+	Remove from Recent	최근 항목에서 제거
+	Remove {name} from Recent	최근 항목에서 {name} 제거
 	Close	닫기
 	Minimize	최소화
 	Maximize	최대화
@@ -73,6 +80,8 @@
 	Import	가져오기
 	Browse…	찾아보기…
 	Reveal in Finder	Finder에서 보기
+	Show in Explorer	파일 탐색기에서 보기
+	Show in Folder	폴더에서 보기
 	File Info…	파일 정보…
 	Print…	인쇄…
 	Print One Copy	한 부 인쇄
@@ -787,7 +796,6 @@
 	Blending Options	혼합 옵션
 	Blue	파랑
 	Blue, Red, Yellow	파랑, 빨강, 노랑
-	Both	둘 다
 	Both Axes	양쪽 축
 	Bottom	아래쪽
 	Brightness	밝기
@@ -1103,7 +1111,6 @@
 	Leading	행간
 	Leading (set to the font size × auto-leading when Auto)	행간(자동일 때 글꼴 크기 × 자동 행간으로 설정)
 	Leave as is (don't color manage)	그대로 두기(색상 관리 안 함)
-	Left	왼쪽
 	Left align text	텍스트 왼쪽 정렬
 	Length:	길이:
 	Level	레벨
@@ -1275,6 +1282,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	연속된 편집을 ● 기록한 다음 원하는 문서에서 ▶ 재생하세요.
 	Red	빨강
 	Redefine style by current selection	현재 선택으로 스타일 재정의
+	Refine	다듬기
 	Reflected Gradient	반사 그레이디언트
 	Registration Marks	맞춤 표시
 	Regular	보통
@@ -1312,7 +1320,6 @@
 	Restore All	모두 복원
 	Restore Defaults	기본값 복원
 	Restrictive (Web)	제한됨(웹)
-	Right	오른쪽
 	Right align text	텍스트 오른쪽 정렬
 	Rigid	고정
 	Rotate:	회전:
@@ -1496,6 +1503,8 @@
 	Blur Tool	흐림 효과 도구
 	Bold	굵게
 	Brush	브러시
+	Pencil	연필
+	Block	블록
 	Brush Pose	브러시 자세
 	Brush Tip Shape	브러시 끝 모양
 	Brush Tool	브러시 도구
@@ -1601,6 +1610,7 @@
 	Mobile	모바일
 	Move Tool	이동 도구
 	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
+	Could not complete the Free Transform command because the layer is locked.	레이어가 잠겨 있어 자유 변형 명령을 완료할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -2109,6 +2119,10 @@ cameraRaw	Color	색상
 
 # UI scale steps (#611)
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -2811,6 +2825,7 @@ cameraRaw	Color	색상
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
+	Color Picker ({name})	색상 선택기 ({name})
 	Color Picker (Fill Color)	색상 선택기 (채우기 색상)
 	Fill color	채우기 색상
 	Color Picker (Stroke Color)	색상 선택기 (획 색상)
@@ -2904,6 +2919,7 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+	PhotoCraft — Screen Color Picker	PhotoCraft — 화면 색상 선택기
 
 	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
@@ -3001,3 +3017,9 @@ fontWeight	Italic	기울임
 	Install Update	업데이트 설치
 	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft가 업데이트를 백그라운드에서 다운로드하여 종료 시 설치하므로 작업이 중단되지 않습니다. 먼저 작업을 저장하세요.
 	PhotoCraft will install the update when you quit.	PhotoCraft가 종료 시 업데이트를 설치합니다.
+	Use Classic Mode	클래식 모드 사용
+	Auto Center Preview	미리 보기 자동 가운데 맞춤
+	Next Document	다음 문서
+	Previous Document	이전 문서
+	W x H x Resolution	폭 x 높이 x 해상도
+	Front Image	전면 이미지

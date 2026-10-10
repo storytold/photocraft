@@ -219,6 +219,13 @@ impl BrushContext {
                 let dx = x as f32 + 0.5 - cx;
                 let (u, v) = to_tip(dx, dy);
                 let (mut val, rn) = match mips {
+                    // Block: the whole-pixel square, hard (the Eraser's Block mode).
+                    _ if aliased && b.square => {
+                        if dx.abs() >= r || dy.abs() >= r {
+                            continue;
+                        }
+                        (1.0, 0.0)
+                    }
                     None if small => {
                         let d2 = (u * ro).powi(2) + v * v;
                         if d2 >= small_reach2 {

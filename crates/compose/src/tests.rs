@@ -87,6 +87,57 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
     }
 }
 
+/// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
+fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
+    let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    let mut b = Layer::raster("b", fmt);
+    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [bottom[0], bottom[1], bottom[2], 1.0]));
+    let mut t = Layer::raster("t", fmt);
+    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
+    t.blend = mode;
+    d.layers = vec![b, t];
+    px(&d, 0, 0)
+}
+
+#[test]
+fn non_separable_modes_keep_values_above_one_in_32_bit() {
+    use photocraft_color::blend::{blend_rgb_within, lum};
+    let modes = [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+    // Hue over a grey of 2: the grey (the backdrop has no saturation), not ClipColor dividing
+    // by the rounding noise of `max − lum` (Hue over (4, 3.9999, 4) gave 27.7 in blue).
+    for bg in [[2.0, 2.0, 2.0], [2.0, 2.0, 1.999_99], [4.0, 3.999_9, 4.0]] {
+        for m in modes {
+            for top in [[3.0, 0.25, 0.125], [2.0, 2.0, 2.0], [4.0, 3.999_9, 4.0]] {
+                let got = blend_px(SampleType::F32, m, bg, top);
+                let want = blend_rgb_within(m, bg, top, f32::MAX);
+                assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-4 * w.abs().max(1.0)), "{m:?} {bg:?} {top:?}: {got:?} vs {want:?}");
+                assert!(got.iter().all(|v| v.is_finite() && *v >= -1e-5), "{m:?} {bg:?} {top:?}: {got:?}");
+            }
+        }
+    }
+    // A saturated colour keeps its brightness above 1 in 32-bit, and is clipped into 0..1
+    // (exactly as before) in 8/16-bit.
+    let (bg, top) = ([0.5, 0.5, 0.5], [1.0, 0.0, 0.0]);
+    let hdr = blend_px(SampleType::F32, BlendMode::Color, bg, top);
+    assert!((hdr[0] - 1.2).abs() < 1e-4 && (lum([hdr[0], hdr[1], hdr[2]]) - 0.5).abs() < 1e-4, "{hdr:?}");
+    for depth in [SampleType::U8, SampleType::U16] {
+        for m in modes {
+            let got = blend_px(depth, m, bg, top);
+            let want = photocraft_color::blend::blend_rgb(m, bg, top);
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1.0 / 255.0), "{m:?} {depth:?}: {got:?} vs {want:?}");
+        }
+        let got = blend_px(depth, BlendMode::Color, bg, top);
+        assert!(got[0] <= 1.0 && got[0] > 0.9, "{depth:?}: {got:?}");
+    }
+    // A 32-bit document's in-range colours that stay in range are unchanged.
+    for m in modes {
+        let got = blend_px(SampleType::F32, m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        let want = photocraft_color::blend::blend_rgb(m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-5), "{m:?}: {got:?} vs {want:?}");
+    }
+}
+
 #[test]
 fn layer_mask_hides_pixels() {
     let mut d = doc_white(4, 4);
@@ -316,11 +367,58 @@ fn solid_and_gradient_fill_layers() {
 
     let g = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
     let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
-    let buf = render_fill(&g, Rect::new(0, 0, 10, 1), Rect::new(0, 0, 10, 1), &patterns);
+    let buf = render_fill(&g, Rect::new(0, 0, 10, 1), Rect::new(0, 0, 10, 1), &patterns, None);
     // tile independence: a 1px render of the right edge equals the full render
-    let one = render_fill(&g, Rect::new(9, 0, 10, 1), Rect::new(0, 0, 10, 1), &patterns);
+    let one = render_fill(&g, Rect::new(9, 0, 10, 1), Rect::new(0, 0, 10, 1), &patterns, None);
     assert_eq!(one.px[0], buf.px[9]);
     assert!(buf.px[0][0] < buf.px[9][0], "left dark, right light");
+}
+
+fn dithered_gradient(stops: Vec<(f32, Color)>, angle: f32) -> Fill {
+    let mut f = Fill::gradient(stops, angle, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    if let Fill::Gradient { dither, .. } = &mut f {
+        *dither = true;
+    }
+    f
+}
+
+/// #2755: a dithered gradient fill under a bright Color Dodge gradient. Dodge divides by
+/// `1 − cs`, so the dither's fraction of a level, left in float, came out as speckle several
+/// levels high (a black channel lifted to 4/255: coloured fringes). On an 8-bit document the
+/// dithered pixels sit on levels, as a painted gradient's do, so a channel at 0 stays 0.
+#[test]
+fn dithered_gradient_fills_under_color_dodge_keep_black_channels() {
+    let mut d = doc_white(128, 32);
+    // Red to blue: green is 0 everywhere.
+    let bottom = dithered_gradient(vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))], 0.0);
+    d.layers.push(Layer::new("bottom", LayerContent::Fill(bottom)));
+    let top = dithered_gradient(vec![(0.0, Color::rgb(0.88, 0.88, 0.88)), (1.0, Color::rgb(0.97, 0.97, 0.97))], 90.0);
+    let mut l = Layer::new("top", LayerContent::Fill(top));
+    l.blend = BlendMode::ColorDodge;
+    d.layers.push(l);
+    for (i, p) in flatten(&d).px.iter().enumerate() {
+        assert_eq!(p[1], 0.0, "pixel {i}: green lifted off black to {} levels", p[1] * 255.0);
+    }
+}
+
+/// Dithered gradient pixels land on the depth's levels; float documents and undithered
+/// gradients keep their float values.
+#[test]
+fn dithered_gradient_fill_is_rounded_to_the_document_depth() {
+    let stops = vec![(0.0, Color::rgb(0.1, 0.4, 0.0)), (1.0, Color::rgb(0.9, 0.2, 1.0))];
+    let rect = Rect::new(0, 0, 64, 8);
+    let f = dithered_gradient(stops.clone(), 0.0);
+    for depth in [SampleType::U8, SampleType::U16] {
+        let q = adjustment_quantum(depth).unwrap();
+        for p in gradient_fill::render_quantized(&f, rect, rect, Some(q)) {
+            for v in &p[..3] {
+                assert_eq!((v * q).round() / q, *v, "{depth:?}: {v} is between levels");
+            }
+        }
+    }
+    assert_eq!(gradient_fill::render_quantized(&f, rect, rect, None), gradient_fill::render(&f, rect, rect));
+    let plain = Fill::gradient(stops, 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    assert_eq!(gradient_fill::render_quantized(&plain, rect, rect, Some(255.0)), gradient_fill::render(&plain, rect, rect));
 }
 
 #[test]

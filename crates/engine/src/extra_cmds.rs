@@ -218,7 +218,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock);
+            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -390,6 +390,10 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
+    // A targeted colour channel (#2307): the paste goes into it, only where `limit` allows.
+    if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+        return crate::channel_clip::paste(s, &params, k, false, Some(&limit), label);
+    }
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         // A targeted mask or channel (#1035): the paste goes into it, only where `limit` allows.
         params["target"] = p.get("target").cloned().unwrap_or_default();
@@ -430,7 +434,7 @@ fn layer_from_background(s: &mut Session) -> Result<Value> {
     Ok(json!({"layer": id.0}))
 }
 
-fn unlock_background(l: &mut Layer) {
+pub(crate) fn unlock_background(l: &mut Layer) {
     l.name = "Layer 0".into();
     l.locks.transparency = false;
     l.locks.position = false;

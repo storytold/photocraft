@@ -934,7 +934,7 @@ fn choice_label(v: &str) -> String {
     match v {
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "75" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
+        "75" | "80" | "85" | "90" | "95" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
@@ -1056,6 +1056,10 @@ fn prefs_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     });
     f.insert("section".into(), json!(section));
     f.insert("values".into(), values);
+    // A colour swatch was clicked: open the Color Picker on that value (#2144).
+    if let Some((path, name)) = ctx_take_pick(ui) {
+        crate::color_picker_ui::request_field(f, &format!("/values/{}", path.replace('.', "/")), &crate::color_picker_ui::title_for(&name));
+    }
 }
 
 /// Preferences › Performance: what the app renders with now, and a reset of the GPU backend
@@ -1243,6 +1247,15 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
     ui.add_space(12.0);
 }
 
+/// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
+/// holds the fields the Color Picker request goes in.
+const PICK_ID: &str = "prefs-pick-color";
+
+/// The colour swatch clicked this frame, if any: (preference path, label).
+fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
+    ui.ctx().data_mut(|d| d.remove_temp::<(String, String)>(egui::Id::new(PICK_ID)))
+}
+
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
 fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>) {
@@ -1306,7 +1319,10 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                     let c = prefs::parse_hex(s).unwrap_or([128, 128, 128]);
                     let mut rgb = c;
                     ui.horizontal(|ui| {
-                        crate::widgets::color_edit_button_srgb(ui, &mut rgb);
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(PICK_ID), (path.clone(), label.clone())));
+                        }
                         hex_field(ui, &path, &mut rgb);
                     });
                     obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
@@ -2269,7 +2285,7 @@ mod tests {
             step(vec2(2560.0, 1440.0), 1.75, 1.75);
             step(vec2(3840.0, 2160.0), 1.0, 2.0);
         }
-        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("auto", 1.5)] {
+        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("95", 0.95), ("90", 0.9), ("85", 0.85), ("80", 0.8), ("auto", 1.5)] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
             let mut input = egui::RawInput::default();
             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
@@ -2392,7 +2408,7 @@ mod tests {
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
         assert!(!prefs::is_hidden("type.useEscToCommit"));
-        assert!(prefs::is_hidden("type.smartQuotes"));
+        assert!(!prefs::is_hidden("type.smartQuotes"));
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));

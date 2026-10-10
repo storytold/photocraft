@@ -46,6 +46,7 @@ mod services;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod tablet;
 mod ui_state;
+mod window_frame;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -460,6 +461,9 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The custom title bar's undecorated window must stay borderless, or its caption and
+            // border offset the content and the pointer on some Windows systems (#2246).
+            app.services.window_frame = window_frame::service(cc, custom_titlebar);
             // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
             // precise crosshair for painting tools while it is toggled on (#1758).
             app.services.caps_lock = caps_lock::service(cc);
