@@ -344,6 +344,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = app.ui.open_dialog(DialogKind::About, fields);
             Ok(json!({"dialog": dialog, "info": crate::gpu_status::system_info_json(app)}))
         }
+        "help.checkForUpdates" => {
+            crate::update_check::check_manual(app);
+            Ok(Value::Null)
+        }
         "file.export.exportAs" => Ok(json!({"dialog": crate::export_dialog::open(app)?})),
         "file.export.quickExportAsPng" => crate::export_dialog::quick_export_png(app),
         // Layer › Export As… / Quick Export as PNG: the export pipeline on just the active layer.
@@ -582,7 +586,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.checkForUpdates" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
@@ -765,6 +769,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("help.checkForUpdates", "help.reportIssue"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
@@ -874,8 +879,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
-    // Help: the link items, a separator, then System Info and About.
-    if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {
+    // Help: the link items, a separator, then Check for Updates, System Info and About.
+    if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates" || i.id == "help.systemInfo" || i.id == "help.about") {
         items.insert(
             at,
             MenuItem { id: "---".into(), label: "---".into(), path: vec!["Help".into()], shortcut: None, enabled: false, checked: None, color: None },
