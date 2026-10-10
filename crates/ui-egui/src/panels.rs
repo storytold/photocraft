@@ -1809,7 +1809,9 @@ fn layer_drag_edge_scroll(pointer: Option<Pos2>, viewport: Rect, dragging: bool,
 /// keep the field interactive and give the dropdown the remaining width.
 fn opacity_row_layout(available: f32, label_width: f32, gap: f32) -> (f32, bool) {
     let full_right = label_width + LAYER_PCT_W + 2.0 * gap + 16.0;
-    let show_label = available >= full_right + 100.0;
+    // The label shows while the blend dropdown keeps a usable width (at the default dock width
+    // with an English label it does; a long translated label on a narrow dock gives way).
+    let show_label = available >= full_right + 80.0;
     let reserved = LAYER_PCT_W + gap + if show_label { label_width + gap + 16.0 } else { 0.0 };
     ((available - reserved).max(40.0), show_label)
 }
@@ -4408,6 +4410,8 @@ mod opacity_row_layout_tests {
         let (wide, visible) = opacity_row_layout(360.0, label, gap);
         assert!(visible);
         assert!(wide >= 100.0);
+        // The default dock width keeps the English label (the Layers dock at its 250 px minimum).
+        assert!(opacity_row_layout(255.0, 46.0, 8.0).1);
         let (medium, visible) = opacity_row_layout(180.0, label, gap);
         assert!(!visible, "the long label must not overlap the blend field");
         assert!(medium + LAYER_PCT_W + gap <= 180.0);
