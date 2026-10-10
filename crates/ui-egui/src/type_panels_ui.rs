@@ -371,6 +371,8 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
         }
     });
     let defined = |attrs: &Value, k: &str| attrs.get(k).is_some();
+    // Preferences ▸ Type ▸ Font Preview Size sizes the family picker's samples.
+    let preview = app.session.prefs().type_.font_preview;
     egui::Grid::new(("style-opts", paragraph, id)).num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
         // (label, model key, panel key, kind)
         let rows: &[(&str, &str, &str, &str)] = &[
@@ -394,7 +396,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
             ui.add_enabled_ui(on, |ui| match kind {
                 "font" => {
                     let mut f = v.as_str().unwrap_or("").to_string();
-                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f) {
+                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f, preview) {
                         set = Some(json!({ panel: f }));
                     }
                 }
@@ -503,9 +505,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
 }
 
 /// Searchable family combo box.
-fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
+fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String, preview: photocraft_engine::prefs::FontPreview) -> bool {
     let mut shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
-    let changed = crate::type_tool::family_picker_in(ui, salt, &mut shown, 140.0, &crate::type_tool::families());
+    let changed = crate::type_tool::family_picker_in(ui, salt, &mut shown, 140.0, &crate::type_tool::families(), preview);
     if changed {
         *current = shown;
     }
@@ -595,7 +597,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Font family + style.
     ui.horizontal(|ui| {
         let mut f = family.clone();
-        if family_picker(ui, "glyph-family", &mut f) {
+        if family_picker(ui, "glyph-family", &mut f, app.session.prefs().type_.font_preview) {
             app.ui.type_panels.glyph_family = f;
             app.ui.type_panels.glyph_style = tl!("Regular").into();
         }

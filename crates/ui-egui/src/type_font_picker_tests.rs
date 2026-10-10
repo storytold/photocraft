@@ -5,24 +5,30 @@ use egui::accesskit::Role;
 use egui::{Key, Modifiers, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::prefs::FontPreview;
 
 struct State {
     current: String,
     families: Vec<String>,
     popup: egui::Id,
+    preview: FontPreview,
 }
 
 fn harness() -> Harness<'static, State> {
+    harness_with(FontPreview::Medium)
+}
+
+fn harness_with(preview: FontPreview) -> Harness<'static, State> {
     // Enough families that the unfiltered menu hits its maximum height and scrolls.
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
-    let state = State { current: "Family 00".into(), families, popup: egui::Id::NULL };
+    let state = State { current: "Family 00".into(), families, popup: egui::Id::NULL, preview };
     let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
         |ui, s: &mut State| {
             // `ComboBox::from_id_salt` wraps its salt in an `IdSalt`; the popup id is the button's + "popup".
             s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
             let fams = s.families.clone();
-            font_picker_in(ui, &mut s.current, 170.0, &fams);
+            font_picker_in(ui, &mut s.current, 170.0, &fams, s.preview);
         },
         state,
     );
@@ -193,4 +199,22 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
     h.run();
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(font(h.state()), "Inter");
+}
+
+/// Preferences ▸ Type ▸ Font Preview Size: Extra Large grows the sample rows, Off drops the
+/// samples (rows shrink to the plain height).
+#[test]
+fn the_preview_size_preference_resizes_or_removes_the_samples() {
+    let mut h = harness_with(FontPreview::Medium);
+    open(&mut h);
+    let medium = h.get_by_label("Family 00").rect().height();
+    assert!((medium - 28.0).abs() < 0.5, "medium rows hold the 24 px sample: {medium}");
+    let mut h = harness_with(FontPreview::ExtraLarge);
+    open(&mut h);
+    let extra = h.get_by_label("Family 00").rect().height();
+    assert!(extra > medium, "extra large rows are taller: {extra} vs {medium}");
+    let mut h = harness_with(FontPreview::Off);
+    open(&mut h);
+    let off = h.get_by_label("Family 00").rect().height();
+    assert!((off - 28.0).abs() < 0.5, "off keeps the plain row height: {off}");
 }

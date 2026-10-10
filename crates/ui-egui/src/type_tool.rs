@@ -774,8 +774,8 @@ pub fn style_label(style: &str) -> String {
 }
 
 /// Searchable font-family combo box.
-fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    family_picker_in(ui, "type-font", current, width, &families())
+fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32, preview: photocraft_engine::prefs::FontPreview) -> bool {
+    family_picker_in(ui, "type-font", current, width, &families(), preview)
 }
 
 /// Maximum height of the font menu.
@@ -783,13 +783,20 @@ const FONT_MENU_HEIGHT: f32 = 460.0;
 
 /// [`font_picker`] over a given family list (tests pass their own).
 #[cfg(test)]
-fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families: &[String]) -> bool {
-    family_picker_in(ui, "type-font", current, width, families)
+fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families: &[String], preview: photocraft_engine::prefs::FontPreview) -> bool {
+    family_picker_in(ui, "type-font", current, width, families, preview)
 }
 
 /// Shared by the Type options, Character, style and Glyphs panels. Selection changes still
 /// flow through each caller's existing engine command.
-pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut String, width: f32, families: &[String]) -> bool {
+pub(crate) fn family_picker_in(
+    ui: &mut egui::Ui,
+    salt: &str,
+    current: &mut String,
+    width: f32,
+    families: &[String],
+    preview: photocraft_engine::prefs::FontPreview,
+) -> bool {
     let mut changed = false;
     let search_id = ui.id().with(("font-search", salt));
     let combo = egui::ComboBox::from_id_salt(salt)
@@ -845,16 +852,21 @@ pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut Stri
             ui.data_mut(|d| d.remove::<String>(search_id));
             ui.close();
         }
+        let preview = crate::font_preview::sample(preview);
+        let row_h = preview.map_or(28.0, |(_, [_, h])| (h + 4.0).max(28.0));
         for f in filtered {
-            let response = ui.add_sized(
-                [330.0, 28.0],
-                egui::Button::selectable(f == current, f).truncate().right_text(egui::Atom::custom(ui.id().with(("font-sample", f)), egui::vec2(100.0, 24.0))),
-            );
+            let mut button = egui::Button::selectable(f == current, f).truncate();
+            if let Some((_, [w, h])) = preview {
+                button = button.right_text(egui::Atom::custom(ui.id().with(("font-sample", f)), egui::vec2(w, h)));
+            }
+            let response = ui.add_sized([330.0, row_h], button);
             if (down || up) && f == current {
                 response.scroll_to_me(Some(egui::Align::Center));
             }
-            if ui.is_rect_visible(response.rect) {
-                crate::font_preview::paint(ui, f, response.rect);
+            if let Some((size, _)) = preview
+                && ui.is_rect_visible(response.rect)
+            {
+                crate::font_preview::paint(ui, f, response.rect, size);
             }
             if response.clicked() {
                 *current = f.clone();
@@ -986,7 +998,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    if font_picker(ui, &mut fam, 170.0) {
+    if font_picker(ui, &mut fam, 170.0, app.session.prefs().type_.font_preview) {
         app.ui.tool_options.type_font = fam.clone();
         let st = styles(&fam);
         style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
@@ -1286,7 +1298,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let w = field_width(full, 2, LABEL_W);
         let mut fam = c.font_family.clone();
         row(ui, &mut |ui| {
-            if font_picker(ui, &mut fam, full) {
+            if font_picker(ui, &mut fam, full, app.session.prefs().type_.font_preview) {
                 app.ui.tool_options.type_font = fam.clone();
                 apply(app, ui.ctx(), json!({"font": fam}));
             }
