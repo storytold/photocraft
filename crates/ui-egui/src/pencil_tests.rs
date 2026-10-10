@@ -177,6 +177,37 @@ fn the_eraser_in_pencil_mode_erases_aliased_pixels() {
 }
 
 #[test]
+fn the_eraser_in_block_mode_erases_a_16_screen_px_square() {
+    // #2770: a soft, small, half-opacity Eraser in Block mode still clears a hard square of
+    // 16 screen pixels: 16 document pixels at 100 %, 8 at 200 %.
+    for (zoom, n) in [(1.0, 16usize), (2.0, 8)] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 5, "hardness": 0.0, "opacity": 0.5, "flow": 0.3, "smoothing": {"amount": 0.0}}})).unwrap();
+        app.ui.tool_options.eraser_mode = "block".into();
+        app.ui.views[0].zoom = zoom;
+        drag(&mut app, &[(60.3, 40.6)], Modifiers::NONE);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["block"]), ("paint.pencil", &json!(true)));
+        let s = layer(&app).surface().unwrap().clone();
+        let (mut erased, mut x0, mut y0, mut x1, mut y1) = (0, i32::MAX, i32::MAX, 0, 0);
+        for y in 0..80 {
+            for x in 0..120 {
+                let a = s.rgba(x, y)[3];
+                assert!(a == 0.0 || a == 1.0, "partial alpha {a} at ({x},{y}), zoom {zoom}");
+                if a == 0.0 {
+                    erased += 1;
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        assert_eq!((erased, x1 - x0 + 1, y1 - y0 + 1), (n * n, n as i32, n as i32), "zoom {zoom}");
+    }
+}
+
+#[test]
 fn b_cycles_brush_pencil_and_mixer_brush() {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());

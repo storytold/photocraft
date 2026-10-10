@@ -338,6 +338,10 @@ fn stroke_params(app: &PhotocraftApp, tool: Tool, erase: bool, points: &[Vec<f64
     if tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
+    // Block mode: the engine sizes the square from the stroke's zoom (16 / zoom px, #2770).
+    if crate::eraser_ui::block_mode(app, tool) {
+        p["block"] = json!(true);
+    }
     p
 }
 
@@ -358,10 +362,10 @@ fn live_retouch_command(tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// The command a live-stroking tool commits: the Pencil's (and the Pencil-mode Eraser's)
-/// `paint.pencil`, else `paint.stroke`.
+/// The command a live-stroking tool commits: the Pencil's (and the Pencil- or Block-mode
+/// Eraser's) `paint.pencil`, else `paint.stroke`.
 pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
-    if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
+    if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
@@ -2944,13 +2948,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
                             // The Pencil (and the Eraser in Pencil mode): the outline of the
                             // whole pixels its dab fills, on the pixel grid. A round tip is a
-                            // disc, a tiny one the whole square (#2662).
-                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) => {
+                            // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
+                            // its square, 16 screen pixels at any zoom (#2770).
+                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
+                                let block = crate::eraser_ui::block_mode(app, tool);
+                                let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
                                 let ppp = painter.ctx().pixels_per_point();
-                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
+                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
                                 let px = 1.0 / ppp;
                                 let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                                if pencil_tip_is_round(brush.size) {
+                                if !block && pencil_tip_is_round(size) {
                                     let r = sq.width() / 2.0;
                                     painter.circle_stroke(sq.center(), r + px / 2.0, dark);
                                     painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);

@@ -828,10 +828,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let b = &mut brush;
                 match app.ui.tool {
                     Tool::Brush | Tool::Eraser if t.pro => {
-                        brush_preset_chip(ui, b, &mut app.ui);
-                        crate::brush_picker::settings_toggle(app, ui);
+                        // A Block-mode Eraser has a fixed size, opacity and flow (Photoshop, #2770).
+                        let block = crate::eraser_ui::block_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!block, |ui| {
+                            brush_preset_chip(ui, b, &mut app.ui);
+                            crate::brush_picker::settings_toggle(app, ui);
+                        });
                         widgets::vline(ui, 22.0);
-                        // The Eraser has no blend mode: its Mode is Brush or Pencil (#2662).
+                        // The Eraser has no blend mode: its Mode is Brush, Pencil or Block (#2662).
                         if app.ui.tool == Tool::Eraser {
                             crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
                         } else {
@@ -842,12 +846,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 b.mode = mode;
                             }
                         }
-                        percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
-                        if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
-                            b.pressure_opacity = !b.pressure_opacity;
-                        }
-                        // A Pencil-mode Eraser is always full flow, without build-up (Photoshop).
-                        ui.add_enabled_ui(!crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
+                        ui.add_enabled_ui(!block, |ui| {
+                            percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
+                            if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
+                                b.pressure_opacity = !b.pressure_opacity;
+                            }
+                        });
+                        // A Pencil- or Block-mode Eraser is always full flow, without build-up (Photoshop).
+                        ui.add_enabled_ui(!block && !crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
                             percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
                             let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
                             if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
@@ -889,17 +895,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         brush_preset_chip(ui, b, &mut app.ui);
                         crate::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
-                        opt_label(ui, tl!("Size"));
-                        widgets::value_field(ui, &mut b.size, 1.0..=2500.0, "px", 76.0);
+                        // A Block-mode Eraser has a fixed size, opacity and flow (Photoshop, #2770).
+                        let block = crate::eraser_ui::block_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!block, |ui| {
+                            opt_label(ui, tl!("Size"));
+                            widgets::value_field(ui, &mut b.size, 1.0..=2500.0, "px", 76.0);
+                        });
                         widgets::vline(ui, 22.0);
                         if app.ui.tool == Tool::Eraser {
                             crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
                         }
                         // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-                        let pencil = crate::eraser_ui::pencil_mode(app, app.ui.tool);
-                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-                        percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0);
-                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
+                        let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
+                        ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0));
+                        ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
                         opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 66.0);
                         widgets::vline(ui, 22.0);
