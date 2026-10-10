@@ -202,7 +202,7 @@ impl GpuCanvas {
         Some((d.format, bytes))
     }
 
-    /// Set the GPU memory the wgpu compositor may hold for layer pages and effect maps (see
+    /// Set the GPU memory the wgpu compositor may hold for layer pages and caches (see
     /// [`memory_budget`]); pages beyond it are evicted least recently used first.
     pub fn set_memory_budget(&self, bytes: u64) {
         let mut r = self.rs.renderer.write();
@@ -217,6 +217,17 @@ impl GpuCanvas {
         r.callback_resources.get::<Resources>()?.compositor_budget
     }
 
+    /// Cap lower-stack composite reuse; zero disables it for profiling the uncached path.
+    pub fn set_composite_cache_budget(&self, bytes: u64) {
+        let mut r = self.rs.renderer.write();
+        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+            res.compositor_cache_budget = Some(bytes);
+            if let Some(comp) = &mut res.compositor {
+                comp.set_composite_cache_budget(bytes);
+            }
+        }
+    }
+
     /// The document area the view shows: full refreshes composite it last, so its layer pages
     /// are the ones still resident for the edits that follow.
     pub fn set_focus(&self, focus: Option<photocraft_geom::Rect>) {
@@ -226,11 +237,12 @@ impl GpuCanvas {
         }
     }
 
-    /// GPU bytes the wgpu compositor holds: resident layer pages and cached effect maps.
+    /// GPU bytes the wgpu compositor holds: resident layer pages and caches (effect maps and
+    /// lower-stack chunks). Keep the scorecard's memory measurements inclusive of reuse.
     pub fn compositor_bytes(&self) -> Option<(u64, usize)> {
         let r = self.rs.renderer.read();
         let c = r.callback_resources.get::<Resources>()?.compositor.as_ref()?;
-        Some((c.resident_bytes(), c.fx_cache_bytes()))
+        Some((c.resident_bytes(), c.fx_cache_bytes().saturating_add(usize::try_from(c.composite_cache_bytes()).unwrap_or(usize::MAX))))
     }
 
     /// Set the checkerboard and gamut warning colours.
@@ -379,6 +391,9 @@ impl GpuCanvas {
         comp.set_health(self.health.clone());
         if let Some(b) = res.compositor_budget {
             comp.set_memory_budget(b);
+        }
+        if let Some(b) = res.compositor_cache_budget {
+            comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
         let key = doc.id.0;
@@ -1126,6 +1141,7 @@ struct Resources {
     /// GPU memory the compositor may hold (`None`: its default), and the document area the
     /// view shows; applied before every composite.
     compositor_budget: Option<u64>,
+    compositor_cache_budget: Option<u64>,
     compositor_focus: Option<photocraft_geom::Rect>,
     encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
@@ -1390,6 +1406,7 @@ impl Resources {
             compositor_failed: None,
             health: photocraft_gpu::DeviceHealth::new(),
             compositor_budget: None,
+            compositor_cache_budget: None,
             compositor_focus: None,
             encode_bgl,
             encode_pipeline,

@@ -4,7 +4,7 @@
 //! way the app creates it; the CPU compositor without an adapter).
 //!
 //! ```sh
-//! cargo run --release -p photocraft-ui-egui --example perf_scenarios -- [--quick] [--json out.json] [--only text] [--reps N] [--cpu]
+//! cargo run --release -p photocraft-ui-egui --example perf_scenarios -- [--quick] [--json out.json] [--only text] [--group layered] [--reps N] [--cpu] [--no-composite-reuse]
 //! ```
 //!
 //! `cargo xtask perf` runs this and maps the rows to scenario ids in `perf/budgets.toml`, so
@@ -313,6 +313,10 @@ fn main() {
     let sz = if quick { &QUICK } else { &FULL };
     let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(if quick { 7 } else { 15 }).max(1);
     let gpu = if args.iter().any(|a| a == "--cpu") { None } else { canvas() };
+    let no_reuse = args.iter().any(|a| a == "--no-composite-reuse");
+    if no_reuse && let Some((canvas, _)) = &gpu {
+        canvas.set_composite_cache_budget(0);
+    }
     let adapter = gpu.as_ref().map(|(_, rs)| rs.adapter.get_info().name);
     let mut b = Bench {
         gpu,
@@ -337,13 +341,25 @@ fn main() {
         ("algorithms", algorithm_scenarios),
     ];
     let use_gpu = b.gpu.is_some();
+    if let Some(wanted) = arg(&args, "--group")
+        && !groups.iter().any(|(group, _)| *group == wanted)
+    {
+        eprintln!("unknown scenario group: {wanted}");
+        std::process::exit(2);
+    }
     for (i, (group, run)) in groups.into_iter().enumerate() {
+        if arg(&args, "--group").is_some_and(|wanted| wanted != group) {
+            continue;
+        }
         b.current = None;
         // Each group starts on a fresh canvas device (one document open, as in the app), so
         // GPU memory or an error left by one group never carries into the next.
         if use_gpu && i > 0 {
             b.gpu = None;
             b.gpu = canvas();
+            if no_reuse && let Some((canvas, _)) = &b.gpu {
+                canvas.set_composite_cache_budget(0);
+            }
         }
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut b, sz))) {
             let msg = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
@@ -360,6 +376,8 @@ fn main() {
             "mode": if quick { "quick" } else { "full" },
             "reps": reps,
             "gpu_adapter": adapter,
+            "composite_reuse": !no_reuse,
+            "group": arg(&args, "--group"),
             "errors": b.errors.iter().map(|(n, e)| json!({"name": n, "error": e})).collect::<Vec<_>>(),
         });
         let rep = report("perf_scenarios", context, std::mem::take(&mut b.rows), Some(&b.sampler));
