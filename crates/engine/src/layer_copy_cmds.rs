@@ -51,12 +51,51 @@ fn point(p: &Value, key: &str) -> Result<Option<[f64; 2]>> {
 }
 
 /// Modes whose layers convert through the colour engine.
-fn layered(mode: ColorMode) -> bool {
+pub(crate) fn layered(mode: ColorMode) -> bool {
     matches!(mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab)
 }
 
 fn center(r: Rect) -> [f64; 2] {
     [(f64::from(r.x0) + f64::from(r.x1)) / 2.0, (f64::from(r.y0) + f64::from(r.y1)) / 2.0]
+}
+
+/// Readies `copies` (a scratch document of the source's colour holding duplicated layers) for
+/// landing in `dest`: smart objects get fresh contents ids, keeping only the sharing within the
+/// batch (contents ids belong to a document, so the copies never join objects already in `dest`,
+/// including another opening of the same file), and the pixels convert to `dest`'s profile and
+/// bit depth.
+pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) -> Result<()> {
+    let mut contents = HashMap::new();
+    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
+    for id in smart_ids {
+        if let Some(l) = copies.layer_mut(id)
+            && let LayerContent::Smart(sm) = &mut l.content
+        {
+            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
+        }
+    }
+    if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
+        let profile = crate::color_cmds::document_profile(dest);
+        crate::color_cmds::convert_document(copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+    }
+    if copies.depth != dest.depth {
+        crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
+            let f = surf.format().with_sample(dest.depth);
+            *surf = surf.convert(f);
+        });
+    }
+    Ok(())
+}
+
+/// Moves every layer of `copies` by whole pixels (content, masks, vectors and smart placement).
+pub(crate) fn translate_copies(copies: &mut Document, dx: i32, dy: i32) {
+    if dx != 0 || dy != 0 {
+        let snapshot = copies.clone();
+        for l in &mut copies.layers {
+            crate::commands::translate_layer(&snapshot, l, dx, dy);
+            crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
+        }
+    }
 }
 
 /// `layer.copyToDocument`.
@@ -107,27 +146,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         }
         copies.layers.push(l);
     }
-    // Contents IDs belong to a document. Preserve sharing within this batch, without joining
-    // pre-existing objects in the destination (including another opening of the same file).
-    let mut contents = HashMap::new();
-    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
-    for id in smart_ids {
-        if let Some(l) = copies.layer_mut(id)
-            && let LayerContent::Smart(sm) = &mut l.content
-        {
-            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
-        }
-    }
-    if (copies.mode, &copies.icc_profile) != (ddoc.mode, &ddoc.icc_profile) {
-        let profile = crate::color_cmds::document_profile(&ddoc);
-        crate::color_cmds::convert_document(&mut copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
-    }
-    if copies.depth != ddoc.depth {
-        crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
-            let f = surf.format().with_sample(ddoc.depth);
-            *surf = surf.convert(f);
-        });
-    }
+    adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
     let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
@@ -142,13 +161,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
     };
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
-    if dx != 0 || dy != 0 {
-        let snapshot = copies.clone();
-        for l in &mut copies.layers {
-            crate::commands::translate_layer(&snapshot, l, dx, dy);
-            crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
-        }
-    }
+    translate_copies(&mut copies, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
