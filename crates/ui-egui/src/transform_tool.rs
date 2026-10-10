@@ -182,7 +182,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // Preview document: the moving pixels removed (layer hidden, or the selection lifted out).
     let mut pd = (*doc).clone();
     let mut lifted = None;
-    if let Some(sel) = doc.selection.clone().filter(|_| !layer.is_group() && layer.surface().is_some()) {
+    // Type, shapes and smart objects move whole, selection or not (#2630): only pixels are lifted.
+    if let Some(sel) = doc.selection.clone().filter(|_| !photocraft_engine::transform_cmds::moves_whole(layer) && layer.surface().is_some()) {
         if let Some(surf) = pd.layer_mut(id).and_then(|l| l.surface_mut()) {
             let (l, rest) = photocraft_engine::transform_cmds::split_selected(surf, &sel).map_err(|e| e.to_string())?;
             *surf = rest;
