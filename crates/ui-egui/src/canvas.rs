@@ -2613,7 +2613,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         }
         // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
-        // Skew, Distort, Perspective).
+        // Skew, Distort, Perspective, Warp).
         let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
         if response.secondary_clicked()
             && transforming
@@ -2886,7 +2886,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         });
         if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
-        } else if let Some(c) = response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt))) {
+        } else if let Some(c) =
+            response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command)))
+        {
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));

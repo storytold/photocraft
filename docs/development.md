@@ -3,7 +3,11 @@
 ## Prerequisites
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
-- macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+- macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
+  - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
+  - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
+  - Arch: `sudo pacman -S libxkbcommon wayland libx11 libxrandr libxi mesa gtk3`
+  - openSUSE: `sudo zypper install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel Mesa-libGL-devel gtk3-devel`
 
 ### Windows source builds
 
