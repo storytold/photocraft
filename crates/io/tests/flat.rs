@@ -43,7 +43,6 @@ codec_rt!(png_rgb8_opaque, "png", ColorMode::Rgb, SampleType::U8, false, 0.0);
 codec_rt!(png_rgba16, "png", ColorMode::Rgb, SampleType::U16, true, 0.0);
 codec_rt!(png_gray8, "png", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(png_graya16, "png", ColorMode::Grayscale, SampleType::U16, true, 0.0);
-codec_rt!(tga_rgba8, "tga", ColorMode::Rgb, SampleType::U8, true, 0.0);
 codec_rt!(tga_rgb8_opaque, "tga", ColorMode::Rgb, SampleType::U8, false, 0.0);
 codec_rt!(tga_gray8, "tga", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(tiff_rgba8, "tiff", ColorMode::Rgb, SampleType::U8, true, 0.0);
@@ -72,6 +71,53 @@ fn exr_rgba32() {
         assert!((photocraft_color::convert::srgb_to_linear(a[c]) - b[c]).abs() < 1e-4, "{a:?} -> {b:?}");
     }
     assert!((a[3] - b[3]).abs() < 1e-6, "alpha kept");
+}
+
+/// An opaque document filled with `#808080`.
+fn mid_gray(mode: ColorMode, depth: SampleType) -> photocraft_doc::Document {
+    let mut d = photocraft_doc::Document::new("g", photocraft_geom::Size::new(4, 4), mode, depth);
+    let fmt = d.pixel_format();
+    let mut s = photocraft_raster::Surface::new(fmt);
+    let v = 128.0 / 255.0;
+    s.fill_rect(d.bounds(), &photocraft_raster::from_rgba(&fmt, [v, v, v, 1.0]));
+    d.layers.push(photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(s)));
+    d
+}
+
+/// OpenEXR and Radiance HDR store linear sRGB in every mode: an sGray `#808080` is written as
+/// its linear value, as an RGB `#808080` is, rather than as the display-encoded 0.5 (#2386).
+#[test]
+fn gray_exr_and_hdr_store_linear_light() {
+    let linear = photocraft_color::convert::srgb_to_linear(128.0 / 255.0);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (ext, tol) in [("exr", 2e-5), ("hdr", 2e-3)] {
+            for mode in [ColorMode::Grayscale, ColorMode::Rgb] {
+                let r = export(&mid_gray(mode, depth), ext, &ExportOptions::default()).expect("export");
+                let img = photocraft_codecs::decode(&r.bytes).expect("decode");
+                let samples = img.to_normalized();
+                let worst = samples.iter().map(|v| (v - linear).abs()).fold(0.0f32, f32::max);
+                assert!(worst <= tol, "{mode:?} {depth:?} .{ext}: stored samples differ from {linear} by {worst}");
+            }
+        }
+    }
+}
+
+/// A grayscale OpenEXR holds linear luminance, so it opens as grayscale tagged with a linear gray
+/// profile, in which its samples are the colours saved.
+#[test]
+fn gray_exr_round_trips() {
+    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let r = export(&mid_gray(ColorMode::Grayscale, depth), "exr", &ExportOptions::default()).expect("export");
+        let back = import("x.exr", &r.bytes).expect("import").document;
+        assert_eq!(back.mode, ColorMode::Grayscale, "{depth:?}");
+        let profile = Profile::parse(back.icc_profile.as_deref().expect("tagged")).expect("profile");
+        assert_eq!(profile.color_space, ColorSpace::Gray, "{depth:?}");
+        let t = Transform::new(&profile, Builtin::SGray.profile(), Intent::RelativeColorimetric, false).expect("transform");
+        let mut v = [back.layers[0].surface().expect("raster").pixel(1, 1)[0]];
+        t.apply(&mut v, 1);
+        assert!((v[0] - 128.0 / 255.0).abs() < 1e-4, "{depth:?}: reopened as {} in sGray", v[0]);
+    }
 }
 
 fn smooth(mode: ColorMode) -> photocraft_doc::Document {
@@ -478,9 +524,71 @@ fn tga_writes_the_alpha_channel_as_32_bit_alpha() {
         let (va, vb) = (sa.read_region(want.bounds()), sb.read_region(back.bounds()));
         for (i, (a, b)) in va.as_chunks::<4>().0.iter().zip(vb.as_chunks::<4>().0.iter()).enumerate() {
             assert!(a[..3].iter().zip(&b[..3]).all(|(p, q)| (p - q).abs() <= 1.0 / 255.0), "{depth:?} colour {i}: {a:?} {b:?}");
-            // Round trip: the alpha opens back as the layer's transparency.
-            assert!((b[3] - alpha_value(i as u32 % 9)).abs() <= 0.5 / 255.0, "{depth:?} alpha {i}: {}", b[3]);
+            assert_eq!(b[3], 1.0, "{depth:?} the Background stays opaque");
         }
+        // Round trip, as in Photoshop: the alpha opens back as the "Alpha 1" channel (#2225).
+        let [ch] = &back.channels[..] else { panic!("{depth:?}: one alpha channel, got {}", back.channels.len()) };
+        assert_eq!(ch.name, "Alpha 1");
+        for (i, a) in ch.surface.read_region(back.bounds()).iter().enumerate() {
+            assert!((a - alpha_value(i as u32 % 9)).abs() <= 0.5 / 255.0, "{depth:?} alpha {i}: {a}");
+        }
+    }
+}
+
+/// A 64×64 uncompressed Targa (bottom-left origin), byte for byte like the files the Photoshop
+/// measurements in #2225 opened: red everywhere, alpha (when `bpp` is 32) 255 on the left half and
+/// 0 on the right, with `alpha_bits` in the descriptor.
+fn tga_file(bpp: u8, alpha_bits: u8) -> Vec<u8> {
+    let mut b = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 64, 0, bpp, alpha_bits];
+    for _y in 0..64 {
+        for x in 0..64 {
+            b.extend_from_slice(&[0, 0, 255]);
+            if bpp == 32 {
+                b.push(if x < 32 { 255 } else { 0 });
+            }
+        }
+    }
+    b
+}
+
+/// #2225, measured on Photoshop 27.11: a 32-bit Targa opens as an opaque, locked Background plus
+/// an "Alpha 1" channel holding the fourth byte (also when the descriptor declares 0 alpha bits),
+/// and the stored colours stay visible where the alpha is 0. A 24-bit Targa has no channel.
+#[test]
+fn tga_32_bit_opens_its_alpha_as_a_channel_like_photoshop() {
+    for alpha_bits in [8, 0] {
+        let d = import("a.tga", &tga_file(32, alpha_bits)).unwrap().document;
+        let [bg] = &d.layers[..] else { panic!("one layer") };
+        assert_eq!(bg.name, "Background", "alpha bits {alpha_bits}");
+        assert!(bg.locks.transparency && bg.locks.position);
+        let px = bg.surface().unwrap().read_region(d.bounds());
+        for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(*p, [1.0, 0.0, 0.0, 1.0], "alpha bits {alpha_bits}: pixel {i} keeps its red, opaque");
+        }
+        let [ch] = &d.channels[..] else { panic!("alpha bits {alpha_bits}: one channel, got {}", d.channels.len()) };
+        assert_eq!((ch.name.as_str(), ch.spot), ("Alpha 1", None));
+        let a = ch.surface.read_region(d.bounds());
+        assert_eq!((a[64 * 32 + 10], a[64 * 32 + 54]), (1.0, 0.0), "alpha bits {alpha_bits}");
+    }
+    let d = import("a.tga", &tga_file(24, 0)).unwrap().document;
+    assert!(d.channels.is_empty());
+    assert_eq!(d.layers[0].name, "Background");
+}
+
+/// Layer transparency is still written as the Targa's alpha when there is no alpha channel (a
+/// choice left to the maintainers in #2225); the file opens back as Photoshop opens it, with the
+/// alpha as "Alpha 1" and the colours of transparent pixels kept.
+#[test]
+fn tga_transparency_reopens_as_alpha_1() {
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    let r = export(&d, "a.tga", &ExportOptions::default()).unwrap();
+    let back = import("a.tga", &r.bytes).unwrap().document;
+    let src = d.layers[0].surface().unwrap().read_region(d.bounds());
+    let got = back.layers[0].surface().unwrap().read_region(back.bounds());
+    let alpha = back.channels.first().expect("Alpha 1").surface.read_region(back.bounds());
+    for (i, ((s, g), a)) in src.as_chunks::<4>().0.iter().zip(got.as_chunks::<4>().0.iter()).zip(&alpha).enumerate() {
+        assert_eq!(&g[..3], &s[..3], "colour {i}");
+        assert_eq!((g[3], *a), (1.0, s[3]), "alpha {i}");
     }
 }
 

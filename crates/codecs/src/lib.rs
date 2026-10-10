@@ -163,6 +163,14 @@ pub fn decode_cryptomatte(bytes: &[u8], layer_name: &str, limits: &Limits) -> Re
     codecs::exr_cryptomatte::decode(bytes, layer_name, limits)
 }
 
+/// Decodes the named channels of one part (exact names as the file stores them, e.g.
+/// `diffuse.R`) into an image: R/G/B (plus A when named) give Rgba, a lone Y gives Gray.
+/// This renders a channel group without the part's other channels in the way.
+pub fn decode_exr_channels(bytes: &[u8], part: usize, names: &[&str], opts: &DecodeOptions) -> Result<Image, CodecError> {
+    let img = exr::decode_channels(bytes, part, names, &opts.limits)?;
+    finish_decode(img, 1, opts)
+}
+
 /// Deep OpenEXR samples (`deepscanline`/`deeptile`): the structured per-pixel sample lists
 /// (colour, alpha and Z per sample), for callers that composite deep data themselves —
 /// [`decode_as_with`] instead flattens a deep file into a normal [`Image`] with a

@@ -560,3 +560,88 @@ fn profile_gain_table_map_is_reported() {
     spec.profile_gain_table_map = Some(vec![0; 64]);
     assert!(gain_table(&sensor(&spec.build())));
 }
+
+/// Adobe DNG compression 34892 (lossy baseline JPEG, 8-bit luma tiles): decodes to the tile
+/// samples widened to 16 bits, within the JPEG quality band (Q60 artifacts are mild but real).
+#[test]
+fn lossy_jpeg_tiles_decode() {
+    let (w, h) = (32, 32);
+    // A smooth ramp: baseline JPEG at Q60 keeps it within a few quantisation steps.
+    let data: Vec<u16> = (0..w * h).map(|i| 4096 + (i / w) as u16 * 16).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.storage = DngStorage::LossyJpegTiles { width: 16, height: 16 };
+    let s = sensor(&spec.build());
+    assert_eq!((s.width, s.height, s.samples), (w, h, 1));
+    let mut worst = 0u32;
+    for (got, want) in s.data.iter().zip(&data) {
+        // The tile was written 8-bit (>>8), so the quantised expectation is (want>>8)<<8.
+        let quant = u32::from(*want >> 8) << 8;
+        worst = worst.max(u32::from(got.abs_diff(quant as u16)));
+    }
+    assert!(worst <= 4 * 256, "worst deviation from the 8-bit quantisation: {worst}");
+}
+
+/// A lossy JPEG tile cut mid-stream fails cleanly.
+#[test]
+fn lossy_jpeg_tiles_hostile() {
+    let (w, h) = (32, 32);
+    let data: Vec<u16> = (0..w * h).map(|_i| 8192u16).collect();
+    let mut spec = DngSpec::cfa(w, h, data);
+    spec.storage = DngStorage::LossyJpegTiles { width: 32, height: 32 };
+    let bytes = spec.build();
+    let at = bytes.windows(2).position(|w| w == [0xFF, 0xD8]).expect("jpeg SOI") + 2;
+    let cut = &bytes[..at + (bytes.len() - at) / 2];
+    assert!(decode(cut, &Limits::default()).is_err(), "a cut JPEG tile must not decode");
+}
+
+/// A tile JPEG whose header lies about its size fails the header check, before any pixel
+/// decode (a hostile SOF must not be able to size the decoder's buffers first).
+#[test]
+fn lossy_jpeg_tile_dimension_mismatch_errors() {
+    use image::ImageEncoder as _;
+    let (w, h) = (32, 32);
+    let data: Vec<u16> = (0..w * h).map(|i| 4096 + (i / w) as u16 * 16).collect();
+    let mut spec = DngSpec::cfa(w, h, data);
+    spec.storage = DngStorage::LossyJpegTiles { width: 32, height: 32 };
+    let mut bytes = spec.build();
+    // Swap the 32x32 tile JPEG for a 16x16 one, inside the same segment (the trailing bytes
+    // after its EOI stay; the JPEG decoder stops at EOI).
+    let small = {
+        let img = image::GrayImage::from_fn(16, 16, |x, _| image::Luma([(x as u16 * 16) as u8]));
+        let mut j = Vec::new();
+        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 60);
+        enc.write_image(img.as_raw(), 16, 16, image::ExtendedColorType::L8).unwrap();
+        j
+    };
+    let soi = bytes.windows(3).position(|w| w == [0xFF, 0xD8, 0xFF]).expect("SOI");
+    let eoi = soi + bytes[soi..].windows(2).position(|w| w == [0xFF, 0xD9]).expect("EOI") + 2;
+    bytes.splice(soi..eoi, small);
+    let err = decode(&bytes, &Limits::default()).unwrap_err().to_string();
+    assert!(err.contains("16x16") && err.contains("32x32"), "{err}");
+}
+
+/// A 3-sample LinearRaw lossy DNG (YCbCr on disk, as real camera files are) decodes to RGB
+/// tiles widened to 16 bits, within the JPEG quality band; a LinearizationTable maps the
+/// decoded samples in the develop stage, so the sensor sees the raw widened values.
+#[test]
+fn lossy_jpeg_rgb_linearraw_decodes() {
+    let (w, h) = (32, 32);
+    // Channel offsets of 64 8-bit steps survive JPEG chroma quantisation at Q60.
+    let data: Vec<u16> = (0..w * h * 3).map(|i| 4096 + ((i / (w * 3)) as u16 * 16) + (i % 3) as u16 * 64 * 256).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.samples = 3;
+    spec.storage = DngStorage::LossyJpegTiles { width: 16, height: 16 };
+    let s = sensor(&spec.build());
+    assert_eq!((s.width, s.height, s.samples), (w, h, 3));
+    let mut worst = 0u32;
+    for (got, want) in s.data.iter().zip(&data) {
+        let quant = u32::from(*want >> 8) << 8;
+        worst = worst.max(u32::from(got.abs_diff(quant as u16)));
+    }
+    assert!(worst <= 8 * 256, "worst deviation from the 8-bit quantisation: {worst}");
+    // Each channel carries its own level: R and B stay apart everywhere.
+    for p in 0..w * h {
+        let (r, b) = (s.data[p * 3], s.data[p * 3 + 2]);
+        assert!(r.abs_diff(b) >= 64 * 256 - 8 * 256, "channels collapsed at pixel {p}");
+    }
+}

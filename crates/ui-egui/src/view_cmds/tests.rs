@@ -188,6 +188,7 @@ fn engine_commands_open_their_dialogs() {
     assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![0.0, 22.5, 32.5, 55.0]);
     app.run("type.create", json!({"x": 5, "y": 40, "text": "Warp", "size": 20})).unwrap();
     let d = menu(&mut app, &ctx, "type.warpText", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.ui.dialog_mut(d).unwrap().fields.insert("style".into(), json!("arc"));
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert!(app.run("type.info", json!({})).unwrap()["warp"]["style"] == "warpArc");
     // Batch needs a recorded action.

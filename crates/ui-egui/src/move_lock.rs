@@ -29,7 +29,7 @@ pub fn blocked(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifie
         })
     };
     if tool == Tool::Move {
-        // `moves_selected_pixels` is false for a layer whose pixels can't float: then the Move tool
+        // `moves_selected_pixels_with` is false for a layer whose pixels can't float: then the Move tool
         // moves the layer, which its position lock refuses too.
         if crate::move_ui::moves_selected_pixels_with(app, tool) {
             return pixels_locked();
