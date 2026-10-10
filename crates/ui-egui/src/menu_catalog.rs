@@ -244,6 +244,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Image", "Analysis"], "Place Scale Marker…", None, "image.analysis.placeScaleMarker"),
     (&["Layer", "New"], "Layer…", Some("Cmd+Shift+N"), "layer.new.layer"),
     (&["Layer", "New"], "Layer from Background…", None, "layer.new.layerFromBackground"),
+    (&["Layer", "New"], "Background from Layer", None, "layer.new.backgroundFromLayer"),
     (&["Layer", "New"], "Group…", None, "layer.new.group"),
     (&["Layer", "New"], "Group from Layers…", None, "layer.new.groupFromLayers"),
     (&["Layer", "New"], "---", None, "---"),

@@ -934,6 +934,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let original_active = st.active_layer;
+    let background = crate::background_cmds::background_id(doc);
     let (count, copies) = s.edit(if copy { "Duplicate Layer" } else { "Reorder Layers" }, |doc, active| {
         let mut moved = Vec::with_capacity(moved_ids.len());
         for &id in &moved_ids {
@@ -956,6 +957,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
             siblings.splice(at..at, moved);
         }
         check_group_depth(doc, "Reorder Layer")?;
+        crate::background_cmds::keep_background_at_bottom(background, doc)?;
         *active = if copy {
             copies.last().copied()
         } else if batch.is_some() {
@@ -1057,6 +1059,7 @@ fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
 fn reverse(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Reverse", |doc, _| {
+        let background = crate::background_cmds::background_id(doc);
         let ids = top_level(doc, &sel);
         if ids.len() < 2 {
             return Err(EngineError::Other("select two or more layers to reverse".into()));
@@ -1068,7 +1071,7 @@ fn reverse(s: &mut Session) -> Result<Value> {
         for (path, l) in paths.iter().zip(layers.into_iter().rev()) {
             *doc.layer_at_mut(path).ok_or_else(|| EngineError::Other("layer tree changed".into()))? = l;
         }
-        Ok(())
+        crate::background_cmds::keep_background_at_bottom(background, doc)
     })?;
     Ok(Value::Null)
 }
