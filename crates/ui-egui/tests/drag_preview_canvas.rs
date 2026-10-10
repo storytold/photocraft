@@ -121,31 +121,35 @@ fn render(h: &mut Harness) -> Image {
     Image { w: img.width(), h: img.height(), px: img.into_raw() }
 }
 
-/// Fraction of positions along the screen segment `a`–`b` (points) where a pixel within ±2
-/// physical pixels across the line passes `test`.
-fn coverage(img: &Image, ppp: f32, a: Pos2, b: Pos2, test: impl Fn(u8) -> bool) -> f32 {
+/// Mean contrasting ink along the screen segment `a`–`b` (points), using the strongest pixel
+/// within ±2 physical pixels across the line. Antialiased pixels contribute their actual contrast
+/// instead of disappearing at a binary luma cutoff.
+fn coverage(img: &Image, ppp: f32, a: Pos2, b: Pos2, contrast: impl Fn(u8) -> f32) -> f32 {
     let (a, b) = (a * ppp, b * ppp);
     let len = a.distance(b).max(1.0);
     let dir = (b - a) / len;
     let normal = egui::vec2(-dir.y, dir.x);
     // Skip the ends (corners, where the other edges and the readout may be).
     let n = (len as usize).saturating_sub(16);
-    let mut hits = 0;
+    let mut ink = 0.0;
     for i in 0..n {
         let p = a + dir * (8.0 + i as f32);
-        let hit = (-2..=2).any(|o| {
-            let q = p + normal * o as f32;
-            img.luma(q.x.round() as i64, q.y.round() as i64).is_some_and(&test)
-        });
-        hits += usize::from(hit);
+        let strongest = (-2..=2)
+            .filter_map(|o| {
+                let q = p + normal * o as f32;
+                img.luma(q.x.round() as i64, q.y.round() as i64)
+            })
+            .map(&contrast)
+            .fold(0.0, f32::max);
+        ink += strongest;
     }
-    hits as f32 / n.max(1) as f32
+    ink / n.max(1) as f32
 }
 
 /// Ink that contrasts with `background`: dark on white, light on black.
-fn ink(background: &str) -> impl Fn(u8) -> bool {
+fn ink(background: &str) -> impl Fn(u8) -> f32 {
     let white = background == "white";
-    move |l| if white { l < 64 } else { l > 192 }
+    move |l| if white { 1.0 - f32::from(l) / 255.0 } else { f32::from(l) / 255.0 }
 }
 
 /// The four edges of the document rectangle `[x0, y0]`–`[x1, y1]` on screen.
@@ -181,8 +185,9 @@ fn marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x() {
                     for (mx, my) in [(200.0, 80.0), (300.0, 150.0), (200.0, 220.0), (100.0, 150.0)] {
                         let m = screen(&h, mx, my);
                         let along = if mx == 200.0 { egui::vec2(14.0 / ppp, 0.0) } else { egui::vec2(0.0, 14.0 / ppp) };
+                        let was = coverage(&before, ppp, m - along, m + along, ink(bg));
                         let now = coverage(&img, ppp, m - along, m + along, ink(bg));
-                        assert!(now > 0.3, "{tool} on {bg} @{ppp}x at {m:?}: {now:.2} contrasting");
+                        assert!(was < 0.05 && now > 0.3, "{tool} on {bg} @{ppp}x at {m:?}: {was:.2} → {now:.2} contrasting");
                     }
                 }
                 // Each move's frame shows the outline where the pointer is now (no stale frame).
