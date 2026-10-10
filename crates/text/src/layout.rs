@@ -495,6 +495,13 @@ impl Layouter {
                     ptext.push('\n');
                     continue;
                 }
+                // Imported PSD text can contain literal tab controls. Font shaping may
+                // render those as .notdef boxes; a space preserves the one-byte source
+                // and style/caret offsets while supplying a real whitespace advance.
+                if ch == '\t' {
+                    ptext.push(' ');
+                    continue;
+                }
                 let style = &out.styles[style_at(prange.start + i)];
                 let caps = style.caps;
                 if caps == Caps::AllCaps || small_caps[style_at(prange.start + i)] == SmallCapsMode::Synthetic {
@@ -512,6 +519,9 @@ impl Layouter {
             }
             let first_style = &out.styles[style_at(prange.start)];
             let first_px = first_style.size_pt * k;
+            // Scripts the loaded fonts may lack (Arabic, Japanese, …): a host serving a font for them
+            // fetches it (`served`); it joins the fallback stack once it arrives.
+            crate::served::request_for_text(&ptext);
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
             let mut layout: Layout<RunBrush> = {
                 let mut b = self.lcx.ranged_builder(&mut fonts.fcx, &ptext, 1.0, false);

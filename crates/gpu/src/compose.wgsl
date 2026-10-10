@@ -153,7 +153,9 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
     return min(cb / (2.0 * (1.0 - cs)), 1.0);
 }
 
-const F32_MAX: f32 = 3.40282347e38;
+// f32::MAX exactly. The decimal 3.40282347e38 is just above it: naga rounds it down, but browsers'
+// WebGPU compiler rejects it, which left the web app without a GPU compositor.
+const F32_MAX: f32 = 0x1.fffffep+127f;
 
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
@@ -185,6 +187,28 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
         case 23: {                                              // Divide
             if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
             return min(cb / cs, hi);
+        }
+        case 28: {                                             // Reflect
+            if (cs >= 1.0) { return 1.0; }
+            return min(cb * cb / (1.0 - cs), 1.0);
+        }
+        case 29: {                                             // Glow
+            if (cb >= 1.0) { return 1.0; }
+            return min(cs * cs / (1.0 - cb), 1.0);
+        }
+        case 30: { return 1.0 - abs(1.0 - cb - cs); }            // Negation
+        case 31: {                                             // XOR (8-bit channel operation)
+            let b = u32(floor(clamp(cb, 0.0, 1.0) * 255.0 + 0.5));
+            let s = u32(floor(clamp(cs, 0.0, 1.0) * 255.0 + 0.5));
+            return f32(b ^ s) / 255.0;
+        }
+        case 32: {                                             // Paint.NET Color Burn
+            if (cs <= 0.0) { return 0.0; }
+            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        }
+        case 33: {                                             // Paint.NET Color Dodge
+            if (cs >= 1.0) { return 1.0; }
+            return min(cb / (1.0 - cs), 1.0);
         }
         default: { return cs; }                                 // Normal, Dissolve, PassThrough
     }

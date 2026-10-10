@@ -659,7 +659,11 @@
 	Pro Medium Gray Theme	Tema Pro cinza médio
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio claro
+	Adwaita Light Theme	Tema Adwaita claro
+	Adwaita Dark Theme	Tema Adwaita escuro
 	Classic Theme	Tema clássico
+	Solarized dark	Solarized escuro
+	Solarized Dark Theme	Tema Solarized Escuro
 	Next Theme	Próximo tema
 	Actions	Ações
 	Brush Settings	Configurações do pincel
@@ -743,7 +747,7 @@
 	All Caps	Tudo em maiúsculas
 	All Slices	Todas as fatias
 	All User Slices	Todas as fatias do usuário
-	All shortcuts reset to Photoshop defaults.	Todos os atalhos foram redefinidos para os padrões do Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Todos os atalhos foram redefinidos para os padrões do PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Sempre usar a pressão para a opacidade
 	Always use pressure for size	Sempre usar a pressão para o tamanho
@@ -1060,7 +1064,7 @@
 	Ignore All	Ignorar tudo
 	Image Size	Tamanho da imagem
 	Import Brushes…	Importar pincéis…
-	Import Photoshop brushes (.abr)	Importar pincéis do Photoshop (.abr)
+	Import brushes (.abr)	Importar pincéis (.abr)
 	Import Presets	Importar predefinições
 	Imported	Importado
 	Indent First	Recuo da primeira linha
@@ -1110,7 +1114,6 @@
 	Liquify is not open	Liquefazer não está aberto
 	Load	Carregar
 	Load 3D LUT…	Carregar LUT 3D…
-	Load Photoshop brushes (.abr)	Carregar pincéis do Photoshop (.abr)
 	Load channel as selection	Carregar canal como seleção
 	Load…	Carregar…
 	Localized Color Clusters	Agrupamentos de cores localizados
@@ -1286,6 +1289,12 @@
 	Rename…	Renomear…
 	Resample	Reamostrar
 	Reset All to Defaults	Redefinir tudo para os padrões
+	Import Shortcuts…	Importar atalhos…
+	Load a keyboard shortcut set saved as .kys	Carregar um conjunto de atalhos de teclado salvo como .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} atalhos importados de {file}. Clique em OK para mantê-los.
+	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
+	Keyboard shortcuts imported	Atalhos de teclado importados
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Seu conjunto de atalhos de teclado {set} está em uso aqui: {n} atalhos diferem dos padrões. Editar › Atalhos de teclado os mostra; Redefinir tudo para o padrão desfaz isso.
 	Reset Section	Redefinir seção
 	Reset Transform	Redefinir transformação
 	Reset to defaults	Redefinir para os padrões
@@ -1501,7 +1510,7 @@
 	Current Tool	Ferramenta atual
 	Custom Shape Tool	Ferramenta Forma personalizada
 	Cyans	Cianos
-	Default Photoshop Size	Padrão do Photoshop
+	Default PhotoCraft Size	Tamanho padrão do PhotoCraft
 	Delete Workspace	Excluir espaço de trabalho
 	Diamond	Diamante
 	Dimensions:	Dimensões:
@@ -1842,6 +1851,8 @@
 	Standard	Padrão
 	Studio	Studio
 	Studio light	Studio claro
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita escuro
 	Subdivisions	Subdivisões
 	System	Sistema
 	Text engine	Mecanismo de texto
@@ -1891,6 +1902,7 @@
 	Collapse group  ({key}-click: all groups)	Recolher grupo  ({key}-clique: todos os grupos)
 	Create new brush from the current settings	Criar novo pincel a partir das configurações atuais
 	Create new brush from these settings	Criar novo pincel a partir destas configurações
+	Update the current brush with these settings	Atualizar o pincel atual com estas configurações
 	Delete brush	Excluir pincel
 	Drag the arrow to set the angle, the dots to set the roundness	Arraste a seta para definir o ângulo e os pontos para definir o arredondamento
 	Expand	Expandir
@@ -1965,6 +1977,13 @@
 	Align with layer	Alinhar com a camada
 	Reset Alignment	Redefinir alinhamento
 	Centre the gradient (offset 0, 0)	Centralizar o degradê (deslocamento 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor de degradê
+	Gradient picker	Seletor de degradê
+	Gradient stops	Paradas do degradê
+	Save As Preset	Salvar como predefinição
+	The gradient the Gradient tool paints with	O degradê com que a ferramenta Degradê pinta
+	Adds the current gradient to the Gradients panel	Adiciona o degradê atual ao painel Degradês
 	The current gradient (pick one in Window › Gradients)	O degradê atual (escolha um em Janela › Degradês)
 	Select a type layer to edit its character and paragraph settings.	Selecione uma camada de texto para editar as configurações de caractere e parágrafo.
 	Text color	Cor do texto
@@ -1997,6 +2016,9 @@
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abrindo {name}
+	Saving {name}	Salvando {name}
+	A save to {name} is still running; try again when it finishes	Um salvamento em {name} ainda está em andamento; tente novamente quando terminar
+	{label} is writing the file and can no longer be cancelled	{label} está gravando o arquivo e não pode mais ser cancelado
 	Opening {name}…	Abrindo {name}…
 	Opening…	Abrindo…
 	Reading…	Lendo…
@@ -2359,7 +2381,7 @@
 	Pixel	Pixel
 	Adjustment	Ajuste
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Arraste (laço) ou clique nos pontos (poligonal) · {add} adicionar · {sub} subtrair
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Arraste uma caixa de corte · arraste dentro para mover · as bordas redimensionam ({ratio} proporção, {centre} centro) · Espaço move durante o desenho · {commit} confirma · Esc cancela
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Arraste uma caixa de corte · arraste dentro para mover · as bordas redimensionam ({ratio} proporção, {centre} centro) · Espaço move durante o desenho · setas deslocam · X troca a orientação · {commit} confirma · Esc cancela
 	{mode} Color · {bits} bit	Cor {mode} · {bits} bits
 	Drag to move the layer	Arraste para mover a camada
 	Scrubby Zoom	Zoom por arraste
@@ -2616,6 +2638,10 @@ cameraRaw	Whites	Brancos
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Seletor de cores (Cor do texto)
+	Color Picker (Fill Color)	Seletor de cores (Cor de preenchimento)
+	Fill color	Cor de preenchimento
+	Color Picker (Stroke Color)	Seletor de cores (Cor do traçado)
+	Stroke color	Cor do traçado
 	Pick screen color	Escolher cor da tela
 	Sample a pixel anywhere on the screen	Amostrar um pixel em qualquer lugar da tela
 	Click to pick · Esc to cancel	Clique para escolher · Esc para cancelar
@@ -2709,3 +2735,55 @@ fontWeight	Italic	Itálico
 	Opacity Threshold	Limiar de opacidade
 
 	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
+	Rule of Thirds	Regra dos terços
+	Triangle	Triângulo
+	Golden Ratio	Proporção áurea
+	Golden Spiral	Espiral áurea
+	Auto Show Overlay	Mostrar sobreposição automaticamente
+	Always Show Overlay	Sempre mostrar sobreposição
+	Never Show Overlay	Nunca mostrar sobreposição
+	Cycle Overlay	Alternar sobreposição
+	Cycle Orientation	Alternar orientação
+	Set the overlay options for the Crop tool	Definir as opções de sobreposição da ferramenta Corte demarcado
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	O Alt-clique foi para o desktop, que move janelas com Alt-arrastar. Mude a tecla de mover janelas dele para Super ou trave o Alt em Janela › Teclas modificadoras.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Seletor de cores (cor do estilo de camada)
+	Auto Hide Notifications	Ocultar notificações automaticamente
+	Notification Duration (seconds)	Duração da notificação (segundos)
+	Appearance Mode	Modo de aparência
+	Dark Theme	Tema escuro
+	Light Theme	Tema claro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Próximo modo de aparência
+	Sync with system	Sincronizar com o sistema
+	Active	Ativo
+	Color Picker (Solid Color)	Seletor de Cores (Cor sólida)
+	Straighten the image by drawing a line on it	Endireitar a imagem desenhando uma linha sobre ela
+	Set additional Crop options	Definir opções adicionais de corte
+	Show Cropped Area	Mostrar área cortada
+	Enable Crop Shield	Ativar proteção de corte
+	Match Canvas	Corresponder à tela de pintura
+	Auto Adjust Opacity	Ajustar opacidade automaticamente
+	Crop Shield color	Cor da proteção de corte
+	Color Picker (Crop Shield Color)	Seletor de cores (Cor da proteção de corte)
+	From Center	A partir do centro
+	Link radii	Vincular raios
+	Star Ratio:	Proporção da estrela:
+	Create Rectangle	Criar retângulo
+	Create Ellipse	Criar elipse
+	Create Triangle	Criar triângulo
+	Create Polygon	Criar polígono
+	Some brush presets could not be loaded	Não foi possível carregar algumas predefinições de pincel
+	Retry saving presets	Tentar salvar as predefinições novamente
+	Brush preset changes are not saved: {error}	As alterações nas predefinições de pincel não foram salvas: {error}
+	Keep this tab open to retain your brushes.	Mantenha esta aba aberta para manter seus pincéis.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	O armazenamento do navegador não está disponível; os pincéis valem apenas para esta sessão. Mantenha esta aba aberta para mantê-los.
+	Saving brush presets… Keep this tab open until saving finishes.	Salvando predefinições de pincel… Mantenha esta aba aberta até o salvamento terminar.
+	Reflect	Refletir
+	Glow	Brilho
+	Negation	Negação
+	XOR	XOR
+	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
+	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)

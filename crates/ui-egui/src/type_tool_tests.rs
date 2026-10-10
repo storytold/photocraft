@@ -50,7 +50,7 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
+        zoom: v.zoom / app.canvas_ppp(),
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
@@ -208,6 +208,26 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     click(&mut h, p);
     assert_eq!(selection(&h), (3, 3));
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+}
+
+/// Preferences ▸ Type ▸ Use Escape to Commit (default on): with it off, Escape cancels the
+/// session like the Cancel button instead of committing.
+#[test]
+fn use_escape_to_commit_off_makes_escape_cancel_the_session() {
+    for (use_esc_to_commit, expected) in [(true, "HOxHOHO"), (false, "HOHOHO")] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": "HOHOHO", "size": 120, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+        app.run("prefs.set", json!({"path": "type.useEscToCommit", "value": use_esc_to_commit})).unwrap();
+        let mut h = harness(1.0, app);
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        super::insert(h.state_mut(), "x");
+        assert_eq!(text(h.state(), id).text, "HOxHOHO", "typing goes into the session");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.text_edit.is_none(), "the session ends either way (useEscToCommit={use_esc_to_commit})");
+        assert_eq!(text(h.state(), id).text, expected, "useEscToCommit={use_esc_to_commit}");
+    }
 }
 
 fn size_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> f32 {
@@ -596,7 +616,8 @@ fn frame_point(app: &PhotocraftApp, p: [f64; 2]) -> Pos2 {
 
 fn assert_affine(a: Affine, b: Affine) {
     for (x, y) in a.m.into_iter().zip(b.m) {
-        assert!((x - y).abs() < 2e-4, "{a:?} != {b:?}");
+        // Translations around 500 doc px at a scaled ppp cancel to ~2.7e-4 in f32 rounding.
+        assert!((x - y).abs() < 1e-3, "{a:?} != {b:?}");
     }
 }
 

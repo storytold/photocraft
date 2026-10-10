@@ -597,6 +597,9 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     sub.resolution_dpi = doc.resolution_dpi;
     sub.icc_profile = doc.icc_profile.clone();
     sub.global_light = doc.global_light;
+    // Pattern fills and pattern layer effects reference document-level patterns by ID.
+    // Preserve those resources in the embedded document before rendering or saving it.
+    sub.patterns = doc.patterns.clone();
     if any_layer(l, &|x| matches!(x.content, LayerContent::Smart(_))) {
         // Nested PSD placed layers find their embedded files here.
         sub.metadata.psd_global_blocks = doc.metadata.psd_global_blocks.clone();
@@ -645,16 +648,32 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
 }
 
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, p)?;
-    s.edit("Convert to Smart Object", |doc, active| {
-        let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        let so = layer_to_smart(doc, l)?;
+    let ids = match p.get("layer").and_then(Value::as_u64) {
+        Some(id) => vec![LayerId(id)],
+        None => crate::layer_multi_cmds::selected(s),
+    };
+    let new_id = s.edit("Convert to Smart Object", |doc, active| {
+        let ids = crate::layer_multi_cmds::top_level(doc, &ids);
+        let top = *ids.last().ok_or_else(|| other("no layer selected"))?;
+        let l = doc.layer(top).ok_or(EngineError::NoLayer(top))?;
+        let so = if ids.len() == 1 {
+            layer_to_smart(doc, l)?
+        } else {
+            let children = ids.iter().map(|id| doc.layer(*id).cloned().ok_or(EngineError::NoLayer(*id))).collect::<Result<Vec<_>>>()?;
+            layer_to_smart(doc, &Layer::group(l.name.clone(), children))?
+        };
         let new_id = so.id;
-        let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
-        *doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))? = so;
+        // As with Group Layers, place the result in the top selected root's parent. Insert
+        // before removal so paths shifting in other parents cannot discard unselected content.
+        doc.insert_above(Some(top), so);
+        for id in ids {
+            doc.remove(id).ok_or(EngineError::NoLayer(id))?;
+        }
         *active = Some(new_id);
-        Ok(json!({"layer": new_id.0}))
-    })
+        Ok(new_id)
+    })?;
+    crate::layer_multi_cmds::reselect(s, vec![new_id], Some(new_id));
+    Ok(json!({"layer": new_id.0}))
 }
 
 // ---------- contents ----------
@@ -844,7 +863,7 @@ fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         let i = filter_index(CMD, p, sm)?;
         let f = &mut sm.smart_filters[i];
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
-            return Err(bad(CMD, "this Photoshop filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
+            return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
         match (&mut f.params, new) {
             (Value::Object(old), Value::Object(n)) => old.extend(n),
@@ -958,8 +977,22 @@ const SF: &[&str] = &["Layer", "Smart Filter"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("layer.smartObjects.convertToSmartObject", "Convert to Smart Object", SO, r##"{"layer":id?}"##, convertible, convert),
-        spec!("filter.convertForSmartFilters", "Convert for Smart Filters", &["Filter"], r##"{"layer":id?}"##, not_smart, convert),
+        spec!(
+            "layer.smartObjects.convertToSmartObject",
+            "Convert to Smart Object",
+            SO,
+            r##"{"layer":id?} (default: combine selected layers)"##,
+            convertible,
+            convert
+        ),
+        spec!(
+            "filter.convertForSmartFilters",
+            "Convert for Smart Filters",
+            &["Filter"],
+            r##"{"layer":id?} (default: combine selected layers)"##,
+            not_smart,
+            convert
+        ),
         spec!("layer.smartObjects.newSmartObjectViaCopy", "New Smart Object via Copy", SO, r##"{"layer":id?}"##, has_smart, via_copy),
         spec!("layer.smartObjects.rasterize", "Rasterize", SO, r##"{"layer":id?}"##, has_smart, |s, p| s.execute("layer.rasterize.smartObject", p.clone())),
         spec!(

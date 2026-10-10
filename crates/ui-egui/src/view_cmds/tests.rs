@@ -92,6 +92,17 @@ fn print_size_and_fit_layers_use_the_whole_zoom_range() {
     assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::MAX);
 }
 
+/// Print Size divides the document's ppi into the Screen Resolution preference
+/// (Units & Rulers), not into a constant 72 ppi.
+#[test]
+fn print_size_uses_the_screen_resolution_preference() {
+    let (mut app, ctx) = app_with(1);
+    app.run("image.imageSize", json!({"resolution": 1, "resample": "none"})).unwrap();
+    app.run("prefs.set", json!({"path": "unitsAndRulers.screenResolution", "value": 96.0})).unwrap();
+    menu(&mut app, &ctx, "view.printSize", json!({})).unwrap();
+    assert_eq!(app.ui.views[0].zoom, 96.0, "96 ppi screen / 1 ppi document = 9600 %");
+}
+
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);

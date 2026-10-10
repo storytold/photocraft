@@ -108,7 +108,7 @@ pub fn release_stale(app: &mut PhotocraftApp, secondary_down: bool) {
 fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
     // Right is bigger on screen, also in a flipped view (View › Flip Horizontal).
     let dx = (x - r.anchor[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 };
-    let (size, hardness) = resized(r.start, dx, y - r.anchor[1], app.current_zoom());
+    let (size, hardness) = resized(r.start, dx, y - r.anchor[1], app.point_zoom());
     let b = &app.session.tools.brush;
     if b.size == size && b.hardness == hardness {
         return;

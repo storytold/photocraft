@@ -182,6 +182,8 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
     if let Some(patch) = p.get("brush").filter(|v| v.is_object()) {
         b = merge_brush(&b, patch, cmd)?;
     }
+    // A library preset's tips stay on disk until a stroke uses them (#1843).
+    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     if let Some(v) = num(p, "size") {
         b.size = v.max(0.5);
     }
@@ -410,6 +412,12 @@ impl LiveStroke {
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
+    /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
+    /// smoothing still catching up)? See `photocraft_paint::dynamics::DabGenerator::wants_time`.
+    pub fn wants_time(&self) -> bool {
+        self.renderer.wants_time()
+    }
+
     /// Render more points; returns the rectangle that changed. The doc shows the stroke as
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
@@ -569,10 +577,14 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                 "builtin": pr.builtin,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
-                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) => "sampled" },
+                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
             });
             if full {
-                v["brush"] = brush_json(&pr.brush);
+                // Full settings embed the bitmaps: load stored tips (a tip that can't be loaded
+                // stays a reference to the store).
+                let mut b = pr.brush.clone();
+                let _ = s.load_brush_tips(&mut b);
+                v["brush"] = brush_json(&b);
             }
             v
         }).collect::<Vec<_>>()
@@ -583,6 +595,7 @@ fn name_param(p: &Value, cmd: &str) -> Result<String> {
     p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| bad(cmd, "missing `name`"))
 }
 
+/// Replace the preset of that name, or append it at the end of the list.
 fn upsert(s: &mut Session, preset: BrushPreset) {
     match s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
         Some(x) => *x = preset,
@@ -598,7 +611,9 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => s.tools.brush.clone(),
     };
-    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group: String::new() });
+    upsert(s, BrushPreset { name: name.clone(), brush, builtin: false, group: String::new(), folder: Vec::new() });
+    // The saved brush is the current brush now (Photoshop selects the brush it just saved).
+    s.tools.current_preset = Some(name.clone());
     Ok(json!({ "name": name, "count": s.tools.presets.len() }))
 }
 
@@ -610,8 +625,46 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
+    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&name)) {
+        s.tools.current_preset = None;
+    }
     s.brush_presets_changed();
     Ok(json!({ "count": s.tools.presets.len() }))
+}
+
+/// Overwrite an existing preset with the current brush (or the current brush plus a `brush`
+/// patch), in place: no new preset, the position, name and group stay. The preset defaults to the
+/// one the current brush was picked from. A built-in that is updated becomes the user's preset
+/// (built-ins regenerate with their factory settings).
+fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "brush.presets.update";
+    let name = match p.get("name").filter(|v| !v.is_null()) {
+        Some(_) => name_param(p, cmd)?,
+        None => s.tools.current_preset.clone().ok_or_else(|| bad(cmd, "the current brush was not picked from a preset"))?,
+    };
+    let brush = match p.get("brush").filter(|v| v.is_object()) {
+        Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
+        None => s.tools.brush.clone(),
+    };
+    let pr = s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)).ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
+    pr.brush = brush;
+    pr.builtin = false;
+    let (name, group) = (pr.name.clone(), pr.group.clone());
+    s.brush_presets_changed();
+    Ok(json!({ "name": name, "group": group }))
+}
+
+/// Mark a preset as the one the current brush was picked from. The tip grids' click copies only
+/// the tip fields (the rest of the brush stays), so the engine cannot infer the preset from the
+/// brush: the UI names it. Selection is by identity, so look-alike duplicates stay distinct.
+fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "brush.presets.setCurrent";
+    let name = name_param(p, cmd)?;
+    if !s.tools.presets.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
+        return Err(bad(cmd, format!("no brush preset named `{name}`")));
+    }
+    s.tools.current_preset = Some(name.clone());
+    Ok(json!({ "name": name }))
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
@@ -674,18 +727,22 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let tip = GrayTile::from_f32(tw, th, &data);
     let brush = BrushSettings { tip: TipShape::Sampled(tip), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
-    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new() });
+    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new() });
     s.tools.brush = brush;
+    s.tools.current_preset = Some(name.clone());
     Ok(json!({ "name": name, "width": tw, "height": th }))
 }
 
 pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tools.setBrush";
     let mut b = s.tools.brush.clone();
+    let mut picked = None;
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
         b = find_preset(s, name, cmd)?.brush.clone().picked_over(&s.tools.brush);
+        picked = Some(name.to_string());
     }
-    if flag(p, "reset", false) {
+    let reset = flag(p, "reset", false);
+    if reset {
         b = BrushSettings::default();
     }
     let mut patch = p.clone();
@@ -703,6 +760,16 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     b = merge_brush(&b, &patch, cmd)?;
     validate_brush(&b, cmd)?;
+    // The picked preset stays "the current brush" across later edits, so `brush.presets.update`
+    // knows what to overwrite. Only once the brush is accepted: a failed call leaves no state
+    // behind (a `reset` wins over a `preset`, as it replaces the whole brush).
+    if reset {
+        s.tools.current_preset = None;
+    } else if let Some(name) = picked {
+        s.tools.current_preset = Some(name);
+    }
+    // The tool's brush always paints with full tips: load a library preset's from the store.
+    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     let before = std::mem::replace(&mut s.tools.brush, b);
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
@@ -821,7 +888,16 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("brush.presets.list", "List Brush Presets", r##"{"full":bool=false}"##, always, presets_list, false),
         spec!("brush.presets.save", "Save Brush Preset", r##"{"name":string,"brush":{…BrushSettings}?=current brush}"##, always, presets_save, true),
+        spec!(
+            "brush.presets.update",
+            "Update Brush Preset",
+            r##"{"name":string?=the preset the current brush was picked from,"brush":{…BrushSettings}?=current brush}"##,
+            always,
+            presets_update,
+            true
+        ),
         spec!("brush.presets.delete", "Delete Brush Preset", r##"{"name":string}"##, always, presets_delete, true),
+        spec!("brush.presets.setCurrent", "Set Current Brush Preset", r##"{"name":string}"##, always, presets_set_current, true),
         spec!("brush.defineFromSelection", "Define Brush Preset…", r##"{"name":string}"##, has_selection_and_pixels, define_from_selection, true),
         spec!("brush.get", "Get Brush", "{}", always, |s, _| Ok(brush_json(&s.tools.brush)), false),
         spec!("tools.setBrush", "Set Brush", r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged)}"##, always, set_brush, true),

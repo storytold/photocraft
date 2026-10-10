@@ -1,5 +1,7 @@
 use super::*;
 
+mod selection;
+
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
 const H: i32 = 48;
@@ -113,6 +115,31 @@ fn masked_layer_and_group_convert_within_rounding() {
     let before = flat(&s);
     convert(&mut s);
     assert!(max_diff(&flat(&s), &before) <= 1.0 / 255.0 + 1e-6);
+}
+
+#[test]
+fn pattern_fill_converts_to_editable_smart_object_without_losing_its_pattern() {
+    let mut s = session(8);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Bricks"})).unwrap();
+    let before = flat(&s);
+    let pattern_id = s.active().unwrap().doc.patterns[0].id.clone();
+    assert!(before.iter().any(|p| p[3] > 0.0), "the pattern fill is visible");
+
+    convert(&mut s);
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "conversion keeps every pattern pixel");
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert!(inner.patterns.iter().any(|p| p.id == pattern_id), "the embedded source keeps the pattern resource");
+
+    // The smart object's source remains live after opening and editing its contents.
+    let child = s.execute("layer.smartObjects.editContents", json!({})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(s.active_index(), Some(child));
+    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == pattern_id));
+    s.set_active(0);
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
+    s.undo();
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
 }
 
 #[test]
@@ -808,7 +835,8 @@ fn automation_smart_contents_refuses_disk_sources_before_changes() {
         let revision = s.active().unwrap().revision;
         let history = s.active().unwrap().history.entries().len();
         let error = s.execute(cmd, json!({"layer": id})).unwrap_err().to_string();
-        assert!(error.contains("source path refused") && error.contains(path.to_str().unwrap()), "{error}");
+        // The error Debug-quotes the path (doubled backslashes on Windows), so match its file name.
+        assert!(error.contains("source path refused") && error.contains(path.file_name().unwrap().to_str().unwrap()), "{error}");
         assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
         assert_eq!((s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entries().len()), (1, revision, history));
 

@@ -227,6 +227,25 @@ pub fn write(v: &Value) -> Vec<u8> {
     out
 }
 
+/// Serializes `/key value` pairs without an enclosing dictionary: the layout of the document's
+/// `Txt2` block (see [`crate::psd::build_txt2`]), which `parse_txt2` wraps in `<< >>` to parse.
+pub fn write_bare(items: &[(String, Value)]) -> Vec<u8> {
+    let mut out = b"\n\n".to_vec();
+    for (k, v) in items {
+        out.push(b'/');
+        out.extend_from_slice(k.as_bytes());
+        if is_container(v) {
+            out.push(b'\n');
+            indent(&mut out, 1);
+        } else {
+            out.push(b' ');
+        }
+        write_value(v, 1, &mut out);
+        out.push(b'\n');
+    }
+    out
+}
+
 fn indent(out: &mut Vec<u8>, n: usize) {
     out.extend(std::iter::repeat_n(b'\t', n));
 }

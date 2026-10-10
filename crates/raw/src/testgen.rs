@@ -368,10 +368,19 @@ fn urat(v: f64) -> (u32, u32) {
 pub enum DngStorage {
     /// One strip per `rows` rows, uncompressed at `bits` per sample (8, 12, 16…).
     Strips { rows: usize },
+    /// Adobe DNG compression 8: zlib streams with the TIFF predictor (1 = none, 2 = horizontal
+    /// differencing) applied before compressing.
+    DeflateStrips { rows: usize, predictor: u16 },
     /// Lossless-JPEG tiles of this size (2 components per JPEG row, as Adobe writes CFA tiles).
     Lj92Tiles { width: usize, height: usize },
     /// Lossless-JPEG strips of this many rows, 1 component.
     Lj92Strips { rows: usize },
+    /// JPEG XL strips of this many rows (Compression 52546): one codestream per strip, taken from
+    /// [`DngSpec::jxl_segments`] (the tests encode them; this crate has no JPEG XL encoder).
+    JxlStrips { rows: usize },
+    /// JPEG XL tiles of this size, one codestream per tile in row-major order from
+    /// [`DngSpec::jxl_segments`].
+    JxlTiles { width: usize, height: usize },
 }
 
 /// A synthetic DNG.
@@ -408,6 +417,10 @@ pub struct DngSpec {
     pub baseline_exposure: Option<f64>,
     /// Raw OpcodeList2 bytes (see [`gain_map_opcode_list`]).
     pub opcode_list2: Option<Vec<u8>>,
+    /// Encoded segments for [`DngStorage::JxlStrips`] / [`DngStorage::JxlTiles`].
+    pub jxl_segments: Vec<Vec<u8>>,
+    /// Raw ProfileGainTableMap bytes, written to IFD0 (contents are not interpreted).
+    pub profile_gain_table_map: Option<Vec<u8>>,
     pub orientation: u16,
     pub make: String,
     pub model: String,
@@ -441,6 +454,8 @@ impl DngSpec {
             baseline_exposure: None,
             orientation: 1,
             opcode_list2: None,
+            jxl_segments: Vec::new(),
+            profile_gain_table_map: None,
             make: "Photocraft".into(),
             model: "Synthetic".into(),
         }
@@ -496,6 +511,42 @@ impl DngSpec {
             raw.push((50711, Val::Short(vec![1])));
         }
         match self.storage {
+            DngStorage::DeflateStrips { rows, predictor } => {
+                use std::io::Write;
+                let mut offs = Vec::new();
+                let mut lens = Vec::new();
+                for y in (0..self.height).step_by(rows) {
+                    let r = (y + rows).min(self.height) - y;
+                    let n = self.width * self.samples;
+                    let mut v: Vec<u16> = self.data[y * n..(y + r) * n].to_vec();
+                    if predictor == 2 {
+                        // Horizontal differencing on the sample values, before byte packing
+                        // (the reader undoes predictor after unpacking, per row, per channel).
+                        let plane = if self.samples.is_multiple_of(3) { 3 } else { 1 };
+                        for row in v.chunks_mut(n) {
+                            for i in (plane..row.len()).rev() {
+                                row[i] = row[i].wrapping_sub(row[i - plane]);
+                            }
+                        }
+                    }
+                    // Pack the delta'd values with the file's byte order and bit depth.
+                    let bytes: Vec<u8> = match self.bits {
+                        8 => v.iter().map(|&x| x as u8).collect(),
+                        16 => v.iter().flat_map(|&x| if self.big_endian { x.to_be_bytes() } else { x.to_le_bytes() }).collect(),
+                        _ => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+                    };
+                    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                    e.write_all(&bytes).expect("zlib");
+                    let z = e.finish().expect("zlib");
+                    lens.push(z.len() as u32);
+                    offs.push(t.blob(z));
+                }
+                raw.push((259, Val::Short(vec![8])));
+                raw.push((317, Val::Short(vec![predictor])));
+                raw.push((278, Val::Long(vec![rows as u32])));
+                raw.push((273, Val::Blobs(offs)));
+                raw.push((279, Val::Long(lens)));
+            }
             DngStorage::Strips { rows } => {
                 let mut offs = Vec::new();
                 let mut lens = Vec::new();
@@ -552,6 +603,23 @@ impl DngSpec {
                     }
                 }
                 raw.push((259, Val::Short(vec![7])));
+                raw.push((322, Val::Long(vec![tw as u32])));
+                raw.push((323, Val::Long(vec![th as u32])));
+                raw.push((324, Val::Blobs(offs)));
+                raw.push((325, Val::Long(lens)));
+            }
+            DngStorage::JxlStrips { rows } => {
+                let lens = self.jxl_segments.iter().map(|j| j.len() as u32).collect();
+                let offs = self.jxl_segments.iter().map(|j| t.blob(j.clone())).collect();
+                raw.push((259, Val::Short(vec![52546])));
+                raw.push((278, Val::Long(vec![rows as u32])));
+                raw.push((273, Val::Blobs(offs)));
+                raw.push((279, Val::Long(lens)));
+            }
+            DngStorage::JxlTiles { width: tw, height: th } => {
+                let lens = self.jxl_segments.iter().map(|j| j.len() as u32).collect();
+                let offs = self.jxl_segments.iter().map(|j| t.blob(j.clone())).collect();
+                raw.push((259, Val::Short(vec![52546])));
                 raw.push((322, Val::Long(vec![tw as u32])));
                 raw.push((323, Val::Long(vec![th as u32])));
                 raw.push((324, Val::Blobs(offs)));
@@ -617,6 +685,9 @@ impl DngSpec {
         }
         if let Some(b) = self.baseline_exposure {
             ifd0.push((50730, Val::SRational(vec![srat(b)])));
+        }
+        if let Some(m) = &self.profile_gain_table_map {
+            ifd0.push((52525, Val::Undefined(m.clone())));
         }
         let i0 = t.ifd(ifd0);
         t.chain = vec![i0];

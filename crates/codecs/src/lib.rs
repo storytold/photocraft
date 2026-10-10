@@ -29,7 +29,7 @@ pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
 pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
-pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
+pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, Image, Metadata, SampleType};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
@@ -128,6 +128,21 @@ fn finish_decode(img: Image, o: u16, opts: &DecodeOptions) -> Result<Image, Code
         l.check(img.height(), img.width(), img.layout(), img.sample_type())?;
     }
     img.oriented(o)
+}
+
+/// Lists the parts of an OpenEXR file without decoding pixels: header facts per part
+/// (name, view, size, channels, deep/tiled), what a multi-part chooser — a Maya/Arnold
+/// render writes one part per AOV — offers. The indices are what [`decode_exr_part`]
+/// takes; [`decode_as_with`] opens the part with the highest [`ExrPartInfo::color_rank`].
+pub fn exr_info(bytes: &[u8], limits: &Limits) -> Result<Vec<ExrPartInfo>, CodecError> {
+    exr::info(bytes, limits)
+}
+
+/// Decodes part `part` (an index into [`exr_info`]'s list) of an OpenEXR file.
+/// Deep parts stay with [`decode_deep_exr`]; a file that has any is refused here.
+pub fn decode_exr_part(bytes: &[u8], part: usize, opts: &DecodeOptions) -> Result<Image, CodecError> {
+    let img = exr::decode_part(bytes, part, &opts.limits)?;
+    finish_decode(img, 1, opts)
 }
 
 /// Deep OpenEXR samples (`deepscanline`/`deeptile`): the structured per-pixel sample lists

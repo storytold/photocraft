@@ -33,7 +33,8 @@ const REGION_SNAP: i32 = 64;
 /// produce one segment per cell; past this the grid is simply left off the remainder.
 const MAX_SEGMENTS: usize = 60_000;
 
-/// Whether the grid is drawn at `zoom`.
+/// Whether the grid is drawn at `zoom`, in device (physical) pixels per document pixel: the
+/// canvas view zoom on the CPU path, the shader's point scale times `pixels_per_point` on the GPU.
 pub fn shows_at(zoom: f32) -> bool {
     zoom > MIN_ZOOM
 }

@@ -138,15 +138,20 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         let opts: Vec<(String, &str)> = CONTENTS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
         if crate::widgets::dropdown(ui, "fill-contents", &mut contents, &opts, 170.0) {
             f.insert("contents".into(), json!(contents));
+            // Choosing Color… opens the Color Picker, as in Photoshop.
+            if contents == "color" {
+                crate::color_picker_ui::request(f, tl!("Color Picker (Fill Color)"));
+            }
         }
     });
     match contents.as_str() {
         "color" => {
             ui.horizontal(|ui| {
                 label(ui, tl!("Color:"));
-                let mut rgb = parse_hex(&get_str(f, "color", "#000000"));
-                if crate::widgets::color_edit_button_srgb(ui, &mut rgb).changed() {
-                    f.insert("color".into(), json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
+                // Photoshop shows no swatch; this one reopens the Color Picker on the colour.
+                let rgb = parse_hex(&get_str(f, "color", "#000000"));
+                if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Fill color")).clicked() {
+                    crate::color_picker_ui::request(f, tl!("Color Picker (Fill Color)"));
                 }
             });
         }

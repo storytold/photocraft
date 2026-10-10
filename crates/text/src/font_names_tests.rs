@@ -40,8 +40,8 @@ fn numeric_font(source: &[u8], style: &str, ps: &str) -> Vec<u8> {
 #[test]
 fn numeric_subfamilies_with_identical_weights_select_distinct_faces() {
     let mut db = FontDb::new();
-    db.register_font_data(numeric_font(INTER_REGULAR, "20", "UnrelatedPS20"));
-    db.register_font_data(numeric_font(INTER_SEMIBOLD, "30", "UnrelatedPS30"));
+    db.register_font_data(numeric_font(&INTER_REGULAR, "20", "UnrelatedPS20"));
+    db.register_font_data(numeric_font(&INTER_SEMIBOLD, "30", "UnrelatedPS30"));
     let faces = db.faces("Numeric Test");
     assert_eq!(faces.iter().map(|f| f.style.as_str()).collect::<Vec<_>>(), ["20", "30"]);
     assert!(faces.iter().all(|f| f.weight == 400.0));
@@ -65,8 +65,8 @@ fn numeric_subfamilies_with_identical_weights_select_distinct_faces() {
 fn numeric_styles_shape_different_outlines_and_keep_psd_identity() {
     use photocraft_doc::{TextLayer, text::TextRun};
     let mut engine = crate::TextEngine::new();
-    engine.fonts.register_font_data(numeric_font(INTER_REGULAR, "20", "UnrelatedPS20"));
-    engine.fonts.register_font_data(numeric_font(INTER_SEMIBOLD, "30", "UnrelatedPS30"));
+    engine.fonts.register_font_data(numeric_font(&INTER_REGULAR, "20", "UnrelatedPS20"));
+    engine.fonts.register_font_data(numeric_font(&INTER_SEMIBOLD, "30", "UnrelatedPS30"));
     let layer = |style: &str| TextLayer {
         text: "Hamburgefonstiv".into(),
         runs: vec![TextRun {
@@ -107,7 +107,7 @@ fn explicit_weight_is_not_overridden_by_a_stale_style_name() {
 #[test]
 fn collection_isolation_preserves_requested_face() {
     // Two faces with identical attributes: the second must not fall back to the first.
-    let sources = [numeric_font(INTER_REGULAR, "20", "Collection20"), numeric_font(INTER_SEMIBOLD, "30", "Collection30")];
+    let sources = [numeric_font(&INTER_REGULAR, "20", "Collection20"), numeric_font(&INTER_SEMIBOLD, "30", "Collection30")];
     let mut bytes = b"ttcf\0\x01\0\0\0\0\0\x02".to_vec();
     bytes.extend(20u32.to_be_bytes());
     bytes.extend((20 + sources[0].len() as u32).to_be_bytes());

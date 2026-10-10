@@ -337,6 +337,17 @@ impl Fill {
     pub fn gradient(stops: Vec<(f32, Color)>, angle: f32, scale: f32, style: GradientStyle, reverse: bool) -> Fill {
         Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops: Vec::new(), midpoints: Vec::new(), offset: (0.0, 0.0), dither: false, align: true }
     }
+
+    /// This fill with its colours in `mode`'s model (see [`Color::in_mode`]): a fill layer's
+    /// colours are in its document's mode, which the compositors read them as.
+    pub fn in_mode(mut self, mode: ColorMode) -> Fill {
+        match &mut self {
+            Fill::Solid(c) => *c = c.in_mode(mode),
+            Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|(_, c)| *c = c.in_mode(mode)),
+            Fill::Pattern { .. } => {}
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

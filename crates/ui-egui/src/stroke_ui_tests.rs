@@ -149,3 +149,39 @@ fn stroke_dialog_labels_are_translated_in_every_catalog() {
         }
     }
 }
+
+/// The Stroke dialog's colour swatch opens PhotoCraft's Color Picker on the stroke colour (as in
+/// Photoshop), not egui's compact popup; OK sets the stroke colour, not the foreground, and the
+/// stroke is drawn in it.
+#[test]
+fn the_color_swatch_opens_the_color_picker() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app()
+    });
+    h.run_steps(6);
+    h.state_mut().run("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#20a040"));
+    h.run_steps(3);
+    assert_eq!(crate::color_picker_ui::top(h.state()), None);
+    h.get_by_label("Stroke color").click();
+    h.run_steps(4);
+    let picker = crate::color_picker_ui::top(h.state()).expect("the swatch opens the Color Picker");
+    let field = |h: &Harness<'_, PhotocraftApp>, d: u64, k: &str| h.state().ui.dialogs.iter().find(|x| x.id == d).and_then(|x| x.fields.get(k).cloned());
+    assert_eq!(field(&h, picker, "color"), Some(json!("#20a040")));
+    assert_eq!(field(&h, picker, "__label"), Some(json!("Color Picker (Stroke Color)")));
+    assert!(!egui::Popup::is_any_open(&h.ctx), "no egui colour popup");
+    h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#0000ff"));
+    crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+    h.run_steps(3);
+    assert_eq!(crate::color_picker_ui::top(h.state()), None);
+    assert_eq!(field(&h, id, "color"), Some(json!("#0000ff")));
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the foreground is untouched");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let p = pixel(h.state(), 10, 15);
+    assert!(p[2] > 0.98 && p[0] < 0.02, "stroked in the picked colour: {p:?}");
+}

@@ -99,7 +99,7 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let enhance = b(p, "enhanceEdge", false);
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
         let canvas = doc.bounds();
-        let r = quick::quick_select(smp, canvas, &pts, size, quick::WORK_PX)?;
+        let r = quick::quick_select(smp, canvas, &pts, size)?;
         if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Some(r) }
     })?;
     apply(s, "Quick Selection", region, m)

@@ -34,8 +34,9 @@ pub struct LangInfo {
     pub code: &'static str,
     /// The language's name in itself, shown in the Preferences dropdown.
     pub name: &'static str,
-    /// Catalog file contents (empty for the built-in English).
-    pub source: &'static str,
+    /// Catalog file contents, raw-deflated by build.rs (empty for the built-in English); see
+    /// [`LangInfo::text`].
+    pub source: &'static [u8],
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese and Chinese: always 0;
     /// Czech: 0 = one, 1 = few (2–4), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
@@ -95,48 +96,68 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// A catalog file as deflated by build.rs (the binary would otherwise carry ~1.9 MB of
+/// translations, which the web build's size gate can't afford).
+macro_rules! catalog {
+    ($code:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/i18n/", $code, ".tsv.deflate"))
+    };
+}
+
+/// Inflated catalogs are bounded, so corrupt data can't exhaust memory (the largest is ~0.2 MB).
+const MAX_CATALOG_BYTES: u64 = 16 << 20;
+
+/// Inflate a catalog. Bad data gives an error (and the language falls back to English), never a panic.
+fn inflate(source: &[u8]) -> Result<String, String> {
+    use std::io::Read as _;
+    let mut text = String::new();
+    if source.is_empty() {
+        return Ok(text);
+    }
+    flate2::read::DeflateDecoder::new(source).take(MAX_CATALOG_BYTES + 1).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    if text.len() as u64 > MAX_CATALOG_BYTES {
+        return Err(format!("over {MAX_CATALOG_BYTES} bytes"));
+    }
+    Ok(text)
+}
+
 /// The registry. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; 17] = [
-    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo {
-        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
-    },
+    LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
-    LangInfo {
-        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
-    },
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "zh-hant", name: "繁體中文", source: catalog!("zh-hant"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "es", name: "Español", source: catalog!("es"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "ru", name: "Русский", source: catalog!("ru"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
     // Ukrainian has the same one/few/many rule for integer counts.
-    LangInfo {
-        code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new()
-    },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "uk", name: "Українська", source: catalog!("uk"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "cs", name: "Čeština", source: catalog!("cs"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "fr", name: "Français", source: catalog!("fr"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "id", name: "Bahasa Indonesia", source: catalog!("id"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "ko", name: "한국어", source: catalog!("ko"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "pl", name: "Polski", source: catalog!("pl"), plural: plural_polish, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "de", name: "Deutsch", source: catalog!("de"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
-    LangInfo {
-        code: "pt-br",
-        name: "Português (Brasil)",
-        source: include_str!("pt-br.tsv"),
-        plural: plural_pt,
-        complete_menus: true,
-        catalog: OnceLock::new(),
-    },
-    LangInfo { code: "el", name: "Ελληνικά", source: include_str!("el.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "pt-br", name: "Português (Brasil)", source: catalog!("pt-br"), plural: plural_pt, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "el", name: "Ελληνικά", source: catalog!("el"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
-    LangInfo { code: "nl", name: "Nederlands", source: include_str!("nl.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "nl", name: "Nederlands", source: catalog!("nl"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "it", name: "Italiano", source: catalog!("it"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
+    /// The catalog file's text (empty for English, or if the bundled data can't be inflated).
+    pub fn text(&self) -> String {
+        inflate(self.source).unwrap_or_else(|e| {
+            log::error!("translation catalog {}: {e}; showing English", self.code);
+            String::new()
+        })
+    }
+
     fn catalog(&self) -> &Catalog {
-        self.catalog.get_or_init(|| Catalog::parse(self.source))
+        self.catalog.get_or_init(|| Catalog::parse(&self.text()))
     }
 }
 
@@ -618,12 +639,42 @@ mod tests {
         assert_eq!(tr(CS(), "All"), "Vše");
     }
 
+    /// The deflated catalogs in the binary inflate to exactly the `.tsv` files.
+    #[test]
+    fn deflated_catalogs_match_their_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
+        for l in LANGUAGES.iter().skip(1) {
+            let file = std::fs::read_to_string(dir.join(format!("{}.tsv", l.code))).unwrap();
+            assert_eq!(inflate(l.source).unwrap(), file, "{}", l.code);
+            assert!(l.source.len() < file.len() / 2, "{}: stored deflated", l.code);
+        }
+        assert_eq!(LANGUAGES[0].text(), "", "English has no catalog");
+    }
+
+    /// Corrupt catalog data is an error (English is shown), not a panic.
+    #[test]
+    fn corrupt_catalog_data_is_an_error() {
+        assert!(inflate(b"\xff\xff\xff\xff not deflate").is_err());
+        let ja = LANGUAGES.iter().find(|l| l.code == "ja").unwrap();
+        assert!(inflate(&ja.source[..ja.source.len() / 2]).is_err(), "truncated");
+        let info: &'static LangInfo = Box::leak(Box::new(LangInfo {
+            code: "xx",
+            name: "x",
+            source: b"\x00garbage",
+            plural: plural_none,
+            complete_menus: false,
+            catalog: OnceLock::new(),
+        }));
+        assert_eq!(info.text(), "");
+        assert_eq!(tr(Lang(info), "Layer"), "Layer", "falls back to English");
+    }
+
     /// Every bundled catalog is well-formed and consistent with its sources.
     #[test]
     fn bundled_catalogs_are_consistent() {
         for l in &LANGUAGES {
             assert!(l.code == l.code.to_ascii_lowercase() && !l.name.is_empty(), "{}", l.code);
-            let (entries, errors) = parse_entries(l.source);
+            let (entries, errors) = parse_entries(&l.text());
             assert!(errors.is_empty(), "{}: {errors:?}", l.code);
             let mut seen = std::collections::HashSet::new();
             for (ctx, src, tr) in &entries {
@@ -772,7 +823,7 @@ mod tests {
     #[test]
     fn blend_mode_names_are_translated() {
         for l in LANGUAGES.iter().filter(|l| l.complete_menus) {
-            for m in std::iter::once(photocraft_color::BlendMode::PassThrough).chain(photocraft_color::BlendMode::LAYER_MODES) {
+            for m in std::iter::once(photocraft_color::BlendMode::PassThrough).chain(photocraft_color::BlendMode::layer_modes()) {
                 assert!(l.catalog().plain(m.label()).is_some(), "{}: blend mode {:?}", l.code, m.label());
             }
         }

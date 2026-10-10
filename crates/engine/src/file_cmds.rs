@@ -116,8 +116,8 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 
 /// Extensions the batch commands pick up from a folder.
 const OPENABLE: &[&str] = &[
-    "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic", "heif",
-    "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
+    "pdn", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic",
+    "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -129,6 +129,19 @@ pub fn tiff_would_write_layers(doc: &Document) -> bool {
 
 pub(crate) fn file_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+}
+
+impl crate::DocState {
+    /// Complete a successful document save. File identity is not a history step; callers must
+    /// finish the write first and must not call this for a copy or export.
+    pub fn saved_to(&mut self, path: String) {
+        let name = file_name(&path);
+        if self.doc.name != name {
+            Arc::make_mut(&mut self.doc).name = name;
+        }
+        self.path = Some(path);
+        self.saved_revision = self.revision;
+    }
 }
 
 /// The lower-case extension of the file name in `path` (none for `.hidden` or `name`).

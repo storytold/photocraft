@@ -661,6 +661,12 @@
 	Studio Theme	Studio-thema
 	Studio Light Theme	Studio-thema licht
 	Classic Theme	Klassiek thema
+	Solarized dark	Solarized donker
+	Solarized Dark Theme	Solarized-thema donker
+	Adwaita Light Theme	Adwaita-thema licht
+	Adwaita Dark Theme	Adwaita-thema donker
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita donker
 	Next Theme	Volgend thema
 	Actions	Acties
 	Brush Settings	Penseelinstellingen
@@ -744,7 +750,7 @@
 	All Caps	Alleen hoofdletters
 	All Slices	Alle segmenten
 	All User Slices	Alle gebruikerssegmenten
-	All shortcuts reset to Photoshop defaults.	Alle sneltoetsen zijn teruggezet naar de standaardwaarden van Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Alle sneltoetsen zijn teruggezet naar de standaardwaarden van PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Altijd druk gebruiken voor dekking
 	Always use pressure for size	Altijd druk gebruiken voor grootte
@@ -1068,7 +1074,7 @@
 	Ignore All	Alles negeren
 	Image Size	Afbeeldingsgrootte
 	Import Brushes…	Penselen importeren…
-	Import Photoshop brushes (.abr)	Photoshop-penselen (.abr) importeren
+	Import brushes (.abr)	Penselen (.abr) importeren
 	Import Presets	Voorinstellingen importeren
 	Imported	Geïmporteerd
 	Indent First	Eerste regel inspringen
@@ -1118,7 +1124,6 @@
 	Liquify is not open	Uitvloeien is niet geopend
 	Load	Laden
 	Load 3D LUT…	3D LUT laden…
-	Load Photoshop brushes (.abr)	Photoshop-penselen (.abr) laden
 	Load channel as selection	Kanaal laden als selectie
 	Load…	Laden…
 	Localized Color Clusters	Gelokaliseerde kleurclusters
@@ -1294,6 +1299,12 @@
 	Rename…	Hernoemen…
 	Resample	Opnieuw bemonsteren
 	Reset All to Defaults	Alles terugzetten naar standaardwaarden
+	Import Shortcuts…	Sneltoetsen importeren…
+	Load a keyboard shortcut set saved as .kys	Een als .kys opgeslagen sneltoetsenset laden
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} sneltoetsen geïmporteerd uit {file}. Klik op OK om ze te behouden.
+	{n} commands are not in PhotoCraft.	{n} opdrachten bestaan niet in PhotoCraft.
+	Keyboard shortcuts imported	Sneltoetsen geïmporteerd
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
 	Reset Section	Sectie herstellen
 	Reset Transform	Transformatie herstellen
 	Reset to defaults	Terugzetten naar standaardwaarden
@@ -1509,7 +1520,7 @@
 	Current Tool	Huidig gereedschap
 	Custom Shape Tool	Gereedschap Aangepaste vorm
 	Cyans	Cyaantinten
-	Default Photoshop Size	Standaardgrootte Photoshop
+	Default PhotoCraft Size	Standaardgrootte PhotoCraft
 	Delete Workspace	Werkruimte verwijderen
 	Diamond	Ruit
 	Dimensions:	Afmetingen:
@@ -1903,6 +1914,7 @@
 	Collapse group  ({key}-click: all groups)	Groep samenvouwen  ({key}-klik: alle groepen)
 	Create new brush from the current settings	Nieuw penseel maken van de huidige instellingen
 	Create new brush from these settings	Nieuw penseel maken van deze instellingen
+	Update the current brush with these settings	Huidig penseel bijwerken met deze instellingen
 	Delete brush	Penseel verwijderen
 	Drag the arrow to set the angle, the dots to set the roundness	Sleep de pijl om de hoek in te stellen, de stippen om de rondheid in te stellen
 	Expand	Uitvouwen
@@ -1978,6 +1990,13 @@
 	Align with layer	Uitlijnen met laag
 	Reset Alignment	Uitlijning herstellen
 	Centre the gradient (offset 0, 0)	Het verloop centreren (verschuiving 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Verloopeditor
+	Gradient picker	Verloopkiezer
+	Gradient stops	Verloopstops
+	Save As Preset	Opslaan als voorinstelling
+	The gradient the Gradient tool paints with	Het verloop waarmee het gereedschap Verloop tekent
+	Adds the current gradient to the Gradients panel	Voegt het huidige verloop toe aan het paneel Verlopen
 	The current gradient (pick one in Window › Gradients)	Het huidige verloop (kies er een via Venster › Verlopen)
 	Select a type layer to edit its character and paragraph settings.	Selecteer een tekstlaag om de teken- en alinea-instellingen te bewerken.
 	Text color	Tekstkleur
@@ -2010,6 +2029,9 @@
 	Cancelled {label}	{label} geannuleerd
 	Esc to cancel	Esc om te annuleren
 	Opening {name}	{name} openen
+	Saving {name}	{name} opslaan
+	A save to {name} is still running; try again when it finishes	Er wordt nog opgeslagen naar {name}; probeer het opnieuw zodra dat klaar is
+	{label} is writing the file and can no longer be cancelled	{label} schrijft het bestand en kan niet meer worden geannuleerd
 	Opening {name}…	{name} openen…
 	Opening…	Openen…
 	Reading…	Lezen…
@@ -2070,7 +2092,7 @@
 	Pixel	Pixel
 	Adjustment	Aanpassing
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Slepen (lasso) of punten klikken (veelhoek) · {add} toevoegen · {sub} aftrekken
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Sleep een bijsnijkader · sleep binnenin om te verplaatsen · randen wijzigen formaat ({ratio} verhouding, {centre} midden) · Spatie verplaatst tijdens tekenen · {commit} past toe · Esc annuleert
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Sleep een bijsnijkader · sleep binnenin om te verplaatsen · randen wijzigen formaat ({ratio} verhouding, {centre} midden) · Spatie verplaatst tijdens tekenen · pijltjes verschuiven · X wisselt oriëntatie · {commit} past toe · Esc annuleert
 	{mode} Color · {bits} bit	{mode}-kleur · {bits} bit
 	Scrubby Zoom	Sleepzoom
 	Auto Erase	Automatisch gummen
@@ -2201,6 +2223,10 @@
 	Knockout	Uitsparing
 	Apply At Canvas Bounds	Toepassen op canvasgrenzen
 	Color Picker (Text Color)	Kleurkiezer (tekstkleur)
+	Color Picker (Fill Color)	Kleurkiezer (vulkleur)
+	Fill color	Vulkleur
+	Color Picker (Stroke Color)	Kleurkiezer (lijnkleur)
+	Stroke color	Lijnkleur
 	Pick screen color	Schermkleur kiezen
 	Sample a pixel anywhere on the screen	Een pixel ergens op het scherm bemonsteren
 	Click to pick · Esc to cancel	Klik om te kiezen · Esc om te annuleren
@@ -3466,3 +3492,52 @@ cameraRaw	Whites	Witten
 	Transform Symmetry	Symmetrie transformeren
 
 	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens
+	Rule of Thirds	Regel van derden
+	Golden Ratio	Gulden snede
+	Golden Spiral	Gulden spiraal
+	Auto Show Overlay	Overlay automatisch tonen
+	Always Show Overlay	Overlay altijd tonen
+	Never Show Overlay	Overlay nooit tonen
+	Cycle Overlay	Overlay wisselen
+	Cycle Orientation	Oriëntatie wisselen
+	Set the overlay options for the Crop tool	Overlay-opties voor het gereedschap Uitsnijden instellen
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	De Alt-klik ging naar het bureaublad, dat vensters verplaatst met Alt-slepen. Stel daar de toets voor het verplaatsen van vensters in op Super, of vergrendel Alt via Venster › Wijzigingstoetsen.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Kleurkiezer (kleur van laagstijl)
+	Auto Hide Notifications	Meldingen automatisch verbergen
+	Notification Duration (seconds)	Duur van melding (seconden)
+	Appearance Mode	Weergavemodus
+	Next Appearance Mode	Volgende weergavemodus
+	Sync with system	Synchroniseren met systeem
+	Active	Actief
+	Color Picker (Solid Color)	Kleurkiezer (effen kleur)
+	Straighten the image by drawing a line on it	Recht de afbeelding uit door er een lijn op te tekenen
+	Set additional Crop options	Aanvullende uitsnijopties instellen
+	Show Cropped Area	Uitgesneden gebied tonen
+	Enable Crop Shield	Uitsnijscherm inschakelen
+	Match Canvas	Gelijk aan canvas
+	Auto Adjust Opacity	Dekking automatisch aanpassen
+	Crop Shield color	Kleur van uitsnijscherm
+	Color Picker (Crop Shield Color)	Kleurkiezer (kleur van uitsnijscherm)
+	From Center	Vanuit midden
+	Link radii	Radii koppelen
+	Star Ratio:	Sterverhouding:
+	Create Rectangle	Rechthoek maken
+	Create Ellipse	Ellips maken
+	Create Triangle	Driehoek maken
+	Create Polygon	Veelhoek maken
+	Some brush presets could not be loaded	Sommige penseelvoorinstellingen konden niet worden geladen
+	Retry saving presets	Opslaan van voorinstellingen opnieuw proberen
+	Brush preset changes are not saved: {error}	Wijzigingen in penseelvoorinstellingen zijn niet opgeslagen: {error}
+	Keep this tab open to retain your brushes.	Houd dit tabblad open om je penselen te behouden.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Browseropslag is niet beschikbaar; penselen gelden alleen voor deze sessie. Houd dit tabblad open om ze te behouden.
+	Saving brush presets… Keep this tab open until saving finishes.	Penseelvoorinstellingen opslaan… Houd dit tabblad open tot het opslaan klaar is.
+	Reflect	Reflecteren
+	Glow	Gloed
+	Negation	Negatie
+	XOR	XOR
+	Color Burn (Paint.NET)	Kleur doordrukken (Paint.NET)
+	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light

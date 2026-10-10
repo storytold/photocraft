@@ -87,21 +87,30 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
-    let fill = if app.ui.tool_options.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
-    let stroke = stroke_param(app);
     if tool == Tool::CustomShape {
         // ⇧ keeps the shape's proportions (the rect is already squared).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
+            let (fill, stroke) = (fill_param(app), stroke_param(app));
             crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
         }
         return;
     }
-    p["fill"] = fill;
-    p["stroke"] = stroke;
-    if let Err(e) = app.run("shape.create", p) {
+    if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+fn fill_param(app: &PhotocraftApp) -> Value {
+    if app.ui.tool_options.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null }
+}
+
+/// Create a shape layer from `shape.create` geometry with the options bar's fill and stroke: the
+/// end of a drag, and the Create Rectangle / Ellipse / … dialogs (`shape_dialog`).
+pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
+    geometry["fill"] = fill_param(app);
+    geometry["stroke"] = stroke_param(app);
+    app.run("shape.create", geometry)
 }
 
 /// Shape-tool drag preview: the shape `finish_shape` will create, filled and stroked, under its
@@ -132,7 +141,7 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles).
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
-    let tol = 6.0 / app.current_zoom().max(0.01) as f64;
+    let tol = 6.0 / app.point_zoom().max(0.01) as f64;
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
     if let Some(first) = pen.knots.first().map(|k| k[0])
         && pen.knots.len() >= 2

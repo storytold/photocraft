@@ -170,6 +170,27 @@ impl Color {
         }
     }
 
+    /// This colour in `mode`'s model, converted as pixels written to a surface of that mode
+    /// are (through sRGB); unchanged when it is already in `mode`. Indexed and Multichannel
+    /// documents keep RGB colours, as [`Color::to_rgb`] reads them.
+    pub fn in_mode(self, mode: ColorMode) -> Color {
+        let rgb_like = |m: ColorMode| matches!(m, ColorMode::Rgb | ColorMode::Indexed | ColorMode::Multichannel);
+        if self.mode == mode || (rgb_like(self.mode) && rgb_like(mode)) {
+            return self;
+        }
+        let rgb = self.to_rgb();
+        let (mode, c) = match mode {
+            ColorMode::Rgb | ColorMode::Indexed | ColorMode::Multichannel => (ColorMode::Rgb, [rgb[0], rgb[1], rgb[2], 0.0]),
+            ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => (mode, [convert::rgb_to_gray(rgb), 0.0, 0.0, 0.0]),
+            ColorMode::Cmyk => (mode, convert::rgb_to_cmyk(rgb)),
+            ColorMode::Lab => {
+                let l = convert::srgb_to_lab(rgb);
+                (mode, [l[0] / 100.0, (l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0, 0.0])
+            }
+        };
+        Color { mode, c, alpha: self.alpha }
+    }
+
     pub fn to_rgba8(&self) -> [u8; 4] {
         let [r, g, b] = self.to_rgb();
         let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
@@ -180,6 +201,24 @@ impl Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colors_convert_into_a_document_mode() {
+        let blue = Color::rgba(0.0, 0.0, 1.0, 0.5);
+        let g = blue.in_mode(ColorMode::Grayscale);
+        assert_eq!((g.mode, g.alpha), (ColorMode::Grayscale, 0.5));
+        assert!((g.c[0] - 0.114).abs() < 1e-6, "{g:?}");
+        // RGB-based modes keep RGB colours; a colour already in the mode is unchanged.
+        assert_eq!(blue.in_mode(ColorMode::Indexed), blue);
+        assert_eq!(g.in_mode(ColorMode::Grayscale), g);
+        for mode in [ColorMode::Cmyk, ColorMode::Lab] {
+            let c = blue.in_mode(mode);
+            assert_eq!(c.mode, mode);
+            let back = c.in_mode(ColorMode::Rgb);
+            assert_eq!(back.mode, ColorMode::Rgb);
+            assert_eq!(back.to_rgb(), c.to_rgb(), "{mode:?}: back to RGB shows the same colour");
+        }
+    }
 
     #[test]
     fn pixel_format_sizes() {

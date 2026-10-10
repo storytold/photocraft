@@ -37,7 +37,7 @@ pub use brush::{
 };
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, grid_center, grid_square, render_stroke};
-pub use tile::GrayTile;
+pub use tile::{GrayTile, StoredTile};
 
 /// One input sample. Missing stylus data defaults to "mouse": full pressure, no tilt/rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
