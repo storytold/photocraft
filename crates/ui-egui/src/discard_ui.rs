@@ -100,6 +100,13 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         return;
     }
+    // A save still writing in the background finishes first (a saved copy, say, leaves nothing
+    // unsaved); `jobs_ui` repeats the close when it ends.
+    if app.saving() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        app.jobs.close_after_saves = true;
+        return;
+    }
     // Leaving: through the platform's own quit where there is one (see `Services::quit`), with
     // the window left open for it to close.
     if let Some(quit) = app.services.quit.as_mut() {
@@ -150,7 +157,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
         return false;
     }
     match saved {
-        Ok(_) => app.tiff_options.is_none(),
+        Ok(_) => app.tiff_options.is_none() && !app.saving(),
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -162,7 +169,8 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 }
 
 /// A completed save may release the close prompt. Choosing a path only starts a layered TIFF
-/// save; TIFF Options calls this after the write. Copies and failed writes leave the doc dirty.
+/// save; TIFF Options calls this after the write, and `jobs_ui` when a background save ends.
+/// Copies and failed writes leave the doc dirty.
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
     if app.tiff_options.is_none()
@@ -179,8 +187,9 @@ fn couldnt_save(e: String) -> String {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Save can ask for a path and then TIFF Options. Wait for both; cancellation brings us back.
-    if app.file_dialog_open() || app.tiff_options.is_some() {
+    // Save can ask for a path and then TIFF Options, and then write in the background. Wait for
+    // all three; cancellation or a failed save brings us back.
+    if app.file_dialog_open() || app.tiff_options.is_some() || app.saving() {
         return;
     }
     let Some(p) = &app.discard else { return };
@@ -561,6 +570,52 @@ mod tests {
         assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
         assert!(h.state().discard.is_none());
         assert!(h.state().session.documents().is_empty());
+    }
+
+    #[test]
+    fn saving_from_the_prompt_waits_for_a_background_save_then_closes() {
+        use egui_kittest::kittest::Queryable;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        let (gate, written) = (Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::<String>::new())));
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.session.active_mut().unwrap().path = Some("/pics/big.psd".into());
+        app.background_jobs = true;
+        let (g, w) = (gate.clone(), written.clone());
+        app.services.save_file = Some(Arc::new(move |_, path, _, ctx| {
+            while !g.load(Ordering::Relaxed) {
+                ctx.check().map_err(|e| e.to_string())?;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            w.lock().unwrap().push(path.to_string());
+            Ok(Vec::new())
+        }));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, app| {
+                crate::jobs_ui::tick(app, ui.ctx());
+                show(app, ui.ctx());
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.ctx.set_os(egui::os::OperatingSystem::Windows);
+        assert!(intercept(h.state_mut(), "file.close", &Value::Null));
+        h.run_steps(2);
+        h.key_press(Key::Y);
+        h.run_steps(3);
+        assert!(h.state().saving());
+        assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits for the save");
+        assert_eq!(h.state().session.documents().len(), 1, "still open while saving");
+        gate.store(true, Ordering::Relaxed);
+        let t = std::time::Instant::now();
+        while h.state().saving() && t.elapsed() < std::time::Duration::from_secs(30) {
+            h.step();
+        }
+        h.run_steps(2);
+        assert_eq!(*written.lock().unwrap(), ["/pics/big.psd"]);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty(), "closed once saved");
     }
 
     #[path = "tiff_tests.rs"]

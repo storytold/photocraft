@@ -531,8 +531,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
+        let mode = doc.mode;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        l.effects.items = list;
+        l.effects.items = list.into_iter().map(|e| e.in_mode(mode)).collect();
         l.effects.enabled = true;
         Ok(())
     })?;
@@ -552,6 +553,8 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         if let Some(pat) = &pattern {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
+        // Colours in the document's mode, as Image › Mode keeps them.
+        let fx = fx.in_mode(doc.mode);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         l.effects.enabled = true;
         match l.effects.items.iter_mut().find(|e| same_kind(e, &fx)) {

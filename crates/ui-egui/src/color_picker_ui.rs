@@ -216,6 +216,21 @@ pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialo
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// Open the picker on `rgb` for a colour the shell keeps itself (e.g. the Crop shield's custom
+/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone.
+pub fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> u64 {
+    let hsv = rgb_to_hsv(rgb);
+    let mut f = Map::new();
+    f.insert("__colorPicker".into(), json!(target));
+    f.insert("__label".into(), json!(label));
+    f.insert("color".into(), json!(hex(rgb)));
+    f.insert("__orig".into(), json!(hex(rgb)));
+    f.insert("__hsv".into(), json!(hsv));
+    f.insert("__mode".into(), json!("h"));
+    f.insert("__webOnly".into(), json!(false));
+    app.ui.open_dialog(DialogKind::Command, f)
+}
+
 /// Set by a dialog body (to the picker's title) to open the Color Picker on its `color` field.
 const REQUEST: &str = "__pickColor";
 
@@ -626,6 +641,9 @@ pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
 
 /// OK: set the foreground or background colour.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if crate::solid_fill_ui::owns(f) {
+        return crate::solid_fill_ui::confirm(app, f);
+    }
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
@@ -639,6 +657,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         };
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
         d.fields.insert(field.into(), json!(color));
+        return Ok(json!({ "color": color }));
+    }
+    if target == "cropShield" {
+        crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
     }
     let r = app.run("tools.setColors", json!({ target: color }))?;

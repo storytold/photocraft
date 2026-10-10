@@ -675,6 +675,8 @@
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
 	Classic Theme	クラシックテーマ
+	Solarized dark	Solarized ダーク
+	Solarized Dark Theme	Solarized ダークテーマ
 	Next Theme	次のテーマ
 	Actions	アクション
 	Brush Settings	ブラシ設定
@@ -1928,6 +1930,7 @@
 	Create new brush from the current settings	現在の設定から新規ブラシを作成
 	Create new brush from these settings	この設定から新規ブラシを作成
 	Delete brush	ブラシを削除
+	Update the current brush with these settings	この設定で現在のブラシを更新
 	Drag the arrow to set the angle, the dots to set the roundness	矢印をドラッグして角度、点をドラッグして真円率を設定
 	Expand	展開
 	Expand Panel Group	パネルグループを展開
@@ -2004,7 +2007,13 @@
 	Align with layer	レイヤーに揃える
 	Reset Alignment	位置をリセット
 	Centre the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
-	The current gradient (pick one in Window › Gradients)	現在のグラデーション(ウィンドウ › グラデーション で選択)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	グラデーションエディター
+	Gradient picker	グラデーションピッカー
+	Save As Preset	プリセットとして保存
+	The gradient the Gradient tool paints with	グラデーションツールで描画されるグラデーション
+	Adds the current gradient to the Gradients panel	現在のグラデーションをグラデーション パネルに追加します
+	Gradient stops	グラデーション ストップ
 	Select a type layer to edit its character and paragraph settings.	文字レイヤーを選択すると、文字と段落の設定を編集できます。
 	Text color	文字色
 	Type Options	文字オプション
@@ -2035,6 +2044,9 @@
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
 	Opening {name}	{name} を開いています
+	Saving {name}	{name} を保存しています
+	A save to {name} is still running; try again when it finishes	{name} への保存がまだ実行中です。完了してからもう一度お試しください
+	{label} is writing the file and can no longer be cancelled	{label} はファイルを書き込み中のため、キャンセルできません
 	Opening {name}…	{name} を開いています…
 	Opening…	開いています…
 	Reading…	読み込み中…
@@ -3317,4 +3329,25 @@ fontWeight	Italic	斜体
 	Cycle Orientation	方向を切り替え
 	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+	Color Picker (Solid Color)	カラーピッカー（べた塗り）
 	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
+	Set additional Crop options	切り抜きの追加オプションを設定
+	Show Cropped Area	切り抜かれた領域を表示
+	Enable Crop Shield	切り抜きシールドを有効にする
+	Match Canvas	カンバスに合わせる
+	Auto Adjust Opacity	不透明度を自動調整
+	Crop Shield color	切り抜きシールドのカラー
+	Color Picker (Crop Shield Color)	カラーピッカー（切り抜きシールドのカラー）
+	From Center	中心から
+	Link radii	半径をリンク
+	Star Ratio:	星の比率:
+	Create Rectangle	長方形を作成
+	Create Ellipse	楕円を作成
+	Create Triangle	三角形を作成
+	Create Polygon	多角形を作成
+	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
+	Retry saving presets	プリセットの保存を再試行
+	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
+	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
+	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。

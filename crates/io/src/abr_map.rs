@@ -30,7 +30,9 @@ pub struct AbrImport {
     pub version: u16,
 }
 
-/// Parse an `.abr` file into presets in group `group` (usually the file name).
+/// Parse an `.abr` file into presets in group `group` (usually the file name). The file's own
+/// folders (Photoshop CC's preset hierarchy) become each preset's [`BrushPreset::folder`] inside
+/// that group, the way Photoshop's Import Brushes puts them in a folder named after the file.
 pub fn read_abr(bytes: &[u8], group: &str) -> Result<AbrImport, String> {
     read_abr_with(bytes, group, &photocraft_raster::Interrupt::NONE)
 }
@@ -84,7 +86,7 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
                 }
             };
             let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
-            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string() });
+            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder: Vec::new() });
         }
     } else if f.presets.is_empty() {
         // Tips without a settings section (early v6 files): one preset per tip.
@@ -92,14 +94,19 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
             step(i)?;
             let (tip, size) = m.tip(s);
             let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
-            out.presets.push(BrushPreset { name: format!("Sampled Brush {}", i + 1), brush, builtin: false, group: group.to_string() });
+            out.presets.push(BrushPreset { name: format!("Sampled Brush {}", i + 1), brush, builtin: false, group: group.to_string(), folder: Vec::new() });
         }
     } else {
         for (i, d) in f.presets.iter().enumerate() {
             step(i)?;
             let name = text(d, "Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
             match m.preset(d) {
-                Some(brush) => out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string() }),
+                // The file's folders nest inside `group`, as Photoshop nests them inside a folder
+                // named after the imported file.
+                Some(brush) => {
+                    let folder = f.folders.get(i).cloned().unwrap_or_default();
+                    out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder });
+                }
                 None => {
                     m.warnings.insert(format!("\"{name}\": its sampled tip is missing from the file; skipped"));
                 }

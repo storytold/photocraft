@@ -27,7 +27,8 @@
 //! Automation simulates a pen with `ui.pointer` events carrying `pressure`, `tiltX`, `tiltY`
 //! and `rotation`.
 
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// One stylus reading. Tilt is in degrees (-90..90, W3C Pointer Events convention), rotation in
 /// degrees 0..360.
@@ -62,19 +63,44 @@ impl PenSample {
     }
 }
 
-/// Shared slot a platform backend writes the current pen sample into (`None` = no pen down).
-/// Cloning shares the slot.
+/// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest).
+const FEED_QUEUE: usize = 1024;
+
+#[derive(Debug, Default)]
+struct FeedState {
+    /// The current sample (`None` = no pen down).
+    latest: Option<PenSample>,
+    /// Every sample set since the canvas last drained them, oldest first.
+    queue: VecDeque<PenSample>,
+}
+
+/// Shared state a platform backend writes pen samples into. Cloning shares it. Each sample both
+/// becomes the current one and is queued, so a frame sees every sample the pen reported, in
+/// order, not just the last one (the pressure of each pointer move is interpolated from them).
 #[derive(Clone, Debug, Default)]
-pub struct StylusFeed(Arc<Mutex<Option<PenSample>>>);
+pub struct StylusFeed(Arc<Mutex<FeedState>>);
 
 impl StylusFeed {
+    /// The current sample (`None` = no pen down); a sample is also queued for [`Self::drain`].
     pub fn set(&self, s: Option<PenSample>) {
-        if let Ok(mut g) = self.0.lock() {
-            *g = s.map(PenSample::sanitized);
+        let mut g = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let s = s.map(PenSample::sanitized);
+        g.latest = s;
+        if let Some(s) = s {
+            if g.queue.len() >= FEED_QUEUE {
+                g.queue.pop_front();
+            }
+            g.queue.push_back(s);
         }
     }
+
     pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().ok().and_then(|g| *g)
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).latest
+    }
+
+    /// The samples set since the last drain, oldest first.
+    pub fn drain(&self) -> Vec<PenSample> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).queue.drain(..).collect()
     }
 }
 
@@ -93,6 +119,14 @@ pub struct Stylus {
     touch: Option<f32>,
     /// The contact ended this frame: keep its force for this frame's last tool events, clear next frame.
     lifted: bool,
+    /// This frame's pen samples, oldest first (the feed's queue and the touch forces).
+    frame: Vec<PenSample>,
+    /// The last pen sample of an earlier frame: where this frame's interpolation starts.
+    prev: Option<PenSample>,
+    /// The sample [`Self::select`] interpolated for the pointer move being processed.
+    current: Option<PenSample>,
+    /// The egui frame [`Self::update_for_frame`] last ran in.
+    updated_frame: Option<u64>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
     /// Time in milliseconds of each point of the current drag (parallel to its points), from
@@ -112,6 +146,10 @@ impl Default for Stylus {
             tool_before_eraser: None,
             touch: None,
             lifted: false,
+            frame: Vec::new(),
+            prev: None,
+            current: None,
+            updated_frame: None,
             stroke: Vec::new(),
             times: Vec::new(),
             clock_ms: 0.0,
@@ -120,17 +158,32 @@ impl Default for Stylus {
 }
 
 impl Stylus {
+    /// [`Self::update`] once per egui frame: the canvas runs once per view, and egui can run a
+    /// frame in several passes; a second update would drain an empty queue and lose the frame's
+    /// pen samples.
+    pub fn update_for_frame(&mut self, frame: u64, events: &[egui::Event]) {
+        if self.updated_frame.replace(frame) != Some(frame) {
+            self.update(events);
+        }
+    }
+
     /// Track touch/pen contacts from this frame's input events.
     pub fn update(&mut self, events: &[egui::Event]) {
         if std::mem::take(&mut self.lifted) {
             self.touch = None;
         }
+        if let Some(last) = self.frame.last() {
+            self.prev = Some(*last);
+        }
+        self.frame = self.feed.drain();
+        self.current = None;
         for e in events {
             if let egui::Event::Touch { phase, force, .. } = e {
                 match phase {
                     egui::TouchPhase::Start | egui::TouchPhase::Move => {
                         if let Some(f) = force.filter(|f| f.is_finite()) {
                             self.touch = Some(f.clamp(0.0, 1.0));
+                            self.frame.push(PenSample { pressure: f.clamp(0.0, 1.0), ..Default::default() });
                         }
                     }
                     egui::TouchPhase::End | egui::TouchPhase::Cancel => self.lifted = true,
@@ -145,7 +198,42 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        self.feed.get().or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+        self.current.or_else(|| self.feed.get()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+    }
+
+    /// Choose the pen sample for move `k` of the `n` pointer moves this frame delivered: the pen
+    /// reports at its own rate, so each move takes the samples interpolated at its share of the
+    /// frame (from the previous frame's last sample), instead of all sharing the latest one. A
+    /// mouse, or a frame without pen samples, keeps the current sample.
+    pub(crate) fn select(&mut self, k: usize, n: usize) {
+        self.current = None;
+        if !self.use_pressure || n == 0 || self.frame.is_empty() || self.sample().is_none() {
+            return;
+        }
+        let m = self.frame.len();
+        let start = self.prev.or(self.frame.first().copied()).unwrap_or_default();
+        let at = |i: usize| if i == 0 { start } else { self.frame.get(i - 1).copied().unwrap_or(start) };
+        let pos = (k + 1).min(n) as f32 / n as f32 * m as f32;
+        let i = pos.floor() as usize;
+        let (a, b, t) = (at(i), at((i + 1).min(m)), pos - pos.floor());
+        let lerp = |x: f32, y: f32| x + (y - x) * t;
+        // Rotation takes the shorter way round.
+        let dr = (b.rotation - a.rotation + 540.0).rem_euclid(360.0) - 180.0;
+        self.current = Some(
+            PenSample {
+                pressure: lerp(a.pressure, b.pressure),
+                tilt_x: lerp(a.tilt_x, b.tilt_x),
+                tilt_y: lerp(a.tilt_y, b.tilt_y),
+                rotation: a.rotation + dr * t,
+                eraser: b.eraser,
+            }
+            .sanitized(),
+        );
+    }
+
+    /// Back to the current sample after a frame's moves.
+    pub(crate) fn clear_selection(&mut self) {
+        self.current = None;
     }
 
     /// Did the pen just flip to its eraser end (`Some(true)`) or back to its tip (`Some(false)`)?
@@ -188,6 +276,9 @@ impl Stylus {
 
     /// Start recording a drag's tilt/rotation.
     pub(crate) fn begin_stroke(&mut self) {
+        // A new stroke's first moves interpolate from this frame's samples, never from a sample
+        // left over from an earlier stroke.
+        self.prev = None;
         self.stroke.clear();
         self.times.clear();
         self.record_point();
@@ -241,6 +332,101 @@ mod tests {
 
     fn touch(phase: egui::TouchPhase, force: Option<f32>) -> egui::Event {
         egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: egui::pos2(1.0, 1.0), force }
+    }
+
+    fn pen(pressure: f32) -> PenSample {
+        PenSample { pressure, ..Default::default() }
+    }
+
+    #[test]
+    fn the_feed_queues_every_sample_in_order_and_keeps_the_latest() {
+        let feed = StylusFeed::default();
+        for p in [0.1, 0.2, 0.3] {
+            feed.set(Some(pen(p)));
+        }
+        assert_eq!(feed.get().map(|s| s.pressure), Some(0.3));
+        assert_eq!(feed.drain().iter().map(|s| s.pressure).collect::<Vec<_>>(), vec![0.1, 0.2, 0.3]);
+        assert!(feed.drain().is_empty(), "drained once");
+        feed.set(None);
+        assert_eq!(feed.get(), None, "a lifted pen is not queued");
+        assert!(feed.drain().is_empty());
+        // A UI that stops draining keeps only the newest samples.
+        for i in 0..FEED_QUEUE + 10 {
+            feed.set(Some(pen((i % 100) as f32 / 100.0)));
+        }
+        assert_eq!(feed.drain().len(), FEED_QUEUE);
+    }
+
+    #[test]
+    fn each_move_takes_its_share_of_the_frames_pen_samples() {
+        let mut s = Stylus::default();
+        s.feed.set(Some(pen(0.2)));
+        s.update(&[]);
+        s.begin_stroke();
+        // Next frame: the pen reported 0.4, 0.6 and 0.8 while six pointer moves arrived.
+        for p in [0.4, 0.6, 0.8] {
+            s.feed.set(Some(pen(p)));
+        }
+        s.update(&[]);
+        let got: Vec<f32> = (0..6)
+            .map(|k| {
+                s.select(k, 6);
+                s.pressure()
+            })
+            .collect();
+        let want = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
+        s.clear_selection();
+        assert_eq!(s.pressure(), 0.8, "back to the current sample");
+    }
+
+    #[test]
+    fn a_second_update_in_the_same_frame_keeps_its_samples() {
+        // The canvas runs once per view, and egui may run a frame in several passes.
+        let mut s = Stylus::default();
+        s.feed.set(Some(pen(0.4)));
+        s.feed.set(Some(pen(0.8)));
+        s.update_for_frame(7, &[]);
+        s.update_for_frame(7, &[]);
+        s.select(0, 2);
+        assert!((s.pressure() - 0.4).abs() < 1e-6, "{}", s.pressure());
+    }
+
+    #[test]
+    fn a_new_stroke_never_starts_from_an_old_strokes_pressure() {
+        let mut s = Stylus::default();
+        s.feed.set(Some(pen(0.9)));
+        s.update(&[]);
+        s.feed.set(Some(pen(0.1)));
+        s.update(&[]);
+        s.begin_stroke();
+        s.select(0, 2);
+        assert!((s.pressure() - 0.1).abs() < 1e-6, "{}", s.pressure());
+    }
+
+    #[test]
+    fn a_mouse_or_use_pressure_off_paints_at_full_pressure() {
+        let mut s = Stylus::default();
+        s.update(&[egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+        s.select(0, 1);
+        assert_eq!(s.pressure(), 1.0);
+        s.feed.set(Some(pen(0.3)));
+        s.use_pressure = false;
+        s.update(&[]);
+        s.select(0, 1);
+        assert_eq!(s.pressure(), 1.0);
+    }
+
+    #[test]
+    fn rotation_between_samples_takes_the_short_way_round() {
+        let mut s = Stylus::default();
+        s.feed.set(Some(PenSample { rotation: 350.0, ..pen(1.0) }));
+        s.update(&[]);
+        s.feed.set(Some(PenSample { rotation: 10.0, ..pen(1.0) }));
+        s.update(&[]);
+        s.select(0, 2);
+        let r = s.sample().map_or(-1.0, |p| p.rotation);
+        assert!(r.abs() < 1e-3 || (r - 360.0).abs() < 1e-3, "halfway from 350° to 10° is 0°, got {r}");
     }
 
     #[test]

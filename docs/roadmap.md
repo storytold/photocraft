@@ -39,6 +39,14 @@ approximated or left out, each with a warning; damaged or unknown files fall bac
 preview. Affinity writing is not implemented: no Affinity installation was available to check
 written files, so `.af` export stays unsupported.
 
+2026-10-09: `corpus/affinity/` now has 39 pinned documents and 21 PNGs (20 rendered references and
+one bitmap-fill texture): the prior 21 public documents plus 18 CC0 samples for #1606. The new
+samples compare against their exported PNGs;
+mean differences range from 0.44/255 (conical gradients) to 86.05/255 (RGB/32 reduced to 8-bit).
+Clouds, hearts, cogs, callouts, arrows, double stars, tears, crescents, diamonds and circular segments
+now import as parametric shapes; the special-shapes sample measures 5.68/255 against its PNG. The
+remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
+
 ## Honest parity assessment (2026-10-05)
 
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
@@ -62,6 +70,12 @@ settings out of 135; see the regenerated scorecard.
 i7-9750H, 12 workers, 24 MP RGBA8, Good quality, amount 1: Spin 66.10 → 16.43 s
 (4.02×), Zoom 19.19 → 5.35 s (3.59×), one paired run each, exact output equality.
 These are local measurements at amount 1; see [method and limits](radial-blur-performance.md).
+
+2026-10-10: native selection distance transforms measured 7.59–10.57x faster on six
+24–36 MP synthetic masks on an AWS c7i.4xlarge (16 workers, three paired release runs).
+The transform also corrects f32 envelope errors past coordinate 4096, including nonzero
+distances at selected pixels. The parallel path needs an additional four bytes per pixel;
+see [measurements, correctness and limits](selection-distance-performance.md).
 
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
@@ -110,6 +124,12 @@ creation, compositing and upload; the UI remains synchronous. FFT work is schedu
 a conservative 512 MiB working-set estimate, excluding stored Surface tiles and row fallback
 memory. The crossover is a heuristic; images dominated by near-cutoff alpha can need extra
 scalar work. These measurements do not establish Photoshop filter parity.
+
+2026-10-10: Proximity Match search medians on an AWS c7i.4xlarge improved 1.54–3.82x
+for four synthetic stroke regions (50–300 px holes), with identical source displacements.
+Bounding the mask table to the hole and pruning losing SSD candidates reduced table storage
+by about 90–93 percent there. Full 24–36 MP kernel inputs improved 4.60–6.24x, but normal
+engine strokes already use a cropped region. See [method and limits](proximity-match-performance.md).
 
 2026-10-08: the tools update above is checked against the current toolbar groups in
 [`panels.rs`](../crates/ui-egui/src/panels.rs), the Pencil and tool-cycle tests in

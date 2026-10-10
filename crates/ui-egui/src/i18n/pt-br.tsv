@@ -660,6 +660,8 @@
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio claro
 	Classic Theme	Tema clássico
+	Solarized dark	Solarized escuro
+	Solarized Dark Theme	Tema Solarized Escuro
 	Next Theme	Próximo tema
 	Actions	Ações
 	Brush Settings	Configurações do pincel
@@ -1890,6 +1892,7 @@
 	Collapse group  ({key}-click: all groups)	Recolher grupo  ({key}-clique: todos os grupos)
 	Create new brush from the current settings	Criar novo pincel a partir das configurações atuais
 	Create new brush from these settings	Criar novo pincel a partir destas configurações
+	Update the current brush with these settings	Atualizar o pincel atual com estas configurações
 	Delete brush	Excluir pincel
 	Drag the arrow to set the angle, the dots to set the roundness	Arraste a seta para definir o ângulo e os pontos para definir o arredondamento
 	Expand	Expandir
@@ -1964,6 +1967,13 @@
 	Align with layer	Alinhar com a camada
 	Reset Alignment	Redefinir alinhamento
 	Centre the gradient (offset 0, 0)	Centralizar o degradê (deslocamento 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor de degradê
+	Gradient picker	Seletor de degradê
+	Gradient stops	Paradas do degradê
+	Save As Preset	Salvar como predefinição
+	The gradient the Gradient tool paints with	O degradê com que a ferramenta Degradê pinta
+	Adds the current gradient to the Gradients panel	Adiciona o degradê atual ao painel Degradês
 	The current gradient (pick one in Window › Gradients)	O degradê atual (escolha um em Janela › Degradês)
 	Select a type layer to edit its character and paragraph settings.	Selecione uma camada de texto para editar as configurações de caractere e parágrafo.
 	Text color	Cor do texto
@@ -1996,6 +2006,9 @@
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abrindo {name}
+	Saving {name}	Salvando {name}
+	A save to {name} is still running; try again when it finishes	Um salvamento em {name} ainda está em andamento; tente novamente quando terminar
+	{label} is writing the file and can no longer be cancelled	{label} está gravando o arquivo e não pode mais ser cancelado
 	Opening {name}…	Abrindo {name}…
 	Opening…	Abrindo…
 	Reading…	Lendo…
@@ -2721,4 +2734,25 @@ fontWeight	Italic	Itálico
 	Cycle Orientation	Alternar orientação
 	Set the overlay options for the Crop tool	Definir as opções de sobreposição da ferramenta Corte demarcado
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	O Alt-clique foi para o desktop, que move janelas com Alt-arrastar. Mude a tecla de mover janelas dele para Super ou trave o Alt em Janela › Teclas modificadoras.
+	Color Picker (Solid Color)	Seletor de Cores (Cor sólida)
 	Straighten the image by drawing a line on it	Endireitar a imagem desenhando uma linha sobre ela
+	Set additional Crop options	Definir opções adicionais de corte
+	Show Cropped Area	Mostrar área cortada
+	Enable Crop Shield	Ativar proteção de corte
+	Match Canvas	Corresponder à tela de pintura
+	Auto Adjust Opacity	Ajustar opacidade automaticamente
+	Crop Shield color	Cor da proteção de corte
+	Color Picker (Crop Shield Color)	Seletor de cores (Cor da proteção de corte)
+	From Center	A partir do centro
+	Link radii	Vincular raios
+	Star Ratio:	Proporção da estrela:
+	Create Rectangle	Criar retângulo
+	Create Ellipse	Criar elipse
+	Create Triangle	Criar triângulo
+	Create Polygon	Criar polígono
+	Some brush presets could not be loaded	Não foi possível carregar algumas predefinições de pincel
+	Retry saving presets	Tentar salvar as predefinições novamente
+	Brush preset changes are not saved: {error}	As alterações nas predefinições de pincel não foram salvas: {error}
+	Keep this tab open to retain your brushes.	Mantenha esta aba aberta para manter seus pincéis.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	O armazenamento do navegador não está disponível; os pincéis valem apenas para esta sessão. Mantenha esta aba aberta para mantê-los.
+	Saving brush presets… Keep this tab open until saving finishes.	Salvando predefinições de pincel… Mantenha esta aba aberta até o salvamento terminar.

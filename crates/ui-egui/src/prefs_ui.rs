@@ -7,10 +7,11 @@
 //! change them with `prefs.get` / `prefs.set`); this module only edits a working copy in a dialog
 //! and commits it with those commands on Apply or OK.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use egui::{Color32, RichText, Sense, vec2};
 use photocraft_doc::DocId;
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use photocraft_engine::prefs::{self, SECTIONS, Theme};
 use photocraft_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
@@ -34,6 +35,9 @@ pub struct Runtime {
     autosaved: HashMap<DocId, u64>,
     /// Queued writes must not masquerade as durable snapshots.
     autosave_pending: HashMap<DocId, u64>,
+    recovery_started: bool,
+    recovery_queue: VecDeque<crate::Recoverable>,
+    recovery_pending: Option<(JobId, String)>,
     log_len: usize,
     /// Snapping state of the drag in progress (see `snap_ui`).
     pub(crate) snap: Option<crate::snap_ui::ActiveSnap>,
@@ -81,6 +85,7 @@ fn theme_kind(t: Theme) -> ThemeKind {
         Theme::Studio => ThemeKind::Studio,
         Theme::StudioLight => ThemeKind::StudioLight,
         Theme::Classic => ThemeKind::Classic,
+        Theme::SolarizedDark => ThemeKind::SolarizedDark,
     }
 }
 
@@ -91,13 +96,13 @@ fn theme_pref(k: ThemeKind) -> Theme {
         ThemeKind::Studio => Theme::Studio,
         ThemeKind::StudioLight => Theme::StudioLight,
         ThemeKind::Classic => Theme::Classic,
+        ThemeKind::SolarizedDark => Theme::SolarizedDark,
     }
 }
 
 // ------------------------------------------------------------------ lifecycle
 
-/// Load saved preferences (once) and recover autosaved documents. Called when the app is
-/// created.
+/// Load saved preferences once, when the app is created. Recovery starts during frame upkeep.
 pub fn load(app: &mut PhotocraftApp) {
     if app.prefs_rt.loaded {
         return;
@@ -112,29 +117,102 @@ pub fn load(app: &mut PhotocraftApp) {
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
-    if app.session.prefs().file_handling.recover_on_launch
-        && let Some(recover) = app.services.recover.as_mut()
-    {
-        let docs = recover();
-        let n = docs.len();
-        for r in docs {
-            app.session.add_document(r.doc, r.path);
-            // Recovered documents are unsaved.
-            let Some(st) = app.session.active_mut() else { continue };
-            st.saved_revision = 0;
-            // Their entry already holds this revision: it stays until a newer autosave replaces
-            // it or the document is saved or closed (see `autosave`).
-            let (id, revision) = (st.doc.id, st.revision);
-            app.prefs_rt.autosaved.insert(id, revision);
-            if let Some(adopt) = app.services.adopt_autosave.as_mut() {
-                adopt(id.0, &r.key);
-            }
-        }
-        if n > 0 {
-            app.sync_views();
-            app.ui.status = format!("Recovered {n} document{}", if n == 1 { "" } else { "s" });
+}
+
+/// Discover recovery entries after construction, then decode one at a time without blocking
+/// the window. Only the completed job's apply step touches the session.
+fn recovery(app: &mut PhotocraftApp) {
+    if !app.prefs_rt.recovery_started {
+        app.prefs_rt.recovery_started = true;
+        if app.session.prefs().file_handling.recover_on_launch
+            && let Some(recover) = app.services.recover.as_mut()
+        {
+            app.prefs_rt.recovery_queue.extend(recover());
         }
     }
+    start_next_recovery(app);
+}
+
+fn start_next_recovery(app: &mut PhotocraftApp) {
+    while app.prefs_rt.recovery_pending.is_none() {
+        let Some(r) = app.prefs_rt.recovery_queue.pop_front() else { return };
+        let label = format!("Recovering {}", r.name);
+        let started = app.session.start_job(
+            "file.recover",
+            json!({}),
+            &label,
+            false,
+            move |ctx| {
+                ctx.check()?;
+                ctx.progress(0.0, "Loading recovery data");
+                let doc = (r.load)().map_err(photocraft_engine::EngineError::Other)?;
+                ctx.check()?;
+                Ok(doc)
+            },
+            move |s, doc| {
+                let active = s.active().map(|st| st.doc.id);
+                let first = s.documents().is_empty();
+                s.add_document(doc, r.path);
+                let st = s.active_mut().ok_or(photocraft_engine::EngineError::NoDocument)?;
+                st.saved_revision = 0;
+                let (id, revision) = (st.doc.id, st.revision);
+                if let Some(index) = active.and_then(|id| s.documents().iter().position(|st| st.doc.id == id)) {
+                    s.set_active(index);
+                }
+                Ok(json!({"documentId": id.0, "revision": revision, "firstDocument": first}))
+            },
+        );
+        match started {
+            Ok(Started::Job(job)) => app.prefs_rt.recovery_pending = Some((job, r.key)),
+            Ok(Started::Done(v)) => finish_recovery(app, &r.key, &v),
+            Err(e) => crate::notices::error(app, format!("{label}: {e}")),
+        }
+    }
+}
+
+fn finish_recovery(app: &mut PhotocraftApp, key: &str, v: &Value) {
+    let recovered = v
+        .get("documentId")
+        .and_then(Value::as_u64)
+        .zip(v.get("revision").and_then(Value::as_u64))
+        .and_then(|(id, revision)| app.session.documents().iter().find(|st| st.doc.id.0 == id).map(|st| (st.doc.id, revision, st.doc.name.clone())));
+    let Some((id, revision, name)) = recovered else {
+        crate::notices::error(app, "The recovered document is no longer open".into());
+        return;
+    };
+    // Track the admitted snapshot's revision, even if another job has already edited it.
+    app.prefs_rt.autosaved.insert(id, revision);
+    if let Some(adopt) = app.services.adopt_autosave.as_mut() {
+        adopt(id.0, key);
+    }
+    if v.get("firstDocument").and_then(Value::as_bool) == Some(true) {
+        app.ui.chrome.home = None;
+    }
+    app.sync_views();
+    app.ui.status = format!("Recovered {name}");
+    app.ui.status_error = false;
+}
+
+/// Recovery uses the existing job polling/progress/cancel path. Its successful result adopts
+/// the original entry on the UI thread, using identity rather than a mutable tab position.
+pub(crate) fn on_recovery_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
+    if !app.prefs_rt.recovery_pending.as_ref().is_some_and(|(job, _)| *job == e.id) {
+        return false;
+    }
+    let Some((_, key)) = app.prefs_rt.recovery_pending.take() else { return false };
+    match &e.outcome {
+        JobOutcome::Done(v) => finish_recovery(app, &key, v),
+        JobOutcome::Failed(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
+        JobOutcome::Cancelled => {
+            // Native bundle decoding cannot stop midway. Cancel admission and the rest of the
+            // batch so another large decoder isn't started while this worker finishes.
+            app.prefs_rt.recovery_queue.clear();
+            app.ui.status = format!("Cancelled {}", e.label);
+            app.ui.status_error = false;
+        }
+    }
+    start_next_recovery(app);
+    true
 }
 
 /// Attach the brush preset store once its background load finishes, and surface write
@@ -203,6 +281,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
         load(app);
     }
+    recovery(app);
     sync_display_scale(app, ctx);
     // Interface theme: a preference change applies to the UI; a theme picked from the Window
     // menu is stored as the preference.
@@ -1485,6 +1564,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
 }
 
+// Test modules stay after the production code: the prefs_usage test reads each file up to
+// its first `#[cfg(test)] mod`.
+#[cfg(test)]
+mod recovery_tests;
+
 #[cfg(test)]
 #[path = "shortcut_capture_tests.rs"]
 mod shortcut_capture_tests;
@@ -2250,12 +2334,21 @@ mod tests {
                 Ok(())
             })),
             discard_autosave: Some(Box::new(move |id: u64| l2.lock().unwrap().push(format!("discard {id}")))),
-            recover: Some(Box::new(move || ["a", "b"].map(|key| crate::Recovered { key: key.into(), path: None, doc: doc() }).into())),
+            recover: Some(Box::new(move || {
+                ["a", "b"].map(|key| crate::Recoverable { key: key.into(), name: "R".into(), path: None, load: Box::new(move || Ok(doc())) }).into()
+            })),
             adopt_autosave: Some(Box::new(move |id: u64, key: &str| l3.lock().unwrap().push(format!("adopt {id} {key}")))),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.session.has_jobs() && std::time::Instant::now() < deadline {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.session.has_jobs(), "recovery finished");
         let ids: Vec<u64> = app.session.documents().iter().map(|d| d.doc.id.0).collect();
         assert!(app.session.documents().iter().all(|d| d.is_dirty()), "recovered documents are unsaved");
         let take = || std::mem::take(&mut *log.lock().unwrap());

@@ -336,6 +336,11 @@ pub struct Panels {
     /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_by_tab: Option<[bool; 3]>,
+    /// The Gradient tool's options-bar swatch opened the Gradient Editor window (`gradient_ui`).
+    /// Photoshop opens its Gradient Editor from that swatch; this is the same idea, drawn as a
+    /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
+    #[serde(default)]
+    pub gradient_editor: bool,
 }
 
 impl Default for Panels {
@@ -354,6 +359,7 @@ impl Default for Panels {
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
+            gradient_editor: false,
         }
     }
 }
@@ -514,6 +520,9 @@ pub struct ToolOptions {
     pub crop_overlay_show: crate::crop_overlay::OverlayShow,
     #[serde(default)]
     pub crop_overlay_orientation: u8,
+    /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
+    #[serde(default)]
+    pub crop_shield: crate::crop_shield::CropShield,
     /// Magic Eraser opacity % (tolerance, anti-alias, contiguous and sample-all are shared with the
     /// Magic Wand and Paint Bucket).
     pub magic_eraser_opacity: f32,
@@ -644,6 +653,7 @@ impl Default for ToolOptions {
             crop_overlay: Default::default(),
             crop_overlay_show: Default::default(),
             crop_overlay_orientation: 0,
+            crop_shield: Default::default(),
             magic_eraser_opacity: 100.0,
             bg_sampling: "continuous".into(),
             bg_limits: "contiguous".into(),

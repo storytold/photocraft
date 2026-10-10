@@ -1539,6 +1539,39 @@ fn pattern_fill_layers() {
     }
 }
 
+/// An RGB pattern paints in the document's mode: grey in a Grayscale document, CMYK colours in
+/// a CMYK one (fills and Pattern Overlay), on the GPU as on the CPU.
+#[test]
+fn rgb_patterns_paint_in_the_document_mode() {
+    let Some(mut g) = gpu() else { return };
+    let pat = checker_pattern();
+    for (mode, fmt) in [(ColorMode::Grayscale, PixelFormat::GRAYA8), (ColorMode::Cmyk, PixelFormat::CMYKA8)] {
+        let mut d = Document::new("m", Size::new(60, 40), mode, SampleType::U8);
+        d.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 60, 40), 63, 0.0));
+        d.patterns.push(pat.clone());
+        let fill = Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) };
+        let mut l = Layer::new("pat", LayerContent::Fill(fill));
+        l.mask = Some(mask(Rect::new(0, 0, 30, 40), 64, 0.0));
+        d.layers.push(l);
+        let mut o = blob("overlay", d.pixel_format(), 45.0, 20.0, 12.0, [0.9, 0.4, 0.2]);
+        o.effects.items = vec![Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: pat.name.clone(),
+            id: pat.id.clone(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }];
+        d.layers.push(o);
+        if mode == ColorMode::Grayscale {
+            let cpu = photocraft_compose::flatten(&d);
+            assert!(cpu.px.iter().all(|p| (p[0] - p[1]).abs() < 1e-6 && (p[1] - p[2]).abs() < 1e-6), "a Grayscale composite is neutral");
+        }
+        fx_check(&mut g, &d, &format!("RGB pattern in {mode:?}"));
+    }
+}
+
 #[test]
 fn lab_documents_mix_in_lab() {
     let Some(mut g) = gpu() else { return };

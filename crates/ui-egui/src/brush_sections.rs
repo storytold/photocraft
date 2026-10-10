@@ -226,21 +226,9 @@ pub fn thumb_scale(size: f32) -> f32 {
     (size / 40.0).clamp(0.3, 1.0)
 }
 
-/// Does `b`'s tip look like `p`'s (same bitmap or round hardness, and size)?
-fn same_tip(tip: &TipShape, size: f32, hardness: f32, p: &BrushPreset) -> bool {
-    let (pt, ps, ph, ..) = preset_tip(p);
-    (size - ps).abs() < 0.5
-        && match (tip, pt) {
-            (TipShape::Round, TipShape::Round) => (hardness - ph).abs() < 0.01,
-            (TipShape::Sampled(a), TipShape::Sampled(b)) => a.width == b.width && a.height == b.height && a.data == b.data,
-            // Stored tips (#1843) match by key: the bitmap is the same one.
-            (TipShape::Stored(a), TipShape::Stored(b)) => a == b,
-            _ => false,
-        }
-}
-
-/// Photoshop's scrolling grid of preset tips with their sizes. Returns the clicked preset index.
-fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl Fn(&BrushPreset) -> bool) -> Option<usize> {
+/// Photoshop's scrolling grid of preset tips with their sizes; `highlight` is the selected
+/// preset (by identity: look-alike duplicates must stay distinct). Returns the clicked index.
+fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], highlight: Option<usize>) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let mut clicked = None;
     let frame = egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm as u8).inner_margin(egui::Margin::same(3));
@@ -253,7 +241,7 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
                     if !ui.is_rect_visible(cell) {
                         continue;
                     }
-                    if selected(p) {
+                    if highlight == Some(i) {
                         ui.painter().rect_filled(cell, 3.0, t.accent_soft);
                         ui.painter().rect_stroke(cell, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                     } else if resp.hovered() {
@@ -281,10 +269,14 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
     clicked
 }
 
-fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) {
-    let (tip, size, hardness) = (b.tip.clone(), b.size, b.hardness);
-    if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, |p| same_tip(&tip, size, hardness, p)).and_then(|i| presets.get(i)) {
-        // Picking a tip changes the tip only: the dynamics sections stay (Photoshop).
+/// The Brush Tip Shape section: the tip grid and the tip's own controls. Picking a tip copies the
+/// tip fields only — the dynamics sections stay as they are (Photoshop). The clicked preset's name
+/// is returned so the caller can mark it current with `brush.presets.setCurrent` (by identity:
+/// look-alike duplicates stay distinct; the engine can't infer it from the brush). The tip fields
+/// are also copied into the working brush so this frame's controls start from them.
+fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
+    let highlight = current.and_then(|n| presets.iter().position(|p| p.name.eq_ignore_ascii_case(n)));
+    if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, highlight).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         b.tip = pt.clone();
         b.size = ps;
@@ -292,6 +284,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
         b.angle = pa;
         b.roundness = pr;
         b.spacing = psp;
+        return Some(p.name.clone());
     }
     let orig = b.tip.bitmap_size().map(|(w, h)| w.max(h) as f32);
     size_row(ui, tl!("Size"), &mut b.size, MAX_BRUSH_SIZE, orig);
@@ -332,6 +325,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
     ui.add_space(2.0);
     let on = b.spacing_enabled;
     ui.add_enabled_ui(on, |ui| signed_pct(ui, tl!("Spacing"), &mut b.spacing, 0.01, 10.0));
+    None
 }
 
 fn shape_dynamics(ui: &mut egui::Ui, b: &mut BrushSettings) {
@@ -490,8 +484,9 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
         widgets::checkbox(ui, &mut d.flip, tl!("Flip"));
     });
     ui.add_space(4.0);
-    let (tip, size, hardness) = (d.tip.clone(), d.size, d.hardness);
-    if let Some(p) = tip_grid(ui, "brush-dual-grid", presets, |p| same_tip(&tip, size, hardness, p)).and_then(|i| presets.get(i)) {
+    // The dual tip is a sub-setting, not a selection: no persistent highlight (a look-alike match
+    // would highlight an arbitrary duplicate).
+    if let Some(p) = tip_grid(ui, "brush-dual-grid", presets, None).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         d.tip = pt.clone();
         d.size = ps;
@@ -582,13 +577,17 @@ fn smoothing(ui: &mut egui::Ui, b: &mut BrushSettings) {
 }
 
 /// Controls for section `i` (see [`crate::brush_panel::SECTIONS`]). `presets` feed the tip grids.
-pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset]) {
+/// Returns the name of a preset whose tip was picked in the Brush Tip Shape grid, for
+/// `brush.presets.setCurrent`.
+pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let note = |ui: &mut egui::Ui, s: &str| {
         ui.label(RichText::new(s).color(t.text_faint).font(theme::medium(11.5)));
     };
+    if i == 0 {
+        return tip_shape(ui, b, presets, current);
+    }
     match i {
-        0 => tip_shape(ui, b, presets),
         1 => shape_dynamics(ui, b),
         2 => scattering(ui, b),
         3 => texture(ui, b),
@@ -609,6 +608,7 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
         11 => smoothing(ui, b),
         _ => note(ui, "Keeps the current pattern and scale when you switch to another textured brush preset."),
     }
+    None
 }
 
 #[cfg(test)]
