@@ -466,46 +466,24 @@ fn build() -> Vec<CommandSpec> {
                     let area = doc.bounds();
                     // A marquee dragged past the canvas stops at its edge (Photoshop); the ellipse
                     // keeps the dragged shape and is only cut there.
-                    let cut = r.intersect(&area);
-                    let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                    if ellipse {
-                        let (cx, cy) = ((r.x0 + r.x1) as f32 / 2.0, (r.y0 + r.y1) as f32 / 2.0);
-                        let (rx, ry) = (r.width() as f32 / 2.0, r.height() as f32 / 2.0);
-                        let inside = |x: f32, y: f32| {
-                            let (dx, dy) = ((x - cx) / rx, (y - cy) / ry);
-                            dx * dx + dy * dy <= 1.0
-                        };
-                        for y in cut.y0..cut.y1 {
-                            for x in cut.x0..cut.x1 {
-                                let (fx, fy) = (x as f32, y as f32);
-                                let corners = [(fx, fy), (fx + 1.0, fy), (fx, fy + 1.0), (fx + 1.0, fy + 1.0)].iter().filter(|(a, b)| inside(*a, *b)).count();
-                                let cov = if !aa {
-                                    if inside(fx + 0.5, fy + 0.5) { 1.0 } else { 0.0 }
-                                } else if corners == 4 {
-                                    1.0
-                                } else {
-                                    let n = (0..16).filter(|i| inside(fx + ((i % 4) as f32 + 0.5) / 4.0, fy + ((i / 4) as f32 + 0.5) / 4.0)).count();
-                                    n as f32 / 16.0
-                                };
-                                if cov > 0.0 {
-                                    shape.write_pixel(x, y, &[cov]);
-                                }
-                            }
-                        }
+                    use photocraft_algo::selection as sel;
+                    let shape = if ellipse {
+                        sel::ellipse_surface(r, area, aa)
                     } else {
-                        shape.fill_rect(cut, &[1.0]);
-                    }
+                        let mut s = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                        s.fill_rect(r.intersect(&area), &[1.0]);
+                        s
+                    };
                     if feather > 0.0 {
-                        use photocraft_algo::selection as sel;
                         let m = sel::feather(&sel::mask_from_surface(Some(&shape), area), area.width() as usize, area.height() as usize, feather);
                         doc.selection = sel::combine(doc.selection.as_ref(), &m, area, sel::SelectionMode::parse(&mode));
                         return Ok(());
                     }
                     let old = doc.selection.take();
                     let combined = match (mode.as_str(), old) {
-                        ("add", Some(o)) => combine(&o, &shape, area, |a, b| a.max(b)),
-                        ("subtract", Some(o)) => combine(&o, &shape, area, |a, b| a * (1.0 - b)),
-                        ("intersect", Some(o)) => combine(&o, &shape, area, |a, b| a.min(b)),
+                        ("add", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.max(b)),
+                        ("subtract", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a * (1.0 - b)),
+                        ("intersect", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.min(b)),
                         // With no existing selection, neither operation can select new pixels.
                         ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
                         _ => shape,
@@ -1301,16 +1279,6 @@ fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) ->
         Ok(())
     })?;
     Ok(Value::Null)
-}
-
-fn combine(a: &Surface, b: &Surface, area: Rect, f: impl Fn(f32, f32) -> f32) -> Surface {
-    let ra = a.read_region(area);
-    let rb = b.read_region(area);
-    let data: Vec<f32> = ra.iter().zip(&rb).map(|(x, y)| f(*x, *y)).collect();
-    let mut out = Surface::new(photocraft_color::PixelFormat::GRAY8);
-    out.write_region(area, &data);
-    out.prune();
-    out
 }
 
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
