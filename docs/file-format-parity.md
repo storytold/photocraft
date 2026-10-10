@@ -9,7 +9,7 @@ As behaviour from Adobe's documentation where the bundle doesn't say). Ours come
 `crates/codecs/src/format.rs` (capability table), `crates/io/src/lib.rs` (import/export
 dispatch), `crates/psd`, `crates/raw`, `crates/heif`, `crates/affinity`. More detail on our side:
 [raster formats](../book/src/formats/raster-formats.md), [PSD/PSB](../book/src/formats/psd-psb.md),
-[OpenRaster](ora.md), [Paint.NET](pdn.md).
+[OpenRaster](ora.md), [Paint.NET](pdn.md), [GIMP XCF](xcf.md).
 
 **Summary.** By count, 13 of Photoshop's 31 formats are fully supported in the directions Photoshop supports them, 4 partially (48%,
 measured). Weighted by use (PSD/PSB 40%, JPEG 15%, PNG 15%, TIFF 10%, camera raw 8%, WebP/AVIF/
@@ -82,6 +82,7 @@ supports many more, including CR3).
 | Affinity `.af`, `.afphoto`, `.afdesign`, `.afpub` | yes | no | See below |
 | Paint.NET `.pdn` | yes | no | [pdn.md](pdn.md) |
 | OpenRaster `.ora` | yes | yes | [ora.md](ora.md) |
+| GIMP `.xcf`, `.xcf.gz` | yes (layers, groups, masks, modes, channels, selection; read only) | no | [xcf.md](xcf.md) |
 | ICO, QOI | yes | yes | |
 | Krita `.kra`, GIMP `.xcf`, Procreate | no | no | Not in Photoshop either |
 
@@ -133,4 +134,5 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | GIMP XCF read (#1076): layers, groups, masks, modes, channels and selection, with GIMP-rendered oracles |
 | 2026-10-10 | major | First version: Photoshop 2026 27.11.0's formats from its bundle, against our codecs; Affinity notes moved from `roadmap.md` |
