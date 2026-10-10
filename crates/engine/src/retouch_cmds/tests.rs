@@ -708,6 +708,39 @@ fn patch_source_repairs_the_selection_with_texture_from_the_drag_target() {
 }
 
 #[test]
+fn patch_content_aware_copies_the_dragged_to_content_into_the_selection() {
+    // Photoshop's Patch: Content-Aware (measured on 25.4): only the selection changes; its middle
+    // is the dragged-to content (Color 0 keeps its level), the edge band blends.
+    for depth in [8, 16] {
+        let mut s = session(128, 64, depth, "rgb");
+        paint_layer(&mut s, blemished(40));
+        s.execute("select.rect", json!({"x": 32, "y": 12, "width": 24, "height": 24})).unwrap();
+        let r = s.execute("paint.patch", json!({"offset": [-30, 2], "contentAware": true, "structure": 7, "color": 0})).unwrap();
+        assert_eq!(r["contentAware"], json!(true));
+        for (x, y) in [(42, 22), (44, 24), (46, 26)] {
+            let (got, want) = (rgba(&s, x, y), texture(x - 30, y + 2));
+            for c in 0..4 {
+                assert!((got[c] - want[c]).abs() <= tol(depth), "depth {depth}: middle copied at {x},{y}: {got:?} vs {want:?}");
+            }
+        }
+        for (x, y) in [(31, 20), (56, 25), (12, 20), (44, 40)] {
+            let (got, want) = (rgba(&s, x, y), texture(x, y));
+            assert!((got[0] - want[0]).abs() <= tol(depth), "depth {depth}: untouched {x},{y}: {got:?}");
+        }
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch (Content-Aware)"));
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(rgba(&s, 44, 24)[1], 0.0, "depth {depth}: undo brings the blemish back");
+    }
+    // Bad options are refused before any work.
+    let mut s = session(96, 48, 8, "rgb");
+    paint_layer(&mut s, blemished(40));
+    s.execute("select.rect", json!({"x": 36, "y": 16, "width": 16, "height": 16})).unwrap();
+    for p in [json!({"offset": [-30, 0], "contentAware": true, "structure": 9}), json!({"offset": [-30, 0], "contentAware": true, "color": -1})] {
+        assert!(s.execute("paint.patch", p.clone()).is_err(), "{p}");
+    }
+}
+
+#[test]
 fn patch_destination_repairs_the_drag_target_from_the_selection() {
     let mut s = session(96, 48, 16, "rgb");
     paint_layer(&mut s, blemished(40));
@@ -864,40 +897,55 @@ fn content_aware_extend_keeps_the_original() {
 
 #[test]
 fn content_aware_move_structure_and_color_shape_the_result() {
-    // Structure 7, Color 0: the content is copied exactly, edge to edge.
-    let mut s = session(128, 64, 16, "rgb");
-    paint_layer(&mut s, texture);
-    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
-    s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": 7, "mode": "extend"})).unwrap();
-    for (x, y) in [(10, 10), (22, 22), (33, 33)] {
+    // Structure 7, Color 0: the content is copied exactly but for a band about a patch wide along
+    // its edge, which blends into the new surroundings; Structure 3 gives the same, bit for bit
+    // (as in Photoshop).
+    let moved = |structure: u64| {
+        let mut s = session(128, 64, 16, "rgb");
+        paint_layer(&mut s, texture);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
+        s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": structure, "mode": "extend"})).unwrap();
+        s
+    };
+    let s = moved(7);
+    for (x, y) in [(16, 16), (22, 22), (27, 27)] {
         let (got, want) = (rgba(&s, x + 70, y + 20), texture(x, y));
         for c in 0..4 {
             assert!((got[c] - want[c]).abs() <= tol(16), "strict copy at {x},{y}: {got:?} vs {want:?}");
         }
     }
-    // A lower Structure re-synthesises an edge band: the edge differs from a plain copy, the
-    // centre doesn't.
-    let mut s = session(128, 64, 16, "rgb");
-    paint_layer(&mut s, texture);
+    let s3 = moved(3);
+    for y in 30..54 {
+        for x in 80..104 {
+            assert_eq!(rgba(&s, x, y), rgba(&s3, x, y), "structure 3 and 7 agree at {x},{y}");
+        }
+    }
+    // Structure 2 widens the re-synthesised band: the edge differs from a plain copy, the centre
+    // doesn't. Structure 1 re-synthesises the content too, its centre included.
     let copy = |s: &Session, x: i32, y: i32| (rgba(s, x + 70, y + 20), rgba(s, x, y));
-    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
-    s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": 1, "mode": "extend"})).unwrap();
+    let s = moved(2);
     let (centre, orig) = copy(&s, 22, 22);
     assert_eq!(centre, orig, "the centre is kept");
     let edge = (0..24).filter(|i| copy(&s, 10 + i, 10).0 != copy(&s, 10 + i, 10).1).count();
     assert!(edge > 12, "the top edge row is blended in ({edge} of 24 pixels differ)");
+    let s = moved(1);
+    let (centre, orig) = copy(&s, 22, 22);
+    assert_ne!(centre, orig, "structure 1 re-synthesises the centre too");
 
     // Color 10 fits a bright patch to a dark place; Color 0 keeps it bright.
     let mean = |color: u64| {
         let mut s = session(128, 64, 32, "rgb");
         paint_layer(&mut s, |x, _| if x < 64 { [0.8, 0.8, 0.8, 1.0] } else { [0.2, 0.2, 0.2, 1.0] });
-        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 16, "height": 16})).unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 24, "height": 24})).unwrap();
         s.execute("paint.contentAwareMove", json!({"offset": [70, 0], "structure": 7, "color": color, "mode": "extend"})).unwrap();
-        (94..102).map(|x| rgba(&s, x, 28)[0]).sum::<f32>() / 8.0
+        // The copied middle (the edge band is re-synthesised from the dark surroundings).
+        (98..106).map(|x| rgba(&s, x, 32)[0]).sum::<f32>() / 8.0
     };
-    let (kept, fitted) = (mean(0), mean(10));
+    let (kept, some, fitted) = (mean(0), mean(3), mean(10));
     assert!((kept - 0.8).abs() < 1e-3, "color 0 keeps the colour: {kept}");
-    assert!(fitted < 0.3, "color 10 adapts to the dark surroundings: {fitted}");
+    // Photoshop shifts by up to about 0.04 per step of Color.
+    assert!((some - 0.68).abs() < 0.03, "color 3 adapts part of the way: {some}");
+    assert!((fitted - 0.4).abs() < 0.03, "color 10 adapts most of the way: {fitted}");
 }
 
 #[test]
@@ -1380,6 +1428,19 @@ fn remove_open_strokes_and_the_selection_limit_what_changes() {
     let err = s.execute("paint.remove", json!({"points": [[46, 30]], "size": 20})).unwrap_err().to_string();
     assert!(err.contains("check the selection"), "{err}");
     assert!(!near(rgba(&s, 46, 30), bg, 0.05));
+}
+
+#[test]
+fn remove_on_an_empty_layer_is_a_no_op_without_a_history_step() {
+    let mut s = square_session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let v = s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap();
+    assert_eq!(v, json!({"changed": false}));
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+    // With Sample All Layers on, the image below is there to remove from.
+    s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16, "sampleAllLayers": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
 }
 
 #[test]

@@ -1316,7 +1316,7 @@ fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32) -> egui::Response 
                 dial.mark_changed();
             }
         }
-        let field = ui.add(egui::DragValue::new(angle).range(-180.0..=180.0).speed(1.0).suffix("°"));
+        let field = ui.add(egui::DragValue::new(angle).custom_parser(crate::widgets::parse_num).range(-180.0..=180.0).speed(1.0).suffix("°"));
         if field.changed() {
             dial.mark_changed();
         }

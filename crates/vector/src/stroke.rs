@@ -100,11 +100,14 @@ fn circle(c: P, r: f64, tol: f64) -> Vec<P> {
 /// Stroke outline pieces for `lines`. Fill them with the non-zero rule.
 pub fn stroke_polygons(lines: &[Polyline], style: &StrokeStyle, tol: f64) -> Vec<Vec<P>> {
     let mut out = Vec::new();
-    if style.width <= 0.0 || !style.width.is_finite() {
+    if style.width <= 0.0 || !style.width.is_finite() || !style.miter_limit.is_finite() || style.miter_limit < 1.0 {
         return out;
     }
     for pl in lines {
-        if style.dashes.iter().any(|d| *d > 0.0) {
+        if pl.pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+            continue;
+        }
+        if !style.dashes.is_empty() {
             for dash in dash_polyline(pl, &style.dashes, style.dash_offset) {
                 stroke_one(&dash, style, tol, &mut out);
             }
@@ -210,7 +213,7 @@ fn stroke_one(pl: &Polyline, style: &StrokeStyle, tol: f64, out: &mut Vec<Vec<P>
                 (jn, true) => jn,
                 (_, false) => LineJoin::Miter,
             };
-            join_piece(v, d1, d2, hw, join, if knot[j] { style.miter_limit } else { f64::INFINITY }, tol, out);
+            join_piece(v, d1, d2, hw, join, if knot[j] { style.miter_limit.min(500.0) } else { f64::INFINITY }, tol, out);
         }
     }
     if !closed {
@@ -291,14 +294,24 @@ fn cap_piece(p: P, dir: P, hw: f64, cap: LineCap, tol: f64, out: &mut Vec<Vec<P>
 
 /// Splits a polyline into dashes (open polylines). `pattern` alternates on/off lengths in px.
 pub fn dash_polyline(pl: &Polyline, pattern: &[f64], offset: f64) -> Vec<Polyline> {
-    let mut pat: Vec<f64> = pattern.iter().map(|d| d.max(0.0)).collect();
+    if pattern.is_empty() {
+        return vec![pl.clone()];
+    }
+    if pattern.len() > 32
+        || !offset.is_finite()
+        || pattern.iter().any(|d| !d.is_finite() || *d < 0.0)
+        || pl.pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite())
+    {
+        return Vec::new();
+    }
+    let mut pat = pattern.to_vec();
     if pat.len() % 2 == 1 {
         let copy = pat.clone();
         pat.extend(copy);
     }
     let total: f64 = pat.iter().sum();
-    if total <= 1e-9 || pl.pts.len() < 2 {
-        return vec![pl.clone()];
+    if !total.is_finite() || total <= 1e-9 || pl.pts.len() < 2 {
+        return Vec::new();
     }
     let mut pts = pl.pts.clone();
     let mut knots = pl.knot.clone();
@@ -331,10 +344,15 @@ pub fn dash_polyline(pl: &Polyline, pattern: &[f64], offset: f64) -> Vec<Polylin
         let mut pos = 0.0;
         while seg - pos > 1e-12 {
             guard += 1;
-            if guard > 10_000_000 {
-                break;
+            if guard > 100_000 {
+                // Bound allocations and time, including file-provided patterns. Commands
+                // reject patterns that exceed this budget before document mutation.
+                return Vec::new();
             }
             let step = left.min(seg - pos);
+            if step > 0.0 && pos + step == pos {
+                return Vec::new();
+            }
             pos += step;
             left -= step;
             let at_end = seg - pos <= 1e-12;
@@ -361,6 +379,25 @@ pub fn dash_polyline(pl: &Polyline, pattern: &[f64], offset: f64) -> Vec<Polylin
         && c.pts.len() > 1
     {
         out.push(c);
+    }
+    if pl.closed {
+        // A dash that crosses the closing vertex has a join there, not two caps.
+        // Preserve knot flags when stitching the tail onto the first dash.
+        let seam = pl.pts.first().copied();
+        let wraps = out.first().and_then(|d| d.pts.first()).copied() == seam && out.last().and_then(|d| d.pts.last()).copied() == seam;
+        if wraps && out.len() == 1 {
+            if let Some(dash) = out.first_mut() {
+                dash.closed = true;
+            }
+        } else if wraps
+            && out.len() > 1
+            && let Some(mut tail) = out.pop()
+            && let Some(first) = out.first_mut()
+        {
+            tail.pts.extend(first.pts.iter().skip(1).copied());
+            tail.knot.extend(first.knot.iter().skip(1).copied());
+            *first = tail;
+        }
     }
     out
 }
@@ -396,5 +433,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn closed_dashes_have_a_join_at_the_seam() {
+        let square = line(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], true);
+        let dashes = dash_polyline(&square, &[8.0, 4.0], 2.0);
+        assert_eq!(dashes.len(), 3);
+        let crossing = &dashes[0];
+        assert_eq!(crossing.pts, [(0.0, 6.0), (0.0, 0.0), (6.0, 0.0)]);
+        assert_eq!(crossing.knot, [true, true, true]);
+        let full = dash_polyline(&square, &[80.0, 2.0], 0.0);
+        assert_eq!(full.len(), 1);
+        assert!(full[0].closed);
+    }
+
+    #[test]
+    fn invalid_and_too_dense_dashes_finish_with_bounded_work() {
+        let pl = line(&[(0.0, 0.0), (100.0, 0.0)], false);
+        for pattern in [vec![0.0, 0.0], vec![f64::INFINITY, 1.0], vec![f64::NAN, 1.0], vec![-1.0, 2.0], vec![1.0; 33], vec![1e-8, 1e-8]] {
+            assert!(dash_polyline(&pl, &pattern, 0.0).is_empty());
+        }
+        assert!(dash_polyline(&pl, &[2.0, 1.0], f64::INFINITY).is_empty());
+        assert!(dash_polyline(&line(&[(f64::NAN, 0.0), (1.0, 0.0)], false), &[2.0, 1.0], 0.0).is_empty());
+    }
+
+    #[test]
+    fn nonuniform_patterns_and_negative_offsets_repeat_by_arc_length() {
+        let pl = line(&[(0.0, 0.0), (30.0, 0.0)], false);
+        let d = dash_polyline(&pl, &[4.0, 2.0, 1.0, 3.0], -10.0);
+        assert_eq!(
+            d.iter().map(|p| (p.pts.first().unwrap().0, p.pts.last().unwrap().0)).collect::<Vec<_>>(),
+            [(0.0, 4.0), (6.0, 7.0), (10.0, 14.0), (16.0, 17.0), (20.0, 24.0), (26.0, 27.0)]
+        );
     }
 }

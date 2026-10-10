@@ -116,8 +116,8 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 
 /// Extensions the batch commands pick up from a folder.
 const OPENABLE: &[&str] = &[
-    "pdn", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic",
-    "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
+    "pdn", "ora", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm",
+    "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -152,7 +152,14 @@ pub fn extension(path: &str) -> Option<String> {
 /// Whether a save without a new path may write back to `path`: only layered files (PSD, PSB,
 /// .pcraft). A flat file goes through Save As instead, so it is never flattened over the original.
 pub fn saves_in_place(path: &str) -> bool {
-    extension(path).is_some_and(|ext| matches!(ext.as_str(), "psd" | "psb" | "pcraft"))
+    extension(path).is_some_and(|ext| layered_extension(&ext))
+}
+
+/// Whether the lower-case extension `ext` names a layered document format (PSD, PSB, OpenRaster,
+/// .pcraft). A save to one becomes the document's file; any other format is a copy for automation
+/// saves, desktop and headless alike (#1547, #2579).
+pub fn layered_extension(ext: &str) -> bool {
+    matches!(ext, "psd" | "psb" | "pcraft" | "ora")
 }
 
 /// Whether `path` names a document template (.psdt). A template opens as a new untitled document

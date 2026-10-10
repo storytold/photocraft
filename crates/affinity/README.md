@@ -13,7 +13,7 @@ Affinity files.
 | Affinity | PhotoCraft |
 |---|---|
 | Pages, Publisher spreads | one artboard per spread, spreads side by side 64 px apart |
-| Artboards (`ShpN` with `ABEn`), with name, solid background, any transform | artboards (nested ones as groups with a vector mask) |
+| Artboards (legacy `ABEn`, or current `.af` `phrp`/`aprp` properties, including converted curves), with name, solid background, any transform | artboards (nested ones as groups with a vector mask; rotated/curved boards use their bounding rectangle) |
 | Layers (`Scop`), groups (`Grup`), pass-through or isolated | groups (pass-through or Normal) |
 | Curves (`PCrv`): cubic subpaths, closed flags, live corners (`CnrD`) | shape layers (multi-subpath curves fill even-odd) |
 | Rectangles with corner radii (relative or absolute), ellipses, polygons (smooth too), stars, square stars, pies, triangles, trapezoids, clouds, hearts, cogs, rounded and elliptical callouts, arrows, double stars, tears, crescents, diamonds and circular segments | shape layers |

@@ -8,7 +8,7 @@
 //! runs as a background job (#210): with progress, cancellable, and the document unchanged until
 //! it applies, in one undo step.
 
-use super::content_aware_move::replace;
+use super::content_aware_move::{Target, replace};
 use super::patch::coverage;
 use super::*;
 
@@ -27,6 +27,13 @@ const GROW: usize = 2;
 
 /// Seed of the completion, so a removal is reproducible.
 const SEED: u64 = 0x0052_e30e;
+
+/// The sampling margin around the stroke: three quarters of its larger side, at least 32 pixels
+/// (in u64, so a huge extent can't overflow; a margin beyond i32 saturates).
+fn sampling_margin(area: Rect) -> i32 {
+    let ext = u64::from(area.width().max(area.height()));
+    i32::try_from(ext * 3 / 4).unwrap_or(i32::MAX).max(32)
+}
 
 /// What a removal does, checked before any work starts.
 struct Plan {
@@ -62,7 +69,7 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
     if area.is_empty() {
         return Err(bad(CMD, "the stroke is outside the canvas"));
     }
-    let window = area.inflate(crate::fill_cmds::sampling_margin(area).min(MAX_MARGIN)).intersect(&canvas);
+    let window = area.inflate(sampling_margin(area).min(MAX_MARGIN)).intersect(&canvas);
     let close_loops = flag(p, "closeLoops", true);
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
     Ok(Plan { id, stroke, window, close_loops, all_layers })
@@ -97,8 +104,9 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Vec<bool> {
     m
 }
 
-/// The filled window and the hole it fills, computed on `doc` (a snapshot).
-fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<(Region, Vec<bool>)> {
+/// The filled window and the hole it fills, computed on `doc` (a snapshot). `None` when the
+/// layer's own window is fully transparent: nothing to remove and nothing to fill from.
+fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<Option<(Region, Vec<bool>)>> {
     let hole = hole(plan, doc.selection.as_ref());
     if !hole.iter().any(|m| *m) {
         return Err(bad(CMD, "the stroke doesn't cover anything that can change (check the selection)"));
@@ -114,13 +122,17 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
         let img = if plan.all_layers { composite_region(doc, None, SampleLayers::All, win, fmt) } else { Region::read(surf, win) };
         (img, fmt)
     };
+    // A no-op without the fill or a history step, as the other retouch tools on an empty layer.
+    if !plan.all_layers && alpha_index(&fmt).is_some_and(|a| img.data.chunks_exact(img.ch).all(|px| px.get(a).is_none_or(|v| *v <= 0.0))) {
+        return Ok(None);
+    }
     let (w, h) = (win.width() as usize, win.height() as usize);
     let mut data = ctx
         .stage(0.0, 1.0, label, |ctl| photocraft_algo::remove::remove_with(w, h, img.ch, &img.data, &hole, SEED, ctl))
         .map_err(|_| EngineError::Cancelled)?;
     // The fill's seam blending can step slightly past the storable range.
     clamp_samples(&fmt, &mut data);
-    Ok((Region { rect: win, ch: img.ch, data }, hole))
+    Ok(Some((Region { rect: win, ch: img.ch, data }, hole)))
 }
 
 pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -142,8 +154,9 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                 run_remove(&mut work, &plan, &p, ctx, label)
             }
         },
-        move |s, (out, hole)| {
-            let damage = s.edit(label, |doc, _| replace(doc, id, &p, &out, &hole))?;
+        move |s, filled| {
+            let Some((out, hole)) = filled else { return Ok(json!({"changed": false})) };
+            let damage = s.edit(label, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             if let Some(st) = s.active_mut() {
                 st.last_damage = Some(damage);
             }

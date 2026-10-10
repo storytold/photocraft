@@ -97,7 +97,7 @@ pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Buffer {
 fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer {
     let tile = tile.max(1);
     // Lab documents mix Normal blending in CIELAB, as Photoshop does (psblend::LAB_MIX); 32-bit
-    // documents don't clip Add / Divide at 1 (psblend::HDR).
+    // documents don't clip Add / Divide or Hue / Saturation / Color / Luminosity at 1 (psblend::HDR).
     let lab = doc.mode == photocraft_color::ColorMode::Lab;
     let hdr = doc.depth == photocraft_color::SampleType::F32;
     // CMYK layers are read through the document's own CMYK profile (thread-local scope).
@@ -734,6 +734,15 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
         LayerContent::Fill(f) => match &layer.fill_cache {
             // Photoshop's own rendering, valid while the fill is unchanged.
             Some(c) if c.fill == *f => surface_to_buffer(&c.surface, rect),
+            _ if cx.mode == photocraft_color::ColorMode::Cmyk => {
+                let frame = fill_frame(layer, cx.canvas);
+                let native_rect = if matches!(f, Fill::Solid(_)) { Rect::new(0, 0, 1, 1) } else { rect };
+                match gradient_fill::render_cmyk_fill(f, native_rect, frame, cx.depth) {
+                    Some(s) if matches!(f, Fill::Solid(_)) => Buffer::filled(rect, s.rgba(0, 0)),
+                    Some(s) => surface_to_buffer(&s, rect),
+                    None => render_fill(f, rect, frame, cx.patterns),
+                }
+            }
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns),
         },
         LayerContent::Adjustment(_) => return None,
@@ -1209,12 +1218,12 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
             *p = psblend::composite(BlendMode::Normal, *p, *s, 1.0);
             p[3] *= mask_k(&mask, i);
         }
-        blend_into(backdrop, &content, layer.blend, opacity);
+        blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, 1.0);
         return;
     }
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
-    blend_into_g(backdrop, &content, layer.blend, opacity, text_gamma(layer));
+    blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, text_gamma(layer));
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -1579,6 +1588,19 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
 /// Blend an isolated layer buffer into the backdrop.
 fn blend_into(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32) {
     blend_into_g(backdrop, src, mode, opacity, 1.0);
+}
+
+/// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
+/// Photoshop's special eight ([`psblend::composite_fill`]), plain coverage otherwise.
+fn blend_into_fill(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
+    if fill >= 1.0 || !psblend::fill_is_special(mode) {
+        return blend_into_g(backdrop, src, mode, opacity * fill, gamma);
+    }
+    for (b, s) in backdrop.px.iter_mut().zip(&src.px) {
+        if s[3] > 0.0 {
+            *b = psblend::composite_fill(mode, *b, *s, opacity, fill, gamma);
+        }
+    }
 }
 
 /// [`blend_into`] mixing coverage in a `gamma` space (type layers).

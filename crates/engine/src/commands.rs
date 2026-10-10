@@ -393,7 +393,7 @@ fn build() -> Vec<CommandSpec> {
             "Fill…",
             ["Edit"],
             Some("Shift+F5"),
-            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":index? (contents=history; default the oldest state),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|{"channel":i}|"quickMask"?}"##,
+            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":index? (contents=history; default the oldest state),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##,
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
@@ -1093,7 +1093,7 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: has_pixel_or_channel,
+            enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 let eyedropped = if kind == "curves" { crate::adjust_params::curves_eyedropper_from_params(s, p)? } else { None };
@@ -1102,6 +1102,11 @@ fn build() -> Vec<CommandSpec> {
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
                 };
                 let label = adj.label().to_string();
+                // A smart object records the adjustment as a smart filter (Photoshop), which
+                // re-runs from the source instead of baking into a copy of the pixels.
+                if crate::adjust_cmds::adjust_as_smart_filter(s, &kind, &label, p)? {
+                    return Ok(Value::Null);
+                }
                 destructive_adjust(s, &label, adj, p)
             },
             journal: true,

@@ -740,16 +740,25 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
 fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
     let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
-    let name = base_name(&path);
-    decode_source(&name, &bytes)?; // fail before touching the document
-    set_source(s, p, "Replace Contents", false, |_, _| Ok(SmartSource::Embedded { file_name: name, bytes: Arc::new(bytes) }))
+    let id = layer_param(s, p)?;
+    replace_contents_bytes(s, id, &base_name(&path), bytes)
+}
+
+/// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
+pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
+    decode_source(file_name, &bytes)?; // fail before touching the document
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+}
+
+/// The file name and bytes of smart object `id`'s contents.
+pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)> {
+    source_bytes(&doc.metadata, &smart(doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))
 }
 
 fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.exportContents", p)?;
     let id = layer_param(s, p)?;
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (name, bytes) = source_bytes(&st.doc.metadata, &smart(&st.doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let (name, bytes) = contents_of(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     crate::file_cmds::write_file(path, &bytes)?;
     Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
 }

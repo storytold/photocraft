@@ -695,3 +695,48 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     s.execute("tools.setBrush", json!({ "brush": scatter(2.0) })).unwrap();
     assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [17, 14, 23, 23]}));
 }
+
+#[test]
+fn strokes_convert_through_the_documents_cmyk_profile() {
+    // A synthetic uncoated-like profile: heavier dot gain than the built-in coated CMYK (whose
+    // params are the defaults here), so painted ink differs from the default conversion. The
+    // compositors and composite exports enter the document's space; the stroke must too (#583).
+    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+        description: "Stroke Test Uncoated".into(),
+        tvi: [0.26, 0.26, 0.26, 0.3],
+        grid_a2b: 5,
+        grid_b2a: 9,
+        ..Default::default()
+    })
+    .to_bytes();
+    let cmyk_session = |tagged: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32, "mode": "cmyk", "background": "white"})).unwrap();
+        if tagged {
+            s.edit("icc", |doc, _| {
+                doc.icc_profile = Some(profile.clone());
+                Ok(())
+            })
+            .unwrap();
+        }
+        s
+    };
+    let params = json!({"points": [[4, 16], [28, 16]], "size": 8, "hardness": 1, "opacity": 1, "flow": 1, "color": "#cc3366", "smoothing": 0});
+    let mut s = cmyk_session(true);
+    // The live preview enters the same space, so it commits the pixels it shows.
+    let mut live =
+        LiveStroke::begin(&s, &json!({"points": [[4, 16]], "size": 8, "hardness": 1, "opacity": 1, "flow": 1, "color": "#cc3366", "smoothing": 0})).unwrap();
+    live.push(&[StrokePoint::new(28.0, 16.0, 1.0)]).unwrap();
+    let mut commit = params.clone();
+    commit["seed"] = json!(live.seed);
+    s.execute("paint.stroke", commit).unwrap();
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &surface(&s), Rect::new(0, 0, 32, 32)), "the preview commits the pixels it shows");
+    // The stroke's ink differs from the same stroke without the embedded profile.
+    let ink = |surf: &Surface| surf.read_region(Rect::new(15, 16, 17, 18));
+    let tagged = ink(&surface(&s));
+    let mut plain = cmyk_session(false);
+    plain.execute("paint.stroke", params).unwrap();
+    let untagged = ink(&surface(&plain));
+    assert!(tagged != untagged, "the document's CMYK profile must convert the painted ink: {tagged:?} vs {untagged:?}");
+}

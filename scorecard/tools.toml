@@ -279,6 +279,13 @@ issue = 1919
 note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"
 
 [[item]]
+id = "TOOL-1053-1"
+target = "Shape stroke controls: solid/dashed/dotted, custom dash/gap/offset, caps, joins, alignment, miter limit and opacity"
+status = "done"
+issue = 1053
+note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; existing shape.create/edit/info; serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Gradient fill UI and saved stroke libraries remain open; Line retains filled-bar geometry"
+
+[[item]]
 id = "TOOL-213-19"
 target = "Remove tool: paint over an object (or circle it) and it is filled from its surroundings"
 status = "partial"
