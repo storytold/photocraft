@@ -1,5 +1,5 @@
-//! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, the square
-//! pixel-grid cursor, ⇧-click lines, Control+Alt resizing and the B group.
+//! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, tip-shaped
+//! cursor, ⇧-click lines, Control+Alt resizing and the B group.
 
 use egui::{Key, Modifiers, Pos2, Rect, vec2};
 use egui_kittest::Harness;
@@ -108,7 +108,7 @@ fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
 }
 
 #[test]
-fn square_cursor_sits_on_the_pixel_grid() {
+fn pencil_cursor_grid_helper_remains_available_for_pixel_alignment() {
     let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(800.0, 600.0));
     let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false };
     // 1 px at 800 %: the 8-point square of the pixel under the pointer.

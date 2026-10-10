@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::state::{Tool, View};
+use photocraft_engine::paint::TipShape;
 
 /// Largest texture side we upload; bigger documents display downsampled until the GPU path lands.
 pub const MAX_TEXTURE: u32 = 4096;
@@ -2465,15 +2466,46 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             crosshair(5.0);
                             egui::CursorIcon::None
                         }
-                        // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
+                        // The Pencil is aliased, but its cursor still follows the selected tip.
                         _ if tool == Tool::Pencil => {
-                            let ppp = painter.ctx().pixels_per_point();
-                            let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
-                            let px = 1.0 / ppp;
-                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
-                            // Too small to see where it is: the hotspot as well.
-                            if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
+                            let radius = full;
+                            match &brush.tip {
+                                TipShape::Round => {
+                                    painter.circle_stroke(p, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
+                                    painter.circle_stroke(p, radius, Stroke::new(1.0, Color32::from_white_alpha(230)));
+                                }
+                                TipShape::Sampled(tile) if tile.is_valid() => {
+                                    let sx = brush.size / tile.width as f32;
+                                    let sy = brush.size / tile.height as f32;
+                                    for y in 0..tile.height {
+                                        for x in 0..tile.width {
+                                            if tile.get(x, y) < 0.5 {
+                                                continue;
+                                            }
+                                            let edge = x == 0
+                                                || y == 0
+                                                || x + 1 == tile.width
+                                                || y + 1 == tile.height
+                                                || tile.get(x - 1, y) < 0.5
+                                                || tile.get(x + 1, y) < 0.5
+                                                || tile.get(x, y - 1) < 0.5
+                                                || tile.get(x, y + 1) < 0.5;
+                                            if edge {
+                                                let x0 = p.x - brush.size * view.zoom / 2.0 + x as f32 * sx * view.zoom;
+                                                let y0 = p.y - brush.size * view.zoom / 2.0 + y as f32 * sy * view.zoom;
+                                                painter.rect_stroke(
+                                                    Rect::from_min_size(pos2(x0, y0), vec2(sx * view.zoom, sy * view.zoom)),
+                                                    0.0,
+                                                    Stroke::new(1.0, Color32::from_white_alpha(230)),
+                                                    egui::StrokeKind::Inside,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            if cur.show_crosshair_in_brush_tip || radius * 2.0 < 6.0 {
                                 crosshair(4.0);
                             }
                             egui::CursorIcon::None

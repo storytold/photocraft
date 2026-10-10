@@ -28,8 +28,7 @@ const NOISE_SALT: u64 = 0x006E_6F69_7365;
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
 /// grid: the centre of the pixel holding the point for odd diameters, the nearest pixel corner
-/// for even ones. Its footprint is then a whole-pixel block around that point, the same square
-/// the Pencil cursor shows ([`grid_square`]).
+/// for even ones.
 pub fn grid_center(x: f64, y: f64, diameter: f32) -> (f32, f32) {
     let n = if diameter.is_finite() { diameter.round().max(1.0) as i64 } else { 1 };
     let snap = |v: f64| if n % 2 == 1 { v.floor() + 0.5 } else { v.round() };
@@ -203,15 +202,34 @@ impl BrushContext {
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                // Pencil dabs are whole-pixel, axis-aligned squares. The cursor uses this same
-                // snapped centre and rounded diameter; applying the selected brush-tip mask here
-                // made the Pencil cursor square while a default round tip still painted a circle.
                 let (mut val, rn) = if aliased {
-                    let half = (2.0 * r).round().max(1.0) * 0.5;
-                    if dx.abs() >= half || dy.abs() >= half {
-                        continue;
+                    // Pencil coverage is aliased, but its selected tip shape still applies.
+                    // Snap the dab to the pixel grid without replacing a round or sampled tip
+                    // with a square (the cursor must describe this same footprint).
+                    let (mut ux, mut uy) = (dx, -dy);
+                    if let Some((ax, ay, k)) = proj {
+                        let t = (ux * ax + uy * ay) * k;
+                        ux += t * ax;
+                        uy += t * ay;
                     }
-                    (1.0, (dx.abs().max(dy.abs()) / half).clamp(0.0, 1.0))
+                    let u = (ux * cs + uy * sn) * fx;
+                    let v = (-ux * sn + uy * cs) * fy;
+                    match mips {
+                        None => {
+                            let d2 = (u * ro).powi(2) + v * v;
+                            if d2 >= reach2 {
+                                continue;
+                            }
+                            (1.0, d2.sqrt() / rm)
+                        }
+                        Some(m) => {
+                            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
+                            if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
+                                continue;
+                            }
+                            (if m.sample_clamped(level, px / tw, py / th) >= 0.5 { 1.0 } else { 0.0 }, 1.0)
+                        }
+                    }
                 } else {
                     // To y-up, project, rotate by -angle, flip.
                     let (mut ux, mut uy) = (dx, -dy);
