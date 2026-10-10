@@ -325,6 +325,29 @@ impl LiveStroke {
     }
 }
 
+/// A live stroke whose pixels its commit took over (`"fromLive"`): document `doc` at `revision`
+/// holds exactly the live stroke's last step, so a cache that showed step `n` of it only misses
+/// the steps after `n` (step 0 = the document before the stroke: everything).
+pub(crate) struct CommittedStroke {
+    pub(crate) doc: photocraft_doc::DocId,
+    pub(crate) revision: u64,
+    key: u64,
+    damage: Vec<DRect>,
+}
+
+impl CommittedStroke {
+    #[cfg(test)]
+    pub(crate) fn for_test(key: u64, damage: Vec<DRect>) -> Self {
+        Self { doc: photocraft_doc::DocId(0), revision: 0, key, damage }
+    }
+
+    /// What a cache that showed raw preview `key` of this stroke at the revision before misses.
+    pub(crate) fn since(&self, key: u64) -> Option<DRect> {
+        let seen = if key == 0 { 0 } else { usize::try_from(key.checked_sub(self.key)?).ok()? };
+        Some(self.damage.get(seen..)?.iter().fold(DRect::EMPTY, |a, r| a.union(r)))
+    }
+}
+
 /// The live stroke on document `idx`, while it is current.
 fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
@@ -963,6 +986,15 @@ pub fn ensure_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
 /// rectangle did: the last edit's damage, or the live stroke's dabs since then. Cached keys have
 /// the colour display's key folded in (`^ display_key`); `now`'s is still raw.
 pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
+    // A brush stroke committed with the pixels its live preview already showed: only the steps
+    // this cache hadn't shown yet (usually nothing), not the stroke's whole bounding box.
+    if seen.0 + 1 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(c) = app.committed_stroke.as_ref().filter(|c| c.doc == st.doc.id && c.revision == now.0)
+        && let Some(r) = c.since(seen.1 ^ display_key)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
         return last_damage;
     }
@@ -3948,6 +3980,63 @@ fn finish_selection_drag(app: &mut PhotocraftApp, floating: bool, start: [f64; 2
     }
 }
 
+/// Commit a Brush, Pencil or Eraser drag. The live stroke already rendered it: its pixels are
+/// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
+/// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
+fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
+    let live = app.live_stroke.take();
+    let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+    if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
+        p["seed"] = json!(seed);
+    }
+    let Some(mut l) = live else {
+        let _ = app.run(stroke_command(d.tool), p);
+        return;
+    };
+    // Points the live stroke hasn't rendered yet (the release frame's last moves).
+    let t0 = app.stylus.point_ms(0);
+    let rest: Vec<_> = (l.fed..d.points.len())
+        .filter_map(|i| {
+            let q = d.points.get(i)?;
+            let t = app.stylus.stroke.get(i).or(app.stylus.stroke.last()).copied().unwrap_or_default();
+            let mut sp = photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32);
+            (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
+            sp.time = app.stylus.point_ms(i) - t0;
+            Some(sp)
+        })
+        .collect();
+    if !rest.is_empty() {
+        match l.stroke.push(&rest) {
+            Ok(r) => l.damage.push(r),
+            // The live stroke can't show these points: the commit renders the stroke itself.
+            Err(_) => {
+                let _ = app.run(stroke_command(d.tool), p);
+                return;
+            }
+        }
+    }
+    let LiveStroke { stroke, doc, key, damage, .. } = l;
+    if let EngineStroke::Brush(stroke) = stroke
+        && app.session.offer_live_stroke(*stroke).is_err()
+    {
+        app.session.clear_live_stroke();
+    }
+    let result = app.run(stroke_command(d.tool), p);
+    app.session.clear_live_stroke();
+    let Ok(r) = result else { return };
+    let revision = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.revision);
+    if r.get("fromLive").and_then(serde_json::Value::as_bool) == Some(true)
+        && let Some(revision) = revision
+    {
+        app.committed_stroke = Some(CommittedStroke { doc, revision, key, damage });
+    } else {
+        // Rendered again from scratch: the commit's damage rect refreshes the stroke.
+        let shown = CommittedStroke { doc, revision: 0, key, damage };
+        // Raw preview key 0 = the document itself (its colour display folded in).
+        shown_as_document(app, doc, |k| shown.since(k).is_some());
+    }
+}
+
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     let end = d.points.last().copied().unwrap_or([d.start[0], d.start[1], 1.0]);
     if let Some(floating) = d.sel_move {
@@ -3976,21 +4065,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
-        Tool::Brush | Tool::Pencil | Tool::Eraser => {
-            let live = app.live_stroke.take();
-            let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
-            if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
-                p["seed"] = json!(seed);
-            }
-            // The canvas already shows the stroke: let the commit's damage rect refresh it rather
-            // than recompositing the whole document.
-            if app.run(stroke_command(d.tool), p).is_ok()
-                && let Some(l) = live
-            {
-                // Raw preview key 0 = the document itself (its colour display folded in).
-                shown_as_document(app, l.doc, |k| l.since(k).is_some());
-            }
-        }
+        Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
         Tool::RectMarquee | Tool::EllipseMarquee => {
             let (a, b) = marquee_corners(&app.ui.tool_options, &d, [end[0], end[1]]);
             let [x0, y0, x1, y1] = marquee_px(a, b);

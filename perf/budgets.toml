@@ -374,8 +374,11 @@ enforce = false  # not in the 2026-10-05 baseline yet; contributor M4 run 2026-1
 id = "P32"
 title = "Brush release on a long stroke"
 issue = 211
-target = "no hitch at mouse-up"
-not_measurable = "the live renderer and the release re-render are UI-side; needs a frame harness"
+target = "≤ 16 ms (no hitch at mouse-up)"
+bench = "perf_scenarios"
+row = "brush release: 600-point stroke, 200 px soft, 24 MP"
+budget_ms = 16
+enforce = false  # measurable since the release commits the live stroke's pixels; awaiting a baseline run
 
 [[scenario]]
 id = "P33"

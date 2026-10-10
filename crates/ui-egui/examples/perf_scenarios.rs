@@ -107,6 +107,26 @@ impl Bench {
 
     /// The canvas refresh after an edit (`canvas::ensure_gpu`): the damage rect grown by the
     /// effect reach when the session reports one, else everything; waits for the GPU.
+    /// Re-composite only `r` of the active document (what the canvas hadn't shown yet).
+    fn refresh_rect(&self, s: &Session, r: photocraft_geom::Rect) -> Res<f64> {
+        let st = s.active().ok_or("no document")?;
+        let doc = &st.doc;
+        let r = r.intersect(&doc.bounds());
+        let t = Instant::now();
+        if !r.is_empty() {
+            match &self.gpu {
+                Some((g, rs)) => {
+                    g.refresh(doc.id.0, doc, Some(r), None);
+                    let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
+                }
+                None => {
+                    std::hint::black_box(photocraft_compose::render(doc, r));
+                }
+            }
+        }
+        Ok(ms(t))
+    }
+
     fn refresh(&self, s: &Session, full: bool) -> Res<f64> {
         let st = s.active().ok_or("no document")?;
         let doc = &st.doc;
@@ -840,6 +860,48 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             let t = Instant::now();
             exec(s, "paint.stroke", json!({"points": [[x, y]], "size": 40, "hardness": 0.8, "color": "#c03020"}))?;
             Ok(ms(t) + b.refresh(s, false)?)
+        });
+    }
+    // P32: releasing a long stroke. The canvas draws it live (untimed here); the release offers
+    // those pixels to the commit and re-composites only what the canvas hadn't shown yet.
+    let release = "brush release: 600-point stroke, 200 px soft, 24 MP";
+    if b.wanted(release) {
+        let (w, h) = sz.big_photo;
+        let mut s = Session::new();
+        if let Err(e) = exec(&mut s, "file.new", json!({"width": w, "height": h, "background": "white"}))
+            .and_then(|_| exec(&mut s, "layer.new.layer", json!({"name": "paint"})))
+        {
+            b.errors.push((release.into(), e));
+            return;
+        }
+        let _ = b.refresh(&s, true);
+        let reps = b.reps.min(5);
+        b.time(release, &mut s, reps, false, |b, s, i| {
+            use photocraft_engine::paint::StrokePoint;
+            let (fw, fh) = (f64::from(w), f64::from(h));
+            let pts: Vec<[f64; 3]> = (0..600)
+                .map(|k| {
+                    let t = k as f64 / 599.0;
+                    [fw * (0.1 + 0.8 * t), fh * (0.5 + 0.35 * (t * 12.0 + i as f64).sin()), 0.6 + 0.4 * (t * 7.0).sin().abs()]
+                })
+                .collect();
+            let mut p = json!({"points": [pts[0]], "size": 200, "hardness": 0.0, "color": "#c03020", "smoothing": 0.0});
+            let mut live = photocraft_engine::brush_cmds::LiveStroke::begin(s, &p).map_err(|e| e.to_string())?;
+            for c in pts[1..].chunks(4) {
+                let sp: Vec<StrokePoint> = c.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+                live.push(&sp).map_err(|e| e.to_string())?;
+            }
+            p["points"] = json!(pts);
+            p["seed"] = json!(live.seed);
+            let t = Instant::now();
+            s.offer_live_stroke(live).map_err(|e| e.to_string())?;
+            let r = exec(s, "paint.stroke", p);
+            s.clear_live_stroke();
+            if r?.get("fromLive").and_then(Value::as_bool) != Some(true) {
+                return Err("the release rendered the stroke again".into());
+            }
+            // The canvas already shows every step of the stroke: nothing left to re-composite.
+            Ok(ms(t) + b.refresh_rect(s, photocraft_geom::Rect::EMPTY)?)
         });
     }
 }

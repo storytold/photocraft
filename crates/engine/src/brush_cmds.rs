@@ -246,12 +246,21 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
 }
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
-fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
+fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    // The live stroke the canvas already rendered for exactly these params: take its pixels
+    // instead of rendering the whole stroke again (the hitch at pen-up).
+    let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
+    let from_live = live.is_some();
     let dmg = s.edit(label, |doc, _| {
+        if let Some(l) = live {
+            let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+            *surf = l.surface;
+            return Ok(l.bounds);
+        }
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
         let mut brush = brush;
@@ -285,7 +294,11 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
         };
         Ok(damage)
     })?;
-    Ok(damage_json(s, dmg))
+    let mut r = damage_json(s, dmg);
+    if from_live {
+        r["fromLive"] = json!(true);
+    }
+    Ok(r)
 }
 
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
@@ -328,7 +341,7 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase { "Eraser" } else { "Brush Tool" };
-    stroke_with(s, p, label, brush, pts, false)
+    stroke_with(s, "paint.stroke", p, label, brush, pts, false)
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
@@ -353,6 +366,44 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    /// Every point rendered so far, in order.
+    points: Vec<StrokePoint>,
+    /// The document and revision the stroke started on.
+    base: (photocraft_doc::DocId, u64),
+}
+
+/// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`]): when the
+/// committing `paint.stroke` / `paint.pencil` matches it (same command, document revision, params,
+/// seed and points), the command takes these pixels instead of rendering the stroke again.
+pub struct LiveCommit {
+    cmd: String,
+    base: (photocraft_doc::DocId, u64),
+    params: Value,
+    seed: u64,
+    points: Vec<StrokePoint>,
+    surface: Surface,
+    bounds: Rect,
+}
+
+impl LiveCommit {
+    /// The params that decide the pixels, without the points and seed (compared separately).
+    fn settings(p: &Value) -> Value {
+        let mut p = p.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.remove("points");
+            o.remove("seed");
+        }
+        p
+    }
+
+    fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
+        let base = s.active().map(|st| (st.doc.id, st.revision));
+        self.cmd == cmd
+            && base == Some(self.base)
+            && p.get("seed").and_then(Value::as_u64) == Some(self.seed)
+            && self.points == pts
+            && Self::settings(p) == Self::settings(&self.params)
+    }
 }
 
 impl LiveStroke {
@@ -374,7 +425,9 @@ impl LiveStroke {
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
-        let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let base = (st.doc.id, st.revision);
+        let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
@@ -401,9 +454,18 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             tail: Rect::EMPTY,
+            points: Vec::new(),
+            base,
         };
         live.push(&pts)?;
         Ok(live)
+    }
+
+    /// The stroke as its commit would take it over (see [`LiveCommit`]).
+    pub fn into_commit(mut self) -> Result<LiveCommit> {
+        let bounds = self.bounds();
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        Ok(LiveCommit { cmd: self.cmd, base: self.base, params: self.params, seed: self.seed, points: self.points, surface: surf.clone(), bounds })
     }
 
     /// Everything the stroke has touched so far.
@@ -425,6 +487,7 @@ impl LiveStroke {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
+        self.points.extend_from_slice(pts);
         self.renderer.push(pts);
         if let Some(symmetry) = &self.symmetry {
             for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -483,7 +546,7 @@ fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase { "Eraser" } else { "Pencil" };
-    stroke_with(s, p, label, brush, pts, flag(p, "autoErase", false))
+    stroke_with(s, "paint.pencil", p, label, brush, pts, flag(p, "autoErase", false))
 }
 
 fn pct(p: &Value, k: &str, d: f32) -> f32 {

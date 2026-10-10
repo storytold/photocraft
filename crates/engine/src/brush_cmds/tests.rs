@@ -695,3 +695,78 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     s.execute("tools.setBrush", json!({ "brush": scatter(2.0) })).unwrap();
     assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [17, 14, 23, 23]}));
 }
+
+/// A live stroke over `pts` (pushed in chunks, as the canvas does) and its commit params.
+fn live_and_commit(s: &Session, cmd: &str, base: Value, pts: &[[f64; 3]]) -> (LiveStroke, Value) {
+    let mut p = base;
+    p["points"] = json!([pts[0]]);
+    let mut live = LiveStroke::begin_with(s, cmd, &p).unwrap();
+    for c in pts[1..].chunks(2) {
+        let sp: Vec<StrokePoint> = c.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+        live.push(&sp).unwrap();
+    }
+    p["points"] = json!(pts);
+    p["seed"] = json!(live.seed);
+    (live, p)
+}
+
+#[test]
+fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
+    let pts = [[10.0, 50.0, 1.0], [60.0, 30.0, 0.7], [120.0, 60.0, 0.9], [180.0, 40.0, 0.4], [150.0, 80.0, 1.0]];
+    for (cmd, base) in [
+        ("paint.stroke", json!({"brush": {"size": 18, "hardness": 0.0, "flow": 0.5}, "smoothing": 0.5, "target": "pixels"})),
+        ("paint.stroke", json!({"preset": "Spatter", "smoothing": 0.0, "target": "pixels"})),
+        ("paint.stroke", json!({"brush": {"size": 12}, "erase": true, "target": "pixels"})),
+        ("paint.pencil", json!({"smoothing": 0.0})),
+    ] {
+        let mut s = session(200, 100);
+        let (live, p) = live_and_commit(&s, cmd, base.clone(), &pts);
+        let steps = s.active().unwrap().history.past_len();
+        s.offer_live_stroke(live).unwrap();
+        let r = s.execute(cmd, p.clone()).unwrap();
+        s.clear_live_stroke();
+        assert_eq!(r["fromLive"], true, "{cmd} {base}: the commit took the live pixels");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+        // The journal's replay renders from scratch and must give the same pixels.
+        let mut fresh = session(200, 100);
+        let r = fresh.execute(cmd, p).unwrap();
+        assert!(r.get("fromLive").is_none());
+        assert!(same_pixels(&surface(&s), &surface(&fresh), Rect::new(0, 0, 200, 100)), "{cmd} {base}");
+        // Undo restores the pre-stroke pixels.
+        s.undo();
+        assert!(same_pixels(&surface(&s), &surface(&session(200, 100)), Rect::new(0, 0, 200, 100)));
+    }
+}
+
+#[test]
+fn an_offer_that_does_not_match_the_commit_is_ignored() {
+    let pts = [[10.0, 50.0, 1.0], [60.0, 30.0, 0.7], [120.0, 60.0, 0.9]];
+    let base = json!({"brush": {"size": 10}, "smoothing": 0.0, "target": "pixels"});
+    // Different points.
+    let mut s = session(200, 100);
+    let (live, mut p) = live_and_commit(&s, "paint.stroke", base.clone(), &pts);
+    p["points"] = json!([[10.0, 50.0, 1.0], [190.0, 90.0, 1.0]]);
+    s.offer_live_stroke(live).unwrap();
+    let r = s.execute("paint.stroke", p.clone()).unwrap();
+    s.clear_live_stroke();
+    assert!(r.get("fromLive").is_none());
+    let mut fresh = session(200, 100);
+    fresh.execute("paint.stroke", p).unwrap();
+    assert!(same_pixels(&surface(&s), &surface(&fresh), Rect::new(0, 0, 200, 100)));
+    // The document changed after the stroke began.
+    let mut s = session(200, 100);
+    let (live, p) = live_and_commit(&s, "paint.stroke", base.clone(), &pts);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.offer_live_stroke(live).unwrap();
+    let r = s.execute("paint.stroke", p).unwrap();
+    s.clear_live_stroke();
+    assert!(r.get("fromLive").is_none(), "a stale offer is never used");
+    // Another command leaves an offer untaken, and a later unrelated stroke can't use it.
+    let mut s = session(200, 100);
+    let (live, _) = live_and_commit(&s, "paint.stroke", base.clone(), &pts);
+    s.offer_live_stroke(live).unwrap();
+    let mut other = base;
+    other["points"] = json!([[5.0, 5.0, 1.0], [40.0, 5.0, 1.0]]);
+    let r = s.execute("paint.stroke", other).unwrap();
+    assert!(r.get("fromLive").is_none());
+}
