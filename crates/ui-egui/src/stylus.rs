@@ -395,7 +395,9 @@ pub struct AndroidTouchRecovery {
 
 impl AndroidTouchRecovery {
     pub fn repair(&mut self, raw: &mut egui::RawInput) {
-        let modifiers = raw.modifiers;
+        // RawInput carries input events, not a `modifiers` field (egui 0.36).
+        // A synthetic release on Android cancellation is not a shortcut action.
+        let modifiers = egui::Modifiers::NONE;
         let mut events = Vec::with_capacity(raw.events.len() + 1);
         for event in raw.events.drain(..) {
             match &event {
