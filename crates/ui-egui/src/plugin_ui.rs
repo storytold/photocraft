@@ -13,7 +13,11 @@ const PREFIX: &str = "plugin.filter.";
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
     let plugins = photocraft_plugins::registry::list();
     let Some(at) = items.iter().position(|i| i.id == "plugin.install") else { return };
-    let path: Vec<String> = vec![tl!("Filter").into(), tl!("Plug-ins").into()];
+    // `MenuItem::path` is the untranslated English path from the command's engine spec: the menu
+    // renderer groups rows by it and translates only at display time. Translating it here left the
+    // plug-in rows under a path no menu node matched, so under any non-English language they were
+    // never drawn (#2540). Borrow the path of "Install Plug-in…", the item we sit above.
+    let Some(path) = items.get(at).map(|i| i.path.clone()) else { return };
     let enabled = app.session.is_enabled("plugin.run");
     let mut extra: Vec<MenuItem> = plugins
         .iter()
@@ -92,5 +96,27 @@ mod tests {
         // Install Plug-in… without params opens its dialog instead of failing.
         let r = crate::menus::invoke(&mut app, &ctx, "plugin.install", json!({})).unwrap();
         assert!(r.get("dialog").is_some());
+    }
+
+    /// Plug-in rows carry the untranslated English menu path like every other item, so they still
+    /// land under Filter › Plug-ins when the UI language translates those menu names (#2540).
+    #[test]
+    fn plugin_menu_path_stays_untranslated_in_other_languages() {
+        let ja = crate::i18n::Lang::from_code("ja").expect("registered language");
+        // The names on the path must really differ from the English, or the test proves nothing.
+        assert_ne!(crate::i18n::tr(ja, "Filter"), "Filter");
+        assert_ne!(crate::i18n::tr(ja, "Plug-ins"), "Plug-ins");
+        let _lang = crate::i18n::language_scope(ja);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
+        app.run("plugin.install", json!({"path": path})).unwrap();
+        let items = crate::menus::menu_items(&app);
+        let me = items
+            .iter()
+            .find(|i| i.id == "plugin.filter.org.photocraft.example.invert")
+            .expect("plug-in listed");
+        assert_eq!(me.path, ["Filter", "Plug-ins"], "plug-in row sits where the menu renderer looks for it");
+        let install = items.iter().find(|i| i.id == "plugin.install").expect("Install Plug-in… listed");
+        assert_eq!(me.path, install.path, "same submenu as Install Plug-in…");
     }
 }
