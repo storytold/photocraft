@@ -74,52 +74,65 @@ fn code_of(theme: Option<egui::Theme>) -> u8 {
 pub fn service() -> Option<photocraft_ui_egui::SystemThemeFn> {
     #[cfg(target_os = "linux")]
     {
-        use std::sync::{
-            Arc, OnceLock,
-            atomic::{AtomicU8, Ordering},
-        };
-        let value = Arc::new(AtomicU8::new(0));
-        let wake: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
-        let (worker_value, worker_wake) = (Arc::clone(&value), Arc::clone(&wake));
-        let (ready, wait) = std::sync::mpsc::channel();
-        if std::thread::Builder::new()
-            .name("appearance-portal".into())
-            .spawn(move || {
-                let proxy = portal_proxy();
-                let initial = proxy.as_ref().and_then(portal_theme).or_else(gtk_theme);
-                worker_value.store(code_of(initial), Ordering::Relaxed);
-                let _ = ready.send(());
-                let Some(proxy) = proxy else { return };
-                let Ok(signals) = proxy.receive_signal("SettingChanged") else { return };
-                for message in signals {
-                    let Ok((namespace, key, changed)) = message.body().deserialize::<(String, String, zbus::zvariant::OwnedValue)>() else {
-                        continue;
-                    };
-                    if namespace != PORTAL_NAMESPACE || key != PORTAL_KEY {
-                        continue;
-                    }
-                    let code = code_of(portal_code(changed).and_then(decode));
-                    if worker_value.swap(code, Ordering::Relaxed) != code
-                        && let Some(ctx) = worker_wake.get()
-                    {
-                        ctx.request_repaint();
-                    }
+        start(|publisher| {
+            let proxy = portal_proxy();
+            publisher.publish(proxy.as_ref().and_then(portal_theme).or_else(gtk_theme));
+            let Some(proxy) = proxy else { return };
+            let Ok(signals) = proxy.receive_signal("SettingChanged") else { return };
+            for message in signals {
+                let Ok((namespace, key, changed)) = message.body().deserialize::<(String, String, zbus::zvariant::OwnedValue)>() else {
+                    continue;
+                };
+                if namespace != PORTAL_NAMESPACE || key != PORTAL_KEY {
+                    continue;
                 }
-            })
-            .is_err()
-        {
-            return None;
-        }
-        let _ = wait.recv_timeout(std::time::Duration::from_millis(250));
-        Some(Box::new(move |ctx| {
-            let _ = wake.set(ctx.clone());
-            decode(u32::from(value.load(Ordering::Relaxed)))
-        }))
+                publisher.publish(portal_code(changed).and_then(decode));
+            }
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {
         None
     }
+}
+
+/// The worker's handle on the shared value. Every change wakes the registered UI, including the
+/// first read when it lands after the start-up wait below.
+#[cfg(target_os = "linux")]
+struct Publisher {
+    value: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    wake: std::sync::Arc<std::sync::OnceLock<egui::Context>>,
+    ready: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl Publisher {
+    fn publish(&self, theme: Option<egui::Theme>) {
+        let code = code_of(theme);
+        if self.value.swap(code, std::sync::atomic::Ordering::Relaxed) != code
+            && let Some(ctx) = self.wake.get()
+        {
+            ctx.request_repaint();
+        }
+        let _ = self.ready.send(());
+    }
+}
+
+/// Runs `worker` on its own thread and waits up to 250 ms for its first value, so a fast desktop
+/// answers before the first frame.
+#[cfg(target_os = "linux")]
+fn start(worker: impl FnOnce(&Publisher) + Send + 'static) -> Option<photocraft_ui_egui::SystemThemeFn> {
+    use std::sync::{Arc, OnceLock, atomic::AtomicU8};
+    let value = Arc::new(AtomicU8::new(0));
+    let wake: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
+    let (ready, wait) = std::sync::mpsc::channel();
+    let publisher = Publisher { value: Arc::clone(&value), wake: Arc::clone(&wake), ready };
+    std::thread::Builder::new().name("appearance-portal".into()).spawn(move || worker(&publisher)).ok()?;
+    let _ = wait.recv_timeout(std::time::Duration::from_millis(250));
+    Some(Box::new(move |ctx| {
+        let _ = wake.set(ctx.clone());
+        decode(u32::from(value.load(std::sync::atomic::Ordering::Relaxed)))
+    }))
 }
 
 #[cfg(test)]
@@ -136,5 +149,34 @@ mod tests {
         assert_eq!(super::parse_gtk_scheme("'prefer-light'\n"), Some(egui::Theme::Light));
         assert_eq!(super::parse_gtk_scheme("'prefer-dark'\n"), Some(egui::Theme::Dark));
         assert_eq!(super::parse_gtk_scheme("'default'\n"), None);
+    }
+
+    /// #2798: a first read that misses the start-up wait still wakes the idle UI.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn late_initial_read_requests_repaint() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let reader = super::start(move |publisher| {
+            let _ = gate.recv();
+            publisher.publish(Some(egui::Theme::Light));
+            let _ = done.send(());
+        })
+        .expect("worker thread");
+        let ctx = egui::Context::default();
+        let repaints = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&repaints);
+        ctx.set_request_repaint_callback(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        assert_eq!(reader(&ctx), None, "start-up wait elapsed without an answer");
+        release.send(()).unwrap();
+        finished.recv().unwrap();
+        assert_eq!(repaints.load(Ordering::Relaxed), 1);
+        assert_eq!(reader(&ctx), Some(egui::Theme::Light));
     }
 }
