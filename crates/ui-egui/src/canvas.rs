@@ -2468,6 +2468,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     zoom_about(&mut view, &xf, p, nz, false, ppp);
                 }
             }
+            (Some(crate::wheel_nav::Wheel::SnapZoom(n)), Some(p)) => {
+                let dir = if n > 0 { 1 } else { -1 };
+                let mut nz = view.zoom;
+                for _ in 0..n.unsigned_abs() {
+                    nz = crate::zoom_levels::step(nz, dir, view.doc_size);
+                }
+                if nz != view.zoom {
+                    zoom_about(&mut view, &xf, p, nz, false, ppp);
+                }
+            }
             (Some(crate::wheel_nav::Wheel::Pan(scroll)), _) => {
                 let d = xf.unmap_vec(scroll) / (view.zoom / ppp);
                 view.center[0] -= d.x;
