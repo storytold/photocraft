@@ -587,6 +587,9 @@ pub enum ToolEvent {
     Up { x: f64, y: f64 },
 }
 
+/// View › Show › Layer Edges: the colour of the active layer's outline.
+pub(crate) const LAYER_EDGES: Color32 = Color32::from_rgb(0x2d, 0x8c, 0xeb);
+
 /// Document ↔ screen mapping for a canvas rect and a view.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewXform {
@@ -2365,14 +2368,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::pixel_grid::paint(app, &painter, &xf, idx, output, visible_doc_rect(&xf));
     }
 
-    // View › Show › Layer Edges: the active layer's content bounds.
-    if app.ui.view.shows(app.ui.view.show.layer_edges)
-        && let Some(st) = app.session.documents().get(idx)
-        && let Some(b) = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(photocraft_compose::bounds::content_bounds)
-        && !b.is_empty()
-    {
-        painter.rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, Color32::from_rgb(0x2d, 0x8c, 0xeb)), egui::StrokeKind::Outside);
-    }
+    // View › Show › Layer Edges: drawn at this depth, but only once this frame's tool events are
+    // in (`layer_edges_rect`), so a press that Auto-Selects a layer outlines that layer.
+    let layer_edges = painter.add(egui::Shape::Noop);
 
     // Selection outline: true boundary, animated marching ants (cached per revision).
     if let Some(sel) = doc.selection.as_ref().filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
@@ -3005,6 +3003,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
     app.tool_override = None;
+    if let Some(b) = layer_edges_rect(app, idx) {
+        painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
+    }
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
@@ -3367,6 +3368,23 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             draw_marquee_readout(painter.ctx(), at, marquee_readout([0.0, 0.0, w, h]));
         }
     }
+}
+
+/// View › Show › Layer Edges: the active layer's content bounds (cached per tile) where the canvas
+/// shows them. During a Move drag that is at the offset the image was drawn with this frame, so
+/// the outline moves in lockstep with the layer's pixels (#2413).
+pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photocraft_geom::Rect> {
+    if !app.ui.view.shows(app.ui.view.show.layer_edges) {
+        return None;
+    }
+    let st = app.session.documents().get(idx)?;
+    let id = st.active_layer?;
+    let b = st.doc.layer(id)?.surface().map(photocraft_compose::bounds::content_bounds)?;
+    if b.is_empty() {
+        return None;
+    }
+    let (dx, dy) = crate::move_ui::shown_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
+    Some(b.translate(dx, dy))
 }
 
 /// Move tool › Show Transform Controls: the active layer's transform bounds.
