@@ -105,6 +105,9 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     s.edit(label, |doc, _| {
+        if photocraft_compose::deep::any_deep(&doc.layers) {
+            return Err(EngineError::Other("deep layers cannot be turned yet; their samples keep their depth".into()));
+        }
         crate::canvas_geom::turn_canvas(doc, t);
         Ok(())
     })?;

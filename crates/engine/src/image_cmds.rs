@@ -287,6 +287,9 @@ fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> 
 
 /// Crops the document to `r` (in current document coordinates).
 fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool) -> Result<()> {
+    if delete_pixels && photocraft_compose::deep::any_deep(&doc.layers) {
+        return Err(bad(cmd, "deep layers cannot be cropped yet; their samples keep their extent"));
+    }
     // The origin moves to (0, 0); `-i32::MIN` has no i32 value (#959).
     let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
         return Err(bad(cmd, format!("the crop origin ({}, {}) can't be moved to (0, 0) within the 32-bit coordinate range", r.x0, r.y0)));
@@ -335,6 +338,12 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
 
 /// Image → Canvas Size.
 fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
+    {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        if photocraft_compose::deep::any_deep(&d.doc.layers) {
+            return Err(bad("image.canvasSize", "deep layers cannot be re-canvased yet; their samples keep their extent"));
+        }
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
@@ -859,6 +868,40 @@ mod tests {
         .unwrap();
         let err = s.edit("move", |doc, _| translate_doc(doc, "move", 10, 0)).unwrap_err();
         assert!(err.to_string().contains("32-bit coordinate range"), "{err}");
+    }
+
+    /// A deep document refuses the canvas operations that would desync its samples' extent:
+    /// rotation, flips, Canvas Size and a deleting Crop (Image Size was already refused).
+    #[test]
+    fn canvas_ops_refuse_deep_documents() {
+        let mut s = session();
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        s.edit("deep", |doc, _| {
+            doc.layers.push(Layer::new("deep", deep));
+            Ok(())
+        })
+        .unwrap();
+        for cmd in [
+            "image.imageRotation.90cw",
+            "image.imageRotation.90ccw",
+            "image.imageRotation.180",
+            "image.imageRotation.flipCanvasHorizontal",
+            "image.imageRotation.flipCanvasVertical",
+            "image.canvasSize",
+        ] {
+            let params = if cmd == "image.canvasSize" { json!({"width": 30, "height": 20}) } else { json!({}) };
+            let err = s.execute(cmd, params).unwrap_err().to_string();
+            assert!(err.contains("deep layers"), "{cmd}: {err}");
+        }
+        // A non-deleting crop (just moving the canvas) is fine.
+        s.execute("image.crop", json!({"x": 0, "y": 0, "width": 30, "height": 20, "deleteCroppedPixels": false})).unwrap();
     }
 
     #[test]

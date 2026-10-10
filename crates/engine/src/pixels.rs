@@ -214,11 +214,35 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
     out
 }
 
+/// Why an upper deep layer cannot merge its samples into the one below: the sample merge
+/// (Nuke's DeepMerge) composites the inputs' samples as they are, so anything that changes
+/// how the upper layer would composite — opacity below 100 %, a blend mode, a mask or layer
+/// effects — is refused instead of silently dropped. Bake it into the samples first
+/// (flatten or rasterize the upper layer) to merge.
+pub fn deep_merge_blocker(l: &Layer) -> Option<&'static str> {
+    if l.opacity < 1.0 {
+        return Some("an opacity below 100 %");
+    }
+    if !matches!(l.blend, photocraft_doc::BlendMode::Normal | photocraft_doc::BlendMode::PassThrough) {
+        return Some("a blend mode");
+    }
+    if l.mask.is_some() || l.vector_mask.is_some() {
+        return Some("a mask");
+    }
+    if photocraft_compose::effects::has_effects(l) {
+        return Some("layer effects");
+    }
+    None
+}
+
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
 pub fn merge_down(doc_bounds: Rect, lower: &Layer, upper: &Layer, format: photocraft_color::PixelFormat) -> Result<Layer, String> {
     // Two deep layers merge their samples and stay deep (Nuke's DeepMerge): the Z sort then
     // composites both inputs' samples together instead of pre-flattening each.
     if let (LayerContent::Deep(a), LayerContent::Deep(b)) = (&lower.content, &upper.content) {
+        if let Some(what) = deep_merge_blocker(upper) {
+            return Err(format!("the upper deep layer has {what}; sample merging would drop it. Flatten or rasterize the layer to bake it in first"));
+        }
         let mut merged = Layer::new(lower.name.clone(), LayerContent::Deep(a.merge(b)?));
         merged.id = lower.id;
         merged.blend = lower.blend;

@@ -33,12 +33,13 @@
 	Open…	Відкрити…
 	Open	Відкрити
 	Open As…	Відкрити як…
+	Open as Deep…	Відкрити як deep…
 	Open EXR Parts…	Відкрити частини EXR…
 	Add beauty precomp from the AOVs	Додати попередню композицію краси з AOV
 	Both	Обидва
 	Left	Лівий
 	Right	Правий
-	Open as Deep…	Відкрити як deep…	Open Recent	Нещодавні файли
+	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -270,6 +271,7 @@
 # Filter
 	Last Filter	Останній фільтр
 	Filter Gallery…	Галерея фільтрів…
+	Filter for deep layers	Фільтр по глибоким шарам
 	Liquify…	Пластика…
 	Camera Raw Filter…	Фільтр Camera Raw…
 	Adaptive Wide Angle…	Адаптивний широкий кут…
@@ -2610,7 +2612,6 @@ fontWeight	Italic	Курсивний
 	Enable airbrush-style build-up effects	Увімкнути ефекти накопичення як в аерографі
 	Filter for adjustment layers	Фільтрувати коригувальні шари
 	Filter for pixel layers	Фільтрувати піксельні шари
-	Filter for deep layers	Фільтр по глибоким шарам
 	Filter for shape layers	Фільтрувати шари фігур
 	Filter for smart objects	Фільтрувати смартоб'єкти
 	Filter for type layers	Фільтрувати текстові шари
