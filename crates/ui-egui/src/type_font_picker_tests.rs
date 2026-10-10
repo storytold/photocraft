@@ -19,7 +19,6 @@ fn harness() -> Harness<'static, State> {
     let state = State { current: "Family 00".into(), families, popup: egui::Id::NULL };
     let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
         |ui, s: &mut State| {
-            // `ComboBox::from_id_salt` wraps its salt in an `IdSalt`; the popup id is the button's + "popup".
             s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
             let fams = s.families.clone();
             font_picker_in(ui, &mut s.current, 170.0, &fams);
@@ -37,8 +36,33 @@ fn popup_rect(h: &Harness<'static, State>) -> Option<Rect> {
 }
 
 fn open(h: &mut Harness<'static, State>) {
-    h.get_by_role(Role::ComboBox).click();
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click();
     h.run();
+}
+
+#[test]
+fn hovering_a_font_row_sets_preview_and_leaving_clears_it() {
+    let mut h = harness();
+    open(&mut h);
+    let row = h.get_by_label("Family 02").rect().center();
+    let popup = popup_rect(&h).expect("font menu open");
+    assert!(popup.contains(row), "row {row:?} is outside popup {popup:?}");
+    h.hover_at(row);
+    h.run_steps(2);
+    let hover_id = egui::Id::new("type-font-hover");
+    assert_eq!(h.ctx.input(|i| i.pointer.interact_pos()), Some(row));
+    assert!(popup_rect(&h).is_some(), "popup closes while moving pointer to the row");
+    assert_eq!(
+        h.ctx.data(|d| d.get_temp::<String>(hover_id)).as_deref(),
+        Some("Family 02"),
+        "row {row:?}, popup {popup:?}, top layer {:?}",
+        h.ctx.layer_id_at(row)
+    );
+
+    let search = h.get_by_role(Role::TextInput).rect().center();
+    h.hover_at(search);
+    h.run();
+    assert!(h.ctx.data(|d| d.get_temp::<String>(hover_id)).is_none());
 }
 
 #[test]
@@ -193,4 +217,152 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
     h.run();
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(font(h.state()), "Inter");
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    assert_eq!(font(h.state()), "JetBrains Mono");
+}
+
+#[test]
+fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
+    use crate::{PhotocraftApp, Services};
+    use serde_json::json;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+
+    let layer_id = app.session.active().unwrap().active_layer.unwrap();
+    let history_before = app.session.active().unwrap().history.entries().len();
+
+    // Simulate hovering a font directly via the preview module
+    let ctx = egui::Context::default();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("type-font-hover"), "JetBrains Mono".to_string()));
+    crate::type_font_preview::follow_hover(&mut app, &ctx);
+
+    // Verify a preview document is generated
+    let (_, preview_key) = crate::type_font_preview::display_doc(&mut app, 0).expect("preview document");
+
+    // Verify the original document's history is NOT polluted
+    let history_after = app.session.active().unwrap().history.entries().len();
+    assert_eq!(history_before, history_after, "Hovering a font does not create an undo step");
+    let doc = app.session.active().unwrap().doc.id;
+    let revision = app.session.active().unwrap().revision;
+    assert!(crate::type_font_preview::damage(&app, doc, revision, 0, preview_key).is_some(), "preview bounds survive dismissal for canvas invalidation");
+
+    // Verify the actual document layer still has the original font
+    let original_font = match &app.session.active().unwrap().doc.layer(layer_id).unwrap().content {
+        photocraft_doc::LayerContent::Text(t) => t.font_family.clone(),
+        _ => panic!("type layer"),
+    };
+    assert_eq!(original_font, "Inter", "Hovering does not commit the font to the document");
+
+    // Simulate the font menu closing (hover cleared)
+    crate::type_font_preview::follow_hover(&mut app, &ctx);
+    let no_preview = crate::type_font_preview::display_doc(&mut app, 0);
+    assert!(no_preview.is_none(), "No preview document is returned after clearing");
+
+    crate::type_font_preview::set(&mut app, "Unavailable Font".into());
+    assert!(crate::type_font_preview::display_doc(&mut app, 0).is_none(), "unavailable fonts do not render a misleading fallback preview");
+}
+
+#[test]
+fn options_bar_hover_previews_on_canvas_without_committing() {
+    use crate::{PhotocraftApp, Services};
+    use photocraft_doc::LayerContent;
+    use serde_json::json;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            crate::type_font_preview::follow_hover(app, ui.ctx());
+            ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
+        },
+        app,
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click();
+    h.run();
+    h.get_by_role(Role::TextInput).type_text("JetBrains Mono");
+    h.run();
+    h.get_by_label("JetBrains Mono").hover();
+    h.run_steps(3);
+
+    let (preview, _) = crate::canvas::display_doc(h.state_mut(), 0);
+    let LayerContent::Text(preview_text) = &preview.layer(layer).unwrap().content else {
+        panic!("type layer");
+    };
+    assert_eq!(preview_text.char_runs()[0].style.font_family, "JetBrains Mono");
+    let LayerContent::Text(original_text) = &h.state().session.active().unwrap().doc.layer(layer).unwrap().content else {
+        panic!("type layer");
+    };
+    assert_eq!(original_text.char_runs()[0].style.font_family, "Inter");
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), 2, "hover adds no history entry");
+
+    h.get_by_role(Role::TextInput).hover();
+    h.run_steps(3);
+    let (restored, key) = crate::canvas::display_doc(h.state_mut(), 0);
+    let LayerContent::Text(restored_text) = &restored.layer(layer).unwrap().content else {
+        panic!("type layer");
+    };
+    assert_eq!(restored_text.char_runs()[0].style.font_family, "Inter");
+    assert_eq!(key, 0, "leaving the font row restores committed canvas content");
+
+    h.get_by_label("JetBrains Mono").hover();
+    h.run_steps(3);
+    h.get_by_label("JetBrains Mono").click();
+    h.run_steps(3);
+    let (committed, key) = crate::canvas::display_doc(h.state_mut(), 0);
+    let LayerContent::Text(committed_text) = &committed.layer(layer).unwrap().content else {
+        panic!("type layer");
+    };
+    assert_eq!(committed_text.char_runs()[0].style.font_family, "JetBrains Mono");
+    assert_eq!(key, 0, "selection replaces the preview with committed content");
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), 3, "selection adds one history step");
+    let committed_font = |app: &PhotocraftApp| {
+        let LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(layer).unwrap().content else {
+            panic!("type layer");
+        };
+        text.char_runs()[0].style.font_family.clone()
+    };
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(committed_font(h.state()), "Inter");
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    assert_eq!(committed_font(h.state()), "JetBrains Mono");
+}
+
+#[test]
+fn hovering_a_font_previews_only_the_selected_characters() {
+    use crate::{PhotocraftApp, Services};
+    use serde_json::json;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"text": "abcdef", "font": "Inter", "size": 18})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    app.run("type.setStyle", json!({"layer": layer.0, "range": [0, 2], "font": "JetBrains Mono"})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: layer.0,
+        caret: 5,
+        anchor: 3,
+        session: "font-preview-test".into(),
+        created: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+
+    crate::type_font_preview::set(&mut app, "Inter".into());
+    let (preview, _) = crate::type_font_preview::display_doc(&mut app, 0).expect("preview document");
+    let fonts = |doc: &photocraft_doc::Document| {
+        let photocraft_doc::LayerContent::Text(text) = &doc.layer(layer).unwrap().content else {
+            panic!("type layer");
+        };
+        text.char_runs().into_iter().flat_map(|run| std::iter::repeat_n(run.style.font_family, run.len)).collect::<Vec<_>>()
+    };
+
+    assert_eq!(fonts(&preview), ["JetBrains Mono", "JetBrains Mono", "Inter", "Inter", "Inter", "Inter"]);
+    assert_eq!(fonts(&app.session.active().unwrap().doc), ["JetBrains Mono", "JetBrains Mono", "Inter", "Inter", "Inter", "Inter"]);
 }
