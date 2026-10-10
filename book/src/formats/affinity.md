@@ -11,6 +11,11 @@ PhotoCraft opens native Affinity documents: `.af` files from Affinity 3 and `.af
 - placed JPEG and PNG images become embedded smart objects, and pixel layers become pixel layers;
 - vector and pixel masks, opacity, visibility, locks, names and blend modes are kept.
 
+Artboards are recognized from both the legacy flag and current Affinity 3 artboard properties.
+They keep their names, bounds and editable children when saved as `.pcraft` or PSD; moving an
+artboard moves its children together. Nested boards become masked groups, and rotated or curved
+boards currently use their bounding rectangle.
+
 The document is 8-bit RGB at the Affinity document's resolution. What PhotoCraft can't reproduce is
 listed in a warning when the file opens, for example layer effects, adjustment layers and live
 filters, brush strokes (drawn as plain strokes), special shapes such as clouds and hearts (drawn as

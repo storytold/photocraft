@@ -171,7 +171,7 @@ id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
 status = "partial"
 issue = 214
-note = "Ratio dropdown and fields, Straighten (TOOL-214-21); no W x H x Resolution with units or saved presets"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); no New/Delete Crop Preset"
 
 [[item]]
 id = "TOOL-214-10"
@@ -255,7 +255,7 @@ id = "TOOL-214-18"
 target = "Crop: drag outside the frame to rotate it (Shift 15 deg steps, angle readout); Enter rotates and crops in one step"
 status = "done"
 issue = 1792
-note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode visuals); UiState.crop_angle"
+note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode; default mode turns the image instead, TOOL-214-23); UiState.crop_angle"
 
 [[item]]
 id = "TOOL-214-19"
@@ -276,7 +276,14 @@ id = "TOOL-214-22"
 target = "Crop gear menu: Show Cropped Area (H), Enable Crop Shield with Match Canvas / custom colour, opacity and Auto Adjust Opacity"
 status = "done"
 issue = 1919
-note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"
+note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. Use Classic Mode / Auto Center Preview: TOOL-214-23"
+
+[[item]]
+id = "TOOL-214-23"
+target = "Crop: Photoshop's default mode (the image turns and moves behind an upright box, Auto Center Preview keeps a resized box's centre in place and centres a drawn one) and Use Classic Mode (P) in the gear menu"
+status = "done"
+issue = 1919
+note = "crop_mode.rs: the crop model (crop_rect + crop_angle) and image.crop are shared by both modes; default mode sets the view's rotation to -crop_angle while the tool shows a frame (picking the tool, in either mode, turns a Rotate View turn upright about the view centre, not restored after Enter/Esc or by P; Classic Mode keeps the camera upright with the frame drawn turned; as Photoshop 25.1), pivoting so the box stays put, moves view and frame together for drags inside and arrow keys, keeps a resized box's centre in place live (Auto Center Preview; a drawn box is centred on release, a moved one never), readout = the image's turn; gear menu order and Classic Mode greying as Photoshop 25.1; CropShield classic_mode / auto_center_preview (ui.set cropShield), P ahead of the Pen key"
 
 [[item]]
 id = "TOOL-1053-1"
