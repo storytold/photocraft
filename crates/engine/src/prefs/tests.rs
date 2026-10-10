@@ -22,6 +22,33 @@ fn defaults_match_photoshop() {
     }
 }
 
+/// #2264: the Studio workspace dot pattern can be hidden without changing themes.
+#[test]
+fn canvas_dot_grid_can_be_disabled_persisted_and_reset() {
+    let mut s = Session::new();
+    assert!(s.prefs().interface.show_canvas_dots, "existing Studio appearance stays unchanged by default");
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.showCanvasDots"})).unwrap(), json!(true));
+
+    s.execute("prefs.set", json!({"path": "interface.showCanvasDots", "value": false})).unwrap();
+    assert!(!s.prefs().interface.show_canvas_dots);
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.showCanvasDots"})).unwrap(), json!(false));
+
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(!restored.prefs().interface.show_canvas_dots, "disabling the pattern must survive restart");
+
+    // Older preference files without the new key retain the original dotted workspace.
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"interface": {"theme": "studio"}}"#).unwrap();
+    assert!(legacy.prefs().interface.show_canvas_dots);
+
+    assert!(s.execute("prefs.set", json!({"path": "interface.showCanvasDots", "value": "no"})).is_err());
+    assert!(!s.prefs().interface.show_canvas_dots, "an invalid type must not change the preference");
+
+    s.execute("prefs.reset", json!({"path": "interface.showCanvasDots"})).unwrap();
+    assert!(s.prefs().interface.show_canvas_dots);
+}
+
 #[test]
 fn appearance_defaults_and_legacy_theme_migrate() {
     let p = Preferences::default();
