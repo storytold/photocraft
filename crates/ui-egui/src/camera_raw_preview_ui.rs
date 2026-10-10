@@ -115,6 +115,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
         match wheel {
             Some(crate::wheel_nav::Wheel::Zoom(factor)) => state.zoom_at(state.scale(viewport, size) * factor, at, viewport, size),
+            Some(crate::wheel_nav::Wheel::SnapZoom(_)) => {}
             Some(crate::wheel_nav::Wheel::Pan(delta)) => state.pan(delta, viewport, size),
             None => {}
         }
