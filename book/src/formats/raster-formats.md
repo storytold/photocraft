@@ -1,6 +1,6 @@
 # Raster formats
 
-`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, QOI, OpenEXR, and Radiance HDR. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. AVIF encoding is optional; AVIF decoding is not implemented in the current crate. Lossless JPEG XL (.jxl) export uses the pure-Rust `zune-jpegxl` encoder for 8/16-bit gray, RGB and RGBA data; gray+alpha is expanded to RGBA at the same bit depth. JPEG XL import is tracked separately in #2868.
+`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, QOI, OpenEXR, and Radiance HDR. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. JPEG XL is decoded in pure Rust by `jxl-oxide` through the optional `photocraft-jxl` crate behind the `jxl` cargo feature (official builds include it; without it `.jxl` files are recognised and refused with the same kind of message): Modular and VarDCT, 8/16-bit integer and 16/32-bit float samples, gray and RGB with alpha, the header's orientation, ICC profiles and enum colour encodings, EXIF and XMP boxes, the first frame of an animation and losslessly recompressed JPEGs; CMYK files are refused as unsupported. Lossless JPEG XL (.jxl) export uses the pure-Rust `zune-jpegxl` encoder for 8/16-bit gray, RGB and RGBA data in every build; gray+alpha is expanded to RGBA at the same bit depth. AVIF encoding is optional; AVIF decoding is not implemented in the current crate.
 
 ## Layered TIFF
 
@@ -16,7 +16,8 @@ incorrect default 8-bit alpha header is corrected to explicitly describe
 16-bit alpha, with an independent decoder oracle checking alpha values.
 The bare codestream has no ICC, EXIF, XMP or DPI boxes; the export path
 converts tagged RGB to sRGB and surfaces metadata losses as fidelity warnings.
-JPEG XL opening remains under review in #2868.
+Opening a `.jxl` file is the `jxl` feature's decoder described above (#2789), so a
+file saved this way reopens with its samples unchanged.
 
 ## WebP
 

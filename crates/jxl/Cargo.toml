@@ -1,0 +1,18 @@
+[package]
+name = "photocraft-jxl"
+description = "Optional JPEG XL decoder for PhotoCraft (a thin, panic-guarded wrapper around jxl-oxide)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pure Rust (MIT OR Apache-2.0), no C code. Without `rayon` it also builds for wasm32.
+jxl-oxide = { version = "0.12.6", default-features = false }
+
+# Groups and passes decode in parallel on native; wasm stays single-threaded.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"] }
+
+[lints]
+workspace = true
