@@ -187,6 +187,18 @@ fn filtered_picker_requests_only_the_given_extensions() {
 }
 
 #[test]
+fn scripts_browse_lists_only_script_files() {
+    let (mut app, open, _) = app();
+    menus::invoke(&mut app, &egui::Context::default(), "file.scripts.browse", json!({})).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(matches!(
+        open.borrow().first().map(|(r, _)| r),
+        Some(FileDialogRequest::Open { multiple: false, extensions: Some(exts), .. })
+            if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt"]
+    ));
+}
+
+#[test]
 fn last_used_dir_takes_the_most_recent_parent() {
     assert_eq!(last_used_dir(&[]), None);
     assert_eq!(last_used_dir(&["/pics/cat.psd".into()]), Some("/pics".into()));
