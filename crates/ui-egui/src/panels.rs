@@ -249,36 +249,45 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             color_chips(app, ui, double);
             if t.pro {
                 ui.add_space(8.0);
-                let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
-                if icons::button(
-                    ui,
-                    "square-dashed",
-                    bx,
-                    quick_mask,
-                    if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
-                )
-                .clicked()
-                {
-                    let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
-                }
-                let sm = icons::button(ui, "app-window", bx, false, tl!("Change Screen Mode  (F)"));
-                if sm.clicked() {
-                    let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
-                }
-                // Right-click (or long-press) lists the modes, like Photoshop's flyout.
-                egui::Popup::context_menu(&sm).show(|ui| {
-                    ui.set_min_width(220.0);
-                    for (id, label) in [
-                        ("view.screenMode.standard", tl!("Standard Screen Mode")),
-                        ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
-                        ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
-                    ] {
-                        let on = crate::view_cmds::checked(app, id).unwrap_or(false);
-                        if ui.add(egui::Button::selectable(on, label)).clicked() {
-                            let _ = crate::menus::invoke(app, &ctx, id, json!({}));
-                            ui.close();
-                        }
+
+                let layout = if double {
+                    egui::Layout::left_to_right(egui::Align::Min)
+                } else {
+                    egui::Layout::top_down(egui::Align::Min)
+                };
+
+                ui.with_layout(layout, |ui| {
+                    let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
+                    if icons::button(
+                        ui,
+                        "square-dashed",
+                        bx,
+                        quick_mask,
+                        if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
+                    )
+                    .clicked()
+                    {
+                        let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
                     }
+                    let sm = icons::button(ui, "app-window", bx, false, tl!("Change Screen Mode  (F)"));
+                    if sm.clicked() {
+                        let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
+                    }
+                    // Right-click (or long-press) lists the modes, like Photoshop's flyout.
+                    egui::Popup::context_menu(&sm).show(|ui| {
+                        ui.set_min_width(220.0);
+                        for (id, label) in [
+                            ("view.screenMode.standard", tl!("Standard Screen Mode")),
+                            ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
+                            ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
+                        ] {
+                            let on = crate::view_cmds::checked(app, id).unwrap_or(false);
+                            if ui.add(egui::Button::selectable(on, label)).clicked() {
+                                let _ = crate::menus::invoke(app, &ctx, id, json!({}));
+                                ui.close();
+                            }
+                        }
+                    });
                 });
             }
         },
