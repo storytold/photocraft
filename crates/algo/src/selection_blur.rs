@@ -155,10 +155,13 @@ fn box_line(src: &[f32], dst: &mut [f32], r: usize) {
     }
 }
 
-/// Select › Modify › Smooth: box average of radius `round(r)` (edges replicated), then the
-/// contrast curve `(v − ½)·4 + ½` that re-hardens the edge and drops specks.
+/// Select › Modify › Smooth: box average of radius `round(r)` (edges replicated), then a hard
+/// threshold at ½, as in Photoshop: straight edges stay exactly where they were, corners round
+/// off and specks drop (measured on Photoshop 27.11, Smooth 8 on a 32 px square: every sampled
+/// pixel 0 or 255, corner cut where the 17×17 average crosses ½). The contrast curve
+/// `(v − ½)·4 + ½` used before left grey, half-selected pixels along every edge.
 pub(crate) fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let curve = |v: f32| ((v - 0.5) * 4.0 + 0.5).clamp(0.0, 1.0);
+    let curve = |v: f32| if v >= 0.5 { 1.0 } else { 0.0 };
     let n = w.saturating_mul(h);
     if m.len() != n || n == 0 {
         return m.iter().map(|v| curve(*v)).collect();
@@ -614,7 +617,7 @@ mod tests {
         }
 
         pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-            box_blur(m, w, h, r.max(0.0).round() as usize).into_iter().map(|v| ((v - 0.5) * 4.0 + 0.5).clamp(0.0, 1.0)).collect()
+            box_blur(m, w, h, r.max(0.0).round() as usize).into_iter().map(|v| if v >= 0.5 { 1.0 } else { 0.0 }).collect()
         }
 
         pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
@@ -692,13 +695,32 @@ mod tests {
         }
     }
 
+    /// Photoshop 27.11, measured: a 32×32 rectangle at (16,16) in 64×64, Select › Modify ›
+    /// Smooth 8 px, filled white. The straight edge stays hard at x = 16; only the corner rounds.
+    #[test]
+    fn smooth_matches_photoshop() {
+        let (w, h) = (64, 64);
+        let m: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (16..48).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+        let s = smooth(&m, w, h, 8.0);
+        let row: Vec<f32> = (8..=24).map(|x| s[32 * w + x]).collect();
+        let want_row: Vec<f32> = (8..=24).map(|x| if x >= 16 { 1.0 } else { 0.0 }).collect();
+        assert_eq!(row, want_row);
+        let diag: Vec<f32> = (16..=24).map(|d| s[d * w + d]).collect();
+        assert_eq!(diag, [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+
     #[test]
     fn smooth_matches_direct_box() {
         for (w, h, seed) in [(97, 61, 4), (40, 150, 5), (13, 7, 6)] {
             for (kind, m) in masks(w, h, seed) {
                 for radius in [0.0, 0.4, 1.0, 2.0, 5.0, 16.0, 50.0, 500.0] {
-                    let d = max_diff(&smooth(&m, w, h, radius), &oracle::smooth(&m, w, h, radius));
-                    assert!(d <= 1.0 / 255.0, "{kind} {w}x{h} r {radius}: {d}");
+                    // The threshold is hard, so a pixel may only differ where the box average sits
+                    // within float rounding of ½ (the running sum adds in another order).
+                    let (fast, slow) = (smooth(&m, w, h, radius), oracle::smooth(&m, w, h, radius));
+                    let avg = oracle::box_blur(&m, w, h, radius.max(0.0).round() as usize);
+                    for (i, (a, b)) in fast.iter().zip(&slow).enumerate() {
+                        assert!(a == b || (avg[i] - 0.5).abs() < 1e-4, "{kind} {w}x{h} r {radius} pixel {i}: {a} vs {b} (average {})", avg[i]);
+                    }
                 }
             }
         }
