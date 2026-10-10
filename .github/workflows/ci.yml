@@ -115,6 +115,14 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --features heif
 
+      # Every command against adversarial params must return Err, never panic or hang (AGENTS.md
+      # Rule 9). The Test step already built this binary (ignored tests are compiled, not run), so
+      # this only adds the run. Same `--workspace --features heif` so nothing rebuilds.
+      - name: Panic hunt
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        run: cargo test --workspace --locked --features heif --test panic_hunt -- --ignored
+
       # The same codecs without the optional decoder: HEIC must stay a clear "not in this build"
       # error for distributors who leave it out.
       - name: Test without heif
