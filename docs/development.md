@@ -318,14 +318,15 @@ bench `--json` support through `photocraft_testkit::perf::{row, report, write_re
 every night (and on demand) as a three-entry matrix of pinned GitHub-hosted runners (macOS
 Apple silicon, Linux x86-64, Windows x86-64), posts each table as its job summary, uploads
 `results.json`, and fails on a failed bench or a regression (budgets are reported, not enforced,
-there: `--advisory-budgets`, since they were set on a faster machine). Each entry compares only with its own
-baseline, `perf/baseline-<os>.json` (`--baseline PATH`), recorded on that runner; hosted Linux and
+there: `--advisory-budgets`, since they were set on a faster machine). Each entry compares only with the
+baseline of its machine class, `perf/baselines/<class>.json` (`--baseline 'perf/baselines/{class}.json'`):
+hosted runners rotate CPU models, and each CPU is its own class. Hosted Linux and
 Windows runners have no hardware GPU (their software ones, llvmpipe and WARP, take seconds per
 refresh), so they run the CPU canvas only (`--cpu`); macOS measures the GPU canvas. On pull requests it
 runs only when the perf setup changes (`perf/**`, `xtask/src/perf.rs`, the workflow): the release
-build of the benches alone takes longer than PR CI should. To record
-the runner baselines, run the workflow by hand with `update_baseline` and commit each
-`perf-baseline-<os>` artifact as `perf/baseline-<os>.json`.
+build of the benches alone takes longer than PR CI should. A run on a
+CPU without a baseline yet records one (only if every bench ran) and uploads it as the
+`perf-baseline-<os>` artifact: commit it to `perf/baselines/`. To re-record one, run the workflow by hand with `update_baseline`.
 
 ## Web build
 

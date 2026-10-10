@@ -9,8 +9,10 @@
 //!   of minutes). Quick numbers are compared only with a quick baseline, and budgets don't apply
 //!   (they are set for the full-size documents).
 //! - `--update-baseline`: write this run into `perf/baseline.json` (the only way it changes).
-//! - `--baseline PATH`: the baseline file to compare with and update (default `perf/baseline.json`;
-//!   the nightly keeps one per GitHub runner OS, `perf/baseline-<os>.json`).
+//! - `--baseline PATH`: the baseline file to compare with and update (default `perf/baseline.json`).
+//!   `{class}` in it is replaced by the machine class, one file per class; a class without a file
+//!   yet gets one written (the nightly uses `perf/baselines/{class}.json`: hosted runners rotate
+//!   CPUs, and each CPU is its own class).
 //! - `--advisory-budgets`: a broken enforced budget is reported, not a failure (CI runners are
 //!   slower than the machine the budgets were set on; only regressions fail there).
 //! - `--threshold PCT`: the regression threshold (default `settings.regression_pct`, 15 %).
@@ -618,6 +620,17 @@ pub fn updated_baseline(old: Option<&Value>, results: &Value) -> Value {
     json!({"schema": 1, "machine_class": class, "machine": results.get("machine"), "modes": modes})
 }
 
+/// Whether a run records a baseline for a machine class that has none yet: only with a per-class
+/// `--baseline` path, and only when every bench ran (a failed bench would leave its scenarios out).
+pub fn records_new_baseline(baseline_exists: bool, per_class: bool, benches_ok: bool) -> bool {
+    !baseline_exists && per_class && benches_ok
+}
+
+/// `--baseline` with `{class}` replaced by the machine class (one baseline file per class).
+pub fn baseline_path(pattern: &str, class: &str) -> String {
+    pattern.replace("{class}", class)
+}
+
 // ---- running ---------------------------------------------------------------------------------
 
 struct Opts {
@@ -809,11 +822,19 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         obj.insert("class".into(), json!(class));
     }
 
-    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(&o.baseline)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let baseline_path = baseline_path(&o.baseline, &class);
+    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(&baseline_path)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    // A per-class path (`{class}`) records a machine class it hasn't seen yet instead of only
+    // skipping: hosted runners rotate CPUs, so each one gets its own baseline file to commit.
+    let per_class = baseline_path != o.baseline;
+    let benches_ok = reports.iter().all(|(_, r)| r.is_ok());
+    let record_new = records_new_baseline(baseline_value.is_some(), per_class, benches_ok);
     let (baseline, baseline_note) = match baseline_value.as_ref().map(|b| baseline_for(b, &class, mode)) {
         Some(Ok(b)) => (Some(b), None),
         Some(Err(e)) => (None, Some(e)),
-        None => (None, Some(format!("no {}: regression check skipped", o.baseline))),
+        None if record_new => (None, Some(format!("no {baseline_path} yet: regression check skipped, this run recorded it (commit it to compare against it)"))),
+        None if per_class => (None, Some(format!("no {baseline_path} yet: regression check skipped, not recorded because a bench failed"))),
+        None => (None, Some(format!("no {baseline_path}: regression check skipped"))),
     };
     let mut outcomes = evaluate(&budgets, &reports, baseline.as_ref(), threshold, !o.quick);
     if o.advisory_budgets {
@@ -875,11 +896,11 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     println!("\n{summary}");
     println!("wrote {}", out_dir.join("results.json").display());
 
-    if o.update_baseline {
+    if o.update_baseline || record_new {
         let nb = updated_baseline(baseline_value.as_ref(), &results);
         let text = serde_json::to_string_pretty(&nb).map_err(|e| format!("encode baseline: {e}"))?;
-        write(&root.join(&o.baseline), &format!("{text}\n"))?;
-        println!("updated {} ({mode}, machine class {class})", o.baseline);
+        write(&root.join(&baseline_path), &format!("{text}\n"))?;
+        println!("updated {baseline_path} ({mode}, machine class {class})");
     }
     let all: Vec<&String> = failures.iter().chain(&bench_failures).collect();
     if all.is_empty() { Ok(()) } else { Err(format!("{} perf failure(s):\n  {}", all.len(), all.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  "))) }
@@ -1146,6 +1167,13 @@ not_measurable = "needs a frame harness"
         assert!(!o.advisory_budgets && parse_opts(&["--advisory-budgets"]).unwrap().advisory_budgets);
         assert!(parse_opts(&["--baseline"]).is_err());
         assert!(!o.cpu && parse_opts(&["--cpu"]).unwrap().cpu);
+        assert_eq!(baseline_path("perf/baselines/{class}.json", "linux-x86-64-epyc"), "perf/baselines/linux-x86-64-epyc.json");
+        assert_eq!(baseline_path(BASELINE, "linux-x86-64-epyc"), BASELINE);
+        // A new class is recorded only from a complete run, and only with a per-class path.
+        assert!(records_new_baseline(false, true, true));
+        assert!(!records_new_baseline(false, true, false), "a failed bench would leave its scenarios out");
+        assert!(!records_new_baseline(true, true, true));
+        assert!(!records_new_baseline(false, false, true));
         assert_eq!(parse_opts(&["--baseline", "perf/baseline-linux.json"]).unwrap().baseline, "perf/baseline-linux.json");
     }
 }

@@ -2,7 +2,8 @@ name: Perf (nightly)
 
 # The performance scorecard (#221): `cargo xtask perf` every night and on demand, on three
 # GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a
-# separate matrix entry with its own baseline, perf/baseline-<os>.json, recorded on that runner.
+# separate matrix entry. Baselines are per machine class (OS, CPU model, GPU), one file each in
+# perf/baselines/: hosted runners rotate CPU models, so each CPU gets its own baseline.
 # On pull requests it runs only when the perf setup itself changes (the paths below). An entry fails when a bench fails or a
 # scenario's p50 regresses more than 15 % against its baseline from the same machine class (other
 # classes are never compared). Budgets in perf/budgets.toml were set on a faster developer machine,
@@ -11,8 +12,10 @@ name: Perf (nightly)
 # would measure themselves), so they run the CPU canvas (--cpu; GPU-only benches read "not run"
 # there). macOS measures the GPU canvas.
 #
-# To (re)record the baselines: run this workflow by hand with "update_baseline", download the
-# `perf-baseline-<os>` artifacts and commit them as perf/baseline-<os>.json in a PR.
+# A run on a CPU without a baseline yet records one if every bench ran (regression check
+# skipped that run) and uploads it as the `perf-baseline-<os>` artifact: commit it to
+# perf/baselines/ in a PR. To re-record an existing one, run this workflow by hand with
+# "update_baseline".
 
 on:
   schedule:
@@ -30,7 +33,7 @@ on:
         type: boolean
         default: false
       update_baseline:
-        description: "Also write perf/baseline-<os>.json from this run (uploaded as artifacts, not committed)"
+        description: "Also rewrite this runner's perf/baselines/<class>.json from this run (uploaded as artifacts, not committed)"
         type: boolean
         default: false
 
@@ -84,7 +87,7 @@ jobs:
           UPDATE: ${{ inputs.update_baseline }}
           EXTRA: ${{ matrix.extra }}
         run: |
-          args=(--baseline "perf/baseline-${{ matrix.name }}.json" --advisory-budgets)
+          args=(--baseline "perf/baselines/{class}.json" --advisory-budgets)
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline); fi
           # shellcheck disable=SC2206 # EXTRA is a list of flags
@@ -111,11 +114,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # Only baselines this run wrote (a new CPU, or update_baseline).
+      - name: Collect new baselines
+        if: always()
+        run: |
+          mkdir -p target/new-baselines
+          git status --porcelain --untracked-files=all perf/baselines | cut -c4- | xargs -r -I{} cp {} target/new-baselines/
+
       - name: Upload baseline
-        if: always() && inputs.update_baseline
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: perf-baseline-${{ matrix.name }}
-          path: perf/baseline-${{ matrix.name }}.json
-          if-no-files-found: warn
+          path: target/new-baselines/
+          if-no-files-found: ignore
           retention-days: 30
