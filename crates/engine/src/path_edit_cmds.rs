@@ -14,7 +14,7 @@ use photocraft_vector::edit::{self, Handle};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::vector_cmds::{bad, has_doc, layer_id, nums, path_json, path_mut, pt, with_shape};
+use crate::vector_cmds::{bad, has_doc, layer_id, nums, parse_path, path_json, path_mut, pt, with_shape};
 use crate::{Result, Session};
 
 /// Coordinates and offsets beyond this are mistakes (the same bound as `path.transform`).
@@ -102,6 +102,42 @@ fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
     edit_path(s, CMD, p, "Drag Segment", |path| edit::bend_segment(path, k, t, d))
 }
 
+fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.addAnchor";
+    let k = knot(CMD, p)?;
+    let t = p.get("t").and_then(Value::as_f64).ok_or_else(|| bad(CMD, "`t` must be a number between 0 and 1, off the existing anchors"))?;
+    edit_path(s, CMD, p, "Add Anchor Point", |path| edit::insert_anchor(path, k, t).map(|_| ()))
+}
+
+fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.deleteAnchor";
+    let k = knot(CMD, p)?;
+    edit_path(s, CMD, p, "Delete Anchor Point", |path| edit::delete_anchor(path, k))
+}
+
+fn replace_subpath(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.replaceSubpath";
+    let index = index(CMD, p, "subpath")?;
+    let closed = p.get("closed").and_then(Value::as_bool).unwrap_or(false);
+    let knots_v = p
+        .get("knots")
+        .filter(|k| k.as_array().is_some_and(|a| (2..=100_000).contains(&a.len())))
+        .ok_or_else(|| bad(CMD, "`knots` must list 2 to 100000 anchors"))?;
+    let parsed = parse_path(&json!({"subpaths": [{"closed": closed, "knots": knots_v}]})).map_err(|e| bad(CMD, e))?;
+    let knots = parsed.subpaths.into_iter().next().map(|sp| sp.knots).unwrap_or_default();
+    if knots.len() < 2
+        || knots.iter().any(|k| !finite([k.anchor.x, k.anchor.y]) || !finite([k.in_ctrl.x, k.in_ctrl.y]) || !finite([k.out_ctrl.x, k.out_ctrl.y]))
+    {
+        return Err(bad(CMD, "each knot needs finite anchor and handle coordinates"));
+    }
+    edit_path(s, CMD, p, "Pen", move |path| {
+        let sp = path.subpaths.get_mut(index).ok_or_else(|| format!("no subpath {index}"))?;
+        sp.closed = closed;
+        sp.knots = knots;
+        Ok(())
+    })
+}
+
 fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.convertPoint";
     let k = knot(CMD, p)?;
@@ -140,6 +176,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert Point",
             r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror)"#.into(),
             convert_point,
+        ),
+        spec(
+            "path.addAnchor",
+            "Add Anchor Point",
+            r#""subpath":i,"knot":j (the segment leaving it),"t":0..1 (off either anchor; the curve is unchanged)"#.into(),
+            add_anchor,
+        ),
+        spec("path.deleteAnchor", "Delete Anchor Point", r#""subpath":i,"knot":j (a closed path opens once two anchors remain)"#.into(), delete_anchor),
+        spec(
+            "path.replaceSubpath",
+            "Pen",
+            r#""subpath":i,"closed":bool=false,"knots":[…] (replaces that subpath; the Pen continues an open path)"#.into(),
+            replace_subpath,
         ),
     ]
 }
@@ -254,9 +303,51 @@ mod tests {
             ("path.convertPoint", json!({"subpath": 0, "knot": 0, "out": "x"})),
             ("path.convertPoint", json!({"name": "nope", "subpath": 0, "knot": 0})),
             ("path.convertPoint", json!({"name": "layer", "subpath": 0, "knot": 0})),
+            ("path.addAnchor", json!({"subpath": 0, "knot": 0, "t": 0.0})),
+            ("path.addAnchor", json!({"subpath": 0, "knot": 0, "t": 1.5})),
+            ("path.addAnchor", json!({"subpath": 4, "knot": 0, "t": 0.5})),
+            ("path.deleteAnchor", json!({"subpath": 0, "knot": 9})),
+            ("path.replaceSubpath", json!({"subpath": 0, "knots": [[1, 1]]})),
+            ("path.replaceSubpath", json!({"subpath": 3, "knots": [[0, 0], [1, 1]]})),
+            ("path.replaceSubpath", json!({"subpath": 0, "knots": [[1e300, 0], [1, 1]]})),
         ] {
             assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
         }
         assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    }
+
+    #[test]
+    fn the_pen_adds_deletes_and_replaces_a_subpath() {
+        let mut s = session();
+        s.execute(
+            "path.set",
+            json!({"path": {"subpaths": [
+                {"closed": false, "knots": [[10, 20], [80, 20], [80, 70]]},
+                {"closed": true, "knots": [[0, 0], [10, 0], [10, 10]]}
+            ]}}),
+        )
+        .unwrap();
+        let r = s.execute("path.addAnchor", json!({"subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+        assert_eq!(anchor(&r, 1), [45.0, 20.0]);
+        assert_eq!(r["path"]["subpaths"][0]["knots"].as_array().unwrap().len(), 4);
+        assert_eq!(r["path"]["subpaths"][1]["knots"].as_array().unwrap().len(), 3, "the other subpath stays");
+        let r = s.execute("path.deleteAnchor", json!({"subpath": 1, "knot": 1})).unwrap();
+        assert_eq!(r["path"]["subpaths"][1]["closed"], false);
+        assert_eq!(r["path"]["subpaths"][1]["knots"].as_array().unwrap().len(), 2);
+        let r = s
+            .execute(
+                "path.replaceSubpath",
+                json!({"subpath": 0, "closed": true, "knots": [
+                    {"anchor": [10, 20], "in": [10, 20], "out": [10, 20], "smooth": false},
+                    {"anchor": [40, 50], "in": [40, 50], "out": [40, 50], "smooth": false},
+                    {"anchor": [70, 20], "in": [70, 20], "out": [70, 20], "smooth": false}
+                ]}),
+            )
+            .unwrap();
+        assert_eq!(r["path"]["subpaths"][0]["closed"], true);
+        assert_eq!(anchor(&r, 1), [40.0, 50.0]);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Pen"));
+        assert!(s.undo());
+        assert_eq!(work(&s).subpaths[0].knots.len(), 4);
     }
 }

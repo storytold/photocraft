@@ -3012,6 +3012,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         egui::CursorIcon::ZoomIn
                     }
                 }
+                Tool::Pen | Tool::DirectSelection | Tool::PathSelection => {
+                    let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+                    if let Some(kind) = crate::vector_ui::path_cursor(app, xf.to_doc(p), mods) {
+                        crate::icons::cursor_badge(ui.ctx(), kind.icon(), p);
+                        egui::CursorIcon::Default
+                    } else {
+                        egui::CursorIcon::Crosshair
+                    }
+                }
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
                 Tool::RedEye => {
@@ -3711,7 +3720,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         crate::type_tool::pointer_move(app, x, y);
     }
     if tool == Tool::Pen {
-        crate::vector_ui::pen_move(app, x, y);
+        crate::vector_ui::pen_move(app, x, y, mods.shift);
     }
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
@@ -3949,7 +3958,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             match tool {
                 Tool::Pen => {
-                    crate::vector_ui::pen_down(app, x, y);
+                    if !crate::vector_ui::pen_edit_existing(app, x, y) {
+                        crate::vector_ui::pen_down(app, x, y, mods.shift);
+                    }
                     return;
                 }
                 Tool::CloneStamp | Tool::Healing if mods.alt => {

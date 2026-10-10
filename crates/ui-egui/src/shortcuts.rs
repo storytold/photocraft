@@ -518,7 +518,7 @@ mod tests {
         app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap();
         let history = app.session.active().unwrap().history.past_len();
         for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_down(&mut app, x, y, false);
             crate::vector_ui::pen_up(&mut app);
         }
         let ctx = egui::Context::default();
@@ -551,7 +551,7 @@ mod tests {
         app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
         app.ui.tool = crate::state::Tool::Pen;
         for (x, y) in [(10.0, 10.0), (50.0, 10.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_down(&mut app, x, y, false);
             crate::vector_ui::pen_up(&mut app);
         }
         app.session.prefs.edit(|p| p.shortcuts.insert("edit.undo".into(), "Cmd+Shift+Y".into()));

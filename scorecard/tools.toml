@@ -178,7 +178,7 @@ id = "TOOL-214-10"
 target = "Pen: Alt breaks a handle, Shift 45 deg, Ctrl direct-selects, Backspace, close-drag handle"
 status = "partial"
 issue = 214
-note = "Ctrl/Cmd = Direct Selection and Alt = Convert Point on existing paths (direct_select.rs, #790); no Shift 45 deg, Backspace or Alt while drawing"
+note = "Shift locks a new segment and a dragged handle to 45 deg from the last anchor; an idle Pen continues an open end, adds an anchor on a segment and deletes any other anchor (vector_ui.rs); Ctrl/Cmd = Direct Selection and Alt = Convert Point on existing paths (direct_select.rs, #790); Backspace retracts a point in progress; no Alt while drawing"
 
 [[item]]
 id = "TOOL-214-11"
