@@ -3379,3 +3379,7 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nie znaleziono obiektu — spróbuj Zaznaczania obiektu lub Lassa
+	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
+	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
+	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu

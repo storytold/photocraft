@@ -2356,3 +2356,7 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nebyl nalezen žádný objekt — zkuste Výběr objektu nebo Laso
+	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
+	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
+	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu

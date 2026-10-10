@@ -2631,3 +2631,7 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
+	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
+	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
+	No subject found — try a rectangle around the object	Объект не найден — попробуйте прямоугольник вокруг объекта

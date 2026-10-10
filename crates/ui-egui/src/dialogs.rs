@@ -345,7 +345,7 @@ fn about_tab(fields: &serde_json::Map<String, Value>) -> &'static str {
 /// One About tab's contents: the credits lists, or the product blurb and links.
 fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
     match tab {
-        "contributors" => crate::credits::contributors_ui(ui),
+        "contributors" => crate::credits::contributors_ui(app, ui),
         "models" => crate::credits::models_ui(ui),
         _ => {
             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
