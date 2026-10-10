@@ -141,9 +141,9 @@ note = "hints and tooltips go through shortcuts::pretty (6266b7a9, #262; pretty_
 [[item]]
 id = "UI-217-20"
 target = "'Show rulers in new documents' preference; guides stored as f64"
-status = "missing"
+status = "done"
 issue = 217
-note = "No rulers pref; doc lib.rs:523 guides are Vec<f32>"
+note = "View › Rulers is remembered in unitsAndRulers.showRulers and applied at launch and on change (#2918; rulers_open_as_last_set_after_a_restart); doc Guides are Vec<f64> through New Guide, .pcraft and PSD 1032 (guides_keep_sub_pixel_positions_through_pcraft_and_psd)"
 
 [[item]]
 id = "UI-217-21"
