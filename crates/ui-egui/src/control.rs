@@ -944,6 +944,25 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) => {
+                // Directory .pcraft (the native on-disk form) loads through a capability-scoped
+                // source; the single-file (zip) form falls back to the bytes path, as do all
+                // other formats.
+                if path.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case(photocraft_format::EXTENSION))
+                    && let Some(open) = app.services.automation_open_pcraft.as_mut()
+                {
+                    match open(path) {
+                        Ok((name, doc)) => {
+                            app.session.add_document(doc, None);
+                            app.opened_from(path);
+                            app.sync_views();
+                            app.ui.status = format!("Opened {name}");
+                            app.ui.status_error = false;
+                            return ok(json!({"path": path, "name": name, "warnings": []}));
+                        }
+                        Err(e) if e.contains("not a directory") => {} // zip form: the bytes path reads it
+                        Err(e) => return err(e),
+                    }
+                }
                 let opened = match app.services.automation_read.as_mut() {
                     Some(read) => read(path),
                     None => Err("automation read authority is not configured".into()),
@@ -1816,6 +1835,55 @@ mod tests {
         } else {
             Ok(())
         }
+    }
+
+    #[test]
+    fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
+        use photocraft_doc::Document;
+        use serde_json::json;
+        // The zip form must keep flowing through the bytes path: the opener answers
+        // "not a directory", and the import still runs.
+        let services = crate::Services {
+            automation_open_pcraft: Some(Box::new(move |path: &str| {
+                if path == "native.pcraft" {
+                    let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                    let doc = Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+                    Ok((name, doc))
+                } else {
+                    Err("automation .pcraft path is not a directory: `zipped.pcraft`".to_string())
+                }
+            })),
+            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
+                let mut d = Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+                d.name = name.to_string();
+                Ok((d, Vec::new()))
+            })),
+            automation_read: Some(Box::new(|path: &str| {
+                if path == "zipped.pcraft" {
+                    Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"zip-bytes".to_vec()))
+                } else {
+                    Err(format!("no such path: {path}"))
+                }
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+
+        let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
+        assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
+        assert_eq!(app.session.active().unwrap().doc.name, "Native");
+        assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "opened_from records the automation path");
+        assert!(!app.session.active().unwrap().is_dirty(), "a fresh open is not dirty");
+
+        // The single-file form takes the bytes path through the same `.pcraft` extension.
+        let r = call(&mut app, &ctx, "app.open", json!({"path": "zipped.pcraft"}));
+        assert_eq!(r["result"]["name"], "zipped.pcraft", "{r}");
+        assert_eq!(app.session.active().unwrap().doc.name, "zipped.pcraft", "the import served the zip form");
+
+        // A real directory error (missing bundle) propagates instead of being masked.
+        let r = call(&mut app, &ctx, "app.open", json!({"path": "gone.pcraft"}));
+        assert!(r["error"].as_str().unwrap().contains("no such path"), "{r}");
     }
 
     fn deny_smart_object_paths(id: &str, params: &Value) -> photocraft_engine::Result<()> {

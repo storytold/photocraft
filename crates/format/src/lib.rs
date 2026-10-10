@@ -44,7 +44,7 @@ pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, re
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
-pub use store::{DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats};
+pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats};
 
 /// File extension of the native format.
 pub const EXTENSION: &str = "pcraft";
@@ -140,6 +140,12 @@ pub fn load_path(path: &Path) -> Result<Document> {
     load_path_with(path, &LoadOptions::default())
 }
 
+/// Load from any byte source — a directory behind a capability handle, an archive, a test
+/// fixture — the same migration and limits as the path loads.
+pub fn load_bytes_source(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    store::load(src, opts)
+}
+
 pub fn load_path_with(path: &Path, opts: &LoadOptions) -> Result<Document> {
     if path.is_dir() {
         store::load(&store::DirSource { root: path.to_path_buf() }, opts)
@@ -160,7 +166,7 @@ pub fn read_thumbnail(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
     let src = store::ZipSource::new(bytes)?;
     let m = store::read_manifest(&src, &LoadOptions::default())?;
     match m.thumbnail {
-        Some(p) => Ok(Some(store::Source::get(&src, &p, 64 << 20)?)),
+        Some(p) => Ok(Some(src.get(&p, 64 << 20)?)),
         None => Ok(None),
     }
 }

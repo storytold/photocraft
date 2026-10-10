@@ -54,7 +54,7 @@ fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
 // Sources
 // ---------------------------------------------------------------------------
 
-pub(crate) trait Source {
+pub trait ByteSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>>;
 }
 
@@ -68,7 +68,7 @@ impl<'a> ZipSource<'a> {
     }
 }
 
-impl Source for ZipSource<'_> {
+impl ByteSource for ZipSource<'_> {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         self.zip.read_by_name(path, max)
     }
@@ -78,7 +78,7 @@ pub(crate) struct DirSource {
     pub root: PathBuf,
 }
 
-impl Source for DirSource {
+impl ByteSource for DirSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         let p = self.root.join(path);
         let len = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?.len();
@@ -127,7 +127,7 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_manifest(src: &dyn Source, opts: &LoadOptions) -> Result<Manifest> {
+pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
     // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
     check_manifest_depth(&raw)?;
@@ -172,7 +172,7 @@ fn take_array(v: &mut serde_json::Value, pointer: &str) -> Vec<serde_json::Value
 }
 
 struct LoadFetch<'a> {
-    src: &'a dyn Source,
+    src: &'a dyn ByteSource,
     opts: LoadOptions,
     total: u64,
     blobs: HashMap<String, Arc<Vec<u8>>>,
@@ -230,7 +230,7 @@ impl Fetch for LoadFetch<'_> {
     }
 }
 
-pub(crate) fn load(src: &dyn Source, opts: &LoadOptions) -> Result<Document> {
+pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
     let m = read_manifest(src, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {

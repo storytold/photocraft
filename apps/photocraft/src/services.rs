@@ -315,6 +315,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_open_pcraft = automation.clone().map(|workspace| {
+        Box::new(move |path: &str| {
+            let doc = workspace.open_pcraft(path).map_err(|error| error.to_string())?;
+            let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
+            Ok((name, doc))
+        }) as photocraft_ui_egui::AutomationOpenPcraftFn
+    });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
     let automation_command = automation.map(|_| {
@@ -337,6 +344,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
         automation_write,
+        automation_open_pcraft,
         automation_command,
         automation_authorize,
         encode_png: Some(Box::new(|w, h, rgba| {

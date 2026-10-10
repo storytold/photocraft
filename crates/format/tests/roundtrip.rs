@@ -90,6 +90,35 @@ fn save_path_zip_file() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The public [`ByteSource`] entry loads a saved directory like `load_path` does.
+#[test]
+fn load_bytes_source_matches_the_path_load() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let dir = temp_dir("bytes-source");
+    let bundle = dir.join("a.pcraft");
+    PcraftWriter::new().save_dir(&doc, &bundle, &SaveOptions::default()).unwrap();
+    let loaded = load_bytes_source(&FsDir { root: bundle.clone() }, &LoadOptions::default()).unwrap();
+    assert_eq!(loaded, doc);
+    assert!(load_bytes_source(&FsDir { root: bundle.join("no-such-dir") }, &LoadOptions::default()).is_err(), "a missing bundle errors");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Reads the on-disk bundle shape for [`load_bytes_source_matches_the_path_load`].
+struct FsDir {
+    root: std::path::PathBuf,
+}
+
+impl ByteSource for FsDir {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        let p = self.root.join(path);
+        let len = std::fs::metadata(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?.len();
+        if len > max as u64 {
+            return Err(FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
+        }
+        Ok(std::fs::read(p)?)
+    }
+}
+
 /// Deepest group nesting in `layers` (0 when there are no groups).
 fn group_depth(layers: &[Layer]) -> usize {
     layers.iter().map(|l| if let photocraft_doc::LayerContent::Group(g) = &l.content { 1 + group_depth(&g.children) } else { 0 }).max().unwrap_or(0)
