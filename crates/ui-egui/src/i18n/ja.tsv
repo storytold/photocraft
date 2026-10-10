@@ -953,6 +953,17 @@
 	Delete current channel	現在のチャンネルを削除
 	Delete current state	現在の状態を削除
 	Delete effect layer	効果レイヤーを削除
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	レイヤー「{name}」を削除しますか？
+	Delete {count} layers? {names}	{count} 個のレイヤーを削除しますか？ {names}
+	Delete layer?	レイヤーを削除しますか？
+	The document is closed	ドキュメントは閉じられています
+	The document or selected layers changed. Please request deletion again.	ドキュメントまたは選択したレイヤーが変更されました。もう一度削除してください。
+	Missing delete command	削除コマンドがありません
+	Invalid delete command	無効な削除コマンドです
+	Layer deleted, but confirmation preference could not be saved: {error}	レイヤーは削除されましたが、確認設定を保存できませんでした: {error}
+
 	Delete layer	レイヤーを削除
 	Delete layer comp	レイヤーカンプを削除
 	Delete note	注釈を削除
@@ -3381,3 +3392,7 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
+	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
+	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
+	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください

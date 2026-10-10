@@ -963,6 +963,17 @@
 	Delete current channel	Odstranit aktuální kanál
 	Delete current state	Odstranit aktuální stav
 	Delete effect layer	Odstranit vrstvu efektu
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Smazat vrstvu „{name}“?
+	Delete {count} layers? {names}	Smazat vrstvy ({count})? {names}
+	Delete layer?	Smazat vrstvu?
+	The document is closed	Dokument je zavřený
+	The document or selected layers changed. Please request deletion again.	Dokument nebo vybrané vrstvy se změnily. Požádejte o smazání znovu.
+	Missing delete command	Chybí příkaz ke smazání
+	Invalid delete command	Neplatný příkaz ke smazání
+	Layer deleted, but confirmation preference could not be saved: {error}	Vrstva byla smazána, ale nastavení potvrzení se nepodařilo uložit: {error}
+
 	Delete layer	Odstranit vrstvu
 	Delete layer comp	Odstranit kompozici vrstev
 	Delete note	Odstranit poznámku
@@ -2357,3 +2368,7 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nebyl nalezen žádný objekt — zkuste Výběr objektu nebo Laso
+	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
+	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
+	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu

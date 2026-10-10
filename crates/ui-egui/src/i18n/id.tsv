@@ -932,6 +932,17 @@
 	Delete current channel	Hapus channel saat ini
 	Delete current state	Hapus kondisi saat ini
 	Delete effect layer	Hapus layer efek
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Hapus layer ‘{name}’?
+	Delete {count} layers? {names}	Hapus {count} layer? {names}
+	Delete layer?	Hapus layer?
+	The document is closed	Dokumen sudah ditutup
+	The document or selected layers changed. Please request deletion again.	Dokumen atau layer yang dipilih telah berubah. Minta penghapusan lagi.
+	Missing delete command	Perintah hapus tidak tersedia
+	Invalid delete command	Perintah hapus tidak valid
+	Layer deleted, but confirmation preference could not be saved: {error}	Layer dihapus, tetapi preferensi konfirmasi tidak dapat disimpan: {error}
+
 	Delete layer	Hapus layer
 	Delete layer comp	Hapus layer comp
 	Delete note	Hapus catatan
@@ -2765,3 +2776,7 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
+	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
+	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
+	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
