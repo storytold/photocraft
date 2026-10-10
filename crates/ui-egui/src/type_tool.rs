@@ -1128,6 +1128,21 @@ pub fn foreground_changed(app: &mut PhotocraftApp) {
     let _ = app.run("type.setStyle", p);
 }
 
+/// The alignment the options bar highlights: the caret paragraph's while a type layer is being
+/// edited, else the tool default.
+fn displayed_align(app: &PhotocraftApp) -> String {
+    use photocraft_doc::text::TextAlign as A;
+    if app.ui.text_edit.is_none() {
+        return app.ui.tool_options.type_align.clone();
+    }
+    match styles_at(app).map(|(_, p)| p.align) {
+        Some(A::Left) => "left".into(),
+        Some(A::Center) => "center".into(),
+        Some(A::Right) => "right".into(),
+        Some(_) | None => String::new(),
+    }
+}
+
 /// Photoshop's Type options bar.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
@@ -1141,6 +1156,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some((tl.font_family.clone(), run.as_ref().map(selected_style).unwrap_or_default(), size, styles_at(app).map_or(tl.color, |(c, _)| c.color)))
     });
     let o = app.ui.tool_options.clone();
+    let shown_align = displayed_align(app);
     let (mut fam, mut style, mut size) = match &shown {
         Some((f, s, z, _)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
         None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
@@ -1196,7 +1212,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (align, icon, tip) in
         [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
     {
-        if crate::icons::button(ui, icon, 24.0, o.type_align == align, tip).clicked() {
+        if crate::icons::button(ui, icon, 24.0, shown_align == align, tip).clicked() {
             app.ui.tool_options.type_align = align.into();
             apply(app, ui.ctx(), json!({"align": align}));
         }
@@ -2007,5 +2023,18 @@ two",
         pointer_up(&mut v, [200.0, 100.0], [200.0, 100.0]);
         insert(&mut v, "مرحبا");
         assert_eq!(align(&v), TextAlign::Left);
+    }
+
+    /// The options bar highlights the edited paragraph's alignment, not the tool default.
+    #[test]
+    fn options_bar_shows_the_edited_paragraphs_alignment() {
+        let mut a = app();
+        assert_eq!(displayed_align(&a), "left");
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut a, "مرحبا");
+        assert_eq!(a.ui.tool_options.type_align, "left", "the tool default is untouched");
+        assert_eq!(displayed_align(&a), "right");
+        a.ui.text_edit = None;
+        assert_eq!(displayed_align(&a), "left", "not editing: the tool default");
     }
 }
