@@ -46,8 +46,10 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
 /// Rasterize run on every selected layer instead.
 pub fn single_layer_only(id: &str) -> bool {
     let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
-    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.quickExportAsPng" | "layer.exportAs")
-        || (id.starts_with("layer.layerMask.") && !adds_mask)
+    matches!(
+        id,
+        "layer.removeBackground" | "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.quickExportAsPng" | "layer.exportAs"
+    ) || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
@@ -86,6 +88,10 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         }
     }
     v.push(None);
+    if !multi && matches!(l.content, LayerContent::Raster(_)) {
+        v.push(Some((tl!("Remove Background (AI)"), "layer.removeBackground")));
+        v.push(None);
+    }
     // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
     if let Some(mask) = l.mask.as_ref().filter(|_| !multi) {
         v.push(Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")));
@@ -146,7 +152,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
                         if !on_set {
                             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                         }
-                        actions.push((id.into(), Value::Null));
+                        actions.push((id.into(), if id == "layer.removeBackground" { json!({"layer": l.id.0, "method": "ai"}) } else { Value::Null }));
                         ui.close();
                     }
                 }
@@ -234,6 +240,21 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_cutout_is_offered_for_one_pixel_layer() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        let st = s.active().unwrap();
+        let raster = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert!(entries(raster, false, false).into_iter().flatten().any(|(_, id)| id == "layer.removeBackground"));
+        assert!(!entries(raster, true, false).into_iter().flatten().any(|(_, id)| id == "layer.removeBackground"));
+        assert!(single_layer_only("layer.removeBackground"));
+        s.execute("type.create", json!({"text":"Text","size":24,"x":0,"y":0})).unwrap();
+        let st = s.active().unwrap();
+        let text = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert!(!entries(text, false, false).into_iter().flatten().any(|(_, id)| id == "layer.removeBackground"));
+    }
 
     #[test]
     fn mask_toggle_label_follows_history_and_selected_layer() {

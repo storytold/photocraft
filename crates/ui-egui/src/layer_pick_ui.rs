@@ -73,11 +73,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(200.0, 24.0 * menu.layers.len() as f32 + 12.0), |r| r.size());
     let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
     let mut chosen = None;
+    let mut remove = None;
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             // As wide as the longest name (long names are cut short), like a menu.
             let font = egui::TextStyle::Button.resolve(ui.style());
-            let widest = menu.layers.iter().map(|(_, n)| ui.painter().layout_no_wrap(n.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
+            let action_width = ui.painter().layout_no_wrap(tl!("Remove Background (AI)").to_owned(), font.clone(), Color32::WHITE).size().x;
+            let widest =
+                menu.layers.iter().map(|(_, n)| ui.painter().layout_no_wrap(n.clone(), font.clone(), Color32::WHITE).size().x).fold(action_width, f32::max);
             let w = (widest + 2.0 * ui.spacing().button_padding.x + 8.0).clamp(140.0, 360.0);
             ui.set_width(w);
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -90,9 +93,32 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         chosen = Some(*layer);
                     }
                 }
+                // Target the topmost pixel layer under the pointer, independently of selection.
+                if let Some((layer, name)) = menu.layers.first()
+                    && let Some(st) = app.session.active()
+                    && let Some(l) = st.doc.layer(photocraft_doc::LayerId(*layer))
+                    && matches!(l.content, photocraft_doc::LayerContent::Raster(_))
+                {
+                    ui.separator();
+                    let locks = st.doc.effective_locks(l.id);
+                    if ui
+                        .add_enabled(!locks.pixels && !locks.all && !app.session.has_jobs(), egui::Button::new(tl!("Remove Background (AI)")))
+                        .on_hover_text(name)
+                        .clicked()
+                    {
+                        remove = Some(*layer);
+                    }
+                }
             });
         });
     });
+    if let Some(layer) = remove {
+        choose(app, layer);
+        if let Err(e) = app.run("layer.removeBackground", json!({"layer": layer, "method": "ai"})) {
+            app.ui.status = e;
+        }
+        return;
+    }
     if let Some(layer) = chosen {
         choose(app, layer);
         return;
@@ -200,6 +226,7 @@ mod tests {
         let c = h.state().last_canvas_rect.center();
         right_click(&mut h, c, Modifiers::NONE);
         assert_eq!(names(h.state()), ["Red", "Background"]);
+        h.get_by_label("Remove Background (AI)");
         let j0 = h.state().session.journal.len();
         h.get_by_label("Background").click();
         h.run_steps(3);

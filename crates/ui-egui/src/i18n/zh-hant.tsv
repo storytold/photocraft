@@ -2394,6 +2394,7 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Remove Background (AI)	移除背景 (AI)
 	Use Classic Mode	使用傳統模式
 	Auto Center Preview	自動置中預視
 	Next Document	下一個文件

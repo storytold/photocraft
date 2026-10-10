@@ -526,3 +526,18 @@ stroke is drawn above its clipped layers; linked effect patterns tile from the l
 reference point; stroke distances follow a 5 × 5 chamfer metric (1, √2, √5) seeded at sub-pixel
 edge offsets; interior effects keep the layer's alpha; outside strokes blend onto the backdrop with
 their own modes, an upper stroke covering lower ones.
+
+## Local AI background removal
+
+Run `scripts/setup-background-removal.sh` once to download the checksum-verified
+BiRefNet General Lite model (214 MiB). With the Move tool, right-click an image on
+the canvas and choose **Remove Background (AI)** to process the topmost pixel
+layer under the pointer. The same action is in a pixel layer's Layers panel menu.
+The desktop app runs inference locally in a cancellable background job and adds
+an editable layer mask in one undo step; source pixels and bit depth are retained.
+
+`layer.removeBackground {"layer":123,"method":"ai"}` exposes the same action to
+CLI/control/MCP clients. The browser build reports that ONNX support requires the
+desktop app. See [photocraft-ml](../crates/ml/README.md) for model installation and
+packaged-app paths. The original subject detector remains the default for older
+scripts and the existing Properties Quick Action.
