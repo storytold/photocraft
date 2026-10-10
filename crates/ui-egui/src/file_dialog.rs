@@ -28,6 +28,9 @@ pub enum FileDialogRequest {
     Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
+    /// A folder (Color Lookup › Install Pack…); answered with its path in `Paths`. The web has
+    /// no folder picker and answers Cancel.
+    Folder,
 }
 
 /// The user's choice (a cancelled dialog answers `None`).
@@ -98,6 +101,7 @@ impl PhotocraftApp {
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
             FileDialogRequest::Save { .. } => "save",
+            FileDialogRequest::Folder => "folder",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
         self.file_dialog = Some(Pending { request: Some(request), answer: None, then });
@@ -152,6 +156,14 @@ impl PhotocraftApp {
         self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
+        })
+    }
+
+    /// Ask for a folder: `then` gets its path.
+    pub(crate) fn pick_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_file(FileDialogRequest::Folder, move |app, answer| match answer {
+            FileDialogAnswer::Paths(paths) => paths.into_iter().next().map_or_else(|| Err(CANCELLED.into()), |dir| then(app, dir)),
+            _ => Err(UNEXPECTED.into()),
         })
     }
 

@@ -372,6 +372,8 @@ fn services(inbox: Inbox) -> Services {
                 let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
                 reply.send(Some(FileDialogAnswer::SaveTo(name)));
             }
+            // A page can't pick a folder (and the web build has no LUT library).
+            FileDialogRequest::Folder => reply.send(None),
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
         encode_png: Some(Box::new(|w, h, rgba| {

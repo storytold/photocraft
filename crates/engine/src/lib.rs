@@ -58,6 +58,9 @@ pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
 pub mod layer_style;
 pub mod lens_cmds;
+mod lut_id_params;
+pub mod lut_library;
+pub mod lut_library_cmds;
 pub mod magnetic_cmds;
 pub mod mask_view_cmds;
 mod migrate_cmds;
@@ -352,6 +355,9 @@ pub struct Session {
     /// Persistent brush preset store (desktop only; `None` keeps presets session-only, as in
     /// headless and test sessions). See `preset_store`. The same store holds the Actions list.
     pub preset_store: Option<preset_store::PresetStore>,
+    /// Installed LUT packs for Color Lookup (desktop only; `None` in headless, test and web
+    /// sessions). See `lut_library`.
+    pub lut_library: Option<lut_library::LutLibrary>,
     /// Window › Actions. The list persists with the preset store when one is attached.
     pub actions: actions_cmds::ActionState,
     /// Gate for every command the session runs, including the ones a command runs on its own

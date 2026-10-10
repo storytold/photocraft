@@ -722,6 +722,22 @@
 	+ Add variable	+ Variabele toevoegen
 	30 frames @ 30 fps	30 frames @ 30 fps
 	3D LUT File	3D LUT-bestand
+	Install Pack…	Pakket installeren…
+	Remove Pack	Pakket verwijderen
+	Built-in	Ingebouwd
+	Favorites	Favorieten
+	Duplicate of	Duplicaat van
+	3D cube	3D-kubus
+	1D cube	1D-kubus
+	LUT look	LUT-look
+	{kind}, size {n}	{kind}, grootte {n}
+	Title: {title}	Titel: {title}
+	Declares an input range other than 0 to 1	Geeft een ander invoerbereik op dan 0 tot 1
+	The name suggests a technical conversion, not a creative look	De naam wijst op een technische conversie, niet op een creatieve look
+	LUTs installed into {pack}: {n}	LUT's geïnstalleerd in {pack}: {n}
+	{n} skipped	{n} overgeslagen
+	{n} already installed	{n} al geïnstalleerd
+	Choosing a folder is not available here; use the lut.installPack command	Een map kiezen is hier niet beschikbaar; gebruik de opdracht lut.installPack
 	Absolute	Absoluut
 	Absolute Colorimetric	Absoluut colorimetrisch
 	Action	Actie

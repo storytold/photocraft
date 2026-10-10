@@ -635,6 +635,8 @@ impl Session {
         if let Some(why) = crate::hidden_target::refusal(self, id, &params) {
             return Err(EngineError::Other(why.into()));
         }
+        // Color Lookup's `lut` may name an installed LUT; its text is read here, where the library is.
+        let run_params = crate::lut_id_params::resolve(self, id, run_params)?;
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
         self.jobs.spawn = background;

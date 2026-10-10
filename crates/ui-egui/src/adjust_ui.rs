@@ -92,31 +92,24 @@ fn browse_color_lookup(app: &mut PhotocraftApp, layer: LayerId) -> Result<Value,
 
 pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     let t = Tokens::get(ui.ctx());
-    let Adjustment::ColorLookup { name, lut, size, tetrahedral, dither } = adj else {
+    let Adjustment::ColorLookup { name, lut, tetrahedral, dither, .. } = adj else {
         return;
     };
     let builtins = photocraft_engine::adjust_cmds::LOOKS;
-    let current =
-        if lut.is_none() { "none".to_string() } else { builtins.iter().find(|b| b.1 == name).map_or_else(|| "custom".to_string(), |b| b.0.to_string()) };
-    let custom_label = format!("{name} ({size}³)");
-    let mut opts: Vec<(String, &str)> = vec![("load".into(), tl!("Load 3D LUT…")), ("none".into(), tl!("None"))];
-    opts.extend(builtins.iter().map(|(id, label)| (id.to_string(), *label)));
-    if current == "custom" {
-        opts.push(("custom".into(), custom_label.as_str()));
-    }
-    let mut sel = current.clone();
+    let look = if lut.is_none() { "none".to_string() } else { builtins.iter().find(|b| b.1 == name).map_or_else(|| "custom".to_string(), |b| b.0.to_string()) };
     let mut params: Option<Value> = None;
     let mut browse = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
-        if widgets::dropdown(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0) {
-            if sel == "load" {
-                browse = true;
-            } else if sel != current && sel != "custom" {
-                params = Some(json!({"lut": sel}));
-            }
-        }
-    });
+    ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
+    let current = crate::lut_library_ui::Current { look: &look, name };
+    match crate::lut_library_ui::browser(app, ui, id, &current, &builtins) {
+        Some(crate::lut_library_ui::Pick::Look(look)) => params = Some(json!({"lut": look})),
+        Some(crate::lut_library_ui::Pick::File(file)) => params = Some(json!({"file": file})),
+        None => {}
+    }
+    // The platform file picker, for a LUT that is not in the library.
+    if widgets::secondary_button(ui, tl!("Load 3D LUT…"), 130.0).clicked() {
+        browse = true;
+    }
     if browse
         && let Err(e) = browse_color_lookup(app, id)
         && e != crate::file_dialog::CANCELLED

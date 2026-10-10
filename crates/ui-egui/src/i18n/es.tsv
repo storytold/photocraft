@@ -732,6 +732,22 @@
 	+ Add variable	+ Añadir variable
 	30 frames @ 30 fps	30 fotogramas @ 30 fps
 	3D LUT File	Archivo LUT 3D
+	Install Pack…	Instalar paquete…
+	Remove Pack	Quitar paquete
+	Built-in	Integrados
+	Favorites	Favoritos
+	Duplicate of	Duplicado de
+	3D cube	Cubo 3D
+	1D cube	Cubo 1D
+	LUT look	Look LUT
+	{kind}, size {n}	{kind}, tamaño {n}
+	Title: {title}	Título: {title}
+	Declares an input range other than 0 to 1	Declara un rango de entrada distinto de 0 a 1
+	The name suggests a technical conversion, not a creative look	El nombre sugiere una conversión técnica, no un look creativo
+	LUTs installed into {pack}: {n}	LUT instalados en {pack}: {n}
+	{n} skipped	{n} omitidos
+	{n} already installed	{n} ya instalados
+	Choosing a folder is not available here; use the lut.installPack command	Aquí no se puede elegir una carpeta; usa el comando lut.installPack
 	Absolute	Absoluto
 	Absolute Colorimetric	Colorimétrico absoluto
 	Action	Acción

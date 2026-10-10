@@ -2629,6 +2629,8 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         let _ = app.run("layer.setAdjustment", params);
         app.live_adjust = None;
     }
+    // The Color Lookup list sizes itself to the room left above everything drawn after it.
+    crate::lut_library_ui::finish(ui, id);
 }
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {

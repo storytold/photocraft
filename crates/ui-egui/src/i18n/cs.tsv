@@ -747,6 +747,22 @@
 	+ Add variable	+ Přidat proměnnou
 	30 frames @ 30 fps	30 snímků při 30 fps
 	3D LUT File	Soubor 3D LUT
+	Install Pack…	Nainstalovat balíček…
+	Remove Pack	Odebrat balíček
+	Built-in	Vestavěné
+	Favorites	Oblíbené
+	Duplicate of	Duplikát
+	3D cube	3D kostka
+	1D cube	1D kostka
+	LUT look	Vzhled LUT
+	{kind}, size {n}	{kind}, velikost {n}
+	Title: {title}	Název: {title}
+	Declares an input range other than 0 to 1	Udává vstupní rozsah jiný než 0 až 1
+	The name suggests a technical conversion, not a creative look	Název napovídá technický převod, ne kreativní vzhled
+	LUTs installed into {pack}: {n}	LUT nainstalováno do {pack}: {n}
+	{n} skipped	{n} přeskočeno
+	{n} already installed	{n} již nainstalováno
+	Choosing a folder is not available here; use the lut.installPack command	Výběr složky tu není dostupný; použijte příkaz lut.installPack
 	Absolute	Absolutní
 	Absolute Colorimetric	Absolutní kolorimetrický
 	Action	Akce

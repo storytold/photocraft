@@ -97,11 +97,12 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
     Ok(Adjustment::SelectiveColor { relative, adjustments: adj })
 }
 
-/// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
-/// .look path, native only) or `"data"` (the file's text, with `"fileName"` naming its format),
-/// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
-/// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
-/// error.
+/// Color Lookup from params: `"lut"` (a built-in look id or `"none"`; an installed LUT's library id
+/// such as `Pack/Name.cube` is turned into `"data"` before this runs, see `lut_id_params`),
+/// `"file"` (a .cube / .3dl / .look path, native only) or `"data"` (the file's text, with
+/// `"fileName"` naming its format), `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`.
+/// The table is embedded in the layer, as Photoshop does. Unspecified fields keep `base`'s values;
+/// a key of the wrong type is an error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
     let (mut name, mut lut, mut size, mut tetrahedral, mut dither) = match base {
@@ -115,7 +116,9 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             lut = None;
             size = 0;
         } else {
-            let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| bad(CMD, format!("unknown look `{id}` (built-ins: {})", builtin_ids())))?;
+            let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| {
+                bad(CMD, format!("unknown look `{id}` (built-ins: {}; or a LUT library id such as Pack/Name.cube, see lut.library)", builtin_ids()))
+            })?;
             let label = f.title.clone();
             loaded = Some((f, label));
         }
@@ -127,9 +130,9 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         loaded = Some((f, base_name(file_name)));
     }
     if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
-        let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
-        let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
-        loaded = Some((f, base_name(path)));
+        // Previews rebuild the adjustment every frame, so parsed files are cached (same errors).
+        let f = crate::lut_library::cache::load(path, read_file).map_err(|e| bad(CMD, e))?;
+        loaded = Some(((*f).clone(), base_name(path)));
     }
     if let Some((f, label)) = loaded {
         if !f.domain_is_default() {

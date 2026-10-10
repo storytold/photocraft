@@ -2529,6 +2529,22 @@
 	Liquify is not open	Το Liquify δεν είναι ανοιχτό
 	Liquify…	Ρευστοποίηση…
 	Load 3D LUT…	Φόρτωση 3D LUT…
+	Install Pack…	Εγκατάσταση πακέτου…
+	Remove Pack	Αφαίρεση πακέτου
+	Built-in	Ενσωματωμένα
+	Favorites	Αγαπημένα
+	Duplicate of	Αντίγραφο του
+	3D cube	Κύβος 3D
+	1D cube	Κύβος 1D
+	LUT look	Εμφάνιση LUT
+	{kind}, size {n}	{kind}, μέγεθος {n}
+	Title: {title}	Τίτλος: {title}
+	Declares an input range other than 0 to 1	Δηλώνει εύρος εισόδου διαφορετικό από 0 έως 1
+	The name suggests a technical conversion, not a creative look	Το όνομα παραπέμπει σε τεχνική μετατροπή και όχι σε δημιουργική εμφάνιση
+	LUTs installed into {pack}: {n}	LUT που εγκαταστάθηκαν στο {pack}: {n}
+	{n} skipped	{n} παραλείφθηκαν
+	{n} already installed	{n} είναι ήδη εγκατεστημένα
+	Choosing a folder is not available here; use the lut.installPack command	Η επιλογή φακέλου δεν είναι διαθέσιμη εδώ· χρησιμοποιήστε την εντολή lut.installPack
 	Load Default Type Styles	Φόρτωση προεπιλεγμένων στυλ κειμένου
 	Load Files into Stack…	Φόρτωση αρχείων σε στοίβα…
 	Load Selection…	Φόρτωση επιλογής…

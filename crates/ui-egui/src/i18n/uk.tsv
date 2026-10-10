@@ -721,6 +721,22 @@
 	Color Lookup…	Таблиця кольорів…
 	Color Lookup Tables…	Таблиці перетворення кольорів…
 	3D LUT File	Файл 3D LUT
+	Install Pack…	Установити пакет…
+	Remove Pack	Вилучити пакет
+	Built-in	Вбудовані
+	Favorites	Вибране
+	Duplicate of	Дублікат
+	3D cube	3D-куб
+	1D cube	1D-куб
+	LUT look	LUT-вигляд
+	{kind}, size {n}	{kind}, розмір {n}
+	Title: {title}	Назва: {title}
+	Declares an input range other than 0 to 1	Оголошує вхідний діапазон, відмінний від 0 до 1
+	The name suggests a technical conversion, not a creative look	Назва вказує на технічне перетворення, а не на творчий вигляд
+	LUTs installed into {pack}: {n}	Установлено LUT у {pack}: {n}
+	{n} skipped	{n} пропущено
+	{n} already installed	{n} уже установлено
+	Choosing a folder is not available here; use the lut.installPack command	Вибір теки тут недоступний; скористайтеся командою lut.installPack
 	Load 3D LUT…	Завантажити 3D LUT…
 	Invert…	Інвертувати…
 	Invert	Інвертувати

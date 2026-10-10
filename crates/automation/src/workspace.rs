@@ -308,6 +308,8 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         // With a `path` the file is written there; without one the bytes come back as `data`.
         "swatches.export" => params.get("path").is_some(),
         "plugin.reload" => true,
+        // They read an arbitrary folder and change the LUT library on disk.
+        "lut.installPack" | "lut.removePack" => true,
         _ => false,
     }
 }
@@ -645,6 +647,9 @@ mod tests {
             ("plugin.install", serde_json::json!({"path": " "})),
             ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
             ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
+            ("lut.installPack", serde_json::json!({"path": "/outside/luts"})),
+            ("lut.installPack", serde_json::json!({})),
+            ("lut.removePack", serde_json::json!({"name": "Pack"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
         }
@@ -776,6 +781,7 @@ mod tests {
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
+            ("lut.installPack", serde_json::json!({"path": "/outside/luts"})),
             ("prefs.set", serde_json::json!({"path": "historyLog.filePath", "value": "/outside/log"})),
             ("prefs.set", serde_json::json!({"values": {"interface.language": "fr", "historyLog.filePath": "/outside/log"}})),
         ] {

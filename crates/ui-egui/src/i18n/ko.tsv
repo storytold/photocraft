@@ -710,6 +710,22 @@
 	+ Add variable	+ 변수 추가
 	30 frames @ 30 fps	30프레임 @ 30fps
 	3D LUT File	3D LUT 파일
+	Install Pack…	팩 설치…
+	Remove Pack	팩 제거
+	Built-in	기본 제공
+	Favorites	즐겨찾기
+	Duplicate of	중복:
+	3D cube	3D 큐브
+	1D cube	1D 큐브
+	LUT look	LUT 룩
+	{kind}, size {n}	{kind}, 크기 {n}
+	Title: {title}	제목: {title}
+	Declares an input range other than 0 to 1	0~1이 아닌 입력 범위를 지정합니다
+	The name suggests a technical conversion, not a creative look	이름으로 보아 창작용 룩이 아닌 기술적 변환으로 보입니다
+	LUTs installed into {pack}: {n}	{pack}에 설치된 LUT: {n}
+	{n} skipped	{n}개 건너뜀
+	{n} already installed	{n}개 이미 설치됨
+	Choosing a folder is not available here; use the lut.installPack command	여기서는 폴더를 선택할 수 없습니다. lut.installPack 명령을 사용하세요
 	Absolute	절대
 	Absolute Colorimetric	절대 색도계
 	Action	액션

@@ -736,6 +736,22 @@
 	+ Add variable	+ 変数を追加
 	30 frames @ 30 fps	30 フレーム @ 30 fps
 	3D LUT File	3D LUT ファイル
+	Install Pack…	パックをインストール…
+	Remove Pack	パックを削除
+	Built-in	内蔵
+	Favorites	お気に入り
+	Duplicate of	重複:
+	3D cube	3Dキューブ
+	1D cube	1Dキューブ
+	LUT look	LUTルック
+	{kind}, size {n}	{kind}、サイズ {n}
+	Title: {title}	タイトル: {title}
+	Declares an input range other than 0 to 1	0〜1以外の入力範囲を指定しています
+	The name suggests a technical conversion, not a creative look	名前から、クリエイティブなルックではなく技術的な変換と思われます
+	LUTs installed into {pack}: {n}	{pack} にインストールした LUT: {n}
+	{n} skipped	{n} 件スキップ
+	{n} already installed	{n} 件はインストール済み
+	Choosing a folder is not available here; use the lut.installPack command	ここではフォルダーを選択できません。lut.installPack コマンドを使ってください
 	Absolute	絶対
 	Absolute Colorimetric	絶対的な色域を維持
 	Action	アクション

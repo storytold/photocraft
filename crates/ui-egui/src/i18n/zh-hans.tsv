@@ -734,6 +734,22 @@
 	+ Add variable	+ 添加变量
 	30 frames @ 30 fps	30 帧 @ 30 fps
 	3D LUT File	3D LUT 文件
+	Install Pack…	安装包…
+	Remove Pack	移除包
+	Built-in	内置
+	Favorites	收藏
+	Duplicate of	重复于
+	3D cube	3D 立方体
+	1D cube	1D 立方体
+	LUT look	LUT 风格
+	{kind}, size {n}	{kind}，大小 {n}
+	Title: {title}	标题：{title}
+	Declares an input range other than 0 to 1	声明了 0 到 1 以外的输入范围
+	The name suggests a technical conversion, not a creative look	名称看起来是技术性转换，而非创意风格
+	LUTs installed into {pack}: {n}	已安装到 {pack} 的 LUT：{n}
+	{n} skipped	跳过 {n} 个
+	{n} already installed	{n} 个已安装
+	Choosing a folder is not available here; use the lut.installPack command	此处无法选择文件夹；请使用 lut.installPack 命令
 	Absolute	绝对
 	Absolute Colorimetric	绝对比色
 	Action	动作

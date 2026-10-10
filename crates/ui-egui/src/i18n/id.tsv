@@ -715,6 +715,22 @@
 	+ Add variable	+ Tambah variabel
 	30 frames @ 30 fps	30 frame @ 30 fps
 	3D LUT File	Berkas LUT 3D
+	Install Pack…	Pasang paket…
+	Remove Pack	Hapus paket
+	Built-in	Bawaan
+	Favorites	Favorit
+	Duplicate of	Duplikat dari
+	3D cube	Kubus 3D
+	1D cube	Kubus 1D
+	LUT look	Look LUT
+	{kind}, size {n}	{kind}, ukuran {n}
+	Title: {title}	Judul: {title}
+	Declares an input range other than 0 to 1	Menyatakan rentang masukan selain 0 hingga 1
+	The name suggests a technical conversion, not a creative look	Nama ini menyiratkan konversi teknis, bukan tampilan kreatif
+	LUTs installed into {pack}: {n}	LUT terpasang di {pack}: {n}
+	{n} skipped	{n} dilewati
+	{n} already installed	{n} sudah terpasang
+	Choosing a folder is not available here; use the lut.installPack command	Memilih folder tidak tersedia di sini; gunakan perintah lut.installPack
 	Absolute	Absolut
 	Absolute Colorimetric	Absolute Colorimetric
 	Action	Action
