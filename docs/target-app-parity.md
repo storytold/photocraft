@@ -16,6 +16,8 @@ the measured checklists are [`scorecard.md`](scorecard.md) (`cargo xtask scoreca
 |---|---|---|
 | **Feature breadth** (does each Photoshop feature exist?) | **~76%** | partly measured (menus, tools, panels, formats), weights below |
 | **Ready for real work** (could a professional replace Photoshop with it?) | **~45%** (range 40–50%) | estimated, weights and evidence below |
+| **Mainstream practitioner** (typical pro, weekly areas only) | **~43%** (38–48%) | estimated, [method](#mainstream-practitioner-43) |
+| **Newbie user** (core features only) | **~61%** (55–67%) | estimated, [method](#newbie-user-61) |
 | **Stage** | **alpha** | ready-for-real-work is inside the ~40–75% band and the [alpha gate](roadmap.md#alpha-gate) passes (six core workflows end to end); PSD exchange with Photoshop is not yet reliable enough for beta |
 | Remaining to **beta** (~75% ready, PSD reliable) | **~1,100–1,800 Opus 5.5 agent-hours** | estimated, calibrated below |
 | Remaining to **full parity** (~95–100%) | **~2,300–4,100 Opus 5.5 agent-hours** | estimated; includes AI and ecosystem, which need owner decisions |
@@ -71,6 +73,79 @@ Weights reflect what a working Photoshop user depends on (photographers, retouch
 | Ecosystem (plug-ins, scripting, presets, libraries) | 5% | 15% | 250–450 | No .8BF hosting (#2647), no UXP/ExtendScript, no .atn import; .abr/.grd/.pat/.aco/.ase/.cube supported | [gaps.md](gaps.md) |
 | AI features | 5% | 10% | 300–600 | No ML runtime at all (scorecard AUTO-219-7); classical substitutes only. Needs an owner decision and openly licensed models (#41) | [gaps.md](gaps.md) |
 | **Weighted** | 100% | **~46%** | **2,340–4,100** | | |
+
+## Mainstream practitioner: ~43%
+
+The same question for the typical professional Photoshop user (photographer, retoucher,
+designer), not the whole product. Method: craftrules `standards/progress-docs.md`. Areas a
+professional uses weekly (the [alpha-gate](roadmap.md#alpha-gate) workflows plus their everyday
+tools), depth from the [feature areas](#feature-areas) table. Left out: AI, plug-ins and
+scripting, Libraries/cloud, video, specialist hardware (tilt, Touch Bar), languages.
+
+| Area | Weight | Depth |
+|---|---:|---:|
+| Layers, masks, blend modes, smart objects, styles | 20% | 65% |
+| Adjustments and filters | 15% | 70% |
+| Selections and masking | 15% | 55% |
+| Retouching | 12% | 50% |
+| Transform and warp | 8% | 55% |
+| Type | 8% | 40% |
+| Painting and brushes | 7% | 55% |
+| Vector shapes and paths | 5% | 55% |
+| Camera Raw | 4% | 45% |
+| Colour management | 3% | 70% |
+| Export, Save for Web | 3% | 50% |
+| **Weighted depth** | 100% | **57%** |
+
+Discounts for what still stops real work (estimated, each with evidence):
+
+| Discount | Factor | Evidence |
+|---|---:|---|
+| Interaction fidelity | ×0.92 | ~150 open UI issues; transform context menu, spring-loaded tools, panel tear-off missing ([ui-parity.md](ui-parity.md)); brush lag and pressure reports ([brush-parity.md](brush-parity.md)) |
+| Stability and speed on real machines | ×0.88 | 3 of 25 performance budgets met; 150-layer GPU crash (P12); Type tool freeze (#2518); GPU start failures (#2519, #2412, #2020); 41 open performance issues |
+| Exchanging files with Photoshop users | ×0.92 | Photoshop-authored oracle 133/256; exports refused by Photoshop (#1281, #2469); smart-filter re-render 5/30 |
+
+**57% × 0.92 × 0.88 × 0.92 ≈ 43%** (range 38–48), estimated.
+
+It is not higher than ready-for-real-work (~45%) because the areas it leaves out carry little
+weight in the full number (AI, ecosystem, localization and hardware together 20%, averaging
+~33%), while the discounts apply to every workflow. The two numbers agree within their error;
+the full number stays where its written weights put it.
+
+**User evidence** (GitHub, 2026-10-10; search hits include maintainer replies, so they are upper
+bounds): 0 issues mention switching from or replacing Photoshop; praise words appear in ~19
+("love"), 10 ("amazing"), 6 ("awesome"), 4 ("great work") issues. Of 579 open issues, 136 are
+feature requests and 443 bugs or reports, of which ~244 are on core paths (layers, selection,
+brush, transform, type, save/open, performance) by title. Users are trying it for real work,
+and most of what they report is core-path friction, not niche requests.
+
+## Newbie user: ~61%
+
+A casual or beginner user who touches only the core: open or create a file, the most used tools
+and commands, undo, save and export, default settings. Excluded: advanced options, pro
+workflows, PSD exchange edge cases, and everything excluded above.
+
+| Core feature | Weight | Depth | Notes |
+|---|---:|---:|---|
+| Save, Save As, Export JPEG/PNG | 12% | 85% | |
+| Layers (add, reorder, hide, opacity) | 12% | 80% | |
+| New / open a photo | 10% | 90% | |
+| Select (marquee, lasso, magic wand, object) | 10% | 75% | |
+| Move and Free Transform | 10% | 70% | no commit/cancel buttons (#2442) |
+| Brush and eraser | 10% | 70% | lag with big brushes (#2619) |
+| Undo, History | 8% | 90% | |
+| Basic adjustments (brightness, levels, curves, hue/saturation) | 8% | 80% | |
+| Crop and straighten | 6% | 85% | |
+| Text | 6% | 55% | freeze report (#2518) |
+| Spot healing, Remove | 5% | 65% | |
+| Blur and sharpen filters | 3% | 85% | |
+| **Weighted depth** | 100% | **78%** | |
+
+Discounts: launch and stability ×0.90 (start failures without a usable GPU, #2519, #2412,
+#1859; Type tool freeze, #2518); discoverability and UI clarity ×0.92 (language option not
+found, #2532; flyouts only on right-click, #2301; toolbar hover issue, #2603); opening files
+people send ×0.95 (JPEG, PNG, HEIC, WebP, PSD open; AVIF and PDF don't, #463, #2541).
+**78% × 0.90 × 0.92 × 0.95 ≈ 61%** (range 55–67), estimated.
 
 ## Feature areas
 
@@ -413,6 +488,7 @@ See [method and results](octagonal-mask-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Added mainstream-practitioner (~43%) and newbie-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate in `roadmap.md`: passes |
 | 2026-10-10 | major | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected); two numbers, weights, per-dimension and per-area hours calibrated from git history; merged `parity-estimate.md` and the roadmap's honest assessment into this file |
 | 2026-10-05 | major | Honest parity assessment in `docs/roadmap.md`: surface 60–70%, ready for real work 25–35% |

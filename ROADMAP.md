@@ -21,6 +21,8 @@ About 80% of the work parallelizes.
 |---|---|---|
 | **Feature breadth** | **~76%** | partly measured: menus 628/628, tools 53/68, panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
+| Mainstream practitioner | ~43% (38–48%) | estimated: weekly areas of a typical pro, with discounts ([method](docs/target-app-parity.md#mainstream-practitioner-43)) |
+| Newbie user | ~61% (55–67%) | estimated: core features only ([method](docs/target-app-parity.md#newbie-user-61)) |
 | Remaining to **beta** | **~1,100–1,800 h** | estimated |
 | Remaining to **full parity** | **~2,300–4,100 h** | estimated; AI and plug-ins need owner decisions |
 
@@ -120,5 +122,6 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Mainstream-practitioner and newbie-user numbers added |
 | 2026-10-10 | minor | Alpha gate result (passes; stays alpha) in the stage explanation |
 | 2026-10-10 | major | First version, per craftrules `standards/progress-docs.md` |
