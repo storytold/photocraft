@@ -25,6 +25,16 @@ keyboard nudges and deletion, at most 16 points. Camera Raw commits one `filter.
 OK; scope interaction never edits the document. Double-clicking a Camera Raw smart filter reopens
 this dialog with its stored settings and the pixels below it; OK updates that filter in place.
 
+Dehaze now uses the constrained-transmission method described in
+[US9508126B2](https://patents.google.com/patent/US9508126B2/en): an atmospheric-light estimate,
+per-pixel radiance visibility and RGB-range bounds, local and edge-aware transmission smoothing,
+then the inverse scattering model. Negative values add haze with the forward scattering model.
+The correction runs in the document's current RGB working values; the patent's optional linear
+sRGB embodiment is not applied to documents with arbitrary embedded ICC profiles. PhotoCraft
+does not claim pixel identity with Adobe Camera Raw.
+The patent is a technical disclosure, not an implementation licence; publication of a patent
+does not itself grant permission to practise its claims ([USPTO explanation](https://www.uspto.gov/terms-use-uspto-website)).
+
 ## PSD Smart Filters
 
 Camera Raw is read and written as a live PSD Smart Filter (`Adobe Camera Raw Filter`, filter id

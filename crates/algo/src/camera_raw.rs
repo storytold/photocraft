@@ -4,9 +4,9 @@
 //!
 //! 1. **White balance and exposure** in linear light (the document's values decoded with the sRGB
 //!    curve as a perceptual working encoding; encoding is undone exactly at the end).
-//! 2. **Dehaze**: K. He, J. Sun, X. Tang, *Single Image Haze Removal Using Dark Channel Prior*,
-//!    CVPR 2009 (dark channel, atmospheric light from its brightest 0.1 %, transmission refined
-//!    with the guided filter); negative amounts add haze toward the atmospheric light.
+//! 2. **Dehaze**: constrained per-pixel transmission from US9508126B2, followed by local and
+//!    edge-aware smoothing and the atmospheric scattering inverse. Negative amounts apply the
+//!    forward scattering model. This does not claim Adobe Camera Raw pixel parity.
 //! 3. **Tone** on luminance with colour ratios kept: Highlights / Shadows as exposure changes
 //!    weighted by an edge-preserving base layer (guided filter: K. He, J. Sun, X. Tang, *Guided
 //!    Image Filtering*, ECCV 2010), so local contrast survives; Whites / Blacks move the ends of
@@ -742,7 +742,28 @@ fn value_noise(x: f32, y: f32, seed: u64) -> f32 {
     top + (bot - top) * sy
 }
 
+/// Lower transmission bound from the patent's physical RGB range and J >= s(I)I visibility
+/// constraint (US9508126B2, equations 2, 5, 6 and 8). Work directly with the inequality in
+/// equation 6 so a dark channel never yields a negative or singular recovered value.
+fn channel_transmission_bound(i: f32, air: f32) -> f32 {
+    let i = i.clamp(0.0, 1.0);
+    if i < air {
+        let visible_floor = if i > 0.1 { 0.02 } else { 0.2 * i };
+        (air - i) / (air - visible_floor)
+    } else {
+        (i - air) / (1.0 - air)
+    }
+}
+
+fn constrained_transmission(rgb: [f32; 3], air: f32) -> f32 {
+    rgb.into_iter().map(|i| channel_transmission_bound(i, air)).fold(0.0f32, f32::max).clamp(0.0, 1.0)
+}
+
 fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
+    if !amount.is_finite() {
+        return;
+    }
+    let amount = amount.clamp(-1.0, 1.0);
     // Transmission on a ≤ 768 px proxy, upsampled.
     let k = w.max(h).div_ceil(768).max(1);
     let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
@@ -751,14 +772,20 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     for y in 0..h {
         for x in 0..w {
             let i = (y / k) * sw + x / k;
+            let q = px[y * w + x];
+            let alpha = if q[3].is_finite() { q[3].clamp(0.0, 1.0) } else { 0.0 };
             for c in 0..3 {
-                small[i][c] += px[y * w + x][c].clamp(0.0, 1.0);
+                if q[c].is_finite() {
+                    small[i][c] += q[c].clamp(0.0, 1.0) * alpha;
+                }
             }
-            cnt[i] += 1.0;
+            cnt[i] += alpha;
         }
     }
     for (s, c) in small.iter_mut().zip(&cnt) {
-        *s = s.map(|v| v / c.max(1.0));
+        if *c > 0.0 {
+            *s = s.map(|v| v / c);
+        }
     }
     let r = (sw.max(sh) / 60).max(2);
     let min_filter = |v: &[f32]| -> Vec<f32> {
@@ -779,7 +806,8 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
         b
     };
     let dark = min_filter(&small.iter().map(|c| c[0].min(c[1]).min(c[2])).collect::<Vec<_>>());
-    // Atmospheric light: mean colour of the brightest 0.1 % of the dark channel.
+    // A saturated highlight is not coloured atmospheric light. Estimate its intensity,
+    // then use a neutral veil so an unrelated bright object cannot tint the whole image.
     let mut idx: Vec<usize> = (0..sw * sh).collect();
     idx.sort_by(|&a, &b| dark[b].total_cmp(&dark[a]));
     let top = (sw * sh / 1000).max(1);
@@ -789,19 +817,38 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
             air[c] += small[i][c] / top as f32;
         }
     }
-    let air = air.map(|v| v.max(0.2));
-    let norm_dark = min_filter(&small.iter().map(|c| (c[0] / air[0]).min(c[1] / air[1]).min(c[2] / air[2])).collect::<Vec<_>>());
-    let t_raw: Vec<f32> = norm_dark.iter().map(|d| 1.0 - 0.95 * d).collect();
+    let air = luma(air).clamp(0.5, 0.98);
+    // A locally smoothed lower bound avoids the harsh pixel-to-pixel transmission changes
+    // that the patent identifies as a source of dehazing artifacts.
+    let lower: Vec<f32> = small.iter().map(|c| constrained_transmission(*c, air)).collect();
+    let smooth = box_mean(&lower, sw, sh, r);
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
-    let t = guided(&guide, &t_raw, sw, sh, r * 2, 1e-3);
+    let t = guided(&guide, &smooth, sw, sh, r * 2, 1e-3);
     let ks = k as f32;
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let tv = crate::photo_util::bilinear(&t, sw, sh, 1, 0, (x as f32 + 0.5) / ks - 0.5, (y as f32 + 0.5) / ks - 0.5).clamp(0.1, 1.0);
-            for c in 0..3 {
-                let i = q[c];
-                let j = (i - air[c]) / tv + air[c];
-                q[c] = if amount >= 0.0 { i + (j - i) * amount } else { i + (air[c] - i) * (-amount) * 0.5 * (1.0 - tv * 0.5) };
+            if !q[3].is_finite() || q[3] <= 0.0 || q[..3].iter().any(|v| !v.is_finite()) {
+                continue;
+            }
+            // The patent's bounded radiance model describes normalized SDR input. Keep HDR
+            // overrange untouched instead of clipping it to that model's unit interval.
+            if q[..3].iter().any(|v| !(0.0..=1.0).contains(v)) {
+                continue;
+            }
+            let filtered = crate::photo_util::bilinear(&t, sw, sh, 1, 0, (x as f32 + 0.5) / ks - 0.5, (y as f32 + 0.5) / ks - 0.5);
+            let tv = filtered.max(constrained_transmission([q[0], q[1], q[2]], air)).clamp(0.35, 1.0);
+            if amount >= 0.0 {
+                // Move transmission toward the constrained estimate as the slider increases.
+                // Keeping a margin above its lower bound limits noise amplification.
+                let applied_t = 1.0 - 0.55 * amount * (1.0 - tv);
+                for c in 0..3 {
+                    q[c] = ((q[c] - air) / applied_t + air).clamp(0.0, 1.0);
+                }
+            } else {
+                let veil = (-amount) * 0.22 * (1.2 - 0.3 * tv);
+                for c in 0..3 {
+                    q[c] += (air - q[c]) * veil;
+                }
             }
         }
     });
@@ -1023,6 +1070,91 @@ mod tests {
             let out = run(p.clone());
             assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{p:?}");
             assert_ne!(out, base);
+        }
+    }
+
+    #[test]
+    fn dehaze_preserves_low_light_detail_without_an_excessive_colour_cast() {
+        let (w, h) = (96, 64);
+        let mut base = vec![[0.06, 0.08, 0.10, 1.0]; w * h];
+        for row in base.chunks_exact_mut(w) {
+            for q in &mut row[88..] {
+                *q = [0.60, 0.70, 0.95, 1.0];
+            }
+        }
+        let middle = (h / 2) * w + w / 2;
+        let before = base[middle];
+        for value in [25.0, 100.0] {
+            let mut out = base.clone();
+            develop(&mut out, w, h, &CameraRaw { dehaze: value, ..Default::default() }, false);
+            let q = out[middle];
+            let retained = if value == 25.0 { 0.85 } else { 0.62 };
+            assert!(luma([q[0], q[1], q[2]]) >= luma([before[0], before[1], before[2]]) * retained);
+            assert!((q[0] / before[0] - q[2] / before[2]).abs() < 0.2, "dehaze shifted the shadow hue excessively: {q:?}");
+            assert_eq!(q[3], 1.0);
+        }
+    }
+
+    #[test]
+    fn dehaze_moves_contrast_both_ways_without_tinting_neutral_pixels_or_hidden_rgb() {
+        let (w, h) = (96, 64);
+        let mut base = vec![[0.38, 0.38, 0.38, 1.0]; w * h];
+        for row in base.chunks_exact_mut(w) {
+            for q in &mut row[88..] {
+                *q = [0.60, 0.70, 0.95, 1.0];
+            }
+        }
+        base[0] = [1.0, 0.0, 0.0, 0.0];
+        let middle = (h / 2) * w + w / 2;
+        let mut removed = base.clone();
+        let mut added = base.clone();
+        develop(&mut removed, w, h, &CameraRaw { dehaze: 70.0, ..Default::default() }, false);
+        develop(&mut added, w, h, &CameraRaw { dehaze: -70.0, ..Default::default() }, false);
+        assert!(removed[middle][0] < base[middle][0] && added[middle][0] > base[middle][0]);
+        assert!((removed[middle][0] - removed[middle][2]).abs() < 1e-5);
+        assert!((added[middle][0] - added[middle][2]).abs() < 1e-5);
+        assert_eq!(removed[0], base[0]);
+        assert_eq!(added[0], base[0]);
+    }
+
+    #[test]
+    fn dehaze_retains_hdr_overrange_and_alpha() {
+        let base = vec![[1.5, 1.4, 1.3, 0.6]; 16 * 16];
+        for value in [-100.0, 100.0] {
+            let mut out = base.clone();
+            develop(&mut out, 16, 16, &CameraRaw { dehaze: value, ..Default::default() }, true);
+            assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite()) && q[3] == 0.6));
+            assert!(out[0][0] > 1.0);
+        }
+    }
+
+    #[test]
+    fn dehaze_uses_straight_colours_for_partially_transparent_layers() {
+        let (w, h) = (64, 64);
+        let mut opaque = vec![[0.35, 0.42, 0.50, 1.0]; w * h];
+        let mut partial = vec![[0.35, 0.42, 0.50, 0.2]; w * h];
+        let settings = CameraRaw { dehaze: 60.0, ..Default::default() };
+        develop(&mut opaque, w, h, &settings, false);
+        develop(&mut partial, w, h, &settings, false);
+        for (a, b) in opaque.iter().zip(&partial) {
+            for c in 0..3 {
+                assert!((a[c] - b[c]).abs() < 1e-5);
+            }
+            assert_eq!(b[3], 0.2);
+        }
+    }
+
+    #[test]
+    fn patent_transmission_bound_keeps_recovered_channels_visible_and_in_range() {
+        let air = 0.7;
+        for rgb in [[0.0, 0.04, 0.08], [0.25, 0.48, 0.60], [0.8, 0.93, 1.0]] {
+            let t = constrained_transmission(rgb, air);
+            assert!((0.0..=1.0).contains(&t));
+            for i in rgb {
+                let floor = if i > 0.1 { 0.02 } else { 0.2 * i };
+                let recovered = (i - air) / t + air;
+                assert!(recovered >= floor - 1e-5 && recovered <= 1.0 + 1e-5, "i={i}, t={t}, recovered={recovered}");
+            }
         }
     }
 
