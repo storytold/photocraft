@@ -9,7 +9,7 @@
 use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
-use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement};
+use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -554,8 +554,14 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(damage_json(s, dmg))
 }
 
-fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
+/// `paint.colorReplacement`'s stroke and settings. The replacement colour is the brush colour
+/// (the foreground unless `color` says otherwise). It paints layer pixels only: a mask, alpha
+/// channel or Quick Mask `target` is refused rather than recolouring the layer instead.
+fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSettings, photocraft_doc::LayerId)> {
     let cmd = "paint.colorReplacement";
+    if let Some(t) = p.get("target").filter(|t| t.as_str() != Some("pixels")) {
+        return Err(bad(cmd, format!("Color Replacement paints layer pixels only (`target` {t} is not \"pixels\")")));
+    }
     let pts = parse_points(p, cmd)?;
     let brush = resolve_brush(s, p, cmd)?;
     fn parse<T: serde::de::DeserializeOwned>(p: &Value, cmd: &str, k: &str) -> Result<Option<T>> {
@@ -571,7 +577,11 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
-    let stroke = Stroke { brush, points: pts };
+    Ok((Stroke { brush, points: pts }, rs, id))
+}
+
+fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
+    let (stroke, rs, id) = color_replacement_setup(s, p)?;
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
@@ -579,6 +589,16 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
     })?;
     Ok(damage_json(s, dmg))
+}
+
+/// A `paint.colorReplacement` stroke shown while it is drawn: the same params, and the same
+/// recolouring per dab as the commit, so the preview at the last point is the committed result.
+pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
+    let (stroke, rs, id) = color_replacement_setup(s, p)?;
+    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre| {
+        Box::new(color_replacement_effect(pre.clone(), rs))
+    })?
+    .with_tail_preview()
 }
 
 fn brush_json(b: &BrushSettings) -> Value {
@@ -898,7 +918,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.colorReplacement",
             "Color Replacement",
-            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
             crate::commands::has_paintable,
             color_replacement,
             true

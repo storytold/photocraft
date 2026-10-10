@@ -788,7 +788,7 @@ enum DabTool {
 }
 
 /// One dab's edit of the working copy.
-type DabEffect = Box<dyn FnMut(&mut Region, &Footprint)>;
+pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint)>;
 
 impl DabTool {
     /// The tool for `cmd` and its history label.
@@ -919,6 +919,13 @@ pub struct LiveDab {
     sel: Option<Surface>,
     lock: bool,
     bounds: Rect,
+    /// Show the dabs finishing the stroke would add, so the preview at the last point is the
+    /// commit. Only for effects that a repeated dab doesn't change (Color Replacement): the
+    /// tail runs on a scratch copy at every push, so an effect that carries paint from dab to
+    /// dab (Smudge) would drift.
+    preview_tail: bool,
+    /// Where the shown tail is.
+    tail: Rect,
 }
 
 impl LiveDab {
@@ -930,11 +937,26 @@ impl LiveDab {
         }
         let (stroke, id) = parse_brush(s, p, cmd)?;
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
+        let (halo, spacing) = (tool.halo(), stroke.brush.spacing);
+        Self::with_effect(s, cmd, p, stroke, id, halo, |pre| tool.effect(pre.format(), spacing))
+    }
+
+    /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke)
+    /// at each dab of `stroke`, reading `halo` pixels around it. `p` gives the target.
+    pub(crate) fn with_effect(
+        s: &Session,
+        cmd: &str,
+        p: &Value,
+        stroke: Stroke,
+        id: Option<LayerId>,
+        halo: i32,
+        effect: impl FnOnce(&Surface) -> DabEffect,
+    ) -> Result<Self> {
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = tool.effect(pre_surf.format(), stroke.brush.spacing);
+        let effect = effect(&pre_surf);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
@@ -943,7 +965,7 @@ impl LiveDab {
             renderer,
             done: 0,
             effect,
-            halo: tool.halo(),
+            halo,
             work: pre_surf.clone(),
             pre_surf,
             id,
@@ -952,9 +974,18 @@ impl LiveDab {
             sel,
             lock,
             bounds: Rect::EMPTY,
+            preview_tail: false,
+            tail: Rect::EMPTY,
         };
         live.push(&stroke.points)?;
         Ok(live)
+    }
+
+    /// Also show the stroke's finishing dabs (see `preview_tail`).
+    pub(crate) fn with_tail_preview(mut self) -> Result<Self> {
+        self.preview_tail = true;
+        self.push(&[])?;
+        Ok(self)
     }
 
     /// Everything the stroke has touched so far.
@@ -981,14 +1012,37 @@ impl LiveDab {
             dmg = dmg.union(&r);
         }
         self.done += new.len();
-        if dmg.is_empty() {
-            return Ok(dmg);
+        // The finishing dabs, run on a scratch copy of the working pixels.
+        let mut tail = None;
+        if self.preview_tail {
+            let ds = self.renderer.tail_dabs();
+            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
+            if !r.is_empty() {
+                let mut region = Region::read(&self.work, r.inflate(self.halo));
+                for (k, d) in ds.iter().enumerate() {
+                    (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+                }
+                tail = Some((r, region.crop(r)));
+            }
         }
-        self.bounds = self.bounds.union(&dmg);
-        let (orig, work) = (Region::read(&self.pre_surf, dmg), Region::read(&self.work, dmg));
+        // Back to the stroke without the previous tail.
+        let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+        let shown = dmg.union(&old);
+        let tail_rect = tail.as_ref().map_or(Rect::EMPTY, |(r, _)| *r);
+        if shown.is_empty() && tail_rect.is_empty() {
+            return Ok(Rect::EMPTY);
+        }
+        self.bounds = self.bounds.union(&dmg).union(&tail_rect);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
-        photocraft_paint::retouch::mix_back(surf, &orig, &work, dmg, self.opacity, self.sel.as_ref(), self.lock);
-        Ok(dmg)
+        if !shown.is_empty() {
+            let (orig, work) = (Region::read(&self.pre_surf, shown), Region::read(&self.work, shown));
+            photocraft_paint::retouch::mix_back(surf, &orig, &work, shown, self.opacity, self.sel.as_ref(), self.lock);
+        }
+        if let Some((r, work)) = tail {
+            photocraft_paint::retouch::mix_back(surf, &Region::read(&self.pre_surf, r), &work, r, self.opacity, self.sel.as_ref(), self.lock);
+            self.tail = r;
+        }
+        Ok(shown.union(&tail_rect))
     }
 }
 

@@ -98,6 +98,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Brush => "brush",
         Tool::Pencil => "pencil",
         Tool::MixerBrush => "palette",
+        Tool::ColorReplacement => "brush-replace",
         Tool::Eraser => "eraser",
         Tool::BackgroundEraser => "eraser-background",
         Tool::MagicEraser => "eraser-magic",

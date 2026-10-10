@@ -1,6 +1,7 @@
 //! UI for the retouching tools (healing, patch, clone, history brush, blur/sharpen/smudge,
-//! dodge/burn/sponge, Mixer Brush) and the smart selection tools (Quick Selection, Object
-//! Selection): gesture → engine command, options bars, and the clone-source marker.
+//! dodge/burn/sponge, Mixer Brush, Color Replacement) and the smart selection tools (Quick
+//! Selection, Object Selection): gesture → engine command, options bars, and the clone-source
+//! marker.
 
 use egui::{Color32, Stroke, vec2};
 use serde_json::{Value, json};
@@ -60,6 +61,23 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
     })
 }
 
+/// `paint.colorReplacement` params from the options bar (without `points`): shared by the live
+/// preview and the commit. The replacement `color` is the foreground, recorded so a replayed
+/// stroke paints the same colour; Background Swatch sampling matches the background colour.
+pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
+    let o = &app.ui.tool_options;
+    json!({
+        "color": app.session.tools.foreground,
+        "mode": o.cr_mode,
+        "sampling": o.cr_sampling,
+        "limits": o.cr_limits,
+        "tolerance": o.cr_tolerance,
+        "antiAlias": o.cr_anti_alias,
+        // A mask or channel target is refused: the tool recolours layer pixels only.
+        "target": crate::canvas::paint_target(app),
+    })
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
@@ -68,6 +86,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
         Tool::Remove => ("paint.remove", json!({"sampleAllLayers": o.sample_all_layers})),
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
+        Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
         Tool::PatternStamp => {
             let mut p = json!({
                 "aligned": o.pattern_stamp_aligned,
@@ -405,6 +424,40 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
             }
+        }
+        Tool::ColorReplacement => {
+            // Photoshop's options bar: Mode, Sampling (three icon toggles), Limits, Tolerance, Anti-alias.
+            opt(ui, tl!("Mode:"));
+            let modes = [
+                ("hue".to_string(), tl!("Hue")),
+                ("saturation".to_string(), tl!("Saturation")),
+                ("color".to_string(), tl!("Color")),
+                ("luminosity".to_string(), tl!("Luminosity")),
+            ];
+            crate::widgets::dropdown(ui, "color-replacement-mode", &mut o.cr_mode, &modes, 100.0);
+            crate::widgets::vline(ui, 22.0);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (k, icon, tip) in [
+                ("continuous", "pipette", tl!("Sampling: Continuous")),
+                ("once", "circle-dot", tl!("Sampling: Once")),
+                ("backgroundSwatch", "square", tl!("Sampling: Background Swatch")),
+            ] {
+                if crate::brush_picker::named(crate::icons::button(ui, icon, 24.0, o.cr_sampling == k, tip), tip).clicked() {
+                    o.cr_sampling = k.into();
+                }
+            }
+            ui.spacing_mut().item_spacing.x = 8.0;
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, tl!("Limits:"));
+            let limits = [
+                ("discontiguous".to_string(), tl!("Discontiguous")),
+                ("contiguous".to_string(), tl!("Contiguous")),
+                ("findEdges".to_string(), tl!("Find Edges")),
+            ];
+            crate::widgets::dropdown(ui, "color-replacement-limits", &mut o.cr_limits, &limits, 110.0);
+            opt(ui, tl!("Tolerance:"));
+            crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
+            crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
         Tool::HistoryBrush => opt(ui, "Paints from the document's opening state"),
         Tool::QuickSelection => {

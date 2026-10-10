@@ -8,7 +8,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{Region, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, apply_dab_stroke};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,9 +79,16 @@ fn dist(a: &[f32; 4], b: [f32; 3]) -> f32 {
 
 /// Replace colours along a stroke. Returns the damaged rectangle.
 pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &ReplaceSettings, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
-    let fmt = target.format();
+    let effect = color_replacement_effect(target.clone(), rs.clone());
+    apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
+}
+
+/// One Color Replacement dab's edit of a working copy, matching against `pre` (the target before
+/// the stroke). Shared by [`apply_color_replacement`] and live previews that run the dabs as they
+/// come, so both recolour the same pixels.
+pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut(&mut Region, &Footprint) {
+    let fmt = pre.format();
     let n = fmt.channels();
-    let pre = target.clone();
     let mode = match rs.mode {
         ReplaceMode::Hue => BlendMode::Hue,
         ReplaceMode::Saturation => BlendMode::Saturation,
@@ -92,7 +99,7 @@ pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &Repla
     let tol = rs.tolerance.clamp(0.0, 1.0);
     let soft = rs.anti_alias && rs.limits != Limits::FindEdges;
     let mut once: Option<[f32; 3]> = None;
-    let match_w = |d: f32| -> f32 {
+    let match_w = move |d: f32| -> f32 {
         if d > tol {
             0.0
         } else if soft && tol > 0.0 {
@@ -102,7 +109,7 @@ pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &Repla
             1.0
         }
     };
-    apply_dab_stroke(target, stroke, selection, lock_transparency, 0, |work: &mut Region, fp| {
+    move |work: &mut Region, fp: &Footprint| {
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let sampled = match rs.sampling {
             Sampling::Continuous => {
@@ -187,7 +194,7 @@ pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &Repla
                 px.copy_from_slice(&enc[..n]);
             }
         }
-    })
+    }
 }
 
 #[cfg(test)]

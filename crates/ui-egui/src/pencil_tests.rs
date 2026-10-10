@@ -138,7 +138,7 @@ fn square_cursor_sits_on_the_pixel_grid() {
 }
 
 #[test]
-fn b_cycles_brush_pencil_and_mixer_brush() {
+fn b_cycles_brush_pencil_mixer_brush_and_color_replacement() {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -158,6 +158,8 @@ fn b_cycles_brush_pencil_and_mixer_brush() {
     assert_eq!(h.state().ui.tool, Tool::Pencil);
     press(&mut h, Modifiers::NONE);
     assert_eq!(h.state().ui.tool, Tool::MixerBrush);
+    press(&mut h, Modifiers::NONE);
+    assert_eq!(h.state().ui.tool, Tool::ColorReplacement);
     // Use Shift Key for Tool Switch: ⇧B cycles, B keeps the group's tool.
     h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
     press(&mut h, Modifiers::SHIFT);
@@ -166,8 +168,10 @@ fn b_cycles_brush_pencil_and_mixer_brush() {
     assert_eq!(h.state().ui.tool, Tool::Pencil);
     press(&mut h, Modifiers::SHIFT);
     assert_eq!(h.state().ui.tool, Tool::MixerBrush);
+    press(&mut h, Modifiers::SHIFT);
+    assert_eq!(h.state().ui.tool, Tool::ColorReplacement);
     press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::MixerBrush);
+    assert_eq!(h.state().ui.tool, Tool::ColorReplacement);
     assert_eq!(Tool::from_name("pencil"), Some(Tool::Pencil));
     assert_eq!(Tool::from_name("mixerBrush"), Some(Tool::MixerBrush));
 }

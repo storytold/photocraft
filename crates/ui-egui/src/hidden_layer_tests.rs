@@ -65,7 +65,7 @@ fn moving_a_hidden_target_layer_is_refused() {
 
 #[test]
 fn painting_a_hidden_layer_is_refused_at_the_press() {
-    for tool in [Tool::Brush, Tool::Eraser, Tool::PaintBucket, Tool::Gradient, Tool::CloneStamp] {
+    for tool in [Tool::Brush, Tool::Eraser, Tool::ColorReplacement, Tool::PaintBucket, Tool::Gradient, Tool::CloneStamp] {
         let (mut app, id) = app(tool);
         // The live Gradient makes a new Gradient Fill layer; the classic one paints the target.
         app.ui.tool_options.gradient_classic = true;

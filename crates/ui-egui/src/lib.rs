@@ -1876,6 +1876,8 @@ impl PhotocraftApp {
 mod input_tests;
 
 #[cfg(test)]
+mod color_replacement_tests;
+#[cfg(test)]
 mod pencil_tests;
 
 #[cfg(test)]

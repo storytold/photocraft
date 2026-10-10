@@ -565,6 +565,15 @@ impl StrokeRenderer {
         self.raster_pending();
     }
 
+    /// The primary dabs finishing the stroke now would add, without finishing it: for live
+    /// previews of sequential-dab tools, which run each dab themselves (see [`tail_preview`](Self::tail_preview)).
+    pub fn tail_dabs(&self) -> Vec<Dab> {
+        let mut generator = self.generator.clone();
+        let (mut dabs, mut duals) = (Vec::new(), Vec::new());
+        generator.finish(&mut dabs, &mut duals);
+        dabs
+    }
+
     /// What finishing the stroke now would add (the smoothing catch-up tail to the last point, or
     /// a lone first dab), for live previews: a renderer holding copies of the coverage tiles the
     /// tail touches with the tail rendered in, so its `composite` draws exactly those tiles as

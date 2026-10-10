@@ -291,3 +291,10 @@ target = "Remove tool: paint over an object (or circle it) and it is filled from
 status = "partial"
 issue = 213
 note = "paint.remove (retouch_cmds/remove.rs, background job) + Tool::Remove in the J flyout; loops close over what they enclose; fill by non-local patch completion with texture features, onion-peel start, best-patch copy and gradient-domain seam hiding (algo/nonlocal.rs, Newson et al. IPOL 2017); sparse holes in tiles (algo/remove.rs). remove_quality on 20 holes in public-domain photos: the fill keeps 0.89 of the texture it replaces (0.54 with Content-Aware Fill's completion), edge gradient 1.03 of the original's; remove_bench 24 MP: 100 px ring 120 ms, 1000 px ring 2.5 s, 3000 px line 1.7 s. Missing: generative AI mode, Remove after each stroke off, live preview of the result"
+
+[[item]]
+id = "TOOL-1045-1"
+target = "Color Replacement tool on the toolbar"
+status = "done"
+issue = 1045
+note = "Tool::ColorReplacement in the Brush (B) flyout after the Mixer Brush; Mode/Sampling/Limits/Tolerance/Anti-alias options drive paint.colorReplacement with the foreground colour; live preview (LiveDab with the stroke's finishing dab), one History step; color_replacement_tests.rs"

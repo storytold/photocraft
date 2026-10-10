@@ -2520,6 +2520,7 @@
 	Edit › Paste	Édition › Coller
 	Use File › Open, or paste a copied image with {paste}.	Utilisez Fichier › Ouvrir, ou collez une image copiée avec {paste}.
 	Mixer Brush Tool	Outil Pinceau mélangeur
+	Color Replacement Tool	Outil Remplacement de couleur
 	Invalid {mode} profile	Profil {mode} non valide
 	Unnamed {mode} profile	Profil {mode} sans nom
 	Show bounding box when dragging layer	Afficher le cadre de sélection lors du déplacement du calque
