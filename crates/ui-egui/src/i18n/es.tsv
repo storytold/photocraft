@@ -2447,3 +2447,15 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+
+# Add Noise, Reduce Noise and Smart Sharpen dialog controls (Filter > Noise, Filter > Sharpen).
+	Distribution	Distribución
+	Uniform	Uniforme
+	Gaussian	Gaussiana
+	Monochromatic	Monocromático
+	Seed	Semilla
+	Strength	Intensidad
+	Reduce Color Noise	Reducir ruido de color
+	Remove Jpeg Artifact	Quitar artefactos JPEG
+	Sharpen Details	Enfocar detalles
+	Reduce Noise	Reducir ruido
