@@ -170,6 +170,37 @@ fn blend_modes() {
     }
 }
 
+/// Photoshop's special eight apply Fill inside the blend (psblend::composite_fill): the GPU's
+/// blend pass takes Fill separately and must match the CPU at low and middle Fill, with Opacity,
+/// over transparency and over an opaque backdrop.
+#[test]
+fn special_eight_fill_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let special = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+    for mode in special {
+        for fill in [0.3, 0.6] {
+            let mut d = base_doc(64, 48);
+            let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("{mode:?} fill {fill}"));
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            check(&mut g, &d, &format!("{mode:?} fill {fill} opaque"));
+        }
+    }
+}
+
 #[test]
 fn xor_rounding_on_half_float_targets() {
     let Some((_adapter, device, queue, _lock)) = any_device() else { return };
@@ -220,6 +251,7 @@ fn adjustments() -> Vec<Adjustment> {
         },
         Adjustment::HueSaturation { hue: 40.0, saturation: 30.0, lightness: -10.0, colorize: false, ranges: HueRange::defaults() },
         Adjustment::HueSaturation { hue: 200.0, saturation: 50.0, lightness: 20.0, colorize: true, ranges: HueRange::defaults() },
+        Adjustment::HueSaturation { hue: 30.0, saturation: 0.0, lightness: -15.0, colorize: true, ranges: HueRange::defaults() },
         Adjustment::HueSaturation { hue: -10.0, saturation: 10.0, lightness: 5.0, colorize: false, ranges: hue_ranges() },
         Adjustment::Vibrance { vibrance: 50.0, saturation: -20.0 },
         Adjustment::Vibrance { vibrance: -60.0, saturation: 0.0 },
@@ -606,6 +638,27 @@ fn incremental_updates_follow_the_document() {
     // Visibility and opacity changes need no uploads.
     d.layers[0].opacity = 0.5;
     check(&mut g, &d, "opacity");
+}
+
+/// #2422: a mask whose default pixel changes without touching its tiles (Invert on a sparse mask)
+/// must re-upload the absent tiles between its stored ones, not keep the old default on the GPU.
+#[test]
+fn changed_mask_default_updates_absent_tiles() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(600, 300);
+    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 600, 300), 61, 0.5));
+    // Tiles in opposite corners: the resident texture spans the absent tiles between them.
+    let corners = [Rect::new(0, 0, 70, 70), Rect::new(530, 230, 600, 300)];
+    let data = vec![0.5f32; 70 * 70];
+    for default in [0.0, 1.0] {
+        let mut m = LayerMask::reveal_all();
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
+        for r in corners {
+            m.surface.write_region(r, &data);
+        }
+        d.layers[1].mask = Some(m);
+        check(&mut g, &d, &format!("mask default {default}"));
+    }
 }
 
 /// #1774: tiles shared across coordinates (a solid fill, a cleared area, the default pixel of a
@@ -1425,6 +1478,72 @@ fn blend_mode_extremes() {
             check(&mut g, &d, &format!("extremes {mode:?} {depth:?}"));
         }
     }
+}
+
+/// Colours for the non-separable modes: in gamut, greys and near-greys above 1 (lum ≈ max, where
+/// ClipColor divided by rounding noise), saturated colours above 1, negatives and mixes. All are
+/// exact in half floats (the GPU's layer textures of 16/32-bit documents), so both compositors
+/// see the same inputs.
+const NONSEP_COLORS: [[f32; 3]; 12] = [
+    [0.25, 0.5, 0.75],
+    [1.0, 1.0, 1.0],
+    [0.0, 0.0, 0.0],
+    [1.5, 1.5, 1.5],
+    [2.0, 2.0, 2.0],
+    [4.0, 4.0, 4.0],
+    [2.0, 2.0, 1.996_093_8],
+    [4.0, 3.992_187_5, 4.0],
+    [3.0, 0.25, 0.125],
+    [0.125, 2.5, 0.375],
+    [1.25, 0.875, 3.75],
+    [-0.25, 0.5, 1.375],
+];
+
+/// Every pair of `colors` (backdrop column, source row) as one opaque pixel, in `mode`.
+fn nonsep_doc(mode: BlendMode, depth: SampleType, colors: &[[f32; 3]]) -> Document {
+    let n = colors.len() as u32;
+    let mut d = Document::new("x", Size::new(n, n), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    let mut bg = Layer::raster("bg", fmt);
+    let mut top = Layer::raster("top", fmt);
+    for (i, b) in colors.iter().enumerate() {
+        for (j, s) in colors.iter().enumerate() {
+            let r = Rect::from_xywh(i as i32, j as i32, 1, 1);
+            bg.surface_mut().unwrap().fill_rect(r, &photocraft_raster::from_rgba(&fmt, [b[0], b[1], b[2], 1.0]));
+            top.surface_mut().unwrap().fill_rect(r, &photocraft_raster::from_rgba(&fmt, [s[0], s[1], s[2], 1.0]));
+        }
+    }
+    top.blend = mode;
+    d.layers.push(bg);
+    d.layers.push(top);
+    d
+}
+
+const NONSEP_MODES: [BlendMode; 6] =
+    [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity, BlendMode::DarkerColor, BlendMode::LighterColor];
+
+#[test]
+fn non_separable_modes_on_hdr_values() {
+    // 32-bit documents hold values above 1 (and below 0): Hue / Saturation / Color / Luminosity
+    // used to divide by the rounding noise of `max − lum` in ClipColor there, which the CPU and
+    // GPU round differently (Hue over a grey of 2: CPU 1.0, GPU 2.82).
+    let Some(mut g) = gpu() else { return };
+    let mut failures = Vec::new();
+    for mode in NONSEP_MODES {
+        if let Err(e) = diff_rect(&mut g, &nonsep_doc(mode, SampleType::F32, &NONSEP_COLORS), Rect::new(0, 0, 12, 12), &format!("hdr {mode:?}")) {
+            failures.push(e);
+        }
+    }
+    // Integer documents store 0..1 only.
+    let in_gamut: Vec<[f32; 3]> = NONSEP_COLORS.iter().map(|c| c.map(|v| v.clamp(0.0, 1.0))).collect();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in NONSEP_MODES {
+            if let Err(e) = diff_rect(&mut g, &nonsep_doc(mode, depth, &in_gamut), Rect::new(0, 0, 12, 12), &format!("in gamut {mode:?} {depth:?}")) {
+                failures.push(e);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]

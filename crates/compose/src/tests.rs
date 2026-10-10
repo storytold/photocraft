@@ -87,6 +87,57 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
     }
 }
 
+/// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
+fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
+    let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    let mut b = Layer::raster("b", fmt);
+    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [bottom[0], bottom[1], bottom[2], 1.0]));
+    let mut t = Layer::raster("t", fmt);
+    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
+    t.blend = mode;
+    d.layers = vec![b, t];
+    px(&d, 0, 0)
+}
+
+#[test]
+fn non_separable_modes_keep_values_above_one_in_32_bit() {
+    use photocraft_color::blend::{blend_rgb_within, lum};
+    let modes = [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+    // Hue over a grey of 2: the grey (the backdrop has no saturation), not ClipColor dividing
+    // by the rounding noise of `max − lum` (Hue over (4, 3.9999, 4) gave 27.7 in blue).
+    for bg in [[2.0, 2.0, 2.0], [2.0, 2.0, 1.999_99], [4.0, 3.999_9, 4.0]] {
+        for m in modes {
+            for top in [[3.0, 0.25, 0.125], [2.0, 2.0, 2.0], [4.0, 3.999_9, 4.0]] {
+                let got = blend_px(SampleType::F32, m, bg, top);
+                let want = blend_rgb_within(m, bg, top, f32::MAX);
+                assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-4 * w.abs().max(1.0)), "{m:?} {bg:?} {top:?}: {got:?} vs {want:?}");
+                assert!(got.iter().all(|v| v.is_finite() && *v >= -1e-5), "{m:?} {bg:?} {top:?}: {got:?}");
+            }
+        }
+    }
+    // A saturated colour keeps its brightness above 1 in 32-bit, and is clipped into 0..1
+    // (exactly as before) in 8/16-bit.
+    let (bg, top) = ([0.5, 0.5, 0.5], [1.0, 0.0, 0.0]);
+    let hdr = blend_px(SampleType::F32, BlendMode::Color, bg, top);
+    assert!((hdr[0] - 1.2).abs() < 1e-4 && (lum([hdr[0], hdr[1], hdr[2]]) - 0.5).abs() < 1e-4, "{hdr:?}");
+    for depth in [SampleType::U8, SampleType::U16] {
+        for m in modes {
+            let got = blend_px(depth, m, bg, top);
+            let want = photocraft_color::blend::blend_rgb(m, bg, top);
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1.0 / 255.0), "{m:?} {depth:?}: {got:?} vs {want:?}");
+        }
+        let got = blend_px(depth, BlendMode::Color, bg, top);
+        assert!(got[0] <= 1.0 && got[0] > 0.9, "{depth:?}: {got:?}");
+    }
+    // A 32-bit document's in-range colours that stay in range are unchanged.
+    for m in modes {
+        let got = blend_px(SampleType::F32, m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        let want = photocraft_color::blend::blend_rgb(m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-5), "{m:?}: {got:?} vs {want:?}");
+    }
+}
+
 #[test]
 fn layer_mask_hides_pixels() {
     let mut d = doc_white(4, 4);

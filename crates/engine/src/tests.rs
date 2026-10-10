@@ -630,6 +630,24 @@ fn fill_layers_and_colors() {
 }
 
 #[test]
+fn default_colors_with_mask_targeted_resets_to_mask_colors() {
+    let mut s = Session::new();
+    s.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+    s.tools.background = [0.8, 0.6, 0.4, 1.0];
+    s.tools.target_mask(true);
+    s.execute("tools.setColors", json!({"foreground": "#112233", "background": "#445566"})).unwrap();
+    s.execute("tools.defaultColors", json!({})).unwrap();
+    assert_eq!(s.tools.foreground, [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(s.tools.background, [0.0, 0.0, 0.0, 1.0]);
+    s.tools.target_mask(false);
+    assert_eq!(s.tools.foreground, [0.2, 0.4, 0.6, 1.0]);
+    assert_eq!(s.tools.background, [0.8, 0.6, 0.4, 1.0]);
+    s.execute("tools.defaultColors", json!({})).unwrap();
+    assert_eq!(s.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.tools.background, [1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn fill_layer_pixel_rewrites_refresh_the_effect_maps() {
     // A pixel-only rewrite of a fill layer's cache (what Image › Transform and friends do)
     // leaves the Fill spec alone; the CPU effect maps must follow the cache surface, or the

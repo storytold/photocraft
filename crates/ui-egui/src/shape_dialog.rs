@@ -173,7 +173,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let px = num(f, key).unwrap_or(100.0);
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
-            if crate::widgets::value_field(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0).changed() {
+            let places = unit.decimals() as u32;
+            if crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).changed() {
                 let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
             }
