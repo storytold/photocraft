@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 /// One entry: label, command id. `None` = separator.
 pub type Entry = Option<(&'static str, &'static str)>;
 
+/// English action key; each menu translates it using its existing display context.
+pub(crate) fn mask_toggle_label(enabled: bool) -> &'static str {
+    if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }
+}
+
 /// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
 /// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
 pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
@@ -81,8 +86,9 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         }
     }
     v.push(None);
-    if l.mask.is_some() && !multi {
-        v.push(Some((tl!("Disable Layer Mask"), "layer.layerMask.enabled")));
+    // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
+    if let Some(mask) = l.mask.as_ref().filter(|_| !multi) {
+        v.push(Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")));
         v.push(Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")));
         v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
     } else {
@@ -228,6 +234,116 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_toggle_label_follows_history_and_selected_layer() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let mut app = crate::PhotocraftApp::new(s, Default::default());
+        let toggle = "layer.layerMask.enabled";
+        let check = |app: &crate::PhotocraftApp, label: Option<&str>| {
+            let st = app.session.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            let entry = entries(l, false, st.doc.selection.is_some()).into_iter().flatten().find(|e| e.1 == toggle);
+            assert_eq!(entry.map(|e| e.0), label);
+            // A selection has no single mask to toggle: its menu never offers the item.
+            assert!(entries(l, true, st.doc.selection.is_some()).into_iter().flatten().all(|e| e.1 != toggle));
+            let item = crate::menus::menu_items(app).into_iter().find(|i| i.id == toggle).unwrap();
+            assert_eq!(item.enabled, label.is_some());
+            assert_eq!(item.label, label.unwrap_or("Enable Layer Mask"));
+            for lang in [crate::i18n::Lang::EN, crate::i18n::Lang::from_pref("fr")] {
+                let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(app), lang, lang.code());
+                let native = layout.bar.find(toggle).unwrap();
+                assert_eq!(native.label, crate::i18n::tr(lang, &item.label));
+                assert_eq!(native.enabled, item.enabled);
+            }
+        };
+        check(&app, None);
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        let masked = app.session.active().unwrap().active_layer.unwrap();
+        check(&app, Some("Disable Layer Mask"));
+        app.run(toggle, json!({})).unwrap();
+        check(&app, Some("Enable Layer Mask"));
+        app.run("edit.undo", json!({})).unwrap();
+        check(&app, Some("Disable Layer Mask"));
+        app.run("edit.redo", json!({})).unwrap();
+        check(&app, Some("Enable Layer Mask"));
+        app.run("layer.new.layer", json!({})).unwrap();
+        check(&app, None);
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        check(&app, Some("Disable Layer Mask"));
+        app.run("layer.select", json!({"layer": masked.0, "mode": "add"})).unwrap();
+        check(&app, Some("Enable Layer Mask"));
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        check(&app, Some("Enable Layer Mask"));
+        app.session.active_mut().unwrap().active_layer = None;
+        assert!(!crate::menus::is_enabled(&app, toggle));
+        let empty = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(!crate::menus::is_enabled(&empty, toggle));
+    }
+
+    #[test]
+    fn mask_toggle_context_menu_follows_the_clicked_layer_and_existing_translations() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for language in ["en", "fr"] {
+            let lang = crate::i18n::Lang::from_pref(language);
+            let _language = crate::i18n::language_scope(lang);
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            let clicked = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let other = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            s.execute("layer.layerMask.enabled", json!({})).unwrap();
+            let app = crate::PhotocraftApp::new(s, Default::default());
+            // `other` stays the active layer with its mask disabled; the menu is opened over `clicked`,
+            // whose mask is enabled, and selects it first (a single-layer menu).
+            let mut h = Harness::builder().with_size(egui::vec2(400.0, 900.0)).build_ui_state(
+                move |ui, app| {
+                    let st = app.session.active().unwrap();
+                    let l = st.doc.layer(clicked).unwrap().clone();
+                    let mut actions = Vec::new();
+                    show(app, ui, &l, false, &mut actions);
+                    for (id, params) in actions {
+                        crate::menus::invoke(app, ui.ctx(), &id, params).unwrap();
+                    }
+                },
+                app,
+            );
+            h.run_steps(3);
+            let enabled_label = crate::i18n::tr(lang, "Enable Layer Mask");
+            let disabled_label = crate::i18n::tr(lang, "Disable Layer Mask");
+            // The label follows the mask of the clicked layer, not of the active one.
+            assert!(h.query_by_label(enabled_label).is_none());
+            h.get_by_label(disabled_label).click();
+            h.run_steps(3);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(clicked));
+            assert!(!h.state().session.active().unwrap().doc.layer(clicked).unwrap().mask.as_ref().unwrap().enabled);
+            assert!(!h.state().session.active().unwrap().doc.layer(other).unwrap().mask.as_ref().unwrap().enabled);
+            h.get_by_label(enabled_label);
+        }
+    }
+
+    /// With several layers selected there is no single mask to toggle, apply or delete: the menu
+    /// offers Add Layer Mask only, whatever the clicked layer has, and does not hit the active layer.
+    #[test]
+    fn multi_selection_menu_has_no_per_layer_mask_items() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let masked = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let ids = entries(&masked, true, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
+        assert!(ids.contains(&"layer.layerMask.revealAll"));
+        for single in ["layer.layerMask.enabled", "layer.layerMask.apply", "layer.layerMask.delete"] {
+            assert!(!ids.contains(&single), "{single} acts on one layer, not on a selection");
+        }
+    }
 
     #[test]
     fn smart_object_context_menu_edits_the_clicked_layer() {
