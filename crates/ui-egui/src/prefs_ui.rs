@@ -1026,10 +1026,8 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     section_fields(ui, &section, obj, &order, lang, system);
                     if section == "fileHandling" {
                         ui.label(
-                            RichText::new(tl!(
-                                "0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."
-                            ))
-                            .color(t.text_faint),
+                            RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
+                                .color(t.text_faint),
                         );
                     }
                     if section == "performance" {
