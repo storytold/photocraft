@@ -368,7 +368,28 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// The transfer curve Camera Raw decodes `doc`'s values with ([`CameraRaw::encoding_gamma`]):
+/// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
+/// the sRGB curve.
+pub fn encoding_gamma(doc: &Document) -> f32 {
+    use photocraft_cms::Builtin;
+    let profile = crate::color_cmds::document_profile(doc);
+    [(Builtin::ProPhotoCompat, 1.8), (Builtin::AdobeRgbCompat, 563.0 / 256.0), (Builtin::LinearSrgb, 1.0)]
+        .into_iter()
+        .find(|(b, _)| profile.same_colors(b.profile()))
+        .map_or(0.0, |(_, g)| g)
+}
+
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
+    let mut p = p.clone();
+    if p.get("encodingGamma").is_none()
+        && let Some(g) = s.active().map(|d| encoding_gamma(&d.doc)).filter(|g| *g > 0.0)
+        && let Value::Object(m) = &mut p
+    {
+        m.insert("encodingGamma".into(), json!((f64::from(g) * 1e4).round() / 1e4));
+    }
+    let p = &p;
     let cr = raw_params(RAW, p)?;
     // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
     cr.validate().map_err(|e| bad(RAW, e))?;
@@ -580,6 +601,32 @@ mod tests {
         s.execute(RAW, json!({"saturation": -100})).unwrap();
         let p = active_px(&s, 60, 40);
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn camera_raw_decodes_light_with_the_documents_curve() {
+        // A raw opens in ProPhoto (gamma 1.8): the filter keeps that with its settings, so Whites,
+        // Blacks, Shadows and Highlights work on the same light as when it was applied.
+        let mut s = session(16);
+        s.execute("edit.assignProfile", json!({"profile": "prophoto-compat"})).unwrap();
+        assert_eq!(encoding_gamma(&s.active().unwrap().doc), 1.8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute(RAW, json!({"shadows": 40, "whites": -30})).unwrap();
+        let d = s.active().unwrap();
+        let filters = match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            LayerContent::Smart(so) => so.smart_filters.clone(),
+            _ => panic!("smart object expected"),
+        };
+        assert_eq!(filters[0].params["encodingGamma"], json!(1.8));
+        // sRGB documents use the sRGB curve, the default, and store nothing.
+        let mut s = session(8);
+        assert_eq!(encoding_gamma(&s.active().unwrap().doc), 0.0);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute(RAW, json!({"shadows": 40})).unwrap();
+        let d = s.active().unwrap();
+        if let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            assert!(so.smart_filters[0].params.get("encodingGamma").is_none());
+        }
     }
 
     #[test]

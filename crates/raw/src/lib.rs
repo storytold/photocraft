@@ -58,6 +58,7 @@ mod sensor;
 mod sony;
 mod tiff;
 mod tiffep;
+mod tone;
 
 #[cfg(feature = "testgen")]
 pub mod testgen;
@@ -69,6 +70,7 @@ pub use crate::error::RawError;
 pub use crate::opcodes::GainMap;
 pub use crate::preview::{Preview, embedded_preview};
 pub use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
+pub use crate::tone::{Tone, retone};
 
 use crate::tiff::{Tiff, tag};
 

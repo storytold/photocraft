@@ -11,10 +11,13 @@
 //! (2 px of optical black on the left, 50 + 8 on the right show as a purple stripe otherwise). The
 //! data is already black-subtracted (the darkest image pixels reach 0). Green saturates at
 //! 15546–15672 while red and blue reach 15687–16383, so one level of 15520 makes clipped
-//! highlights white without shifting the white balance. Matrix and curve were fitted to the
-//! camera's embedded JPEGs (Picture Control Standard, Active D-Lighting off; 52 frames, smooth
-//! areas, 4 × 4 means): on 15 held-out frames the development is 7.2/255 per channel off the
-//! camera's JPEG on average, against 34 without a profile.
+//! highlights white without shifting the white balance. Matrix, curve and black point copy
+//! Photoshop Camera Raw's default rendering of these files, measured black-box: 29 NEFs opened
+//! in Photoshop 25.4 against our own linear development of the same data (8 × 8 means, pixels
+//! clipped in neither). The matrix is our first ForwardMatrix (fitted to the camera's embedded
+//! JPEGs) times a linear-ProPhoto look matrix whose rows sum to 1; the curve applies per channel
+//! after it; the black point follows the frame's darkest tones ([`crate::tone`]). Median
+//! luminance difference to Camera Raw: 0.04 stop (0.29 with the camera-JPEG curve).
 //!
 //! Bodies whose full profile is not measured yet can still get their measured image area — the
 //! same alignment method, see [`IMAGE_AREAS`] — so their frames crop like the camera's JPEG.
@@ -22,39 +25,63 @@
 use crate::color::{Calibration, ColorInfo, IDENTITY, Mat3};
 use crate::sensor::{Rect, Sensor};
 
-const D4_FORWARD: Mat3 = [[0.644598, 0.0703598, 0.249262], [0.342249, 0.518929, 0.138822], [0.0568265, -0.269568, 1.03795]];
+const D4_FORWARD: Mat3 = [[0.639454, 0.260359, 0.0643991], [0.273094, 0.796492, -0.0695779], [0.00965321, -0.131427, 0.94699]];
+/// A third of the 0.1th percentile of the luminance, as Camera Raw renders D4 NEFs by default.
+const D4_BLACK_POINT: f32 = 0.33;
 const D4_COLOR: Mat3 = [[0.895936, -0.218092, -0.185988], [-1.09736, 2.06898, -0.0131889], [-0.26977, 0.393884, 0.687829]];
-const D4_TONE: [[f32; 2]; 31] = [
-    [0.005524272, 0.00285028],
-    [0.006569503, 0.00357083],
-    [0.0078125, 0.00447912],
-    [0.009290681, 0.00605813],
-    [0.01104854, 0.00841445],
-    [0.01313901, 0.011536],
-    [0.015625, 0.0165399],
-    [0.01858136, 0.0230234],
-    [0.02209709, 0.0319205],
-    [0.02627801, 0.0434858],
-    [0.03125, 0.0582138],
-    [0.03716272, 0.0771963],
-    [0.04419417, 0.0993894],
-    [0.05255603, 0.125058],
-    [0.0625, 0.157207],
-    [0.07432544, 0.194929],
-    [0.08838835, 0.236109],
-    [0.1051121, 0.279155],
-    [0.125, 0.329365],
-    [0.1486509, 0.388405],
-    [0.1767767, 0.457944],
-    [0.2102241, 0.52456],
-    [0.25, 0.598051],
-    [0.2973018, 0.668794],
-    [0.3535534, 0.749954],
-    [0.4204482, 0.815443],
-    [0.5, 0.870167],
-    [0.5946036, 0.907869],
-    [std::f32::consts::FRAC_1_SQRT_2, 0.939351],
-    [0.8408964, 0.970567],
+const D4_TONE: [[f32; 2]; 53] = [
+    [0.00012207031, 7.44377e-05],
+    [0.00014516688, 8.44049e-05],
+    [0.00017263349, 9.57067e-05],
+    [0.00020529698, 0.000108523],
+    [0.00024414062, 0.000123055],
+    [0.00029033376, 0.000123202],
+    [0.00034526698, 0.000123348],
+    [0.00041059396, 0.000142387],
+    [0.00048828125, 0.000164366],
+    [0.0005806675, 0.00020246],
+    [0.00069053395, 0.000249382],
+    [0.0008211879, 0.000310083],
+    [0.0009765625, 0.000385559],
+    [0.001161335, 0.000474115],
+    [0.0013810679, 0.00058301],
+    [0.0016423758, 0.000717142],
+    [0.001953125, 0.000882133],
+    [0.00232267, 0.00109054],
+    [0.0027621358, 0.00134818],
+    [0.0032847517, 0.00163655],
+    [0.00390625, 0.0019866],
+    [0.00464534, 0.00235945],
+    [0.0055242716, 0.00280228],
+    [0.0065695033, 0.00342616],
+    [0.0078125, 0.00418894],
+    [0.00929068, 0.00540942],
+    [0.011048543, 0.0069855],
+    [0.013139007, 0.00959286],
+    [0.015625, 0.0131734],
+    [0.01858136, 0.0181471],
+    [0.022097087, 0.0249987],
+    [0.026278013, 0.0336416],
+    [0.03125, 0.0452726],
+    [0.03716272, 0.0591889],
+    [0.044194173, 0.077383],
+    [0.052556027, 0.0990869],
+    [0.0625, 0.126878],
+    [0.07432544, 0.161688],
+    [0.088388346, 0.206049],
+    [0.10511205, 0.256563],
+    [0.125, 0.31946],
+    [0.14865088, 0.382637],
+    [0.17677669, 0.458308],
+    [0.2102241, 0.531942],
+    [0.25, 0.617405],
+    [0.29730177, 0.683279],
+    [0.35355338, 0.756182],
+    [0.4204482, 0.809073],
+    [0.5, 0.865664],
+    [0.59460354, 0.900869],
+    [std::f32::consts::FRAC_1_SQRT_2, 0.937507],
+    [0.8408964, 0.956434],
     [1.0, 1.0],
 ];
 
@@ -71,6 +98,8 @@ struct Profile {
     forward: Mat3,
     color: Mat3,
     tone: &'static [[f32; 2]],
+    /// Camera Raw's adaptive black-point factor ([`Sensor::black_point`]).
+    black_point: f32,
 }
 
 const PROFILES: &[Profile] = &[Profile {
@@ -83,6 +112,7 @@ const PROFILES: &[Profile] = &[Profile {
     forward: D4_FORWARD,
     color: D4_COLOR,
     tone: &D4_TONE,
+    black_point: D4_BLACK_POINT,
 }];
 
 /// A measured image area of a body whose remaining profile has not been
@@ -131,6 +161,7 @@ pub(crate) fn apply(s: &mut Sensor) {
         ..ColorInfo::default()
     };
     s.tone_curve = p.tone.to_vec();
+    s.black_point = p.black_point;
 }
 
 #[cfg(test)]
@@ -161,6 +192,7 @@ mod tests {
             baseline_exposure: 0.0,
             gain_maps: Vec::new(),
             tone_curve: Vec::new(),
+            black_point: 0.0,
             warnings: vec!["NEF: black level not recorded in a documented tag; assumed 0".into()],
         }
     }
@@ -178,6 +210,7 @@ mod tests {
         assert_eq!(s.color.calibrations.len(), 1);
         assert_eq!(s.color.calibrations[0].forward_matrix, Some(D4_FORWARD));
         assert_eq!(s.tone_curve.len(), D4_TONE.len());
+        assert_eq!(s.black_point, D4_BLACK_POINT);
         assert!(s.warnings.is_empty(), "the D4's black level is known: {:?}", s.warnings);
         // The profile gives a colour conversion for the as-shot white balance.
         assert!(s.color.balanced_to_xyz_d50([0.5, 1.0, 0.7]).is_some());

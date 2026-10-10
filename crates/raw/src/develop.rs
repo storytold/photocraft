@@ -1,11 +1,13 @@
 //! Raw development: linearize, subtract black, scale to white, white
 //! balance, clip highlights, demosaic, camera → XYZ (D50) → linear ProPhoto,
-//! exposure, gamma 1.8 encode to 16 bits, orientation.
+//! exposure, Shadows / Highlights and the black point (`tone.rs`), the profile's
+//! tone curve, gamma 1.8 encode to 16 bits, orientation.
 
 use crate::color::{self, Mat3};
 use crate::demosaic::{Demosaic, PAD, Padded, Pattern, demosaic, demosaic_cfa};
 use crate::error::{RawError, Result};
 use crate::sensor::Sensor;
+use crate::tone::{Tone, ToneMap};
 use crate::{Limits, RawFormat, par};
 
 /// White balance choice.
@@ -29,12 +31,21 @@ pub struct DevelopOptions {
     pub exposure: f64,
     /// Apply the file's orientation (rotate / flip the pixels).
     pub orient: bool,
+    /// Camera Raw's Shadows and Highlights, applied in linear light before the tone curve.
+    pub tone: Tone,
     pub limits: Limits,
 }
 
 impl Default for DevelopOptions {
     fn default() -> Self {
-        DevelopOptions { demosaic: Demosaic::default(), white_balance: WhiteBalance::default(), exposure: 0.0, orient: true, limits: Limits::default() }
+        DevelopOptions {
+            demosaic: Demosaic::default(),
+            white_balance: WhiteBalance::default(),
+            exposure: 0.0,
+            orient: true,
+            tone: Tone::default(),
+            limits: Limits::default(),
+        }
     }
 }
 
@@ -288,15 +299,27 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         }
     }
 
-    // Camera → ProPhoto, exposure, the profile's tone curve, gamma 1.8, 16 bits.
+    // Camera → ProPhoto, exposure, Shadows / Highlights and the black point, the profile's tone
+    // curve, gamma 1.8, 16 bits.
+    let y_row = color::rgb_to_xyz(color::ROMM, color::D50_XY)[1];
+    let luma: [f32; 3] = [0, 1, 2].map(|c| (0..3).map(|k| y_row[k] * f64::from(out_m[k][c])).sum::<f64>() as f32);
+    let lum = |p: &[f32]| luma[0] * p[0] + luma[1] * p[1] + luma[2] * p[2];
+    let map = ToneMap::new(w, h, |i| lum(&rgb[i * 3..i * 3 + 3]), opts.tone, s.black_point);
     let mut out = vec![0u16; w * h * 3];
     let lut = GammaLut::with_curve(&s.tone_curve);
     par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
         let start = b * band * w * 3;
         let src = &rgb[start..start + chunk.len()];
-        for (o, p) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(src.as_chunks::<3>().0) {
+        for (i, (o, p)) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(src.as_chunks::<3>().0).enumerate() {
+            let mut v = [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
+            if let Some(m) = &map {
+                let g = m.gain(i % w, b * band + i / w, lum(p));
+                // The black point first, as Camera Raw: lifting before it would flatten the
+                // deepest shadows' contrast.
+                v = v.map(|c| m.unblack(c) * g);
+            }
             for k in 0..3 {
-                o[k] = lut.encode(out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
+                o[k] = lut.encode(v[k]);
             }
         }
     });
@@ -390,7 +413,7 @@ impl GammaLut {
 
 /// `curve` at linear `v`: linear interpolation between the points in log₂ of the input, a line
 /// through 0 below the first point, the last output beyond the last.
-fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
+pub(crate) fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
     let (Some(first), Some(last)) = (curve.first(), curve.last()) else { return v };
     if v <= first[0] {
         return if first[0] > 0.0 { v * first[1] / first[0] } else { first[1] };

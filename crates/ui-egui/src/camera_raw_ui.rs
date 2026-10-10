@@ -62,6 +62,9 @@ pub struct CameraRawDialog {
     pub render_ms: f64,
     /// Set for the open-time dialog ([`Target::OpenRaw`]).
     raw_open: Option<RawOpen>,
+    /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there,
+    /// in linear light before this curve, and the preview undoes it to show the same.
+    raw_curve: Option<Vec<[f32; 2]>>,
 }
 
 impl CameraRawDialog {
@@ -126,6 +129,11 @@ impl CameraRawDialog {
         let mut px = self.proxy.clone();
         let mut p = self.params.clone();
         p.pixel_scale = (self.pw as f32 / self.full_w.max(1) as f32).min(1.0);
+        if let Some(curve) = &self.raw_curve {
+            let tone = photocraft_io::raw::Tone { shadows: p.shadows, highlights: p.highlights };
+            photocraft_io::raw::retone(&mut px, self.pw, self.ph, curve, tone);
+            (p.shadows, p.highlights) = (0.0, 0.0);
+        }
         photocraft_algo::camera_raw::develop(&mut px, self.pw, self.ph, &p, self.float);
         if let Some(mask) = &self.selection {
             for ((out, original), coverage) in px.iter_mut().zip(&self.proxy).zip(mask) {
@@ -166,9 +174,9 @@ enum Target {
 
 /// A raw file opened interactively, shown in Camera Raw before it is kept (as Photoshop opens
 /// raws in Adobe Camera Raw first). The document is already developed with the defaults; Open
-/// re-develops it when Temperature, Tint or Exposure changed (those act on the sensor data, see
-/// [`photocraft_io::raw::import_raw_tuned`]) and applies the other settings as one Camera Raw
-/// step, then marks the document unmodified. Cancel closes it.
+/// re-develops it when Temperature, Tint, Exposure, Shadows or Highlights changed (those act on
+/// the sensor data, see [`photocraft_io::raw::import_raw_tuned`]) and applies the other settings
+/// as one Camera Raw step, then marks the document unmodified. Cancel closes it.
 #[derive(Clone, Debug)]
 pub struct RawOpen {
     pub document: photocraft_doc::DocId,
@@ -208,8 +216,15 @@ fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Resul
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::None, Target::OpenRaw)?;
+    let curve = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
+        _ => None,
+    };
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
+        d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
     Ok(())
@@ -256,7 +271,13 @@ pub struct Redevelop {
 /// (tests, the web) it runs inline.
 fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -> Result<Value, String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
-    let tuning = photocraft_io::raw::RawTuning { temperature: params.temperature, tint: params.tint, exposure: params.exposure };
+    let tuning = photocraft_io::raw::RawTuning {
+        temperature: params.temperature,
+        tint: params.tint,
+        exposure: params.exposure,
+        shadows: params.shadows,
+        highlights: params.highlights,
+    };
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
     let source = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
@@ -338,6 +359,8 @@ fn finish_redevelop(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, 
     crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
     let mut rest = params.clone();
     rest.exposure = 0.0;
+    rest.shadows = 0.0;
+    rest.highlights = 0.0;
     if v.get("wb").and_then(Value::as_bool) == Some(true) {
         rest.temperature = 0.0;
         rest.tint = 0.0;
@@ -474,6 +497,10 @@ fn open_pixels(
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
+    let mut params = params;
+    if params.encoding_gamma == 0.0 {
+        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
+    }
     // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
     // stages (vignette, grain, local contrast) must agree with the committed result.
     let area = canvas.union(&surf.content_bounds());
@@ -580,6 +607,7 @@ fn open_pixels(
         curve_rect: None,
         render_ms: 0.0,
         raw_open: None,
+        raw_curve: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
@@ -919,7 +947,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            let detail_needed = r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32;
+            let raw_tone = d.raw_curve.is_some() && (d.params.shadows != 0.0 || d.params.highlights != 0.0);
+            let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -1302,6 +1331,27 @@ mod tests {
         assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
         assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
         assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+    }
+
+    #[test]
+    fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("IMG_0002.dng", &dng).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        assert!(app.camera_raw.as_ref().unwrap().raw_curve.is_some(), "the preview knows how the raw was developed");
+        let mean = |px: &[[f32; 4]]| px.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / px.len() as f32;
+        let preview_before = mean(&app.camera_raw.as_ref().unwrap().processed);
+        let before = mean_red(&app);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadows": 100}}})).unwrap().unwrap();
+        let d = app.camera_raw.as_mut().unwrap();
+        d.render(&ctx);
+        assert!(mean(&d.processed) > preview_before + 0.01, "{preview_before} → {}", mean(&d.processed));
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r["redeveloped"], true, "{r}");
+        assert!(r.get("filter").is_none(), "Shadows acts while developing, not as a later filter step: {r}");
+        assert!(mean_red(&app) > before + 0.01, "{before} → {}", mean_red(&app));
     }
 
     #[test]
