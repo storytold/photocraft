@@ -676,6 +676,9 @@ pub fn mono(size: f32) -> FontId {
 
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
+    // including when an integration or restored egui state pinned its own theme preference.
+    ctx.set_theme(egui::ThemePreference::System);
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
@@ -742,6 +745,11 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
         s.spacing.tooltip_width = 280.0;
     });
+    // egui selects its style branch using OS appearance, independently of PhotoCraft's fixed
+    // Dark/Light mode or platform appearance service. Both branches need the selected palette.
+    let style = ctx.global_style();
+    ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 /// Seconds the pointer rests on a control before its tooltip shows.
@@ -859,6 +867,32 @@ mod tests {
         let s = Tokens::for_kind(ThemeKind::SolarizedDark);
         assert!(s.dark() && !s.bevel && s.kind == ThemeKind::SolarizedDark && s.card == Color32::from_rgb(7, 54, 66));
         assert_eq!(ThemeKind::from_name("neon"), None);
+    }
+
+    #[test]
+    fn every_palette_keeps_complete_egui_styles_when_the_os_changes() {
+        for kind in ThemeKind::ALL {
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() }, |ui| apply(ui.ctx(), kind)).textures_delta.clear();
+            let expected = ctx.global_style();
+            for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+                ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |_| {}).textures_delta.clear();
+                assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
+                assert_eq!(ctx.global_style(), expected, "{kind:?} changed with {appearance:?}");
+                assert_eq!(ctx.style_of(egui::Theme::Light), expected);
+                assert_eq!(ctx.style_of(egui::Theme::Dark), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn applying_a_palette_clears_a_pinned_native_appearance_preference() {
+        for pinned in [egui::Theme::Light, egui::Theme::Dark] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(pinned);
+            apply(&ctx, ThemeKind::ProMedium);
+            assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        }
     }
 
     #[test]
