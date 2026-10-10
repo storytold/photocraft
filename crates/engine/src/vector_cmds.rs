@@ -964,6 +964,11 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
         if feather > 0.0 {
             cov = sel::feather(&cov, area.width() as usize, area.height() as usize, feather);
         }
+        // An active selection limits the fill, soft edges included, as every other fill does (#2387).
+        if let Some(selection) = doc.selection.as_ref() {
+            let mask = sel::mask_from_surface(Some(selection), area);
+            cov.iter_mut().zip(&mask).for_each(|(c, m)| *c *= m);
+        }
         let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.pixels || locks.all {
