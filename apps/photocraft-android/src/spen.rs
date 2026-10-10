@@ -8,7 +8,7 @@
 //! and AXIS_ORIENTATION points clockwise from vertical. The conversion below
 //! matches Android-to-W3C Pointer Events (Chromium) tiltX/tiltY conventions.
 
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, Once, OnceLock, PoisonError};
 
 use photocraft_ui_egui::stylus::{PenSample, StylusFeed};
 
@@ -55,6 +55,10 @@ pub extern "system" fn Java_ai_storyteller_photocraft_PhotocraftActivity_nativeS
     eraser: u8,
     contact: u8,
 ) {
+    static FIRST_JAVA_PEN: Once = Once::new();
+    if contact != 0 {
+        FIRST_JAVA_PEN.call_once(|| log::info!("S Pen JNI metadata active (pressure/tilt/eraser)"));
+    }
     let feed = current_feed().lock().unwrap_or_else(PoisonError::into_inner).clone();
     let Some(feed) = feed else { return };
     if contact == 0 {
