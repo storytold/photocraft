@@ -11,6 +11,8 @@ struct Fake {
     color: [u8; 3],
     vary: bool,
     flaky: bool,
+    /// How long each call takes.
+    delay: std::time::Duration,
     calls: AtomicUsize,
     size: Option<(u32, u32)>,
     fail: Option<GenError>,
@@ -25,6 +27,7 @@ impl Fake {
             color,
             vary: false,
             flaky: false,
+            delay: std::time::Duration::ZERO,
             calls: AtomicUsize::new(0),
             size: None,
             fail: None,
@@ -48,6 +51,7 @@ impl ImageProvider for Fake {
     fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
         self.sent.lock().unwrap().push(r.clone());
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(self.delay);
         if let Some(e) = &self.fail {
             return Err(e.clone());
         }
@@ -370,4 +374,18 @@ fn the_selected_pixels_are_never_sent() {
     };
     assert_eq!(at(60, 60), [128, 128, 128], "cleared to grey");
     assert_eq!(at(30, 30), [255, 255, 255], "the context is sent as it is");
+}
+
+#[test]
+fn variations_are_requested_at_the_same_time() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let delay = std::time::Duration::from_millis(400);
+    let fake = Arc::new(Fake { delay, ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let start = std::time::Instant::now();
+    let r = s.execute(FILL, json!({"variations": 4})).unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 4);
+    // One after another would take 1.6 s.
+    assert!(start.elapsed() < delay * 2, "{:?}", start.elapsed());
 }
