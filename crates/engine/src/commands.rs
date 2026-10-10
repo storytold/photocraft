@@ -560,6 +560,7 @@ fn build() -> Vec<CommandSpec> {
                     return crate::layer_multi_cmds::duplicate_selected(s, in_place);
                 }
                 let id = layer_param(s, p)?;
+                let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let dup = layer_copy(doc, id)?;
                     let nid = doc.insert_above(Some(id), dup);
@@ -569,6 +570,7 @@ fn build() -> Vec<CommandSpec> {
                     *active = Some(nid);
                     Ok(nid)
                 })?;
+                crate::layer_multi_cmds::note_insert(s, &before);
                 Ok(json!({ "layer": nid.0 }))
             }
         ),
