@@ -19,7 +19,9 @@ Automation is a privilege boundary because requests can cause filesystem access,
   PNGs are limited to 5 MiB before base64 encoding or file writes. Trusted-local CLI rendering
   retains its existing behavior.
 - The MCP bridge bounds incoming replies and does not retry an operation after an oversized
-  reply. Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
+  reply. Edits are never automatically resent after a transport failure (#1007); the server's
+  pure-read tools opt into a single retry on a fresh connection, which applies nothing.
+  Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
   downscaling; the 5 MiB PNG limit applies to the returned image.
 - MCP normally uses stdio and can optionally bridge to loopback control TCP.
 - The bridge and UI request paths use timeouts.
