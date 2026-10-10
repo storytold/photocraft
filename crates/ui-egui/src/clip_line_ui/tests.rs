@@ -107,7 +107,7 @@ fn only_siblings_next_to_each_other_meet_at_a_line() {
     assert_eq!(at(&doc, &open, pos2(x, 64.0)), None, "a group's last child and the layer below the group");
     let line = at(&doc, &open, pos2(x, 96.0)).expect("two top-level layers");
     assert_eq!((line.upper, line.release), (d, false));
-    assert_eq!(line.command(), ("layer.createClippingMask".to_string(), json!({"layer": d.0})));
+    assert_eq!(line.commands(&doc, "k"), vec![("layer.createClippingMask".to_string(), json!({"layer": d.0}))]);
     assert_eq!(at(&doc, &open, pos2(10.0, 96.0)), None, "the eye column");
     assert_eq!(at(&doc, &open, pos2(x, 90.0)), None, "inside a row");
     // A closed group sits directly above the layer below it, and can be clipped to it.
@@ -120,5 +120,91 @@ fn only_siblings_next_to_each_other_meet_at_a_line() {
     assert_eq!(at(&doc, &[row(g, 0.0), row(bg, 32.0)], pos2(x, 32.0)), None);
     doc.layer_mut(d).unwrap().clipped = true;
     let line = at(&doc, &closed, pos2(x, 64.0)).unwrap();
-    assert_eq!(line.command(), ("layer.releaseClippingMask".to_string(), json!({"layer": d.0})));
+    assert_eq!(
+        line.commands(&doc, "k"),
+        vec![
+            ("layer.releaseClippingMask".to_string(), json!({"layer": d.0, "coalesce": "k"})),
+            ("layer.select".to_string(), json!({"layer": d.0, "mode": "replace"})),
+        ]
+    );
+}
+
+#[test]
+fn the_band_reaches_three_above_and_five_below_the_line() {
+    // Photoshop 25.4: the line takes the pointer from 3 px above it to 5 px below it.
+    let (s, a, b) = two_layers();
+    let doc = s.active().unwrap().doc.clone();
+    let bg = doc.layers[0].id;
+    let rows = [row(b, 0.0), row(a, 32.0), row(bg, 64.0)];
+    let x = 100.0;
+    for y in [61.0, 64.0, 68.9] {
+        assert_eq!(at(&doc, &rows, pos2(x, y)).map(|l| l.upper), Some(a), "y {y}");
+    }
+    for y in [60.0, 69.5] {
+        assert_eq!(at(&doc, &rows, pos2(x, y)), None, "y {y}");
+    }
+}
+
+/// Background, Layer 1, CB (Color Balance), Top; Top active.
+fn chain() -> (photocraft_engine::Session, [LayerId; 3]) {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let l1 = s.execute("layer.new.layer", json!({"name": "Layer 1"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.newAdjustmentLayer.colorBalance", json!({})).unwrap();
+    let cb = s.active().unwrap().active_layer.unwrap().0;
+    let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
+    (s, [LayerId(l1), LayerId(cb), LayerId(top)])
+}
+
+/// A point on the line along the top of `layer`'s row, `dy` below it, right of the eye column.
+fn on_line(h: &Harness<'_, PhotocraftApp>, layer: LayerId, dy: f32) -> Pos2 {
+    let r = recorded(&h.ctx).into_iter().find(|r| r.layer == layer.0).unwrap().row;
+    pos2(r.left() + 80.0, r.top() + dy)
+}
+
+fn active(h: &Harness<'_, PhotocraftApp>) -> Option<LayerId> {
+    h.state().session.active().unwrap().active_layer
+}
+
+fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
+    h.state().session.active().unwrap().history.entries().len()
+}
+
+#[test]
+fn releasing_frees_the_clipped_layers_above_too_and_selects_the_layer() {
+    // Photoshop 25.4: a release in the middle of a clipping chain frees the layer above the line
+    // and every clipped layer stacked above it, in one history step, and makes it active.
+    let (s, [l1, cb, top]) = chain();
+    let mut h = harness(s);
+    // Clip CB onto Layer 1 (from inside the band, 4 px below the line), then Top onto CB.
+    let p = on_line(&h, l1, 4.0);
+    click(&mut h, p, Modifiers::ALT);
+    assert!(clipped(&h, cb) && !clipped(&h, top));
+    assert_eq!(active(&h), Some(top), "clipping keeps the active layer");
+    let p = on_line(&h, cb, -2.5);
+    click(&mut h, p, Modifiers::ALT);
+    assert!(clipped(&h, top) && clipped(&h, cb));
+    let before = steps(&h);
+    let p = on_line(&h, l1, 2.0);
+    click(&mut h, p, Modifiers::ALT);
+    assert!(!clipped(&h, cb) && !clipped(&h, top), "the clipped layer above is released too");
+    assert_eq!(active(&h), Some(cb), "the released layer becomes active");
+    assert_eq!(steps(&h), before + 1, "one history step");
+    assert!(h.state_mut().session.undo());
+    assert!(clipped(&h, cb) && clipped(&h, top), "one Undo brings the chain back");
+    // Releasing the top of a chain leaves the layers below it clipped.
+    let p = on_line(&h, cb, 0.0);
+    click(&mut h, p, Modifiers::ALT);
+    assert!(!clipped(&h, top) && clipped(&h, cb));
+}
+
+#[test]
+fn outside_the_band_an_alt_click_does_not_clip() {
+    let (s, [l1, cb, _]) = chain();
+    let mut h = harness(s);
+    for dy in [-4.5, 6.0] {
+        let p = on_line(&h, l1, dy);
+        click(&mut h, p, Modifiers::ALT);
+        assert!(!clipped(&h, cb), "{dy} px from the line");
+    }
 }

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
-use photocraft_color::PixelFormat;
+use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::vector::ShapeLayer;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -22,14 +22,15 @@ fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
 
 const CAPACITY: usize = 32;
 
-/// (fill only, stroke only) of a stroked shape, rendered over `canvas` (RGBA8, as the CPU
-/// compositor's split always was). `None` without a stroke. Where the shape's pixels
+/// (fill only, stroke only) of a stroked shape, rendered over `canvas` in RGBA at `depth`.
+/// `None` without a stroke. Where the shape's pixels
 /// (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't explain is
 /// stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
-pub fn split(sh: &ShapeLayer, canvas: Rect) -> Option<(Surface, Surface)> {
+pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surface, Surface)> {
     sh.stroke.as_ref()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
+    depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
@@ -47,7 +48,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect) -> Option<(Surface, Surface)> {
             return Some(e.0.clone());
         }
     }
-    let fmt = PixelFormat::RGBA8;
+    let fmt = PixelFormat::RGBA8.with_sample(depth);
     let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
@@ -92,6 +93,7 @@ fn fit_stroke(fill: &Surface, stroke: &mut Surface, cache: &Surface, canvas: Rec
     stroke.read_rgba_into(r, &mut s);
     cache.read_rgba_into(r, &mut c);
     let mut out = Vec::with_capacity(n * 4);
+    let float = stroke.format().sample == SampleType::F32;
     for ((fp, sp), cp) in f.iter().zip(&s).zip(&c) {
         let mut p = *sp;
         if fp[3] < 1.0 - 1e-3 {
@@ -101,7 +103,11 @@ fn fit_stroke(fill: &Surface, stroke: &mut Surface, cache: &Surface, canvas: Rec
             } else if a > 1e-3 {
                 // Normal over the fill: a·p + f·(1 - a)·fill = pixels (premultiplied).
                 let k = fp[3] * (1.0 - a);
-                let un = |i: usize| ((cp[3] * cp[i] - k * fp[i]) / a).clamp(0.0, 1.0);
+                let un = |i: usize| {
+                    let v = (cp[3] * cp[i] - k * fp[i]) / a;
+                    // Float RGB retains HDR values; integer samples use the normalized range.
+                    if float { v } else { v.clamp(0.0, 1.0) }
+                };
                 [un(0), un(1), un(2), a]
             } else {
                 [sp[0], sp[1], sp[2], a]

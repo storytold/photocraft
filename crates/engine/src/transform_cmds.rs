@@ -264,11 +264,21 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
     let mut lp = px.clone();
     let mut rp = px;
     let w = src.width() as usize;
+    // A pixel the selection fully lifts out is reset to the surface's (transparent) default;
+    // keeping its colour would make `content_bounds` still count it, so the layer's bounds would
+    // include the area the pixels were moved from.
+    let mut rest_clear = rest.default_pixel();
+    if rest_clear.last().is_some_and(|a| *a > 0.0) {
+        rest_clear.fill(0.0);
+    }
     for (i, (l, r)) in lp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
         let (x, y) = (src.x0 + (i % w) as i32, src.y0 + (i / w) as i32);
         let k = sel.sample_channel(x, y, 0);
         l[n - 1] *= k;
         r[n - 1] *= 1.0 - k;
+        if r[n - 1] <= 0.0 {
+            r.iter_mut().zip(&rest_clear).for_each(|(d, c)| *d = *c);
+        }
     }
     lifted.write_region(src, &lp);
     lifted.prune();
@@ -489,6 +499,16 @@ mod tests {
         assert_eq!(surf.pixel(15, 65)[3], 1.0, "moved pixels land");
         let sel = st.doc.selection.as_ref().unwrap().content_bounds();
         assert_eq!((sel.y0, sel.y1), (60, 70), "selection moves too");
+    }
+
+    #[test]
+    fn with_selection_bounds_drop_the_vacated_area() {
+        // #1097: moving every pixel through a selection left transparent but coloured pixels
+        // behind, so the layer bounds were the union of the old and new positions.
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 10})).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 50, 0]})).unwrap();
+        assert_eq!(active_bounds(&s), Rect::new(60, 10, 80, 20));
     }
 
     #[test]

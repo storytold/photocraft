@@ -228,6 +228,47 @@ fn budgets_stop_runaway_plugins() {
 }
 
 #[test]
+fn parallel_bands_preserve_the_originating_error() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 256, 256), &[0.0, 0.0, 0.0, 1.0]);
+    s.fill_rect(Rect::new(0, 256, 256, 512), &[1.0, 0.0, 0.0, 1.0]);
+    for (body, expected) in [
+        ("(i32.const 7)", Error::Failed("pc_filter returned error code 7".into())),
+        ("unreachable", Error::Trap("wasm `unreachable` instruction executed".into())),
+    ] {
+        // The later band fails immediately while the earlier one is still running (or hasn't
+        // started). Collecting in band order must not turn that failure into sibling cancellation.
+        let filter = format!(
+            "(if (result i32) (f32.gt (f32.load (local.get $buf)) (f32.const 0.5)) \
+             (then {body}) (else (loop $spin (br $spin)) (i32.const 0)))"
+        );
+        let limits = Limits { band_bytes: 1, fuel_base: 100_000_000, fuel_per_sample: 0, ..Limits::default() };
+        let p = Plugin::load(&ok_module(&filter), limits).unwrap();
+        let before = s.clone();
+        let e = pool.install(|| p.apply(&s, Rect::new(0, 0, 256, 512), None, &json!({}))).unwrap_err();
+        assert_eq!(e, expected);
+        assert_eq!(s, before, "a failed run must not change the input");
+    }
+}
+
+#[test]
+fn parallel_bands_preserve_instruction_budget() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let p = Plugin::load(
+        &ok_module("(loop $spin (br $spin)) (i32.const 0)"),
+        Limits { band_bytes: 1, fuel_base: 1_000_000, fuel_per_sample: 0, ..Limits::default() },
+    )
+    .unwrap();
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 768, 512), &[0.25, 0.5, 0.75, 1.0]);
+    for _ in 0..8 {
+        let e = pool.install(|| p.apply(&s, Rect::new(0, 0, 768, 512), None, &json!({}))).unwrap_err();
+        assert_eq!(e, Error::Limit("instruction budget".into()));
+    }
+}
+
+#[test]
 fn wall_clock_budget_stops_runaway_plugins() {
     let spin = ok_module("(loop $l (br $l)) (i32.const 0)");
     // Wall-clock budget, with an effectively unlimited instruction budget.

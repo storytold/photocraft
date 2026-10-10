@@ -325,3 +325,24 @@ fn out_of_range_slice_ids_are_rejected_not_wrapped() {
     assert_eq!(doc(&s).slices.list.len(), 1);
     assert_eq!(doc(&s).slices.list[0].name, "");
 }
+
+#[test]
+fn divide_refuses_more_parts_than_one_division_makes() {
+    // #1020: 1000 x 1000 was accepted (a million slices), and resolving the list is quadratic in
+    // the slice count.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1000, "height": 1000})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 1000, 1000]})).unwrap();
+    let id = doc(&s).slices.list[0].id;
+    for (h, v) in [(101, 100), (100, 101), (1000, 1000)] {
+        let (before, past) = (doc(&s).slices.clone(), s.active().unwrap().history.past_len());
+        let err = s.execute("slice.divide", json!({"slice": id, "horizontal": h, "vertical": v})).unwrap_err();
+        assert!(err.to_string().contains("10000"), "{h} x {v}: {err}");
+        assert_eq!((&doc(&s).slices, s.active().unwrap().history.past_len()), (&before, past), "{h} x {v}: nothing changed");
+    }
+    // At the limit it divides, and the list resolves.
+    let r = s.execute("slice.divide", json!({"slice": id, "horizontal": 100, "vertical": 100})).unwrap();
+    assert_eq!(r["count"], 10_000);
+    assert_eq!(doc(&s).slices.list.len(), 10_000);
+    assert!(s.execute("slice.list", json!({})).is_ok());
+}

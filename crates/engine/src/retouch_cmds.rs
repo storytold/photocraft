@@ -1,5 +1,5 @@
 //! Retouching tools as commands: Clone Stamp, Pattern Stamp, Healing Brush, Spot Healing Brush,
-//! Patch, Content-Aware Move, Dodge, Burn, Sponge, Blur, Sharpen, Smudge and History Brush.
+//! Patch, Content-Aware Move, Remove, Dodge, Burn, Sponge, Blur, Sharpen, Smudge and History Brush.
 //!
 //! Every command takes a Photoshop-style brush (`points`, `size`, `hardness`, `opacity`, `flow`,
 //! `spacing`, `layer`), respects the active selection as a mask and the layer's transparency lock, and
@@ -26,6 +26,7 @@ use crate::{EngineError, Result, Session};
 mod content_aware_move;
 mod patch;
 mod pattern_stamp;
+mod remove;
 pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -42,7 +43,7 @@ fn has_pixel_layer(s: &Session) -> std::result::Result<(), String> {
     if matches!(l.content, LayerContent::Raster(_)) || l.mask.is_some() {
         Ok(())
     } else {
-        Err(format!("active layer is a {} layer, not a pixel layer", l.content.kind_name()))
+        Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()))
     }
 }
 
@@ -81,10 +82,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
     if pts.is_empty() {
         return Err(bad(cmd, "`points` is empty"));
     }
-    // A stroke runs dab by dab along its length: an absurd coordinate would mean billions of dabs.
-    if pts.iter().any(|q| !(q.x.abs() <= crate::brush_cmds::MAX_COORD && q.y.abs() <= crate::brush_cmds::MAX_COORD)) {
-        return Err(bad(cmd, format!("point coordinates must be finite and within ±{}", crate::brush_cmds::MAX_COORD)));
-    }
+    crate::brush_cmds::check_coords(&pts, cmd)?;
     let base = s.tools.brush.clone();
     let pct = |k: &str, d: f32, lo: f32, hi: f32| num(p, k, d).clamp(lo, hi) / 100.0;
     let brush = BrushSettings {
@@ -92,7 +90,8 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         hardness: pct("hardness", base.hardness * 100.0, 0.0, 100.0),
         opacity: pct("opacity", 100.0, 1.0, 100.0),
         flow: pct("flow", 100.0, 1.0, 100.0),
-        spacing: pct("spacing", 25.0, 1.0, 1000.0),
+        // Brush Settings › Brush Tip Shape › Spacing, as the Brush uses it (#2140).
+        spacing: pct("spacing", base.spacing * 100.0, 1.0, 1000.0),
         erase: false,
         ..base
     };
@@ -318,6 +317,7 @@ enum LivePaint {
 pub struct LiveRetouch {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
+    cmd: String,
     renderer: photocraft_paint::StrokeRenderer,
     pre: std::sync::Arc<Document>,
     pre_surf: Surface,
@@ -364,8 +364,21 @@ impl LiveRetouch {
             LivePaint::History(src) if src.format() != pre_surf.format() => LivePaint::History(src.convert(pre_surf.format())),
             other => other,
         };
-        let mut live =
-            Self { doc: std::sync::Arc::new(doc), renderer, pre, pre_surf, id, params: p.clone(), paint, mode, opacity, sel, lock, tail: Rect::EMPTY };
+        let mut live = Self {
+            doc: std::sync::Arc::new(doc),
+            cmd: cmd.into(),
+            renderer,
+            pre,
+            pre_surf,
+            id,
+            params: p.clone(),
+            paint,
+            mode,
+            opacity,
+            sel,
+            lock,
+            tail: Rect::EMPTY,
+        };
         live.push(&stroke.points)?;
         Ok(live)
     }
@@ -380,7 +393,9 @@ impl LiveRetouch {
     /// the commit, and pixels painted earlier in the stroke are never re-cloned. What finishing
     /// the stroke now would add is drawn too (a lone first dab shows on the press), and redrawn on
     /// every step.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        crate::brush_cmds::check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
         let mut dmg = Rect::EMPTY;
@@ -539,6 +554,30 @@ fn dilate(w: usize, h: usize, m: &[bool], r: usize) -> Vec<bool> {
     out
 }
 
+/// Copy a translated Proximity Match patch from the *pre-healing* pixels. Reading
+/// `out` here would make overlapping offsets repeatedly copy the pixels just written,
+/// leaving streaks instead of the selected source texture.
+fn proximity_source_patch(img: &[f32], w: usize, h: usize, ch: usize, mask: &[bool], dx: i32, dy: i32) -> Option<Vec<f32>> {
+    if w == 0 || h == 0 || ch == 0 || mask.len() != w.checked_mul(h)? || img.len() != mask.len().checked_mul(ch)? {
+        return None;
+    }
+    let mut out = img.to_vec();
+    for (p, masked) in mask.iter().enumerate() {
+        if !masked {
+            continue;
+        }
+        let x = i32::try_from(p % w).ok()?.checked_add(dx)?;
+        let y = i32::try_from(p / w).ok()?.checked_add(dy)?;
+        if x < 0 || y < 0 || x >= i32::try_from(w).ok()? || y >= i32::try_from(h).ok()? {
+            return None;
+        }
+        let src = (usize::try_from(y).ok()?.checked_mul(w)? + usize::try_from(x).ok()?).checked_mul(ch)?;
+        let dst = p.checked_mul(ch)?;
+        out.get_mut(dst..dst + ch)?.copy_from_slice(img.get(src..src + ch)?);
+    }
+    Some(out)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpotType {
     ContentAware,
@@ -548,14 +587,19 @@ enum SpotType {
 
 /// Fill the stroke area with no source, then gradient-domain blend it into its surroundings. With
 /// `all` (Sample All Layers) it heals what is visible, so it works on an empty layer above the image.
+///
+/// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
+/// its texture from around it, as Edit › Fill does from its window
+/// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
 fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: SpotType, all: bool, sel: Option<&Surface>, lock: bool) -> Rect {
     let (bounds, cov) = stroke_coverage(stroke);
     let size = stroke.brush.size;
-    let margin = (size.max(8.0) * 1.0).ceil() as i32 + 8;
-    let region_rect = bounds.inflate(margin).intersect(&pre.bounds());
+    let region_rect = crate::fill_cmds::sampling_window(bounds, pre.bounds());
     if region_rect.is_empty() {
         return Rect::EMPTY;
     }
+    // Proximity Match looks for its source anywhere in that window.
+    let margin = (region_rect.width().max(region_rect.height()) / 2) as i32;
     let fmt = surf.format();
     let img = if all { composite_region(pre, None, SampleLayers::All, region_rect, fmt) } else { Region::read(surf, region_rect) };
     let (w, h, ch) = (img.width(), img.height(), img.ch);
@@ -584,18 +628,7 @@ fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: 
         SpotType::ProximityMatch => {
             let ring = (size / 8.0).clamp(3.0, 16.0) as usize;
             match inpaint::best_offset(w, h, ch, &img.data, &domain, ring, margin) {
-                Some((dx, dy)) => {
-                    let mut out = img.data.clone();
-                    for y in 0..h {
-                        for x in 0..w {
-                            if domain[y * w + x] {
-                                let (i, j) = ((y * w + x) * ch, (((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize) * ch);
-                                out.copy_within(j..j + ch, i);
-                            }
-                        }
-                    }
-                    out
-                }
+                Some((dx, dy)) => proximity_source_patch(&img.data, w, h, ch, &domain, dx, dy).unwrap_or_else(|| content_aware(&img.data)),
                 None => content_aware(&img.data),
             }
         }
@@ -656,6 +689,77 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
             }
         }
     }
+}
+
+/// Dodge and Burn: a stroke tones each pixel once, from its original colour, mixed in by the
+/// stroke's coverage there (`toned` is the full-exposure colour). Dabs build up coverage as in a
+/// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
+/// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
+/// new stroke builds on the last.
+fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
+    /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
+    /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
+    /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
+    /// large brushes over ten times slower.
+    const CELL: i32 = 64;
+    struct Cell {
+        cov: Vec<f32>,
+        orig: Vec<f32>,
+    }
+    let mut cells: std::collections::HashMap<(i32, i32), Cell> = std::collections::HashMap::new();
+    let a = alpha_index(&fmt);
+    let n = fmt.channels();
+    Box::new(move |work, fp| {
+        let r = fp.rect.intersect(&work.rect);
+        if r.is_empty() {
+            return;
+        }
+        let mut enc = [0.0f32; 8];
+        for cy in r.y0.div_euclid(CELL)..=(r.y1 - 1).div_euclid(CELL) {
+            for cx in r.x0.div_euclid(CELL)..=(r.x1 - 1).div_euclid(CELL) {
+                let cr = Rect::new(cx * CELL, cy * CELL, cx * CELL + CELL, cy * CELL + CELL);
+                let part = r.intersect(&cr);
+                if part.is_empty() {
+                    continue;
+                }
+                let len = (CELL * CELL) as usize;
+                // Coverage -1: not touched yet, so `orig` isn't filled in for that pixel.
+                let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
+                for y in part.y0..part.y1 {
+                    for x in part.x0..part.x1 {
+                        let k = fp.at(x, y).clamp(0.0, 1.0);
+                        if k <= 0.0 {
+                            continue;
+                        }
+                        let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
+                        let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
+                        if *prev < 0.0 {
+                            // First touch: the working pixel is still the original.
+                            src.copy_from_slice(work.px(x, y));
+                            *prev = 0.0;
+                        }
+                        // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
+                        // to full coverage; the tone is applied once, from the original.
+                        let k = *prev + k * (1.0 - *prev);
+                        if k <= *prev {
+                            continue;
+                        }
+                        *prev = k;
+                        let o = to_rgba(&fmt, src);
+                        let t = toned([o[0], o[1], o[2]]);
+                        let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
+                        from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
+                        let px = work.px_mut(x, y);
+                        for c in 0..n {
+                            if Some(c) != a {
+                                px[c] = enc[c];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn tone_range(p: &Value, cmd: &str) -> Result<ToneRange> {
@@ -732,9 +836,7 @@ impl DabTool {
     fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
         let sp = spacing;
         match self.clone() {
-            Self::Tone { burn, range, exposure, protect } => {
-                Box::new(move |work, fp| color_dab(&fmt, work, fp, exposure, sp, |c, k| dodge_burn(c, k, range, burn, protect)))
-            }
+            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
             // Flow is already in each dab's coverage; a full-flow pass moves colours half-way.
             Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
             Self::Focus { sharpen, strength, protect, sigma } => {
@@ -798,6 +900,7 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
+    cmd: String,
     renderer: photocraft_paint::StrokeRenderer,
     done: usize,
     effect: DabEffect,
@@ -830,6 +933,7 @@ impl LiveDab {
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
+            cmd: cmd.into(),
             renderer,
             done: 0,
             effect,
@@ -853,7 +957,9 @@ impl LiveDab {
     }
 
     /// Render more points; returns the rectangle that changed.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        crate::brush_cmds::check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         let ctx = self.renderer.ctx.clone();
         let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
@@ -926,7 +1032,7 @@ impl<'a> AllLayers<'a> {
 /// The brush every retouching command shares, plus the tool's own params.
 macro_rules! brush_params {
     ($extra:literal) => {
-        concat!("{", r#""points":[[x,y,pressure?],…],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=25,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
+        concat!("{", r#""points":[[x,y,pressure?],…],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=Brush Settings spacing,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
     };
 }
 
@@ -984,7 +1090,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Patch",
             menu: &[],
             shortcut: None,
-            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
+            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","contentAware":bool=false (fill the selection content-aware from the dragged-to place; a background job),"structure":1..7=4 (content-aware: 3..7 copy the middle exactly, 1..2 re-synthesise more of it),"color":0..10=0 (content-aware: how far the copy's level adapts to the selection's surroundings),"sampleAllLayers":bool=false (content-aware),"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
             enabled: patch::enabled,
             run: patch::patch,
             journal: true,
@@ -994,9 +1100,21 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Content-Aware Move",
             menu: &[],
             shortcut: None,
-            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"move|extend"="move","structure":1..7=4 (7 keeps the content up to its edge, lower blends a wider edge band),"color":0..10=0 (how far the content's colour adapts to its new place),"sampleAllLayers":bool=false,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset","mode"} (a background job; the selection moves with the content)"#,
+            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"move|extend"="move","structure":1..7=4 (3..7 copy the content exactly but for a band about a patch wide along its edge; 2 widens the band, 1 re-synthesises the content too),"color":0..10=0 (0 keeps the content's level; higher values bring it towards its new place, by up to about 0.04 × color),"sampleAllLayers":bool=false,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset","mode"} (a background job; the selection moves with the content)"#,
             enabled: content_aware_move::enabled,
             run: content_aware_move::content_aware_move,
+            journal: true,
+        },
+        CommandSpec {
+            id: "paint.remove",
+            label: "Remove",
+            menu: &[],
+            shortcut: None,
+            params: brush_params!(
+                r#","closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false → {"damage"} (a background job)"#
+            ),
+            enabled: has_pixel_layer,
+            run: remove::remove,
             journal: true,
         },
         CommandSpec {

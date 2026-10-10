@@ -1,7 +1,14 @@
 //! JPEG: decode via `zune-jpeg` (gray, YCbCr, CMYK, YCCK), encode via
 //! `jpeg-encoder` (gray, RGB, CMYK). Metadata (APP0 JFIF density, APP1
-//! EXIF/XMP, APP2 multi-segment ICC, APP14 Adobe) is parsed by our own marker
-//! scanner so behaviour does not depend on decoder internals.
+//! EXIF/XMP, APP2 multi-segment ICC, APP13 Photoshop resources, APP14 Adobe) is
+//! parsed by our own marker scanner so behaviour does not depend on decoder internals.
+//!
+//! **Resolution** (#1691) can be recorded four times; like Photoshop the first usable one of
+//! these wins: the APP13 Photoshop ResolutionInfo, the XMP `tiff:` resolution, the EXIF IFD0
+//! resolution, and last the JFIF density (a unit-0 JFIF density is only an aspect ratio and
+//! never counts). Cameras record their resolution in EXIF only, and many tools write a default
+//! 72 into JFIF, so JFIF can't outrank EXIF (see [`crate::resolution`]). On export the JFIF
+//! density, the EXIF and the XMP resolution are all written as the image's resolution.
 
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
@@ -12,12 +19,13 @@ use crate::error::CodecError;
 use crate::fidelity::Plan;
 use crate::image::{ChannelLayout, DecodeWarning, Image, Metadata, SampleType};
 use crate::options::{EncodeOptions, Limits};
-use crate::orientation::{upright_exif, upright_xmp};
+use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 
 const F: Format = Format::Jpeg;
 const EXIF_HEADER: &[u8] = b"Exif\0\0";
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const ICC_HEADER: &[u8] = b"ICC_PROFILE\0";
+const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
 
 #[derive(Default, Debug)]
 pub(crate) struct JpegMeta {
@@ -34,6 +42,9 @@ pub(crate) struct JpegMeta {
 pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     let mut m = JpegMeta::default();
     let mut icc_parts: Vec<(u8, u8, &[u8])> = Vec::new();
+    // Photoshop splits a large resource block over consecutive APP13 segments.
+    let mut photoshop: Vec<u8> = Vec::new();
+    let mut jfif_dpi = None;
     let mut i = 2;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
@@ -62,7 +73,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let x = u16::from_be_bytes([seg[8], seg[9]]) as f32;
                 let y = u16::from_be_bytes([seg[10], seg[11]]) as f32;
                 if x > 0.0 && y > 0.0 {
-                    m.dpi = match unit {
+                    jfif_dpi = match unit {
                         1 => Some((x, y)),
                         2 => Some((x * 2.54, y * 2.54)),
                         _ => None,
@@ -74,6 +85,9 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
             }
             0xE1 if seg.starts_with(XMP_HEADER) && m.xmp.is_none() => {
                 m.xmp = std::str::from_utf8(&seg[XMP_HEADER.len()..]).ok().map(|s| s.trim_end_matches('\0').to_owned());
+            }
+            0xED if seg.starts_with(PHOTOSHOP_HEADER) && photoshop.len() < 1 << 24 => {
+                photoshop.extend_from_slice(&seg[PHOTOSHOP_HEADER.len()..]);
             }
             0xE2 if seg.len() >= 14 && seg.starts_with(ICC_HEADER) => {
                 icc_parts.push((seg[12], seg[13], &seg[14..]));
@@ -90,6 +104,10 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         i += 2 + len;
     }
+    m.dpi = photoshop_resolution(&photoshop)
+        .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
+        .or_else(|| m.exif.as_deref().and_then(exif_resolution))
+        .or(jfif_dpi);
     if !icc_parts.is_empty() {
         icc_parts.sort_by_key(|p| p.0);
         let total = icc_parts[0].1 as usize;
@@ -250,10 +268,10 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         }
         // Metadata too large for its one segment is left out (and reported by the fidelity
         // warnings) rather than failing the whole export.
-        if let Some(seg) = img.meta.exif.as_deref().and_then(exif_segment) {
+        if let Some(seg) = img.meta.exif.as_deref().and_then(|x| exif_segment(x, img.meta.dpi)) {
             enc.add_app_segment(1, &seg).map_err(e)?;
         }
-        if let Some(seg) = img.meta.xmp.as_deref().and_then(xmp_segment) {
+        if let Some(seg) = img.meta.xmp.as_deref().and_then(|x| xmp_segment(x, img.meta.dpi)) {
             enc.add_app_segment(1, &seg).map_err(e)?;
         }
     }
@@ -275,16 +293,17 @@ const MAX_SEGMENT: usize = 65533;
 const LAYERED_ONLY_XMP: [&str; 2] = ["DocumentAncestors", "TextLayers"];
 
 /// The EXIF APP1 segment, or `None` when it doesn't fit in one segment.
-pub(crate) fn exif_segment(exif: &[u8]) -> Option<Vec<u8>> {
-    // The pixels are written as they are shown: never let a viewer rotate them again.
-    let seg = [EXIF_HEADER, upright_exif(exif).as_ref()].concat();
+pub(crate) fn exif_segment(exif: &[u8], dpi: Option<(f32, f32)>) -> Option<Vec<u8>> {
+    // The pixels are written as they are shown: never let a viewer rotate them again; and the
+    // resolution is the one written to JFIF, not the source's (#1691).
+    let seg = [EXIF_HEADER, export_exif(exif, dpi).as_ref()].concat();
     (seg.len() <= MAX_SEGMENT).then_some(seg)
 }
 
 /// The XMP APP1 segment. When the packet doesn't fit in one segment, the layered-document
 /// properties are left out; `None` when it still doesn't fit.
-pub(crate) fn xmp_segment(xmp: &str) -> Option<Vec<u8>> {
-    let xmp = upright_xmp(xmp);
+pub(crate) fn xmp_segment(xmp: &str, dpi: Option<(f32, f32)>) -> Option<Vec<u8>> {
+    let xmp = export_xmp(xmp, dpi);
     let seg = |x: &str| [XMP_HEADER, x.as_bytes()].concat();
     if XMP_HEADER.len() + xmp.len() <= MAX_SEGMENT {
         return Some(seg(&xmp));

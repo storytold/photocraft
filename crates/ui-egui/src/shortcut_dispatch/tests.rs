@@ -439,7 +439,7 @@ fn names(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
 /// pixel layer on an adjustment layer.
 #[test]
 fn delete_without_a_selection_deletes_the_selected_layer() {
-    for place in [Place::Canvas, Place::LayersRow] {
+    for place in [Place::Canvas, Place::LayersRow, Place::FocusedWidget] {
         for key in ["Delete", "Backspace"] {
             let mut h = harness();
             put_focus(&mut h, place);
@@ -487,4 +487,96 @@ fn delete_with_a_selection_clears_it() {
     press(&mut h, "Delete");
     assert_eq!(logged(&h), ["edit.clear"]);
     assert_eq!(names(&h), before, "no layer was deleted");
+}
+
+#[test]
+fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
+    let mut h = harness();
+    let action =
+        photocraft_engine::actions_cmds::Action { name: "LivePrint 2R".into(), steps: vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))] };
+    h.state_mut().session.actions.list.push(action);
+    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
+    let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
+    let restored = serde_json::from_value(saved).unwrap();
+    h.state_mut().session.edit_prefs(|p| *p = restored);
+    h.state_mut().ui.actions.selected = None;
+    press(&mut h, "F6");
+    assert_eq!(active_name(&h), "F6 overlay");
+    assert_eq!(h.state().ui.status, "Played 1 steps");
+    assert!(!h.state().ui.status_error);
+    assert_eq!(take_log(&h.ctx), vec![(crate::actions::shortcut_id("LivePrint 2R"), Outcome::Ran)]);
+    h.state_mut().run("actions.delete", json!({"action": "LivePrint 2R"})).unwrap();
+    assert!(bindings(h.state()).iter().all(|(id, _)| !id.starts_with(crate::actions::SHORTCUT_PREFIX)));
+    assert!(bindings(h.state()).iter().any(|(_, sc)| *sc == parse("F6").unwrap()));
+}
+
+#[test]
+fn assigning_action_function_key_moves_it_and_reports_failed_steps() {
+    let mut h = harness();
+    for name in ["first", "second"] {
+        h.state_mut()
+            .session
+            .actions
+            .list
+            .push(photocraft_engine::actions_cmds::Action { name: name.into(), steps: vec![("no.such.command".into(), json!({}))] });
+    }
+    crate::actions::assign_shortcut(h.state_mut(), "first", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), "second", "F6").unwrap();
+    assert_eq!(h.state().session.prefs().shortcuts[&crate::actions::shortcut_id("first")], "");
+    h.state_mut().ui.actions.selected = Some(0);
+    press(&mut h, "F6");
+    assert!(h.state().ui.status_error);
+    assert!(h.state().ui.status.contains("Step 1 (no.such.command) failed"));
+    assert!(matches!(&take_log(&h.ctx)[..], [(id, Outcome::Failed(_))] if id == "actions.play:second"));
+}
+
+#[test]
+fn action_function_key_checks_automation_authorization() {
+    let mut h = harness();
+    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        name: "restricted".into(),
+        steps: vec![("layer.new.layer".into(), json!({"name": "should not exist"}))],
+    });
+    crate::actions::assign_shortcut(h.state_mut(), "restricted", "F6").unwrap();
+    h.state_mut().services.automation_command = Some(Box::new(|id, _| if id == "actions.play" { Err("denied action playback".into()) } else { Ok(()) }));
+    h.state_mut().automation_input = true;
+    super::dispatch(h.state_mut(), &egui::Context::default(), "actions.play:restricted");
+    assert_eq!(h.state().ui.status, "denied action playback");
+    assert_eq!(active_name(&h), "paint");
+}
+
+#[test]
+fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
+    let mut h = harness();
+    h.state_mut().run("actions.record", json!({"name": "Resize and fit"})).unwrap();
+    h.state_mut().run("image.canvasSize", json!({"width": 1800, "height": 1080})).unwrap();
+    press(&mut h, "Cmd+0");
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[0].steps.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["image.canvasSize", "view.fitOnScreen"]);
+    let item = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.fitOnScreen").unwrap();
+    assert_eq!(item.shortcut.as_deref(), Some("Cmd+0"));
+    crate::actions::assign_shortcut(h.state_mut(), "Resize and fit", "F6").unwrap();
+    h.state_mut().ui.views[0].zoom = 0.1;
+    h.state_mut().ui.views[0].center = [0.0, 0.0];
+    press(&mut h, "F6");
+    let view = &h.state().ui.views[0];
+    assert!(!view.fit_pending, "the real canvas frame consumed Fit on Screen");
+    assert!(view.zoom > 0.1 && view.zoom < 1.0, "{}", view.zoom);
+    assert_eq!(view.center, [900.0, 540.0]);
+    assert_eq!(h.state().ui.status, "Played 2 steps");
+}
+
+#[test]
+fn f6_while_recording_records_a_named_call_not_the_child_steps() {
+    let mut h = harness();
+    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        name: "LivePrint 2R".into(),
+        steps: vec![("layer.new.layer".into(), json!({"name":"Nested overlay"})), ("view.fitOnScreen".into(), json!({}))],
+    });
+    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
+    h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
+    press(&mut h, "F6");
+    assert_eq!(active_name(&h), "Nested overlay");
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"}))]);
 }

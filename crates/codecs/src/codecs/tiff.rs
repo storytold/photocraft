@@ -407,6 +407,8 @@ struct Layout {
     chunks_per_plane: usize,
     /// WhiteIsZero: invert the gray channel.
     invert: bool,
+    /// The decoded sample (chunky) or file plane (planar) of the alpha channel (when there is one).
+    alpha_sample: usize,
     /// Associated (premultiplied) alpha to turn straight.
     premultiplied: bool,
     /// Palette images: the colour map (16-bit RGB per index).
@@ -418,6 +420,10 @@ struct Layout {
 impl Layout {
     fn out_channels(&self) -> usize {
         self.out_layout.channels()
+    }
+    /// The decoded sample (chunky) or file plane (planar) of output channel `k`.
+    fn source_sample(&self, k: usize) -> usize {
+        if self.out_layout.has_alpha() && k + 1 == self.out_channels() { self.alpha_sample } else { k }
     }
     fn out_row(&self) -> usize {
         self.w * self.out_channels() * self.out.bytes()
@@ -518,6 +524,17 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     } else {
         None
     };
+    // TIFF 6.0 lets any extra sample be the alpha (#1349). For RGB and CMYK the `tiff` crate
+    // returns the alpha only when it is the first extra sample: otherwise it is asked for every
+    // sample (as multiband gray) and the colour and alpha samples are picked here. An alpha
+    // position past the samples the file has is ignored.
+    let color = match photometric {
+        2 => 3,
+        5 => 4,
+        _ => 1,
+    };
+    let alpha_at = extra.iter().position(|&e| e == 1 || e == 2).filter(|&a| (color + a as u64) < spp);
+    let all_samples = palette.is_none() && matches!(photometric, 2 | 5) && alpha_at.is_some_and(|a| a > 0);
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let encode_u = |v: u64, len: usize| -> Vec<u8> {
         let b = if f.le { v.to_le_bytes() } else { v.to_be_bytes() };
@@ -532,7 +549,7 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     // The directory is seen as the last of its chain: the chain was walked already, and a
     // cycle through it must not fail this page.
     patches.push((dir.next_at, vec![0; if f.big { 8 } else { 4 }]));
-    if invert || palette.is_some() {
+    if invert || palette.is_some() || all_samples {
         let e = photometric_entry.ok_or_else(|| err("missing PhotometricInterpretation"))?;
         let len = match e.ty {
             3 if e.count == 1 => 2,
@@ -555,11 +572,13 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         return Err(err("inconsistent image directory"));
     }
     let ct = dec.colortype().map_err(map_err)?;
-    let alpha_first = matches!(extra.first(), Some(1 | 2));
-    let gray_alpha = alpha_first || (extra.is_empty() && spp == 2);
+    let gray_alpha = alpha_at.is_some() || (extra.is_empty() && spp == 2);
     let (out_layout, chunk_spp) = match ct {
         _ if palette.is_some() => (ChannelLayout::Rgb, 1),
         tiff::ColorType::Gray(_) => (ChannelLayout::Gray, 1),
+        tiff::ColorType::Multiband { num_samples, .. } if all_samples => {
+            (if photometric == 2 { ChannelLayout::Rgba } else { ChannelLayout::CmykA }, usize::from(num_samples))
+        }
         tiff::ColorType::Multiband { num_samples, .. } if photometric <= 1 => {
             (if gray_alpha { ChannelLayout::GrayA } else { ChannelLayout::Gray }, usize::from(num_samples))
         }
@@ -570,6 +589,11 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         other => return Err(CodecError::unsupported(F, format!("colour type {other:?}"))),
     };
     let chunk_spp = if planar { 1 } else { chunk_spp };
+    // The sample (chunky) or plane (planar) that holds the alpha: the colour samples come first.
+    let alpha_sample = out_layout.color_channels() + alpha_at.unwrap_or(0);
+    if out_layout.has_alpha() && (alpha_sample as u64 >= spp || (!planar && alpha_sample >= chunk_spp)) {
+        return Err(err("the alpha sample is past the samples of a pixel"));
+    }
     if matches!(src, Src::Bits(_)) && (out_layout.channels() > 1 || spp != 1) && palette.is_none() {
         return Err(CodecError::unsupported(F, format!("{bits}-bit samples with {spp} samples per pixel")));
     }
@@ -628,7 +652,8 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         across,
         chunks_per_plane,
         invert: invert && palette.is_none(),
-        premultiplied: out_layout.has_alpha() && extra.first() == Some(&1),
+        alpha_sample,
+        premultiplied: out_layout.has_alpha() && alpha_at.and_then(|a| extra.get(a)) == Some(&1),
         palette,
         scratch_cap,
     };
@@ -722,8 +747,9 @@ fn decode_band(lay: &Layout, dec: &mut Decoder<Patched<'_>>, scratch: &mut Vec<u
     let px = lay.out_channels() * lay.out.bytes();
     let mut tally = Tally::default();
     for plane in 0..lay.planes {
+        let file_plane = lay.source_sample(plane);
         for col in 0..lay.across {
-            let chunk = plane
+            let chunk = file_plane
                 .checked_mul(lay.chunks_per_plane)
                 .and_then(|c| c.checked_add(b.checked_mul(lay.across)?))
                 .and_then(|c| c.checked_add(col))
@@ -795,7 +821,7 @@ fn convert_row(lay: &Layout, src: &[u8], dst: &mut [u8], n: usize, plane: usize)
         transfer(lay.src, src, 1, 0, dst, lay.out, och, plane, n);
     } else {
         for k in 0..och {
-            transfer(lay.src, src, lay.chunk_spp, k, dst, lay.out, och, k, n);
+            transfer(lay.src, src, lay.chunk_spp, lay.source_sample(k), dst, lay.out, och, k, n);
         }
     }
 }
@@ -1103,7 +1129,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         Vec::new()
     };
     // TIFF writes no Orientation tag (= 1): keep the XMP from contradicting it.
-    let xmp = if opts.embed_metadata { img.meta.xmp.as_deref().map(crate::orientation::upright_xmp) } else { None };
+    let xmp = if opts.embed_metadata { img.meta.xmp.as_deref().map(|x| crate::resolution::export_xmp(x, img.meta.dpi)) } else { None };
     let tags = TagSet {
         icc: if opts.embed_icc { img.icc.as_deref() } else { None },
         xmp: xmp.as_deref().map(str::as_bytes),

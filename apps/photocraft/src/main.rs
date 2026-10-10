@@ -22,8 +22,10 @@
 
 mod app_dirs;
 mod app_icon;
+mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod caps_lock;
 mod control_server;
 mod crash_guard;
 mod cursor;
@@ -37,6 +39,8 @@ mod mac_window;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod photoshop_settings;
+mod screen_color;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
@@ -208,6 +212,20 @@ fn main() -> eframe::Result {
     // app no pen input (#639).
     #[cfg(target_os = "linux")]
     let session = tablet::display_session();
+    // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too,
+    // where native file drops work (winit 0.30 has none on Wayland, #386). Only when Xwayland can
+    // run the window ($DISPLAY set, X11 libraries installed); otherwise the session's own.
+    #[cfg(target_os = "linux")]
+    let session = if session == linux_libs::DisplaySession::Wayland
+        && gpu_startup::read_display_server(services::prefs_file().as_deref()) == photocraft_engine::prefs::LinuxDisplayServer::X11
+        && std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
+        && linux_libs::available(linux_libs::DisplaySession::X11)
+    {
+        eprintln!("photocraft: opening the window through Xwayland (Preferences › Performance › Linux display server)");
+        linux_libs::DisplaySession::X11
+    } else {
+        session
+    };
 
     // winit and wgpu dlopen the windowing and GPU libraries, and some of those crates panic when
     // one is missing (issue #201). Name the package to install and exit instead.
@@ -223,7 +241,7 @@ fn main() -> eframe::Result {
             Ok(token) => token,
             Err(e) => {
                 eprintln!("photocraft: cannot configure control authentication: {e}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         if let Some(path) = token_file {
@@ -237,7 +255,7 @@ fn main() -> eframe::Result {
             Ok(workspace) => workspace,
             Err(error) => {
                 eprintln!("photocraft: cannot configure automation workspace: {error}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         Some((port, token, workspace))
@@ -418,6 +436,8 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                // Quit through AppKit, not by closing the window (Touch Bar Macs, #1575, #1458).
+                app.services.quit = Some(Box::new(mac_window::terminate_later));
                 // The macOS menu bar, installed now so winit's default menu doesn't stay up.
                 if !in_window_menus {
                     app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
@@ -427,6 +447,10 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
+            // precise crosshair for painting tools while it is toggled on (#1758).
+            app.services.caps_lock = caps_lock::service(cc);
+            app.services.screen_pick = screen_color::service(cc, app.services.is_wayland);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).

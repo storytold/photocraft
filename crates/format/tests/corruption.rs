@@ -23,6 +23,22 @@ fn rebuild(bytes: &[u8], f: impl Fn(&str, Vec<u8>) -> Option<Vec<u8>>) -> Vec<u8
 }
 
 #[test]
+fn older_bundles_without_text_metadata_still_load() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let old = rebuild(&bytes, |name, data| {
+        if name != "manifest.json" {
+            return Some(data);
+        }
+        let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        assert!(manifest["document"]["metadata"].as_object_mut().unwrap().remove("text").is_some());
+        Some(serde_json::to_vec(&manifest).unwrap())
+    });
+    doc.metadata.text.clear();
+    assert_eq!(load_from_bytes(&old).unwrap(), doc);
+}
+
+#[test]
 fn truncation_never_panics_and_fails() {
     let b = sample();
     let step = (b.len() / 200).max(1);
@@ -328,4 +344,46 @@ proptest! {
 fn sample_cached() -> &'static [u8] {
     static S: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     S.get_or_init(sample)
+}
+
+/// Moves the first tile of the first top-level layer that has pixels to `(tx, ty)`; returns that
+/// layer's index.
+fn move_first_tile(v: &mut serde_json::Value, tx: i64, ty: i64) -> Option<usize> {
+    let layers = v["document"]["layers"].as_array_mut()?;
+    let (i, tile) = layers.iter_mut().enumerate().find_map(|(i, l)| l["content"]["surface"]["tiles"].get_mut(0).map(|t| (i, t)))?;
+    tile["tx"] = tx.into();
+    tile["ty"] = ty.into();
+    Some(i)
+}
+
+#[test]
+fn tile_coordinates_outside_the_i32_pixel_range_are_rejected() {
+    // #938: a tile index whose rectangle overflows i32 loaded fine and panicked later, in
+    // `TileCoord::rect`, wherever the layer's bounds were asked for (wrapping in release).
+    let with_tile_at = |tx: i64, ty: i64| {
+        let layer = std::cell::Cell::new(None);
+        let b = rebuild(&sample(), |n, d| {
+            Some(if n == "manifest.json" {
+                let mut v: serde_json::Value = serde_json::from_slice(&d).unwrap();
+                layer.set(move_first_tile(&mut v, tx, ty));
+                serde_json::to_vec(&v).unwrap()
+            } else {
+                d
+            })
+        });
+        (b, layer.get().expect("the sample has a raster layer with a tile"))
+    };
+    let (lo, hi) = (i64::from(i32::MIN / 256), i64::from(i32::MAX / 256 - 1));
+    for (tx, ty) in [(hi + 1, 0), (0, hi + 1), (lo - 1, 0), (0, lo - 1), (i64::from(i32::MAX), 0), (0, i64::from(i32::MIN))] {
+        let err = load_from_bytes(&with_tile_at(tx, ty).0).unwrap_err();
+        assert!(err.to_string().contains("outside the coordinate range"), "({tx}, {ty}): {err}");
+    }
+    // The extreme valid indices still load, and the layer's bounds can be computed.
+    for (tx, ty) in [(hi, hi), (lo, lo), (hi, lo)] {
+        let (b, i) = with_tile_at(tx, ty);
+        let doc = load_from_bytes(&b).unwrap_or_else(|e| panic!("({tx}, {ty}): {e}"));
+        let s = doc.layers[i].surface().expect("raster layer");
+        assert!(s.tiles().any(|(c, _)| (i64::from(c.tx), i64::from(c.ty)) == (tx, ty)), "({tx}, {ty})");
+        assert!(!s.content_bounds().is_empty());
+    }
 }

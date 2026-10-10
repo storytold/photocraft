@@ -9,8 +9,68 @@ static site in `photocraft-web-<version>/`:
 | `photocraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `photocraft-web-<hash>_bg.wasm` | The app: about 19 MiB raw, 8 MiB with gzip, 5.6 MiB with Brotli (see [Sizes](#sizes)) |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `fonts/` (optional) | Fonts loaded on demand, listed in `fonts/manifest.txt` (see [Fonts](#fonts)) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
+
+## Docker
+
+> The Docker recipe (`Dockerfile`, `.dockerignore`, `packaging/web/nginx.conf`) is
+> **community-maintained**: it is not built in CI or used for releases, so it can lag behind the
+> official web build above. Fixes are welcome.
+
+From the repository root (Docker is the only build prerequisite):
+
+```sh
+docker build --load -t photocraft-web:local .
+docker run -d --name photocraft-web --restart unless-stopped \
+  -p 8080:8080 photocraft-web:local
+```
+
+Open **http://localhost:8080/**. The multi-stage `Dockerfile` builds the existing Rust/Wasm
+app with Trunk, including HEIF support, then copies only the static site into NGINX. The
+runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint and Docker
+health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
+assets, and an HTML page that revalidates after deployments. No Rust installation, Node.js,
+database, GPU passthrough, or document volume is needed on the host.
+
+The first build downloads Rust dependencies and Trunk's Wasm tools and can take several
+minutes. Subsequent builds reuse Cargo caches. The builder supports Linux amd64 and arm64;
+the default Rust version is the stable release CI used when the `Dockerfile` was last updated
+(CI and releases always use the latest stable), and Trunk is pinned to the release workflow's
+`TRUNK_VERSION`. `RUST_VERSION`, `TRUNK_VERSION`, and `NGINX_VERSION` can be overridden with
+`--build-arg`. To stamp the About dialog with the commit and date instead of "dev build", pass
+`--build-arg PHOTOCRAFT_BUILD_SHA=$(git rev-parse HEAD) --build-arg PHOTOCRAFT_BUILD_DATE=$(date -u +%F)`.
+The web build does not embed the optional `craft-fonts` checkout.
+
+The Docker build uses thin LTO and one Cargo build job to reduce peak memory, while keeping
+the web profile's size optimizations and `wasm-opt -Oz`. Its Wasm size may differ from the
+release zip figures below; NGINX has no 25 MiB file limit. To use the release zip's fat LTO on
+a builder with more memory, pass `--build-arg CARGO_PROFILE_WASM_RELEASE_LTO=fat`.
+`--build-arg CARGO_BUILD_JOBS=4` enables more concurrent compilation on larger builders. A compiler killed with
+`SIGKILL`/`cannot allocate memory` means the Docker/Podman VM needs more memory or swap.
+
+For a public deployment, put an HTTPS reverse proxy or your hosting platform's TLS endpoint
+in front of container port 8080. With a reverse proxy on the same host, bind only loopback
+(`-p 127.0.0.1:8080:8080`); with a proxy container, connect both through a Docker network.
+HTTPS enables WebGPU and browser clipboard APIs. If hosting under `/photocraft/`, redirect
+`/photocraft` to `/photocraft/` and strip that prefix when proxying to the container. Relative
+asset URLs then work without rebuilding. For example, in an existing HTTPS NGINX server:
+
+```nginx
+location = /photocraft { return 301 /photocraft/; }
+location /photocraft/ {
+    proxy_pass http://127.0.0.1:8080/;
+}
+```
+
+The editor and image processing run on the visitor's device. Open uses the browser file
+picker; Save and Export download files. Preferences use browser localStorage. There is no
+server-side document storage, desktop TCP control server, or web autosave/crash recovery;
+save/download work before closing or reloading the page. A browser with WebGPU or WebGL2 is
+required; `?webgl` forces the fallback when troubleshooting.
+
+To verify the browser deployment, open the page, open an image and save/export it.
 
 ## Sizes
 
@@ -65,6 +125,41 @@ location /photocraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Fonts
+
+The app has two fonts of its own, Inter and JetBrains Mono: a browser offers no system fonts, and
+embedding more would push the wasm over the size gate. A host can serve more fonts next to the
+app. They show in the font menus straight away, and a family's files are downloaded the first time
+it is picked or a document's text needs it, so starting the app costs one small text file.
+
+1. Put the font files (`.ttf`, `.otf`, `.ttc`) anywhere under `fonts/` next to `index.html`.
+2. List them in `fonts/manifest.txt`, one file per line, in the format of
+   [craft-fonts](https://github.com/storytold/craft-fonts)' own `fonts/manifest.txt`:
+
+   ```text
+   # family | style | file (relative to the site root) | scripts | licence | licence file | sha256 | source
+   Open Sans | Regular | fonts/open-sans/OpenSans[wdth,wght].ttf
+   Open Sans | Italic | fonts/open-sans/OpenSans-Italic[wdth,wght].ttf
+   Lobster | Regular | fonts/lobster/Lobster-Regular.ttf | Latn,Cyrl | OFL-1.1 | fonts/lobster/OFL.txt
+   ```
+
+   The app reads the first three fields; the others are optional here. `family` must be the font's
+   own family name (the typographic family in its `name` table, else the family), which is what the
+   font menu shows once the file is in. The path is relative to the site root and can't leave it
+   (no `..`, no `/` at the start, no other host). A variable font is one line: the style menu offers
+   the weights of its `wght` axis.
+3. Put each font's licence next to it; the SIL Open Font License, for one, requires that.
+
+A craft-fonts checkout is already laid out this way, and so is any folder with a
+`fonts/manifest.txt` and the files it lists: `PHOTOCRAFT_WEB_FONTS_DIR=<that folder>
+packaging/web/package.sh` copies the manifest, the fonts and their licences into the zip, keeping
+their paths. Without `fonts/manifest.txt` (a 404) nothing changes.
+
+Serving: let `fonts/manifest.txt` revalidate (`Cache-Control: no-cache`) so edits show up; cache
+the font files for long only if their names change with their contents. Serve `.ttf` as `font/ttf`
+and `.otf` as `font/otf`, and compress them (Brotli roughly halves a TrueType file). The app
+fetches them with `fetch()`, so a Content Security Policy needs them allowed by `connect-src`.
 
 ## Embedding in a page (iframe)
 

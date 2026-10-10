@@ -36,6 +36,56 @@ fn shape(x0: f64, x1: f64, fill: Fill, stroke: Option<ShapeStroke>) -> Layer {
     Layer::new("shape", LayerContent::Shape(sh))
 }
 
+fn gradient_shape(width: u32, height: u32) -> ShapeLayer {
+    let (w, h) = (f64::from(width), f64::from(height));
+    ShapeLayer {
+        path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)])]),
+        fill: Some(Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false)),
+        stroke: Some(ShapeStroke { width: 4.0, ..ShapeStroke::default() }),
+        live: None,
+        cache: None,
+        psd_raw: None,
+    }
+}
+
+#[test]
+fn split_stroked_gradient_with_effect_keeps_document_precision() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::with_background("t", Size::new(4000, 40), ColorMode::Rgb, depth, Color::WHITE);
+        let mut sh = gradient_shape(4000, 40);
+        sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+        let mut layer = Layer::new("gradient shape", LayerContent::Shape(sh));
+        layer.effects.items = vec![stroke(1.0, StrokePosition::Outside, blue())];
+        d.layers.push(layer);
+        let row = render(&d, Rect::from_xywh(0, 20, 4000, 1));
+        let mut levels: Vec<u32> = row.px.iter().map(|p| (p[0] * 65535.0).round() as u32).collect();
+        levels.sort_unstable();
+        levels.dedup();
+        if depth == SampleType::U8 {
+            assert!(levels.len() <= 256, "8-bit control: {} levels", levels.len());
+        } else {
+            assert!(levels.len() > 3000, "{depth:?}: split gradient has only {} levels", levels.len());
+        }
+    }
+}
+
+#[test]
+fn split_cache_keeps_same_shape_separate_at_each_document_depth() {
+    let canvas = Rect::new(0, 0, 64, 8);
+    let mut sh = gradient_shape(64, 8);
+    // Keep the shape and cached tile identities identical while only the document depth changes.
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA32F, canvas));
+    let mut layer = Layer::new("same shape", LayerContent::Shape(sh.clone()));
+    layer.effects.items = vec![stroke(1.0, StrokePosition::Outside, blue())];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U8] {
+        let mut d = Document::with_background("t", Size::new(64, 8), ColorMode::Rgb, depth, Color::WHITE);
+        d.layers.push(layer.clone());
+        let expected = photocraft_vector::render_shape(&sh, PixelFormat::RGBA8.with_sample(depth), canvas).pixel(17, 4)[0];
+        let actual = px(&d, 17, 4)[0];
+        assert!((actual - expected).abs() < 1e-6, "{depth:?}: got {actual}, expected {expected}; split cache must include document depth");
+    }
+}
+
 #[test]
 fn outline_share_treats_stroke_and_shape_as_disjoint_areas() {
     // Outside the shape the stroke covers the pixel; inside it nothing.
@@ -172,15 +222,19 @@ fn hairline_vector_stroke_keeps_the_files_edge_pixel_colour() {
     // pixels are opaque and mostly fill. Our path sits off the pixel grid, so our fill covers only
     // part of an edge pixel; fitting the stroke to the file's pixels must keep their colour there,
     // not paint the edge in the stroke's full colour. At every depth.
-    for (sample, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+    for (sample, fmt, edge, fill) in [
+        (SampleType::U8, PixelFormat::RGBA8, 0.86, 1.0),
+        (SampleType::U16, PixelFormat::RGBA16, 0.86, 1.0),
+        (SampleType::F32, PixelFormat::RGBA32F, 0.86, 1.0),
+        (SampleType::F32, PixelFormat::RGBA32F, 2.0, 2.0),
+    ] {
         let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, sample, Color::WHITE);
-        let edge = 0.86;
         let vs = ShapeStroke { width: 0.25, paint: Fill::Solid(Color::rgb(0.48, 0.48, 0.48)), ..ShapeStroke::default() };
         let path = Path::new(vec![Subpath::polygon(&[(10.3, 10.3), (29.7, 10.3), (29.7, 29.7), (10.3, 29.7)])]);
         let mut cache = photocraft_raster::Surface::new(fmt);
         cache.fill_rect(Rect::new(10, 10, 30, 30), &[edge, edge, edge, 1.0]);
-        cache.fill_rect(Rect::new(11, 11, 29, 29), &[1.0, 1.0, 1.0, 1.0]);
-        let sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::WHITE)), stroke: Some(vs), live: None, cache: Some(cache), psd_raw: None };
+        cache.fill_rect(Rect::new(11, 11, 29, 29), &[fill, fill, fill, 1.0]);
+        let sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(fill, fill, fill))), stroke: Some(vs), live: None, cache: Some(cache), psd_raw: None };
         let mut l = Layer::new("shape", LayerContent::Shape(sh));
         // Any layer effect sends the shape through the fill/stroke split.
         l.effects.items = vec![Effect::default_drop_shadow()];
@@ -190,6 +244,6 @@ fn hairline_vector_stroke_keeps_the_files_edge_pixel_colour() {
             assert!(close4(p, [edge, edge, edge, 1.0]), "{sample:?} edge pixel ({x}, {y}): {p:?}");
         }
         // The interior keeps the fill.
-        assert!(close4(px(&d, 20, 20), [1.0, 1.0, 1.0, 1.0]), "{sample:?} {:?}", px(&d, 20, 20));
+        assert!(close4(px(&d, 20, 20), [fill, fill, fill, 1.0]), "{sample:?} {:?}", px(&d, 20, 20));
     }
 }

@@ -193,7 +193,7 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
     }
     let fmt = doc.pixel_format();
     let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
-    let src = photocraft_io::import(path, &bytes).map_err(|e| EngineError::Other(format!("`{path}`: {e}")))?.document;
+    let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
     let (tw, th) = (target.width() as f64, target.height() as f64);
@@ -272,15 +272,15 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let delim = p.get("delimiter").and_then(Value::as_str).and_then(|d| d.bytes().next()).unwrap_or(b',');
     let text = std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
-    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-    let header: Vec<String> = lines.next().map(|h| split_csv(h, delim)).unwrap_or_default();
+    let mut records = csv_records(&text).filter(|r| !r.trim().is_empty());
+    let header: Vec<String> = records.next().map(|h| split_csv(h, delim)).unwrap_or_default();
     if header.is_empty() {
         return Err(bad("file.import.variableDataSets", "empty CSV"));
     }
     let named = header[0].trim().is_empty() || header[0].eq_ignore_ascii_case("dataset");
     let mut sets = Vec::new();
-    for (row, line) in lines.enumerate() {
-        let cells = split_csv(line, delim);
+    for (row, record) in records.enumerate() {
+        let cells = split_csv(record, delim);
         let name = if named {
             cells.first().cloned().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| format!("Data Set {}", row + 1))
         } else {
@@ -303,6 +303,28 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let n = sets.len();
     set_vars(s, |v| v.data_sets = sets)?;
     Ok(json!({"imported": n}))
+}
+
+/// Split logical CSV records without changing line endings inside quoted fields.
+fn csv_records(text: &str) -> impl Iterator<Item = &str> {
+    let mut chars = text.char_indices();
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let mut quoted = false;
+        for (end, c) in chars.by_ref() {
+            if c == '"' {
+                // An escaped quote pair toggles twice, leaving the surrounding state intact.
+                quoted = !quoted;
+            } else if c == '\n' && !quoted {
+                let record = text.get(start..end)?;
+                start = end.saturating_add(1);
+                return Some(record.strip_suffix('\r').unwrap_or(record));
+            }
+        }
+        let record = text.get(start..)?;
+        start = text.len();
+        (!record.is_empty()).then_some(record)
+    })
 }
 
 /// Minimal CSV field splitter with double-quote support.

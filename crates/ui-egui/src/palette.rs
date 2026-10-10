@@ -1,4 +1,4 @@
-//! ⌘K command palette: fuzzy search over every menu command and tool.
+//! ⌘F command palette: fuzzy search over every menu command and tool.
 
 use egui::{Align2, Color32, CornerRadius, RichText, Sense, Stroke, vec2};
 
@@ -34,6 +34,57 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
         }
     }
     Some(score - (t.len() as i32 / 8))
+}
+
+/// How many recently run commands the palette remembers.
+const RECENT_CAP: usize = 8;
+
+/// The id of the palette's recently-run list (egui temp data: session-scoped, like the query).
+fn recent_id() -> egui::Id {
+    egui::Id::new("palette-recent")
+}
+
+/// Remember `id` as the most recently run command: deduplicated, newest first, capped.
+pub(crate) fn note_recent(ctx: &egui::Context, id: &str) {
+    ctx.data_mut(|d| {
+        let mut list: Vec<String> = d.get_temp(recent_id()).unwrap_or_default();
+        push_recent(&mut list, id, RECENT_CAP);
+        d.insert_temp(recent_id(), list);
+    });
+}
+
+/// The palette's recently run commands, newest first (for tests).
+#[cfg(test)]
+pub(crate) fn recent_ids(ctx: &egui::Context) -> Vec<String> {
+    ctx.data(|d| d.get_temp(recent_id()).unwrap_or_default())
+}
+
+/// [`note_recent`]'s core: move `id` to the front, dropping the oldest past `cap`.
+fn push_recent(list: &mut Vec<String>, id: &str, cap: usize) {
+    list.retain(|x| x != id);
+    list.insert(0, id.to_string());
+    list.truncate(cap);
+}
+
+/// The empty-query hits: the recent commands as rows, newest first (UI-217-7). Ids that are
+/// no longer menu commands are skipped.
+fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate::i18n::Lang) -> Vec<(i32, String, String, Option<String>, bool)> {
+    recents
+        .iter()
+        .enumerate()
+        .filter_map(|(i, id)| {
+            let m = menus.iter().find(|m| &m.id == id)?;
+            let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
+            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
+            Some((
+                1000 - i as i32,
+                m.id.clone(),
+                label.trim_end_matches('…').to_string(),
+                Some(path + &m.shortcut.as_ref().map(|s| format!("   {}", crate::shortcuts::pretty(s))).unwrap_or_default()),
+                m.enabled,
+            ))
+        })
+        .collect()
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -86,9 +137,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     crate::widgets::hairline(ui);
                     ui.add_space(6.0);
                     let lang = crate::i18n::Lang::from_pref(&app.session.prefs().interface.language);
-                    let mut hits: Vec<(i32, String, String, Option<String>, bool)> = crate::menus::menu_items(app)
-                        .into_iter()
-                        .filter_map(|m| {
+                    let menus = crate::menus::menu_items(app);
+                    let recents: Vec<String> = ui.data(|d| d.get_temp(recent_id()).unwrap_or_default());
+                    let empty = q.trim().is_empty();
+                    // An empty query lists the recently run commands (UI-217-7); with none (or a
+                    // fresh session) it falls back to the full fuzzy list, as before.
+                    let mut hits: Vec<(i32, String, String, Option<String>, bool)> = if empty { recent_hits(&recents, &menus, lang) } else { Vec::new() };
+                    if !empty || hits.is_empty() {
+                        hits.extend(menus.into_iter().filter_map(|m| {
                             let path_en = m.path.join(" › ");
                             let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
                             let label = crate::i18n::tr_id(lang, &m.id, &m.label);
@@ -101,11 +157,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()),
                                 m.enabled,
                             ))
-                        })
-                        .collect();
-                    for tool in crate::state::Tool::ALL {
-                        if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
-                            hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
+                        }));
+                        for tool in crate::state::Tool::ALL {
+                            if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
+                                hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
+                            }
                         }
                     }
                     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
@@ -184,7 +240,7 @@ mod tests {
     use egui_kittest::Harness;
     use serde_json::json;
 
-    use super::fuzzy_score;
+    use super::{fuzzy_score, push_recent};
     use crate::PhotocraftApp;
 
     #[test]
@@ -204,6 +260,59 @@ mod tests {
             })
             .collect();
         assert_eq!(interrupts, [None, Some(false), Some(false), Some(false)]);
+    }
+
+    #[test]
+    fn push_recent_moves_to_the_front_and_caps() {
+        let mut l = Vec::new();
+        push_recent(&mut l, "b", 3);
+        push_recent(&mut l, "a", 3);
+        push_recent(&mut l, "c", 3);
+        assert_eq!(l, ["c", "a", "b"]);
+        push_recent(&mut l, "a", 3);
+        assert_eq!(l, ["a", "c", "b"], "re-running a command moves it to the front");
+        push_recent(&mut l, "d", 3);
+        assert_eq!(l, ["d", "a", "c"], "the oldest falls off the cap");
+    }
+
+    #[test]
+    fn the_palette_records_and_replays_recent_commands_on_an_empty_query() {
+        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+        });
+        h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        h.state_mut().sync_views();
+        let ctx = h.ctx.clone();
+        // Run "Keyboard Shortcuts" through the palette: it becomes the recent command.
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.search", json!({})).unwrap();
+        h.run_steps(2);
+        h.event(Event::Text("keyboard shortcuts".into()));
+        h.run_steps(2);
+        h.event(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert_eq!(super::recent_ids(&ctx).len(), 1, "the command the palette ran is remembered");
+        // Close its dialog, reopen the palette with an empty query and press Enter: the recent
+        // command is the first hit, so the same dialog opens again.
+        let dialog = h
+            .state()
+            .ui
+            .dialogs
+            .iter()
+            .find(|d| d.fields.get("__prefsui").and_then(|v| v.as_str()) == Some("shortcuts"))
+            .map(|d| d.id)
+            .expect("the shortcuts dialog");
+        h.state_mut().ui.close_dialog(dialog);
+        h.run_steps(2);
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.search", json!({})).unwrap();
+        h.run_steps(2);
+        h.event(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(
+            h.state().ui.dialogs.iter().any(|d| d.fields.get("__prefsui").and_then(|v| v.as_str()) == Some("shortcuts")),
+            "the empty-query palette runs the recent command"
+        );
+        assert_eq!(super::recent_ids(&ctx).len(), 1, "re-running it moves it to the front, no duplicate");
     }
 
     #[test]

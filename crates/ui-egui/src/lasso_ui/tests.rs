@@ -153,7 +153,7 @@ fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
 fn mouse(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, kind: &str, x: f32, y: f32, mods: Modifiers) {
     let app = h.state();
     let v = &app.ui.views[0];
-    let xf = ViewXform { rect: crate::rulers::content_rect(app, app.last_canvas_rect), zoom: v.zoom, center: v.center, flip: false };
+    let xf = ViewXform { rect: crate::rulers::content_rect(app, app.last_canvas_rect), zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation };
     let pos = xf.to_screen(x, y);
     h.event(Event::ModifiersChanged(mods));
     h.event(Event::PointerMoved(pos));
@@ -265,7 +265,7 @@ fn real_canvas_backspace_and_right_click_retract_polygonal_points() {
 
     let state = h.state();
     let view = &state.ui.views[0];
-    let xf = ViewXform { rect: crate::rulers::content_rect(state, state.last_canvas_rect), zoom: view.zoom, center: view.center, flip: false };
+    let xf = ViewXform { rect: crate::rulers::content_rect(state, state.last_canvas_rect), zoom: view.zoom, center: view.center, flip: false, rotation: 0.0 };
     let pos = xf.to_screen(155.0, 100.0);
     h.event(Event::PointerMoved(pos));
     h.event(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::ALT });

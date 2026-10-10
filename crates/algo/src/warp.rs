@@ -311,8 +311,10 @@ pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), 
     let v = s.read_region(src);
     tmp.write_region(src, &v.iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
     let w = warp_mesh_surface(&tmp, src, f, interp);
-    let cover = src.union(&w.content_bounds());
-    out.write_region(cover, &vec![default; cover.width() as usize * cover.height() as usize]);
+    // Clear the old region and write the warped one separately, as `warp_gray` does: one dense
+    // `src ∪ warped` buffer grows with the square of how far a mesh moves the content (#995).
+    // `Surface` is tile-sparse, so a distant region costs only its own tiles.
+    out.write_region(src, &vec![default; src.width() as usize * src.height() as usize]);
     let b = w.content_bounds();
     if !b.is_empty() {
         let px = w.read_region(b);
@@ -338,6 +340,23 @@ mod tests {
             }
         }
         surf
+    }
+
+    #[test]
+    fn a_mesh_warp_far_off_canvas_writes_only_the_two_regions() {
+        // #995: the old and warped regions were cleared as one dense `src ∪ warped` buffer, about
+        // 37 GiB of floats for a 48 px selection moved 100000 px. Same fix as `warp_gray` (b70fbd4).
+        for sample in [SampleType::U8, SampleType::F32] {
+            let mut sel = Surface::new(PixelFormat::new(ColorMode::Grayscale, sample, false));
+            sel.fill_rect(Rect::new(8, 8, 56, 56), &[1.0]);
+            for d in [100_000.0, -100_000.0, 300.0] {
+                let out = warp_mesh_gray(&sel, &|x, y| (x + d, y + d), Interp::Bilinear);
+                let k = d as i32;
+                assert_eq!(out.content_bounds(), Rect::new(8 + k, 8 + k, 56 + k, 56 + k), "{sample:?} {d}");
+                assert_eq!(out.sample_channel(30 + k, 30 + k, 0), 1.0, "{sample:?} {d}: moved");
+                assert_eq!(out.sample_channel(30, 30, 0), 0.0, "{sample:?} {d}: old region cleared");
+            }
+        }
     }
 
     #[test]

@@ -219,6 +219,87 @@ LUT_3D_SIZE 2
     assert_eq!(looks.as_array().unwrap().len(), photocraft_cms::lutfile::BUILTIN.len());
 }
 
+/// The kind's parameters, read back from the model (Color Lookup with its table name and size).
+fn adjustment_of(s: &Session, id: photocraft_doc::LayerId) -> Adjustment {
+    match &doc(s).layer(id).unwrap().content {
+        LayerContent::Adjustment(a) => a.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn selective_color_and_color_lookup_reject_wrong_typed_params() {
+    let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    // (kind, params, the key the error must name)
+    let cases: Vec<(&str, Value, &str)> = vec![
+        ("selectiveColor", json!({"method": 5}), "method"),
+        ("selectiveColor", json!({"method": "sideways"}), "method"),
+        ("selectiveColor", json!({"relative": "yes"}), "relative"),
+        ("selectiveColor", json!({"reds": "not-an-array"}), "reds"),
+        ("selectiveColor", json!({"blues": [10, 20]}), "blues"),
+        ("selectiveColor", json!({"neutrals": [10, "20", 0, 0]}), "neutrals"),
+        ("selectiveColor", json!({"colors": 3, "cyan": 50}), "colors"),
+        ("selectiveColor", json!({"colors": "purples", "cyan": 50}), "purples"),
+        ("selectiveColor", json!({"colors": "reds", "cyan": "50"}), "cyan"),
+        ("selectiveColor", json!({"colors": "blacks", "black": [1]}), "black"),
+        ("colorLookup", json!({"lut": 42}), "lut"),
+        ("colorLookup", json!({"interpolation": 5}), "interpolation"),
+        ("colorLookup", json!({"interpolation": "bicubic"}), "interpolation"),
+        ("colorLookup", json!({"tetrahedral": 1}), "tetrahedral"),
+        ("colorLookup", json!({"dither": "yes"}), "dither"),
+        ("colorLookup", json!({"data": 42}), "data"),
+        ("colorLookup", json!({"data": cube, "fileName": 7}), "fileName"),
+        ("colorLookup", json!({"file": 42}), "file"),
+    ];
+    let named = |r: Result<Value>, key: &str, what: &str| match r {
+        Err(e @ EngineError::BadParams { .. }) => assert!(e.to_string().contains(key), "{what}: {e}"),
+        other => panic!("{what}: expected BadParams naming `{key}`, got {other:?}"),
+    };
+    for depth in DEPTHS {
+        for mode in ["rgb", "cmyk", "lab"] {
+            for (kind, p, key) in &cases {
+                let what = format!("{kind} {p} {depth} {mode}");
+                let mut s = session(depth, mode);
+                let (layers, steps, px) = (doc(&s).layers.len(), s.active().unwrap().history.past_len(), rgba(&s, 3, 3));
+                named(s.execute(&format!("image.adjustments.{kind}"), p.clone()), key, &what);
+                named(s.execute(&format!("layer.newAdjustmentLayer.{kind}"), p.clone()), key, &what);
+                assert_eq!(doc(&s).layers.len(), layers, "{what}: no layer added");
+                assert_eq!(s.active().unwrap().history.past_len(), steps, "{what}: no history step");
+                assert_eq!(rgba(&s, 3, 3), px, "{what}: pixels unchanged");
+            }
+        }
+    }
+    // An update with a wrong-typed key fails and keeps every existing value.
+    let mut s = session(8, "rgb");
+    let made = [
+        ("selectiveColor", json!({"method": "absolute", "reds": [10, -20, 30, -40], "colors": "blues", "yellow": 40})),
+        ("colorLookup", json!({"lut": "warm", "interpolation": "tetrahedral", "dither": true})),
+    ];
+    for (kind, p) in made {
+        let id = photocraft_doc::LayerId(s.execute(&format!("layer.newAdjustmentLayer.{kind}"), p).unwrap()["layer"].as_u64().unwrap());
+        let before = adjustment_of(&s, id);
+        for (k, p, key) in cases.iter().filter(|c| c.0 == kind) {
+            let mut p = p.clone();
+            p["layer"] = json!(id.0);
+            named(s.execute("layer.setAdjustment", p.clone()), key, &format!("setAdjustment {k} {p}"));
+            assert_eq!(adjustment_of(&s, id), before, "{p}");
+        }
+        // Null still means "not given": the update keeps everything.
+        let nulls = json!({"layer": id.0, "method": null, "reds": null, "colors": null, "lut": null, "interpolation": null, "dither": null});
+        s.execute("layer.setAdjustment", nulls).unwrap();
+        assert_eq!(adjustment_of(&s, id), before, "{kind}: nulls");
+    }
+    // Well-typed values reach the model.
+    match adjustment_of(&s, doc(&s).layers[1].id) {
+        Adjustment::SelectiveColor { relative: false, adjustments } => {
+            assert_eq!(adjustments[0], [10.0, -20.0, 30.0, -40.0]);
+            assert_eq!(adjustments[4], [0.0, 0.0, 40.0, 0.0]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(adjustment_of(&s, doc(&s).layers[2].id), Adjustment::ColorLookup { lut: Some(_), tetrahedral: true, dither: true, .. }));
+}
+
 #[test]
 fn new_kinds_round_trip_through_psd_and_pcraft() {
     let mut s = session(8, "rgb");
@@ -273,6 +354,104 @@ fn invert_with_the_mask_targeted_inverts_the_mask() {
         }
         assert_eq!((mask_at(&s, 3, 3), mask_at(&s, 30, 3), mask_at(&s, -500, 3)), (0.0, 1.0, off_canvas));
     }
+}
+
+// ---------- Image › Adjustments as smart filters (FILE-215-4) ----------
+
+/// A painted pixel layer converted to a smart object, over the painted Background.
+fn smart_session() -> Session {
+    let mut s = session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |x, y| [0.1 + x as f32 / 60.0, 0.2 + y as f32 / 50.0, 0.6 - x as f32 / 120.0, 1.0]);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s
+}
+
+fn flatten(s: &Session) -> Vec<[f32; 4]> {
+    photocraft_compose::flatten(doc(s)).px
+}
+
+fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
+    a.iter().zip(b).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
+}
+
+fn smart_filters_of(s: &Session) -> Vec<photocraft_doc::SmartFilter> {
+    let d = s.active().unwrap();
+    match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+        LayerContent::Smart(sm) => sm.smart_filters.clone(),
+        other => panic!("not a smart object: {}", other.kind_name()),
+    }
+}
+
+/// FILE-215-4: Image › Adjustments on a smart object record a smart filter (Photoshop) instead
+/// of baking into a copy of the pixels: it renders exactly what the destructive command would
+/// bake in, and can be hidden, re-edited and undone, each in one history step.
+#[test]
+fn adjustments_on_a_smart_object_record_a_smart_filter() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    // The destructive result on the same pixels: the smart filter must match it exactly.
+    let mut plain = session(8, "rgb");
+    plain.execute("image.adjustments.invert", json!({})).unwrap();
+    let baked = flatten(&plain);
+    assert!(max_diff(&original, &baked) > 0.5, "the control changes the pixels");
+    assert!(s.is_enabled("image.adjustments.invert"), "an adjustment runs on a smart object");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+    let sf = smart_filters_of(&s);
+    assert_eq!(sf.len(), 1);
+    assert_eq!(sf[0].command, "image.adjustments.invert");
+    assert!(sf[0].visible && sf[0].opacity == 1.0 && sf[0].blend == photocraft_color::BlendMode::Normal);
+    assert!(sf[0].params.get("__kind").is_none(), "the engine's private key is not recorded");
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "the smart filter renders the destructive result");
+    // Hiding the filter shows the original exactly.
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    assert_eq!(flatten(&s), original);
+    s.undo();
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "undo restores the filtered pixels");
+    // Re-editing the recorded params re-renders; the same params give the same pixels.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {}})).unwrap();
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "the same params render the same pixels");
+    // The setParams step, then the filter itself, undo away.
+    s.undo();
+    s.undo();
+    assert!(smart_filters_of(&s).is_empty(), "the filter is gone");
+    assert_eq!(flatten(&s), original);
+}
+
+/// A selection becomes the smart filter's mask, and the adjustment with its own command
+/// (Shadows/Highlights) records a filter too.
+#[test]
+fn adjustment_smart_filters_take_a_selection_as_their_mask() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 24, "height": 32})).unwrap();
+    s.execute("image.adjustments.shadowsHighlights", json!({"shadowAmount": 100, "blackClip": 0, "whiteClip": 0})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not smart") };
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, "image.adjustments.shadowsHighlights");
+    assert!(sm.filter_mask.is_some(), "the selection became the filter mask");
+    let now = flatten(&s);
+    let at = |px: &[[f32; 4]], x: i32, y: i32| px[(y * 48 + x) as usize];
+    assert!(changed(at(&original, 5, 16), at(&now, 5, 16)) > 1e-3, "inside the selection the shadows lifted");
+    assert_eq!(at(&now, 40, 16), at(&original, 40, 16), "outside the mask the composite is unchanged");
+}
+
+/// A wrong-typed value errors before anything is recorded (never a panic), and the adjustments
+/// that can't re-render from a source (Replace Color, Match Color) stay off a smart object.
+#[test]
+fn a_bad_adjustment_param_on_a_smart_object_is_an_error() {
+    let mut s = smart_session();
+    let (filters, steps, flat) = (smart_filters_of(&s).len(), s.active().unwrap().history.past_len(), flatten(&s));
+    let e = s.execute("image.adjustments.colorLookup", json!({"lut": 42})).unwrap_err();
+    assert!(e.to_string().contains("lut"), "{e}");
+    assert_eq!(smart_filters_of(&s).len(), filters, "nothing recorded");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
+    assert_eq!(flatten(&s), flat, "pixels untouched");
+    assert!(!s.is_enabled("image.adjustments.replaceColor"), "only adjustments that re-render become smart filters");
+    assert!(!s.is_enabled("image.adjustments.matchColor"), "only adjustments that re-render become smart filters");
 }
 
 /// #780: a targeted mask enables Invert (and filters) on layers without pixels, such as an

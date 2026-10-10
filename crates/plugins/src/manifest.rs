@@ -107,7 +107,8 @@ impl Manifest {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
         let name = self.name.trim();
-        if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        let printable = name.chars().all(|c| !c.is_control() && !hidden_format(c)) && name.chars().any(visible);
+        if !printable || name.chars().count() > 64 {
             return Err(Error::Manifest("`name` must be 1-64 printable characters".into()));
         }
         if self.version.len() > 32 || self.description.len() > 1024 || self.author.len() > 128 {
@@ -167,8 +168,8 @@ impl Manifest {
         format!("{{{}}}", parts.join(","))
     }
 
-    /// Validates user `params` against the schema: missing keys take their defaults, numbers are
-    /// clamped into range, unknown keys are dropped; a value of the wrong type is an error.
+    /// Validates user `params` against the schema: missing keys take their defaults, numbers (defaults
+    /// included) are clamped into range, unknown keys are dropped; a value of the wrong type is an error.
     pub fn resolve_params(&self, params: &Value) -> Result<Map<String, Value>> {
         let given = match params {
             Value::Null => &Map::new(),
@@ -181,11 +182,11 @@ impl Manifest {
             let wrong = |what: &str| Error::Params(format!("`{k}` must be {what}"));
             let resolved = match spec {
                 ParamSpec::Number { min, max, default } => match v {
-                    None => json!(default),
+                    None => json!((*default).clamp(*min, *max)),
                     Some(v) => json!(v.as_f64().filter(|f| f.is_finite()).ok_or_else(|| wrong("a number"))?.clamp(*min, *max)),
                 },
                 ParamSpec::Int { min, max, default } => match v {
-                    None => json!(default),
+                    None => json!((*default).clamp(*min, *max)),
                     Some(v) => {
                         let f = v.as_f64().filter(|f| f.is_finite()).ok_or_else(|| wrong("a number"))?;
                         json!((f.round().clamp(*min as f64, *max as f64)) as i64)
@@ -251,6 +252,62 @@ pub fn valid_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// The Unicode format characters (general category Cf, Unicode 15.1). Most draw nothing, and the bidi
+/// controls among them (U+061C, U+200E-200F, U+202A-202E, U+2066-2069) reorder the text around them.
+const FORMAT: &[(char, char)] = &[
+    ('\u{AD}', '\u{AD}'),
+    ('\u{600}', '\u{605}'),
+    ('\u{61C}', '\u{61C}'),
+    ('\u{6DD}', '\u{6DD}'),
+    ('\u{70F}', '\u{70F}'),
+    ('\u{890}', '\u{891}'),
+    ('\u{8E2}', '\u{8E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
+];
+
+/// Default-ignorable characters outside Cf (fillers, variation selectors): allowed in a name, but they
+/// draw nothing on their own.
+const BLANK: &[(char, char)] = &[
+    ('\u{34F}', '\u{34F}'),
+    ('\u{115F}', '\u{1160}'),
+    ('\u{17B4}', '\u{17B5}'),
+    ('\u{180B}', '\u{180D}'),
+    ('\u{180F}', '\u{180F}'),
+    ('\u{3164}', '\u{3164}'),
+    ('\u{FE00}', '\u{FE0F}'),
+    ('\u{FFA0}', '\u{FFA0}'),
+    ('\u{E0100}', '\u{E01EF}'),
+];
+
+fn in_ranges(c: char, ranges: &[(char, char)]) -> bool {
+    ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+}
+
+/// A format character a menu label must not carry: it hides in the label or reorders it. The zero-width
+/// non-joiner and joiner stay allowed, since Persian, Indic scripts and emoji sequences need them and they
+/// cannot reorder text.
+fn hidden_format(c: char) -> bool {
+    !matches!(c, '\u{200C}' | '\u{200D}') && in_ranges(c, FORMAT)
+}
+
+/// A character that draws something on its own.
+fn visible(c: char) -> bool {
+    !c.is_whitespace() && !c.is_control() && !in_ranges(c, FORMAT) && !in_ranges(c, BLANK)
+}
+
 fn valid_key(k: &str) -> bool {
     (1..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && !k.starts_with('_') && k != "id" && k != "layer"
 }
@@ -288,6 +345,28 @@ mod tests {
     }
 
     #[test]
+    fn out_of_range_defaults_are_clamped() {
+        // Issue #1012: a missing value fell back to a default outside the declared range unclamped.
+        let m = Manifest::parse(
+            br#"{"id":"org.example.tone","name":"Tone","kind":"filter",
+                "params":{"amount":{"type":"number","min":0,"max":100,"default":1000},
+                          "steps":{"type":"int","min":1,"max":16,"default":1000},
+                          "low":{"type":"number","min":-1,"max":1,"default":-5},
+                          "count":{"type":"int","min":3,"max":9}}}"#,
+        )
+        .unwrap();
+        let resolved = json!({"amount": 100.0, "steps": 16, "low": -1.0, "count": 3});
+        assert_eq!(Value::Object(m.resolve_params(&json!({})).unwrap()), resolved);
+        assert_eq!(Value::Object(m.resolve_params(&Value::Null).unwrap()), resolved);
+        assert_eq!(Value::Object(m.resolve_params(&json!({"amount": null, "steps": null})).unwrap()), resolved);
+        let given = m.resolve_params(&json!({"amount": 500, "steps": 500, "low": 0.5, "count": 5})).unwrap();
+        assert_eq!(Value::Object(given), json!({"amount": 100.0, "steps": 16, "low": 0.5, "count": 5}));
+        // In-range defaults are unchanged.
+        let full = Manifest::parse(FULL.as_bytes()).unwrap();
+        assert_eq!(Value::Object(full.resolve_params(&json!({})).unwrap()), json!({"amount": 50.0, "mode": "hard", "mono": false, "seed": 0}));
+    }
+
+    #[test]
     fn rejects_bad_manifests() {
         for bad in [
             "",
@@ -308,5 +387,34 @@ mod tests {
         }
         assert!(Manifest::parse(&[0xff, 0xfe]).is_err());
         assert!(Manifest::parse(&vec![b' '; MAX_MANIFEST_BYTES + 1]).is_err());
+    }
+
+    fn with_name(name: &str) -> Result<Manifest> {
+        Manifest::parse(json!({"id": "org.example.tone", "name": name, "kind": "filter"}).to_string().as_bytes())
+    }
+
+    #[test]
+    fn name_must_be_printable_unicode() {
+        for bad in [
+            "Tone\u{202E}evil",
+            "\u{2067}Tone\u{2069}",
+            "Tone\u{200F}",
+            "\u{200B}\u{200B}\u{200B}",
+            "Tone\u{00AD}",
+            "\u{FEFF}Tone",
+            "\u{200D}",
+            "\u{3164}\u{FE0F}",
+            " \u{3000} ",
+            "Tone\u{7}",
+        ] {
+            assert!(with_name(bad).is_err(), "{bad:?}");
+        }
+        // Unicode names still install, with joiners where the script or emoji needs them.
+        for good in ["Tone…", "Kontrast ±", "می\u{200C}خواهم", "\u{1F469}\u{200D}\u{1F4BB} Code", "\u{2764}\u{FE0F} Love", "色调"] {
+            assert_eq!(with_name(good).map(|m| m.name).ok().as_deref(), Some(good));
+        }
+        // The documented limit counts characters, not bytes.
+        assert!(with_name(&"é".repeat(64)).is_ok());
+        assert!(with_name(&"é".repeat(65)).is_err());
     }
 }

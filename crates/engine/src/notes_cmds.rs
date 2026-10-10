@@ -165,7 +165,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// File › Import › Notes… from file bytes (what a file picker returns).
 pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
-    let src = photocraft_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?.document;
+    let src = crate::file_cmds::import(name, bytes)?;
     if src.notes.is_empty() {
         return Err(EngineError::Other(format!("{name} has no notes")));
     }

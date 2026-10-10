@@ -239,6 +239,44 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
 }
 
 #[test]
+fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = options_bar_harness(crate::state::Tool::CloneStamp);
+    for (label, field) in [("Opacity", "opacity"), ("Flow", "flow")] {
+        let n = h.state().session.journal.len();
+        let rect = h.get_by_label(label).rect();
+        let start = egui::pos2(rect.right() + 40.0, rect.center().y);
+        h.hover_at(start);
+        h.run();
+        h.drag_at(start);
+        h.run();
+        for k in 1..=8 {
+            h.hover_at(start - vec2(5.0 * k as f32, 0.0));
+            h.run();
+        }
+        h.drop_at(start - vec2(40.0, 0.0));
+        h.run_steps(2);
+        let brush = &h.state().session.tools.brush;
+        let value = if field == "opacity" { brush.opacity } else { brush.flow };
+        assert!(value < 0.95, "the drag lowered {field}: {value}");
+        let journal = &h.state().session.journal;
+        assert_eq!(journal.len(), n + 1, "one command per gesture");
+        let (id, params) = journal.last().unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"][field].as_f64().map(|v| v as f32), Some(value));
+    }
+    h.state_mut().ui.clone_source = Some([0.0, 0.0]);
+    let params = crate::retouch_ui::clone_params(h.state()).unwrap();
+    assert_eq!(params["opacity"], json!(h.state().session.tools.brush.opacity * 100.0));
+    assert_eq!(params["flow"], json!(h.state().session.tools.brush.flow * 100.0));
+    let mut replay = photocraft_engine::Session::new();
+    for (id, params) in &h.state().session.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.tools.brush, h.state().session.tools.brush);
+}
+
+#[test]
 fn options_bar_edits_are_one_set_brush_per_gesture() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::Brush);
@@ -325,7 +363,7 @@ fn airbrush_smoothing_options_and_symmetry_buttons_work() {
     h.run_steps(3);
     h.get_by_label("Work Path").click();
     h.run_steps(3);
-    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
+    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry.as_ref().and_then(|a| a.path_source().map(str::to_owned));
     assert_eq!(source(&h).as_deref(), Some("work"));
     assert_eq!(last_journal(h.state()).unwrap(), ("paint.symmetryFromPath".to_string(), json!({"name": "work"})));
     h.get_by_label("Set painting symmetry options").click();
@@ -365,32 +403,32 @@ fn drop_targets_and_actions_reorder_presets() {
     use crate::brushes_tab::{Action, apply, drop_target, group_key};
     let mut app = app();
     for (n, g) in [("A1", "Alpha"), ("A2", "Alpha"), ("A3", "Alpha"), ("B1", "Beta")] {
-        app.session.tools.presets.push(paint::BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into() });
+        app.session.tools.presets.push(paint::BrushPreset { name: n.into(), brush: Default::default(), builtin: false, group: g.into(), folder: Vec::new() });
     }
     let p = &app.session.tools.presets;
     // Dropping A1 on A3's lower half lands after A3 (index 2 once A1 is out); on its upper half, before it.
-    assert_eq!(drop_target(p, "A1", "A3", true), Some(("Alpha".into(), 2)));
-    assert_eq!(drop_target(p, "A1", "A3", false), Some(("Alpha".into(), 1)));
-    assert_eq!(drop_target(p, "A3", "A1", false), Some(("Alpha".into(), 0)));
-    assert_eq!(drop_target(p, "A2", "B1", true), Some(("Beta".into(), 1)));
+    assert_eq!(drop_target(p, "A1", "A3", true), Some(("Alpha".into(), vec![], 2)));
+    assert_eq!(drop_target(p, "A1", "A3", false), Some(("Alpha".into(), vec![], 1)));
+    assert_eq!(drop_target(p, "A3", "A1", false), Some(("Alpha".into(), vec![], 0)));
+    assert_eq!(drop_target(p, "A2", "B1", true), Some(("Beta".into(), vec![], 1)));
     assert_eq!(drop_target(p, "A2", "Nope", true), None);
     assert_eq!(group_key(p, UNGROUPED), "");
-    let (group, index) = drop_target(p, "A1", "A3", true).unwrap();
-    apply(&mut app, vec![Action::Move { name: "A1".into(), group, index: Some(index) }]);
+    let (group, folder, index) = drop_target(p, "A1", "A3", true).unwrap();
+    apply(&mut app, vec![Action::Move { name: "A1".into(), group, folder: Some(folder), index: Some(index) }]);
     let names = |app: &PhotocraftApp, g: &str| app.session.tools.presets.iter().filter(|x| x.group == g).map(|x| x.name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&app, "Alpha"), ["A2", "A3", "A1"]);
-    apply(&mut app, vec![Action::Move { name: "A2".into(), group: "Beta".into(), index: None }]);
+    apply(&mut app, vec![Action::Move { name: "A2".into(), group: "Beta".into(), folder: None, index: None }]);
     assert_eq!(names(&app, "Beta"), ["B1", "A2"]);
-    apply(&mut app, vec![Action::MoveGroup { group: "Beta".into(), before: Some("Alpha".into()) }]);
+    apply(&mut app, vec![Action::MoveGroup { group: "Beta".into(), folder: vec![], before: Some("Alpha".into()) }]);
     let order = photocraft_engine::brush_preset_cmds::group_order(&app.session.tools.presets);
     assert!(order.iter().position(|g| g == "Beta") < order.iter().position(|g| g == "Alpha"));
     // Rename and delete from the context menu.
-    apply(&mut app, vec![Action::Rename(Renaming { group: false, name: "A3".into(), text: "Third".into() })]);
+    apply(&mut app, vec![Action::Rename(Renaming { group: false, name: "A3".into(), folder: vec![], text: "Third".into() })]);
     assert!(paint::presets::find(&app.session.tools.presets, "Third").is_some());
     assert!(app.ui.brushes_panel.renaming.is_none());
-    apply(&mut app, vec![Action::Rename(Renaming { group: true, name: "Beta".into(), text: "Bees".into() })]);
+    apply(&mut app, vec![Action::Rename(Renaming { group: true, name: "Beta".into(), folder: vec![], text: "Bees".into() })]);
     assert_eq!(names(&app, "Bees"), ["B1", "A2"]);
-    apply(&mut app, vec![Action::Delete("Third".into()), Action::DeleteGroup("Bees".into())]);
+    apply(&mut app, vec![Action::Delete("Third".into()), Action::DeleteGroup { group: "Bees".into(), folder: vec![] }]);
     assert_eq!(names(&app, "Alpha"), ["A1"]);
     assert!(names(&app, "Bees").is_empty());
     // Every action went through a journaled command.
@@ -493,6 +531,110 @@ fn brushes_panel_groups_collapse_and_filter() {
     assert!(brush_preview::render_count(&ctx) >= n);
 }
 
+fn kit(name: &str, folder: &[&str]) -> paint::BrushPreset {
+    paint::BrushPreset {
+        name: name.into(),
+        brush: Default::default(),
+        builtin: false,
+        group: "Kit".into(),
+        folder: folder.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[test]
+fn folder_tree_nests_presets_in_panel_order() {
+    use crate::brushes_tab::{MAX_VIEW_DEPTH, Node, folder_tree};
+    let deep: Vec<&str> = vec!["d"; MAX_VIEW_DEPTH + 5];
+    let presets = [kit("Top", &[]), kit("Pen", &["Inks"]), kit("Chalk", &["Dry"]), kit("Nib", &["Inks", "Fine"]), kit("Quill", &["Inks"]), kit("Deep", &deep)];
+    let items: Vec<&paint::BrushPreset> = presets.iter().collect();
+    let tree = folder_tree(&items);
+    fn show(nodes: &[Node], out: &mut Vec<String>) {
+        for n in nodes {
+            match n {
+                Node::Preset(p) => out.push(p.name.clone()),
+                Node::Folder(f) => {
+                    out.push(format!("[{} {}]", f.path.join("/"), f.count));
+                    show(&f.children, out);
+                    out.push("[end]".into());
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    show(&tree, &mut out);
+    let deep_path = vec!["d"; MAX_VIEW_DEPTH].join("/");
+    assert_eq!(out[..12], ["Top", "[Inks 3]", "Pen", "[Inks/Fine 1]", "Nib", "[end]", "Quill", "[end]", "[Dry 1]", "Chalk", "[end]", "[d 1]"]);
+    assert!(out.contains(&format!("[{deep_path} 1]")), "paths are cut at the view depth");
+    assert_eq!(out.iter().filter(|s| s.starts_with("[d")).count(), MAX_VIEW_DEPTH);
+}
+
+/// Nested folders show under their group, open and close, and their context menu renames and
+/// deletes them through the group commands (#1851).
+#[test]
+fn brushes_panel_shows_nested_folders() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(1, 0);
+    let builtin_groups: Vec<String> = grouped_presets(&h.state().session.tools.presets).into_iter().map(|(g, _)| g).collect();
+    h.state_mut().ui.brushes_panel.collapsed = builtin_groups;
+    for p in [kit("Kit Top", &[]), kit("Kit Pen", &["Test Inks"]), kit("Kit Nib", &["Test Inks", "Test Fine"]), kit("Kit Chalk", &["Test Dry"])] {
+        h.state_mut().session.tools.presets.push(p);
+    }
+    h.run_steps(3);
+    for label in ["Kit", "Test Inks", "Test Fine", "Test Dry", "Kit Nib", "Kit Chalk"] {
+        assert!(h.query_by_label(label).is_some(), "{label} is shown");
+    }
+    // Closing a folder hides what it holds, and only that.
+    h.get_by_label("Test Inks").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.brushes_panel.collapsed.last().map(String::as_str), Some("Kit/Test Inks"));
+    assert!(h.query_by_label("Kit Nib").is_none() && h.query_by_label("Test Fine").is_none());
+    assert!(h.query_by_label("Kit Chalk").is_some());
+    // Rename a nested folder from its context menu.
+    h.get_by_label("Test Dry").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename Group…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.brushes_panel.renaming.as_ref().map(|r| r.folder.clone()), Some(vec!["Test Dry".to_string()]));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Test Wet".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        last_journal(h.state()).unwrap(),
+        ("brush.presets.renameGroup".to_string(), json!({ "group": "Kit", "folder": ["Test Dry"], "newName": "Test Wet" }))
+    );
+    assert_eq!(paint::presets::find(&h.state().session.tools.presets, "Kit Chalk").unwrap().folder, ["Test Wet"]);
+    // Delete it: only its presets go.
+    h.get_by_label("Test Wet").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Delete Group").click();
+    h.run_steps(3);
+    assert_eq!(last_journal(h.state()).unwrap(), ("brush.presets.deleteGroup".to_string(), json!({ "group": "Kit", "folder": ["Test Wet"] })));
+    let kit_left: Vec<String> = h.state().session.tools.presets.iter().filter(|p| p.group == "Kit").map(|p| p.name.clone()).collect();
+    assert_eq!(kit_left, ["Kit Top", "Kit Pen", "Kit Nib"]);
+}
+
+#[test]
+fn folder_actions_become_folder_commands() {
+    use crate::brushes_tab::{Action, apply, drop_target};
+    let mut app = app();
+    for p in [kit("Kit Top", &[]), kit("Kit Pen", &["Inks"]), kit("Kit Nib", &["Inks"]), kit("Kit Chalk", &["Dry"])] {
+        app.session.tools.presets.push(p);
+    }
+    // Dropping a preset on one inside a folder moves it into that folder.
+    let (group, folder, index) = drop_target(&app.session.tools.presets, "Kit Top", "Kit Nib", false).unwrap();
+    assert_eq!((group.as_str(), folder.clone(), index), ("Kit", vec!["Inks".to_string()], 1));
+    apply(&mut app, vec![Action::Move { name: "Kit Top".into(), group, folder: Some(folder), index: Some(index) }]);
+    assert_eq!(paint::presets::find(&app.session.tools.presets, "Kit Top").unwrap().folder, ["Inks"]);
+    // Dropping on a folder header appends to the folder; a folder header dropped on a sibling's moves it.
+    apply(&mut app, vec![Action::Move { name: "Kit Pen".into(), group: "Kit".into(), folder: Some(vec!["Dry".into()]), index: None }]);
+    assert_eq!(paint::presets::find(&app.session.tools.presets, "Kit Pen").unwrap().folder, ["Dry"]);
+    apply(&mut app, vec![Action::MoveGroup { group: "Kit".into(), folder: vec!["Dry".into()], before: Some("Inks".into()) }]);
+    assert_eq!(photocraft_engine::brush_preset_cmds::subfolder_order(&app.session.tools.presets, "Kit", &[]), ["Dry", "Inks"]);
+    assert_eq!(last_journal(&app).unwrap(), ("brush.presets.moveGroup".to_string(), json!({ "group": "Kit", "folder": ["Dry"], "before": "Inks" })));
+}
+
 /// A fresh session with the Brush tool: shortcuts, the options bar and the Brush Settings window,
 /// in the default theme (#258).
 fn app_harness() -> Harness<'static, PhotocraftApp> {
@@ -593,6 +735,49 @@ fn f5_edits_the_default_brush_with_every_section() {
 }
 
 #[test]
+fn update_current_brush_button_overwrites_the_picked_preset_in_place() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(0, 0);
+    // Nothing picked yet: the button is disabled and clicking it does nothing.
+    assert!(h.state().session.tools.current_preset.is_none());
+    h.get_by_label("Update the current brush with these settings").click();
+    h.run_steps(3);
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "brush.presets.update"));
+    // Pick a preset, then turn a section on.
+    h.state_mut().run("tools.setBrush", json!({ "preset": "Chalk" })).unwrap();
+    h.run_steps(2);
+    let n = h.state().session.tools.presets.len();
+    let at = h.state().session.tools.presets.iter().position(|p| p.name == "Chalk").unwrap();
+    h.get_by_label("Enable Scattering").click();
+    h.run_steps(3);
+    assert!(h.state().session.tools.brush.scattering.enabled);
+    // The update button overwrites the picked preset in place: no new preset, position kept.
+    h.get_by_label("Update the current brush with these settings").click();
+    h.run_steps(3);
+    assert!(h.state().session.journal.iter().any(|(id, p)| id == "brush.presets.update" && p["brush"]["scattering"]["enabled"] == json!(true)));
+    assert_eq!(h.state().session.tools.presets.len(), n);
+    let chalk = h.state().session.tools.presets.get(at).unwrap();
+    assert_eq!(chalk.name, "Chalk");
+    assert!(chalk.brush.scattering.enabled);
+    assert!(!chalk.builtin, "an updated built-in becomes the user's preset");
+}
+
+/// Each painting tool keeps its own brush (#218): the preset picked for one tool is not the
+/// current preset of the next, so Update can't overwrite it with the other tool's brush.
+#[test]
+fn switching_tools_forgets_the_picked_preset() {
+    let mut app = app();
+    app.ui.tool = crate::state::Tool::Brush;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({ "preset": "Chalk" })).unwrap();
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some("Chalk"));
+    app.ui.tool = crate::state::Tool::Eraser;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    assert_eq!(app.session.tools.current_preset, None);
+    assert!(app.run("brush.presets.update", json!({})).is_err());
+}
+
+#[test]
 fn options_bar_reaches_brush_settings_and_the_preset_library() {
     use egui_kittest::kittest::Queryable;
     let mut h = app_harness();
@@ -615,11 +800,14 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
         assert!(h.query_by_label(&group).is_some(), "group {group}");
     }
     let target = presets.iter().find(|p| p.group == "Dry Media").or(presets.last()).unwrap().name.clone();
-    assert!(!is_current(&paint::presets::find(&presets, &target).unwrap().brush, &h.state().session.tools.brush));
+    assert_ne!(h.state().session.tools.current_preset.as_deref(), Some(target.as_str()));
+    // The picker's cards are tall: scroll the target into the list before clicking it.
+    h.get_by_label(&target).scroll_to_me();
+    h.run_steps(3);
     h.get_by_label(&target).click();
     h.run_steps(3);
     assert_eq!(last_journal(h.state()).unwrap(), ("tools.setBrush".to_string(), json!({ "preset": target })));
-    assert!(is_current(&paint::presets::find(&presets, &target).unwrap().brush, &h.state().session.tools.brush));
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(target.as_str()));
     // A click picks and keeps the picker open; the chip's click closes it again.
     assert!(h.state().ui.brush_picker.is_some());
     h.get_by_label("Brush Preset picker").click();

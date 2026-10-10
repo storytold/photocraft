@@ -145,8 +145,44 @@ fn xywh(r: Rect) -> [i64; 4] {
     [i64::from(r.x0), i64::from(r.y0), i64::from(r.width()), i64::from(r.height())]
 }
 
+/// Layer › Duplicate on an artboard (#1531): Photoshop never stacks the copy on the original,
+/// it puts it right of the board, a [`GAP`] away, sliding further right past any board in the
+/// way. Moves the copy, layer `id` (just inserted on top of its original), there with its
+/// contents and grows the canvas to show it; anything that isn't an artboard is left alone.
+pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(()) };
+    let name = l.name.clone();
+    let boards: Vec<Rect> = doc.artboards().iter().filter(|b| b.0 != id).map(|b| b.2.rect).collect();
+    let (y0, y1, w) = (i64::from(r.y0), i64::from(r.y1), i64::from(r.width()));
+    // In i64: `x1 + GAP` passes i32::MAX for a board at the far right edge (#931).
+    let mut x = i64::from(r.x1) + i64::from(GAP);
+    // Each round clears every board in the way, so one round per board settles it.
+    for _ in 0..=boards.len() {
+        let blocked =
+            boards.iter().filter(|b| i64::from(b.x0) < x + w && i64::from(b.x1) > x && i64::from(b.y0) < y1 && i64::from(b.y1) > y0).map(|b| b.x1).max();
+        match blocked {
+            Some(edge) => x = i64::from(edge) + i64::from(GAP),
+            None => break,
+        }
+    }
+    let fits = x.checked_add(w).is_some_and(|x1| x1 <= i64::from(i32::MAX));
+    let dx = i32::try_from(x - i64::from(r.x0)).ok().filter(|_| fits).ok_or_else(|| {
+        EngineError::Other(format!("no room for a copy of artboard \"{name}\" right of it; duplicate it in place (\"inPlace\": true) and move it"))
+    })?;
+    // Grow the canvas first, so shapes on the board re-render uncut where they land.
+    let x1 = i64::from(doc.size.width).max(x + w);
+    doc.size = Size::new(x1.clamp(1, 300_000) as u32, doc.size.height);
+    let snapshot = doc.clone();
+    let copy = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    crate::commands::translate_layer(&snapshot, copy, dx, 0);
+    crate::vector_cmds::translate_vectors(&snapshot, copy, f64::from(dx), 0.0);
+    fit_canvas(doc);
+    Ok(())
+}
+
 /// Grow the canvas (right/bottom) so every artboard fits.
-fn fit_canvas(doc: &mut Document) {
+pub(crate) fn fit_canvas(doc: &mut Document) {
     let (mut w, mut h) = (doc.size.width as i64, doc.size.height as i64);
     for (_, _, a) in doc.artboards() {
         w = w.max(i64::from(a.rect.x1));

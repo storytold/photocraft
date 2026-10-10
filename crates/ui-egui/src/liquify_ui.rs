@@ -172,10 +172,10 @@ impl LiquifyDialog {
         })
     }
 
-    fn template(&self) -> LiquifyStroke {
+    fn template(&self, tool: LiquifyTool) -> LiquifyStroke {
         let o = &self.opts;
         LiquifyStroke {
-            tool: o.tool,
+            tool,
             size: f64::from(o.size),
             density: f64::from(o.density),
             pressure: f64::from(o.pressure),
@@ -193,9 +193,11 @@ impl LiquifyDialog {
         self.mask_dirty |= mask;
     }
 
-    fn begin(&mut self, p: [f64; 3], now: f64) {
+    /// Starts a stroke; `alt` draws with the selected tool's opposite (see [`alt_tool`]).
+    fn begin(&mut self, p: [f64; 3], now: f64, alt: bool) {
         self.redo.clear();
-        let mut s = self.template();
+        let tool = if alt { alt_tool(self.opts.tool) } else { self.opts.tool };
+        let mut s = self.template(tool);
         s.points.push(p.to_vec());
         let t0 = crate::gpu_canvas::now_ms();
         let d = self.field.stroke_begin(&s, p);
@@ -236,8 +238,7 @@ impl LiquifyDialog {
             pts.push(first);
         }
         self.redo.clear();
-        let mut s = self.template();
-        s.tool = LiquifyTool::LassoMask;
+        let mut s = self.template(LiquifyTool::LassoMask);
         s.amount = Some(if subtract { 0.0 } else { 1.0 });
         s.points = pts.into_iter().map(|p| p.to_vec()).collect();
         let d = self.field.apply_stroke(&s);
@@ -441,8 +442,21 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(d.describe())
 }
 
-/// Pointer in document coordinates (from the preview or the control channel). Alt = subtract
-/// from the freeze mask (lasso only); Shift adds, same as no modifier.
+/// Photoshop's Alt (Option) variant of a Liquify brush: the twirls reverse direction and Pucker
+/// and Bloat swap. Other tools are unchanged.
+fn alt_tool(t: LiquifyTool) -> LiquifyTool {
+    match t {
+        LiquifyTool::TwirlCw => LiquifyTool::TwirlCcw,
+        LiquifyTool::TwirlCcw => LiquifyTool::TwirlCw,
+        LiquifyTool::Pucker => LiquifyTool::Bloat,
+        LiquifyTool::Bloat => LiquifyTool::Pucker,
+        t => t,
+    }
+}
+
+/// Pointer in document coordinates (from the preview or the control channel). Alt at
+/// pointer-down subtracts from the freeze mask (lasso), reverses a twirl and swaps Pucker/Bloat;
+/// Shift adds to the mask, same as no modifier.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     let now = crate::gpu_canvas::now_ms();
     let Some(d) = app.distort.liquify.as_mut() else { return };
@@ -451,7 +465,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
             if d.opts.tool == LiquifyTool::LassoMask {
                 d.lasso = Some((mods.alt, vec![[x, y]]));
             } else {
-                d.begin([x, y, f64::from(pressure)], now);
+                d.begin([x, y, f64::from(pressure)], now, mods.alt);
             }
         }
         ToolEvent::Move { x, y, pressure } => {
@@ -701,6 +715,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 && let Some(hp) = resp.hover_pos()
             {
                 let before = to_doc(d, area, hp);
+                // Liquify's own preview zoom, not the canvas (`zoom_levels` doesn't apply): the
+                // preview is a proxy of at most PROXY_SIDE px, so past 3200 % it would only magnify
+                // proxy pixels further.
                 d.zoom = (d.zoom * (scroll / 200.0).exp()).clamp(0.01, 32.0);
                 let after = to_doc(d, area, hp);
                 d.center = [d.center[0] + before[0] - after[0], d.center[1] + before[1] - after[1]];
@@ -921,6 +938,50 @@ mod tests {
         assert!(open(&mut app, &ctx).is_ok());
     }
 
+    /// Follow-up to #1494 / #1484: Alt is captured at stroke-down and stays recorded
+    /// through undo, redo and deterministic Liquify field reconstruction.
+    #[test]
+    fn alt_reversed_twirl_survives_replay_undo_and_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "twirlCw", "size": 36, "rate": 80})).unwrap();
+
+        // Releasing Alt while dragging must not change the tool recorded at pointer-down.
+        pointer(&mut app, ToolEvent::Down { x: 53.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        pointer(&mut app, ToolEvent::Move { x: 58.0, y: 41.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 58.0, y: 41.0 }, egui::Modifiers::NONE);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.opts.tool, LiquifyTool::TwirlCw, "Alt must not change the selected tool");
+        assert_eq!(d.strokes.len(), 1);
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        // A following stroke without Alt records the original tool.
+        pointer(&mut app, ToolEvent::Down { x: 70.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Move { x: 75.0, y: 42.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        pointer(&mut app, ToolEvent::Up { x: 75.0, y: 42.0 }, egui::Modifiers::ALT);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 2);
+        assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        control(&mut app, &json!({"undo": true})).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 1);
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(d.redo[0].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        control(&mut app, &json!({"redo": true})).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 2);
+        assert!(d.redo.is_empty());
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+    }
+
     #[test]
     fn dialog_strokes_match_the_engine_and_commit_once() {
         let ctx = egui::Context::default();
@@ -1051,6 +1112,30 @@ mod tests {
         assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 1);
         lasso(&mut app, egui::Modifiers::NONE, [0.0, 0.0, 10.0, 10.0]);
         assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 0, "a new lasso clears redo");
+    }
+
+    #[test]
+    fn alt_reverses_twirl_and_swaps_pucker_and_bloat() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        let dab = |app: &mut PhotocraftApp, m: egui::Modifiers| {
+            pointer(app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
+            pointer(app, ToolEvent::Up { x: 50.0, y: 40.0 }, m);
+            app.distort.liquify.as_ref().unwrap().strokes.last().unwrap().tool
+        };
+        for (tool, plain, alt) in [
+            ("twirlCw", LiquifyTool::TwirlCw, LiquifyTool::TwirlCcw),
+            ("twirlCcw", LiquifyTool::TwirlCcw, LiquifyTool::TwirlCw),
+            ("pucker", LiquifyTool::Pucker, LiquifyTool::Bloat),
+            ("bloat", LiquifyTool::Bloat, LiquifyTool::Pucker),
+            ("forwardWarp", LiquifyTool::ForwardWarp, LiquifyTool::ForwardWarp),
+        ] {
+            control(&mut app, &json!({"tool": tool})).unwrap();
+            assert_eq!(dab(&mut app, egui::Modifiers::NONE), plain, "{tool}");
+            assert_eq!(dab(&mut app, egui::Modifiers::ALT), alt, "⌥ {tool}");
+            assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, plain, "⌥ leaves the selected tool alone");
+        }
     }
 
     #[test]

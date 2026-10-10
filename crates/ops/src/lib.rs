@@ -15,9 +15,12 @@ use std::sync::Arc;
 
 use photocraft_doc::{Document, LayerId};
 
-/// The layers a state targeted when it was created: the active ("key") layer and every selected
-/// layer. Undo and redo bring them back with the state's document, as the reference app does;
-/// selecting layers is not a step of its own, so it doesn't change a state's target.
+mod tiles;
+
+/// The layers a state targeted: the active ("key") layer and every selected layer. Undo and redo
+/// bring them back with the state's document, as the reference app does. Selecting layers is not
+/// a step of its own, so the session updates the current state's target with
+/// [`History::set_current_layers`] just before recording the next step (#1356).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayerTarget {
     pub active: Option<LayerId>,
@@ -37,6 +40,8 @@ pub struct History {
     /// Past states; the last one is the state *before* the current document.
     undo: VecDeque<HistoryState>,
     redo: Vec<HistoryState>,
+    /// Lazily initialized when a byte budget is used; unlimited histories pay no counting cost.
+    tiles: Option<tiles::Tiles>,
     pub max_states: usize,
     /// Pixel memory budget in bytes for the current document plus the tiles only history holds
     /// (0 = unlimited). [`History::trim`] drops the oldest states beyond it.
@@ -58,6 +63,7 @@ impl History {
         Self {
             undo: VecDeque::new(),
             redo: Vec::new(),
+            tiles: None,
             max_states: max_states.max(1),
             max_bytes: 0,
             current_label: "Open".into(),
@@ -68,12 +74,22 @@ impl History {
     /// Record that `before` was replaced by a new current document via step `label`, which left
     /// `layers` targeted.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
+        if self.max_bytes == 0 {
+            self.tiles = None;
+        }
+        if let Some(tiles) = &mut self.tiles {
+            tiles.add(&before);
+        }
         let prev_label = std::mem::replace(&mut self.current_label, label.into());
         let prev_layers = std::mem::replace(&mut self.current_layers, layers);
         self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers });
-        self.redo.clear();
+        self.clear_redo();
         while self.undo.len() > self.max_states {
-            self.undo.pop_front();
+            if let Some(state) = self.undo.pop_front()
+                && let Some(tiles) = &mut self.tiles
+            {
+                tiles.remove(&state.doc);
+            }
         }
     }
 
@@ -104,6 +120,10 @@ impl History {
     /// targeted when it was created.
     pub fn undo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
         let prev = self.undo.pop_back()?;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&prev.doc);
+            tiles.add(&current);
+        }
         let label = std::mem::replace(&mut self.current_label, prev.label);
         let layers = std::mem::replace(&mut self.current_layers, prev.layers.clone());
         self.redo.push(HistoryState { label, doc: current, layers });
@@ -113,6 +133,10 @@ impl History {
     /// Redo: the mirror of [`Self::undo`].
     pub fn redo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
         let next = self.redo.pop()?;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&next.doc);
+            tiles.add(&current);
+        }
         let label = std::mem::replace(&mut self.current_label, next.label);
         let layers = std::mem::replace(&mut self.current_layers, next.layers.clone());
         self.undo.push_back(HistoryState { label, doc: current, layers });
@@ -143,18 +167,28 @@ impl History {
     /// Forget the most recent undo state and every redo state (Edit › Purge › Undo): the
     /// last step can no longer be undone and its pixels are released.
     pub fn purge_last(&mut self) -> bool {
-        self.redo.clear();
-        self.undo.pop_back().is_some()
+        self.clear_redo();
+        let Some(state) = self.undo.pop_back() else { return false };
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&state.doc);
+        }
+        true
     }
 
     /// Forget the redo states, e.g. after undoing half of a compound step that failed.
     pub fn clear_redo(&mut self) {
+        if let Some(tiles) = &mut self.tiles {
+            for state in &self.redo {
+                tiles.remove(&state.doc);
+            }
+        }
         self.redo.clear();
     }
 
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.tiles = None;
     }
 
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
@@ -167,6 +201,9 @@ impl History {
     /// Pixel bytes of `current` plus the tiles only history holds (what [`History::trim`]
     /// bounds by [`History::max_bytes`]).
     pub fn pixel_bytes(&self, current: &Document) -> usize {
+        if let Some(tiles) = &self.tiles {
+            return usize::try_from(tiles.bytes_with(current)).unwrap_or(usize::MAX);
+        }
         let mut seen = HashSet::new();
         let own = tile_bytes(current, &mut seen);
         self.undo.iter().chain(self.redo.iter()).fold(own, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
@@ -178,6 +215,16 @@ impl History {
     /// many states were dropped.
     pub fn trim(&mut self, current: &Document) -> usize {
         if self.max_bytes == 0 || self.undo.len() <= 1 {
+            return 0;
+        }
+        let tiles = self.tiles.get_or_insert_with(|| {
+            let mut tiles = tiles::Tiles::default();
+            for state in self.undo.iter().chain(&self.redo) {
+                tiles.add(&state.doc);
+            }
+            tiles
+        });
+        if tiles.fits(current, self.max_bytes) {
             return 0;
         }
         let mut seen = HashSet::new();
@@ -194,26 +241,23 @@ impl History {
             keep += 1;
         }
         let drop = self.undo.len() - keep;
-        self.undo.drain(..drop);
+        for state in self.undo.drain(..drop) {
+            tiles.remove(&state.doc);
+        }
         drop
     }
 }
 
 /// Bytes of the pixel tiles of `doc` (layers, masks, alpha channels) not already in `seen`.
 fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
-    let mut add = |s: &photocraft_doc::Surface| s.tiles().filter(|(_, t)| seen.insert(Arc::as_ptr(t) as usize)).map(|(_, t)| t.bytes().len()).sum::<usize>();
-    let mut n = 0;
-    for (_, _, l) in doc.walk() {
-        if let Some(s) = l.surface() {
-            n += add(s);
+    let mut n = 0usize;
+    tiles::surfaces(doc, |surface| {
+        for (_, tile) in surface.tiles() {
+            if seen.insert(Arc::as_ptr(tile) as usize) {
+                n = n.saturating_add(tile.bytes().len());
+            }
         }
-        if let Some(m) = &l.mask {
-            n += add(&m.surface);
-        }
-    }
-    for c in doc.channels.iter().chain(&doc.quick_mask) {
-        n += add(&c.surface);
-    }
+    });
     n
 }
 
@@ -362,5 +406,128 @@ mod tests {
             d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[0.0, 0.0, 0.0, 1.0]);
         });
         assert_eq!(h.unique_bytes(&cur), 256 * 256 * 4);
+    }
+
+    fn assert_counter(h: &History, current: &Document) {
+        let counter = h.tiles.as_ref().expect("budget initializes the counter");
+        let total = tile_bytes(current, &mut HashSet::new()).saturating_add(h.unique_bytes(current));
+        assert_eq!(counter.bytes_with(current), total as u128);
+        assert_eq!(h.pixel_bytes(current), total);
+        let mut seen = HashSet::new();
+        let retained: usize = h.undo.iter().chain(&h.redo).map(|s| tile_bytes(&s.doc, &mut seen)).sum();
+        let empty = Document::new("empty", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        assert_eq!(counter.bytes_with(&empty), retained as u128);
+    }
+
+    #[test]
+    fn counter_tracks_eviction_undo_redo_branching_purge_and_clones() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut cur = Arc::new(Document::with_background("h", Size::new(300, 64), ColorMode::Rgb, depth, Color::WHITE));
+            let mut h = History::new(4);
+            h.max_bytes = usize::MAX;
+            for i in 0..8 {
+                edit(&mut h, &mut cur, "Paint", |doc| {
+                    doc.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 10.0, 0.0, 0.0, 1.0]);
+                });
+                h.trim(&cur);
+                if i >= 1 {
+                    assert_counter(&h, &cur);
+                }
+            }
+            cur = h.undo(cur).unwrap().0;
+            assert_counter(&h, &cur);
+            cur = h.undo(cur).unwrap().0;
+            assert_counter(&h, &cur);
+            cur = h.redo(cur).unwrap().0;
+            assert_counter(&h, &cur);
+            let copy = h.clone();
+            edit(&mut h, &mut cur, "Branch", |doc| doc.name = "branch".into());
+            assert!(!h.can_redo());
+            assert_counter(&h, &cur);
+            assert_counter(&copy, &cur);
+            cur = h.undo(cur).unwrap().0;
+            h.clear_redo();
+            assert_counter(&h, &cur);
+            h.purge_last();
+            assert_counter(&h, &cur);
+            h.clear();
+            assert!(h.tiles.is_none());
+            assert_eq!(h.pixel_bytes(&cur), tile_bytes(&cur, &mut HashSet::new()));
+        }
+    }
+
+    #[test]
+    fn shared_masks_channels_and_repeated_snapshot_references_count_once() {
+        use photocraft_doc::{AlphaChannel, LayerMask, PixelFormat, Surface};
+        let mut doc = base();
+        let mut gray = Surface::new(PixelFormat::GRAY8);
+        gray.write_pixel(1, 1, &[1.0]);
+        doc.layers[0].mask = Some(LayerMask { surface: gray.clone(), ..LayerMask::reveal_all() });
+        doc.channels.push(AlphaChannel::new("alpha", gray.clone()));
+        doc.quick_mask = Some(AlphaChannel::new("quick", gray));
+        doc.layers.push(doc.layers[0].clone());
+        let mut cur = Arc::new(doc);
+        let bytes = tile_bytes(&cur, &mut HashSet::new());
+        let mut h = History::new(50);
+        // Counting current separately would double count its tiles; the exact union fits.
+        h.max_bytes = bytes;
+        for _ in 0..6 {
+            h.record("Same", cur.clone(), LayerTarget::default());
+            assert_eq!(h.trim(&cur), 0);
+        }
+        assert_counter(&h, &cur);
+        for _ in 0..3 {
+            cur = h.undo(cur).unwrap().0;
+            assert_counter(&h, &cur);
+        }
+        h.clear_redo();
+        h.purge_last();
+        assert_counter(&h, &cur);
+        assert_eq!(h.pixel_bytes(&cur), bytes);
+    }
+
+    #[test]
+    fn threshold_rechecks_coalesced_current_and_changed_budget() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        h.max_bytes = usize::MAX;
+        for i in 0..6 {
+            edit(&mut h, &mut cur, "Paint", |doc| {
+                doc.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 10.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        // A coalesced edit may change current without recording another history state.
+        Arc::make_mut(&mut cur).layers[0].surface_mut().unwrap().write_pixel(300, 1, &[1.0; 4]);
+        let tile = 256 * 256 * 4;
+        h.max_bytes = 4 * tile;
+        assert_eq!(h.trim(&cur), 4);
+        assert_eq!(h.past_len(), 2);
+        assert_counter(&h, &cur);
+        cur = h.undo(cur).unwrap().0;
+        assert_counter(&h, &cur);
+        h.max_bytes = 0;
+        edit(&mut h, &mut cur, "Unlimited", |doc| doc.name = "u".into());
+        assert!(h.tiles.is_none());
+        h.max_bytes = 1;
+        h.trim(&cur);
+        assert_eq!(h.past_len(), 1, "always retain the most recent undo");
+        assert_counter(&h, &cur);
+    }
+
+    #[test]
+    fn transferred_tiles_cannot_make_the_budget_check_underestimate_current() {
+        use photocraft_doc::{PixelFormat, Surface};
+        let before = Arc::new(base());
+        let mut current = (*before).clone();
+        let mut large = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true));
+        large.write_pixel(256, 0, &[1.0; 5]);
+        current.layers[0].surface_mut().unwrap().put_tiles(large.take_tiles(photocraft_doc::Rect::from_xywh(256, 0, 1, 1)));
+        let mut h = History::new(50);
+        h.max_bytes = tile_bytes(&current, &mut HashSet::new()) - 1;
+        h.record("A", before.clone(), LayerTarget::default());
+        h.record("B", before, LayerTarget::default());
+        assert_eq!(h.trim(&current), 1, "current alone exceeds the budget; only the mandatory undo survives");
+        assert_counter(&h, &current);
     }
 }

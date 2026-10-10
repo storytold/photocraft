@@ -80,6 +80,24 @@ fn groups_keep_opacity_blend_and_nesting_while_plain_groups_vanish() {
 }
 
 #[test]
+fn svg_group_rasterization_threshold_is_configurable_and_clamped() {
+    let source = format!(
+        "<svg {NS} width=\"20\" height=\"20\"><g id=\"outer\"><rect width=\"2\" height=\"2\" fill=\"blue\"/><g id=\"inner\"><rect width=\"10\" height=\"10\" fill=\"red\"/><rect x=\"12\" width=\"5\" height=\"5\" fill=\"green\"/></g></g></svg>"
+    );
+    let shallow = import_with_svg_group_depth("nested.svg", source.as_bytes(), 1).unwrap();
+    let LayerContent::Group(outer) = &shallow.document.layers[0].content else { panic!("outer group should remain editable") };
+    assert!(outer.children.iter().any(|child| matches!(child.content, LayerContent::Raster(_))), "the subtree past the setting should be rasterized");
+    assert!(shallow.warnings.iter().any(|warning| warning.contains("nested too deeply")));
+
+    let unlimited = import_with_svg_group_depth("nested.svg", source.as_bytes(), 0).unwrap();
+    let LayerContent::Group(outer) = &unlimited.document.layers[0].content else { panic!("outer group should remain editable") };
+    assert!(outer.children.iter().any(|child| matches!(child.content, LayerContent::Group(_))), "zero disables the preference threshold");
+
+    let clamped = import_with_svg_group_depth("nested.svg", source.as_bytes(), usize::MAX).unwrap();
+    assert!(matches!(clamped.document.layers[0].content, LayerContent::Group(_)), "out-of-range settings clamp to the document's hard group limit");
+}
+
+#[test]
 fn transforms_curves_and_fill_rules_are_in_the_knots() {
     let r = open(&format!(
         "<svg {NS} width=\"60\" height=\"60\">\
@@ -213,6 +231,74 @@ fn size_comes_from_the_viewbox_and_huge_drawings_shrink_to_fit() {
     // The right half is still the right half.
     let (w, h) = (d.size.width as i32, d.size.height as i32);
     assert!(px(d, w / 4, h / 2)[3] < 0.01 && px(d, 3 * w / 4, h / 2)[3] > 0.99);
+}
+
+fn nested(depth: usize) -> String {
+    format!("<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>", "<g>".repeat(depth), "</g>".repeat(depth))
+}
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    e.write_all(bytes).unwrap();
+    e.finish().unwrap()
+}
+
+/// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
+/// abort nothing can catch. It is an error now, found before the parser runs; the thread here
+/// has a small stack so a regression aborts the test instead of passing by luck.
+#[test]
+fn deeply_nested_markup_is_an_error_not_a_stack_overflow() {
+    let deep = nested(8_000);
+    let gz = gzip(deep.as_bytes());
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            for (name, bytes) in [("deep.svg", deep.as_bytes()), ("deep.svgz", gz.as_slice())] {
+                let e = import(name, bytes).err().unwrap_or_else(|| panic!("{name} opened"));
+                assert!(matches!(&e, IoError::Svg(m) if m.contains("nested") && m.contains(&svg::MAX_XML_DEPTH.to_string())), "{name}: {e}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    // Just inside the limit still opens, the empty groups folded away.
+    let r = open(&nested(svg::MAX_XML_DEPTH - 1));
+    assert_eq!(r.document.layers.len(), 1);
+}
+
+/// The depth check reads the markup, not the parser's tree: it must not count `<` in comments,
+/// CDATA, processing instructions or the DOCTYPE, nor end a tag at a `>` inside quotes.
+#[test]
+fn the_depth_check_skips_comments_cdata_doctype_and_quoted_markup() {
+    let svg = format!(
+        "<?xml version=\"1.0\"?><!-- {g} --><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\
+         <svg {NS} width=\"8\" height=\"8\"><desc><![CDATA[ {g} ]]></desc><?pi {g} ?>\
+         <g id='a>b' data-x=\"c/>d\"><rect width=\"8\" height=\"8\" fill=\"#ff0000\"/></g><!-- {g} --></svg>",
+        g = "<g>".repeat(svg::MAX_XML_DEPTH + 10)
+    );
+    let r = open(&svg);
+    assert_eq!(r.document.layers.len(), 1);
+    assert!(close(px(&r.document, 4, 4), [1.0, 0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn svgz_is_inflated_with_a_size_cap() {
+    let plain = format!("<svg {NS} width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\" fill=\"#0000ff\"/></svg>");
+    let r = import("drawing.svgz", &gzip(plain.as_bytes())).unwrap();
+    assert_eq!(r.document.layers.len(), 1);
+    assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    // A bomb: a few hundred KB of gzip holding more than the cap of whitespace.
+    let mut bomb = format!("<svg {NS} width=\"8\" height=\"8\">").into_bytes();
+    bomb.resize(usize::try_from(svg::MAX_INFLATED_BYTES).unwrap() + 1024, b' ');
+    bomb.extend_from_slice(b"</svg>");
+    let gz = gzip(&bomb);
+    assert!(gz.len() < 2 << 20, "{} bytes compressed", gz.len());
+    let e = import("bomb.svgz", &gz).err().unwrap_or_else(|| panic!("the bomb opened"));
+    assert!(matches!(&e, IoError::Svg(m) if m.contains("inflates past")), "{e}");
+    // Corrupt gzip is an error too.
+    let e = import("bad.svgz", &[0x1f, 0x8b, 0x08, 0x00, 0xff, 0xff]).err().unwrap_or_else(|| panic!("corrupt gzip opened"));
+    assert!(matches!(e, IoError::Svg(_)), "{e}");
 }
 
 #[test]

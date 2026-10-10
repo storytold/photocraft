@@ -87,6 +87,110 @@ fn deleting_the_vector_mask_prunes_its_thumbnail() {
 }
 
 #[test]
+fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
+    for linked in [true, false] {
+        for kind in [MaskKind::Pixel, MaskKind::Vector] {
+            let (mut s, masked, shape) = session();
+            s.execute("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+            s.execute("layer.vectorMask.linked", json!({"linked": linked})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let mut h = harness(s, 0, 1.0, 290.0);
+            let r = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == kind).unwrap().1;
+            click_with(&mut h, r.center(), Modifiers::NONE);
+            let label = if kind == MaskKind::Pixel { "Delete Layer Mask" } else { "Delete Vector Mask" };
+            let at = h.get_by_label(label).rect().center();
+            click_with(&mut h, at, Modifiers::NONE);
+            let l = layer(&h, masked);
+            assert!(h.state().ui.dialogs.is_empty(), "mask deletion remains immediate");
+            let original = before.layer(photocraft_doc::LayerId(masked)).unwrap();
+            assert_eq!(l.content, original.content);
+            assert_eq!(layer(&h, shape), *before.layer(photocraft_doc::LayerId(shape)).unwrap());
+            if kind == MaskKind::Pixel {
+                assert!(l.mask.is_none());
+                assert_eq!(l.vector_mask, original.vector_mask);
+                assert!(!h.state().ui.mask_target);
+            } else {
+                assert!(l.vector_mask.is_none());
+                assert_eq!(l.mask, original.mask);
+                assert!(!h.state().ui.vector_mask_target);
+            }
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(*h.state().session.active().unwrap().doc, *before);
+            h.state_mut().run("edit.redo", json!({})).unwrap();
+            assert_eq!(layer(&h, masked), l);
+        }
+    }
+}
+
+#[test]
+fn footer_trash_still_deletes_the_layer_when_its_content_is_targeted() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_some());
+    assert!(h.state().ui.dialogs.iter().any(|d| crate::delete_layer_prompt::owns(&d.fields)));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+/// Like Photoshop, ⌥/Alt-clicking the trash deletes the layer without asking.
+#[test]
+fn alt_click_on_the_footer_trash_deletes_without_confirmation() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::ALT);
+    assert!(h.state().ui.dialogs.is_empty(), "no confirmation");
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+#[test]
+fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
+    let (s, _, shape) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    h.state_mut().run("layer.new.layer", json!({"name": "Fresh mask"})).unwrap();
+    let id = h.state().session.active().unwrap().active_layer.unwrap();
+    h.run_steps(3);
+    let label = format!("Add a mask  (from the selection; {} inverts)", crate::shortcuts::pretty("Alt"));
+    let at = h.get_by_label(&label).rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().ui.mask_target && !h.state().ui.vector_mask_target);
+    assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_some());
+    let at = h.get_by_label("Delete Layer Mask").rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_none());
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(shape)).is_some());
+}
+
+#[test]
+fn dragging_a_layer_row_to_trash_still_deletes_the_layer_with_a_mask_targeted() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let mask = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Pixel).unwrap().1;
+    click_with(&mut h, mask.center(), Modifiers::NONE);
+    let from = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row.center();
+    let to = h.get_by_label("Delete Layer Mask").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+#[test]
 fn the_chain_toggles_linking_and_it_survives_psd() {
     let (s, masked, _) = session();
     let mut h = harness(s, 0, 1.0, 290.0);
@@ -176,9 +280,9 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let p = h.get_by_label("Badge Shape Path").rect().center();
     click_with(&mut h, p, Modifiers::NONE);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"));
-    // Footer: fill, stroke, load as selection, … (24 pt buttons, 2 pt apart).
+    // Footer: fill, stroke, load as selection, … (26 pt buttons, 2 pt apart).
     let footer = crate::vector_ui::paths_footer(&h.ctx).unwrap();
-    let p = pos2(footer.left() + 2.0 * 26.0 + 12.0, footer.center().y);
+    let p = pos2(footer.left() + 2.0 * 28.0 + 13.0, footer.center().y);
     click_with(&mut h, p, Modifiers::NONE);
     let sel = h.state().session.active().unwrap().doc.selection.clone().expect("selection from the shape path");
     let b = sel.content_bounds();
@@ -336,7 +440,12 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     let k = layer(&h, masked).vector_mask.unwrap().path.subpaths[0].knots[0].anchor;
     assert_eq!((k.x, k.y), (25.0, 12.0));
     // The Pen adds a subpath to it.
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]], dragging: false });
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath {
+        knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]],
+        unlinked: Vec::new(),
+        dragging: false,
+        adjusting_last: false,
+    });
     crate::vector_ui::pen_commit(h.state_mut(), true);
     assert_eq!(layer(&h, masked).vector_mask.unwrap().path.subpaths.len(), 2);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "not a work path");
@@ -383,6 +492,34 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null);
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
+}
+
+/// #1765: `\` shows the active layer's mask as a rubylith and hides it again, as in Photoshop;
+/// the mask stays the paint target meanwhile. On a layer without a mask it does nothing, and a
+/// focused text field keeps the key.
+#[test]
+fn backslash_toggles_the_rubylith() {
+    let (s, masked, shape) = dotted();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let doc = h.state().session.active().unwrap().doc.clone();
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), json!({"layer": masked, "mode": "overlay"}), "\\ shows the overlay");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
+    let px = canvas_px(&h).unwrap();
+    assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "a view toggle, not an edit");
+    // A layer without a layer mask: nothing happens.
+    h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null);
+    let sc = crate::shortcuts::parse("\\").unwrap();
+    assert!(!crate::shortcut_dispatch::Focus::Text.allows(&sc), "typing \\ in a text field stays text");
 }
 
 /// #780: clicking the mask thumbnail targets the mask, and ⌘I (Image › Adjustments › Invert)

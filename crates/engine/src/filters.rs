@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod validation;
+pub(crate) use validation::validate_params;
+
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
 }
@@ -26,6 +29,10 @@ fn b(p: &Value, k: &str, d: bool) -> bool {
 }
 fn s<'a>(p: &'a Value, k: &str, d: &'a str) -> &'a str {
     p.get(k).and_then(Value::as_str).unwrap_or(d)
+}
+fn seed(p: &Value) -> u32 {
+    // New calls accept the entire documented u32 range; keep legacy record decoding otherwise.
+    p.get("seed").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or_else(|| i(p, "seed", 0) as u32)
 }
 fn undefined(p: &Value) -> UndefinedAreas {
     match s(p, "undefinedAreas", "wrap") {
@@ -55,7 +62,8 @@ fn preset(id: &str) -> Option<(&'static str, FilterParams)> {
 }
 
 /// Builds the algorithm parameters for a filter command id from JSON params
-/// (Photoshop dialog units).
+/// (Photoshop dialog units). Stored smart filters and previews retain their tolerant decoding;
+/// new command invocations pass through `validate_params` before any document changes.
 pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
     if let Some((_, fp)) = preset(id) {
         return Some(fp);
@@ -94,7 +102,7 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             amount: f(p, "amount", 12.5).clamp(0.1, 400.0),
             distribution: if s(p, "distribution", "uniform") == "gaussian" { Distribution::Gaussian } else { Distribution::Uniform },
             monochromatic: b(p, "monochromatic", false),
-            seed: i(p, "seed", 0) as u32,
+            seed: seed(p),
         },
         "filter.noise.median" => FilterParams::Median { radius: f(p, "radius", 1.0).clamp(1.0, 500.0) },
         "filter.noise.dustAndScratches" => {
@@ -131,7 +139,7 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
                 _ => WaveType::Sine,
             },
             undefined: undefined(p),
-            seed: i(p, "seed", 0) as u32,
+            seed: seed(p),
         },
         "filter.distort.ripple" => FilterParams::Ripple {
             amount: f(p, "amount", 100.0).clamp(-999.0, 999.0),
@@ -195,11 +203,12 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
     match &l.content {
         LayerContent::Raster(_) => Ok(()),
         LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
-        other => Err(format!("filters need a pixel layer (active layer is a {} layer)", other.kind_name())),
+        other => Err(format!("filters need a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),
     }
 }
 
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
+    validate_params(id, p)?;
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
     let prepared = crate::filters_ext::prepare(s, id, p);
     let p = &prepared;
@@ -240,10 +249,19 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 *surf = filter(surf, &fp, area, bounds, selection.as_ref(), doc_bounds.union(&content))?;
                 return Ok(fp.clone());
             }
+            // Filters that make pixels transparent (Color to Alpha) turn the Background into a
+            // normal layer first, as the erasers do: it can't hold transparency.
+            if fp.makes_transparency() {
+                crate::extra_cmds::background_to_layer_for_mask(doc, layer);
+            }
             let locks = doc.effective_locks(layer);
             let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
             if locks.pixels || locks.all {
                 return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+            }
+            // Putting the old alpha back (below) would leave unmixed colours fully opaque.
+            if locks.transparency && fp.makes_transparency() && matches!(l.content, LayerContent::Raster(_)) {
+                return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
             }
             let mut fp = fp.clone();
             crate::filters_ext::resolve_in_layer(&mut fp, l, bounds);
@@ -651,6 +669,7 @@ mod tests {
             let l = Layer::new(
                 "so",
                 LayerContent::Smart(SmartObject {
+                    contents_id: photocraft_doc::SmartContentsId::fresh(),
                     source: SmartSource::Linked { path: String::new() },
                     transform: photocraft_geom::Affine::IDENTITY,
                     smart_filters: vec![],

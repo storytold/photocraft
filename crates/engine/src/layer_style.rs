@@ -531,8 +531,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
+        let mode = doc.mode;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        l.effects.items = list;
+        l.effects.items = list.into_iter().map(|e| e.in_mode(mode)).collect();
         l.effects.enabled = true;
         Ok(())
     })?;
@@ -552,6 +553,8 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         if let Some(pat) = &pattern {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
+        // Colours in the document's mode, as Image › Mode keeps them.
+        let fx = fx.in_mode(doc.mode);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         l.effects.enabled = true;
         match l.effects.items.iter_mut().find(|e| same_kind(e, &fx)) {
@@ -694,16 +697,15 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clear Layer Style",
             menu: &["Layer", "Layer Style"],
             shortcut: None,
-            params: r##"{"layer":id}"##,
+            params: r##"{"layer":id? (no layer: every selected layer that has a style)}"##,
             enabled: has_layer,
             run: |s, p| {
-                let id = match p.get("layer").and_then(Value::as_u64) {
-                    Some(id) => photocraft_doc::LayerId(id),
-                    None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into()))?,
-                };
+                let ids = crate::extra_cmds::style_targets(s, p, |l| !l.effects.items.is_empty())?;
                 s.edit("Clear Layer Style", |doc, _| {
-                    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-                    l.effects = photocraft_doc::Effects { enabled: true, ..Default::default() };
+                    for id in ids {
+                        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        l.effects = photocraft_doc::Effects { enabled: true, ..Default::default() };
+                    }
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -750,6 +752,27 @@ mod tests {
             let fx = effects(&s);
             assert_eq!(fx.len(), 1, "{kind}");
             assert!(fx[0].enabled());
+        }
+    }
+
+    /// #1543: a Satin or Bevel & Emboss size or softness far past Photoshop's range rendered a
+    /// blur kernel of 2^62 taps ("capacity overflow"), or ran for minutes at 1e6. The blur width
+    /// is capped at the effect reach, so the document still renders, quickly.
+    #[test]
+    fn oversized_satin_and_bevel_sizes_render() {
+        for (cmd, p) in [
+            ("satin", json!({"size": 1e308})),
+            ("satin", json!({"size": 1_000_000})),
+            ("bevelEmboss", json!({"size": 1e308})),
+            ("bevelEmboss", json!({"soften": 1e308})),
+            ("bevelEmboss", json!({"size": 1_000_000, "soften": 1_000_000})),
+        ] {
+            let mut s = session();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute(&format!("layer.layerStyle.{cmd}"), p.clone()).unwrap();
+            let start = std::time::Instant::now();
+            s.execute("document.pixel", json!({"x": 0, "y": 0})).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
+            assert!(start.elapsed().as_secs() < 20, "{cmd} {p}: {:?}", start.elapsed());
         }
     }
 

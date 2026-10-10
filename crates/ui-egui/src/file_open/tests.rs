@@ -18,7 +18,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], _depth: usize| {
             if bytes == b"bad" {
                 return Err("not an image".into());
             }
@@ -78,6 +78,29 @@ fn open_file_sets_name_path_and_recent() {
     assert_eq!(app.ui.recent_files, vec!["/pics/cat.psd".to_string()]);
     assert!(!app.ui.status_error);
     assert!(app.ui.notices.is_empty());
+}
+
+#[test]
+fn affinity_preview_does_not_acquire_the_source_path_even_when_renamed() {
+    for automation in [false, true] {
+        for path in ["/pics/source.af", "/pics/renamed.psd"] {
+            let (mut app, written) = app_with(vec![None]);
+            // The fake importer supplies the preview; its source signature controls path policy.
+            if automation {
+                app.open_automation_bytes(&display_name(path), b"\x00\xffKA").unwrap();
+                app.opened_from(path);
+            } else {
+                app.open_file(path, b"\x00\xffKA").unwrap();
+            }
+            assert!(app.session.active().unwrap().source_read_only);
+            assert!(app.session.active().unwrap().path.is_none());
+            assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(path));
+            // Save asks for a new file (cancelled here) instead of writing over the source.
+            assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+            answer(&mut app);
+            assert!(written.borrow().is_empty());
+        }
+    }
 }
 
 #[test]
@@ -375,6 +398,9 @@ fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     std::fs::create_dir_all(&dir).unwrap();
     let abs = dir.join("photo.png");
     std::fs::write(&abs, png_bytes(200, 100)).unwrap();
+    let svg = dir.join("logo.svg");
+    std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\"><rect width=\"20\" height=\"10\" fill=\"red\"/></svg>")
+        .unwrap();
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let (layers, steps) = (layer_count(&app), history_steps(&app));
@@ -416,6 +442,13 @@ fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     app.place_next_dropped(&ctx);
     assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
     assert!(app.ui.recent_files.is_empty(), "placing isn't opening");
+    app.open_dropped(&ctx, vec![dropped(svg, Err("egui's reader must not be used".into()))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let st = app.session.active().unwrap();
+    let placed_svg = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    assert_eq!(placed_svg.name, "logo");
+    assert!(matches!(placed_svg.content, photocraft_doc::LayerContent::Smart(_)), "SVG drops use Place Embedded");
+    assert!(app.ui.transform.is_some(), "SVG drop should enter Free Transform");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -641,4 +674,22 @@ fn notices_render_without_panicking() {
     let mut out = ctx.run_ui(Default::default(), |ui| notices::show(&mut app, ui.ctx()));
     out.textures_delta.clear();
     assert_eq!(app.ui.notices.len(), 2);
+}
+
+#[test]
+fn open_documents_as_tabs_preference_controls_floating_windows() {
+    let (mut app, _) = app_with(Vec::new());
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = false);
+    app.open_bytes("a.psd", b"x").unwrap();
+    assert_eq!(app.ui.windows.len(), 1);
+    assert_eq!(app.ui.windows[0].document, 0);
+
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
+    assert_eq!(app.ui.windows[1].document, 1);
+
+    // Opening with preference true docks into tabs, creating no new floating window
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = true);
+    app.open_bytes("b.psd", b"x").unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
 }

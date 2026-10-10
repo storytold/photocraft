@@ -7,6 +7,19 @@ use crate::image::{Edge, Image, premultiply, unpremultiply};
 use crate::photo_util::{par_map, par_rows};
 use crate::{Ctx, FilterParams, RadialMethod, RadialQuality};
 
+#[cfg(test)]
+use self::motion as motion_rows;
+
+pub(crate) mod motion_apply;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod motion_bench;
+mod motion_fft;
+#[cfg(test)]
+mod motion_fft_tests;
+#[cfg(test)]
+mod motion_tests;
+pub(crate) mod radial;
+
 /// Normalized Gaussian kernel with standard deviation `sigma` (radius 3σ).
 pub(crate) fn gaussian_kernel(sigma: f32) -> Vec<f32> {
     if sigma < 0.05 {
@@ -43,12 +56,21 @@ pub(crate) fn conv_sep(src: &Image, out: Rect, kx: &[f32], ky: &[f32], alpha: bo
     for ty in 0..th {
         let row = &p[ty * ww * n..(ty + 1) * ww * n];
         let dst = &mut tmp[ty * ow * n..(ty + 1) * ow * n];
-        for ox in 0..ow {
-            let d = &mut dst[ox * n..(ox + 1) * n];
-            for (i, kv) in kx.iter().enumerate() {
-                let s = &row[(ox + i) * n..(ox + i + 1) * n];
-                for c in 0..n {
-                    d[c] += s[c] * kv;
+        match n {
+            1 => conv_row::<1>(row, dst, kx),
+            2 => conv_row::<2>(row, dst, kx),
+            3 => conv_row::<3>(row, dst, kx),
+            4 => conv_row::<4>(row, dst, kx),
+            5 => conv_row::<5>(row, dst, kx),
+            _ => {
+                for ox in 0..ow {
+                    let d = &mut dst[ox * n..(ox + 1) * n];
+                    for (i, kv) in kx.iter().enumerate() {
+                        let s = &row[(ox + i) * n..(ox + i + 1) * n];
+                        for c in 0..n {
+                            d[c] += s[c] * kv;
+                        }
+                    }
                 }
             }
         }
@@ -66,6 +88,21 @@ pub(crate) fn conv_sep(src: &Image, out: Rect, kx: &[f32], ky: &[f32], alpha: bo
     }
     unpremultiply(&mut res, n, alpha);
     res
+}
+
+// Fixed channel counts let LLVM keep one pixel's accumulators in registers and vectorize
+// channels. The tap order is unchanged; unusual multichannel images keep the generic path.
+fn conv_row<const N: usize>(src: &[f32], dst: &mut [f32], kernel: &[f32]) {
+    let pixels = src.as_chunks::<N>().0;
+    for (x, out) in dst.as_chunks_mut::<N>().0.iter_mut().enumerate() {
+        let mut acc = [0.0f32; N];
+        for (pixel, weight) in pixels.get(x..).unwrap_or(&[]).iter().zip(kernel) {
+            for c in 0..N {
+                acc[c] += pixel[c] * weight;
+            }
+        }
+        *out = acc;
+    }
 }
 
 pub(crate) fn gaussian(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {
@@ -789,6 +826,34 @@ mod tests {
         assert!(actual > 0.001, "dense radial samples should resolve the bright patch, got {actual}");
         assert!((actual - expected).abs() < 0.0015, "radial result {actual} differs from dense reference {expected}");
         assert!(coarse < expected * 0.1, "former 64-interval sampling unexpectedly resolved the patch: {coarse} vs {expected}");
+    }
+
+    #[test]
+    fn fixed_channel_convolution_matches_scalar_tap_order() {
+        fn check<const N: usize>() {
+            for width in [1, 7, 256] {
+                for radius in [0.0, 0.5, 3.0, 4.0] {
+                    let k = gaussian_kernel(radius);
+                    let src: Vec<f32> = (0..(width + k.len() - 1) * N).map(|i| ((i * 73) % 251) as f32 / 250.0).collect();
+                    let mut expected = vec![0.0f32; width * N];
+                    for x in 0..width {
+                        for (i, w) in k.iter().enumerate() {
+                            for c in 0..N {
+                                expected[x * N + c] += src[(x + i) * N + c] * w;
+                            }
+                        }
+                    }
+                    let mut actual = vec![0.0f32; width * N];
+                    conv_row::<N>(&src, &mut actual, &k);
+                    assert_eq!(actual, expected, "channels={N} width={width} radius={radius}");
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<5>();
     }
 
     #[test]

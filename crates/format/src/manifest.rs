@@ -283,6 +283,9 @@ pub enum ContentM {
         live: Option<LiveShape>,
     },
     Smart {
+        /// Shared source identity; older bundles did not record it.
+        #[serde(default)]
+        contents_id: Option<u64>,
         source: SmartSourceM,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,
@@ -343,6 +346,8 @@ fn default_channel_opacity() -> f32 {
 pub struct MetadataM {
     pub xmp: Option<String>,
     pub exif: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text: Vec<(String, String)>,
     /// (id, name, blob)
     pub psd_resources: Vec<(u16, String, Hash)>,
     /// (signature hex, key hex, blob)

@@ -5,7 +5,7 @@ The layer numbers below describe allowed dependency direction, not runtime privi
 | Layer | Crates | Responsibility |
 |---|---|---|
 | L0 | `geom`, `cms`, `color`, `raster` | Geometry, ICC processing, color/blend math, pixel formats, and copy-on-write tiles |
-| L0 standalone | `psd`, `codecs` | PSD/PSB and flat raster format parsing/encoding |
+| L0 standalone | `psd`, `codecs`, `affinity` | PSD/PSB and flat raster format parsing/encoding; bounded Affinity preview extraction |
 | L1 | `doc` | Pure-data documents, layers, masks, effects, adjustments, text, vectors, and smart objects |
 | L2 | `ops`, `paint`, `algo`, `text`, `vector` | History operations, painting, imaging algorithms, type, paths, and shapes |
 | L3 | `compose`, `gpu`, `format` | CPU composition, wgpu composition, and `.pcraft` persistence |

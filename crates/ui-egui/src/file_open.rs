@@ -45,7 +45,7 @@ pub fn display_name(path: &str) -> String {
 
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
-    /// `path` for File › Save, and `path` goes to the top of Open Recent. Returns the import
+    /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
     /// warnings (also shown to the user).
     pub fn open_file(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         // Brushes/gradients go to the preset libraries (no document, no Open Recent entry).
@@ -63,10 +63,11 @@ impl PhotocraftApp {
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it
-    /// (unless it's a template) and it goes to the top of Open Recent.
+    /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
+            && !st.source_read_only
         {
             st.path = Some(path.to_string());
         }

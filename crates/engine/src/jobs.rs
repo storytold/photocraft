@@ -221,6 +221,8 @@ pub struct Jobs {
     /// Workers of cancelled jobs that may still be unwinding (native).
     #[cfg(not(target_arch = "wasm32"))]
     draining: Vec<std::thread::JoinHandle<()>>,
+    /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
+    inline: Option<JobCtx>,
 }
 
 const RECENT: usize = 16;
@@ -283,7 +285,7 @@ pub fn run<T: Send + 'static>(
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
-        let t = work(&JobCtx::new())?;
+        let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
         return apply(s, t);
     }
     if s.jobs.pending.is_some() {
@@ -352,7 +354,7 @@ pub fn edit_job<R: Send + 'static>(
 ) -> Result<Value> {
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
         // Inline: exactly `Session::edit`, as before jobs existed.
-        let ctx = JobCtx::new();
+        let ctx = s.jobs.inline.clone().unwrap_or_default();
         let r = s.edit(label, |doc, active| f(doc, active, &ctx))?;
         return Ok(finish(r));
     }
@@ -393,6 +395,14 @@ pub enum OpenSource {
 pub const OPEN_JOB: &str = "file.open";
 
 impl Session {
+    /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
+    /// can cancel them: a live preview whose parameters changed stops its stale computation
+    /// (`Err(Cancelled)`, the document unchanged) instead of finishing it. `None` restores the
+    /// default, a context nothing can cancel.
+    pub fn set_inline_job_ctx(&mut self, ctx: Option<JobCtx>) {
+        self.jobs.inline = ctx;
+    }
+
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
@@ -407,6 +417,7 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let max_svg_group_depth = self.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),
@@ -420,13 +431,17 @@ impl Session {
                 };
                 ctx.check()?;
                 ctx.progress(0.02, "Decoding");
-                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
-                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                    e => EngineError::Other(e.to_string()),
-                })
+                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl))
+                    .map_err(|e| match e {
+                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                        e => EngineError::Other(e.to_string()),
+                    })
             },
             move |s, r: photocraft_io::ImportResult| {
                 let (index, color) = s.open_document(r.document, None);
+                if let Some(st) = s.active_mut() {
+                    st.source_read_only = r.source_read_only;
+                }
                 Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
             },
         )
@@ -600,6 +615,10 @@ impl Session {
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
         }
+        if id == "file.new" {
+            crate::document_preset_cmds::validate_new_params(self, &params)?;
+        }
+        crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
@@ -704,13 +723,18 @@ impl Session {
         };
         self.coalesce_request = None;
         self.color_restrict = None;
+        // Finish successful command bookkeeping on the document the job edited.
+        // Restoring the viewed document first would attribute Fade and slice updates
+        // to that document instead, when the user switched tabs mid-job.
+        if r.is_ok() {
+            self.after_command(command, params.clone(), *journal);
+        }
         // Keep the user's active document unless the job opened a new one.
+        // This also restores the selection when the apply step returned an error.
         if target.is_some() && self.active == target {
             self.active = prev_active.filter(|i| *i < self.docs.len()).or(self.active);
         }
-        let v = r?;
-        self.after_command(command, params.clone(), *journal);
-        Ok(v)
+        r
     }
 
     fn end_job(&mut self, job: &Running, outcome: JobOutcome) {

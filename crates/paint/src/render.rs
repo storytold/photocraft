@@ -19,16 +19,21 @@ use crate::dynamics::DabGenerator;
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, dab_coverage};
+use crate::{Dab, StrokePoint, dab_coverage, tip_falloff};
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
+/// Computed tips with a smaller radius (in pixels) are rasterised by area, not at pixel centres.
+const SMALL_TIP_RADIUS: f32 = 3.0;
+/// Sub-pixel sample offsets (a 4×4 grid) for the area coverage of small tips.
+const SUBPIXEL: [f32; 4] = [-0.375, -0.125, 0.125, 0.375];
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
 /// grid: the centre of the pixel holding the point for odd diameters, the nearest pixel corner
-/// for even ones.
+/// for even ones. Its footprint is then a whole-pixel block around that point, the same square
+/// the Pencil cursor shows ([`grid_square`]).
 pub fn grid_center(x: f64, y: f64, diameter: f32) -> (f32, f32) {
     let n = if diameter.is_finite() { diameter.round().max(1.0) as i64 } else { 1 };
     let snap = |v: f64| if n % 2 == 1 { v.floor() + 0.5 } else { v.round() };
@@ -96,8 +101,10 @@ fn prepare_pattern(b: &BrushSettings) -> Option<Arc<PatternImage>> {
     }
     let mut img = match &t.pattern {
         Pattern::Procedural { style, size, seed } => crate::procedural::pattern(*style, *size, *seed),
-        Pattern::Tile(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
-        Pattern::Tile(_) => return None,
+        p => match p.bitmap() {
+            Some(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
+            _ => return None,
+        },
     };
     let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.contrast.clamp(-1.0, 1.0));
     for v in &mut img.data {
@@ -120,8 +127,8 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
 impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
-        let mips = |t: &TipShape| match t {
-            TipShape::Sampled(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
+        let mips = |t: &TipShape| match t.bitmap() {
+            Some(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
             _ => None,
         };
         Self {
@@ -152,14 +159,7 @@ impl BrushContext {
     /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
         let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
-        let aliased = self.brush.aliased && !dual;
-        let reach = if aliased {
-            (2.0 * d.radius).round().max(1.0) * 0.5 * std::f32::consts::SQRT_2
-        } else if sampled {
-            d.radius * std::f32::consts::SQRT_2
-        } else {
-            d.radius
-        };
+        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius };
         rect_around(d, reach)
     }
 
@@ -196,68 +196,66 @@ impl BrushContext {
             }
             None => (0, 1.0, 1.0, 1.0),
         };
+        // A pixel offset from the dab centre in tip space: to y-up, project, rotate by -angle, flip.
+        let to_tip = |dx: f32, dy: f32| {
+            let (mut ux, mut uy) = (dx, -dy);
+            if let Some((ax, ay, k)) = proj {
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            ((ux * cs + uy * sn) * fx, (-ux * sn + uy * cs) * fy)
+        };
+        // A tip a few pixels across takes each pixel's covered area (a 4×4 grid inside it):
+        // sampling only the pixel centre made a tiny dab's total coverage swing with its sub-pixel
+        // position, and thin lines beaded.
+        let small = mips.is_none() && !aliased && rm < SMALL_TIP_RADIUS;
+        let small_reach2 = (rm + 0.75) * (rm + 0.75);
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                let (mut val, rn) = if aliased {
-                    // Pencil coverage is aliased, but its selected tip shape still applies.
-                    // Snap the dab to the pixel grid without replacing a round or sampled tip
-                    // with a square (the cursor must describe this same footprint).
-                    let (mut ux, mut uy) = (dx, -dy);
-                    if let Some((ax, ay, k)) = proj {
-                        let t = (ux * ax + uy * ay) * k;
-                        ux += t * ax;
-                        uy += t * ay;
+                let (u, v) = to_tip(dx, dy);
+                let (mut val, rn) = match mips {
+                    None if small => {
+                        let d2 = (u * ro).powi(2) + v * v;
+                        if d2 >= small_reach2 {
+                            continue;
+                        }
+                        let mut sum = 0.0;
+                        for sy in SUBPIXEL {
+                            for sx in SUBPIXEL {
+                                let (su, sv) = to_tip(dx + sx, dy + sy);
+                                let sd = ((su * ro).powi(2) + sv * sv).sqrt();
+                                // Each sample anti-aliases over its own quarter pixel, so the
+                                // covered area changes smoothly with the dab's position.
+                                let inside = ((rm - sd) * 4.0 + 0.5).clamp(0.0, 1.0);
+                                if inside > 0.0 {
+                                    sum += inside * tip_falloff(sd.min(rm), rm, hardness);
+                                }
+                            }
+                        }
+                        (sum / (SUBPIXEL.len() * SUBPIXEL.len()) as f32, d2.sqrt() / rm)
                     }
-                    let u = (ux * cs + uy * sn) * fx;
-                    let v = (-ux * sn + uy * cs) * fy;
-                    match mips {
-                        None => {
-                            let d2 = (u * ro).powi(2) + v * v;
-                            if d2 >= reach2 {
-                                continue;
-                            }
-                            (1.0, d2.sqrt() / rm)
+                    None => {
+                        let d2 = (u * ro).powi(2) + v * v;
+                        if d2 >= reach2 {
+                            continue;
                         }
-                        Some(m) => {
-                            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
-                            if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
-                                continue;
-                            }
-                            (if m.sample_clamped(level, px / tw, py / th) >= 0.5 { 1.0 } else { 0.0 }, 1.0)
-                        }
+                        let dd = d2.sqrt();
+                        let val = if aliased { if dd <= rm { 1.0 } else { 0.0 } } else { dab_coverage(dd, rm, hardness) };
+                        (val, dd / rm)
                     }
-                } else {
-                    // To y-up, project, rotate by -angle, flip.
-                    let (mut ux, mut uy) = (dx, -dy);
-                    if let Some((ax, ay, k)) = proj {
-                        let t = (ux * ax + uy * ay) * k;
-                        ux += t * ax;
-                        uy += t * ay;
-                    }
-                    let u = (ux * cs + uy * sn) * fx;
-                    let v = (-ux * sn + uy * cs) * fy;
-                    match mips {
-                        None => {
-                            let d2 = (u * ro).powi(2) + v * v;
-                            if d2 >= reach2 {
-                                continue;
-                            }
-                            let dd = d2.sqrt();
-                            let val = dab_coverage(dd, rm, hardness);
-                            (val, dd / rm)
+                    Some(m) => {
+                        let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
+                        if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
+                            continue;
                         }
-                        Some(m) => {
-                            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
-                            if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
-                                continue;
-                            }
-                            let s = m.sample_clamped(level, px / tw, py / th);
-                            (s, 1.0 - s)
-                        }
+                        let s = m.sample_clamped(level, px / tw, py / th);
+                        let val = if aliased { if s >= 0.5 { 1.0 } else { 0.0 } } else { s };
+                        (val, 1.0 - s)
                     }
                 };
                 if val <= 0.0 {
@@ -458,10 +456,24 @@ impl StrokeRenderer {
     /// Composite the union of this stroke and a mirrored pass as one stroke. This keeps
     /// overlapping dabs on a symmetry axis under one opacity ceiling at every bit depth.
     pub fn composite_union(&self, other: &Self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
+        self.composite_union_many(std::iter::once(other), pre, target, selection, lock_transparency)
+    }
+
+    /// Combine all symmetry passes before applying brush opacity and selection once.
+    pub fn composite_union_many<'a>(
+        &self,
+        others: impl IntoIterator<Item = &'a Self>,
+        pre: &Surface,
+        target: &mut Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+    ) -> Rect {
         let mut merged = self.clone();
-        merged.cov.union_max(&other.cov);
-        if let (Some(to), Some(from)) = (&mut merged.dual, &other.dual) {
-            to.union_max(from);
+        for other in others {
+            merged.cov.union_max(&other.cov);
+            if let (Some(to), Some(from)) = (&mut merged.dual, &other.dual) {
+                to.union_max(from);
+            }
         }
         merged.composite(pre, target, selection, lock_transparency, true)
     }
@@ -534,6 +546,11 @@ impl StrokeRenderer {
         duals.clear();
         self.dab_buf = dabs;
         self.dual_buf = duals;
+    }
+
+    /// See [`DabGenerator::wants_time`].
+    pub fn wants_time(&self) -> bool {
+        self.generator.wants_time()
     }
 
     /// Feed input points (any chunking gives the same result).

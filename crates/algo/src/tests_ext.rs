@@ -106,6 +106,8 @@ fn new_filters() -> Vec<FilterParams> {
             offset: 0.0,
         },
         FilterParams::HsbHsl { input: HsbModel::Rgb, output: HsbModel::Hsl },
+        FilterParams::ColorToAlpha { color: WHITE, transparency_threshold: 0.0, opacity_threshold: 1.0 },
+        FilterParams::ColorToAlpha { color: [0.5, 0.25, 0.75, 1.0], transparency_threshold: 0.1, opacity_threshold: 0.9 },
         FilterParams::DeInterlace { eliminate_even: false, interpolate: true },
         FilterParams::NtscColors,
     ]

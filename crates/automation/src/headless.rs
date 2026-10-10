@@ -91,7 +91,10 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
-        let index = self.session.add_document(o.document, path);
+        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
+        if let Some(st) = self.session.active_mut() {
+            st.source_read_only = o.source_read_only;
+        }
         let d = &self.session.documents()[index];
         Ok(json!({
             "index": index,
@@ -142,16 +145,19 @@ impl Headless {
                 warnings
             }
         };
-        let is_native = format
-            .map(|f| f.trim_start_matches('.').eq_ignore_ascii_case("pcraft"))
-            .unwrap_or_else(|| target.extension().is_some_and(|e| e.eq_ignore_ascii_case("pcraft")));
-        if is_native {
+        // A layered document save (PSD, PSB, OpenRaster or .pcraft) is a full write, not a flattened copy:
+        // record the current revision as saved so the session stops reporting `dirty`, and make
+        // the file the document's path. A flat export (PNG, JPEG, …) is a copy and leaves both
+        // alone (#1547).
+        let ext =
+            format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
+        let layered = matches!(ext.as_deref(), Some("psd" | "psb" | "ora")) || ext.as_deref() == Some(photocraft_format::EXTENSION);
+        if layered {
             // Saving by index must not retarget the next automation command.
             let previously_active = self.session.active_index();
             self.session.set_active(i);
             if let Some(st) = self.session.active_mut() {
-                st.saved_revision = st.revision;
-                st.path = Some(target.to_string_lossy().into_owned());
+                st.saved_to(target.to_string_lossy().into_owned());
             }
             if let Some(active) = previously_active {
                 self.session.set_active(active);
@@ -232,6 +238,9 @@ impl Headless {
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
         let params = if params.is_null() { json!({}) } else { params };
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            if id == "file.export.renderVideo" {
+                return self.render_video(params, |_, _| true);
+            }
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
@@ -243,5 +252,34 @@ impl Headless {
             photocraft_engine::jobs::Started::Done(v) => v,
             photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
         })
+    }
+}
+
+impl Headless {
+    /// A direct automation Render Video uses only the launch-time write capability. Nested
+    /// engine actions still reject this filesystem command until they can carry capabilities.
+    pub(crate) fn render_video(&mut self, params: Value, progress: impl FnMut(usize, usize) -> bool) -> Result<Value, AutomationError> {
+        self.sync_jobs();
+        let Filesystem::Workspace(workspace) = &self.filesystem else {
+            return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into()));
+        };
+        let dir = params.get("dir").and_then(Value::as_str).ok_or_else(|| AutomationError::BadRequest("renderVideo needs `dir`".into()))?;
+        let mut outputs = workspace.export_sequence(dir)?;
+        let result = photocraft_engine::render_video_with(
+            &self.session,
+            &params,
+            |name, bytes| outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string())),
+            progress,
+        );
+        match result {
+            Ok(value) => {
+                outputs.commit();
+                Ok(value)
+            }
+            Err(error) => {
+                outputs.cleanup()?;
+                Err(error.into())
+            }
+        }
     }
 }

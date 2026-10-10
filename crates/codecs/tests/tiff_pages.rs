@@ -169,6 +169,48 @@ fn extra_samples_that_are_not_alpha_are_dropped() {
 }
 
 #[test]
+fn alpha_after_an_unspecified_extra_sample_is_kept() {
+    // #1349: TIFF 6.0 lets alpha be any extra sample; ExtraSamples [0, 2] puts it second.
+    let (w, h) = (5usize, 3usize);
+    for (photometric, color, layout) in [(2u16, 3usize, ChannelLayout::Rgba), (5, 4, ChannelLayout::CmykA), (1, 1, ChannelLayout::GrayA)] {
+        let spp = color + 2;
+        let t = truth(w * h * spp, 13 + spp as u64);
+        for (little, big) in ORDERS {
+            for (bits, format, file, want_all, sample) in depths(&t, little) {
+                let bps = bits as usize / 8;
+                // The colour samples, then the second extra sample (the alpha).
+                let want: Vec<u8> = want_all.chunks(spp * bps).flat_map(|p| [&p[..color * bps], &p[(color + 1) * bps..]].concat()).collect();
+                for planar in [false, true] {
+                    let chunks = if planar { planar_strips(&file, w, h, spp, bps, 2) } else { file.chunks(w * spp * bps * 2).map(<[u8]>::to_vec).collect() };
+                    let mut d = Dir { entries: base(w as u32, h as u32, bits, spp as u16, photometric), chunks, tiled: false }
+                        .tag(278, LONG, &[2])
+                        .tag(339, SHORT, &vec![u64::from(format); spp])
+                        .tag(338, SHORT, &[0, 2]);
+                    if planar {
+                        d = d.tag(284, SHORT, &[2]);
+                    }
+                    let img = decode_ok(&build(little, big, &[d], &[0]).bytes);
+                    let what = format!("photometric {photometric} little {little} big {big} bits {bits} planar {planar}");
+                    assert_eq!((img.layout(), img.sample_type()), (layout, sample), "{what}");
+                    assert_eq!(img.data(), &want[..], "{what}");
+                    assert_eq!(img.warnings, [], "{what}");
+                }
+            }
+        }
+    }
+    // The issue's file: 2x2 RGB, every pixel 200 100 50, then 17 (unspecified), then alpha 128.
+    let px: Vec<u8> = [200u8, 100, 50, 17, 128].repeat(4);
+    let d = strips(2, 2, 8, 5, 2, 2, &px).tag(338, SHORT, &[0, 2]);
+    let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
+    assert_eq!(img.data(), &[200u8, 100, 50, 128].repeat(4)[..]);
+    // Associated alpha in the same position is made straight.
+    let px: Vec<u8> = [100u8, 50, 25, 17, 128].repeat(4);
+    let d = strips(2, 2, 8, 5, 2, 2, &px).tag(338, SHORT, &[0, 1]);
+    let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
+    assert_eq!(img.data(), &[199u8, 100, 50, 128].repeat(4)[..]);
+}
+
+#[test]
 fn associated_alpha_is_made_straight() {
     // Premultiplied: half-transparent mid gray is stored as 64 with alpha 128.
     let px = [64u8, 128, 200, 255, 0, 0];

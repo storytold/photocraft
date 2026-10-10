@@ -136,6 +136,42 @@ fn shape_layer_typed_roundtrip() {
 }
 
 #[test]
+fn custom_stroke_styles_roundtrip_through_psd_vstk() {
+    for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
+        for (cap, join) in [(LineCap::Butt, LineJoin::Miter), (LineCap::Round, LineJoin::Round), (LineCap::Square, LineJoin::Bevel)] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let mut d = doc();
+                d.depth = depth;
+                let want = ShapeStroke {
+                    width: 5.0,
+                    paint: Fill::Solid(Color::rgb(0.0, 0.0, 1.0)),
+                    opacity: 0.5,
+                    align,
+                    cap,
+                    join,
+                    miter_limit: 2.0,
+                    dashes: vec![0.0, 2.0, 4.0, 1.0],
+                    dash_offset: -0.5,
+                };
+                let sh = ShapeLayer {
+                    path: Path::new(vec![Subpath::polygon(&[(32.0, 32.0), (160.0, 32.0), (96.0, 160.0)])]),
+                    stroke: Some(want.clone()),
+                    ..Default::default()
+                };
+                d.layers.push(shape_layer(sh.clone()));
+                let back = roundtrip(&d);
+                let LayerContent::Shape(result) = &back.layers[1].content else { panic!("not a shape") };
+                assert_eq!(result.stroke.as_ref().unwrap(), &want);
+                let clip = d.bounds();
+                let before = photocraft_vector::CompiledShape::new(&sh, 0.01, clip).render_rgba(clip);
+                let after = photocraft_vector::CompiledShape::new(result, 0.01, clip).render_rgba(clip);
+                assert_eq!(before, after);
+            }
+        }
+    }
+}
+
+#[test]
 fn vector_mask_roundtrip_and_removal() {
     let mut d = doc();
     let mut l = Layer::raster("pix", d.pixel_format());

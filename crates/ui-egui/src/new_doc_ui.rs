@@ -14,7 +14,7 @@ pub type Preset = (&'static str, u32, u32, f32);
 
 /// Photoshop's New Document categories and their blank-document presets.
 pub const CATEGORIES: &[(&str, &[Preset])] = &[
-    ("Recent", &[("Default Photoshop Size", 2100, 1500, 300.0), ("HDTV 1080p", 1920, 1080, 72.0)]),
+    ("Recent", &[("Default PhotoCraft Size", 2100, 1500, 300.0), ("HDTV 1080p", 1920, 1080, 72.0)]),
     (
         "Photo",
         &[
@@ -127,6 +127,7 @@ pub fn set_size(f: &mut Map<String, Value>, key: &str, v: f32, unit: &str, ppi: 
     f.insert(key.into(), px_value(from_unit(v, unit, ppi)));
     f.insert(typed_key(key), json!({"value": v, "unit": unit}));
     f.remove("__preset");
+    f.remove("__savedPreset");
 }
 
 /// What Width or Height (`key`, `d` pixels when unset) shows in `unit`: the value the user typed
@@ -149,6 +150,7 @@ fn typed_key(key: &str) -> String {
 /// Swap Width and Height (the Orientation buttons), with the values typed for them, so a typed
 /// 841 x 1189 mm turns into 1189 x 841 mm, not 1188.9 x 841.
 pub fn swap_size(f: &mut Map<String, Value>) {
+    f.remove("__savedPreset");
     let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
     f.insert("width".into(), px_value(h));
     f.insert("height".into(), px_value(w));
@@ -163,6 +165,7 @@ pub fn swap_size(f: &mut Map<String, Value>) {
 
 /// Apply a preset to the dialog fields.
 pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset) {
+    f.remove("__savedPreset");
     f.insert("width".into(), json!(p.1));
     f.insert("height".into(), json!(p.2));
     f.insert("resolution".into(), json!(p.3));
@@ -182,6 +185,9 @@ pub fn command_params(f: &Map<String, Value>) -> Value {
 pub fn set_resolution(f: &mut Map<String, Value>, new_ppi: f32) {
     let old_ppi = get_f(f, "resolution", 72.0);
     f.insert("resolution".into(), json!(new_ppi));
+    if old_ppi != new_ppi {
+        f.remove("__savedPreset");
+    }
     if get_s(f, "__unit", "px") == "px" || !(old_ppi > 0.0 && new_ppi > 0.0) || old_ppi == new_ppi {
         return;
     }
@@ -190,6 +196,7 @@ pub fn set_resolution(f: &mut Map<String, Value>, new_ppi: f32) {
     f.insert("width".into(), px_value(w * scale));
     f.insert("height".into(), px_value(h * scale));
     f.remove("__preset");
+    f.remove("__savedPreset");
 }
 
 fn get_f(f: &Map<String, Value>, k: &str, d: f32) -> f32 {
@@ -221,15 +228,114 @@ fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
     ui.painter().rect_stroke(page, 1.0, Stroke::new(1.2, t.text_dim), StrokeKind::Inside);
 }
 
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Restore a snapshot without replacing the new document's name or its clipboard offer.
+pub fn apply_saved_preset(f: &mut Map<String, Value>, preset: &photocraft_engine::document_preset_cmds::DocumentPreset) {
+    f.remove("backgroundColor");
+    if let Some(params) = preset.settings.command_params().as_object() {
+        f.extend(params.clone());
+    }
+    f.insert("__unit".into(), json!(preset.settings.unit));
+    f.insert("__resUnit".into(), json!(preset.settings.resolution_unit));
+    f.insert("__savedPreset".into(), json!(preset.name));
+    f.remove("__preset");
+    // Typed Width/Height belong to the previous values (`shown_size`).
+    f.remove(&typed_key("width"));
+    f.remove(&typed_key("height"));
+}
+
+fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let presets = app.session.presets.documents.clone();
+    if presets.is_empty() {
+        ui.label(tl!("No saved presets yet."));
+        return;
+    }
+    egui::ScrollArea::vertical().id_salt("saved-document-presets").max_height(320.0).show(ui, |ui| {
+        for preset in &presets {
+            ui.push_id(&preset.name, |ui| {
+                ui.horizontal(|ui| {
+                    let selected = get_s(f, "__savedPreset", "") == preset.name;
+                    let label = egui::Button::new(&preset.name).selected(selected).truncate();
+                    if ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name).clicked() {
+                        apply_saved_preset(f, preset);
+                    }
+                    if widgets::secondary_button(ui, tl!("Delete"), 76.0).clicked() {
+                        match app.run("document.presets.delete", json!({"name":preset.name})) {
+                            Ok(_) => {
+                                f.remove("__presetError");
+                                if selected {
+                                    f.remove("__savedPreset");
+                                }
+                            }
+                            Err(e) => {
+                                f.insert("__presetError".into(), json!(e.to_string()));
+                            }
+                        }
+                    }
+                });
+                let s = &preset.settings;
+                small_label(ui, &format!("{} × {} px @ {} ppi · {}/{}", s.width, s.height, s.resolution, s.mode.to_uppercase(), s.depth));
+                ui.add_space(8.0);
+            });
+        }
+    });
+}
+
+fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    ui.add_space(12.0);
+    if f.get("__savingPreset").and_then(Value::as_bool) != Some(true) {
+        if widgets::secondary_button(ui, tl!("Save Preset…"), 240.0).clicked() {
+            f.insert("__savingPreset".into(), json!(true));
+            f.remove("__presetError");
+        }
+    } else {
+        // Consume before TextEdit sees Enter, so naming can never confirm the outer dialog.
+        let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        let label = ui.label(tl!("Preset Name"));
+        let mut name = get_s(f, "__presetName", "");
+        ui.add(egui::TextEdit::singleline(&mut name).id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
+        f.insert("__presetName".into(), json!(name));
+        ui.horizontal(|ui| {
+            if widgets::secondary_button(ui, tl!("Save"), 110.0).clicked() || enter {
+                let mut settings = command_params(f);
+                settings["unit"] = json!(get_s(f, "__unit", "px"));
+                settings["resolutionUnit"] = json!(get_s(f, "__resUnit", "in"));
+                match app.run("document.presets.save", json!({"name":name,"settings":settings})) {
+                    Ok(_) => {
+                        if let Some(preset) = app.session.presets.documents.last() {
+                            apply_saved_preset(f, preset);
+                        }
+                        f.insert("__category".into(), json!("Saved"));
+                        f.remove("__savingPreset");
+                        f.remove("__presetName");
+                        f.remove("__presetError");
+                        ui.ctx().request_repaint();
+                    }
+                    Err(e) => {
+                        f.insert("__presetError".into(), json!(e.to_string()));
+                    }
+                }
+            }
+            if widgets::secondary_button(ui, tl!("Cancel"), 110.0).clicked() {
+                f.remove("__savingPreset");
+                f.remove("__presetError");
+            }
+        });
+    }
+    if let Some(error) = f.get("__presetError").and_then(Value::as_str) {
+        ui.add(egui::Label::new(error).wrap());
+    }
+}
+
+pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let cat = get_s(f, "__category", "Recent");
     // Category tabs.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
-        for (name, _) in CATEGORIES {
-            let on = cat == *name;
-            let r = ui.add(egui::Label::new(RichText::new(tl!(name)).size(13.0).color(if on { t.text } else { t.text_dim })).sense(Sense::click()));
+        for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
+            let on = cat == name;
+            let label = if name == "Saved" { tl!("Saved") } else { tl!(name) };
+            let r = ui.add(egui::Label::new(RichText::new(label).size(13.0).color(if on { t.text } else { t.text_dim })).sense(Sense::click()));
             if on {
                 ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(2.0, t.text));
             }
@@ -249,6 +355,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // Left: preset grid.
         ui.vertical(|ui| {
             ui.set_width(520.0);
+            if cat == "Saved" {
+                saved_presets(app, ui, f);
+                return;
+            }
             ui.label(RichText::new(crate::i18n::fmt(tl!("BLANK DOCUMENT PRESETS ({n})"), &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
             ui.add_space(6.0);
             let card = vec2(164.0, 112.0);
@@ -319,6 +429,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
                 if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
                     f.insert("__unit".into(), json!(unit));
+                    f.remove("__savedPreset");
                 }
             });
             small_label(ui, tl!("Height"));
@@ -348,6 +459,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
                 {
                     f.insert("__resUnit".into(), json!(ru));
+                    f.remove("__savedPreset");
                 }
             });
             ui.add_space(4.0);
@@ -367,11 +479,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     110.0,
                 ) {
                     f.insert("mode".into(), json!(mode));
+                    f.remove("__savedPreset");
                 }
                 let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
                 let depth_options: Vec<(u64, &str, &str)> = DEPTH_OPTIONS.iter().map(|(bits, label, tooltip)| (*bits, *label, *tooltip)).collect();
                 if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, &depth_options, 120.0) {
                     f.insert("depth".into(), json!(depth));
+                    f.remove("__savedPreset");
                 }
             });
             ui.add_space(4.0);
@@ -385,7 +499,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ];
             if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0) {
                 f.insert("background".into(), json!(bg));
+                f.remove("__savedPreset");
+                // A fresh choice of Background Color uses today's toolbox colour. Selecting a
+                // saved preset instead restores the colour captured when it was saved.
+                f.remove("backgroundColor");
             }
+            save_preset(app, ui, f);
         });
     });
 }
@@ -512,6 +631,39 @@ mod tests {
         let d = &s.active().unwrap().doc;
         assert_eq!((d.size.width, d.size.height, d.resolution_dpi), (2480, 3508, 300.0));
     }
+
+    #[test]
+    fn saved_selection_restores_all_settings_but_keeps_the_document_name() {
+        let mut session = photocraft_engine::Session::new();
+        session
+            .execute(
+                "document.presets.save",
+                json!({"name":"Print proof","settings":{
+                    "width":1600,"height":800,"resolution":254.0,"mode":"cmyk","depth":16,
+                    "background":"backgroundColor","backgroundColor":[0.2,0.3,0.4],"unit":"mm","resolutionUnit":"cm"
+                }}),
+            )
+            .unwrap();
+        let preset = session.presets.documents[0].clone();
+        let mut f = crate::state::UiState::new_document_fields();
+        set_clipboard(&mut f, 20, 30);
+        f.insert("name".into(), json!("Catalog cover"));
+        apply_saved_preset(&mut f, &preset);
+        assert_eq!(f["name"], "Catalog cover");
+        assert_eq!(f["__unit"], "mm");
+        assert_eq!(f["__resUnit"], "cm");
+        assert_eq!(f["__savedPreset"], "Print proof");
+        assert!(f.get("__preset").is_none());
+        assert_eq!(clipboard_preset(&f), Some((CLIPBOARD, 20, 30, 72.0)));
+        let mut expected = preset.settings.command_params();
+        expected["name"] = json!("Catalog cover");
+        assert_eq!(command_params(&f), expected);
+        f.insert("width".into(), json!(42));
+        assert_eq!(session.presets.documents[0], preset, "editing the form does not edit the snapshot");
+        apply_preset(&mut f, &(CLIPBOARD, 20, 30, 72.0));
+        assert!(f.get("__savedPreset").is_none());
+        assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(20), Some(30)));
+    }
     /// The real dialog (#254): a typed size must reach `file.new`, however it is confirmed.
     mod dialog {
         use super::super::{CATEGORIES, apply_preset};
@@ -519,6 +671,113 @@ mod tests {
         use crate::state::{DialogKind, UiState};
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+
+        /// The real preference services, backed by an in-memory store shared across app restarts.
+        fn harness_with_store(store: &Arc<Mutex<Option<String>>>) -> Harness<'static, PhotocraftApp> {
+            let (read, write) = (store.clone(), store.clone());
+            let services = crate::Services {
+                load_prefs: Some(Box::new(move || read.lock().unwrap().clone())),
+                save_prefs: Some(Box::new(move |text| {
+                    *write.lock().unwrap() = Some(text.to_string());
+                    Ok(())
+                })),
+                ..Default::default()
+            };
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+                |ui, app| {
+                    crate::prefs_ui::tick(app, ui.ctx());
+                    crate::dialogs::show(app, ui.ctx());
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+            h.run_steps(3);
+            h
+        }
+
+        fn name_preset(h: &mut Harness<'static, PhotocraftApp>, name: &str) {
+            h.get_by_label("Save Preset…").click();
+            h.run_steps(2);
+            h.get_by_role_and_label(Role::TextInput, "Preset Name").click();
+            h.run_steps(1);
+            h.event(egui::Event::Text(name.into()));
+            h.run_steps(1);
+        }
+
+        #[test]
+        fn save_restart_select_create_and_delete_through_the_dialog() {
+            let store = Arc::new(Mutex::new(None));
+            let mut h = harness_with_store(&store);
+            type_into(&mut h, 0, "1600");
+            type_into(&mut h, 1, "1600");
+            let mut f = fields(&h);
+            f.insert("background".into(), serde_json::json!("transparent"));
+            set_fields(&mut h, f);
+            name_preset(&mut h, " Product square ");
+            h.get_by_label("Save").click();
+            h.run_steps(3);
+            assert!(h.state().session.documents().is_empty(), "saving does not create a document");
+            assert_eq!(h.state().session.presets.documents[0].name, "Product square");
+            type_into(&mut h, 0, "32");
+            assert_eq!(h.state().session.presets.documents[0].settings.width, 1600);
+            drop(h);
+
+            let mut h = harness_with_store(&store);
+            h.get_by_label("Saved").click();
+            h.run_steps(2);
+            h.get_by_label("Product square").click();
+            h.run_steps(2);
+            assert!(h.state().session.documents().is_empty(), "selection only populates the form");
+            assert_eq!(fields(&h)["name"], "Untitled-1");
+            assert_eq!(fields(&h)["background"], "transparent");
+            h.get_by_label("Create").click();
+            h.run_steps(3);
+            assert_eq!(created(&h), (1600, 1600, 72.0));
+            let pixel = h.state_mut().session.execute("document.pixel", serde_json::json!({"x":0,"y":0})).unwrap();
+            assert_eq!(pixel[3], 0.0);
+
+            h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+            h.run_steps(2);
+            h.get_by_label("Saved").click();
+            h.run_steps(2);
+            h.get_by_label("Delete").click();
+            h.run_steps(3);
+            drop(h);
+            let mut h = harness_with_store(&store);
+            h.get_by_label("Saved").click();
+            h.run_steps(2);
+            assert!(h.state().session.presets.documents.is_empty());
+            assert!(h.query_by_label("No saved presets yet.").is_some());
+        }
+
+        #[test]
+        fn enter_saves_the_preset_and_bad_names_leave_the_form_open() {
+            let mut h = harness();
+            name_preset(&mut h, "Enter test");
+            enter(&mut h);
+            assert_eq!(h.state().session.presets.documents.len(), 1);
+            assert!(h.state().session.documents().is_empty(), "Enter must not also press Create");
+            assert_eq!(h.state().ui.dialogs.len(), 1);
+            name_preset(&mut h, " ENTER TEST ");
+            h.get_by_label("Save").click();
+            h.run_steps(2);
+            assert!(fields(&h).get("__presetError").is_some());
+            assert_eq!(h.state().session.presets.documents.len(), 1);
+            assert!(h.state().session.documents().is_empty());
+            h.get_by_label("Cancel").click();
+            h.run_steps(2);
+            name_preset(&mut h, "");
+            // Cancel keeps the entered name; clear it as an automation edit, then use the button.
+            h.state_mut().ui.dialogs[0].fields.insert("__presetName".into(), serde_json::json!("   "));
+            h.run_steps(2);
+            h.get_by_label("Save").click();
+            h.run_steps(2);
+            assert!(fields(&h).get("__presetError").is_some());
+            assert_eq!(h.state().session.presets.documents.len(), 1);
+        }
 
         fn harness() -> Harness<'static, PhotocraftApp> {
             let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -574,6 +833,15 @@ mod tests {
         }
 
         #[test]
+        fn arithmetic_dimensions_create_the_evaluated_size() {
+            let mut h = harness();
+            type_into(&mut h, 0, "1920/2");
+            type_into(&mut h, 1, "(100+50)*2");
+            enter(&mut h);
+            assert_eq!(created(&h), (960, 300, 72.0));
+        }
+
+        #[test]
         fn typed_size_then_enter_creates_that_size() {
             let mut h = harness();
             type_into(&mut h, 0, "512");
@@ -620,7 +888,7 @@ mod tests {
             let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
             // Pick the second card, then the first (Clipboard) again.
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 172.0, 60.0));
-            assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default Photoshop Size"));
+            assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default PhotoCraft Size"));
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
             assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));
             enter(&mut h);

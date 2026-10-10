@@ -3,8 +3,8 @@
 use crate::error::CodecError;
 use crate::image::{ChannelLayout, SampleType};
 
-/// Decompression-bomb guards. All checks happen on header values *before*
-/// the pixel buffer is allocated.
+/// Decompression-bomb guards. Dimension checks precede pixel allocation;
+/// metadata decoding checks its budget before growing decoded output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_width: u32,
@@ -13,6 +13,8 @@ pub struct Limits {
     pub max_pixels: u64,
     /// Maximum bytes for the decoded pixel buffer (and passed on as the
     /// allocation budget to underlying decoders).
+    /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
+    /// including keywords, separately from pixels. This is not a total RSS cap.
     pub max_alloc: u64,
 }
 

@@ -85,6 +85,8 @@ mod tests {
         for (tags, expected) in [
             (vec!["ja-JP", "en-US"], "ja"),
             (vec!["fr-CA", "en-US"], "fr"),
+            (vec!["uk-UA", "en-US"], "uk"),
+            (vec!["sv-SE", "uk_UA.UTF-8", "ru-RU"], "uk"),
             (vec!["sv-SE", "ko-KR", "fr-FR"], "ko"),
             (vec!["zh-Hant-HK", "zh-CN"], "zh-hant"),
             (vec!["zh-Hans-CN", "zh-TW"], "zh-hans"),
@@ -93,6 +95,7 @@ mod tests {
             (vec!["de-AT", "en-US"], "de"),
             (vec!["pt-PT"], "pt-br"),
             (vec!["it-IT", "en-US"], "it"),
+            (vec!["nl-BE", "fr-BE"], "nl"),
             (vec![], "en"),
         ] {
             with_system_tags(&tags, || assert_eq!(system_lang().code(), expected));

@@ -6,14 +6,14 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>PhotoCraft</name>
-  <summary>Edit photos and layered Photoshop documents</summary>
+  <summary>Edit photos and layered PSD documents</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
   <description>
     <p>
-      PhotoCraft is an open-source, native image editor that works the way Photoshop users
-      expect: familiar menus, shortcuts, panels and tools, with layers, masks, adjustment
+      PhotoCraft is an open-source, native image editor with the familiar menus,
+      shortcuts, panels and tools professionals expect: layers, masks, adjustment
       layers, layer styles, type and brushes.
     </p>
     <ul>
@@ -62,6 +62,8 @@
   <provides>
     <binary>photocraft</binary>
     <mediatype>application/x-photocraft</mediatype>
+    <mediatype>image/x-paintnet</mediatype>
+    <mediatype>image/openraster</mediatype>
     <mediatype>image/vnd.adobe.photoshop</mediatype>
     <mediatype>image/x-psb</mediatype>
   </provides>

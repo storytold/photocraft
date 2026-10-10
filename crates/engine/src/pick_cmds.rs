@@ -1,6 +1,6 @@
-//! Move tool Auto-Select: pick the topmost visible layer with pixels at a canvas point (Photoshop's
-//! options bar "Auto-Select: Layer | Group", ⌘-click with the Move tool, and the canvas right-click
-//! layer list).
+//! Move tool Auto-Select: pick the topmost visible, not fully locked layer with pixels at a canvas
+//! point (Photoshop's options bar "Auto-Select: Layer | Group", ⌘-click with the Move tool, and the
+//! canvas right-click layer list).
 
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
@@ -24,6 +24,17 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
     for (path, _, l) in rows.iter().rev() {
         // The layer and every enclosing group must be visible.
         if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+            continue;
+        }
+        // An artboard clips its layers to the board (#1531): pixels past its edge aren't shown,
+        // so they can't be picked. The board itself is hit anywhere on it, below its layers
+        // (the walk lists them first), as a Photoshop click on an empty spot selects the board.
+        let board = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard());
+        if board.is_some_and(|a| !a.rect.contains(x, y)) {
+            continue;
+        }
+        if l.artboard().is_some() {
+            out.push(l.id);
             continue;
         }
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
@@ -53,9 +64,12 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
     out
 }
 
-/// The outermost group containing `id` (the layer itself when it isn't in a group).
+/// The outermost group containing `id` (the layer itself when it isn't in a group). An artboard
+/// is not a group here: Group mode stops at the outermost group on the board.
 fn top_group(doc: &Document, id: LayerId) -> LayerId {
-    doc.walk().iter().find(|(_, _, l)| l.id == id).and_then(|(path, _, _)| doc.layer_at(&path[..1])).map_or(id, |l| l.id)
+    let Some((path, _, _)) = doc.walk().into_iter().find(|(_, _, l)| l.id == id) else { return id };
+    let depth = if path.get(..1).and_then(|p| doc.layer_at(p)).is_some_and(|t| t.artboard().is_some()) { 2 } else { 1 };
+    path.get(..depth).and_then(|p| doc.layer_at(p)).map_or(id, |l| l.id)
 }
 
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
@@ -67,7 +81,9 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         let names: Vec<Value> = hits.iter().filter_map(|id| doc.layer(*id)).map(|l| json!({"layer": l.id.0, "name": l.name})).collect();
         return Ok(json!({ "layers": names }));
     }
-    let Some(&hit) = hits.first() else { return Ok(json!({ "layer": null })) };
+    // Like Photoshop, Auto-Select clicks through a fully locked layer (its own Lock All or a
+    // locked group's) to the layer under it (#1641). The right-click list above still shows it.
+    let Some(&hit) = hits.iter().find(|id| !doc.effective_locks(**id).all) else { return Ok(json!({ "layer": null })) };
     let target = if p.get("target").and_then(Value::as_str) == Some("group") { top_group(&doc, hit) } else { hit };
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
@@ -171,6 +187,77 @@ mod tests {
         s.execute("layer.pickAt", json!({"x": 25, "y": 25, "mode": "add"})).unwrap();
         let st = s.active().unwrap();
         assert!(st.is_layer_selected(a) && st.is_layer_selected(b));
+    }
+
+    #[test]
+    fn a_click_on_an_artboard_picks_the_board_or_the_layers_on_it() {
+        // #1531: an empty spot on a board picked the Background under it, so a Move-tool drag
+        // there never moved the board.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let a = s.active().unwrap().active_layer.unwrap();
+        let board = s.execute("layer.new.artboardFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.artboard.set", json!({"width": 30, "height": 30})).unwrap();
+        // A's pixels past the board's edge are clipped away, so they can't be picked either.
+        s.edit("paint outside", |doc, _| {
+            doc.layer_mut(a).unwrap().surface_mut().unwrap().fill_rect(Rect::new(32, 32, 36, 36), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let pick =
+            |s: &mut Session, x: i32, y: i32, target: &str| s.execute("layer.pickAt", json!({"x": x, "y": y, "target": target})).unwrap()["layer"].clone();
+        assert_eq!(pick(&mut s, 5, 5, "layer"), a.0, "the layer on the board");
+        assert_eq!(pick(&mut s, 5, 5, "group"), a.0, "Group mode stops inside the board");
+        assert_eq!(pick(&mut s, 20, 20, "layer"), board, "an empty spot on the board picks the board");
+        assert_eq!(s.active().unwrap().active_layer, Some(LayerId(board)));
+        assert_eq!(pick(&mut s, 33, 33, "layer"), bg.0, "off the board: the Background, not A's clipped pixels");
+        let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
+        let ids: Vec<u64> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].as_u64().unwrap()).collect();
+        assert_eq!(ids, vec![a.0, board, bg.0]);
+        // A hidden board is skipped with its layers.
+        s.execute("layer.setProps", json!({"layer": board, "visible": false})).unwrap();
+        assert_eq!(pick(&mut s, 5, 5, "layer"), bg.0);
+    }
+
+    #[test]
+    fn a_fully_locked_layer_is_clicked_through() {
+        // #1641: a locked layer on top was picked, so the drag couldn't reach the layer under it.
+        let (mut s, a, _) = two_squares();
+        s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let top = s.active().unwrap().active_layer.unwrap();
+        let lock = |s: &mut Session, id: u64, locks: Value| s.execute("layer.setProps", json!({"layer": id, "locks": locks})).unwrap();
+        let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap()["layer"].clone();
+        assert_eq!(pick(&mut s), top.0);
+        // A position lock alone doesn't hide it from Auto-Select.
+        lock(&mut s, top.0, json!({"position": true}));
+        assert_eq!(pick(&mut s), top.0);
+        lock(&mut s, top.0, json!({"all": true}));
+        assert_eq!(pick(&mut s), a.0);
+        assert_eq!(s.active().unwrap().active_layer, Some(a));
+        // The right-click layer list still names it.
+        let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
+        assert_eq!(list["layers"][0]["layer"], top.0);
+        // A locked group locks the layers inside it.
+        lock(&mut s, top.0, json!({"all": false, "position": false}));
+        s.execute("layer.select", json!({"layer": top.0})).unwrap();
+        let g = s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+        assert_eq!(pick(&mut s), top.0);
+        lock(&mut s, g, json!({"all": true}));
+        assert_eq!(pick(&mut s), a.0);
+        // Nothing unlocked under the point: no pick.
+        lock(&mut s, a.0, json!({"all": true}));
+        let bg = s.active().unwrap().doc.layers[0].id;
+        assert_eq!(pick(&mut s), bg.0);
+        lock(&mut s, bg.0, json!({"all": true}));
+        assert_eq!(pick(&mut s), Value::Null);
     }
 
     #[test]

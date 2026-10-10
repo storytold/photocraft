@@ -276,6 +276,8 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     }
     match ui.get("zoom") {
         Some(Value::String(s)) if s == "fit" => d.zoom = 0.0,
+        // The gallery's own preview zoom, not the canvas (`zoom_levels` doesn't apply): its − / +
+        // buttons and menu stop at 400 %, an agent may set up to 3200 %.
         Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(0.01, 32.0),
         _ => {}
     }
@@ -513,7 +515,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let mut rgb = c.map_or([neon[0], neon[1], neon[2]], |v| [v[0], v[1], v[2]]);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!("Glow Color")).color(t.text_dim));
-                            ui.color_edit_button_rgb(&mut rgb);
+                            crate::widgets::color_edit_button_rgb(ui, &mut rgb);
                         });
                         e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
                     }

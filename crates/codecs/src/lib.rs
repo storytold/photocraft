@@ -20,17 +20,22 @@ mod format;
 mod image;
 mod options;
 pub mod orientation;
+pub mod resolution;
 pub mod web;
 
+pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
 pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
-pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
+pub use crate::image::{
+    ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, Image, Metadata, SampleType,
+};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
+pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use half::f16;
 
 use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
@@ -68,6 +73,13 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
+    // Without a resolution of the format's own (PNG pHYs, TIFF tags, JPEG's metadata), the
+    // XMP or EXIF one counts, like Photoshop: a WebP, HEIF or PNG from a camera or phone
+    // opens at its recorded resolution, not at the 72 ppi default.
+    let mut img = img;
+    if img.meta.dpi.is_none() && format != Format::Tiff {
+        img.meta.dpi = resolution::from_metadata(img.meta.exif.as_deref(), img.meta.xmp.as_deref());
+    }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
     // on the way. HEIF keeps it in its container, and its decoder has already applied it.
@@ -119,6 +131,36 @@ fn finish_decode(img: Image, o: u16, opts: &DecodeOptions) -> Result<Image, Code
         l.check(img.height(), img.width(), img.layout(), img.sample_type())?;
     }
     img.oriented(o)
+}
+
+/// Lists the parts of an OpenEXR file without decoding pixels: header facts per part
+/// (name, view, size, channels, deep/tiled), what a multi-part chooser — a Maya/Arnold
+/// render writes one part per AOV — offers. The indices are what [`decode_exr_part`]
+/// takes; [`decode_as_with`] opens the part with the highest [`ExrPartInfo::color_rank`].
+pub fn exr_info(bytes: &[u8], limits: &Limits) -> Result<Vec<ExrPartInfo>, CodecError> {
+    exr::info(bytes, limits)
+}
+
+/// Decodes part `part` (an index into [`exr_info`]'s list) of an OpenEXR file.
+/// Deep parts stay with [`decode_deep_exr`]; a file that has any is refused here.
+pub fn decode_exr_part(bytes: &[u8], part: usize, opts: &DecodeOptions) -> Result<Image, CodecError> {
+    let img = exr::decode_part(bytes, part, &opts.limits)?;
+    finish_decode(img, 1, opts)
+}
+
+/// Lists every Cryptomatte layer of an EXR file (specification 1.2: object/material IDs
+/// with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma and Cycles) from the
+/// headers alone: name, metadata key, channels and the parsed embedded manifest. The
+/// samples come from [`decode_cryptomatte`]; names hash to IDs with [`cryptomatte_id`].
+pub fn cryptomatte_layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLayer>, CodecError> {
+    codecs::exr_cryptomatte::layers(bytes, limits)
+}
+
+/// Decodes the samples of the Cryptomatte layer called `layer_name` (a
+/// [`CryptomatteLayer::name`]): per pixel its (ID, coverage) pairs, coverage above zero,
+/// sorted by descending coverage.
+pub fn decode_cryptomatte(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<CryptomatteBuffer, CodecError> {
+    codecs::exr_cryptomatte::decode(bytes, layer_name, limits)
 }
 
 /// Deep OpenEXR samples (`deepscanline`/`deeptile`): the structured per-pixel sample lists

@@ -130,24 +130,39 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
         s.postscript_name = None;
         hit(true);
     }
-    if let Some(v) = p.get("postscriptName").and_then(Value::as_str) {
-        s.postscript_name = Some(v.to_string());
-        hit(true);
-    }
     if let Some(v) = p.get("fontStyle").and_then(Value::as_str) {
         s.font_style = v.to_string();
+        s.postscript_name = None;
         let l = v.to_lowercase();
         s.italic = l.contains("italic") || l.contains("oblique");
         let g = photocraft_text::fonts::guess_from_postscript(&format!("X-{}", v.replace(' ', "")));
         s.weight = g.weight;
+        if let Some(face) = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.named_face(&s.font_family, v) {
+            s.weight = face.weight.round() as u16;
+            s.italic = face.italic;
+            s.postscript_name = face.postscript_name;
+        }
         hit(true);
     }
     if let Some(v) = p.get("weight").and_then(Value::as_f64) {
-        s.weight = v.clamp(1.0, 1000.0) as u16;
+        let weight = v.clamp(1.0, 1000.0) as u16;
+        if s.weight != weight {
+            s.postscript_name = None;
+            s.font_style.clear();
+        }
+        s.weight = weight;
         hit(true);
     }
     if let Some(v) = p.get("italic").and_then(Value::as_bool) {
+        if s.italic != v {
+            s.postscript_name = None;
+            s.font_style.clear();
+        }
         s.italic = v;
+        hit(true);
+    }
+    if let Some(v) = p.get("postscriptName").and_then(Value::as_str) {
+        s.postscript_name = Some(v.to_string());
         hit(true);
     }
     if let Some(v) = f32p(p, "size") {
@@ -418,7 +433,7 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let auto_named = is_auto_named(l);
         let LayerContent::Text(t) = &mut l.content else {
-            return Err(EngineError::Other(format!("layer {} is a {} layer, not a type layer", id.0, l.content.kind_name())));
+            return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
         let before = t.cache.as_ref().map(|c| c.tile_bounds());
         let mut rename = None;
@@ -437,6 +452,93 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         st.last_damage = damage;
     }
     Ok(r)
+}
+
+/// Direct formatting follows the selected Type layers, while an explicit layer or character
+/// range keeps its single-layer scope. Selected groups are not expanded.
+pub(crate) fn format_targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let single = p.get("layer").is_some() || (p.get("range").is_some() && p.get("layers").is_none());
+    let ids = if single {
+        vec![layer_id(s, p)?]
+    } else if let Some(value) = p.get("layers") {
+        value
+            .as_array()
+            .ok_or_else(|| EngineError::Other("layers must be an array of layer IDs".into()))?
+            .iter()
+            .map(|v| v.as_u64().map(LayerId).ok_or_else(|| EngineError::Other("layers must contain layer IDs".into())))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        st.selected_layers()
+    };
+    let mut targets = Vec::new();
+    for id in ids {
+        let l = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        if matches!(l.content, LayerContent::Text(_)) {
+            if !targets.contains(&id) {
+                targets.push(id);
+            }
+        } else if single {
+            return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
+        }
+    }
+    if targets.is_empty() {
+        return Err(EngineError::Other("select a type layer".into()));
+    }
+    Ok(targets)
+}
+
+pub(crate) fn has_format_target(s: &Session) -> std::result::Result<(), String> {
+    format_targets(s, &Value::Null).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// One history step for a formatting batch. Structural text edits keep their singular helper.
+pub(crate) fn with_text_targets(
+    s: &mut Session,
+    p: &Value,
+    label: &str,
+    mut f: impl FnMut(&mut TextLayer, (usize, usize)) -> Result<()>,
+) -> Result<Vec<LayerId>> {
+    let ids = format_targets(s, p)?;
+    let damage = s.edit(label, |doc, _| {
+        let snapshot = doc.clone();
+        let mut damage = Some(photocraft_geom::Rect::EMPTY);
+        for id in &ids {
+            let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) else { return Err(EngineError::NoLayer(*id)) };
+            let before = t.cache.as_ref().map(|c| c.tile_bounds());
+            let range = if p.get("layers").is_none() || p.get("layer").is_some() { range_param(&t.text, p) } else { (0, t.text.len()) };
+            f(t, range)?;
+            refresh(&snapshot, t);
+            // An unknown old/new cache retains Session.edit's full-refresh fallback.
+            damage = damage.zip(before).zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|((all, a), b)| all.union(&a).union(&b));
+        }
+        Ok(damage)
+    })?;
+    if let Some(st) = s.active_mut() {
+        st.last_damage = damage;
+    }
+    Ok(ids)
+}
+
+/// UI size/leading are measured after the layer transform; command callers otherwise use points.
+fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Cow<'a, Value>> {
+    if p.get("metricsAsShown").and_then(Value::as_bool) != Some(true) {
+        return Ok(std::borrow::Cow::Borrowed(p));
+    }
+    let m = t.transform.m;
+    let scale = (m[0] * m[3] - m[1] * m[2]).abs().sqrt() as f32;
+    let scale = if scale.is_finite() && scale > 1e-3 { f64::from(scale) } else { 1.0 };
+    let mut params = p.clone();
+    for key in ["size", "leading"] {
+        if let Some(value) = p.get(key).and_then(Value::as_f64) {
+            let value = value / scale;
+            if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+                return Err(bad("type.setStyle", "shown size and leading must convert to finite point values"));
+            }
+            params[key] = json!(value);
+        }
+    }
+    Ok(std::borrow::Cow::Owned(params))
 }
 
 /// Whether a type layer still has the name it got from its text, so the name follows edits to
@@ -569,7 +671,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?,"kerning":1/1000em|"metrics"|"optical"|"off"? (with "range":[startChar,endChar]?, default all),"kernPair":{"at":caretChar,"by":1/1000em}? (Photoshop Alt+←/→: the pair before the caret becomes manual, its current kerning + by)}"##,
+            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?,"kerning":1/1000em|"metrics"|"optical"|"off"? (with "range":[startChar,endChar]?, default all),"kernPair":{"at":caretChar,"by":1/1000em}? (Alt+←/→: the pair before the caret becomes manual, its current kerning + by)}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
@@ -690,21 +792,20 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id?,"range":[startChar,endChar]? (default all), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading include each layer's transform scale), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll","firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
             journal: true,
             run: |s, p| {
-                let id = layer_id(s, p)?;
                 check_kerning(p).map_err(|m| bad("type.setStyle", m))?;
-                check_size_tracking(p).map_err(|m| bad("type.setStyle", m))?;
-                with_text_layer(s, p, "Set Type Style", |t, _, _| {
-                    let (a, b) = range_param(&t.text, p);
+                let ids = with_text_targets(s, p, "Set Type Style", |t, (a, b)| {
+                    let props = shown_style_params(t, p)?;
+                    check_size_tracking(&props).map_err(|m| bad("type.setStyle", m))?;
                     let mut probe = CharStyle::default();
-                    if apply_char_props(&mut probe, p) {
+                    if apply_char_props(&mut probe, &props) {
                         style_range(t, a, b, &|st| {
-                            apply_char_props(st, p);
+                            apply_char_props(st, &props);
                         });
                     }
                     let mut pprobe = ParagraphStyle::default();
@@ -715,6 +816,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                let id = ids.first().ok_or_else(|| EngineError::Other("select a type layer".into()))?;
                 info(s, &json!({ "layer": id.0 }))
             },
         },
@@ -768,7 +870,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
                 match p.get("family").and_then(Value::as_str) {
                     Some(f) => {
-                        let faces: Vec<Value> = eng.fonts.faces(f).into_iter().map(|x| json!({ "family": x.family, "weight": x.weight, "italic": x.italic, "axes": x.axes })).collect();
+                        let faces: Vec<Value> = eng.fonts.faces(f).into_iter().map(|x| json!({ "family": x.family, "style": x.style, "postscriptName": x.postscript_name, "weight": x.weight, "italic": x.italic, "axes": x.axes })).collect();
                         Ok(json!({ "faces": faces }))
                     }
                     None => Ok(json!({ "families": eng.fonts.families() })),
@@ -796,6 +898,21 @@ mod tests {
     }
 
     #[test]
+    fn named_face_metadata_replaces_old_postscript_identity() {
+        let mut style = CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-Regular".into()), ..Default::default() };
+        apply_char_props(&mut style, &json!({"fontStyle": "SemiBold"}));
+        assert_eq!(style.weight, 600);
+        assert_eq!(style.postscript_name.as_deref(), Some("Inter-SemiBold"));
+        apply_char_props(&mut style, &json!({"weight": 400}));
+        assert!(style.postscript_name.is_none());
+        assert!(style.font_style.is_empty());
+        apply_char_props(&mut style, &json!({"fontStyle": "unknown-style"}));
+        assert!(style.postscript_name.is_none());
+        apply_char_props(&mut style, &json!({"fontStyle": "Regular", "postscriptName": "ExplicitFace"}));
+        assert_eq!(style.postscript_name.as_deref(), Some("ExplicitFace"));
+    }
+
+    #[test]
     fn absurd_type_size_and_tracking_are_rejected_as_bad_params() {
         let mut s = session();
         assert!(matches!(
@@ -817,6 +934,32 @@ mod tests {
             Err(EngineError::BadParams { cmd, .. }) if cmd == "type.setStyle"
         ));
         assert_eq!(text_layer(&s, id).runs, before.runs);
+    }
+
+    /// A font that arrives after the layer was drawn (served fonts on the web) re-renders it with
+    /// no history step, and a clean document stays clean.
+    #[test]
+    fn refreshing_type_layers_takes_no_history_step() {
+        let mut s = session();
+        let id = LayerId(s.execute("type.create", json!({"text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap());
+        let doc_id = s.active().unwrap().doc.id;
+        // Stale pixels, and a document saved in this state.
+        {
+            let st = s.active_mut().unwrap();
+            let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(&mut st.doc).layer_mut(id) else { panic!("not a type layer") };
+            t.cache = None;
+            st.saved_revision = st.revision;
+        }
+        let rev = s.active().unwrap().revision;
+        let unknown = [(doc_id, LayerId(9999)), (photocraft_doc::DocId(u64::MAX), id)];
+        assert!(s.refresh_type_layers(&[&[(doc_id, id)][..], &unknown].concat()).is_empty());
+        assert!(text_layer(&s, id.0).cache.is_some());
+        let st = s.active().unwrap();
+        assert!(st.revision > rev);
+        assert_eq!(st.saved_revision, st.revision, "still clean");
+        // The only history step is still the creation.
+        assert!(s.undo());
+        assert!(s.active().unwrap().doc.layer(id).is_none());
     }
 
     #[test]

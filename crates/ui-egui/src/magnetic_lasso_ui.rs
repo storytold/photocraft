@@ -73,12 +73,12 @@ fn settings(app: &PhotocraftApp, pressure: f32) -> Settings {
 fn spacing(app: &PhotocraftApp) -> f64 {
     let f = app.ui.tool_options.magnetic_frequency;
     let f = if f.is_finite() { f64::from(f.clamp(0.0, 100.0)) } else { 57.0 };
-    (8.0 + (100.0 - f) * 0.9) / f64::from(app.current_zoom().max(0.01))
+    (8.0 + (100.0 - f) * 0.9) / f64::from(app.point_zoom().max(0.01))
 }
 
 /// Within this distance of the first point (document px), a click closes the border.
 fn close_radius(app: &PhotocraftApp) -> f64 {
-    8.0 / f64::from(app.current_zoom().max(0.01))
+    8.0 / f64::from(app.point_zoom().max(0.01))
 }
 
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -104,7 +104,8 @@ fn trace(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2
 
 /// Pointer events while the Magnetic Lasso is the tool (it takes them all).
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
-    if app.ui.tool != Tool::MagneticLasso {
+    // ⌘ held makes it the Move tool (`hold_keys::cmd_moves`): nothing to take then.
+    if app.active_tool() != Tool::MagneticLasso {
         return false;
     }
     match ev {

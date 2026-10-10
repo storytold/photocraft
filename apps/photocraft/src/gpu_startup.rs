@@ -16,7 +16,9 @@
 //! overrides everything, and `--safe-gpu` forces the CPU path for one launch.
 //!
 //! "CPU" composites on the CPU and draws the window with a software adapter where the platform
-//! has one (WARP on Windows, llvmpipe over GL elsewhere).
+//! has one (WARP on Windows, llvmpipe over GL elsewhere). On Linux a GL adapter that can't present
+//! (NVIDIA's EGL, which also hides llvmpipe) falls back to a Vulkan adapter for the window only
+//! (#1337); before, CPU mode then couldn't start at all.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -189,7 +191,9 @@ pub fn backends(plan: &Plan, os: Os) -> Option<wgpu::Backends> {
         GpuBackend::Cpu => match os {
             Os::Windows => wgpu::Backends::DX12,
             Os::Mac => wgpu::Backends::METAL,
-            Os::Other => wgpu::Backends::GL,
+            // Vulkan only for the window when no GL adapter can present (`rank`): with NVIDIA's
+            // EGL the GL adapter can't, and CPU mode failed every start (#1337).
+            Os::Other => wgpu::Backends::GL | wgpu::Backends::VULKAN,
         },
     })
 }
@@ -222,8 +226,10 @@ pub struct Candidate {
 
 /// Rank of an adapter (lower is better): high-performance device types first (egui's power
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
-/// Intel on Windows.
-fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8) {
+/// Intel on Windows. For `cpu`, any GL adapter comes before Vulkan, which is only the fallback
+/// for presenting the window (see [`backends`]).
+fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
+    let fallback = u8::from(backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan);
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -243,7 +249,7 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8) {
         wgpu::Backend::Gl => 3,
         wgpu::Backend::BrowserWebGpu | wgpu::Backend::Noop => 4,
     };
-    (ty, be)
+    (fallback, ty, be)
 }
 
 /// The adapter to use among `adapters` (`None` when there is none).
@@ -408,6 +414,17 @@ impl Sentinel {
     }
 }
 
+/// The Linux display-server preference (`performance.linuxDisplayServer`) from the preferences
+/// file, read before the window opens; `Auto` when the file or value is missing or unknown.
+#[cfg(any(target_os = "linux", test))]
+pub fn read_display_server(path: Option<&Path>) -> photocraft_engine::prefs::LinuxDisplayServer {
+    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    v.get("performance")
+        .and_then(|p| serde_json::from_value::<photocraft_engine::prefs::Performance>(p.clone()).ok())
+        .map(|performance| performance.linux_display_server)
+        .unwrap_or_default()
+}
+
 /// Read the policy leniently at startup, including old settings without renderingMode.
 pub fn read_rendering_prefs(path: Option<&Path>) -> (GpuBackend, RenderingMode) {
     let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
@@ -426,6 +443,27 @@ mod tests {
 
     fn crashed(backend: &str, adapter_backend: &str) -> Marker {
         Marker { backend: backend.into(), adapter: "Intel(R) UHD Graphics".into(), adapter_backend: adapter_backend.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn display_server_preference_is_read_before_the_window_opens() {
+        use photocraft_engine::prefs::LinuxDisplayServer;
+        let dir = std::env::temp_dir().join(format!("photocraft-display-server-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("preferences.json");
+        let read = |json: &str| {
+            std::fs::write(&file, json).unwrap();
+            read_display_server(Some(&file))
+        };
+        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"x11"}}"#), LinuxDisplayServer::X11);
+        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"auto","gpuBackend":"vulkan"}}"#), LinuxDisplayServer::Auto);
+        // Unknown values, other types, broken JSON and a missing file all start as Auto.
+        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"wayland"}}"#), LinuxDisplayServer::Auto);
+        assert_eq!(read(r#"{"performance":{"linuxDisplayServer":11}}"#), LinuxDisplayServer::Auto);
+        assert_eq!(read("{not json"), LinuxDisplayServer::Auto);
+        assert_eq!(read_display_server(Some(&dir.join("missing.json"))), LinuxDisplayServer::Auto);
+        assert_eq!(read_display_server(None), LinuxDisplayServer::Auto);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -497,7 +535,7 @@ mod tests {
         let p = plan(Vulkan, Some(&crashed("vulkan", "vulkan")), None, true, Os::Other);
         assert_eq!((p.backend, p.remember), (Cpu, false));
         assert_eq!(backends(&p, Os::Windows), Some(wgpu::Backends::DX12));
-        assert_eq!(backends(&p, Os::Other), Some(wgpu::Backends::GL));
+        assert_eq!(backends(&p, Os::Other), Some(wgpu::Backends::GL | wgpu::Backends::VULKAN));
         assert_eq!(backends(&p, Os::Mac), Some(wgpu::Backends::METAL));
     }
 
@@ -535,6 +573,28 @@ mod tests {
         assert_eq!(pick(&a, Cpu, Os::Windows), Some(1));
         // No software adapter: still something.
         assert_eq!(pick(&a[..1], Cpu, Os::Windows), Some(0));
+    }
+
+    /// #1337: on Linux with NVIDIA, the only GL adapter (NVIDIA's EGL) can't present, so CPU mode
+    /// found no adapter and never started. GL still wins whenever it can present.
+    #[test]
+    fn cpu_on_linux_falls_back_to_vulkan_only_when_gl_cannot_present() {
+        use wgpu::{Backend as B, DeviceType as T};
+        const NVIDIA: u32 = 0x10de;
+        let llvmpipe = cand(0x10005, T::Cpu, B::Gl);
+        let nvidia_gl = cand(NVIDIA, T::DiscreteGpu, B::Gl);
+        let nvidia_vk = cand(NVIDIA, T::DiscreteGpu, B::Vulkan);
+        let lavapipe = cand(0x10005, T::Cpu, B::Vulkan);
+        // GL presents: same choice as GL-only, software first, then hardware GL over any Vulkan.
+        assert_eq!(pick(&[nvidia_vk, lavapipe, llvmpipe], Cpu, Os::Other), Some(2));
+        assert_eq!(pick(&[nvidia_vk, lavapipe, nvidia_gl], Cpu, Os::Other), Some(2));
+        // GL can't present: Vulkan for the window, software first.
+        let mut gl = nvidia_gl;
+        gl.surface_ok = false;
+        assert_eq!(pick(&[gl, nvidia_vk, lavapipe], Cpu, Os::Other), Some(2));
+        assert_eq!(pick(&[gl, nvidia_vk], Cpu, Os::Other), Some(1));
+        // Other backends rank as before.
+        assert_eq!(pick(&[nvidia_gl, nvidia_vk], Auto, Os::Other), Some(1));
     }
 
     #[test]

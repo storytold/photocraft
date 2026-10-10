@@ -124,12 +124,14 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (Some(st), Some(i)) = (app.session.active(), app.session.active_index()) else {
         ui.label(RichText::new(tl!("No document")).color(t.text_dim));
+        // A command run with no document open still reports here (#1567: File › Automate › Batch).
+        status_message(app, ui, &t);
         return;
     };
     let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc));
     let mut pct = app.ui.views[i].zoom * 100.0;
-    if widgets::value_field(ui, &mut pct, 1.0..=3200.0, "%", 64.0).changed() {
-        app.ui.views[i].zoom = pct / 100.0;
+    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 64.0).changed() {
+        app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
         app.ui.views[i].fit_pending = false;
     }
     ui.add_space(12.0);
@@ -150,12 +152,18 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
     });
-    if !app.ui.status.is_empty() {
-        let (r, _) = ui.allocate_exact_size(vec2(17.0, 16.0), Sense::hover());
-        ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, t.separator));
-        let is_err = app.ui.status_error || app.ui.status.starts_with("Couldn");
-        ui.label(RichText::new(&app.ui.status).color(if is_err { t.warning } else { t.text_faint }));
+    status_message(app, ui, &t);
+}
+
+/// The latest status message after a separator, in the warning colour when it is an error.
+fn status_message(app: &PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if app.ui.status.is_empty() {
+        return;
     }
+    let (r, _) = ui.allocate_exact_size(vec2(17.0, 16.0), Sense::hover());
+    ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, t.separator));
+    let is_err = app.ui.status_error || app.ui.status.starts_with("Couldn");
+    ui.label(RichText::new(&app.ui.status).color(if is_err { t.warning } else { t.text_faint }));
 }
 
 /// Home button at the very start of Photoshop 2026's options bar: toggles the Home (start)
@@ -208,7 +216,7 @@ pub fn crop_ratio(key: &str, doc_w: f64, doc_h: f64) -> Option<(f64, f64)> {
         return Some((doc_w, doc_h));
     }
     let (a, b) = key.split_once(':')?;
-    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+    Some((crate::numeric_expression::parse(a)?, crate::numeric_expression::parse(b)?))
 }
 
 #[cfg(test)]
@@ -315,6 +323,21 @@ mod tests {
         assert_eq!(crop_ratio("", 1.0, 1.0), None);
         let (w, h) = crop_ratio("1:1", 0.0, 0.0).unwrap();
         assert_eq!(marquee_end("fixedRatio", w, h, false, [0.0, 0.0], [50.0, 20.0]), [50.0, 50.0]);
+    }
+
+    #[test]
+    fn status_message_shows_with_no_document_open() {
+        // #1567: File › Automate › Batch with no recorded action and no document answered nothing.
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.actions.list.clear();
+        let e = crate::menus::invoke(&mut app, &egui::Context::default(), "file.automate.batch", json!({})).unwrap_err();
+        app.ui.status = e.clone();
+        app.ui.status_error = true;
+        let mut h = Harness::builder().with_size(vec2(900.0, 40.0)).build_ui_state(|ui, app| status_bar_pro(app, ui), app);
+        h.run_steps(2);
+        assert!(h.query_by_label("No document").is_some());
+        assert!(h.query_by_label(&e).is_some(), "status bar shows {e:?}");
     }
 
     #[test]

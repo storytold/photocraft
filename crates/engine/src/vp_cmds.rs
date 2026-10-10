@@ -69,7 +69,7 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     match d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content) {
         Some(LayerContent::Raster(_)) => Ok(()),
-        Some(other) => Err(format!("Vanishing Point needs a pixel layer (active layer is a {} layer)", other.kind_name())),
+        Some(other) => Err(format!("Vanishing Point needs a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),
         None => Err("no active layer".into()),
     }
 }

@@ -122,7 +122,7 @@ fn polygon_radius(theta: f32, n: u32, rot: f32) -> f32 {
     (PI / n as f32).cos() / a.cos()
 }
 
-fn shape_inside(shape: BlurShape) -> Box<dyn Fn(f32, f32) -> bool + Send + Sync> {
+pub(crate) fn shape_inside(shape: BlurShape) -> Box<dyn Fn(f32, f32) -> bool + Send + Sync> {
     match shape {
         BlurShape::Circle => Box::new(|u, v| u * u + v * v <= 1.0),
         BlurShape::Ring => Box::new(|u, v| {
@@ -154,10 +154,10 @@ fn shape_inside(shape: BlurShape) -> Box<dyn Fn(f32, f32) -> bool + Send + Sync>
 
 /// Shape Blur: mean over a built-in shape of the given radius.
 pub(crate) fn shape_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, shape: BlurShape) -> Vec<f32> {
-    let spans = Spans::new(radius.max(0.0), shape_inside(shape));
-    conv_spans(src, out, ctx, &spans)
+    crate::shape_blur::Prepared::new(radius, shape).run(src, out, ctx)
 }
 
+#[cfg(test)]
 fn conv_spans(src: &Image, out: Rect, ctx: &Ctx, spans: &Spans) -> Vec<f32> {
     let n = src.ch;
     let win = src.rect;
@@ -179,6 +179,10 @@ fn conv_spans(src: &Image, out: Rect, ctx: &Ctx, spans: &Spans) -> Vec<f32> {
     }
     res
 }
+
+#[cfg(test)]
+#[path = "shape_blur_tests.rs"]
+mod shape_tests;
 
 // ---------- smart blur ----------
 

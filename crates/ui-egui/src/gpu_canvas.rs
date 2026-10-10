@@ -13,10 +13,11 @@
 //!
 //! Per frame the shader draws, in *device pixels*:
 //! - a soft analytic drop shadow around the document on the pasteboard (erf-blurred box),
-//! - a screen-space transparency checkerboard (8 pt squares, grays 255/204) under the document,
+//! - a transparency checkerboard (8 pt squares, grays 255/204, the same size at every zoom)
+//!   under the document, anchored to the document's top-left corner so it moves with the image,
 //! - the document itself, sampled trilinearly when zoomed out, bilinearly between 1× and 2×, and
 //!   with an anti-aliased "sharp nearest" filter at integer scales and ≥ 2×,
-//! - a one-device-pixel pixel grid at zoom ≥ 8.
+//! - a one-device-pixel pixel grid above 500% zoom, over pixels with content only.
 //!
 //! GPU resources live in the renderer's `callback_resources` type map; the per-frame callback only
 //! carries plain view parameters, so it is `Send + Sync` on every target (including wasm).
@@ -42,9 +43,14 @@ const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// documents (a 14000² one would need 2.1 GB) use `Rgba8Unorm`, so they stay on the GPU like
 /// 8-bit ones. `PHOTOCRAFT_CANVAS_F16=0` turns the float canvas off, `=1` ignores this budget.
 pub const F16_BUDGET_PX: u64 = 100_000_000;
-const VIEW_UNIFORM_SIZE: u64 = 112;
-const VIEW_FLOATS: usize = 28;
+const VIEW_UNIFORM_SIZE: u64 = 128;
+const VIEW_FLOATS: usize = 32;
 const TILE_UNIFORM_SIZE: u64 = 16;
+
+/// Whether this view can use the GPU canvas. Flip is still a CPU blit; rotation is a shader uniform.
+pub fn gpu_view_ok(flip: bool, _rotation: f32) -> bool {
+    !flip
+}
 
 /// Parameters for drawing one document view. Positions are in egui points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,6 +63,9 @@ pub struct ViewParams {
     pub zoom: f32,
     /// Document point shown at the centre of the canvas rect.
     pub center: [f32; 2],
+    /// Camera rotation in radians, clockwise in Y-down screen space. Rotate around [`Self::center`]
+    /// before sampling. Flip stays on the CPU path.
+    pub rotation: f32,
     /// Draw the drop shadow on the pasteboard.
     pub shadow: bool,
     /// Draw the pixel grid at high zoom.
@@ -1579,6 +1588,40 @@ fn filter_mode(scale: f32) -> (f32, f32) {
     }
 }
 
+fn map_doc_px(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, x: f32, y: f32) -> [f32; 2] {
+    let dx = x - center[0];
+    let dy = y - center[1];
+    let rx = dx * cos - dy * sin;
+    let ry = dx * sin + dy * cos;
+    [origin[0] + center[0] * scale + rx * scale, origin[1] + center[1] * scale + ry * scale]
+}
+
+fn tile_screen_aabb(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, tile: [f32; 4]) -> (f32, f32, f32, f32) {
+    let [tx, ty, tw, th] = tile;
+    if sin.abs() < 1e-8 && (cos - 1.0).abs() < 1e-8 {
+        let x0 = origin[0] + tx * scale;
+        let y0 = origin[1] + ty * scale;
+        return (x0, y0, x0 + tw * scale, y0 + th * scale);
+    }
+    let pts = [
+        map_doc_px(origin, scale, center, cos, sin, tx, ty),
+        map_doc_px(origin, scale, center, cos, sin, tx + tw, ty),
+        map_doc_px(origin, scale, center, cos, sin, tx + tw, ty + th),
+        map_doc_px(origin, scale, center, cos, sin, tx, ty + th),
+    ];
+    let mut x0 = pts[0][0];
+    let mut y0 = pts[0][1];
+    let mut x1 = x0;
+    let mut y1 = y0;
+    for p in pts {
+        x0 = x0.min(p[0]);
+        y0 = y0.min(p[1]);
+        x1 = x1.max(p[0]);
+        y1 = y1.max(p[1]);
+    }
+    (x0, y0, x1, y1)
+}
+
 impl CanvasCallback {
     /// Screen-pixel origin of document (0, 0) (snapped to whole pixels) and device px per doc px.
     fn placement(&self, ppp: f32) -> ([f32; 2], f32) {
@@ -1594,7 +1637,10 @@ impl CanvasCallback {
         let p = &self.params;
         let (origin, scale) = self.placement(ppp);
         let (mode, lod) = filter_mode(scale);
-        let grid = if p.pixel_grid && p.zoom >= 8.0 { 0.16 } else { 0.0 };
+        // The pixel grid shows above 500% (the constants are shared with the CPU path,
+        // pixel_grid.rs). `p.zoom` is screen points per document pixel; the shared threshold is
+        // in device pixels, so scale by the display's pixels per point.
+        let grid = if p.pixel_grid && crate::pixel_grid::shows_at(p.zoom * ppp) { crate::pixel_grid::STRENGTH } else { 0.0 };
         let square = if style.checker_square > 0.0 { (style.checker_square * ppp).round().max(1.0) } else { 0.0 };
         let (l, d, g) = (style.checker_light, style.checker_dark, style.gamut_color);
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.
@@ -1615,8 +1661,8 @@ impl CanvasCallback {
             lod,
             grid,
             square,
-            (self.rect.min.x * ppp).round(),
-            (self.rect.min.y * ppp).round(),
+            0.0,
+            0.0,
             p.display as f32,
             if out_linear { 1.0 } else { 0.0 },
             l[0],
@@ -1631,6 +1677,16 @@ impl CanvasCallback {
             g[1],
             g[2],
             inv_gamma,
+            {
+                let r = if p.rotation.is_finite() { p.rotation } else { 0.0 };
+                if r.abs() < 1e-8 { 1.0 } else { r.cos() }
+            },
+            {
+                let r = if p.rotation.is_finite() { p.rotation } else { 0.0 };
+                if r.abs() < 1e-8 { 0.0 } else { r.sin() }
+            },
+            p.center[0],
+            p.center[1],
         ]
     }
 }
@@ -1700,12 +1756,14 @@ impl CallbackTrait for CanvasCallback {
         let (origin, scale) = self.placement(info.pixels_per_point);
         let (cx0, cy0) = (clip.left_px as f32, clip.top_px as f32);
         let (cx1, cy1) = (cx0 + clip.width_px as f32, cy0 + clip.height_px as f32);
+        let rot = if self.params.rotation.is_finite() { self.params.rotation } else { 0.0 };
+        let (cos, sin) = if rot.abs() < 1e-8 { (1.0, 0.0) } else { (rot.cos(), rot.sin()) };
+        let cen = self.params.center;
         pass.set_pipeline(&res.tile_pipeline);
         pass.set_bind_group(2, res.luts.get(&(self.params.doc, self.params.output)).unwrap_or(&res.identity_lut), &[]);
         for t in &doc.tiles {
             let [tx, ty, tw, th] = t.rect.map(|v| v as f32);
-            let (x0, y0) = (origin[0] + tx * scale, origin[1] + ty * scale);
-            let (x1, y1) = (x0 + tw * scale, y0 + th * scale);
+            let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, cen, cos, sin, [tx, ty, tw, th]);
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;
             }
@@ -1720,10 +1778,11 @@ struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
     c: vec4<f32>, // filter mode, lod, grid alpha, checker square (device px)
-    d: vec4<f32>, // checker anchor x, y (device px), display (0 none, 1 LUT, 2 LUT + gamut), output linear
+    d: vec4<f32>, // unused x, y, display (0 none, 1 LUT, 2 LUT + gamut), output linear
     e: vec4<f32>, // checker light rgb, gamut warning opacity
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
+    h: vec4<f32>, // cos, sin, center_doc_x, center_doc_y
 };
 struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
 
@@ -1743,6 +1802,23 @@ fn corner(i: u32) -> vec2<f32> {
 fn px_to_clip(p: vec2<f32>) -> vec4<f32> {
     let n = p / view.a.xy * 2.0 - 1.0;
     return vec4(n.x, -n.y, 0.0, 1.0);
+}
+
+fn screen_center() -> vec2<f32> {
+    return view.b.xy + view.h.zw * view.a.z;
+}
+
+fn doc_to_px(d: vec2<f32>) -> vec2<f32> {
+    let cs = view.h.xy;
+    let q = d - view.h.zw;
+    let r = vec2(q.x * cs.x - q.y * cs.y, q.x * cs.y + q.y * cs.x);
+    return screen_center() + r * view.a.z;
+}
+
+fn px_to_doc(p: vec2<f32>) -> vec2<f32> {
+    let cs = view.h.xy;
+    let q = (p - screen_center()) / view.a.z;
+    return vec2(q.x * cs.x + q.y * cs.y, -q.x * cs.y + q.y * cs.x) + view.h.zw;
 }
 
 fn doc_min() -> vec2<f32> { return view.b.xy; }
@@ -1779,21 +1855,29 @@ fn box_blur(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>, sigma: f32) -> f32 {
 @vertex
 fn vs_shadow(@builtin(vertex_index) vi: u32) -> VOut {
     let pad = 64.0 * view.a.w;
-    let p = mix(doc_min() - vec2(pad), doc_max() + vec2(pad), corner(vi));
+    let c0 = doc_to_px(vec2(0.0, 0.0));
+    let c1 = doc_to_px(vec2(view.b.z, 0.0));
+    let c2 = doc_to_px(vec2(view.b.z, view.b.w));
+    let c3 = doc_to_px(vec2(0.0, view.b.w));
+    let lo = min(min(c0, c1), min(c2, c3)) - vec2(pad);
+    let hi = max(max(c0, c1), max(c2, c3)) + vec2(pad);
+    let p = mix(lo, hi, corner(vi));
     return VOut(px_to_clip(p));
 }
 
 @fragment
 fn fs_shadow(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
-    let lo = doc_min();
-    let hi = doc_max();
-    if (all(p >= lo) && all(p < hi)) {
+    let d = px_to_doc(p);
+    if (all(d >= vec2(0.0)) && all(d < view.b.zw)) {
         discard;
     }
+    let p_align = view.b.xy + d * view.a.z;
+    let lo = doc_min();
+    let hi = doc_max();
     let u = view.a.w;
-    let ambient = box_blur(p - vec2(0.0, 7.0 * u), lo, hi, 16.0 * u) * 0.40;
-    let contact = box_blur(p - vec2(0.0, 0.75 * u), lo, hi, 1.25 * u) * 0.30;
+    let ambient = box_blur(p_align - vec2(0.0, 7.0 * u), lo, hi, 16.0 * u) * 0.40;
+    let contact = box_blur(p_align - vec2(0.0, 0.75 * u), lo, hi, 1.25 * u) * 0.30;
     let a = 1.0 - (1.0 - ambient) * (1.0 - contact);
     return vec4(0.0, 0.0, 0.0, a);
 }
@@ -1802,15 +1886,18 @@ fn fs_shadow(in: VOut) -> @location(0) vec4<f32> {
 
 @vertex
 fn vs_tile(@builtin(vertex_index) vi: u32) -> VOut {
-    let p = view.b.xy + (tile.r.xy + tile.r.zw * corner(vi)) * view.a.z;
+    let p = doc_to_px(tile.r.xy + tile.r.zw * corner(vi));
     return VOut(px_to_clip(p));
 }
 
+// Cells are screen-sized (view.c.w device px) but anchored to the document's top-left corner, so
+// the pattern moves with the image as it is panned or zoomed.
 fn checker(p: vec2<f32>) -> vec3<f32> {
     if (view.c.w <= 0.0) {
         return vec3(1.0);
     }
-    let c = floor((p - view.d.xy) / view.c.w);
+    let d = px_to_doc(p);
+    let c = floor(d * view.a.z / view.c.w);
     let odd = fract((c.x + c.y) * 0.5) > 0.25;
     return select(view.e.xyz, view.f.xyz, odd);
 }
@@ -1819,7 +1906,7 @@ fn checker(p: vec2<f32>) -> vec3<f32> {
 fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
     let scale = view.a.z;
-    let d = (p - view.b.xy) / scale;       // document pixel coordinates
+    let d = px_to_doc(p);                  // document pixel coordinates
     let size = tile.r.zw;
     let t = d - tile.r.xy;                 // texel coordinates within this tile
     let mode = view.c.x;
@@ -1854,12 +1941,13 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
         col = vec4(shown * col.a, col.a);
     }
     var rgb = col.rgb + checker(p) * (1.0 - col.a);
-    let grid = view.c.z;
+    // The pixel grid is drawn over pixels with content, not over empty checker.
+    let grid = view.c.z * col.a;
     if (grid > 0.0) {
         let e = fract(d) * scale;
         if (e.x < 1.0 || e.y < 1.0) {
-            let l = dot(rgb, vec3(0.299, 0.587, 0.114));
-            rgb = mix(rgb, select(vec3(1.0), vec3(0.0), l > 0.55), grid);
+            let on_light = dot(rgb, vec3(0.299, 0.587, 0.114)) > 0.55;
+            rgb = mix(rgb, select(vec3(1.0), vec3(0.0), on_light), select(grid, grid * 0.64, on_light));
         }
     }
     if (view.d.w > 0.5) {
@@ -1937,6 +2025,25 @@ mod tests {
         assert_eq!(memory_budget(8 * G, 10 * G, Some(48 * G)), MIN_GPU_BUDGET);
         assert_eq!(memory_budget(64 * G, 0, None), 4 * G);
         assert!(physical_memory().is_none_or(|b| b >= 256 << 20));
+    }
+
+    #[test]
+    fn view_uniform_packs_rotation() {
+        assert_eq!(VIEW_FLOATS, 32);
+        assert_eq!(VIEW_UNIFORM_SIZE, 128);
+        assert_eq!(VIEW_FLOATS * 4, VIEW_UNIFORM_SIZE as usize);
+        assert!(gpu_view_ok(false, 0.0));
+        assert!(gpu_view_ok(false, 45.0_f32.to_radians()));
+        assert!(!gpu_view_ok(true, 45.0_f32.to_radians()));
+        // Identity packing: rotation 0 matches the unrotated origin + scale map.
+        let origin = [10.0, 20.0];
+        let (scale, center) = (2.0, [40.0, 8.0]);
+        let a = map_doc_px(origin, scale, center, 1.0, 0.0, 5.0, 9.0);
+        assert!((a[0] - (origin[0] + 5.0 * scale)).abs() < 1e-4);
+        assert!((a[1] - (origin[1] + 9.0 * scale)).abs() < 1e-4);
+        let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, center, 1.0, 0.0, [0.0, 0.0, 10.0, 4.0]);
+        assert!((x0 - origin[0]).abs() < 1e-4 && (y0 - origin[1]).abs() < 1e-4);
+        assert!((x1 - (origin[0] + 20.0)).abs() < 1e-4 && (y1 - (origin[1] + 8.0)).abs() < 1e-4);
     }
 
     #[test]

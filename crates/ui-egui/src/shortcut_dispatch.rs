@@ -50,6 +50,8 @@ pub const SECONDARY: &[(&str, &str)] = &[("edit.fill", "Shift+Backspace")];
 /// their overrides apply. Held temporary tools (Space…) are not here: see [`crate::hold_keys`].
 pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
     let prefs = app.session.prefs();
+    let action_ids: Vec<String> = app.session.actions.list.iter().map(|a| crate::actions::shortcut_id(&a.name)).collect();
+    let actions = action_ids.iter().map(|id| (id.as_str(), prefs.shortcut(id, None)));
     // The Keyboard Shortcuts dialog lists Photoshop's Window › <panel> item (`window.panel.*`)
     // in place of the shell command it runs (`window.toggle.*`, see `menus::panel_alias`), so an
     // edit to that row reassigns or removes the shell command's default too (#1272).
@@ -75,6 +77,7 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
         .iter()
         .filter(|(id, sc)| {
             !sc.is_empty()
+                && !id.starts_with(crate::actions::SHORTCUT_PREFIX)
                 && photocraft_engine::commands::find(id).is_none()
                 && !crate::menus::UI_COMMANDS.iter().any(|c| c.0 == id.as_str())
                 && !crate::hold_keys::is_temporary(id)
@@ -85,7 +88,7 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
     // A key the user assigned in Edit › Keyboard Shortcuts belongs to that command, ahead of any
     // default that still names it (#1272): OK clears the old owner's row, but that row can be
     // another id for the same item, or a default the dialog doesn't list.
-    let mut candidates: Vec<(&str, Option<&str>)> = ui.chain(engine).chain(catalog).chain(overrides).chain(secondary).collect();
+    let mut candidates: Vec<(&str, Option<&str>)> = actions.chain(ui).chain(engine).chain(catalog).chain(overrides).chain(secondary).collect();
     candidates.sort_by_key(|(id, sc)| !(sc.is_some() && prefs.shortcuts.get(*id).map(String::as_str) == *sc));
     let mut all: Vec<(String, KeyboardShortcut)> = Vec::new();
     for (id, sc) in candidates {
@@ -104,7 +107,22 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
 pub enum Focus {
     None,
     Widget,
+    /// A focused widget that edits with ⌫ / Delete itself (a Curves graph deletes its selected
+    /// point), see [`claim_delete_keys`].
+    DeletingWidget,
     Text,
+}
+
+/// Where [`claim_delete_keys`] keeps the id of the widget that owns ⌫ / Delete while focused.
+fn delete_owner_id() -> egui::Id {
+    egui::Id::new("shortcut_dispatch::delete_owner")
+}
+
+/// Called by a widget that has keyboard focus and uses ⌫ / Delete itself (the Curves graph):
+/// while it keeps focus those keys reach it instead of Edit › Clear or Delete Layer. Every other
+/// focused widget (a Layers row, a slider) leaves them to the shortcuts, as in Photoshop (#1534).
+pub fn claim_delete_keys(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.insert_temp(delete_owner_id(), id));
 }
 
 impl Focus {
@@ -113,14 +131,15 @@ impl Focus {
         if ctx.text_edit_focused() || crate::layer_row_ui::rename_active(ctx) {
             Focus::Text
         } else if ctx.egui_wants_keyboard_input() {
-            Focus::Widget
+            let owner = ctx.data(|d| d.get_temp::<egui::Id>(delete_owner_id()));
+            if owner.is_some() && ctx.memory(|m| m.focused()) == owner { Focus::DeletingWidget } else { Focus::Widget }
         } else {
             Focus::None
         }
     }
 
     /// May `sc` fire with this focus? A focused widget keeps its navigation keys (arrows, ↩,
-    /// Space, Delete…); a text field keeps everything but ⌘ shortcuts (minus its own editing
+    /// Space, Esc…, plus ⌫ / Delete when it claimed them); a text field keeps everything but ⌘ shortcuts (minus its own editing
     /// ones: select all, clipboard, undo) and the function keys.
     pub fn allows(self, sc: &KeyboardShortcut) -> bool {
         let k = sc.logical_key;
@@ -152,8 +171,6 @@ impl Focus {
                 | Key::Space
                 | Key::Tab
                 | Key::Escape
-                | Key::Backspace
-                | Key::Delete
                 | Key::Home
                 | Key::End
                 | Key::PageUp
@@ -162,8 +179,11 @@ impl Focus {
         match self {
             Focus::None => true,
             Focus::Widget => sc.modifiers.command || !navigation,
+            Focus::DeletingWidget => sc.modifiers.command || !(navigation || matches!(k, Key::Backspace | Key::Delete)),
             Focus::Text => {
-                let text_edit = !sc.modifiers.alt && matches!(k, Key::A | Key::C | Key::X | Key::V | Key::Z | Key::Y) || navigation;
+                let text_edit = !sc.modifiers.alt && matches!(k, Key::A | Key::C | Key::X | Key::V | Key::Z | Key::Y)
+                    || navigation
+                    || matches!(k, Key::Backspace | Key::Delete);
                 function || (sc.modifiers.command && !text_edit)
             }
         }
@@ -263,15 +283,24 @@ fn label(id: &str) -> String {
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
-    let outcome = if !crate::menus::is_enabled(app, id) {
-        let why = disabled_reason(app, id);
+    let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
+    let command_id = if action.is_some() { "actions.play" } else { id };
+    let outcome = if !crate::menus::is_enabled(app, command_id) {
+        let why = disabled_reason(app, command_id);
         app.ui.status = format!("{} is not available: {why}", label(id));
         app.ui.status_error = true;
         Outcome::Disabled(why)
     } else if ctx.data(|d| d.get_temp::<bool>(dry_run_id())).unwrap_or(false) {
         Outcome::Ran
     } else {
-        let r = if crate::adjust_dialog::has_dialog(id) {
+        let r = if let Some(name) = action {
+            // Use the normal command path: synthetic input and every nested action
+            // step must still pass the automation authorizer.
+            crate::menus::invoke(app, ctx, "actions.play", json!({"action": name})).and_then(|v| {
+                crate::actions::report_play(app, &v);
+                if v.get("failed").is_some_and(|f| f.is_object()) { Err(app.ui.status.clone()) } else { Ok(v) }
+            })
+        } else if crate::adjust_dialog::has_dialog(id) {
             crate::adjust_dialog::open(app, id);
             Ok(serde_json::Value::Null)
         } else {

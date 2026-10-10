@@ -27,7 +27,10 @@ fn trap(s: &mut Session, p: &Value) -> Result<Value> {
         let bounds = doc.bounds();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let LayerContent::Raster(surf) = &mut l.content else {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("Trap needs a pixel layer (active layer is a {})", l.content.kind_name()) });
+            return Err(EngineError::BadParams {
+                cmd: cmd.into(),
+                msg: format!("Trap needs a pixel layer (active layer is {} {})", l.content.article(), l.content.kind_name()),
+            });
         };
         if bounds.is_empty() {
             return Ok(());

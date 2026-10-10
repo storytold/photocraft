@@ -1,20 +1,24 @@
 //! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, tip-shaped
 //! cursor, ⇧-click lines, Control+Alt resizing and the B group.
 
-use egui::{Key, Modifiers, Pos2, Rect, vec2};
+use egui::{Key, Modifiers, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, tool_event};
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 120, "height": 80, "background": "transparent"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
-    app.run("tools.setBrush", json!({"brush": {"size": 3, "hardness": 0.0, "smoothing": {"amount": 0.0}}})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 3, "hardness": 0.0}})).unwrap();
+    // Each tool keeps its own brush (#218): switch first, then set the Pencil's options, as the
+    // options bar does (its first frame takes the Brush's tip at Photoshop's 10 % smoothing).
     app.ui.tool = Tool::Pencil;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"smoothing": {"amount": 0.0}}})).unwrap();
     app
 }
 
@@ -105,32 +109,6 @@ fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
     drag(&mut app, &[(50.0, 40.0), (60.0, 40.0)], ctrl_alt);
     assert_eq!(app.session.tools.brush.size, 23.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), 0);
-}
-
-#[test]
-fn pencil_cursor_grid_helper_remains_available_for_pixel_alignment() {
-    let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(800.0, 600.0));
-    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false };
-    // 1 px at 800 %: the 8-point square of the pixel under the pointer.
-    let r = pencil_cursor_rect(&xf, [10.3, 5.7], 1.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(10.0, 5.0), xf.to_screen(11.0, 6.0)));
-    assert_eq!(r.size(), vec2(8.0, 8.0));
-    // Even sizes centre on the nearest pixel corner; odd ones on the pixel.
-    let r = pencil_cursor_rect(&xf, [10.3, 5.7], 4.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(8.0, 4.0), xf.to_screen(12.0, 8.0)));
-    let r = pencil_cursor_rect(&xf, [10.9, 5.1], 3.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(9.0, 4.0), xf.to_screen(12.0, 7.0)));
-    // At 2× and at an odd zoom the edges land on physical pixels.
-    for (zoom, ppp) in [(3.3, 2.0), (0.5, 2.0), (1.0, 1.0), (13.7, 1.5)] {
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::new(0.3, 0.7), vec2(800.0, 600.0)), zoom, center: [50.2, 37.9], flip: true };
-        let r = pencil_cursor_rect(&xf, [20.4, 30.6], 5.0, ppp);
-        for v in [r.min.x, r.min.y, r.max.x, r.max.y] {
-            assert!((v * ppp - (v * ppp).round()).abs() < 1e-3, "zoom {zoom} ppp {ppp}: {v}");
-        }
-        assert!((r.width() - 5.0 * zoom).abs() <= 1.0 / ppp + 1e-3, "{r:?}");
-    }
-    // Hostile numbers don't panic.
-    let _ = pencil_cursor_rect(&xf, [f64::NAN, f64::INFINITY], f32::NAN, f32::NAN);
 }
 
 #[test]

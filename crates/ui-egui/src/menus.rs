@@ -5,11 +5,23 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::state::DialogKind;
 
+/// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
+/// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation
+/// commands also usable through shortcuts. Camera Raw blocks menu commands entirely, and a pending
+/// crop blocks the commands Photoshop greys during one (`crop_ui::blocks`).
+pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
+    if app.camera_raw.is_some() || crate::crop_ui::blocks(app, id) {
+        return false;
+    }
+    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+}
+
 /// Top-level menus in Photoshop order.
 pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];
 
 /// UI-level commands (handled by the shell rather than the engine): id, label, menu, shortcut.
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+    ("ui.symmetryTransform", "Transform Symmetry", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
@@ -37,6 +49,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.zoomOut", "Zoom Out", &["View"], Some("Cmd+-")),
     ("view.fitOnScreen", "Fit on Screen", &["View"], Some("Cmd+0")),
     ("view.actualPixels", "100%", &["View"], Some("Cmd+1")),
+    ("view.rotateView", "Rotate View", &[], None),
+    ("view.resetView", "Reset View", &["View"], None),
     ("window.newWindowForDocument", "New Window for Document", &["Window", "Arrange"], None),
     ("window.toggle.layers", "Layers", &["Window"], Some("F7")),
     ("window.toggle.history", "History", &["Window"], None),
@@ -49,13 +63,17 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
     ("window.toggle.options", "Options", &["Window"], None),
-    ("window.theme.toggle", "Next Theme", &["Window"], None),
+    ("window.theme.toggle", "Next Appearance Mode", &["Window"], None),
     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
-    ("edit.search", "Search…", &["Edit"], Some("Cmd+K")),
+    ("window.theme.solarizedDark", "Solarized Dark Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaita", "Adwaita Light Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaitaDark", "Adwaita Dark Theme", &["Window", "Theme"], None),
+    ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
+    ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
     ("help.website", "PhotoCraft Website", &["Help"], None),
     ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
@@ -112,11 +130,28 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }
-    invoke_unguarded(app, ctx, id, params)
+    let r = invoke_unguarded(app, ctx, id, params)?;
+    // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
+    if id != "edit.search" {
+        crate::palette::note_recent(ctx, id);
+    }
+    Ok(r)
 }
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if id == "ui.symmetryTransform" {
+        return crate::symmetry_ui::begin(app).map(|_| Value::Null);
+    }
+    // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard.
+    if id == "edit.undo" && crate::vector_ui::pen_undo_last_point(app) {
+        return Ok(Value::Null);
+    }
+    // Image › Crop while the Crop tool has a pending frame commits that frame (#1918).
+    if id == "image.crop" && crate::crop_ui::pending(app) {
+        crate::canvas::commit_crop(app);
+        return Ok(json!({"committed": true}));
+    }
     // Help › Discord, website, GitHub, Report an Issue.
     if let Some(url) = crate::links::url_for(id) {
         return Ok(crate::links::open(app, ctx, url));
@@ -261,23 +296,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
         }
         "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)),
-        "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => {
-            let i = app.session.active_index().ok_or("no document")?;
-            let v = &mut app.ui.views[i];
-            match id {
-                "view.zoomIn" => v.zoom = crate::canvas::zoom_step(v.zoom, 1),
-                "view.zoomOut" => v.zoom = crate::canvas::zoom_step(v.zoom, -1),
-                "view.fitOnScreen" => v.fit_pending = true,
-                _ => v.zoom = 1.0,
-            }
-            if id == "view.fitOnScreen" {
-                v.fill_pending = false;
-            } else {
-                v.fit_pending = false;
-                v.fill_pending = false;
-            }
-            Ok(Value::Null)
-        }
+        "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
         "window.newWindowForDocument" => {
             let doc = app.session.active_index().ok_or("no document")?;
             let wid = app.ui.alloc_id();
@@ -286,11 +305,22 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"window": wid}))
         }
         "window.theme.toggle" => {
-            let next = app.ui.theme.next();
-            app.set_theme(ctx, next);
+            crate::prefs_ui::cycle_appearance(app, ctx);
             Ok(Value::Null)
         }
-        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" => {
+        "window.theme.system" => {
+            app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"}))?;
+            crate::prefs_ui::sync_appearance(app, ctx);
+            Ok(Value::Null)
+        }
+        "window.theme.pro"
+        | "window.theme.proMedium"
+        | "window.theme.studio"
+        | "window.theme.studioLight"
+        | "window.theme.classic"
+        | "window.theme.solarizedDark"
+        | "window.theme.adwaita"
+        | "window.theme.adwaitaDark" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);
             Ok(Value::Null)
@@ -328,6 +358,24 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "layer.layerStyle.blendingOptions" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::layer_style::open(app, Some(crate::layer_style::BLENDING)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
+        // Formatting menus follow an inline text selection when editing. Outside an edit,
+        // snapshot the selected type layers; explicit automation targets retain their scope.
+        t if (t.starts_with("type.antiAlias.")
+            || t.starts_with("type.orientation.")
+            || t.starts_with("type.openType.")
+            || matches!(t, "type.warpText" | "type.loadDefaultTypeStyles"))
+            && params.get("layer").is_none()
+            && params.get("layers").is_none()
+            && params.get("range").is_none() =>
+        {
+            let Some(mut p) = crate::type_tool::formatting_params(app) else { return app.run(id, params) };
+            if let Some(props) = params.as_object() {
+                for (key, value) in props {
+                    p[key] = value.clone();
+                }
+            }
+            app.run(id, p)
+        }
         "type.editText" => {
             crate::type_tool::edit_active(app)?;
             if let Some(focus) = ctx.memory(|m| m.focused()) {
@@ -335,12 +383,23 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Layer Content Options…: the adjustment / fill controls live in Properties.
+        // Solid Color uses the Color Picker; other adjustment / fill controls use Properties.
         "layer.layerContentOptions" => {
+            if let Some(dialog) = crate::solid_fill_ui::open(app) {
+                return Ok(json!({"dialog": dialog}));
+            }
             let r = app.run(id, params)?;
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;
             Ok(r)
+        }
+        // Edit › Stroke…: open its full options dialog when called from menus/context
+        // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
+        crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            Ok(json!({"dialog": crate::stroke_ui::open(app)}))
         }
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
@@ -366,7 +425,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let visible = !external
                 && app.session.active_index().zip(app.session.clipboard.as_ref()).is_some_and(|(i, clip)| {
                     let v = &app.ui.views[i];
-                    let (hw, hh) = (app.last_canvas_rect.width() / 2.0 / v.zoom, app.last_canvas_rect.height() / 2.0 / v.zoom);
+                    let pz = app.point_zoom();
+                    let (hw, hh) = (app.last_canvas_rect.width() / 2.0 / pz, app.last_canvas_rect.height() / 2.0 / pz);
                     let r =
                         photocraft_geom::Rect::new((v.center[0] - hw) as i32, (v.center[1] - hh) as i32, (v.center[0] + hw) as i32, (v.center[1] + hh) as i32);
                     !clip.bounds.intersect(&r).is_empty()
@@ -488,8 +548,19 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    if id == "ui.symmetryTransform" {
+        return crate::symmetry_ui::can_transform(app);
+    }
+    // Draft Pen points can be undone even when the document has no History entries.
+    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+        return true;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
+        return false;
+    }
+    // A pending crop greys what Photoshop greys during one (#1918).
+    if crate::crop_ui::blocks(app, id) {
         return false;
     }
     if let Some(e) = crate::workspace_ui::is_enabled(app, id) {
@@ -564,7 +635,8 @@ const MODE_CHECKS: [&str; 11] = ["rgb", "grayscale", "cmyk", "lab", "multichanne
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
     if let Some(name) = id.strip_prefix("window.theme.").filter(|n| *n != "toggle") {
-        return Some(crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme));
+        let auto = app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto;
+        return Some(if name == "system" { auto } else { !auto && crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme) });
     }
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
@@ -670,8 +742,9 @@ pub struct MenuItem {
 /// Is `id` implemented by the engine or the shell (a live menu item)? Shared by the menus and
 /// the parity report ([`crate::parity`]).
 pub fn is_live(id: &str) -> bool {
+    static UI_IDS: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
     photocraft_engine::commands::find(id).is_some()
-        || UI_COMMANDS.iter().any(|c| c.0 == id)
+        || UI_IDS.get_or_init(|| UI_COMMANDS.iter().map(|c| c.0).collect()).contains(id)
         || panel_alias(id).is_some()
         || workspace_name(id).is_some()
         || proof_preset(id).is_some()
@@ -685,7 +758,14 @@ pub fn is_live(id: &str) -> bool {
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
-const PLACE_AFTER: &[(&str, &str)] = &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects")];
+/// The command takes that item's submenu path, so it joins Photoshop's submenu even where the
+/// catalogue spells it differently (Filter › "Other…").
+const PLACE_AFTER: &[(&str, &str)] = &[
+    ("file.newFromClipboard", "file.new"),
+    ("filter.render.relight", "filter.render.lightingEffects"),
+    ("view.resetView", "view.flipHorizontal"),
+    ("filter.other.colorToAlpha", "filter.other.offset"),
+];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
@@ -728,18 +808,26 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             color: None,
         });
     }
-    for e in extra {
+    for mut e in extra {
         let dup = items.iter().any(|i| i.id == e.id || (i.path == e.path && i.label.trim_end_matches('…') == e.label.trim_end_matches('…')));
         if !dup {
             // Insert after the item it belongs next to, else after the last item of the same
             // top-level menu, keeping menus contiguous.
             let top = e.path.first().cloned();
             let after = PLACE_AFTER.iter().find(|(id, _)| *id == e.id).and_then(|(_, a)| items.iter().position(|i| i.id == *a));
+            if let Some(path) = after.and_then(|a| items.get(a)).map(|i| i.path.clone()) {
+                e.path = path;
+            }
             let at = after.or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
         }
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
+    if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
+        && let Some(item) = items.iter_mut().find(|i| i.id == "layer.layerMask.enabled")
+    {
+        item.label = crate::layer_menu_ui::mask_toggle_label(mask.enabled).into();
+    }
     // The File quick-export command uses the format selected in Export Preferences.
     // On the web it intentionally downloads PNG until the quick-export service supports
     // the other formats; the Layer quick-export command also always produces PNG.
@@ -885,7 +973,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                         if top == "Help" {
                             // The search field scrolls with the rows, as part of the menu's content.
                             crate::menu_nav::level(ui, 1, &mut nav, |ui, nav| {
-                                help_search(ui, items, &mut clicked, nav);
+                                help_search(ui, items, opening, &mut clicked, nav);
                                 render_level_rows(ui, &mine, 1, &mut clicked, nav);
                             });
                         } else {
@@ -910,6 +998,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
         if let Err(e) = invoke(app, &ctx, &id, json!({})) {
             app.ui.status = e;
+            app.ui.status_error = true;
         }
     }
     right
@@ -1014,7 +1103,8 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
 
 /// Help › Search : a field at the top of the Help menu that finds any menu command
 /// by name. Results show their menu path; click, ↓ then ↩, or ↩ in the field runs one.
-fn help_search(ui: &mut egui::Ui, items: &[MenuItem], clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
+/// `opening`: this frame's release ends the click on the Help title that opened the menu.
+fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
     let ctx = ui.ctx().clone();
     let lang = crate::i18n::current();
     let text_id = egui::Id::new("help-menu-search");
@@ -1025,7 +1115,9 @@ fn help_search(ui: &mut egui::Ui, items: &[MenuItem], clicked: &mut Option<Strin
     ctx.data_mut(|d| d.insert_temp(pass_id, pass));
     let mut query: String = if reopened { String::new() } else { ctx.data(|d| d.get_temp(text_id)).unwrap_or_default() };
     let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
-    if reopened {
+    // The menu opens on the press; the release a frame later completes a click on the title,
+    // outside the field, and egui takes the focus away from it again (#1447, #1438).
+    if reopened || opening {
         field.request_focus();
     }
     let results = search_items(items, &query, lang);
@@ -1135,8 +1227,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             }
             shown_subs.push(name);
             let child: Vec<&MenuItem> = items.iter().copied().filter(|c| c.path.len() > depth && c.path[depth] == name).collect();
-            let any_enabled = child.iter().any(|c| c.enabled && c.label != "---");
-            let enabled = any_enabled || !child.is_empty();
+            let enabled = submenu_enabled(&child);
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, |ui, nav| {
                     let r = ui.menu_button(crate::i18n::tr(lang, name), |ui| render_level(ui, &child, depth + 1, clicked, nav));
@@ -1150,6 +1241,12 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             last_was_sep = false;
         }
     }
+}
+
+/// A submenu header is enabled only while some item under it (at any depth) can run, so a
+/// submenu of greyed items is greyed too instead of opening onto them (#1976).
+fn submenu_enabled(children: &[&MenuItem]) -> bool {
+    children.iter().any(|c| c.enabled && c.label != "---")
 }
 
 /// The command a menu click runs: ⌥ + Merge Down / Merge Layers / Merge Visible keep the
@@ -1174,7 +1271,11 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     let (nav, color, layers, history, props) = match app.ui.workspace.as_str() {
         "Photography" => (true, false, true, true, true),
         "Painting" => (false, true, true, false, false),
-        "Graphic and Web" => (false, true, true, false, true),
+        // Leave room for typography alongside Properties and Layers.
+        "Graphic and Web" => (false, false, true, false, true),
+        // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
+        "Pixel Art" => (true, true, true, false, false),
+        "Motion" => (false, false, true, false, true),
         _ => (false, true, true, false, true),
     };
     p.navigator = nav;
@@ -1182,12 +1283,79 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     p.layers = layers;
     p.history = history;
     p.properties = props;
-    p.character = false;
+    p.character = app.ui.workspace == "Graphic and Web";
+    // Timeline is a floating panel, not a dock group. Showing it does not create or edit
+    // a document timeline; changing away from Motion closes it just like its Close button.
+    app.ui.timeline.open = app.ui.workspace == "Motion";
+    if !app.ui.timeline.open {
+        app.ui.timeline.playing = false;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
+        use photocraft_engine::prefs::{AppearanceMode, DarkTheme, LightTheme};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
+        app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
+        invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
+        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
+        assert_eq!(app.ui.theme, crate::theme::ThemeKind::Classic);
+        for appearance in [egui::Theme::Dark, egui::Theme::Light] {
+            app.services.system_theme = Some(Box::new(move |_| Some(appearance)));
+            crate::prefs_ui::tick(&mut app, &ctx);
+            let items = menu_items(&app);
+            let item = items.iter().find(|i| i.id == "window.theme.system").unwrap();
+            assert_eq!(item.label, "Sync with system");
+            assert_eq!(item.path, ["Window", "Theme"]);
+            assert!(item.enabled);
+            assert_eq!(item.checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(checked(&app, &format!("window.theme.{}", kind.id())), Some(false));
+            }
+        }
+        invoke(&mut app, &ctx, "window.theme.studio", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Dark);
+        assert_eq!(checked(&app, "window.theme.system"), Some(false));
+        assert_eq!(checked(&app, "window.theme.studio"), Some(true));
+    }
+
+    #[test]
+    fn submenu_header_is_disabled_when_every_item_is() {
+        let item = |label: &str, enabled: bool| MenuItem {
+            id: label.into(),
+            label: label.into(),
+            path: vec!["File".into(), "Export".into()],
+            shortcut: None,
+            enabled,
+            checked: None,
+            color: None,
+        };
+        let (off, on, sep) = (item("Off", false), item("On", true), item("---", true));
+        assert!(!submenu_enabled(&[]));
+        assert!(!submenu_enabled(&[&off, &sep]));
+        assert!(submenu_enabled(&[&off, &on]));
+    }
+
+    #[test]
+    fn live_lookup_finds_engine_and_shell_commands() {
+        for command in photocraft_engine::commands::command_specs() {
+            assert!(is_live(command.id), "{}", command.id);
+        }
+        for &(id, ..) in UI_COMMANDS {
+            assert!(is_live(id), "{id}");
+        }
+        for id in ["", "missing.command", "💾"] {
+            assert!(!is_live(id));
+        }
+    }
 
     #[test]
     fn select_menu_contains_every_selection_context_action_and_more() {
@@ -1210,6 +1378,23 @@ mod tests {
             "keep the Photoshop Modify route"
         );
         assert!(!top.iter().any(|i| i.id == "select.modify.feather"), "no extra top-level Feather");
+    }
+
+    /// Color to Alpha (#1576) has no Photoshop counterpart: it joins Photoshop's own Filter ›
+    /// Other submenu (not a second "Other") right after Offset, enabled on a pixel layer.
+    #[test]
+    fn color_to_alpha_sits_in_filter_other_after_offset() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let items = menu_items(&app);
+        let at = |id: &str| items.iter().position(|i| i.id == id).unwrap_or_else(|| panic!("{id} missing"));
+        let (offset, c2a) = (at("filter.other.offset"), at("filter.other.colorToAlpha"));
+        assert_eq!(c2a, offset + 1);
+        assert_eq!(items[c2a].path, items[offset].path);
+        assert_eq!(items[c2a].label, "Color to Alpha…");
+        assert!(items[c2a].enabled, "the Background becomes a layer when the filter runs");
+        let others: Vec<_> = items.iter().filter(|i| i.path.first().is_some_and(|p| p == "Filter") && i.path.len() == 2).map(|i| &i.path[1]).collect();
+        assert!(!others.iter().any(|p| p.as_str() == "Other"), "no duplicate Other submenu: {others:?}");
     }
 
     #[test]
@@ -1327,6 +1512,62 @@ mod tests {
         assert!(!ids("calque").is_empty(), "French menu name");
         assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
         assert!(ids("zzzzqqq").is_empty());
+    }
+
+    /// #1447, #1438: a click on Help leaves its search field focused, so typing searches at once,
+    /// and clicking into the field and typing keeps the menu open. Whole app, real clicks (press
+    /// and release in separate frames), with the custom title bar (Windows, Linux) and without.
+    #[test]
+    fn help_search_takes_typing_and_clicks_without_closing_the_menu() {
+        use egui::{Event, Modifiers, PointerButton};
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (custom, doc, scale) in [(true, false, 1.0), (true, true, 1.25), (false, true, 1.5)] {
+            let what = format!("custom title bar {custom}, document {doc}, scale {scale}");
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0 / scale, 800.0 / scale)).with_pixels_per_point(scale).with_max_steps(64).build_eframe(
+                move |cc| {
+                    PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                    app.custom_titlebar = custom;
+                    if doc {
+                        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+                    }
+                    app
+                },
+            );
+            h.run_steps(4);
+            let click = |h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2| {
+                h.event(Event::PointerMoved(at));
+                h.run_steps(1);
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run_steps(3);
+            };
+            let typing = |h: &mut Harness<'_, PhotocraftApp>, text: &str| {
+                for c in text.chars() {
+                    h.event(Event::Text(c.to_string()));
+                    h.run_steps(1);
+                }
+                h.run_steps(3);
+            };
+            let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About PhotoCraft").is_some();
+            let field_id = egui::Id::new("help-menu-search").with("field");
+            let help = h.get_by_label("Help").rect().center();
+            click(&mut h, help);
+            assert!(open(&h), "Help opened ({what})");
+            assert_eq!(h.ctx.memory(|m| m.focused()), Some(field_id), "the click on Help leaves the search field focused ({what})");
+            typing(&mut h, "lev");
+            assert!(open(&h), "typing keeps Help open ({what})");
+            assert!(h.query_all_by_label_contains("› Levels").next().is_some(), "typing right away searches ({what})");
+            let field = h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).map(|n| n.rect().center());
+            let field = field.unwrap_or_else(|| panic!("the search field is in the accessibility tree ({what})"));
+            click(&mut h, field);
+            assert!(open(&h), "clicking the search field keeps Help open ({what})");
+            assert_eq!(h.ctx.memory(|m| m.focused()), Some(field_id), "and focused ({what})");
+            typing(&mut h, "els");
+            assert!(open(&h), "typing after the click keeps Help open ({what})");
+            assert!(h.query_all_by_label_contains("› Levels").next().is_some(), "and lists the matches ({what})");
+        }
     }
 
     #[test]
@@ -1509,7 +1750,9 @@ mod open_recent_tests {
         use photocraft_color::{ColorMode, SampleType};
         use photocraft_geom::Size;
         let services = crate::Services {
-            import: Some(Box::new(|_n: &str, _b: &[u8]| Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))),
+            import: Some(Box::new(|_n: &str, _b: &[u8], _depth: usize| {
+                Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            })),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);

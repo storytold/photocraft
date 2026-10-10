@@ -7,7 +7,10 @@ use photocraft_doc::{Adjustment, Document, Fill, GradientStyle, Layer, LayerCont
 use photocraft_geom::{Rect, Size};
 use photocraft_gpu::{Compositor, render_to_vec};
 
-const TOL: f32 = 1.0 / 255.0;
+/// One 8-bit step, plus a few f32 ulps: two results exactly one step apart can differ by a hair
+/// more than `1.0 / 255.0` after premultiplying and subtracting (NVIDIA's shader arithmetic
+/// lands on that side at the Hue/Saturation pixel in `adjustment_layers`).
+const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 
 /// Concurrent wgpu instances in one process segfault on some drivers (RADV), so the GPU tests
 /// take this lock and hold it until their device is dropped.
@@ -153,7 +156,7 @@ fn first_frame_renders() {
 #[test]
 fn blend_modes() {
     let Some(mut g) = gpu() else { return };
-    for mode in BlendMode::LAYER_MODES {
+    for mode in BlendMode::layer_modes() {
         let mut d = base_doc(64, 48);
         let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
         l.blend = mode;
@@ -165,6 +168,25 @@ fn blend_modes() {
         d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
         check(&mut g, &d, &format!("{mode:?} opaque"));
     }
+}
+
+#[test]
+fn xor_rounding_on_half_float_targets() {
+    let Some((_adapter, device, queue, _lock)) = any_device() else { return };
+    let Ok(mut comp) = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba16Float) else { return };
+    let mut doc = Document::new("XOR rounding", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+    for (value, opacity, blend) in [(127, 1.0, BlendMode::Normal), (128, 127.0 / 255.0, BlendMode::Normal), (64, 1.0, BlendMode::Xor)] {
+        let mut layer = Layer::raster("pixel", PixelFormat::RGBA8);
+        let channel = value as f32 / 255.0;
+        layer.surface_mut().unwrap().fill_rect(doc.bounds(), &[channel, channel, channel, 1.0]);
+        layer.opacity = opacity;
+        layer.blend = blend;
+        doc.layers.push(layer);
+    }
+    let cpu = photocraft_compose::flatten(&doc);
+    assert!((cpu.px[0][0] - 63.0 / 255.0).abs() < 1e-6);
+    let gpu = render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds()).unwrap();
+    assert!(worst_diff(&cpu.px, &gpu).0 <= TOL, "CPU {:?}, GPU {:?}", cpu.px[0], gpu[0]);
 }
 
 fn hue_ranges() -> [HueRange; 6] {
@@ -345,6 +367,131 @@ fn groups_masks_and_clipping() {
 }
 
 #[test]
+fn hard_stop_gradients_match_cpu_or_fall_back() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::new("hard stops", Size::new(8, 2), ColorMode::Rgb, depth);
+        let mut fill =
+            Fill::gradient(vec![(0.0, Color::BLACK), (0.5, Color::WHITE), (0.5, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false);
+        for opacity in [false, true] {
+            if opacity && let Fill::Gradient { stops, opacity_stops, .. } = &mut fill {
+                *stops = vec![(0.0, Color::WHITE), (1.0, Color::WHITE)];
+                *opacity_stops = vec![(0.0, 0.0), (0.5, 1.0), (0.5, 0.0), (1.0, 1.0)];
+            }
+            d.layers.clear();
+            d.layers.push(Layer::new("gradient", LayerContent::Fill(fill.clone())));
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            assert_eq!(cpu.px[4], [1.0; 4]);
+            let out = match render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()) {
+                Ok(out) => out,
+                Err(e) => {
+                    assert!(e.0.contains("coincident gradient stops"), "{e}");
+                    photocraft_compose::render(&d, d.bounds()).px
+                }
+            };
+            let worst = worst_diff(&cpu.px, &out);
+            assert!(worst.0 <= TOL, "{depth:?}: diff {}/255, cpu {:?}, gpu {:?}", worst.0 * 255.0, cpu.px[worst.1], out[worst.1]);
+            assert!(g.comp.supports(&d).is_err(), "hard stops must request the canvas's CPU fallback");
+        }
+
+        // The ordinary two-stop control must still render on the GPU.
+        d.layers[0].content = LayerContent::Fill(Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false));
+        check(&mut g, &d, &format!("linear gradient control {depth:?}"));
+    }
+}
+
+#[test]
+fn hard_stop_fill_fallback_respects_caches_and_visibility() {
+    use photocraft_doc::FillCache;
+    use photocraft_raster::Surface;
+
+    for opacity in [false, true] {
+        // Non-adjacent duplicates must be caught too: the CPU sorts fill stops.
+        let mut fill = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false);
+        if let Fill::Gradient { stops, opacity_stops, .. } = &mut fill {
+            if opacity {
+                *opacity_stops = vec![(0.5, 1.0), (0.0, 0.0), (0.5, 0.0), (1.0, 1.0)];
+            } else {
+                *stops = vec![(0.5, Color::WHITE), (0.0, Color::BLACK), (0.5, Color::BLACK), (1.0, Color::WHITE)];
+            }
+        }
+        let mut d = Document::new("hard stops", Size::new(8, 2), ColorMode::Rgb, SampleType::U8);
+        d.layers.push(Layer::new("gradient", LayerContent::Fill(fill.clone())));
+        assert_gradient_fallback(&d);
+
+        d.layers[0].visible = false;
+        assert!(photocraft_gpu::plan(&d).is_ok(), "hidden fill is not sampled");
+        d.layers[0].visible = true;
+        d.layers[0].fill_cache = Some(FillCache { fill: fill.clone(), surface: Surface::with_default(d.pixel_format(), &[1.0; 4]) });
+        assert!(photocraft_gpu::plan(&d).is_ok(), "matching fill cache is sampled instead of the ramp");
+        if let LayerContent::Fill(Fill::Gradient { reverse, .. }) = &mut d.layers[0].content {
+            *reverse = true;
+        }
+        assert_gradient_fallback(&d);
+
+        // Group and clipping routes must propagate Unsupported to the canvas too.
+        d.layers[0] = Layer::group("group", vec![Layer::new("gradient", LayerContent::Fill(fill.clone()))]);
+        assert_gradient_fallback(&d);
+        let mut clipped = Layer::new("clipped", LayerContent::Fill(fill));
+        clipped.clipped = true;
+        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped];
+        assert_gradient_fallback(&d);
+        d.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+        assert!(photocraft_gpu::plan(&d).is_ok(), "occluded gradients are not sampled");
+    }
+}
+
+fn assert_gradient_fallback(d: &Document) {
+    let e = photocraft_gpu::plan(d).unwrap_err();
+    assert!(e.0.contains("coincident gradient stops"), "{e}");
+}
+
+#[test]
+fn hard_stop_effects_and_gradient_maps_request_cpu() {
+    let mut d = Document::with_background("hard stops", Size::new(8, 2), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    for opacity in [false, true] {
+        for position in [0.0, 0.5, 1.0] {
+            let mut gradient = Gradient::default();
+            if opacity {
+                gradient.opacity_stops = vec![(position, 1.0), (position, 0.0)];
+            } else {
+                gradient.stops = vec![(position, Color::WHITE), (position, Color::BLACK)];
+            }
+            let paint = FxPaint::Gradient(gradient.clone());
+            let effects = [
+                Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient, dither: false },
+                Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size: 1.0, position: StrokePosition::Inside, paint: paint.clone() }),
+                Effect::InnerGlow(glow(paint.clone(), GlowTechnique::Softer, 1.0, 0.0, GlowSource::Edge)),
+                Effect::OuterGlow(glow(paint, GlowTechnique::Softer, 1.0, 0.0, GlowSource::Edge)),
+            ];
+            for effect in effects {
+                d.layers[0].effects.items = vec![effect];
+                assert_gradient_fallback(&d);
+                d.layers[0].effects.enabled = false;
+                assert!(photocraft_gpu::plan(&d).is_ok(), "disabled effects are not sampled");
+                d.layers[0].effects.enabled = true;
+                d.layers[0].effects.items[0].set_enabled(false);
+                assert!(photocraft_gpu::plan(&d).is_ok(), "disabled effect is not sampled");
+            }
+        }
+    }
+    d.layers[0].effects.items.clear();
+    d.layers.push(Layer::new(
+        "map",
+        LayerContent::Adjustment(Adjustment::GradientMap {
+            stops: vec![(0.0, [0.0; 3]), (0.5, [1.0; 3]), (0.5, [0.0; 3]), (1.0, [1.0; 3])],
+            reverse: false,
+            dither: false,
+        }),
+    ));
+    assert_gradient_fallback(&d);
+    d.layers[1].clipped = true;
+    assert_gradient_fallback(&d);
+    d.layers[1].visible = false;
+    assert!(photocraft_gpu::plan(&d).is_ok());
+}
+
+#[test]
 fn fills_and_dissolve() {
     let Some(mut g) = gpu() else { return };
     let mut d = base_doc(64, 48);
@@ -461,6 +608,42 @@ fn incremental_updates_follow_the_document() {
     check(&mut g, &d, "opacity");
 }
 
+/// #1774: tiles shared across coordinates (a solid fill, a cleared area, the default pixel of a
+/// mask) upload once and are copied on the GPU, at 8 and 16 bits, in RGB and grayscale, on a new
+/// layer page and on an incremental update.
+#[test]
+fn shared_tiles_upload_once_and_copy() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (1100, 700);
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAYA8 }] {
+        let mut d = base_doc(w, h);
+        let mut l = Layer::raster("fill", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(30, 40, 90, 70), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
+        let mut m = LayerMask::reveal_all();
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        l.mask = Some(m);
+        d.layers.push(l);
+        check(&mut g, &d, &format!("{fmt:?} small"));
+        // Select All + Fill: the page grows (a new page), every full tile shares one.
+        let s = d.layers[1].surface_mut().unwrap();
+        s.fill_rect(Rect::new(0, 0, w as i32, h as i32), &[0.7, 0.2, 0.5, 0.8][..fmt.channels()]);
+        check(&mut g, &d, &format!("{fmt:?} filled"));
+        // Fill again (same page, incremental), then paint one tile and mask most of it.
+        let s = d.layers[1].surface_mut().unwrap();
+        s.fill_rect(Rect::new(0, 0, w as i32, h as i32), &[0.1, 0.9, 0.4, 0.6][..fmt.channels()]);
+        s.fill_rect(Rect::new(300, 300, 340, 320), &[1.0, 0.0, 0.0, 1.0][..fmt.channels()]);
+        let m = &mut d.layers[1].mask.as_mut().unwrap().surface;
+        m.fill_rect(Rect::new(0, 0, w as i32, h as i32), &[0.25]);
+        check(&mut g, &d, &format!("{fmt:?} refilled"));
+        // Clear the mask back to its (non-zero) default: its tiles go away.
+        d.layers[1].mask.as_mut().unwrap().surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        check(&mut g, &d, &format!("{fmt:?} mask cleared"));
+        // Clear the layer: every tile goes away and reads as transparent again.
+        *d.layers[1].surface_mut().unwrap() = photocraft_raster::Surface::new(fmt);
+        check(&mut g, &d, &format!("{fmt:?} cleared"));
+    }
+}
+
 // ---- layer effects --------------------------------------------------------------------------
 
 use photocraft_doc::adjust::CurvePoint as Cp;
@@ -484,7 +667,7 @@ fn small_layers_composite_over_their_bounds() {
         l
     };
     let mut d = base_doc(200, 150);
-    for (i, mode) in BlendMode::LAYER_MODES.into_iter().enumerate() {
+    for (i, mode) in BlendMode::layer_modes().enumerate() {
         let i = i as i32;
         d.layers.push(small(100 + i as u32, (i * 29) % 190 - 8, (i * 37) % 140 - 5, mode));
     }
@@ -518,7 +701,7 @@ fn small_layers_composite_over_their_bounds() {
     check(&mut g, &d, "small layers");
     // The same over several compositor chunks.
     let mut big = base_doc(1500, 1200);
-    for (i, mode) in BlendMode::LAYER_MODES.into_iter().enumerate() {
+    for (i, mode) in BlendMode::layer_modes().enumerate() {
         let i = i as i32;
         big.layers.push(small(400 + i as u32, 1010 + (i % 4) * 5, 1010 + (i / 4) * 5, mode));
     }
@@ -1056,40 +1239,42 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
     // clipped layers and a mask.
     let Some(mut g) = gpu() else { return };
     use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
-    for (fill_kind, vector_stroke, masked) in [(0, false, false), (1, false, true), (0, true, false), (1, true, true)] {
-        let mut d = fx_doc(90, 70, SampleType::U8);
-        let path = Path::new(vec![Subpath::polygon(&[(14.3, 12.6), (70.2, 18.1), (60.7, 58.4), (24.9, 50.2)])]);
-        let mut clear = Color::rgb(0.9, 0.3, 0.1);
-        clear.alpha = 0.0;
-        let fill = if fill_kind == 0 {
-            Fill::Solid(Color::rgb(0.3, 0.6, 0.9))
-        } else {
-            Fill::gradient(vec![(0.0, Color::rgb(0.9, 0.3, 0.1)), (1.0, clear)], 20.0, 1.0, GradientStyle::Linear, false)
-        };
-        let stroke_v = vector_stroke.then(|| ShapeStroke {
-            width: 3.0,
-            align: StrokeAlign::Inside,
-            paint: Fill::Solid(Color::rgb(0.1, 0.8, 0.2)),
-            ..ShapeStroke::default()
-        });
-        let mut sh = ShapeLayer { path, fill: Some(fill), stroke: stroke_v, live: None, cache: None, psd_raw: None };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
-        let mut l = Layer::new("shape", LayerContent::Shape(sh));
-        if masked {
-            l.mask = Some(mask(Rect::new(0, 0, 90, 70), 7, 0.6));
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (fill_kind, vector_stroke, masked) in [(0, false, false), (1, false, true), (0, true, false), (1, true, true)] {
+            let mut d = fx_doc(90, 70, depth);
+            let path = Path::new(vec![Subpath::polygon(&[(14.3, 12.6), (70.2, 18.1), (60.7, 58.4), (24.9, 50.2)])]);
+            let mut clear = Color::rgb(0.9, 0.3, 0.1);
+            clear.alpha = 0.0;
+            let fill = if fill_kind == 0 {
+                Fill::Solid(Color::rgb(0.3, 0.6, 0.9))
+            } else {
+                Fill::gradient(vec![(0.0, Color::rgb(0.9, 0.3, 0.1)), (1.0, clear)], 20.0, 1.0, GradientStyle::Linear, false)
+            };
+            let stroke_v = vector_stroke.then(|| ShapeStroke {
+                width: 3.0,
+                align: StrokeAlign::Inside,
+                paint: Fill::Solid(Color::rgb(0.1, 0.8, 0.2)),
+                ..ShapeStroke::default()
+            });
+            let mut sh = ShapeLayer { path, fill: Some(fill), stroke: stroke_v, live: None, cache: None, psd_raw: None };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("shape", LayerContent::Shape(sh));
+            if masked {
+                l.mask = Some(mask(Rect::new(0, 0, 90, 70), 7, 0.6));
+            }
+            l.effects.items = vec![
+                Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+                Effect::Stroke(stroke(5.0, StrokePosition::Outside, FxPaint::Gradient(gradient()))),
+                Effect::Stroke(stroke(3.0, StrokePosition::Inside, FxPaint::Gradient(gradient()))),
+                Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Multiply, 0.7), color: Color::rgb(0.2, 0.2, 0.9) },
+                Effect::DropShadow(shadow(BlendMode::Multiply, 0.7, 120.0, 4.0, 5.0, 0.0)),
+            ];
+            d.layers.push(l);
+            let mut c = noise_layer("clip", d.pixel_format(), Rect::new(30, 0, 60, 70), 9, 0.5);
+            c.clipped = true;
+            d.layers.push(c);
+            fx_check(&mut g, &d, &format!("{depth:?} fill {fill_kind} vector stroke {vector_stroke} masked {masked}"));
         }
-        l.effects.items = vec![
-            Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
-            Effect::Stroke(stroke(5.0, StrokePosition::Outside, FxPaint::Gradient(gradient()))),
-            Effect::Stroke(stroke(3.0, StrokePosition::Inside, FxPaint::Gradient(gradient()))),
-            Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Multiply, 0.7), color: Color::rgb(0.2, 0.2, 0.9) },
-            Effect::DropShadow(shadow(BlendMode::Multiply, 0.7, 120.0, 4.0, 5.0, 0.0)),
-        ];
-        d.layers.push(l);
-        let mut c = noise_layer("clip", PixelFormat::RGBA8, Rect::new(30, 0, 60, 70), 9, 0.5);
-        c.clipped = true;
-        d.layers.push(c);
-        fx_check(&mut g, &d, &format!("fill {fill_kind} vector stroke {vector_stroke} masked {masked}"));
     }
 }
 
@@ -1219,7 +1404,7 @@ fn blend_mode_extremes() {
     let Some(mut g) = gpu() else { return };
     let vals = [0.0f32, 1.0, 0.5];
     for depth in [SampleType::U8, SampleType::U16] {
-        for mode in BlendMode::LAYER_MODES {
+        for mode in BlendMode::layer_modes() {
             let mut d = Document::new("x", Size::new(9, 9), ColorMode::Rgb, depth);
             let fmt = d.pixel_format();
             let mut bg = Layer::raster("bg", fmt);
@@ -1243,28 +1428,67 @@ fn blend_mode_extremes() {
 }
 
 #[test]
+fn float_documents_blend_past_white() {
+    // 32-bit documents hold values above 1; Linear Dodge (Add) and Divide don't clip them there
+    // (integer depths do, see `blend_mode_extremes`). Values and alphas are exact in half floats.
+    // Separable modes only: the non-separable ones' ClipColor is ill-conditioned past white (a
+    // grey above 1 has max − lum ≈ 0), so CPU and GPU rounding diverge there.
+    let Some(mut g) = gpu() else { return };
+    let vals = [0.0f32, 0.25, 0.5, 1.0, 2.0, 4.0];
+    let alphas = [1.0f32, 0.5, 0.25];
+    for mode in BlendMode::LAYER_MODES.into_iter().filter(|m| m.is_separable()) {
+        let n = vals.len() as u32;
+        let mut d = Document::new("hdr", Size::new(n * 3, n), ColorMode::Rgb, SampleType::F32);
+        let fmt = d.pixel_format();
+        let mut bg = Layer::raster("bg", fmt);
+        let mut top = Layer::raster("top", fmt);
+        for (i, &b) in vals.iter().enumerate() {
+            for (j, &s) in vals.iter().enumerate() {
+                for (k, &a) in alphas.iter().enumerate() {
+                    let r = Rect::from_xywh((i * 3 + k) as i32, j as i32, 1, 1);
+                    bg.surface_mut().unwrap().fill_rect(r, &[b, b * 0.5, b, 1.0]);
+                    top.surface_mut().unwrap().fill_rect(r, &[s, s, s * 0.5, a]);
+                }
+            }
+        }
+        top.blend = mode;
+        d.layers.push(bg);
+        d.layers.push(top);
+        check(&mut g, &d, &format!("hdr {mode:?}"));
+        if mode == BlendMode::LinearDodge {
+            // 4 + 0.25 at full opacity (column 5 × 3, row 1): unclipped on the GPU too.
+            let px = render_to_vec(&mut g.comp, &g.device, &g.queue, &d, Rect::from_xywh(15, 1, 1, 1)).unwrap();
+            assert!((px[0][0] - 4.25).abs() < 1e-3, "{:?}", px[0]);
+        }
+    }
+}
+
+#[test]
 fn stroked_shapes_with_clipped_layers() {
     let Some(mut g) = gpu() else { return };
     use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
-    for (blend, masked) in [(BlendMode::Normal, false), (BlendMode::Multiply, true)] {
-        let mut d = base_doc(80, 64);
-        let path = Path::new(vec![Subpath::polygon(&[(10.3, 8.6), (66.2, 12.1), (58.7, 54.4), (16.9, 48.2)])]);
-        let stroke = ShapeStroke { width: 5.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..Default::default() };
-        let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))), stroke: Some(stroke), live: None, cache: None, psd_raw: None };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
-        let mut l = Layer::new("shape", LayerContent::Shape(sh));
-        l.blend = blend;
-        l.opacity = 0.9;
-        if masked {
-            l.mask = Some(mask(Rect::new(0, 0, 80, 64), 41, 1.0));
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (blend, masked) in [(BlendMode::Normal, false), (BlendMode::Multiply, true)] {
+            let mut d = Document::new("t", Size::new(80, 64), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("bg", d.pixel_format(), Rect::from_xywh(0, 0, 80, 64), 1, 0.3));
+            let path = Path::new(vec![Subpath::polygon(&[(10.3, 8.6), (66.2, 12.1), (58.7, 54.4), (16.9, 48.2)])]);
+            let stroke = ShapeStroke { width: 5.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..Default::default() };
+            let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))), stroke: Some(stroke), live: None, cache: None, psd_raw: None };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("shape", LayerContent::Shape(sh));
+            l.blend = blend;
+            l.opacity = 0.9;
+            if masked {
+                l.mask = Some(mask(Rect::new(0, 0, 80, 64), 41, 1.0));
+            }
+            let mut c = noise_layer("clip", d.pixel_format(), Rect::new(0, 0, 80, 64), 42, 0.5);
+            c.clipped = true;
+            c.blend = BlendMode::Screen;
+            d.layers.extend([l, c]);
+            let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
+            assert!(st.is_ok(), "planned on the GPU");
+            check(&mut g, &d, &format!("{depth:?} stroked shape + clipped {blend:?} masked {masked}"));
         }
-        let mut c = noise_layer("clip", PixelFormat::RGBA8, Rect::new(0, 0, 80, 64), 42, 0.5);
-        c.clipped = true;
-        c.blend = BlendMode::Screen;
-        d.layers.extend([l, c]);
-        let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
-        assert!(st.is_ok(), "planned on the GPU");
-        check(&mut g, &d, &format!("stroked shape + clipped {blend:?} masked {masked}"));
     }
 }
 
@@ -1331,6 +1555,39 @@ fn pattern_fill_layers() {
         missing.content = LayerContent::Fill(Fill::Pattern { name: "nope".into(), id: "nope".into(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) });
         d.layers.push(missing);
         fx_check(&mut g, &d, &format!("pattern fill link {link} scale {scale} angle {angle}"));
+    }
+}
+
+/// An RGB pattern paints in the document's mode: grey in a Grayscale document, CMYK colours in
+/// a CMYK one (fills and Pattern Overlay), on the GPU as on the CPU.
+#[test]
+fn rgb_patterns_paint_in_the_document_mode() {
+    let Some(mut g) = gpu() else { return };
+    let pat = checker_pattern();
+    for (mode, fmt) in [(ColorMode::Grayscale, PixelFormat::GRAYA8), (ColorMode::Cmyk, PixelFormat::CMYKA8)] {
+        let mut d = Document::new("m", Size::new(60, 40), mode, SampleType::U8);
+        d.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 60, 40), 63, 0.0));
+        d.patterns.push(pat.clone());
+        let fill = Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) };
+        let mut l = Layer::new("pat", LayerContent::Fill(fill));
+        l.mask = Some(mask(Rect::new(0, 0, 30, 40), 64, 0.0));
+        d.layers.push(l);
+        let mut o = blob("overlay", d.pixel_format(), 45.0, 20.0, 12.0, [0.9, 0.4, 0.2]);
+        o.effects.items = vec![Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: pat.name.clone(),
+            id: pat.id.clone(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }];
+        d.layers.push(o);
+        if mode == ColorMode::Grayscale {
+            let cpu = photocraft_compose::flatten(&d);
+            assert!(cpu.px.iter().all(|p| (p[0] - p[1]).abs() < 1e-6 && (p[1] - p[2]).abs() < 1e-6), "a Grayscale composite is neutral");
+        }
+        fx_check(&mut g, &d, &format!("RGB pattern in {mode:?}"));
     }
 }
 

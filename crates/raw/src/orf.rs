@@ -146,9 +146,10 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         crop,
         color: Default::default(),
         camera_wb,
-        orientation: t.tag_uint(&raw, tag::ORIENTATION).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
+        orientation: crate::tiff::orientation(t.tag_uint(&raw, tag::ORIENTATION)),
         baseline_exposure: 0.0,
         gain_maps: Vec::new(),
+        tone_curve: Vec::new(),
         warnings,
     })
 }

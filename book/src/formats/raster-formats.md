@@ -27,8 +27,8 @@ Every route that writes a document to a flat format (Save As, the CLI, MCP `doc_
 |---|---:|
 | Maximum width | 262,144 pixels |
 | Maximum height | 262,144 pixels |
-| Maximum pixel count | 268,435,456 pixels |
-| Maximum decoded allocation | 2 GiB |
+| Maximum pixel count | 1,073,741,824 pixels |
+| Maximum decoded allocation | 8 GiB on 64-bit targets; 2 GiB on 32-bit targets (including wasm32) |
 
 Format adapters pass compatible allocation limits into PNG, TIFF, WebP, and `image`-based decoders, while other implementations perform explicit checked dimension/buffer validation. Tests cover bomb-like headers, truncation, bit flips, header overwrites, and random data.
 

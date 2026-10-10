@@ -147,3 +147,21 @@ fn a_note_icon_near_i32_max_saves_with_representable_geometry() {
     let back = import("x.psd", &to_psd(&doc)).unwrap().document;
     assert_eq!(back.notes[0].position, [42.0, 28.0]);
 }
+
+/// Issue #944: an `Anno` block the reader rejects opened as "no notes" without a word, and the
+/// next save deleted it. It now opens with a warning and is written back byte for byte.
+#[test]
+fn an_unreadable_anno_block_warns_and_survives_a_save() {
+    // The block declares two annotations but holds one.
+    let mut broken = anno_with_icon(28, 42);
+    broken[4..8].copy_from_slice(&2u32.to_be_bytes());
+    let imp = import("notes.psd", &psd_with_anno(broken.clone())).expect("import");
+    assert!(imp.document.notes.is_empty());
+    assert!(imp.warnings.iter().any(|w| w.contains("Anno")), "{:?}", imp.warnings);
+    let f = PsdFile::from_bytes(&to_psd(&imp.document)).unwrap();
+    assert_eq!(f.global_block(b"Anno").expect("Anno block kept").data, broken);
+    // Control: the intact block reads with no warning.
+    let ok = import("notes.psd", &psd_with_anno(anno_with_icon(28, 42))).expect("import");
+    assert_eq!(ok.document.notes.len(), 1);
+    assert!(!ok.warnings.iter().any(|w| w.contains("Anno")));
+}

@@ -49,7 +49,9 @@ build. Limits (`photocraft_plugins::Limits`, defaults):
 Every band runs in a **fresh instance**, so no state survives between calls, and parallel bands
 never share memory. Traps, exhausted budgets, malformed modules, bad manifests, out-of-range
 pointers and non-zero return codes all become errors; the document is left untouched (the edit is
-transactional). Output samples that are NaN or infinite keep their original value; integer-depth
+transactional). When a failure stops sibling bands, those bands retain the originating error
+instead of replacing it with a generic cancellation message. Output samples that are NaN or
+infinite keep their original value; integer-depth
 documents and alpha are clamped to 0–1.
 
 wasmi is built with its *portable* (loop) dispatcher: the default tail-call dispatcher relies on LLVM
@@ -93,7 +95,10 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
 
 - `id`: 1–64 characters from `A-Z a-z 0-9 . _ -` (reverse-DNS recommended). Installing a module
   with the same id replaces the old one.
-- `name`: the menu label (1–64 printable characters). `kind`: `"filter"` (the only kind in v1).
+- `name`: the menu label (1–64 printable characters). Any script works, but control characters and
+  Unicode format characters (bidi overrides and marks, zero-width spaces, soft hyphens) are rejected,
+  except the zero-width joiner and non-joiner, and at least one character must be visible.
+  `kind`: `"filter"` (the only kind in v1).
 - `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`.
   The host validates the user's values before calling: missing values take the default, numbers are
   clamped to `min..max` (ints rounded), a wrong type or an unknown choice is an error.
