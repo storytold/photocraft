@@ -497,6 +497,11 @@ fn merged_composite_unmattes_photoshop_white() {
     hdr.header.channels = 4;
     hdr.image_data =
         photocraft_psd::ImageData { compression: Compression::Raw, data: [1.5_f32, 0.25, 0.5, 0.5].into_iter().flat_map(f32::to_be_bytes).collect() };
+    assert_eq!(merged_composite(&hdr).unwrap(), vec![[2.0, -0.5, 0.0, 0.5]]);
+    let mut deep = testgen::merged_only(Version::Psd, ColorMode::Rgb, 16, Compression::Raw, 1, 1);
+    deep.header.channels = 4;
+    deep.image_data.data = [65535_u16, 65535, 65535, 65500].into_iter().flat_map(u16::to_be_bytes).collect();
+    assert_eq!(merged_composite(&deep).unwrap()[0][3], 65500.0 / 65535.0);
     let imported = import("hdr.psd", &hdr.to_bytes().unwrap()).unwrap().document;
     assert_eq!(imported.depth, photocraft_color::SampleType::F32);
     assert_eq!(imported.layers[0].surface().unwrap().pixel(0, 0), vec![2.0, -0.5, 0.0, 0.5]);

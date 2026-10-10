@@ -611,7 +611,7 @@ impl LayerRecord {
         out.put_len(self.blending_ranges.data.len() as u64, false)?;
         out.put(&self.blending_ranges.data);
         write_pascal(out, &self.name, 4);
-        write_blocks(out, &self.blocks, version)?;
+        write_blocks(out, &self.blocks, version, 2)?;
         out.put(&self.extra_trailing);
         out.end_len(at, false)
     }

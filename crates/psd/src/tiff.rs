@@ -173,7 +173,7 @@ impl ImageSourceData {
             blocks.push(b);
         }
         let mut body = Vec::new();
-        write_blocks(&mut body, &blocks, version)?;
+        write_blocks(&mut body, &blocks, version, 2)?;
         body.put(&self.trailing);
         let (body, warnings) =
             if order.is_little() { transcode::transcode_blocks(&body, version, ByteOrder::Big, ByteOrder::Little)? } else { (body, Vec::new()) };

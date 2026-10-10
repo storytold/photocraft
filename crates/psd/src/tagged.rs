@@ -38,7 +38,8 @@ pub struct TaggedBlock {
     /// Block data exactly as covered by the length field.
     pub data: Vec<u8>,
     /// Bytes that followed the data before the next block. `None` means
-    /// "default": zero-pad to an even length. Parsing yields `None` whenever
+    /// "default": zero-pad to a multiple of four for global blocks, two for
+    /// layer blocks. Parsing yields `None` whenever
     /// the stored padding equals the default, so the model stays canonical.
     pub padding: Option<Vec<u8>>,
 }
@@ -159,8 +160,8 @@ impl TaggedBlock {
         String::from_utf8_lossy(&self.key).into_owned()
     }
 
-    fn default_padding(len: usize) -> usize {
-        len % 2
+    fn default_padding(len: usize, alignment: usize) -> usize {
+        (alignment - len % alignment) % alignment
     }
 
     /// Typed view for known keys. `None` for keys without a typed parser,
@@ -323,22 +324,22 @@ impl TaggedBlock {
         Ok(())
     }
 
-    pub(crate) fn write(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+    pub(crate) fn write(&self, out: &mut Vec<u8>, version: Version, alignment: usize) -> Result<()> {
         out.put(&self.signature);
         out.put(&self.key);
         out.put_len(self.data.len() as u64, uses_long_length(version, &self.key))?;
         out.put(&self.data);
         match &self.padding {
             Some(p) => out.put(p),
-            None => out.extend(std::iter::repeat_n(0u8, Self::default_padding(self.data.len()))),
+            None => out.extend(std::iter::repeat_n(0u8, Self::default_padding(self.data.len(), alignment))),
         }
         Ok(())
     }
 
-    /// Serialized size in bytes.
+    /// Serialized size in bytes as a layer block (two-byte alignment).
     pub fn encoded_len(&self, version: Version) -> usize {
         let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
-        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len()), Vec::len);
+        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), 2), Vec::len);
         8 + l + self.data.len() + p
     }
 }
@@ -429,6 +430,16 @@ fn is_sig(b: &[u8]) -> bool {
 /// a block (fewer than 12 bytes or no valid signature) are returned as
 /// trailing data.
 pub(crate) fn read_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
+    read_blocks_with(r, version, 2, |_, _, _, _, _| false)
+}
+
+/// The callback consumes selected payloads before they are copied into owned blocks.
+pub(crate) fn read_blocks_with(
+    r: &mut Reader<'_>,
+    version: Version,
+    alignment: usize,
+    mut consume: impl FnMut(usize, [u8; 4], [u8; 4], &[u8], &Option<Vec<u8>>) -> bool,
+) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
     let mut blocks = Vec::new();
     loop {
         let rest = r.peek_rest();
@@ -440,7 +451,7 @@ pub(crate) fn read_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<T
         let signature = r.array::<4>()?;
         let key = r.array::<4>()?;
         let len = r.len_field(uses_long_length(version, &key))?;
-        let data = r.bytes_u64(len)?.to_vec();
+        let data = r.bytes_u64(len)?;
         // Detect padding: the smallest k in 0..=3 such that the next block
         // signature (or the end of the region) follows k bytes later.
         let rest = r.peek_rest();
@@ -451,16 +462,21 @@ pub(crate) fn read_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<T
                 break;
             }
         }
-        let pad = pad.unwrap_or(0);
+        // Opaque trailing bytes can follow canonical zero padding without another signature.
+        let default = TaggedBlock::default_padding(data.len(), alignment);
+        let pad = pad.unwrap_or_else(|| if rest.get(..default).is_some_and(|p| p.iter().all(|&b| b == 0)) { default } else { 0 });
         let pad_bytes = r.bytes(pad)?.to_vec();
-        let padding = if pad_bytes.len() == TaggedBlock::default_padding(data.len()) && pad_bytes.iter().all(|&b| b == 0) { None } else { Some(pad_bytes) };
-        blocks.push(TaggedBlock { signature, key, data, padding });
+        let padding =
+            if pad_bytes.len() == TaggedBlock::default_padding(data.len(), alignment) && pad_bytes.iter().all(|&b| b == 0) { None } else { Some(pad_bytes) };
+        if !consume(blocks.len(), signature, key, data, &padding) {
+            blocks.push(TaggedBlock { signature, key, data: data.to_vec(), padding });
+        }
     }
 }
 
-pub(crate) fn write_blocks(out: &mut Vec<u8>, blocks: &[TaggedBlock], version: Version) -> Result<()> {
+pub(crate) fn write_blocks(out: &mut Vec<u8>, blocks: &[TaggedBlock], version: Version, alignment: usize) -> Result<()> {
     for b in blocks {
-        b.write(out, version)?;
+        b.write(out, version, alignment)?;
     }
     Ok(())
 }
@@ -471,7 +487,7 @@ mod tests {
 
     fn rt(blocks: &[TaggedBlock], version: Version) -> Vec<u8> {
         let mut out = Vec::new();
-        write_blocks(&mut out, blocks, version).unwrap();
+        write_blocks(&mut out, blocks, version, 2).unwrap();
         let (back, trailing) = read_blocks(&mut Reader::new(&out), version).unwrap();
         assert_eq!(back, blocks);
         assert!(trailing.is_empty());
@@ -585,7 +601,7 @@ mod tests {
     #[test]
     fn trailing_bytes_kept() {
         let mut out = Vec::new();
-        write_blocks(&mut out, &[TaggedBlock::layer_id(1)], Version::Psd).unwrap();
+        write_blocks(&mut out, &[TaggedBlock::layer_id(1)], Version::Psd, 2).unwrap();
         out.extend_from_slice(&[0; 8]);
         let (blocks, trailing) = read_blocks(&mut Reader::new(&out), Version::Psd).unwrap();
         assert_eq!(blocks.len(), 1);
@@ -597,7 +613,7 @@ mod tests {
     #[test]
     fn short_trailing_pad_attributed_to_block() {
         let mut out = Vec::new();
-        write_blocks(&mut out, &[TaggedBlock::layer_id(1)], Version::Psd).unwrap();
+        write_blocks(&mut out, &[TaggedBlock::layer_id(1)], Version::Psd, 2).unwrap();
         out.extend_from_slice(&[0; 2]);
         let (blocks, trailing) = read_blocks(&mut Reader::new(&out), Version::Psd).unwrap();
         assert_eq!(blocks[0].padding, Some(vec![0, 0]));

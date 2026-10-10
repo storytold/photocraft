@@ -307,8 +307,42 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// with the document pixel model and un-matted from white (Photoshop mattes
 /// the merged image of transparent documents). Used as the compositing oracle.
 pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
-    let img = file.composite_rgba8().ok();
     let h = &file.header;
+    h.validate()?;
+    if h.color_mode == photocraft_psd::ColorMode::Rgb && file.merged_has_alpha() {
+        // Preserve native sample precision before removing the white matte.
+        let raw = file.decode_merged()?;
+        let plane = raw.len() / usize::from(h.channels);
+        let planes = raw
+            .chunks_exact(plane)
+            .take(4)
+            .map(|bytes| match h.depth {
+                32 => Ok(photocraft_psd::pixels::samples_f32(bytes)),
+                16 => Ok(photocraft_psd::pixels::samples_u16(bytes).into_iter().map(|v| f32::from(v) / 65535.0).collect()),
+                _ => photocraft_psd::pixels::plane_to_u8(bytes, h.depth, h.width as usize, h.height as usize)
+                    .map(|values| values.into_iter().map(|v| f32::from(v) / 255.0).collect()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let [r, g, b, a] = planes.as_slice() else { return Err(PsdError::Invalid("missing RGB composite channels".into()).into()) };
+        return Ok(r
+            .iter()
+            .zip(g)
+            .zip(b)
+            .zip(a)
+            .map(|(((&r, &g), &b), &a)| {
+                let mut pixel = [r, g, b, a];
+                let alpha = pixel[3];
+                for c in pixel.iter_mut().take(3) {
+                    *c = pixels::unmatte(*c, alpha, 1.0);
+                    if h.depth != 32 {
+                        *c = c.clamp(0.0, 1.0);
+                    }
+                }
+                pixel
+            })
+            .collect());
+    }
+    let img = file.composite_rgba8().ok();
     // CMYK goes through the colour-managed model conversion (the PSD crate's RGBA preview is a
     // naive, profile-free conversion).
     if let (Some(img), false) = (img, matches!(h.color_mode, photocraft_psd::ColorMode::Lab | photocraft_psd::ColorMode::Cmyk)) {

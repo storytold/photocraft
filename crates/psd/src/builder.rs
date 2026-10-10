@@ -82,6 +82,34 @@ impl PixelData {
             PixelData::Rgba16(v) | PixelData::GrayA16(v) | PixelData::Cmyka16(v) => (0..n).all(|i| v[i * spp + spp - 1] == 65535),
         }
     }
+
+    fn composite_plane(&self, c: usize, n: usize) -> Vec<u8> {
+        // Photoshop stores transparent RGB composites against white; layer channels stay straight.
+        match self {
+            Self::Rgba8(v) if c < 3 => v
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(n)
+                .map(|p| {
+                    let (color, alpha) = (u32::from(p[c]), u32::from(p[3]));
+                    if alpha == 0 { p[c] } else { ((color * alpha + 127) / 255 + 255 - alpha) as u8 }
+                })
+                .collect(),
+            Self::Rgba16(v) if c < 3 => v
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(n)
+                .flat_map(|p| {
+                    let (color, alpha) = (u32::from(p[c]), u32::from(p[3]));
+                    let value = if alpha == 0 { p[c] } else { ((color * alpha + 32767) / 65535 + 65535 - alpha) as u16 };
+                    value.to_be_bytes()
+                })
+                .collect(),
+            _ => self.plane(c, n),
+        }
+    }
 }
 
 /// A layer mask given as 8-bit samples.
@@ -261,7 +289,8 @@ impl PsdBuilder {
         self.entries.push(Entry::GroupEnd(g));
         Ok(self)
     }
-    /// Supplies the merged composite (same pixel format as layers, full canvas).
+    /// Supplies the merged composite (straight samples, same format as layers, full canvas).
+    /// Transparent RGB is stored against white, quantized at the document depth.
     pub fn composite(&mut self, pixels: PixelData) -> &mut Self {
         self.composite = Some(pixels);
         self
@@ -394,7 +423,7 @@ impl PsdBuilder {
                 let with_alpha = !p.alpha_is_opaque(n);
                 let mut planes = Vec::new();
                 for c in 0..cc + usize::from(with_alpha) {
-                    planes.extend(p.plane(c, n));
+                    planes.extend(if with_alpha { p.composite_plane(c, n) } else { p.plane(c, n) });
                 }
                 (true, planes, with_alpha)
             }

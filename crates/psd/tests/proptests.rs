@@ -137,7 +137,7 @@ proptest! {
             // Only padding patterns the detector can recover are modeled:
             // zeros up to 3 bytes.
             tb.padding = match pad { 0 => None, n => Some(vec![0; n - 1]) };
-            if tb.padding.as_ref().is_some_and(|p| p.len() == tb.data.len() % 2) {
+            if tb.padding.as_ref().is_some_and(|p| p.len() == (4 - tb.data.len() % 4) % 4) {
                 tb.padding = None;
             }
             f.global_blocks.push(tb);

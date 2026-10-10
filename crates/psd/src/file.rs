@@ -6,7 +6,7 @@ use crate::image_data::ImageData;
 use crate::io::{Reader, WriteExt};
 use crate::layer::{LayerInfo, LayerRecord};
 use crate::resources::{self, ImageResource, ResourceData, ids};
-use crate::tagged::{TaggedBlock, read_blocks, uses_long_length, write_blocks};
+use crate::tagged::{TaggedBlock, read_blocks_with, uses_long_length, write_blocks};
 
 /// Where the layer info was stored in the file.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -112,21 +112,22 @@ impl PsdFile {
             if s.remaining() >= 4 {
                 let n = s.u32()?;
                 global_layer_mask = Some(GlobalLayerMask { data: s.bytes_u64(u64::from(n))?.to_vec() });
-                let (blocks, trailing) = read_blocks(&mut s, header.version)?;
+                let mut candidate_seen = layer_info.is_some();
+                let (blocks, trailing) = read_blocks_with(&mut s, header.version, 4, |index, signature, key, data, padding| {
+                    if candidate_seen || !matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
+                        return false;
+                    }
+                    candidate_seen = true;
+                    let Ok(info) = LayerInfo::read_body(data, header.version) else { return false };
+                    layer_info = Some(info);
+                    layer_info_placement = LayerInfoPlacement::GlobalBlock { index, signature, key, padding: padding.clone() };
+                    true
+                })?;
                 global_blocks = blocks;
                 layer_mask_trailing = trailing;
             } else {
                 layer_mask_trailing = s.peek_rest().to_vec();
             }
-        }
-        // 16/32-bit files keep their layers in a global Lr16/Lr32 block.
-        if layer_info.is_none()
-            && let Some(i) = global_blocks.iter().position(|b| matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr"))
-            && let Ok(info) = LayerInfo::read_body(&global_blocks[i].data, header.version)
-        {
-            let b = global_blocks.remove(i);
-            layer_info = Some(info);
-            layer_info_placement = LayerInfoPlacement::GlobalBlock { index: i, signature: b.signature, key: b.key, padding: b.padding };
         }
         let image_data = ImageData::read(&mut r, &header)?;
         Ok(PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data })
@@ -164,7 +165,7 @@ impl PsdFile {
             match (&self.layer_info, &self.layer_info_placement) {
                 (Some(info), LayerInfoPlacement::GlobalBlock { index, signature, key, padding }) => {
                     let (before, after) = self.global_blocks.split_at((*index).min(self.global_blocks.len()));
-                    write_blocks(&mut out, before, v)?;
+                    write_blocks(&mut out, before, v, 4)?;
                     // Write into the final buffer: a temporary LayerInfo payload and a clone
                     // of all neighboring opaque blocks otherwise double the save's memory.
                     out.put(signature);
@@ -177,11 +178,11 @@ impl PsdFile {
                     out.end_len(at, long)?;
                     match padding {
                         Some(bytes) => out.put(bytes),
-                        None => out.extend(std::iter::repeat_n(0u8, len % 2)),
+                        None => out.extend(std::iter::repeat_n(0u8, (4 - len % 4) % 4)),
                     }
-                    write_blocks(&mut out, after, v)?;
+                    write_blocks(&mut out, after, v, 4)?;
                 }
-                _ => write_blocks(&mut out, &self.global_blocks, v)?,
+                _ => write_blocks(&mut out, &self.global_blocks, v, 4)?,
             }
             out.put(&self.layer_mask_trailing);
         }
@@ -284,6 +285,24 @@ mod write_tests {
     use crate::{Compression, testgen};
 
     #[test]
+    fn global_blocks_default_to_four_byte_padding() {
+        for version in [Version::Psd, Version::Psb] {
+            for len in 1usize..8 {
+                let mut file = testgen::small(version, Compression::Raw);
+                file.global_blocks = vec![TaggedBlock::new(*b"TEST", vec![7; len]), TaggedBlock::new(*b"NEXT", vec![8; 4])];
+                let bytes = file.to_bytes().unwrap();
+                let start = bytes.windows(8).position(|b| b == b"8BIMTEST").unwrap() + 12;
+                let next = bytes.windows(8).position(|b| b == b"8BIMNEXT").unwrap();
+                assert_eq!(next - start, len.next_multiple_of(4));
+                let mut expected = vec![7; len];
+                expected.resize(len.next_multiple_of(4), 0);
+                assert_eq!(&bytes[start..start + expected.len()], expected);
+                assert_eq!(PsdFile::from_bytes(&bytes).unwrap(), file);
+            }
+        }
+    }
+
+    #[test]
     fn streamed_layer_info_equals_a_materialized_tagged_block() {
         for version in [Version::Psd, Version::Psb] {
             for key in [*b"Lr16", *b"Lr32", *b"Layr"] {
@@ -313,5 +332,32 @@ mod write_tests {
         file.layer_info = Some(LayerInfo { layers: vec![LayerRecord::default(); 32768], ..Default::default() });
         file.layer_info_placement = LayerInfoPlacement::GlobalBlock { index: usize::MAX, signature: *b"8BIM", key: *b"Lr16", padding: None };
         assert!(matches!(file.to_bytes(), Err(PsdError::LimitExceeded(_))));
+    }
+
+    #[test]
+    fn global_layers_preserve_order_padding_and_first_candidate() {
+        for version in [Version::Psd, Version::Psb] {
+            for depth in [16, 32] {
+                let mut file = testgen::layered(version, ColorMode::Rgb, depth, Compression::Raw);
+                let key = if depth == 16 { *b"Lr16" } else { *b"Lr32" };
+                file.global_blocks = vec![TaggedBlock::new(*b"BEFR", vec![1]), TaggedBlock::new(*b"AFTR", vec![2, 3])];
+                file.layer_info_placement = LayerInfoPlacement::GlobalBlock { index: 1, signature: *b"8B64", key, padding: Some(vec![7, 8]) };
+                file.layer_mask_trailing = vec![9; 4];
+                let bytes = file.to_bytes().unwrap();
+                let parsed = PsdFile::from_bytes(&bytes).unwrap();
+                assert_eq!(parsed, file);
+                assert_eq!(parsed.to_bytes().unwrap(), bytes);
+                let mut duplicate = Vec::new();
+                file.layer_info.as_ref().unwrap().write_body(&mut duplicate, version).unwrap();
+                file.global_blocks.push(TaggedBlock::new(key, duplicate));
+                assert_eq!(PsdFile::from_bytes(&file.to_bytes().unwrap()).unwrap(), file);
+                file.global_blocks.insert(0, TaggedBlock::new(key, vec![255]));
+                let bytes = file.to_bytes().unwrap();
+                let parsed = PsdFile::from_bytes(&bytes).unwrap();
+                assert!(parsed.layer_info.is_none());
+                assert_eq!(parsed.global_blocks.len(), 5);
+                assert_eq!(parsed.to_bytes().unwrap(), bytes);
+            }
+        }
     }
 }

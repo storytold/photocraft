@@ -195,15 +195,16 @@ fn empty_layer() {
 
 #[test]
 fn composite_supplied_with_alpha() {
-    let px = rgba_pattern(3, 2, 0);
-    let mut b = PsdBuilder::new(3, 2);
-    b.push_layer(LayerSpec::new("x", 0, 0, 3, 2, PixelData::Rgba8(px.clone())));
+    let px = vec![255, 0, 0, 128, 17, 89, 203, 0];
+    let mut b = PsdBuilder::new(2, 1);
+    b.push_layer(LayerSpec::new("x", 0, 0, 2, 1, PixelData::Rgba8(px.clone())));
     b.composite(PixelData::Rgba8(px.clone()));
     let f = built(&b);
     assert_eq!(f.header.channels, 4);
     assert!(f.layer_info.as_ref().unwrap().merged_alpha);
     assert!(f.merged_has_alpha());
     assert_eq!(f.has_real_merged_data(), Some(true));
+    assert_eq!(f.decode_merged().unwrap(), [255, 17, 127, 89, 127, 203, 128, 0]);
     assert_eq!(f.composite_rgba8().unwrap().data, px);
 }
 
