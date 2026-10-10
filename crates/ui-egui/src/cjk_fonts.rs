@@ -4,16 +4,17 @@
 //! Devanagari glyphs, and the OS fonts that do are large (Hiragino ~10 MB, Apple SD Gothic Neo
 //! 28 MB, PingFang 78 MB, Noto Sans CJK ~20 MB). Instead of reading them at startup, an egui
 //! plugin scans each frame's text for characters no registered font covers, and registers the
-//! next system font for them (`ctx.add_font`, active from the next frame, which it requests).
-//! Fonts are appended at the lowest priority to every family, so Latin text keeps Inter.
+//! next system font for them (active from the next frame, which it requests). Fonts are appended
+//! at the lowest priority to every family, so Latin text keeps Inter.
 //!
 //! Script order follows the UI locale ([`photocraft_text::cjk::script_order`]): Kana prefers a
 //! Japanese font, Hangul a Korean one, Bopomofo a Traditional Chinese one, and Han the
-//! locale's script (Japanese forms only for a Japanese locale). Once every script has been tried
-//! the scan stops. A character of another script the bundled fonts lack (Thai, Arabic, Hebrew,
-//! Devanagari) is looked up in the Type tool's font database instead
-//! ([`photocraft_text::fonts::FontDb::fallback_face_for`]); it never returns a broad font that
-//! also covers CJK, so it cannot shadow the locale-ordered CJK choice above.
+//! locale's script (Japanese forms only for a Japanese locale). A character of another script the
+//! bundled fonts lack (Thai, Arabic, Hebrew, Devanagari) is looked up in the Type tool's font
+//! database instead ([`photocraft_text::fonts::FontDb::fallback_face_for`]). A face that also
+//! covers CJK (a broad fallback such as Arial Unicode) is registered after the script faces, so it
+//! never shadows the locale-ordered CJK choice; the scan runs every frame because new text can
+//! need a new script at any time.
 //!
 //! Builds made with the optional craft-fonts input (`CRAFT_FONTS_DIR`,
 //! [`photocraft_text::craft_fonts`]) carry Japanese fonts (BIZ UDPGothic first): they are tried
