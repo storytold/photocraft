@@ -110,6 +110,15 @@ struct AndroidShell {
 
 impl eframe::App for AndroidShell {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        static FIRST_NATIVE_TOUCH: Once = Once::new();
+        if let Some(force) = raw.events.iter().find_map(|e| match e {
+            egui::Event::Touch { phase: egui::TouchPhase::Start, force, .. } => Some(*force),
+            _ => None,
+        }) {
+            FIRST_NATIVE_TOUCH.call_once(|| {
+                log::info!("Android native touch events active (first force: {force:?})");
+            });
+        }
         // Forward the editor's normal input processing: AndroidShell is an
         // eframe::App wrapper, so it must not drop the inner app's hook.
         <PhotocraftApp as eframe::App>::raw_input_hook(&mut self.app, ctx, raw);
