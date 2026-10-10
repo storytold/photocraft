@@ -143,6 +143,7 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     icons::paint(ui, r, "chevron-right", 11.0, t.text_dim);
     let resp = resp.on_hover_text(tl!("Show"));
     egui::Popup::menu(&resp).show(|ui| {
+        crate::widgets::style_spectrum_popup_menu(ui);
         ui.set_min_width(200.0);
         for (key, label) in STATUS_INFO {
             let on = app.ui.chrome.status_info == *key;

@@ -1411,6 +1411,7 @@ mod multi_layer_formatting {
             for label in ["Layer", "Layers", "Range", "Coalesce"] {
                 assert!(h.query_by_label(label).is_none(), "target metadata must not become a form field: {label}");
             }
+            h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("style".into(), json!("arc"));
             h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("bend".into(), json!(25.0));
             selected(h.state_mut(), &[ids[2]]);
             h.get_by_label("OK").click();
