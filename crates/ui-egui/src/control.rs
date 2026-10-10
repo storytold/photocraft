@@ -74,7 +74,8 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 33] = [
+pub const UI_SET_FIELDS: [&str; 34] = [
+    "contextualTaskbar",
     "tool",
     "panels",
     "dock",
@@ -396,6 +397,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
                     return Err("cropShield.opacity must be 0..100".into());
                 }
+                let contextual_taskbar = merged_object(&app.ui.contextual_taskbar, p.get("contextualTaskbar"), "contextualTaskbar")?;
+                if contextual_taskbar.as_ref().and_then(|bar| bar.position).is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))) {
+                    return Err("contextualTaskbar.position must be two finite numbers in 0..1, or null".into());
+                }
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
@@ -489,6 +494,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
 
                 // Apply (nothing below can fail).
+                if let Some(bar) = contextual_taskbar {
+                    app.ui.contextual_taskbar = bar;
+                }
                 if let Some(stroke) = shape_stroke {
                     if let Some(stroke) = stroke {
                         app.ui.tool_options.stroke_width = stroke.width;
@@ -1014,6 +1022,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                 }).collect::<Vec<_>>()
             })
         }),
+        "contextualTaskbar": app.ui.contextual_taskbar,
         "panels": app.ui.panels,
         "view": app.ui.view,
         "views": app.ui.views,

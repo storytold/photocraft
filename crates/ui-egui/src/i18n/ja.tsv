@@ -35,6 +35,14 @@
 	New…	新規…
 	New from Clipboard	クリップボードから新規作成
 	Open…	開く…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	コンテキストタスクバー
+	Drag contextual task bar	コンテキストタスクバーをドラッグ
+	Reset position	位置をリセット
+	Hide contextual task bar	コンテキストタスクバーを非表示
+	Contextual task bar options	コンテキストタスクバーのオプション
+	Hide the background with an editable layer mask.	編集可能なレイヤーマスクで背景を隠します。
+
 	Open As…	形式を指定して開く…
 	Open EXR Parts…	EXRパートを開く…
 	Add beauty precomp from the AOVs	AOVからビューティーをプリコンポーズして追加

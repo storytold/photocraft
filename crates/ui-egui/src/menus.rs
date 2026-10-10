@@ -51,6 +51,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.actualPixels", "100%", &["View"], Some("Cmd+1")),
     ("view.rotateView", "Rotate View", &[], None),
     ("view.resetView", "Reset View", &["View"], None),
+    ("window.contextualTaskbar", "Contextual Task Bar", &["Window"], None),
     ("window.newWindowForDocument", "New Window for Document", &["Window", "Arrange"], None),
     ("window.toggle.layers", "Layers", &["Window"], Some("F7")),
     ("window.toggle.history", "History", &["Window"], None),
@@ -143,6 +144,10 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if id == "window.contextualTaskbar" {
+        app.ui.contextual_taskbar.visible = !app.ui.contextual_taskbar.visible;
+        return Ok(Value::Null);
+    }
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
     }
@@ -607,7 +612,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
             app.session.active().is_some() && app.services.export.is_some()
         }
         i if i.starts_with("window.toggle.") => true,
-        "window.togglePanels" => true,
+        "window.togglePanels" | "window.contextualTaskbar" => true,
         // With one document open the key stays quiet, as in Photoshop, rather than reporting why.
         "window.nextDocument" | "window.previousDocument" => app.session.active().is_some(),
         i if panel_alias(i).is_some() || workspace_name(i).is_some() => true,
@@ -720,6 +725,7 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     let p = &app.ui.panels;
     Some(match id {
+        "window.contextualTaskbar" => app.ui.contextual_taskbar.visible,
         "window.toggle.layers" => p.layers,
         "window.toggle.history" => p.history,
         "window.toggle.properties" => p.properties,

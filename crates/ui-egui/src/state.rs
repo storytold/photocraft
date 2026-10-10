@@ -862,6 +862,9 @@ pub struct ColorPanelState {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
+    /// Floating viewport actions, remembered independently of the document.
+    #[serde(default)]
+    pub contextual_taskbar: crate::contextual_taskbar::TaskbarState,
     pub tool: Tool,
     /// The last tool used in each shortcut group (the tools sharing a key, [`Tool::key`]), at most
     /// one per group: the group's key brings it back, as in Photoshop (#2608).
@@ -1042,6 +1045,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
+            contextual_taskbar: Default::default(),
             tool: Tool::Brush,
             group_tools: Vec::new(),
             recent_files: Vec::new(),

@@ -937,6 +937,8 @@ pub struct Preferences {
     /// the footer slider's card scale, saved as the user changes them and restored at launch.
     /// JSON owned by the shell.
     pub brush_picker: Value,
+    /// The contextual task bar's visibility and viewport-relative position. JSON owned by the shell.
+    pub contextual_taskbar: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
 }

@@ -31,6 +31,14 @@
 	New…	新建…
 	New from Clipboard	从剪贴板新建
 	Open…	打开…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	上下文任务栏
+	Drag contextual task bar	拖动上下文任务栏
+	Reset position	重置位置
+	Hide contextual task bar	隐藏上下文任务栏
+	Contextual task bar options	上下文任务栏选项
+	Hide the background with an editable layer mask.	使用可编辑的图层蒙版隐藏背景。
+
 	Open As…	打开为…
 	Open EXR Parts…	打开 EXR 分段…
 	Add beauty precomp from the AOVs	从 AOV 预合成美丽通道
