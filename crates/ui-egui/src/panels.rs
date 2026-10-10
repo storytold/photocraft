@@ -76,6 +76,18 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     sections
 }
 
+/// Opening by dragging requires leaving the original button while it remains held (#2301).
+fn tool_flyout_drag_open(dragged: bool, hovered: bool) -> bool {
+    dragged && !hovered
+}
+
+/// A drag/hold started on the original tool button, not on a menu row. Select the
+/// row under the primary pointer release rather than waiting for `ir.clicked()`, which
+/// cannot fire when the pointer press occurred on the toolbar button (#2301).
+fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bool, from_origin: bool) -> bool {
+    released && from_origin && pointer.is_some_and(|p| row.contains(p))
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
@@ -155,7 +167,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     // With no document open there is nothing to zoom.
                                     let _ = app.run("view.actualPixels", json!({}));
                                 }
-                                // Right-click or long-press opens the flyout (Photoshop).
+                                // Right-click, long-press, or drag off the tool button opens its flyout (Photoshop).
                                 let held_for =
                                     resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
                                 if slot.len() > 1
@@ -165,10 +177,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
                                 }
                                 let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
-                                if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
+                                let drag_open = tool_flyout_drag_open(resp.dragged(), resp.hovered());
+                                if slot.len() > 1 && (resp.secondary_clicked() || long_press || drag_open) {
                                     ui.data_mut(|d| {
                                         d.insert_temp(flyout_id, (key, resp.rect));
-                                        if long_press {
+                                        if long_press || drag_open {
                                             d.insert_temp(held_id, key);
                                         }
                                     });
@@ -229,7 +242,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                             t.text_dim,
                                                         );
                                                     }
-                                                    if ir.clicked() {
+                                                    let release_from_origin = tool_flyout_release(
+                                                        r,
+                                                        ui.input(|i| i.pointer.hover_pos()),
+                                                        ui.input(|i| i.pointer.primary_released()),
+                                                        ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key),
+                                                    );
+                                                    if ir.clicked() || release_from_origin {
                                                         app.ui.tool = item;
                                                         ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                                     }
@@ -4451,3 +4470,23 @@ mod opacity_row_layout_tests {
 #[cfg(test)]
 #[path = "mask_props_ui_tests.rs"]
 mod mask_properties_tests;
+
+#[cfg(test)]
+mod tool_flyout_gesture_tests {
+    use super::*;
+
+    #[test]
+    fn dragging_off_group_button_opens_and_releasing_on_row_selects() {
+        assert!(!tool_flyout_drag_open(false, false));
+        assert!(!tool_flyout_drag_open(true, true));
+        assert!(tool_flyout_drag_open(true, false));
+
+        let row = Rect::from_min_size(pos2(50.0, 80.0), vec2(160.0, 26.0));
+        let inside = Some(row.center());
+        assert!(tool_flyout_release(row, inside, true, true));
+        assert!(!tool_flyout_release(row, inside, false, true));
+        assert!(!tool_flyout_release(row, inside, true, false));
+        assert!(!tool_flyout_release(row, Some(row.right_bottom() + vec2(4.0, 4.0)), true, true));
+        assert!(!tool_flyout_release(row, None, true, true));
+    }
+}
