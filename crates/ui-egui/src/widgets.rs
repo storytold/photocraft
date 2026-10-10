@@ -8,6 +8,23 @@ use crate::theme::{self, Tokens};
 mod color_count;
 pub use color_count::color_count_row;
 
+/// Match the Spectrum application-menu padding and blue/white hover state in
+/// secondary menus (status bar, dock hamburger, layer context menus; #2187).
+/// The setting is local to this popup's Ui and leaves other themes unchanged.
+pub fn style_spectrum_popup_menu(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    if !t.pro {
+        return;
+    }
+    ui.spacing_mut().button_padding = vec2(10.0, 4.0);
+    let v = &mut ui.style_mut().visuals;
+    v.widgets.hovered.weak_bg_fill = t.accent;
+    v.widgets.hovered.bg_fill = t.accent;
+    v.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    v.widgets.hovered.bg_stroke = Stroke::NONE;
+    v.widgets.hovered.corner_radius = CornerRadius::same(3);
+}
+
 /// An accent insertion line on one edge of `r` while a drag hovers it (vertical: on its left or,
 /// `after`, right edge; else on its top or bottom).
 pub fn drop_line(ui: &Ui, r: Rect, after: bool, vertical: bool, t: &Tokens) {
@@ -206,7 +223,8 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
     let suffix_w = if suffix.is_empty() { 0.0 } else { 16.0 };
-    let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w + trailing, 2.0));
+    // 1 pt higher than centred: digits have no descenders, so centred text looks low.
+    let field = Rect::from_min_max(rect.min + vec2(4.0, 1.0), rect.max - vec2(4.0 + suffix_w + trailing, 3.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
     let (lo, hi) = (*range.start(), *range.end());
@@ -873,6 +891,7 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
     let reveal_id = wheel_id.with("reveal");
     let mut reveal = wheel && ui.data_mut(|d| d.remove_temp::<bool>(reveal_id)).unwrap_or(false);
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+        fit_widest_option(ui, options.iter().map(|(_, l)| tl!(l)));
         // Over the open list the wheel steps the value too, instead of scrolling the list.
         over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
         if over_list {
@@ -910,6 +929,16 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
         hovered = None;
     }
     (chosen, hovered)
+}
+
+/// Makes an open dropdown list as wide as its widest option is when hovered, from the start. egui
+/// takes a plain row's frame stroke off its padding but draws a hovered row with the stroke, so a
+/// row grows by two stroke widths under the pointer, and the list never shrinks back: scrolling
+/// the widest option under the pointer widened the list (#2607).
+fn fit_widest_option<'a>(ui: &mut Ui, labels: impl Iterator<Item = &'a str>) {
+    let extend = Some(egui::TextWrapMode::Extend);
+    let widest = labels.map(|l| egui::WidgetText::from(l).into_galley(ui, extend, f32::INFINITY, egui::FontSelection::Default).size().x).fold(0.0, f32::max);
+    ui.set_min_width(widest + 2.0 * ui.spacing().button_padding.x);
 }
 
 /// Whether the pointer still rests where the wheel last stepped dropdown `id` (`wheeled`: it did
@@ -1032,6 +1061,7 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
     let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| tl!(l)).unwrap_or("—");
     let mut changed = false;
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+        fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
         for (v, l, tip) in options {
             if ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip)).clicked() {
                 *current = v.clone();
@@ -1132,6 +1162,29 @@ fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use egui::{Key, Modifiers};
+
+    #[test]
+    fn spectrum_popup_style_matches_main_menu_and_preserves_studio() {
+        for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::StudioLight] {
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx, kind);
+            let tokens = crate::theme::Tokens::for_kind(kind);
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let original_padding = ui.spacing().button_padding;
+                let original_hover = ui.visuals().widgets.hovered.fg_stroke;
+                super::style_spectrum_popup_menu(ui);
+                if tokens.pro {
+                    assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
+                    assert_eq!(ui.visuals().widgets.hovered.bg_fill, tokens.accent);
+                    assert_eq!(ui.visuals().widgets.hovered.fg_stroke.color, egui::Color32::WHITE);
+                } else {
+                    assert_eq!(ui.spacing().button_padding, original_padding);
+                    assert_eq!(ui.visuals().widgets.hovered.fg_stroke, original_hover);
+                }
+            });
+            out.textures_delta.clear();
+        }
+    }
     use egui_kittest::{Harness, kittest::Queryable};
 
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
@@ -1159,6 +1212,21 @@ mod tests {
         h.get_by_role(egui::accesskit::Role::SpinButton).click();
         h.run();
         h
+    }
+
+    /// Digits have no descenders, so the number sits 1 pt above the box's centre to look centred.
+    #[test]
+    fn value_field_digits_sit_one_point_above_centre() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut (f32, egui::Rect)| {
+                s.1 = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "px", 80.0, 0.0).1;
+            },
+            (50.0, egui::Rect::NOTHING),
+        );
+        h.run();
+        let number = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
+        let field = h.state().1;
+        assert!((field.center().y - number.center().y - 1.0).abs() < 0.01, "field {field:?}, number {number:?}");
     }
 
     #[test]
@@ -1386,6 +1454,38 @@ mod tests {
         h.key_press(egui::Key::ArrowUp);
         h.run();
         assert_eq!(*h.state(), 0);
+    }
+
+    /// Scrolling rows under the pointer doesn't widen the list: it is as wide as the widest
+    /// option hovered from the start (#2607).
+    #[test]
+    fn dropdown_list_keeps_its_width_while_scrolling() {
+        use photocraft_color::BlendMode;
+        let mut h = Harness::builder().with_size(egui::vec2(400.0, 700.0)).build_ui_state(
+            |ui, mode: &mut BlendMode| {
+                let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                super::dropdown(ui, "brush-mode", mode, &opts, 96.0);
+            },
+            BlendMode::Normal,
+        );
+        // The app's theme strokes plain rows, which is what made hovered rows wider.
+        crate::theme::apply(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run();
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run();
+        let list = |h: &Harness<'_, BlendMode>| h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)));
+        let Some(open) = list(&h) else { panic!("the list is open") };
+        for _ in 0..30 {
+            h.hover_at(open.center());
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            h.run();
+            assert_eq!(list(&h).map(|r| r.width()), Some(open.width()));
+        }
     }
 
     const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Multiply")];

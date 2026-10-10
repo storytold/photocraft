@@ -74,3 +74,19 @@ sync_github_name = true
 real_name = "Ahmed Moussa"
 display_name = "Ahmed Moussa"
 sync_github_name = false
+
+[people.alexanderalber]
+real_name = "Alexander Alber"
+display_name = "Alexander Alber"
+sync_github_name = false
+
+[people.Erica4fr]
+sync_github_name = true
+
+[people.itsF4LCON]
+real_name = "Ran Geerts"
+display_name = "Ran Geerts"
+sync_github_name = false
+
+[people.vangel76]
+sync_github_name = true

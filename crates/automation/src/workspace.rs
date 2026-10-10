@@ -811,6 +811,15 @@ mod tests {
         refused(abs(&inside));
         refused(abs(&inside.join("CON")));
         refused(format!("{}:hidden", abs(&inside.join("a.bin"))));
+        // A sibling whose name merely starts with the root's name is not beneath it.
+        let sibling = inside.with_file_name("inside-sibling");
+        std::fs::create_dir_all(&sibling).unwrap();
+        refused(abs(&sibling.join("lookalike.bin")));
+        refused(format!("{}-sibling/lookalike.bin", abs(&inside)));
+        // Climbing back out through a subdirectory is refused too.
+        refused(abs(&inside.join("sub").join("..").join("..").join("outside").join("climb.bin")));
+        assert!(!sibling.join("lookalike.bin").exists());
+        assert!(!outside.join("climb.bin").exists());
         assert!(!outside.join("escape.bin").exists());
         assert!(!outside.join("traversal.bin").exists());
         assert_eq!(std::fs::read(inside.join("a.bin")).unwrap(), b"one");

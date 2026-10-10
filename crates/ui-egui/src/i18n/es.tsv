@@ -32,6 +32,11 @@
 	New from Clipboard	Nuevo desde el portapapeles
 	Open…	Abrir…
 	Open As…	Abrir como…
+	Open EXR Parts…	Abrir partes EXR…
+	Add beauty precomp from the AOVs	Añadir la precomposición de belleza a partir de los AOV
+	Both	Ambas
+	Left	Izquierda
+	Right	Derecha
 	Open Recent	Archivos recientes
 	Clear Recent Files	Vaciar archivos recientes
 	Close	Cerrar
@@ -81,6 +86,8 @@
 	Import	Importar
 	Browse…	Examinar…
 	Reveal in Finder	Mostrar en Finder
+	Show in Explorer	Mostrar en el Explorador
+	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
 	Print One Copy	Imprimir un ejemplar
@@ -808,7 +815,6 @@
 	Blending Options	Opciones de fusión
 	Blue	Azul
 	Blue, Red, Yellow	Azul, rojo, amarillo
-	Both	Ambos
 	Both Axes	Ambos ejes
 	Bottom	Inferior
 	Brightness	Brillo
@@ -1127,7 +1133,6 @@
 	Leading	Interlínea
 	Leading (set to the font size × auto-leading when Auto)	Interlínea (al estar en Automático se iguala al tamaño de fuente × interlínea automática)
 	Leave as is (don't color manage)	Dejar como está (no gestionar el color)
-	Left	Izquierda
 	Left align text	Alinear texto a la izquierda
 	Length:	Longitud:
 	Level	Nivel
@@ -1337,7 +1342,6 @@
 	Restore All	Restaurar todo
 	Restore Defaults	Restaurar valores predeterminados
 	Restrictive (Web)	Restrictivo (web)
-	Right	Derecha
 	Right align text	Alinear texto a la derecha
 	Rigid	Rígido
 	Rotate:	Rotación:
@@ -2474,3 +2478,7 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+	Next Document	Documento siguiente
+	Previous Document	Documento anterior
+	W x H x Resolution	An. x Al. x Resolución
+	Front Image	Imagen frontal

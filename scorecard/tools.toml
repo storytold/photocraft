@@ -171,7 +171,7 @@ id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
 status = "partial"
 issue = 214
-note = "Ratio dropdown and fields, Straighten (TOOL-214-21); no W x H x Resolution with units or saved presets"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); no New/Delete Crop Preset"
 
 [[item]]
 id = "TOOL-214-10"

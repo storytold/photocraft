@@ -648,6 +648,92 @@ fn txt2_keeps_a_kept_objects_extras_and_drops_them_with_its_text() {
     assert!(object.path(&["0", "keep"]).is_none(), "model extras of another text are dropped");
 }
 
+/// A `Txt2` shaped like Photoshop's: document resources and settings beside the text objects
+/// (`/0`, `/1 /0`, `/1 /2`), style runs carrying a full style (font, size, leading) besides the
+/// auto-kern mode, a Latin-1 string without a byte-order mark, reals, and a second object no
+/// layer names. `modes` are the object's `(UTF-16 length, auto-kern mode)` runs for "AVA\r".
+fn photoshop_txt2(modes: &[(usize, i64)]) -> Vec<u8> {
+    let mut v = b"\n\n/98 << /0 14 >> /0 << /1 << /0 [ << /0 << /0 (MyriadPro-Regular) /2 0 >> >> ] >> >> /1 << /0 << /0 1 /1 .5 >> /1 [ << /0 << /0 (\xfe\xff\0A\0V\0A\0\r) /6 << /0 [ ".to_vec();
+    for (len, m) in modes {
+        v.extend_from_slice(format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 /2 14.5 /11 {m} >> >> >> /1 {len} >> ").as_bytes());
+    }
+    v.extend_from_slice(
+        b"] >> /7 << /0 1 >> >> /21 << /1 [ 1.25 2.5 ] >> >> << /0 << /0 (\xfe\xff\0B\0\r) >> /21 << /1 [ 3.0 ] >> >> ] /2 << /0 7 >> >> /3 << /0 .25 >>",
+    );
+    v
+}
+
+/// #2374: an unedited save hands Photoshop back its own `Txt2`, byte for byte. Rebuilding it
+/// dropped `/1 /0` and `/1 /2`, emptied unnamed objects and cut every style run down to its
+/// auto-kern mode, and Photoshop refused to open the file.
+#[test]
+fn unchanged_txt2_is_written_back_byte_for_byte() {
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_txt2(&[(2, 1), (2, 1)]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&styled("AVA", CharStyle::default()), 72.0, None), 0);
+    let mut t = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut t, &tysh, &crate::psd::parse_txt2(&prev).unwrap());
+    assert!(t.char_runs().iter().all(|r| r.style.kerning == Kerning::Metrics));
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev);
+    // An optical run reads back and writes back the same way.
+    let prev = photoshop_txt2(&[(1, 2), (3, 1)]);
+    crate::psd::apply_txt2(&mut t, &tysh, &crate::psd::parse_txt2(&prev).unwrap());
+    assert_eq!(t.char_runs().first().map(|r| r.style.kerning), Some(Kerning::Optical));
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev);
+}
+
+/// An edited auto-kern mode changes only `/11` (splitting the run it falls inside); the file's
+/// style keys, the other `/1` keys and the objects no layer names all survive.
+#[test]
+fn edited_txt2_keeps_the_files_styles_and_objects() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_txt2(&[(4, 1)]);
+    let style = |kerning: Kerning| CharStyle { kerning, ..Default::default() };
+    let t = runs_of("AVA", &[(1, style(Kerning::Optical)), (2, style(Kerning::Metrics))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    let before = crate::psd::parse_txt2(&prev).unwrap();
+    for key in [&["0"][..], &["1", "0"], &["1", "2"], &["3"]] {
+        assert_eq!(out.path(key), before.path(key), "/{} survives", key.join(" /"));
+    }
+    let objects = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert_eq!(objects.len(), 2, "the object no layer names is kept");
+    assert_eq!(objects.get(1), before.path(&["1", "1"]).and_then(E::as_array).unwrap().get(1));
+    let object = &objects[0];
+    assert_eq!(object.path(&["0", "7", "0"]).and_then(E::as_i64), Some(1), "model extras survive");
+    assert!(object.path(&["21", "1"]).is_some(), "pen positions survive an unchanged text");
+    let runs = object.path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+    let got: Vec<(i64, i64)> =
+        runs.iter().map(|r| (r.get("1").and_then(E::as_i64).unwrap(), r.path(&["0", "0", "6", "11"]).and_then(E::as_i64).unwrap())).collect();
+    assert_eq!(got, vec![(1, 2), (3, 1)], "the run is split where the mode changes");
+    for r in runs {
+        assert_eq!(r.path(&["0", "0", "6", "1"]).and_then(E::as_f64), Some(12.0), "the font size survives");
+        assert_eq!(r.path(&["0", "0", "6", "2"]).and_then(E::as_f64), Some(14.5), "the leading survives");
+    }
+    // And it reads back with the edited modes.
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &out);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(1, Kerning::Optical), (2, Kerning::Metrics)]);
+}
+
+/// The file's style runs are only reused when they cover the text: runs of another length (or
+/// hostile lengths) fall back to generated runs, without panicking.
+#[test]
+fn txt2_runs_that_dont_cover_the_text_are_regenerated() {
+    use crate::engine_data::Value as E;
+    let t = runs_of("AVA", &[(3, CharStyle::default())]);
+    for modes in [&[(3, 1)][..], &[(9, 1)], &[(i64::MAX as usize, 1), (2, 1)], &[]] {
+        let prev = photoshop_txt2(modes);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let runs = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+        let total: i64 = runs.iter().filter_map(|r| r.get("1").and_then(E::as_i64)).sum();
+        assert_eq!(total, 4, "{modes:?}");
+        assert!(out.path(&["1", "2"]).is_some());
+    }
+}
+
 /// A file-controlled `TextIndex` must not size the save: out-of-range numbers are ignored (the
 /// slot array is sized by real text objects, never by a file's numbers) and reading one back is
 /// a no-op, so a hostile file degrades instead of allocating gigabytes on export.

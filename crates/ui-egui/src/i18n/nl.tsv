@@ -28,6 +28,11 @@
 	New from Clipboard	Nieuw vanaf klembord
 	Open…	Openen…
 	Open As…	Openen als…
+	Open EXR Parts…	EXR-delen openen…
+	Add beauty precomp from the AOVs	Schoonheidsvoorcompositie toevoegen vanuit de AOV's
+	Both	Beide
+	Left	Links
+	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
 	Close	Sluiten
@@ -77,6 +82,8 @@
 	Import	Importeren
 	Browse…	Bladeren…
 	Reveal in Finder	Weergeven in Finder
+	Show in Explorer	Weergeven in Verkenner
+	Show in Folder	Weergeven in map
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
 	Print One Copy	Eén exemplaar afdrukken
@@ -798,7 +805,6 @@
 	Blending Options	Overvloeiopties
 	Blue	Blauw
 	Blue, Red, Yellow	Blauw, rood, geel
-	Both	Beide
 	Both Axes	Beide assen
 	Bottom	Onder
 	Brightness	Helderheid
@@ -1120,7 +1126,6 @@
 	Leading	Interlinie
 	Leading (set to the font size × auto-leading when Auto)	Interlinie (bij Automatisch: lettergrootte × automatische interlinie)
 	Leave as is (don't color manage)	Ongewijzigd laten (geen kleurbeheer)
-	Left	Links
 	Left align text	Tekst links uitlijnen
 	Length:	Lengte:
 	Level	Niveau
@@ -1329,7 +1334,6 @@
 	Restore All	Alles herstellen
 	Restore Defaults	Standaardwaarden herstellen
 	Restrictive (Web)	Beperkt (web)
-	Right	Rechts
 	Right align text	Tekst rechts uitlijnen
 	Rigid	Star
 	Rotate:	Roteren:
@@ -3585,3 +3589,7 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+	Next Document	Volgend document
+	Previous Document	Vorig document
+	W x H x Resolution	B x H x Resolutie
+	Front Image	Voorste afbeelding

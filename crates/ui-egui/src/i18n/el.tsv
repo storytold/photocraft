@@ -18,6 +18,11 @@
 	New from Clipboard	Νέο από το πρόχειρο
 	Open…	Άνοιγμα…
 	Open As…	Άνοιγμα ως…
+	Open EXR Parts…	Άνοιγμα τμημάτων EXR…
+	Add beauty precomp from the AOVs	Προσθήκη προ-σύνθεσης ομορφιάς από τα AOV
+	Both	Και τα δύο
+	Left	Αριστερά
+	Right	Δεξιά
 	Open Recent	Πρόσφατα αρχεία
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
 	Close	Κλείσιμο
@@ -67,6 +72,8 @@
 	Import	Εισαγωγή
 	Browse…	Περιήγηση…
 	Reveal in Finder	Εμφάνιση στο Finder
+	Show in Explorer	Εμφάνιση στην Εξερεύνηση αρχείων
+	Show in Folder	Εμφάνιση στον φάκελο
 	File Info…	Πληροφορίες αρχείου…
 	Print…	Εκτύπωση…
 	Print One Copy	Εκτύπωση ενός αντιγράφου
@@ -436,8 +443,6 @@
 	Alignment	Στοίχιση
 	Align	Στοίχιση
 	Distribute	Κατανομή
-	Left	Αριστερά
-	Right	Δεξιά
 	Center	Κέντρο
 	Top	Πάνω
 	Bottom	Κάτω
@@ -2015,7 +2020,6 @@
 	Bold Italic	Έντονα πλάγια
 	Border	Περίγραμμα
 	Border…	Περίγραμμα…
-	Both	Και τα δύο
 	Both Axes	Και οι δύο άξονες
 	Box Blur	Θόλωση πλαισίου
 	Box Blur…	Θόλωση πλαισίου…
@@ -3514,3 +3518,7 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Next Document	Επόμενο έγγραφο
+	Previous Document	Προηγούμενο έγγραφο
+	W x H x Resolution	Π x Υ x Ανάλυση
+	Front Image	Μπροστινή εικόνα

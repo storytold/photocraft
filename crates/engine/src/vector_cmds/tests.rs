@@ -362,6 +362,42 @@ fn fill_and_stroke_path_on_pixel_layer() {
 }
 
 #[test]
+fn fill_path_stays_inside_the_selection() {
+    let alpha = |s: &Session, x, y| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)[3]
+    };
+    for depth in [8, 16, 32] {
+        // A hard rectangle, an ellipse and a feathered rectangle, all over the left half.
+        for extra in [json!({}), json!({"ellipse": true}), json!({"feather": 4})] {
+            let mut s = session(100, 100, depth);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let mut rect = json!({"x": 0, "y": 0, "width": 50, "height": 100});
+            rect.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            s.execute("select.rect", rect).unwrap();
+            s.execute("path.set", json!({"path": {"subpaths": [{"closed": true, "knots": [[10, 10], [90, 10], [90, 90], [10, 90]]}]}})).unwrap();
+            s.execute("path.fill", json!({"color": "#ff0000", "opacity": 100})).unwrap();
+            let mask = selection_mask(&s);
+            assert!(alpha(&s, 30, 50) > 0.99, "{depth} {extra}: inside the selection");
+            assert_eq!(alpha(&s, 70, 50), 0.0, "{depth} {extra}: outside the selection");
+            // At every pixel the fill's alpha is at most the selection's coverage there.
+            for (x, y) in [(46, 50), (49, 50), (51, 50), (25, 12), (12, 25)] {
+                let m = mask[(y * 100 + x) as usize];
+                assert!(alpha(&s, x, y) <= m + 0.01, "{depth} {extra} ({x},{y}): alpha {} > selection {m}", alpha(&s, x, y));
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(alpha(&s, 30, 50), 0.0, "{depth} {extra}: undo restores");
+        }
+    }
+    // Without a selection the whole path fills, as before.
+    let mut s = session(100, 100, 8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("path.set", json!({"path": {"subpaths": [{"closed": true, "knots": [[10, 10], [90, 10], [90, 90], [10, 90]]}]}})).unwrap();
+    s.execute("path.fill", json!({"color": "#ff0000"})).unwrap();
+    assert!(alpha(&s, 30, 50) > 0.99 && alpha(&s, 70, 50) > 0.99);
+}
+
+#[test]
 fn clipping_path_requires_saved_path_and_tracks_rename_delete() {
     let mut s = session(60, 60, 8);
     assert!(s.execute("path.clippingPath.set", json!({})).is_err());
@@ -611,4 +647,22 @@ fn path_stroke_rejects_oversized_brush_before_rendering() {
     s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[2, 2], [20, 20]]}]}})).unwrap();
     let result = s.execute("path.stroke", json!({"size": 1e30}));
     assert!(result.is_err(), "path strokes share the bounded paint renderer");
+}
+
+#[test]
+fn shape_info_bounds_of_curved_shapes_are_exact() {
+    // Issue #2537: an exact 600×600 ellipse reported width 601.
+    for depth in [8, 16, 32] {
+        let mut s = session(1920, 1080, depth);
+        for (params, want) in [
+            (json!({"kind": "ellipse", "rect": [0, 0, 100, 100], "fill": "#0000ff"}), json!([0, 0, 100, 100])),
+            (json!({"kind": "ellipse", "rect": [660, 240, 600, 600], "fill": "#0000ff"}), json!([660, 240, 600, 600])),
+            (json!({"kind": "ellipse", "rect": [10.5, 10, 100, 100], "fill": "#0000ff"}), json!([10, 10, 101, 100])),
+            (json!({"kind": "rect", "rect": [0, 0, 100, 100], "fill": "#0000ff"}), json!([0, 0, 100, 100])),
+        ] {
+            let id = s.execute("shape.create", params.clone()).unwrap()["layer"].as_u64().unwrap();
+            let info = s.execute("shape.info", json!({"layer": id})).unwrap();
+            assert_eq!(info["bounds"], want, "{params} at {depth}-bit");
+        }
+    }
 }
