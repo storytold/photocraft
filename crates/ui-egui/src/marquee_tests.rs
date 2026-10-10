@@ -146,10 +146,68 @@ fn the_live_outline_snaps_to_pixels_and_matches_the_committed_selection() {
         press_at(&mut h, 10.3, 10.3, Modifiers::NONE);
         move_to(&mut h, 20.6, 15.4);
         let app = h.state();
-        let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(&app.ui.tool_options, d)).unwrap();
+        let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(&app.ui.tool_options, d, app.point_zoom())).unwrap();
         assert_eq!(live, [10.0, 10.0, 21.0, 16.0], "{tool:?}: whole pixels while dragging");
         release_at(&mut h, 20.6, 15.4, Modifiers::NONE);
         assert_eq!(selection(&h), Rect::new(10, 10, 21, 16), "{tool:?}: the commit is what was shown");
+    }
+}
+
+/// 800 %, snapping off, the view centred on (30, 30): the pointer lands between pixel edges.
+fn zoomed(tool: Tool) -> Harness<'static, PhotocraftApp> {
+    let mut h = harness(tool);
+    h.state_mut().ui.extras.snap = false;
+    let v = &mut h.state_mut().ui.views[0];
+    v.zoom = 8.0;
+    v.center = [30.0, 30.0];
+    h.run_steps(2);
+    h
+}
+
+/// Press at `from` and move to `to` in six ordinary pointer moves, the button still held.
+fn drag_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]) {
+    move_to(h, from[0], from[1]);
+    button(h, screen(h, from[0], from[1]), true, Modifiers::NONE);
+    for i in 1..=6 {
+        let t = i as f32 / 6.0;
+        move_to(h, from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
+    }
+}
+
+/// #2391: a one-pixel column or row shown while dragging (ants and readout) is the selection the
+/// release keeps, also when the drag starts outside a selection it replaces (Photoshop). A click
+/// without a drag still deselects.
+#[test]
+fn a_one_pixel_column_or_row_is_kept_on_release() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        for (name, end, want) in [("column", [10.6, 50.4], Rect::new(10, 10, 11, 51)), ("row", [50.6, 10.8], Rect::new(10, 10, 51, 11))] {
+            for existing in [false, true] {
+                let mut h = zoomed(tool);
+                if existing {
+                    h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 10, "height": 10})).unwrap();
+                }
+                drag_to(&mut h, [10.2, 10.4], end);
+                let app = h.state();
+                let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(&app.ui.tool_options, d, app.point_zoom()));
+                let shown = [want.x0, want.y0, want.x1, want.y1].map(f64::from);
+                assert_eq!(live, Some(shown), "{tool:?} {name} (existing {existing}): the outline while dragging");
+                assert!(readout(&h, want.width() as i32, want.height() as i32), "{tool:?} {name}: W/H readout");
+                let p = screen(&h, end[0], end[1]);
+                button(&mut h, p, false, Modifiers::NONE);
+                h.run_steps(2);
+                assert_eq!(selection(&h), want, "{tool:?} {name} (existing {existing}): the release keeps what was shown");
+                assert!(h.query_by_label("W:").is_none(), "the readout goes away with the drag");
+            }
+        }
+        // A plain click outside the selection deselects.
+        let mut h = zoomed(tool);
+        h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 10, "height": 10})).unwrap();
+        move_to(&mut h, 10.2, 10.4);
+        let p = screen(&h, 10.2, 10.4);
+        button(&mut h, p, true, Modifiers::NONE);
+        button(&mut h, p, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert!(h.state().session.active().unwrap().doc.selection.is_none(), "{tool:?}: a click deselects");
     }
 }
 
