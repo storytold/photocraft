@@ -283,6 +283,14 @@ fn services(inbox: Inbox) -> Services {
                 };
                 reply.send(answer);
             }),
+            FileDialogRequest::OpenFiltered { name, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
+                let picked = rfd::AsyncFileDialog::new().add_filter(&name, &extensions.iter().map(String::as_str).collect::<Vec<_>>()).pick_file().await;
+                let answer = match picked {
+                    Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
+                    None => None,
+                };
+                reply.send(answer);
+            }),
             // No save dialog on the web: the suggested name becomes the download name.
             FileDialogRequest::Save { suggested } => {
                 let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());

@@ -26,6 +26,8 @@ pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
     Open { multiple: bool, initial_dir: Option<String> },
+    /// Read a file using a feature-specific picker filter (for example, exported note archives).
+    OpenFiltered { name: String, extensions: Vec<String>, initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
 }
@@ -96,7 +98,7 @@ impl PhotocraftApp {
             return Err("a file dialog is already open".into());
         }
         let kind = match request {
-            FileDialogRequest::Open { .. } => "open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenFiltered { .. } => "open",
             FileDialogRequest::Save { .. } => "save",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
@@ -129,6 +131,23 @@ impl PhotocraftApp {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
+    }
+
+    /// Ask for a file with a feature-specific filter while retaining the normal file reading path.
+    pub(crate) fn pick_file_bytes_filtered(
+        &mut self,
+        name: &str,
+        extensions: &[&str],
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(
+            FileDialogRequest::OpenFiltered { name: name.to_string(), extensions: extensions.iter().map(|ext| ext.to_string()).collect(), initial_dir },
+            move |app, answer| {
+                let (name, bytes) = read_picked(answer)?;
+                then(app, name, bytes)
+            },
+        )
     }
 
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).

@@ -1174,7 +1174,7 @@ fn show_notes(ui: &mut egui::Ui, app: &mut PhotocraftApp, ctx: &egui::Context, h
                 ui.add_space(4.0);
                 if ui.add_sized(vec2(list_width - 8.0, 28.0), egui::Button::new(tl!("Import notes…"))).clicked() {
                     let selection_ctx = ctx.clone();
-                    let result = app.pick_file_bytes(move |app, name, bytes| {
+                    let result = app.pick_file_bytes_filtered("PhotoCraft Notes", &["json"], move |app, name, bytes| {
                         let range = append_imported_notes(&mut app.documentation_notes, &bytes).map_err(|error| format!("{name}: {error}"))?;
                         let imported = range.len();
                         if imported > 0 {

@@ -46,6 +46,17 @@ fn open_starts_in_the_last_used_folder() {
 }
 
 #[test]
+fn filtered_file_picker_passes_its_extensions_to_the_platform_shell() {
+    let (mut app, open, _) = app();
+    app.pick_file_bytes_filtered("PhotoCraft Notes", &["json"], |_, _, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(matches!(
+        open.borrow().as_slice(),
+        [(FileDialogRequest::OpenFiltered { name, extensions, .. }, _)] if name == "PhotoCraft Notes" && extensions == &["json"]
+    ));
+}
+
+#[test]
 fn last_used_dir_takes_the_most_recent_parent() {
     assert_eq!(last_used_dir(&[]), None);
     assert_eq!(last_used_dir(&["/pics/cat.psd".into()]), Some("/pics".into()));
