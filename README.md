@@ -295,6 +295,19 @@ tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr
 photocraft
 ```
 
+## Community packages
+
+These installers are maintained by community members, not by the PhotoCraft team.
+
+On Gentoo, the [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as `media-gfx/photocraft-bin`:
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'media-gfx/photocraft-bin ~amd64' >> /etc/portage/package.accept_keywords/photocraft
+emerge --ask media-gfx/photocraft-bin
+```
+
 Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
 
 > [!IMPORTANT]
