@@ -3,7 +3,12 @@
 use photocraft_doc::Layer;
 use serde_json::json;
 
+use crate::props_layout::COL_GAP;
+use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, widgets};
+
+/// Image › Adjustments › Invert, which inverts a targeted layer mask in place (#780).
+const INVERT: &str = "image.adjustments.invert";
 
 pub fn targeted(app: &PhotocraftApp, layer: &Layer) -> bool {
     app.ui.mask_target && !app.ui.vector_mask_target && layer.mask.is_some()
@@ -50,5 +55,39 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 }
             }
         }
+        refine_row(app, ui);
     });
+}
+
+/// Photoshop's Refine row below Density and Feather: Select and Mask… and Color Range… open their
+/// dialogs (the mask is Select and Mask's input when nothing is selected), and Invert flips the
+/// mask. Invert names its target itself (`"target":"mask"`) rather than leaning on the shell's
+/// target routing, so it edits the mask and never the layer's pixels (#1137).
+fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    const REFINE: [(&str, &str); 3] = [("Select and Mask…", "select.selectAndMask"), ("Color Range…", "select.colorRange"), ("Invert", INVERT)];
+    ui.add_space(theme::ROW_GAP / 2.0);
+    ui.label(egui::RichText::new(tl!("Refine")).color(Tokens::get(ui.ctx()).text_dim));
+    ui.add_space(theme::ROW_GAP / 2.0);
+    let avail = ui.available_width();
+    // Two buttons to a row in a wide panel, as Quick Actions do; a narrow one stacks them.
+    let cols = if avail >= 360.0 { 2 } else { 1 };
+    for row in REFINE.chunks(cols) {
+        // A short last row (or a lone button) still spans the panel.
+        let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = COL_GAP;
+            for &(label, id) in row {
+                // Greyed when its command can't run, by the same rule as the menu item.
+                let enabled = crate::menus::is_enabled(app, id);
+                if ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, label, w).clicked()).inner {
+                    let params = if id == INVERT { json!({"target": "mask"}) } else { json!({}) };
+                    if let Err(error) = crate::menus::invoke(app, ui.ctx(), id, params) {
+                        app.ui.status = error;
+                        app.ui.status_error = true;
+                    }
+                }
+            }
+        });
+        ui.add_space(theme::ROW_GAP);
+    }
 }
