@@ -1,56 +1,22 @@
-//! Android-specific egui input and density helpers.
-//! Kept separate from the document engine and desktop UI.
+//! Android UI ergonomics for PhotoCraft's existing egui interface.
+//!
+//! eframe's egui-winit backend *already* converts the primary Android touch to
+//! pointer events, while preserving native events for multi-touch. Injecting
+//! a second PointerButton here makes a single tap paint twice. Leave event
+//! conversion to eframe and change only visual/touch target sizing.
 #![cfg(target_os = "android")]
 
-use egui::{Context, Event, PointerButton, Pos2, TouchPhase};
+use egui::{Context, vec2};
 
-/// Convert Android display density to a readable UI scale.
-/// egui's logical points already account for DPI; this is an extra
-/// accessibility-friendly adjustment for compact touch screens.
-pub fn configure_touch_ui(ctx: &Context, screen_width_points: f32) {
-    let scale = if screen_width_points < 600.0 { 1.15 } else { 1.0 };
-    ctx.set_zoom_factor(scale);
-}
-
-/// Translate the primary finger to pointer events for existing mouse-oriented
-/// PhotoCraft tools. Other fingers remain available as native egui touch events.
-/// The caller must retain and update primary_touch_id across events.
-pub fn pointer_from_touch(
-    event: &Event,
-    primary_touch_id: &mut Option<egui::TouchId>,
-) -> Vec<Event> {
-    let Event::Touch { id, phase, pos, .. } = event else {
-        return Vec::new();
-    };
-
-    match phase {
-        TouchPhase::Start if primary_touch_id.is_none() => {
-            *primary_touch_id = Some(*id);
-            vec![
-                Event::PointerMoved(*pos),
-                Event::PointerButton {
-                    pos: *pos,
-                    button: PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ]
-        }
-        TouchPhase::Move if *primary_touch_id == Some(*id) => {
-            vec![Event::PointerMoved(*pos)]
-        }
-        TouchPhase::End | TouchPhase::Cancel if *primary_touch_id == Some(*id) => {
-            *primary_touch_id = None;
-            vec![
-                Event::PointerButton {
-                    pos: *pos,
-                    button: PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                },
-                Event::PointerGone,
-            ]
-        }
-        _ => Vec::new(),
-    }
+/// Install touch-friendly sizes after the PhotoCraft theme is installed.
+///
+/// The OS/winit pipeline reports positions in egui points, so this intentionally
+/// does not multiply input coordinates by Android's physical pixel density.
+pub fn configure_touch_ui(ctx: &Context) {
+    ctx.set_zoom_factor(1.0);
+    ctx.style_mut(|style| {
+        style.spacing.interact_size.y = style.spacing.interact_size.y.max(44.0);
+        style.spacing.interact_size.x = style.spacing.interact_size.x.max(44.0);
+        style.spacing.button_padding = vec2(12.0, 9.0);
+    });
 }
