@@ -313,10 +313,14 @@ fn save_as_offers_only_writable_formats_including_ico() {
         assert!(!filters.iter().any(|(_, exts)| exts.iter().any(|e| e == subtype)), "{name}: .{subtype} is offered");
     }
     // File Open lists readable Save As formats in their own type. Export-only formats must
-    // stay absent from both Open filters rather than advertising an unavailable decoder.
+    // stay absent from both Open filters rather than advertising an unavailable decoder. A
+    // format whose decoder is a build-time feature (HEIF, JPEG XL) stays listed either way:
+    // opening one in a build without the feature says what that build lacks.
     for (name, exts) in SAVE_FILTERS {
         for ext in exts.iter().filter(|e| **e != "pdf") {
-            if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
+            let format = photocraft_codecs::from_extension(ext);
+            let feature_gated = matches!(format, Some(photocraft_codecs::Format::Heif | photocraft_codecs::Format::Jxl));
+            if !feature_gated && format.is_some_and(|format| !format.caps().read) {
                 assert!(!OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
                 assert!(!OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
                 continue;
