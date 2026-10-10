@@ -88,7 +88,7 @@ id = "BUG-204-6"
 target = "Test: every Prefs field is read somewhere or on a hidden allowlist"
 status = "done"
 issue = 204
-note = "crates/engine/tests/prefs_usage.rs every_preference_is_read_or_hidden: each field is read outside prefs.rs or listed in prefs::HIDDEN_UNTIL_IMPLEMENTED, never both"
+note = "crates/engine/tests/it/prefs_usage.rs every_preference_is_read_or_hidden: each field is read outside prefs.rs or listed in prefs::HIDDEN_UNTIL_IMPLEMENTED, never both"
 
 [[item]]
 id = "BUG-205-1"

@@ -11,7 +11,7 @@ cargo xtask layers
 For changes below or at L6, also run `cargo xtask wasm`. Command changes require the ignored adversarial test:
 
 ```sh
-cargo test -p photocraft-engine --test panic_hunt -- --ignored
+cargo test -p photocraft-engine --test it panic_hunt -- --ignored
 ```
 
 Format changes should include valid round trips, exact boundary values, truncation, inconsistent lengths, malformed structures, and allocation/decompression limit cases. Pixel behavior should be exercised at applicable 8-bit, 16-bit, and 32-bit depths.

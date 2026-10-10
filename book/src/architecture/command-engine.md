@@ -19,11 +19,11 @@ The desktop UI, CLI, control protocol, and MCP tools all dispatch into this regi
 
 Command parameters and current document state are untrusted at the command boundary. Implementations must return `Err` for missing, wrong-type, out-of-range, or contradictory parameters. Values derived from input must not reach unchecked indexing, division, allocation sizing, or panic paths.
 
-The ignored `crates/engine/tests/panic_hunt.rs` integration test exercises commands with adversarial parameters. A changed command also needs focused graceful-failure tests and should be verified with:
+The ignored `crates/engine/tests/it/panic_hunt.rs` integration test exercises commands with adversarial parameters. A changed command also needs focused graceful-failure tests and should be verified with:
 
 ```sh
 cargo test -p photocraft-engine
-cargo test -p photocraft-engine --test panic_hunt -- --ignored
+cargo test -p photocraft-engine --test it panic_hunt -- --ignored
 ```
 
 The exact command-creation checklist is maintained in the existing [contribution guide](https://github.com/storytold/photocraft/blob/main/docs/contributing.md).
