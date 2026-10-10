@@ -252,12 +252,20 @@ The desktop app also offers an authenticated, loopback-only control channel (`ph
 
 ## Get started
 
+Install [Rust](https://rustup.rs) (stable, 1.95 or newer), then:
+
 ```sh
 git clone https://github.com/storytold/photocraft
 cd photocraft
+cargo xtask doctor --fix                         # the toolchain components/targets the gates need
 cargo run --release -p photocraft -- image.psd   # the desktop app
 cargo test --workspace                           # the test suite
 ```
+
+`cargo xtask doctor` checks everything a machine needs — toolchain targets/components, Linux system
+libraries, and build inputs — and prints the exact fix for anything missing; `--fix` installs the
+required ones. On Linux, install the system packages it lists before `cargo run`. The full list is in
+[docs/prerequisites.md](docs/prerequisites.md).
 
 Japanese fonts for the UI and Type tool come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build input (desktop release builds always include it). Without it PhotoCraft uses your system's CJK fonts:
 

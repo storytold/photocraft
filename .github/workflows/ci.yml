@@ -143,6 +143,13 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo xtask scorecard --check
 
+      # The prerequisites manifest (xtask/src/prereqs.rs) is the single source of truth for the
+      # tools, targets, data checkouts and system libraries a checkout needs; --check fails if the
+      # generated docs/prerequisites.md is stale, so the page cannot drift from the code (the
+      # environment itself is reported by `cargo xtask doctor`, not asserted in CI).
+      - name: Toolchain prerequisites
+        run: cargo xtask doctor --check
+
   corpus:
     # Real-file corpus tests (cargo feature `corpus`), on every PR and on main. The corpora are
     # pinned in xtask/src/corpus_pins.rs and sha256-verified (xtask/*.sha256) after both a cache
