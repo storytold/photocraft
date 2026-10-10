@@ -15,6 +15,8 @@ fn defaults_match_photoshop() {
     assert_eq!(p.transparency_and_gamut.colors(), [[255, 255, 255], [204, 204, 204]]);
     assert_eq!(p.transparency_and_gamut.square(), Some(8.0));
     assert_eq!(p.cursors.painting, PaintingCursor::NormalTip);
+    // Linux global menu: on until the user switches it off (Interface › Use Global Menu Bar).
+    assert!(p.interface.global_menu_bar);
     // Every dialog section is a key of the JSON form.
     let v = p.to_json();
     for (id, _) in SECTIONS {
@@ -60,6 +62,16 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
     assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
     assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+}
+
+#[test]
+fn global_menu_bar_preference_round_trips() {
+    let mut s = session();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.globalMenuBar"})).unwrap(), json!(true));
+    s.execute("prefs.set", json!({"path": "interface.globalMenuBar", "value": false})).unwrap();
+    assert!(!s.prefs().interface.global_menu_bar);
+    s.execute("prefs.reset", json!({"path": "interface.globalMenuBar"})).unwrap();
+    assert!(s.prefs().interface.global_menu_bar);
 }
 
 #[test]
@@ -439,4 +451,10 @@ fn linux_only_preferences_show_only_on_linux() {
     assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
     assert!(!is_hidden("performance.gpuBackend"));
     assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
+}
+
+#[test]
+fn global_menu_preference_shows_on_linux_and_the_bsds_only() {
+    assert_eq!(is_hidden("interface.globalMenuBar"), !cfg!(all(unix, not(target_os = "macos"))));
+    assert!(X11_DESKTOP_ONLY.iter().all(|p| !HIDDEN_UNTIL_IMPLEMENTED.contains(p)));
 }

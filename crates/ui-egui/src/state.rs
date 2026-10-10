@@ -974,6 +974,11 @@ pub struct UiState {
     /// The status message is an error (shown in the warning colour).
     #[serde(default)]
     pub status_error: bool,
+    /// While a global-menu host (Canonical AppMenu/dbusmenu registrar) serves the menus on
+    /// Linux, the in-window menu bar is hidden; mirrored here each frame from the exporter
+    /// so the control channel can read and react to it.
+    #[serde(default)]
+    pub global_menu_hosted: bool,
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
@@ -1050,6 +1055,7 @@ impl Default for UiState {
             next_id: 1,
             status: String::new(),
             status_error: false,
+            global_menu_hosted: false,
             notices: Vec::new(),
             gpu_fallback_notice: None,
             slow_refresh_noticed: Vec::new(),

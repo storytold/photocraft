@@ -4236,6 +4236,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-appmenu"
+version = "0.6.0"
+dependencies = [
+ "futures-lite",
+ "log",
+ "serde",
+ "thiserror 2.0.21",
+ "x11rb",
+ "zbus",
+ "zvariant",
+]
+
+[[package]]
 name = "photocraft-automation"
 version = "0.6.0"
 dependencies = [
@@ -4558,6 +4571,7 @@ dependencies = [
  "flate2",
  "log",
  "photocraft-algo",
+ "photocraft-appmenu",
  "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",

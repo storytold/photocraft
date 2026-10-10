@@ -17,6 +17,7 @@ photocraft-compose = { workspace = true }
 photocraft-gpu = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
+photocraft-appmenu = { workspace = true }
 photocraft-plugins = { workspace = true }
 photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }

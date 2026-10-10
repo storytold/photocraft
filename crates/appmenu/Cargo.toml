@@ -1,0 +1,32 @@
+[package]
+name = "photocraft-appmenu"
+description = "Canonical AppMenu (dbusmenu) global-menu exporter: publishes an application menu over D-Bus and registers X11 windows with the menu registrar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# L0 standalone: no workspace dependencies (usable by every *craft app; AGENTS.md).
+# The D-Bus (zbus) and X11 (x11rb) bits are Linux/BSD only; other targets build the
+# pure-data model plus stubs that fail gracefully (never "unsupported", never panic).
+# Already in Cargo.lock (winit → accesskit → atspi → zbus); pinned exactly like
+# `photocraft-tablet`: review the diff before bumping.
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+zbus = "=5.19.0"
+# Same zvariant zbus 5.19 pulls (`^5.14`); used directly for wire values and signatures.
+zvariant = "=5.15.0"
+serde = { version = "1", features = ["derive", "rc"] }
+# Signal emission from the synchronous update path needs a tiny block_on driver.
+futures-lite = { version = "=2.6.1", default-features = false, features = ["std"] }
+# Same crate and pin `photocraft-tablet` already pulls for XInput2; no extra code size.
+x11rb = { version = "=0.13.2", default-features = false }
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
+
+# The crate-local lints would *replace* the workspace's (`unsafe_code = "forbid"` is a
+# workspace lint: an own `[lints.clippy]` removes it, "extends it" was wrong). The deny
+# list lives in `lib.rs`'s `#![deny(...)]`; the workspace supplies the rust lints.
+[lints]
+workspace = true

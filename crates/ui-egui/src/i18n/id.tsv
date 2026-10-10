@@ -2494,6 +2494,7 @@
 	32 bit (float)	32 bit (titik mengambang)
 	Floating point	Titik mengambang
 	Use Global Light	Gunakan Cahaya Global
+	Use global menu bar	Gunakan bilah menu global
 	Native file drag-and-drop is unavailable	Seret dan lepas berkas native tidak tersedia
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Seret dan lepas berkas native belum didukung di Wayland. Gunakan Berkas › Buka, atau salin gambar di pengelola berkas lalu tempel dengan {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Untuk menjatuhkan berkas, jalankan PhotoCraft di XWayland: `{command}`

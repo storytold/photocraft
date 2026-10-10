@@ -35,6 +35,7 @@ photocraft-engine = { path = "crates/engine" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
+photocraft-appmenu = { path = "crates/appmenu" }
 
 # external
 thiserror = "2"

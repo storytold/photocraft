@@ -929,6 +929,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,
+        // While a global-menu host serves the menus, the in-window menu bar is hidden
+        // (Linux export); visible to automation and scripting.
+        "globalMenuHosted": app.ui.global_menu_hosted,
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "frame": app.frame,

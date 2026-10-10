@@ -2508,6 +2508,7 @@
 	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Ou defina Preferências › Desempenho › Servidor de exibição Linux como X11: o PhotoCraft passa a iniciar sempre no XWayland.
 	Edit › Paste	Editar › Colar
 	Use File › Open, or paste a copied image with {paste}.	Use Arquivo › Abrir ou cole uma imagem copiada com {paste}.
+	Use global menu bar	Usar a barra de menus global
 	Mixer Brush Tool	Ferramenta Pincel misturador
 	Invalid {mode} profile	Perfil {mode} inválido
 	Unnamed {mode} profile	Perfil {mode} sem nome

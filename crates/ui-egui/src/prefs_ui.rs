@@ -900,6 +900,10 @@ fn humanize(key: &str) -> String {
     if key == "webpQuality" {
         return "Quality".into();
     }
+    // Interface › Use global menu bar: an explicit label, not a string replace on the humanized key.
+    if key == "globalMenuBar" {
+        return "Use global menu bar".into();
+    }
     // The auto-hide notice settings read best with their own labels (Interface › Notification, #2022).
     if key == "notificationAutoHide" {
         return "Auto Hide Notifications".into();
