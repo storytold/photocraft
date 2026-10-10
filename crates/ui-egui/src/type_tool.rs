@@ -1121,7 +1121,7 @@ pub(crate) fn parse_kerning(s: &str) -> Option<serde_json::Value> {
     match s.to_ascii_lowercase().as_str() {
         "metrics" => Some(json!("metrics")),
         "optical" => Some(json!("optical")),
-        _ => s.parse::<f64>().ok().filter(|v| v.is_finite() && (-1000.0..=10000.0).contains(v)).map(|v| json!(v.round())),
+        _ => crate::numeric_expression::parse(s).filter(|v| v.is_finite() && (-1000.0..=10000.0).contains(v)).map(|v| json!(v.round())),
     }
 }
 

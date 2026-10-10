@@ -187,3 +187,13 @@ panel width. Catalog coverage and actual shell language-switch tests enforce the
 
 Native CJK font fallback follows the selected UI script and resets its cache when switching
 languages; font delivery on the web remains separate work.
+
+## Arithmetic in numeric fields
+
+Click a numeric value and type an expression, then press Enter or move focus to finish.
+Numeric fields accept `+`, `-`, `*`, `/`, remainder `%`, powers `^` or `**`, parentheses,
+scientific notation, and `pi` / `tau`. For example, `1920/2` gives `960`, and `(30+15)*2`
+gives `90`. Shared value fields apply plain numbers live and arithmetic when editing
+finishes, preserving rounded/integer workflows. Field limits and integer rounding
+still apply; invalid expressions, division by zero, and non-finite results are rejected.
+Expressions are evaluated locally as arithmetic, never as scripts.
