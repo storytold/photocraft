@@ -20,6 +20,7 @@
 //! `--right-click-at X,Y` opens a screen-space context menu after the script, including panel
 //! and document-tab menus that are outside the document-coordinate control pointer.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
+//! `--drag-from X,Y --drag-to X,Y` captures a screen-space drag with the button held.
 
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use photocraft_ui_egui::{PhotocraftApp, Services};
@@ -148,6 +149,17 @@ fn main() {
         harness.step();
         harness.event(egui::Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
         harness.run_steps(4);
+    }
+    let point = |name| arg(&args, name).and_then(|s| s.split_once(',').and_then(|(x, y)| Some(egui::pos2(x.parse().ok()?, y.parse().ok()?))));
+    if let (Some(from), Some(to)) = (point("--drag-from"), point("--drag-to")) {
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        harness.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        harness.step();
+        for step in 1..=6 {
+            harness.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 6.0)));
+            harness.step();
+        }
     }
     let t_settle = std::time::Instant::now();
     while t_settle.elapsed() < std::time::Duration::from_millis(settle_ms) {

@@ -508,6 +508,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         t if t.starts_with("window.toggle.") => {
+            if let Some(g) = crate::dock::Group::from_key(&t["window.toggle.".len()..]) {
+                let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+                if let Some(panel) = crate::panel_docking::PanelTab::from_source(g, *g.tab_mut(&mut app.ui.dock_tabs), pro)
+                    && crate::panel_docking::toggle(app, panel, false).is_some()
+                {
+                    return Ok(Value::Null);
+                }
+            }
             // A shown but collapsed dock group is expanded rather than hidden (#129).
             if let Some(g) = crate::dock::Group::from_key(&t["window.toggle.".len()..]).filter(|g| g.shown(&app.ui.panels) && app.ui.dock.is_collapsed(*g)) {
                 crate::dock::reveal(app, g);
@@ -697,6 +705,15 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "view.snap" => return Some(e.snap),
         "view.lockGuides" => return Some(e.lock_guides),
         _ => {}
+    }
+    if let Some(g) = id.strip_prefix("window.toggle.").and_then(crate::dock::Group::from_key) {
+        let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+        let mut tabs = app.ui.dock_tabs;
+        if let Some(panel) = crate::panel_docking::PanelTab::from_source(g, *g.tab_mut(&mut tabs), pro)
+            && let Some(visible) = crate::panel_docking::visible(app, panel)
+        {
+            return Some(visible);
+        }
     }
     let p = &app.ui.panels;
     Some(match id {
@@ -1265,7 +1282,9 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         return;
     }
     // Presets use the default group order, heights and tabs (Reset brings everything back).
-    app.ui.dock = Default::default();
+    let mut dock = crate::dock::DockLayout::default();
+    dock.arrangement.preserve_ids(&app.ui.dock.arrangement);
+    app.ui.dock = dock;
     app.ui.dock_tabs = Default::default();
     let p = &mut app.ui.panels;
     let (nav, color, layers, history, props) = match app.ui.workspace.as_str() {

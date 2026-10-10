@@ -365,6 +365,12 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(o.arrange == k);
     }
     if let Some((panel, tab)) = panel_tab(app, id) {
+        let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+        if let Some(panel) = crate::dock::Group::from_key(panel).and_then(|g| crate::panel_docking::PanelTab::from_source(g, tab, pro))
+            && let Some(visible) = crate::panel_docking::visible(app, panel)
+        {
+            return Some(visible);
+        }
         let (p, t) = (&app.ui.panels, &app.ui.dock_tabs);
         let (vis, cur) = match panel {
             "navigator" => (p.navigator, t.navigator),
@@ -471,6 +477,12 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
+        let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+        if let Some(key) = crate::dock::Group::from_key(panel).and_then(|g| crate::panel_docking::PanelTab::from_source(g, tab, pro))
+            && let Some(visible) = crate::panel_docking::toggle(app, key, id.starts_with("type.panels."))
+        {
+            return Ok(json!({"panel": panel, "tab": tab, "visible": visible}));
+        }
         let group = crate::dock::Group::from_key(panel);
         let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
         let (vis, cur) = panel_state(app, panel);

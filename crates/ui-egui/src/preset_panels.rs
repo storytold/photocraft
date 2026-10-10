@@ -83,6 +83,12 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     }
     let want = params.get("show").and_then(Value::as_bool);
     if let Some(tab) = color_tab(id) {
+        let panel = crate::panel_docking::PanelTab { group: crate::dock::Group::Color, tab };
+        if let Some(showing) = crate::panel_docking::visible(app, panel) {
+            let show = want.unwrap_or(!showing);
+            crate::panel_docking::set_visible(app, panel, show);
+            return Some(Ok(json!({"visible": show})));
+        }
         // A collapsed Color group counts as not showing: the item expands it (#129).
         let showing = app.ui.panels.color && app.ui.dock_tabs.color == tab && !app.ui.dock.is_collapsed(crate::dock::Group::Color);
         let show = want.unwrap_or(!showing);
@@ -100,6 +106,9 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if let Some(tab) = color_tab(id) {
+        if let Some(showing) = crate::panel_docking::visible(app, crate::panel_docking::PanelTab { group: crate::dock::Group::Color, tab }) {
+            return Some(showing);
+        }
         return Some(app.ui.panels.color && app.ui.dock_tabs.color == tab);
     }
     let mut p = app.ui.presets_ui.clone();

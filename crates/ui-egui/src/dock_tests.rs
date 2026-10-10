@@ -269,6 +269,327 @@ fn double_clicking_a_tab_collapses_and_dragging_a_strip_reorders() {
     assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
 }
 
+fn named_tab(h: &Harness<'static, PhotocraftApp>, group: Group, name: &str) -> Rect {
+    let panels = h.state().ui.dock.arrangement.tabs(group, crate::theme::Tokens::get(&h.ctx).pro);
+    let index = panels.iter().position(|p| p.label() == Some(name)).expect("panel is in this group");
+    last_strips(&h.ctx)
+        .into_iter()
+        .find(|s| s.group == group)
+        .and_then(|s| s.tabs.into_iter().find(|(i, _)| *i == index).map(|(_, r)| r))
+        .expect("tab is visible")
+}
+
+fn floating_target(h: &Harness<'static, PhotocraftApp>, id: u64) -> crate::panel_docking::Target {
+    crate::panel_docking::targets(&h.ctx).into_iter().find(|t| t.location == crate::panel_docking::Location::Floating(id)).expect("floating panel rendered")
+}
+
+fn floating_handle(h: &Harness<'static, PhotocraftApp>, id: u64) -> Pos2 {
+    let target = floating_target(h, id);
+    Pos2::new(target.header.right() - 75.0, target.header.center().y)
+}
+
+#[test]
+fn panel_drag_preview_contains_content_follows_cursor_and_clears() {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("panel-tab-drag"));
+    let preview = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<Vec<egui::epaint::ClippedShape>>(layer.id.with("paint"))).unwrap_or_default();
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1440.0, 900.0), theme);
+        // Drag an inactive tab: its contents must replace the previous active panel.
+        let from = named_tab(&h, Group::Color, "Swatches").center();
+        let to = egui::pos2(350.0, 230.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerMoved(to));
+        h.run_steps(3);
+        assert_eq!(h.state().ui.dock_tabs.color, usize::from(is_pro(theme)), "{theme:?}: dragging selects Swatches");
+        let first = preview(&h.ctx);
+        assert!(first.len() > 15, "{theme:?}: preview includes panel contents, not only a title: {}", first.len());
+        let bounds = first[0].shape.visual_bounding_rect();
+        assert!(bounds.height() > 100.0 && bounds.width() > 100.0, "{theme:?}: {bounds:?}");
+        if let egui::Shape::Rect(rect) = &first[0].shape {
+            assert!(rect.fill.a() > 0 && rect.fill.a() < 255, "preview is translucent");
+        } else {
+            panic!("preview starts with its translucent backing rectangle");
+        }
+        assert_ne!(h.ctx.layer_id_at(to), Some(layer), "paint-only preview must not intercept a drop");
+        let delta = vec2(100.0, 70.0);
+        h.event(egui::Event::PointerMoved(to + delta));
+        h.step();
+        let second = preview(&h.ctx);
+        assert_eq!(first.len(), second.len(), "the preview stays stable during a drag");
+        for (a, b) in first.iter().zip(&second) {
+            assert!((b.shape.visual_bounding_rect().min - a.shape.visual_bounding_rect().min - delta).length() < 0.1);
+        }
+        // Escape cancels the drag even while the pointer button remains held.
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(preview(&h.ctx).is_empty());
+        h.event(egui::Event::PointerButton { pos: to + delta, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(h.state().ui.dock.arrangement.floating.is_empty());
+        // A subsequent ordinary drop still detaches the panel and removes its ghost.
+        let from = named_tab(&h, Group::Color, "Swatches").center();
+        drag(&mut h, from, to);
+        assert_eq!(h.state().ui.dock.arrangement.floating.len(), 1);
+        assert!(preview(&h.ctx).is_empty());
+    }
+}
+
+#[test]
+fn blue_drop_marker_matches_the_inserted_tab_and_clears_off_target() {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("panel-tab-drag"));
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1440.0, 900.0), theme);
+        let from = named_tab(&h, Group::Layers, "Layers").center();
+        let destination = named_tab(&h, Group::Color, "Swatches");
+        let to = destination.left_center() + vec2(2.0, 0.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerMoved(to));
+        h.run_steps(3);
+        let accent = crate::theme::Tokens::get(&h.ctx).accent;
+        let markers = |ctx: &egui::Context| {
+            ctx.data(|d| d.get_temp::<Vec<egui::epaint::ClippedShape>>(layer.id.with("paint")))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::Shape::LineSegment { points, stroke } if stroke.color == accent && stroke.width == 3.0 => Some(points),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(markers(&h.ctx).iter().any(|p| (p[0].x - destination.left()).abs() < 1.0 && p[0].x == p[1].x), "insertion caret precedes Swatches");
+        h.event(egui::Event::PointerMoved(pos2(500.0, 500.0)));
+        h.run_steps(2);
+        assert!(markers(&h.ctx).is_empty(), "no destination line over canvas content");
+        h.event(egui::Event::PointerMoved(to));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        let tabs = h.state().ui.dock.arrangement.tabs(Group::Color, crate::theme::Tokens::get(&h.ctx).pro);
+        let labels: Vec<_> = tabs.iter().filter_map(|p| p.label()).collect();
+        let index = labels.iter().position(|p| *p == "Swatches").expect("destination tab remains");
+        assert_eq!(labels.get(index - 1), Some(&"Layers"));
+        assert!(markers(&h.ctx).is_empty(), "drop clears the marker");
+    }
+}
+
+#[test]
+fn dragging_a_named_tab_detaches_moves_and_redocks_it() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let color = named_tab(&h, Group::Color, "Color").center();
+    drag(&mut h, color, Pos2::new(350.0, 230.0));
+    let floating = h.state().ui.dock.arrangement.floating.first().expect("detached panel").clone();
+    assert_eq!(floating.tabs.len(), 1);
+    assert_eq!(floating.tabs[0].label(), Some("Color"));
+    assert!(!h.state().ui.dock.arrangement.tabs(Group::Color, true).contains(&floating.tabs[0]));
+    assert_eq!(h.state().ui.dock.arrangement.tabs(Group::Color, true).len(), 3, "other tabs stay docked");
+    let target = crate::panel_docking::targets(&h.ctx)
+        .into_iter()
+        .find(|t| t.location == crate::panel_docking::Location::Floating(floating.id))
+        .expect("floating panel rendered");
+    // Move the actual floating window by its title bar.
+    let title = floating_handle(&h, floating.id);
+    drag(&mut h, title, title + vec2(120.0, 70.0));
+    let moved = &h.state().ui.dock.arrangement.floating[0];
+    assert!(moved.position[0] > floating.position[0] + 80.0, "floating window moves: {:?}", moved.position);
+    let target = crate::panel_docking::targets(&h.ctx).into_iter().find(|t| t.location == target.location).expect("moved panel");
+    let tab = target.tabs[0].1.center();
+    let swatches = named_tab(&h, Group::Color, "Swatches");
+    drag(&mut h, tab, swatches.left_center() + vec2(2.0, 0.0));
+    assert!(h.state().ui.dock.arrangement.floating.is_empty(), "last floating tab redocks");
+    assert_eq!(h.state().ui.dock.arrangement.tabs(Group::Color, true).first().and_then(|p| p.label()), Some("Color"));
+}
+
+#[test]
+fn tabs_reorder_and_move_between_groups_without_losing_their_content() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let color = named_tab(&h, Group::Color, "Color").center();
+    let patterns = named_tab(&h, Group::Color, "Patterns");
+    drag(&mut h, color, patterns.right_center() - vec2(2.0, 0.0));
+    assert_eq!(h.state().ui.dock.arrangement.tabs(Group::Color, true).last().and_then(|p| p.label()), Some("Color"));
+    let swatches = named_tab(&h, Group::Color, "Swatches").center();
+    let properties = named_tab(&h, Group::Properties, "Properties");
+    drag(&mut h, swatches, properties.left_center() + vec2(2.0, 0.0));
+    let panels = h.state().ui.dock.arrangement.tabs(Group::Properties, true);
+    assert_eq!(panels.first().and_then(|p| p.label()), Some("Swatches"));
+    assert_eq!(panels[0].group, Group::Color, "content still comes from Swatches, not Properties");
+    assert_eq!(h.state().ui.dock.arrangement.tabs(Group::Color, true).len(), 3);
+    let saved = serde_json::to_value(&h.state().ui.dock).unwrap();
+    let restored: DockLayout = serde_json::from_value(saved).unwrap();
+    assert_eq!(restored, h.state().ui.dock, "tab memberships and selection round trip");
+}
+
+#[test]
+fn floating_title_bar_drag_redocks_and_merges_groups() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (mut app, _, _) = app_with_layers();
+        // Reproduce an already detached panel saved by the earlier build.
+        app.ui.dock.arrangement.place(&[crate::panel_docking::PanelTab { group: Group::Color, tab: 0 }], None, None, Pos2::new(230.0, 168.0), is_pro(theme));
+        let mut legacy = serde_json::to_value(&app.ui.dock.arrangement).unwrap();
+        legacy.as_object_mut().unwrap().remove("next_id");
+        app.ui.dock.arrangement = serde_json::from_value(legacy).unwrap();
+        let mut h = harness(app, vec2(1440.0, 900.0), theme);
+        let id = h.state().ui.dock.arrangement.floating[0].id;
+        let title = floating_handle(&h, id);
+        let swatches = named_tab(&h, Group::Color, "Swatches").center();
+        drag(&mut h, title, swatches);
+        assert!(h.state().ui.dock.arrangement.floating.is_empty(), "{theme:?}: dragging the title bar redocks the panel");
+        let color = named_tab(&h, Group::Color, "Color").center();
+        drag(&mut h, color, Pos2::new(250.0, 180.0));
+        let patterns = named_tab(&h, Group::Color, "Patterns").center();
+        drag(&mut h, patterns, Pos2::new(650.0, 180.0));
+        assert_eq!(h.state().ui.dock.arrangement.floating.len(), 2, "{theme:?}: {:?}", h.state().ui.dock.arrangement);
+        let source = h.state().ui.dock.arrangement.floating[1].id;
+        let destination = h.state().ui.dock.arrangement.floating[0].id;
+        let title = floating_handle(&h, source);
+        let target = crate::panel_docking::targets(&h.ctx).into_iter().find(|t| t.location == crate::panel_docking::Location::Floating(destination)).unwrap();
+        drag(&mut h, title, target.tabs[0].1.center());
+        assert_eq!(h.state().ui.dock.arrangement.floating.len(), 1, "{theme:?}: title bar drop merges floating groups");
+        assert_eq!(h.state().ui.dock.arrangement.floating[0].tabs.len(), 2);
+        let id = h.state().ui.dock.arrangement.floating[0].id;
+        let title = floating_target(&h, id).header;
+        assert!(title.height() <= 30.0, "{theme:?}: compact title bar: {title:?}");
+    }
+}
+
+#[test]
+fn detached_layers_and_history_keep_the_users_resized_height() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        for group in [Group::Layers, Group::History, Group::Color, Group::Properties] {
+            let (mut app, _, _) = app_with_layers();
+            app.ui.dock.arrangement.place(&[crate::panel_docking::PanelTab { group, tab: 0 }], None, None, Pos2::new(230.0, 168.0), is_pro(theme));
+            let mut h = harness(app, vec2(1440.0, 900.0), theme);
+            let initial = h.state().ui.dock.arrangement.floating[0].size;
+            h.run_steps(120);
+            let stable = h.state().ui.dock.arrangement.floating[0].size;
+            assert!((initial[1] - stable[1]).abs() < 2.0, "{theme:?} {group:?}: growing {initial:?} -> {stable:?}");
+            let id = h.state().ui.dock.arrangement.floating[0].id;
+            let corner = floating_target(&h, id).rect.right_bottom() - vec2(3.0, 3.0);
+            drag(&mut h, corner, corner - vec2(35.0, 90.0));
+            let resized = h.state().ui.dock.arrangement.floating[0].size;
+            assert!(resized[1] < initial[1] - 50.0, "{theme:?} {group:?}: shrink works: {initial:?} -> {resized:?}");
+            h.run_steps(120);
+            let later = h.state().ui.dock.arrangement.floating[0].size;
+            assert!((resized[1] - later[1]).abs() < 2.0, "{theme:?} {group:?}: shrunk panel grows back: {resized:?} -> {later:?}");
+        }
+    }
+}
+
+#[test]
+fn floating_panels_collapse_restore_and_merge_only_at_headers() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (mut app, _, _) = app_with_layers();
+        for (group, x) in [(Group::Layers, 230.0), (Group::History, 650.0)] {
+            app.ui.dock.arrangement.place(&[crate::panel_docking::PanelTab { group, tab: 0 }], None, None, Pos2::new(x, 168.0), is_pro(theme));
+        }
+        let mut h = harness(app, vec2(1440.0, 900.0), theme);
+        let destination = h.state().ui.dock.arrangement.floating[0].id;
+        let source = h.state().ui.dock.arrangement.floating[1].id;
+        let from = floating_handle(&h, source);
+        let body = floating_target(&h, destination).rect.center();
+        drag(&mut h, from, body);
+        assert_eq!(h.state().ui.dock.arrangement.floating.len(), 2, "{theme:?}: dropping on the body must not merge");
+        // Move it away again before testing the collapse controls underneath.
+        let from = floating_handle(&h, source);
+        drag(&mut h, from, Pos2::new(860.0, 180.0));
+        let expanded = h.state().ui.dock.arrangement.floating[0].size;
+        let click = |h: &mut Harness<'static, PhotocraftApp>, at| {
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(4);
+        };
+        let header = floating_target(&h, destination).header;
+        click(&mut h, Pos2::new(header.right() - 56.0, header.center().y));
+        assert!(h.state().ui.dock.arrangement.floating[0].collapsed);
+        assert!(floating_target(&h, destination).rect.height() <= 30.0);
+        assert_eq!(h.state().ui.dock.arrangement.floating[0].size[1], expanded[1]);
+        let saved = serde_json::to_value(&h.state().ui.dock).unwrap();
+        let restored: DockLayout = serde_json::from_value(saved).unwrap();
+        assert!(restored.arrangement.floating[0].collapsed);
+        let header = floating_target(&h, destination).header;
+        click(&mut h, Pos2::new(header.right() - 56.0, header.center().y));
+        assert!(!h.state().ui.dock.arrangement.floating[0].collapsed);
+        assert!((h.state().ui.dock.arrangement.floating[0].size[1] - expanded[1]).abs() < 2.0);
+        let from = floating_handle(&h, source);
+        let header = floating_target(&h, destination).tabs[0].1.center();
+        drag(&mut h, from, header);
+        assert_eq!(h.state().ui.dock.arrangement.floating.len(), 1, "{theme:?}: header drop merges");
+        assert_eq!(h.state().ui.dock.arrangement.floating[0].tabs.len(), 2);
+    }
+}
+
+#[test]
+fn locked_workspace_does_not_detach_panel_tabs() {
+    let (mut app, _, _) = app_with_layers();
+    app.session.prefs.edit(|p| p.workspace_locked = true);
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let color = named_tab(&h, Group::Color, "Color").center();
+    drag(&mut h, color, Pos2::new(350.0, 230.0));
+    assert!(h.state().ui.dock.arrangement.floating.is_empty());
+    assert!(h.state().ui.dock.arrangement.groups.is_none());
+}
+
+#[test]
+fn moved_panels_reopen_through_the_window_menu_and_restore_at_launch() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1200.0, 800.0), theme);
+        let tab = named_tab(&h, Group::Color, "Color").center();
+        drag(&mut h, tab, Pos2::new(350.0, 230.0));
+        assert_eq!(h.state().ui.dock.arrangement.floating[0].tabs[0].label(), Some("Color"));
+        let size = h.state().ui.dock.arrangement.floating[0].size;
+        h.run_steps(120);
+        let stable = h.state().ui.dock.arrangement.floating[0].size;
+        assert!((stable[1] - size[1]).abs() < 2.0, "{theme:?}: floating size stays stable: {size:?} -> {stable:?}");
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "window.panel.color", json!({})).unwrap();
+        assert!(!h.state().ui.dock.arrangement.floating[0].open);
+        crate::menus::invoke(h.state_mut(), &ctx, "window.panel.color", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().ui.dock.arrangement.floating[0].open);
+        assert_eq!(crate::view_cmds::checked(h.state(), "window.panel.color"), Some(true));
+        let remembered = h.state().session.prefs().panel_layout.clone();
+        let (mut restored, _, _) = app_with_layers();
+        restored.session.prefs.edit(|p| p.panel_layout = remembered);
+        restore(&mut restored);
+        assert_eq!(restored.ui.dock, h.state().ui.dock);
+        crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
+        assert!(h.state().ui.dock.arrangement.floating.is_empty());
+        assert!(h.state().ui.dock.arrangement.groups.is_none());
+    }
+}
+
+#[test]
+fn floating_tabs_merge_and_preset_menu_follows_the_moved_tab() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let tab = named_tab(&h, Group::Color, "Color").center();
+    drag(&mut h, tab, Pos2::new(350.0, 230.0));
+    let target = crate::panel_docking::targets(&h.ctx).into_iter().find(|t| matches!(t.location, crate::panel_docking::Location::Floating(_))).unwrap();
+    let gradients = named_tab(&h, Group::Color, "Gradients").center();
+    drag(&mut h, gradients, target.tabs[0].1.center());
+    assert_eq!(h.state().ui.dock.arrangement.floating.len(), 1);
+    assert_eq!(h.state().ui.dock.arrangement.floating[0].tabs.len(), 2);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.gradients", json!({"show": false})).unwrap();
+    assert!(!h.state().ui.dock.arrangement.floating[0].open);
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.gradients", json!({"show": true})).unwrap();
+    assert!(h.state().ui.dock.arrangement.floating[0].open);
+    assert_eq!(crate::preset_panels::checked(h.state(), "window.panel.gradients"), Some(true));
+}
+
 #[test]
 fn tiny_windows_do_not_panic() {
     for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
@@ -706,4 +1027,53 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
     v.as_object_mut().unwrap().remove("dock");
     assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
+}
+
+#[test]
+fn closed_moved_tabs_reopen_in_their_new_container() {
+    use crate::panel_docking::{Location, PanelTab};
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1440.0, 900.0), theme);
+        let pro = crate::theme::Tokens::get(&h.ctx).pro;
+        let layer = PanelTab { group: Group::Layers, tab: 0 };
+        h.state_mut().ui.dock.arrangement.place(&[layer], Some(Location::Dock(Group::Color)), None, pos2(0.0, 0.0), pro);
+        h.state_mut().ui.dock.hide_tab(Group::Layers, 0, pro);
+        h.run_steps(3);
+        let target = crate::panel_docking::targets(&h.ctx).into_iter().find(|t| t.location == Location::Dock(Group::Color)).unwrap();
+        assert!(!target.tabs.iter().any(|(p, _)| *p == layer));
+        h.state_mut().ui.dock_tabs.layers = 0;
+        reveal(h.state_mut(), Group::Layers);
+        h.run_steps(3);
+        let target = crate::panel_docking::targets(&h.ctx).into_iter().find(|t| t.location == Location::Dock(Group::Color)).unwrap();
+        assert!(target.tabs.iter().any(|(p, _)| *p == layer));
+        assert_eq!(h.state().ui.dock.arrangement.selected.get(&Group::Color), Some(&layer));
+        let color = PanelTab { group: Group::Color, tab: 0 };
+        h.state_mut().ui.dock.arrangement.place(&[color], None, None, pos2(200.0, 200.0), pro);
+        h.state_mut().ui.dock.hide_tab(Group::Color, color.source_index(pro), pro);
+        h.run_steps(3);
+        assert!(!crate::panel_docking::targets(&h.ctx).iter().any(|t| matches!(t.location, Location::Floating(_))));
+        h.state_mut().ui.dock_tabs.color = color.source_index(pro);
+        reveal(h.state_mut(), Group::Color);
+        h.run_steps(3);
+        assert!(crate::panel_docking::targets(&h.ctx).iter().any(|t| matches!(t.location, Location::Floating(_))));
+    }
+}
+
+#[test]
+fn rail_follows_detached_and_regrouped_panels() {
+    use crate::panel_docking::{Location, PanelTab};
+    let (mut app, _, _) = app_with_layers();
+    app.ui.theme = ThemeKind::ProMedium;
+    let panel = PanelTab { group: Group::Layers, tab: 0 };
+    app.ui.dock.arrangement.place(&[panel], None, None, pos2(200.0, 200.0), true);
+    rail_click(&mut app, Group::Layers, true);
+    assert!(app.ui.dock.arrangement.floating[0].collapsed);
+    rail_click(&mut app, Group::Layers, true);
+    assert!(!app.ui.dock.arrangement.floating[0].collapsed);
+    app.ui.dock.arrangement.place(&[panel], Some(Location::Dock(Group::Color)), None, pos2(0.0, 0.0), true);
+    rail_click(&mut app, Group::Layers, true);
+    assert!(app.ui.dock.is_collapsed(Group::Color));
+    rail_click(&mut app, Group::Layers, true);
+    assert!(!app.ui.dock.is_collapsed(Group::Color));
 }

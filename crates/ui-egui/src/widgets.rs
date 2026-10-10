@@ -43,6 +43,7 @@ pub fn card(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, body: im
 
 /// What happened on a card's tab strip this frame (see [`card_ex`]).
 pub struct CardResponse {
+    pub tab_drag: Option<(usize, Response)>,
     /// The tab strip background: drag to move the group, double-click to collapse it.
     pub strip: Response,
     /// The panel menu button (hamburger in Pro, ellipsis in Studio).
@@ -58,6 +59,62 @@ pub struct CardResponse {
     pub tabs: Vec<(usize, Rect)>,
     /// The » overflow button, when some tabs didn't fit.
     pub chevron: Option<Rect>,
+}
+
+pub(crate) struct FloatingHeader {
+    pub card: CardResponse,
+    pub close: bool,
+    pub toggle_collapse: bool,
+}
+
+/// Floating panels use their tab strip as their title bar, without a second row.
+pub(crate) fn floating_header(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool) -> FloatingHeader {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    let strip = ui.interact(rect, ui.id().with((id, "strip")), Sense::click_and_drag());
+    ui.painter().rect_filled(rect, t.radius_sm, t.tab_strip);
+    let close_rect = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(20.0, 22.0));
+    let menu_rect = close_rect.translate(vec2(-22.0, 0.0));
+    let collapse_rect = menu_rect.translate(vec2(-22.0, 0.0));
+    let area = Rect::from_min_max(rect.min, pos2(collapse_rect.left() - 2.0, rect.bottom()));
+    let tabs_out = if t.pro {
+        crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), rect, area.right(), tabs, selected, collapsed)
+    } else {
+        crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected)
+    };
+    let close = ui.interact(close_rect, ui.id().with((id, "close")), Sense::click()).on_hover_text(tl!("Close Tab Group"));
+    crate::icons::paint(ui, close_rect, "x", 12.0, if close.hovered() { t.text } else { t.text_dim });
+    let menu = ui.interact(menu_rect, ui.id().with((id, "menu")), Sense::click());
+    let color = if menu.hovered() { t.text } else { t.text_dim };
+    if t.pro {
+        for k in 0..3 {
+            let y = menu_rect.center().y - 3.5 + k as f32 * 3.5;
+            ui.painter().line_segment([pos2(menu_rect.center().x - 5.0, y), pos2(menu_rect.center().x + 5.0, y)], Stroke::new(1.0, color));
+        }
+    } else {
+        crate::icons::paint(ui, menu_rect, "ellipsis", 12.0, color);
+    }
+    let collapse = ui.interact(collapse_rect, ui.id().with((id, "collapse")), Sense::click()).on_hover_text(if collapsed {
+        tl!("Expand Panel Group")
+    } else {
+        tl!("Collapse Panel Group")
+    });
+    crate::icons::paint(ui, collapse_rect, if collapsed { "chevrons-left" } else { "chevrons-right" }, 12.0, t.text_dim);
+    let toggle_collapse = collapse.clicked() || strip.double_clicked() || tabs_out.double_clicked;
+    FloatingHeader {
+        close: close.clicked(),
+        toggle_collapse,
+        card: CardResponse {
+            tab_clicked: tabs_out.clicked,
+            tab_context: tabs_out.context,
+            tab_drag: tabs_out.drag,
+            strip,
+            menu,
+            tab_double_clicked: tabs_out.double_clicked,
+            tabs: tabs_out.tabs,
+            chevron: tabs_out.chevron,
+        },
+    }
 }
 
 /// [`card`] that can be collapsed to its tab strip and reports strip and menu interactions.
@@ -90,6 +147,7 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
                 body(ui, *selected);
             }
             CardResponse {
+                tab_drag: tabs_out.drag,
                 strip,
                 menu,
                 tab_clicked: tabs_out.clicked,
@@ -162,6 +220,7 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     }
     ui.add_space(2.0);
     CardResponse {
+        tab_drag: tabs_out.drag,
         strip: strip_resp,
         menu: mresp,
         tab_clicked: tabs_out.clicked,

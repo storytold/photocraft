@@ -109,6 +109,7 @@ mod opacity_keys;
 pub mod outline;
 pub mod paint_mouse;
 pub mod palette;
+mod panel_docking;
 pub mod panels;
 pub mod parity;
 pub mod patch_preview;

@@ -95,6 +95,7 @@ pub enum TabContextAction {
 pub struct StripOut {
     /// A tab was activated, including a choice from the overflow menu.
     pub clicked: bool,
+    pub drag: Option<(usize, Response)>,
     pub double_clicked: bool,
     pub context: Option<TabContextAction>,
     /// Rects of the tabs on the strip, `(tab index, rect)`.
@@ -152,19 +153,22 @@ fn tabs_in(
     let natural: Vec<f32> = tabs.iter().map(|n| ui.painter().layout_no_wrap((*n).to_owned(), font.clone(), t.text).size().x + pad).collect();
     let f = fit(&natural, *selected, area.width(), min_w, CHEVRON_W);
     let mut x = area.left();
-    let mut out = StripOut { clicked: false, double_clicked: false, context: None, tabs: Vec::with_capacity(f.shown.len()), chevron: None };
+    let mut out = StripOut { clicked: false, drag: None, double_clicked: false, context: None, tabs: Vec::with_capacity(f.shown.len()), chevron: None };
     for &(i, w) in &f.shown {
         let Some(name) = tabs.get(i) else { continue };
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()));
-        let resp = ui.interact(r, id.with(("tab", i)), Sense::click());
+        let resp = ui.interact(r, id.with(("tab", i)), Sense::click_and_drag());
         // The padding gives way (down to a third) before the label is cut.
         let galley = elided(ui, name, font.clone(), t.text, (w - pad / 3.0).max(1.0));
         let cut = galley.size().x + pad + 0.5 < natural.get(i).copied().unwrap_or(0.0) && galley.size().x + pad / 3.0 >= w - 0.5;
         paint_tab(ui, r, i, galley, &resp, active(i));
         let resp = if cut { resp.on_hover_text(*name) } else { resp };
         out.double_clicked |= resp.double_clicked();
-        if resp.clicked() {
-            out.clicked = true;
+        if resp.dragged() || resp.drag_stopped() {
+            out.drag = Some((i, resp.clone()));
+        }
+        if resp.clicked() || resp.dragged() {
+            out.clicked = resp.clicked();
             *selected = i;
         }
         // The context menu belongs to the actual tab response, so its normal clicks
