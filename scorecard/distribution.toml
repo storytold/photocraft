@@ -43,9 +43,9 @@ note = "release.yml:242-283 (freebsd job) + packaging/freebsd/package.sh; layout
 [[item]]
 id = "DIST-220-1"
 target = "Help > Check for Updates plus an opt-out periodic release-feed check on all desktops"
-status = "missing"
+status = "done"
 issue = 220
-note = "No update check in crates"
+note = "Help > Check for Updates with GitHub Releases feed, semver comparison, periodic background check, and General settings toggle (#220)"
 
 [[item]]
 id = "DIST-220-2"
