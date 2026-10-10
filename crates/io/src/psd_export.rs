@@ -504,7 +504,12 @@ impl Ex {
             let keep = raw.iter().any(|(k, d)| matches!(k, b"SoCo" | b"GdFl" | b"PtFl") && blocks::parse_fill(k, d).as_ref() == Some(f));
             if !keep {
                 raw.retain(|(k, _)| !matches!(k, b"SoCo" | b"GdFl" | b"PtFl"));
-                regenerated.push(blocks::write_fill(f));
+                // Photoshop pads layer-level blocks to a multiple of 4 inside the length (every
+                // one in its own files is). A fill descriptor of 2 mod 4 bytes, as a pattern
+                // name of the wrong length gives, left the record's extra data unaligned.
+                let (key, mut data) = blocks::write_fill(f);
+                data.resize(data.len().next_multiple_of(4), 0);
+                regenerated.push((key, data));
             }
         };
         match &l.content {
@@ -715,7 +720,13 @@ impl Ex {
                         }
                         None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
                     };
-                    crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt)
+                    match unfiltered {
+                        Ok(unfiltered) => crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt),
+                        Err(e) => {
+                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -890,6 +901,12 @@ impl Ex {
             && c.fill == *f
         {
             return c.surface.clone();
+        }
+        if self.cmyk
+            && let Some(s) =
+                photocraft_compose::gradient_fill::render_cmyk_fill(f, self.canvas, photocraft_compose::fill_frame(l, self.canvas), self.fmt.sample)
+        {
+            return s;
         }
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
@@ -1320,7 +1337,8 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
             ex.text_index.insert(l.id, index);
         }
     }
-    ex.emit(&doc.layers);
+    let space = photocraft_compose::cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers));
 
     // Merged composite, rendered and encoded in bands (no full-size float composite). Matting
     // against white only changes pixels with alpha < 1; if some are slightly translucent but all

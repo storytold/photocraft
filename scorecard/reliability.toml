@@ -33,9 +33,9 @@ note = "photocraft_format::atomic_write (format/src/atomic.rs, #230): same-dir t
 [[item]]
 id = "REL-212-1"
 target = "Fallible allocation for paste/erase/fill/transform/save/import, clear out-of-memory error"
-status = "missing"
+status = "partial"
 issue = 212
-note = "try_reserve only in io/flat.rs:221; codec max_alloc limits cover decode only"
+note = "Raster region/tile buffers, paste/erase/fill/transform and warp output use fallible reservations; save/import boundaries preserve existing state, but encoder/decoder internals still need a broader fallible-allocation audit"
 
 [[item]]
 id = "REL-212-2"
@@ -47,6 +47,6 @@ note = "PSD export uses checked size estimates for raster, masks, channels, and 
 [[item]]
 id = "REL-212-3"
 target = "Tests: an allocation-limit injection makes each command Err with the document unchanged"
-status = "missing"
+status = "partial"
 issue = 212
-note = "Only codec/raw max_alloc tests (codecs/tests/limits.rs:48)"
+note = "Engine failpoint tests cover paste, erase, fill, transform, import and save transaction boundaries; codec-level allocator failure coverage remains open"

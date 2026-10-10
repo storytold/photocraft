@@ -1093,6 +1093,10 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     f.insert("section".into(), json!(section));
     f.insert("__search".into(), json!(search));
     f.insert("values".into(), values);
+    // A colour swatch was clicked: open the Color Picker on that value (#2144).
+    if let Some((path, name)) = ctx_take_pick(ui) {
+        crate::color_picker_ui::request_field(f, &format!("/values/{}", path.replace('.', "/")), &crate::color_picker_ui::title_for(&name));
+    }
 }
 
 /// Preferences › Performance: what the app renders with now, and a reset of the GPU backend
@@ -1280,6 +1284,15 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
     ui.add_space(12.0);
 }
 
+/// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
+/// holds the fields the Color Picker request goes in.
+const PICK_ID: &str = "prefs-pick-color";
+
+/// The colour swatch clicked this frame, if any: (preference path, label).
+fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
+    ui.ctx().data_mut(|d| d.remove_temp::<(String, String)>(egui::Id::new(PICK_ID)))
+}
+
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
 fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>, search: &str) {
@@ -1347,7 +1360,10 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                     let c = prefs::parse_hex(s).unwrap_or([128, 128, 128]);
                     let mut rgb = c;
                     ui.horizontal(|ui| {
-                        crate::widgets::color_edit_button_srgb(ui, &mut rgb);
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(PICK_ID), (path.clone(), label.clone())));
+                        }
                         hex_field(ui, &path, &mut rgb);
                     });
                     obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
@@ -2447,7 +2463,7 @@ mod tests {
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
         assert!(!prefs::is_hidden("type.useEscToCommit"));
-        assert!(prefs::is_hidden("type.smartQuotes"));
+        assert!(!prefs::is_hidden("type.smartQuotes"));
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
