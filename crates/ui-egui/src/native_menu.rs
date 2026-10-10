@@ -1063,6 +1063,72 @@ mod tests {
         assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
     }
 
+    /// Edit > Cut uses the type editor's selection, like the clipboard Cut event (#1355).
+    #[test]
+    fn cut_selected_type_from_native_menu_matches_keyboard_cut() {
+        for native_click in [true, false] {
+            let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut app = app(true);
+            let ctx = egui::Context::default();
+            let id = photocraft_doc::LayerId(app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 24})).unwrap()["layer"].as_u64().unwrap());
+            crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 5));
+            let events = if native_click { vec![Event::Click("edit.cut".into())] } else { Vec::new() };
+            app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events })));
+            frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+            assert!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be enabled for selected characters");
+
+            let mut raw = egui::RawInput::default();
+            app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+            if !native_click {
+                raw.events.push(egui::Event::Cut);
+            }
+            let mut out = ctx.run_ui(raw, |ui| {
+                run(&mut app, ui.ctx());
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                sync(&mut app, ui.ctx());
+            });
+            out.textures_delta.clear();
+            assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText("Hello".into())]);
+            let photocraft_doc::LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(id).unwrap().content else {
+                panic!("type layer changed kind")
+            };
+            assert!(text.text.is_empty());
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 0));
+            assert!(!synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be disabled at an empty caret");
+            assert!(app.session.clipboard.is_none(), "text Cut must not copy rendered pixels");
+        }
+    }
+
+    #[test]
+    fn native_cut_without_type_edit_keeps_pixel_clipboard_behavior() {
+        let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app(false);
+        app.run("file.new", json!({"width": 4, "height": 4, "background": "transparent"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([1.0, 0.0, 0.0, 1.0]));
+        let ctx = egui::Context::default();
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("edit.cut".into())] })));
+        frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+        assert_eq!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, app.session.is_enabled("edit.cut"));
+        assert!(app.session.is_enabled("edit.cut"));
+        let mut raw = egui::RawInput::default();
+        app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+        frame(&ctx, raw, |ui| {
+            run(&mut app, ui.ctx());
+            sync(&mut app, ui.ctx());
+        });
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([0.0, 0.0, 0.0, 0.0]));
+        let clip = app.session.clipboard.as_ref().unwrap();
+        assert_eq!((clip.bounds.width(), clip.bounds.height()), (4, 4));
+        let mut px = vec![[0u8; 4]; 16];
+        clip.surface.read_rgba8_into(clip.bounds, &mut px);
+        assert_eq!(px, vec![[255u8, 0, 0, 255]; 16]);
+        assert!(app.ui.text_edit.is_none());
+    }
+
     /// With the Mac menu bar the title bar draws no menu titles: each title shows once fewer.
     #[test]
     fn the_title_bar_hides_its_menus_with_the_mac_menu_bar() {

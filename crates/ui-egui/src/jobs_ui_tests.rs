@@ -283,6 +283,32 @@ fn files_open_in_the_background_with_a_tab_and_cancel_closes_it() {
     assert!(h.state().jobs.focus.is_none());
 }
 
+/// #2423: a long file name used to wrap the card's title and push the percentage and Cancel
+/// below the card. The name stays on one line and every row is inside the card.
+#[test]
+fn the_opening_card_keeps_a_long_name_and_cancel_inside() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    let long = "a7rv-test_2024_02_17_shot_30_3705_with_an_even_longer_suffix_that_never_ends.psb";
+    for name in ["short.psd", long] {
+        h.state_mut().jobs.opens.clear();
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, slot: None });
+        h.state_mut().jobs.focus = Some(job);
+        h.run_steps(4);
+        let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
+        assert!(r.title.height() < 22.0, "{name}: the title is one line, {:?}", r.title);
+        assert!(r.card.contains_rect(r.title), "{name}: title {:?} inside card {:?}", r.title, r.card);
+        assert!(r.card.contains_rect(r.cancel), "{name}: Cancel {:?} inside card {:?}", r.cancel, r.card);
+        assert!(r.title.right() <= r.card.right() - 10.0, "{name}: the title keeps the card's padding");
+        assert!(r.cancel.width() > 0.0 && r.cancel.height() > 0.0, "{name}: Cancel was drawn");
+    }
+    gate.store(true, Ordering::Relaxed);
+    h.state_mut().jobs.focus = None;
+    h.state_mut().jobs.opens.clear();
+    h.run_steps(4);
+}
+
 #[test]
 fn templates_open_untitled_in_the_background() {
     let mut h = app_harness();

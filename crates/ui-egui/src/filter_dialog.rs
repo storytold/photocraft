@@ -247,6 +247,7 @@ pub const PREVIEWED: &[&str] = &[
     "layer.matting.defringe",
     "layer.matting.colorDecontaminate",
     "layer.layerStyle.scaleEffects",
+    "type.warpText",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
@@ -339,6 +340,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut fields);
     }
+    if command == "type.warpText" {
+        warp_defaults(app, &mut fields);
+    }
     // Photoshop's Pattern Name dialog starts from the name the pattern would get anyway.
     if command == "edit.definePattern" {
         fields.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
@@ -362,6 +366,28 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
     fields.insert("angle".into(), json!(rot.abs()));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
+}
+
+/// Warp Text edits the type layers it opened on (the selected ones, or the one being edited) and
+/// starts from the warp the shown layer has, or None, never from remembered values (#218).
+fn warp_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    if let Some(Value::Object(targets)) = crate::type_tool::formatting_params(app) {
+        fields.extend(targets);
+    }
+    let warp = crate::type_tool::target_text(app).and_then(|t| t.warp.clone());
+    let w = warp.unwrap_or(photocraft_doc::text::TextWarp {
+        style: "warpNone".into(),
+        value: 50.0,
+        horizontal_distortion: 0.0,
+        vertical_distortion: 0.0,
+        horizontal: true,
+    });
+    // A style without a short id (from a PSD) shows as None, with the layer's values.
+    fields.insert("style".into(), json!(photocraft_text::warp::short_style(&w.style).unwrap_or("none")));
+    fields.insert("bend".into(), json!(w.value));
+    fields.insert("horizontalDistortion".into(), json!(w.horizontal_distortion));
+    fields.insert("verticalDistortion".into(), json!(w.vertical_distortion));
+    fields.insert("orientation".into(), json!(if w.horizontal { "horizontal" } else { "vertical" }));
 }
 
 /// A filter dialog with live preview for `command` whose parameters follow `spec` (registry
@@ -531,19 +557,25 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
                 let rgb = set.or(default).unwrap_or([0.0; 3]);
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let mut bytes = rgb.map(q);
-                let mut changed = false;
+                let bytes = rgb.map(q);
+                let name = label(&p.key);
+                let mut clicked = false;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.label(egui::RichText::new(&name).color(t.text_dim));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        changed = crate::widgets::color_edit_button_srgb(ui, &mut bytes).changed();
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
                     });
                 });
-                if changed {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(bytes.map(|b| f32::from(b) / 255.0))));
-                } else if set.is_none() && default.is_some() {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(rgb)));
+                if set.is_none() && default.is_some() {
+                    f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                }
+                if clicked {
+                    if !f.contains_key(&p.key) {
+                        f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                    }
+                    crate::color_picker_ui::request_field(f, &p.key, &crate::color_picker_ui::title_for(&name));
                 }
             }
             Kind::Int { default } => {
@@ -590,7 +622,10 @@ pub fn preview_document_with(
     k: u32,
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
-    let proxy = crate::proxy::proxy_document(doc, k);
+    // Warp Text renders the type again from the layer model (font size, position), which a
+    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
+    let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
+    let proxy = crate::proxy::proxy_document(doc, run_k);
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());
     s.add_document(proxy, None);
@@ -598,7 +633,7 @@ pub fn preview_document_with(
         s.select_layer(id).ok()?;
     }
     let mut p = params.clone();
-    if k > 1
+    if run_k > 1
         && let Some(o) = p.as_object_mut()
     {
         let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
@@ -615,13 +650,13 @@ pub fn preview_document_with(
                 let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
                 // Negative lengths (Offset's left/up shift, Displace's inverted scale) keep their
                 // sign: the floor that keeps a radius positive turned them into +0.1 (#2063).
-                let x = x / k as f64;
+                let x = x / run_k as f64;
                 *v = json!(if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) });
             }
         }
     }
     s.execute(command, p).ok()?;
-    s.active().map(|d| (*d.doc).clone())
+    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
 }
 
 /// Cached preview state on the app.
@@ -1125,6 +1160,29 @@ mod tests {
         // Tree's and Picture Frame's sizes are relative, not pixels (and not shown as "px").
         assert!(!is_pixel_param_of("filter.render.tree", "size") && !is_pixel_param_of("filter.render.pictureFrame", "size"));
         assert!(is_pixel_param_of("filter.stylize.extrude", "size"));
+    }
+
+    /// #218: Warp Text renders the type again from the layer model, which a reduced proxy doesn't
+    /// scale: the preview showed the text k times too large. It is the full-size result, reduced.
+    #[test]
+    fn warp_text_preview_matches_the_full_size_result_on_a_reduced_proxy() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 4000, "height": 3000})).unwrap();
+        s.execute("type.create", json!({"x": 300, "y": 1600, "text": "Warp", "size": 400})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, layer) = ((*st.doc).clone(), st.active_layer.unwrap());
+        let p = json!({"style": "arc", "bend": 40.0});
+        let k = preview_factor("type.warpText", &p, crate::proxy::preview_factor(&doc, true));
+        assert!(k > 1, "the preview runs on a reduced proxy");
+        let cache = |d: &Document| match &d.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => t.cache.clone().unwrap(),
+            _ => panic!("a type layer"),
+        };
+        let full = crate::proxy::proxy_document(&preview_document(&doc, Some(layer), "type.warpText", &p, 1).unwrap(), k);
+        let shown = preview_document(&doc, Some(layer), "type.warpText", &p, k).unwrap();
+        assert_eq!(shown.size, full.size);
+        assert_eq!(cache(&shown).content_bounds(), cache(&full).content_bounds());
+        assert_eq!(photocraft_compose::flatten(&shown).px, photocraft_compose::flatten(&full).px);
     }
 
     /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's

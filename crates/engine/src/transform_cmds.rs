@@ -18,7 +18,15 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.transform".into(), msg: msg.into() }
 }
 
-/// Document-space bounds a transform of `layer` starts from (what Free Transform frames).
+/// Layers a transform moves as a whole, even with a selection: groups, and the kinds that keep the
+/// transform instead of pixels (type, shapes, smart objects). Only pixel layers move just the
+/// selected pixels.
+pub fn moves_whole(layer: &Layer) -> bool {
+    matches!(layer.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
+}
+
+/// Document-space bounds a transform of `layer` starts from (what Free Transform frames): the
+/// content within the selection, or all of it for a layer that [`moves_whole`] (#2630).
 /// Content scans are cached per tile: snapping asks for every layer's bounds per Move drag.
 pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content = match &layer.content {
@@ -28,7 +36,7 @@ pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content =
         if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content };
     match &doc.selection {
-        Some(sel) if !layer.is_group() => content.intersect(&sel.content_bounds()),
+        Some(sel) if !moves_whole(layer) => content.intersect(&sel.content_bounds()),
         _ => content,
     }
 }
@@ -181,22 +189,52 @@ pub(crate) fn group_locks(doc: &Document, id: LayerId) -> Locks {
     doc.path_of(id).and_then(|p| Some(doc.locks_at(p.split_last()?.1))).unwrap_or_default()
 }
 
+/// The locks a transform of `l` meets: its own and `group`'s (those it inherits). The Background's
+/// position lock doesn't count: Photoshop turns it into a normal layer first ([`transform_layer`]).
+fn transform_locks(l: &Layer, group: Locks) -> Locks {
+    let mut own = l.locks;
+    if own.position && l.name == "Background" {
+        own.position = false;
+        own.transparency = false;
+    }
+    own.union(group)
+}
+
+/// Would a transform of the layer `id` be refused because it, a group around it, or (for a group)
+/// a layer inside it is locked in place? The same rule [`transform_layer`] applies at commit, so
+/// Free Transform can refuse before its box opens, as Photoshop does.
+pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
+    let Some(l) = doc.layer(id) else { return false };
+    // An explicit stack rather than recursion: documents can nest deeply.
+    let mut stack = vec![(l, group_locks(doc, id))];
+    while let Some((l, group)) = stack.pop() {
+        let locks = transform_locks(l, group);
+        if locks.position || locks.all {
+            return true;
+        }
+        if let LayerContent::Group(g) = &l.content {
+            stack.extend(g.children.iter().map(|c| (c, locks)));
+        }
+    }
+    false
+}
+
 /// `group` holds the locks `l` inherits from the groups around it ([`group_locks`]).
 pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, h: &Homography, affine: Option<Affine>, interp: Interp) -> Result<()> {
     crate::allocation::checkpoint("transforming pixels")?;
+    let locks = transform_locks(l, group);
     // Photoshop turns the Background into a normal layer before transforming it.
     if l.locks.position && l.name == "Background" {
         l.locks.position = false;
         l.locks.transparency = false;
         l.name = "Layer 0".into();
     }
-    let locks = l.locks.union(group);
     if locks.position || locks.all {
         return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
     }
     // With a selection only the selected pixels move, and so only the same region of a linked
     // mask (#205). Groups, type, shapes and smart objects move whole.
-    let mask_sel = doc_sel.filter(|_| !matches!(l.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)));
+    let mask_sel = doc_sel.filter(|_| !moves_whole(l));
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -505,6 +543,34 @@ mod tests {
         assert_eq!(l.surface().unwrap().pixel(30, 30)[3], 0.0, "revealed area is transparent");
     }
 
+    /// `locked_for_transform` (what Free Transform asks before its box opens, #2585) agrees with
+    /// what `edit.transform` refuses at commit: a position lock, its own or a group's; never the
+    /// Background's (it becomes Layer 0).
+    #[test]
+    fn locked_for_transform_matches_the_commit() {
+        let quad = json!({"quad": [[10, 10], [50, 10], [50, 30], [10, 30]]});
+        let lock = |s: &mut Session, id: LayerId, on: bool| {
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(id).unwrap().locks.position = on;
+                Ok(())
+            })
+            .unwrap();
+        };
+        let mut s = session();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        lock(&mut s, layer, true);
+        assert!(locked_for_transform(&s.active().unwrap().doc, layer));
+        assert!(s.execute("edit.transform", quad.clone()).is_err());
+        lock(&mut s, layer, false);
+        let group = LayerId(s.execute("layer.groupLayers", json!({"layer": layer.0})).unwrap()["layer"].as_u64().unwrap());
+        lock(&mut s, group, true);
+        s.execute("layer.select", json!({"layer": layer.0})).unwrap();
+        assert!(locked_for_transform(&s.active().unwrap().doc, layer), "the group's lock reaches the layer");
+        assert!(s.execute("edit.transform", quad.clone()).is_err());
+        let bg = s.active().unwrap().doc.layers[0].id;
+        assert!(!locked_for_transform(&s.active().unwrap().doc, bg), "the Background transforms");
+    }
+
     #[test]
     fn with_selection_only_selected_pixels_move() {
         let mut s = session();
@@ -709,5 +775,33 @@ mod tests {
         let mut sel = Surface::new(PixelFormat::GRAY8);
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
         assert!(matches!(split_gray_selected(&s, &sel), Ok(None)));
+    }
+
+    /// #2630: type can't be partly transformed, so a selection doesn't narrow the frame: Free
+    /// Transform (and the frame-based presets) act on the whole type layer.
+    #[test]
+    fn a_selection_does_not_narrow_a_type_layers_frame() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 120})).unwrap();
+        s.execute("type.create", json!({"x": 20, "y": 60, "text": "Hello", "size": 36})).unwrap();
+        let whole = active_bounds(&s);
+        s.execute("select.rect", json!({"x": whole.x0, "y": whole.y0, "width": whole.width() / 2, "height": whole.height()})).unwrap();
+        let st = s.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(transform_bounds(&st.doc, l), whole, "the frame is the whole type layer");
+        // Corners of the frame moved 10 px right: a pure translation of the whole text.
+        let q = [[whole.x0 + 10, whole.y0], [whole.x1 + 10, whole.y0], [whole.x1 + 10, whole.y1], [whole.x0 + 10, whole.y1]];
+        s.execute("edit.transform", json!({"quad": q})).unwrap();
+        let moved = active_bounds(&s);
+        assert!(moved.x0.abs_diff(whole.x0 + 10) <= 1 && moved.width().abs_diff(whole.width()) <= 1, "{whole:?} -> {moved:?}");
+        // Rotate 180° turns it about its own centre, not the selection's.
+        s.execute("edit.transform.rotate180", json!({})).unwrap();
+        let turned = active_bounds(&s);
+        assert!(turned.x0.abs_diff(moved.x0) <= 2 && turned.x1.abs_diff(moved.x1) <= 2, "{moved:?} -> {turned:?}");
+        // A pixel layer still frames only the selected pixels.
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 10})).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(transform_bounds(&st.doc, st.doc.layer(st.active_layer.unwrap()).unwrap()), Rect::new(10, 10, 15, 20));
     }
 }

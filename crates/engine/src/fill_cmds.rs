@@ -171,6 +171,12 @@ pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limi
     blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
 }
 
+/// `area` of `surf` filled with an opaque `color` (Normal, 100 %), weighted by `sel` when given:
+/// Clear on a targeted alpha channel or the Quick Mask (#2734).
+pub(crate) fn fill_color(surf: &mut Surface, area: Rect, color: [f32; 4], sel: Option<&Surface>) -> Result<()> {
+    blend_into(surf, area, &Source::Color(color), sel, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+}
+
 /// Reuse Edit › Fill's compositing for Edit › Stroke. The stroke's rasterized band
 /// is already a grayscale coverage mask; opacity, blend modes and alpha locking
 /// must behave identically for both commands at 8/16/32-bit depth.

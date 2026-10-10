@@ -46,8 +46,10 @@ pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;
+pub mod crop_mode;
 pub mod crop_overlay;
 pub mod crop_shield;
+pub mod crop_size;
 pub mod crop_straighten;
 pub mod crop_ui;
 pub mod delete_layer_prompt;
@@ -62,6 +64,7 @@ pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
 pub mod eyedropper_ui;
+pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
 pub mod file_ui;
@@ -165,6 +168,7 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod warp_preview;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
@@ -297,6 +301,9 @@ pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 /// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
 /// report it (native Wayland): the cursor then follows the cursor preference (#1758).
 pub type CapsLockFn = Box<dyn FnMut() -> bool>;
+/// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
+/// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
+pub type WindowFrameFn = Box<dyn FnMut()>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -362,6 +369,10 @@ pub struct Services {
     /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
     /// the canvas can show the precise crosshair for painting tools, whatever the preference.
     pub caps_lock: Option<CapsLockFn>,
+    /// Keeps the undecorated window borderless, so the content and the pointer stay aligned
+    /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
+    /// decorated or the platform needs no fixing.
+    pub window_frame: Option<WindowFrameFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
@@ -831,7 +842,8 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
-        if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
+        let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
+        if r.is_ok() && (ADDS_LAYER_MASK.contains(&id) || creates_adjustment_or_fill) {
             // Adding a layer mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
@@ -941,6 +953,13 @@ impl PhotocraftApp {
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
         self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+    }
+
+    /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
+    /// file stays on disk, and opening it again lists it again.
+    pub fn remove_recent(&mut self, path: &str) {
+        self.ui.recent_files.retain(|p| p != path);
+        self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
     }
 
     /// How many recent files to remember ("Recent File List Contains", 0–100).
@@ -1080,19 +1099,69 @@ impl PhotocraftApp {
     /// [`Self::save_as`] once the path is known.
     fn save_to(&mut self, path: String) -> Result<Value, String> {
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
-        // continues from the prompt.
+        // continues from the prompt, which records the step once answered.
         if tiff_options_ui::wants_prompt(self, &path) {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
+        self.save_as_step(path, None)
+    }
+
+    /// File › Save back to the document's own layered file, recorded as a `file.save` step.
+    pub(crate) fn save_in_place(&mut self, path: String) -> Result<Value, String> {
+        if self.tiff_options.is_some() {
+            return Err("Answer TIFF Options before starting another save".into());
+        }
+        let r = self.write_save(path, None)?;
+        self.session.journal.push(("file.save".into(), Value::Object(Default::default())));
+        Ok(r)
+    }
+
+    /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF
+    /// answer), so an action being recorded keeps it (#2032).
+    fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>) -> Result<Value, String> {
+        let r = self.write_save(path.clone(), tiff_layers)?;
+        let mut step = serde_json::json!({"path": path});
+        if let Some(layers) = tiff_layers {
+            step["tiffLayers"] = layers.into();
+        }
+        self.session.journal.push(("file.saveAs".into(), step));
+        Ok(r)
+    }
+
+    /// Replays a recorded `file.save` / `file.saveAs` step: no dialog or prompt, and the
+    /// recorded TIFF answer (if any) stands in for the TIFF Options prompt.
+    pub(crate) fn replay_save(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        if self.tiff_options.is_some() {
+            return Err("Answer TIFF Options before starting another save".into());
+        }
+        if id == "file.save" {
+            let path = self
+                .session
+                .active()
+                .ok_or("no document")?
+                .path
+                .clone()
+                .filter(|p| photocraft_engine::file_cmds::saves_in_place(p))
+                .ok_or("Save writes back only to the document's own PSD, PSB or .pcraft file")?;
+            return self.save_in_place(path);
+        }
+        let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save As needs a `path`")?;
+        self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool))
+    }
+
+    /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:
+    /// `Some(false)` discards the layers and saves a copy.
+    fn write_save(&mut self, path: String, tiff_layers: Option<bool>) -> Result<Value, String> {
         // A flat file that can't hold the document (its layers, or the layered file it lives in)
         // is written as a copy, as in Photoshop: the document keeps its file, so Save still
         // writes the layered original and the edits stay unsaved (#2550).
         let st = self.session.active().ok_or("no document")?;
         let layered =
             |p: &str| photocraft_engine::file_cmds::saves_in_place(p) || matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
-        let copy = !layered(&path) && (plain_raster(&st.doc).is_none() || st.path.as_deref().is_some_and(layered));
-        match self.write_document(path.clone(), &ExportSettings::default(), copy)? {
+        let copy = tiff_layers == Some(false) || (!layered(&path) && (plain_raster(&st.doc).is_none() || st.path.as_deref().is_some_and(layered)));
+        let settings = ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..Default::default() };
+        match self.write_document(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
@@ -1326,6 +1395,11 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // An undecorated window gets its caption back when the toolkit changes its flags
+        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
+        if let Some(window_frame) = self.services.window_frame.as_mut() {
+            window_frame();
+        }
         // Native menu key equivalents become the key presses they were (see `native_menu`).
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
@@ -1489,7 +1563,7 @@ impl PhotocraftApp {
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
-    fn sync_mask_targets(&mut self) {
+    pub(crate) fn sync_mask_targets(&mut self) {
         if let Some(st) = self.session.active() {
             if photocraft_engine::mask_view_cmds::current(st).is_some() {
                 self.ui.mask_target = true;
@@ -1907,6 +1981,9 @@ impl PhotocraftApp {
 }
 
 #[cfg(test)]
+mod color_swatch_tests;
+
+#[cfg(test)]
 mod input_tests;
 
 #[cfg(test)]
@@ -1917,6 +1994,9 @@ mod pixel_aspect_tests;
 
 #[cfg(test)]
 mod transform_undo_tests;
+
+#[cfg(test)]
+mod transform_type_tests;
 
 #[cfg(test)]
 mod save_identity_tests;
@@ -1943,6 +2023,9 @@ mod hidden_layer_tests;
 mod blend_dropdown_keys_tests;
 
 #[cfg(test)]
+mod warp_text_dialog_tests;
+
+#[cfg(test)]
 mod blend_dropdown_wheel_tests;
 
 #[cfg(test)]
@@ -1964,6 +2047,9 @@ mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;
+
+#[cfg(test)]
+mod window_frame_tests;
 
 #[cfg(test)]
 mod clipboard_tests {

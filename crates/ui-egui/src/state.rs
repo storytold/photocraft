@@ -532,6 +532,17 @@ pub struct ToolOptions {
     pub crop_ratio: String,
     #[serde(default = "yes")]
     pub crop_delete: bool,
+    /// Crop W x H x Resolution (`crop_ratio` = "whr", #2443): width and height as typed lengths
+    /// with their unit ("4 in", "1024 px"; empty = unset), the resolution ("" = the document's)
+    /// and its unit ("px/in" or "px/cm"). See `crop_size`.
+    #[serde(default)]
+    pub crop_width: String,
+    #[serde(default)]
+    pub crop_height: String,
+    #[serde(default)]
+    pub crop_resolution: String,
+    #[serde(default = "default_crop_resolution_unit")]
+    pub crop_resolution_unit: String,
     /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
     /// (Photoshop's defaults: Rule of Thirds, Auto Show Overlay). See `crop_overlay`.
     #[serde(default)]
@@ -558,6 +569,10 @@ pub struct ToolOptions {
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
+    /// Eraser › Mode: `brush` (soft, anti-aliased) or `pencil` (hard, aliased pixels, through
+    /// `paint.pencil`), as in Photoshop's options bar (#2662).
+    #[serde(default = "default_eraser_mode")]
+    pub eraser_mode: String,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -587,8 +602,16 @@ fn yes() -> bool {
     true
 }
 
+fn default_crop_resolution_unit() -> String {
+    crate::crop_size::PX_PER_IN.into()
+}
+
 fn default_move_target() -> String {
     "layer".into()
+}
+
+fn default_eraser_mode() -> String {
+    "brush".into()
 }
 
 fn default_marquee_style() -> String {
@@ -674,6 +697,10 @@ impl Default for ToolOptions {
             move_show_transform: false,
             crop_ratio: String::new(),
             crop_delete: true,
+            crop_width: String::new(),
+            crop_height: String::new(),
+            crop_resolution: String::new(),
+            crop_resolution_unit: default_crop_resolution_unit(),
             crop_overlay: Default::default(),
             crop_overlay_show: Default::default(),
             crop_overlay_orientation: 0,
@@ -685,6 +712,7 @@ impl Default for ToolOptions {
             bg_protect_fg: false,
             zoom_scrubby: true,
             pencil_auto_erase: false,
+            eraser_mode: default_eraser_mode(),
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
