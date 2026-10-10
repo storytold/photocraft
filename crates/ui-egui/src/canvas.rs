@@ -3612,6 +3612,9 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             if let Some(lasso) = &d.lasso {
                 pts.push(xf.to_screen(lasso.cursor[0] as f32, lasso.cursor[1] as f32));
             }
+            // On pixel centres like the marquee's ants, so a 1 pt line stays crisp wherever the
+            // canvas sits (a pixel edge would blur it to grey).
+            let pts: Vec<Pos2> = pts.into_iter().map(|p| p.round() + vec2(0.5, 0.5)).collect();
             crate::tool_feedback::draw_ants(painter, &pts, false);
         }
         Tool::Gradient => {
