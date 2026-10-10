@@ -193,7 +193,7 @@ fn warnings_match_actual_roundtrip_behaviour() {
     for f in rw_formats() {
         for l in ChannelLayout::ALL {
             for s in SampleType::ALL {
-                let img = test_image(l, s);
+                let img = if f == Format::Icns { synth(16, 16, l, s, 11, 0.2) } else { test_image(l, s) };
                 let w = warns(&img, f);
                 let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();
                 let depth_reduced = w.iter().any(|w| matches!(w, W::DepthReduced { .. }));

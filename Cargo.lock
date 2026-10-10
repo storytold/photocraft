@@ -4421,6 +4421,7 @@ dependencies = [
 name = "photocraft-io"
 version = "0.6.0"
 dependencies = [
+ "base64",
  "blake3",
  "crc32fast",
  "flate2",

@@ -49,6 +49,7 @@ mod pdn;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
+mod raster_documents;
 pub mod raw;
 pub mod slices_map;
 pub mod smart_map;
@@ -238,6 +239,12 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
+    if (has_extension(name, "svg") || has_extension(name, "svgz"))
+        && photocraft_codecs::detect(bytes).is_none()
+        && let Some(imported) = raster_documents::import_wrapper(name, bytes)?
+    {
+        return Ok(imported);
+    }
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
@@ -268,6 +275,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if matches!(ext.as_str(), "svg" | "svgz" | "pdf") {
+        return raster_documents::export(doc, &ext, opts);
+    }
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
     }

@@ -39,28 +39,21 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// An explicit SVG filter keeps vector artwork discoverable even when a native picker defaults to
 /// the PhotoCraft-only filter. SVG is also included in All Formats for normal multi-format opens.
 fn open_filters() -> Vec<(&'static str, Vec<String>)> {
+    let mut extensions = OPEN_EXTS.to_vec();
+    for codec in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+        for ext in codec.extensions() {
+            if !extensions.contains(ext) {
+                extensions.push(ext);
+            }
+        }
+    }
     vec![
-        ("All Formats", open_filter_extensions(OPEN_EXTS)),
+        ("All Formats", open_filter_extensions(&extensions)),
         ("PhotoCraft", open_filter_extensions(&["pcraft"])),
         ("OpenRaster", open_filter_extensions(&["ora"])),
         ("SVG", open_filter_extensions(SVG_EXTS)),
     ]
 }
-
-/// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
-/// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
-/// keeps defaulting to PSD.
-const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("PSD Document", &["psd", "psb"]),
-    ("PhotoCraft", &["pcraft"]),
-    ("OpenRaster", &["ora"]),
-    ("PNG", &["png"]),
-    ("JPEG", &["jpg"]),
-    ("WebP", &["webp"]),
-    ("TIFF", &["tif"]),
-    ("Targa", &["tga"]),
-    ("OpenEXR", &["exr"]),
-];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
 /// never swaps their extension for a document format's.
@@ -72,7 +65,10 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     if let Some((name, exts)) = OTHER_SAVE_FILTERS.iter().find(|(_, exts)| exts.contains(&ext.as_str())) {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
-    let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
+    let mut v: Vec<(String, Vec<String>)> = photocraft_ui_egui::save_formats::document_formats()
+        .into_iter()
+        .map(|f| (f.name.to_string(), f.extensions.iter().map(|e| e.to_string()).collect()))
+        .collect();
     match v.iter().position(|(_, exts)| exts.contains(&ext)) {
         Some(i) => {
             let f = v.remove(i);
@@ -115,7 +111,9 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             }
         }
         FileDialogRequest::Save { suggested } => {
-            for (name, exts) in save_filters(&suggested) {
+            let filters = save_filters(&suggested);
+            let filters = if cfg!(target_os = "macos") { filters.into_iter().take(1).collect() } else { filters };
+            for (name, exts) in filters {
                 dialog = dialog.add_filter(name, &exts);
             }
             if let Some(name) = Path::new(&suggested).file_name() {
@@ -334,6 +332,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
+        choose_save_format: cfg!(target_os = "macos"),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
         automation_write,
@@ -460,6 +459,17 @@ mod tests {
     use photocraft_format::list_recovery;
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
+
+    #[test]
+    fn every_readable_codec_is_discoverable_in_the_native_open_panel() {
+        let filters = open_filters();
+        let all = &filters.iter().find(|(name, _)| *name == "All Formats").unwrap().1;
+        for codec in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+            for ext in open_filter_extensions(codec.extensions()) {
+                assert!(all.contains(&ext), "{codec:?}: {ext}");
+            }
+        }
+    }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
@@ -596,6 +606,20 @@ mod tests {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
+    }
+
+    #[test]
+    fn save_panel_lists_every_writable_format_and_alias() {
+        let filters = save_filters("Untitled.psd");
+        for codec in photocraft_codecs::Format::ALL {
+            for ext in codec.extensions() {
+                assert_eq!(filters.iter().any(|(_, exts)| exts.iter().any(|e| e == ext)), codec.caps().write, "{ext}");
+            }
+        }
+        assert_eq!(save_filters("image.TIFF")[0].0, "TIFF");
+        assert_eq!(save_filters("large.psb")[0].0, "Large Document (PSB)");
+        assert_eq!(save_filters("image.bmp")[0].0, "BMP");
+        assert_eq!(save_filters("Swatches.aco").len(), 1);
     }
 
     #[test]

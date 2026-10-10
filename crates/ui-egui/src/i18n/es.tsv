@@ -2490,6 +2490,10 @@ fontWeight	Italic	Cursiva
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
 
+# Save format chooser
+	Continue	Continuar
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Este formato guarda una imagen acoplada. Usa Guardar una copia para conservar el documento editable.
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm elige el subtipo según la profundidad de bits y los canales de la imagen.
 # Add Noise, Reduce Noise and Smart Sharpen dialog controls (Filter > Noise, Filter > Sharpen).
 	Distribution	Distribución
 	Uniform	Uniforme

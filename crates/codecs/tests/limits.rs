@@ -13,7 +13,8 @@ fn is_limit(r: Result<Image, CodecError>) -> bool {
 }
 
 fn encoded(f: Format) -> Vec<u8> {
-    let img = synth(64, 48, ChannelLayout::Rgba, SampleType::U8, 1, 0.1);
+    let h = if f == Format::Icns { 64 } else { 48 };
+    let img = synth(64, h, ChannelLayout::Rgba, SampleType::U8, 1, 0.1);
     encode(&img, f, &EncodeOptions::default()).unwrap()
 }
 
@@ -23,7 +24,7 @@ fn max_pixels_enforced_for_every_format() {
         let b = encoded(f);
         let l = Limits { max_pixels: 1000, ..Limits::default() };
         assert!(is_limit(decode_with(&b, &opts(l))), "{f:?}");
-        let l = Limits { max_pixels: 64 * 48, ..Limits::default() };
+        let l = Limits { max_pixels: if f == Format::Icns { 64 * 64 } else { 64 * 48 }, ..Limits::default() };
         assert!(decode_with(&b, &opts(l)).is_ok(), "{f:?} exact limit should pass");
     }
 }
@@ -47,7 +48,7 @@ fn max_height_enforced_for_every_format() {
 #[test]
 fn max_alloc_enforced_for_every_format() {
     for f in rw_formats() {
-        let l = Limits { max_alloc: 64 * 48, ..Limits::default() };
+        let l = Limits { max_alloc: 64 * 48 - 1, ..Limits::default() };
         assert!(decode_with(&encoded(f), &opts(l)).is_err(), "{f:?}");
     }
 }

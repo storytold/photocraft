@@ -73,7 +73,7 @@ id = "FILE-215-10"
 target = "Multi-page PDF save, PDF presentation, layer comps to PDF, vector/text output, PDF import"
 status = "missing"
 issue = 215
-note = "Only print_cmds.rs:133 print_pdf (raster print page)"
+note = "Raster PDF delivery now available in Export As (io raster_documents.rs): one page, 8/16-bit RGB/gray, ICC, soft mask and document DPI, with external Poppler checks. Multi-page/vector/text/import workflows remain pending."
 
 [[item]]
 id = "FILE-215-11"
@@ -183,9 +183,9 @@ note = "The round trip is our export -> our import"
 [[item]]
 id = "FILE-216-5"
 target = "Save-path tests: layered TIFF, PDF, SVG, ACO/ASE, .shc, Smart Filters, atomic-save failure"
-status = "missing"
+status = "partial"
 issue = 216
-note = "Features absent; no atomic-save failure-injection test"
+note = "Export As tests write every offered format at 8/16/32-bit and preserve working file state; SVG/SVGZ reopens, PDF structure and independent renders checked. ACO/ASE/.shc, Smart Filters and atomic-save failure injection still pending."
 
 [[item]]
 id = "FILE-216-6"

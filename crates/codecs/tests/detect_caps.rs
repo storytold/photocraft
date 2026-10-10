@@ -118,7 +118,7 @@ fn caps_function_matches_method() {
 #[test]
 fn detect_encoded_output_of_every_format() {
     for f in writable_formats() {
-        let img = test_image(ChannelLayout::Rgba, SampleType::U8);
+        let img = if f == Format::Icns { synth(16, 16, ChannelLayout::Rgba, SampleType::U8, 11, 0.2) } else { test_image(ChannelLayout::Rgba, SampleType::U8) };
         let bytes = encode(&img, f, &EncodeOptions::default()).unwrap();
         assert_eq!(detect(&bytes), Some(f));
     }

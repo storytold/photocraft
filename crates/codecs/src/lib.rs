@@ -38,7 +38,7 @@ pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use half::f16;
 
-use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
+use crate::codecs::{exr, heif, jpeg, legacy, png, pnm, tiff, via_image, webp};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -64,6 +64,17 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     }
     let l = &opts.limits;
     let img = match format {
+        Format::Pcx
+        | Format::Sgi
+        | Format::SunRaster
+        | Format::Farbfeld
+        | Format::Wbmp
+        | Format::Xbm
+        | Format::Xpm
+        | Format::Cur
+        | Format::Icns
+        | Format::Gbr
+        | Format::GimpPat => legacy::decode(format, bytes, l),
         Format::Png => png::decode(bytes, l),
         Format::Jpeg => jpeg::decode(bytes, l),
         Format::Tiff => tiff::decode(bytes, l),
@@ -198,6 +209,17 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
     }
     let plan = fidelity::plan(image, format, opts);
     match format {
+        Format::Pcx
+        | Format::Sgi
+        | Format::SunRaster
+        | Format::Farbfeld
+        | Format::Wbmp
+        | Format::Xbm
+        | Format::Xpm
+        | Format::Cur
+        | Format::Icns
+        | Format::Gbr
+        | Format::GimpPat => legacy::encode(format, image, plan, opts),
         Format::Png => png::encode(image, plan, opts),
         Format::Jpeg => jpeg::encode(image, plan, opts),
         Format::Tiff => tiff::encode(image, plan, opts),

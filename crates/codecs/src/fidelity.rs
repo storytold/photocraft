@@ -197,7 +197,7 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     if sl.has_alpha() && !p.layout.has_alpha() && image.has_translucency() {
         w.push(W::AlphaDiscarded);
     }
-    if format == Format::Gif && p.layout.has_alpha() && image.has_translucency() {
+    if matches!(format, Format::Gif | Format::Xpm) && p.layout.has_alpha() && image.has_translucency() {
         w.push(W::AlphaBinarized);
     }
     if sl.is_cmyk() && !p.layout.is_cmyk() {
