@@ -1,17 +1,34 @@
 name: Perf (nightly)
 
-# The performance scorecard (#221): `cargo xtask perf` on a fixed macOS runner (Apple silicon,
-# Metal), every night and on demand. It never runs on pull requests, so it can't block one.
-# It fails when an enforced budget in perf/budgets.toml breaks or a scenario's p50 regresses
-# more than 15 % against perf/baseline.json from the same machine class (other classes are
-# never compared). The table goes to the job summary; results.json is uploaded as an artifact.
+# The performance scorecard (#221): `cargo xtask perf` every night and on demand, on three
+# GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a separate
+# matrix entry. Baselines are per machine class (OS, CPU model, GPU), one file each in
+# perf/baselines/: hosted runners rotate CPU models, so each CPU gets its own baseline. On pull
+# requests it runs only when the perf setup itself changes (the paths below). An entry fails when a
+# bench fails or a scenario's p50 regresses more than 25 % against its baseline from the same
+# machine class (other classes are never compared), in the run and in one retry; regressions on a
+# slowed-down machine (its CPU canary over 20 % slower than the baseline's) are reported, not
+# failed. Shared VMs catch notable regressions only: accurate numbers need a local run or a
+# dedicated runner. Budgets in perf/budgets.toml were set on a faster developer machine, so here
+# they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners have no
+# hardware GPU (only software ones, llvmpipe/WARP, which take seconds per refresh and would measure
+# themselves), so they run the CPU canvas (--cpu; GPU-only benches read "not run" there). macOS
+# measures the GPU canvas.
 #
-# To give this runner class its own baseline: run it by hand with "update_baseline", download
-# the `perf-baseline` artifact and commit it as perf/baseline.json in a PR.
+# A run on a CPU without a baseline for its mode yet records one, if every bench ran and the CPU
+# canary held steady (regression check skipped that run), and uploads it as the `perf-baseline-<os>`
+# artifact: commit it to perf/baselines/ in a PR. To re-record an existing one, run this workflow by
+# hand with "update_baseline".
 
 on:
   schedule:
     - cron: "23 3 * * *"
+  # Only PRs that change the perf setup: a full run takes ~18-24 min per OS.
+  pull_request:
+    paths:
+      - "perf/**"
+      - "xtask/src/perf.rs"
+      - ".github/workflows/perf-nightly.yml"
   workflow_dispatch:
     inputs:
       quick:
@@ -19,26 +36,38 @@ on:
         type: boolean
         default: false
       update_baseline:
-        description: "Also write perf/baseline.json from this run (uploaded as an artifact, not committed)"
+        description: "Also rewrite this runner's perf/baselines/<class>.json from this run (uploaded as artifacts, not committed)"
         type: boolean
         default: false
 
 permissions:
   contents: read
 
+# A newer push to a PR cancels its older run; nightly and manual runs are never cancelled.
 concurrency:
-  group: perf-nightly
-  cancel-in-progress: false
+  group: perf-${{ github.event_name == 'pull_request' && github.ref || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   perf:
-    name: perf (macOS, Apple GPU)
-    # Pinned image, not -latest: the machine class must stay fixed for comparisons.
-    runs-on: macos-15
+    name: perf (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned images, not -latest: the machine class must stay fixed for comparisons.
+          - { name: macos, os: macos-15 }
+          # No hardware GPU on hosted Linux/Windows: they measure the CPU canvas.
+          - { name: linux, os: ubuntu-24.04, extra: --cpu }
+          - { name: windows, os: windows-2025, extra: --cpu }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,20 +75,34 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Release builds only, one cache per OS; saved even when a bench fails (it holds compiled
+      # dependencies, not results). PRs restore it but don't save, so they never evict main's.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: perf-release
+          shared-key: perf-release-${{ matrix.name }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Run benchmarks
         id: perf
         env:
           QUICK: ${{ inputs.quick }}
           UPDATE: ${{ inputs.update_baseline }}
+          EXTRA: ${{ matrix.extra }}
         run: |
-          args=()
+          # Shared VMs are noisy: CI flags regressions over 25 % (15 % is the local default).
+          args=(--baseline "perf/baselines/{class}.json" --advisory-budgets --threshold 25)
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline); fi
-          cargo xtask perf "${args[@]}"
+          # shellcheck disable=SC2206 # EXTRA is a list of flags
+          args+=($EXTRA)
+          # One retry (same binaries) before a failure counts: a noisy neighbour rarely hits twice.
+          cargo xtask perf "${args[@]}" || {
+            echo "::warning::perf failed; retrying once to rule out a noisy runner"
+            # Drop any baseline the failed run wrote, so the retry isn't compared against it.
+            git checkout -q -- perf/baselines && git clean -qf -- perf/baselines
+            cargo xtask perf --skip-build "${args[@]}"
+          }
 
       - name: Job summary
         if: always()
@@ -74,18 +117,25 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-results
+          name: perf-results-${{ matrix.name }}
           path: |
             target/perf/*.json
             target/perf/summary.md
           if-no-files-found: warn
           retention-days: 30
 
+      # Only baselines this run wrote (a new CPU, or update_baseline).
+      - name: Collect new baselines
+        if: always()
+        run: |
+          mkdir -p target/new-baselines
+          git status --porcelain --untracked-files=all perf/baselines | cut -c4- | xargs -r -I{} cp {} target/new-baselines/
+
       - name: Upload baseline
-        if: always() && inputs.update_baseline
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-baseline
-          path: perf/baseline.json
-          if-no-files-found: warn
+          name: perf-baseline-${{ matrix.name }}
+          path: target/new-baselines/
+          if-no-files-found: ignore
           retention-days: 30

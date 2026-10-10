@@ -308,18 +308,34 @@ breaks, when a scenario's p50 regresses more than 15 % (`--threshold`, or `regre
 against a baseline from the same machine class and mode, or when a bench fails. Runs from
 different machine classes are never compared, and `--quick` numbers are only compared with a
 quick baseline. Machines that run other work give noisy numbers: check the load average in the
-summary before trusting a regression, and record it next to any number you quote.
+summary before trusting a regression, and record it next to any number you quote. Each run also
+times a CPU canary (a fixed single-threaded workload, before and after the benches) and the
+baseline stores it: when this run's canary is more than 20 % slower than the baseline's, the
+machine is slower than when the baseline was recorded, so regressions are reported but don't
+fail the run (the summary says so). The load average can't tell: inside a VM it counts our own
+build and bench processes and never sees other VMs on the host. `--update-baseline` warns when
+the canary moved more than 15 % during the run.
 
 **Adding a scenario.** Add a row to a bench (keep its name stable: it is the key), give the
 bench `--json` support through `photocraft_testkit::perf::{row, report, write_report}`, then add a
 `[[scenario]]` to `perf/budgets.toml` and run `cargo xtask scorecard`.
 
 **CI.** `ci.yml` runs `cargo xtask scorecard --check`. `perf-nightly.yml` runs `cargo xtask perf`
-on a fixed macOS runner every night (and on demand), posts the table as the job summary, uploads
-`results.json`, and fails on a broken budget or regression. It never runs on pull requests: the
-release build of the benches alone takes longer than PR CI should. To give the nightly runner
-its own baseline, run the workflow by hand with `update_baseline` and commit the `perf-baseline`
-artifact as `perf/baseline.json`.
+every night (and on demand) as a three-entry matrix of pinned GitHub-hosted runners (macOS Apple
+silicon, Linux x86-64, Windows x86-64), posts each table as its job summary, uploads `results.json`,
+and fails on a failed bench or a regression over 25 % (`--threshold 25`) that a retry of the benches
+confirms (budgets are reported, not enforced, there: `--advisory-budgets`, since they were set on a
+faster machine). Shared hosted VMs only catch notable regressions; for accurate numbers, benchmark
+locally or on a dedicated runner. Each entry compares only with the baseline of its machine class,
+`perf/baselines/<class>.json` (`--baseline 'perf/baselines/{class}.json'`): hosted runners rotate
+CPU models, and each CPU is its own class. Hosted Linux and Windows runners have no hardware GPU
+(their software ones, llvmpipe and WARP, take seconds per refresh), so they run the CPU canvas only
+(`--cpu`); macOS measures the GPU canvas. On pull requests it runs only when the perf setup changes
+(`perf/**`, `xtask/src/perf.rs`, the workflow): the release build of the benches alone takes longer
+than PR CI should. A run on a CPU without a baseline for its mode (full or quick) yet records one,
+if every bench ran and the CPU canary held steady, and uploads it as the `perf-baseline-<os>`
+artifact: commit it to `perf/baselines/`. To re-record one, run the workflow by hand with
+`update_baseline`.
 
 ## Web build
 

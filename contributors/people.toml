@@ -85,3 +85,6 @@ sync_github_name = false
 
 [people.vangel76]
 sync_github_name = true
+
+[people.1Git2Clone]
+sync_github_name = true
