@@ -656,7 +656,10 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// (a workspace or `panelLayout`). Missing or invalid dock parts are left alone; old
 /// layouts without Timeline visibility restore it closed.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
-    if let Some(p) = v.get("panels").and_then(|p| serde_json::from_value(p.clone()).ok()) {
+    if let Some(mut p) = v.get("panels").and_then(|p| serde_json::from_value::<Panels>(p.clone()).ok()) {
+        // The embedding host owns these flags, including for layouts that serialize them.
+        p.menu_bar = app.ui.panels.menu_bar;
+        p.rail = app.ui.panels.rail;
         app.ui.panels = p;
     }
     if let Some(t) = v.get("dockTabs").and_then(|t| serde_json::from_value(t.clone()).ok()) {

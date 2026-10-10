@@ -82,6 +82,11 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 
 ## Menus
 
+An embedding application's `panels.menu_bar` and `panels.rail` flags belong to its current
+session. Restoring a saved workspace or remembered panel layout preserves both flags, including
+when the serialized layout contains their values. Panel visibility, dock layout, tabs and Timeline
+visibility follow the saved layout.
+
 `menu_catalog.rs` holds Photoshop's menu tree (standard command names, order, separators, default shortcuts). Items whose id matches an engine or UI command are live; others render disabled until implemented. Give new commands the catalogue's id (for example `image.imageSize`) and they light up in the right place automatically.
 
 Menus never run off the window: the menu bar's menus and submenus scroll with arrows (`menu_nav::level`), and long right-click menus (Layers, canvas tools, Channels, Paths, document tabs) wrap their rows in `widgets::menu_scroll`, so they move up to fit and scroll only when taller than the visible window.
