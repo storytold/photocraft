@@ -2476,3 +2476,18 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+
+# Searchable New Document formats.
+	Popular	Popolari
+	Social Media	Social media
+	Search formats	Cerca formati
+	Name, size or aspect ratio	Nome, dimensioni o proporzioni
+	No matching formats.	Nessun formato corrispondente.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Post Instagram, 3:4
+	Instagram post, 4:5	Post Instagram, 4:5
+	Square post	Post quadrato
+	Landscape post	Post orizzontale
+	YouTube thumbnail, 4K	Miniatura YouTube, 4K
+	Shorts thumbnail, 4K	Miniatura Shorts, 4K
+	Video thumbnail, HD	Miniatura video, HD

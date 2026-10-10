@@ -3426,3 +3426,18 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+
+# Searchable New Document formats.
+	Popular	Popularne
+	Social Media	Media społecznościowe
+	Search formats	Szukaj formatów
+	Name, size or aspect ratio	Nazwa, rozmiar lub proporcje
+	No matching formats.	Brak pasujących formatów.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Post na Instagramie, 3:4
+	Instagram post, 4:5	Post na Instagramie, 4:5
+	Square post	Post kwadratowy
+	Landscape post	Post poziomy
+	YouTube thumbnail, 4K	Miniatura YouTube, 4K
+	Shorts thumbnail, 4K	Miniatura Shorts, 4K
+	Video thumbnail, HD	Miniatura filmu, HD

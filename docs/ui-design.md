@@ -32,6 +32,28 @@ The toolbar's foreground and background colour chips follow the `Tokens::round_c
   - Toolbar tool groups carry a corner triangle.
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
+## New Document
+
+File › New opens centred every time, even if its previous opening was dragged. The view uses
+a searchable catalog, wrapping category filters and a live canvas proportion preview. Popular
+shows Stories/Reels/Shorts (1080×1920), both Instagram portrait shapes (1080×1440 and
+1080×1350), a square post, a 4K YouTube thumbnail and 1080p. Social Media adds landscape and
+HD/Shorts thumbnails; All/search retains every existing photo, print, art, screen and video preset.
+
+Selecting a format fills dimensions and PPI while keeping the current name/mode/depth/background.
+Width, height, orientation and background stay beside the preview; Advanced groups resolution,
+mode and depth. Saved configurations retain their full settings. The body scrolls and stacks on
+narrow windows while Create stays in the footer. Colors and radii follow all eight themes.
+See [control protocol](control-protocol.md) for search and automation details.
+
+Before (Pro Medium, pt-br):
+
+![Previous New Document dialog](images/new-document-before.png)
+
+After (same theme, language and 1440×900 viewport):
+
+![Searchable New Document catalog](images/new-document-after.png)
+
 ## Adding icons
 
 ```sh

@@ -209,6 +209,29 @@ Headless CLI/MCP sessions and the web build keep brush presets and the action li
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
 
+File › New opens a searchable format catalog with Popular, Social Media and the existing
+photo/print/screen/video formats. Search accepts English or translated names, platform aliases
+(such as `tiktok`), pixel dimensions (`1080x1920` or `1080 × 1920`) and exact reduced ratios
+(`9:16`, `3:4`). Results span built-in categories and omit duplicate names. In Saved, search
+filters saved names. Enter in search selects the first result without creating a document;
+Create still uses the ordinary `file.new` command. The canvas preview reflects the current
+pixel dimensions. Resolution, color mode and depth are grouped under Advanced. Choosing a
+built-in format changes dimensions and PPI, preserving the current name/mode/depth/background.
+The clipboard offer remains first in Popular when an image is available. The dialog always opens centred, ignores its previous opening’s dragged position and keeps
+the footer outside the scrolling body on smaller viewports.
+
+`ui.dialog.set` can set the UI-only `__category` (`Popular`, `Social Media`, `All`, the existing
+category ids or `Saved`) and `__search` fields. `__advanced: true` opens Advanced initially.
+These keys, like all `__` fields, are stripped before dispatching `file.new`. The legacy
+`Recent` id remains accepted; its built-ins are also available through All/search.
+
+Social presets are editable starting canvases, not upload validators. The generic post shapes
+are 1:1, 3:4, 4:5 and 1200×630; vertical Stories/Reels/Shorts starts at 1080×1920 (9:16).
+YouTube/Shorts 4K thumbnails use 3840×2160 / 2160×3840, following the current
+[YouTube Help recommendation](https://support.google.com/youtube/answer/72431).
+The HD video thumbnail remains available at 1280×720. Platform requirements can change;
+export format, file size limits, cropping and safe areas are separate concerns.
+
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
 web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or
 deletes it. Selection only fills the form: Create still runs `file.new`, and the document name

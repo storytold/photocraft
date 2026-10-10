@@ -3426,3 +3426,18 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+
+# Searchable New Document formats.
+	Popular	人気
+	Social Media	ソーシャルメディア
+	Search formats	形式を検索
+	Name, size or aspect ratio	名前、サイズ、縦横比
+	No matching formats.	一致する形式がありません。
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Instagram の投稿, 3:4
+	Instagram post, 4:5	Instagram の投稿, 4:5
+	Square post	正方形の投稿
+	Landscape post	横長の投稿
+	YouTube thumbnail, 4K	YouTube サムネイル、4K
+	Shorts thumbnail, 4K	Shorts サムネイル、4K
+	Video thumbnail, HD	動画サムネイル、HD
