@@ -492,7 +492,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.close();
             }
         });
-        // Splitter in the gap below this group: resizes it against the next expanded group.
+        // Splitter in the gap below this group: resizes it, pushing the neighbouring groups.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
             let sresp = ui.interact(gap, ui.id().with(("dock-splitter", g.key())), Sense::drag());
@@ -574,16 +574,24 @@ fn drop_before(order: &[Group], rects: &[(Group, Rect)], dragged: Group, y: f32)
     }
 }
 
-/// Splitter `i` (below group `i`) dragged by `dy`: group `i` grows or shrinks against the next
-/// expanded group (or the filler, which absorbs the difference).
+/// Splitter `i` (below group `i`) dragged by `dy`. Like Photoshop, the groups on the side the
+/// splitter moves into shrink in turn, nearest first, each down to its minimum (#2573), and the
+/// group on the other side grows by what they gave. The filler absorbs its share implicitly,
+/// so the column height stays the same.
 fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) {
     if !dy.is_finite() || dy == 0.0 {
         return;
     }
-    let Some(&(g, h)) = heights.get(i) else { return };
-    let filler = heights.iter().rposition(|(g, _)| !layout.is_collapsed(*g));
-    let Some(j) = heights.iter().enumerate().skip(i + 1).find(|(_, (n, _))| !layout.is_collapsed(*n)).map(|(j, _)| j) else { return };
-    let Some(&(n, nh)) = heights.get(j) else { return };
+    let expanded = |k: &usize| heights.get(*k).is_some_and(|(g, _)| !layout.is_collapsed(*g));
+    let filler = (0..heights.len()).rev().find(expanded);
+    let Some(j) = (i + 1..heights.len()).find(expanded) else { return };
+    if !expanded(&i) {
+        return;
+    }
+    // Dragging down grows group `i` at the expense of the groups below; dragging up grows the
+    // next expanded group at the expense of `i` and the groups above it.
+    let (grow, shrink): (usize, Vec<usize>) =
+        if dy > 0.0 { (i, (j..heights.len()).filter(expanded).collect()) } else { (j, (0..=i).rev().filter(expanded).collect()) };
     // The first drag pins the other groups at the heights they show, so groups still at their
     // defaults (which give way to the filler) don't shift while this one is resized.
     for (k, (o, oh)) in heights.iter().enumerate() {
@@ -591,10 +599,22 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
             layout.heights.entry(*o).or_insert(*oh);
         }
     }
-    let new_h = (h + dy).clamp(g.min_height(), (h + nh - n.min_height()).max(g.min_height()));
-    layout.heights.insert(g, new_h);
-    if Some(j) != filler {
-        layout.heights.insert(n, (nh - (new_h - h)).max(n.min_height()));
+    let mut left = dy.abs();
+    for k in shrink {
+        if left <= 0.0 {
+            break;
+        }
+        let Some(&(o, oh)) = heights.get(k) else { continue };
+        let give = (oh - o.min_height()).max(0.0).min(left);
+        left -= give;
+        if Some(k) != filler {
+            layout.heights.insert(o, oh - give);
+        }
+    }
+    if let Some(&(o, oh)) = heights.get(grow)
+        && Some(grow) != filler
+    {
+        layout.heights.insert(o, oh + (dy.abs() - left));
     }
 }
 
