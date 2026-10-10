@@ -105,8 +105,8 @@ pub fn caret_segment(l: &TextLayout, text: &str, c: Caret) -> [(f32, f32); 2] {
     [l.to_text(g.x, g.top), l.to_text(g.x, g.bottom)]
 }
 
-/// The caret nearest to a text-space point, with the side clicked: the existing direction-aware
-/// hit test ([`TextLayout::hit_test`]) plus affinity.
+/// The caret nearest to a text-space point, with the side clicked. A cluster under the point
+/// beats a neighbour whose edge is as near, so a click where directions meet keeps its side.
 pub fn hit(l: &TextLayout, text: &str, x: f32, y: f32) -> Caret {
     let (x, y) = l.to_line(x, y);
     let Some(li) = l.nearest_line(y) else { return Caret::default() };

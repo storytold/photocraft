@@ -59,7 +59,7 @@ fn a_letter_and_its_harakat_are_one_cluster() {
     let b = l.bounds().unwrap();
     let mut x = b[0] - 5.0;
     while x < b[2] + 5.0 {
-        let off = l.hit_test(x, -10.0);
+        let off = crate::navigate::hit(&l, t, x, -10.0).byte;
         assert!([0, 4, 8, 12].contains(&off), "x {x} hit {off}");
         x += 0.5;
     }

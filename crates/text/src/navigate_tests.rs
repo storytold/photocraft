@@ -571,3 +571,37 @@ fn vertical_type_never_steps_into_hidden_columns() {
     assert!(w.iter().all(|c| c.byte <= end), "{w:?}");
     assert_eq!(step(&l, s, Caret::new(end, true), Dir::Right, Unit::Grapheme).byte, end);
 }
+
+#[test]
+fn a_click_past_a_wrapped_lines_ends_keeps_the_line_it_was_on() {
+    let mut e = TextEngine::new();
+    // "aaa bbb ccc ddd" in 90 px wraps after a space: the offset where line 0 ends is also where
+    // line 1 starts, and a click on either line must stay on that line.
+    let t = "aaa bbb ccc ddd";
+    let l = e.layout(&boxed(t, 90.0, 1000.0), 72.0);
+    assert!(l.lines.len() >= 2, "wraps");
+    let seam = l.lines[0].range.end;
+    assert_eq!(seam, l.lines[1].range.start);
+    let y = |li: usize| l.lines[li].baseline - l.lines[li].ascent * 0.5;
+    let past_end = hit(&l, t, edges(&l, 0).1 + 50.0, y(0));
+    assert_eq!(past_end, Caret::new(seam, true), "after the last character of line 0");
+    assert_eq!(caret_geometry(&l, t, past_end).line, 0);
+    let before_start = hit(&l, t, edges(&l, 1).0 - 50.0, y(1));
+    assert_eq!(before_start, Caret::new(seam, false), "before the first character of line 1");
+    assert_eq!(caret_geometry(&l, t, before_start).line, 1);
+    // On a character the click is decided by its half, not by the neighbour's edge.
+    let first = l.clusters.iter().find(|c| c.line == 1 && c.range.start == seam).expect("line 1's first cluster");
+    assert_eq!(hit(&l, t, first.x + first.advance * 0.25, y(1)), Caret::new(seam, false));
+    assert_eq!(hit(&l, t, first.x + first.advance * 0.75, y(1)), Caret::new(first.range.end, true));
+}
+
+#[test]
+fn latin_ctrl_arrows_stop_at_word_ends() {
+    let mut e = TextEngine::new();
+    let t = "hello big world";
+    let l = e.layout(&point(t), 72.0);
+    let right: Vec<usize> = walk(&l, t, Caret::new(0, false), Dir::Right, Unit::Word).iter().map(|c| c.byte).collect();
+    assert_eq!(right, [0, 5, 9, 15]);
+    let left: Vec<usize> = walk(&l, t, Caret::new(15, true), Dir::Left, Unit::Word).iter().map(|c| c.byte).collect();
+    assert_eq!(left, [15, 10, 6, 0], "leftwards the stops are word starts");
+}

@@ -37,10 +37,7 @@ use photocraft_doc::TextLayer;
 
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
-pub use layout::{
-    ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, grapheme_step, hit_char, line_edge, line_index, line_step, text_point_inside,
-    word_boundary,
-};
+pub use layout::{ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, grapheme_step, line_index, text_point_inside, word_boundary};
 pub use render::Rendered;
 
 /// Font database + layout context. Create once and reuse (font loading and shaping caches).

@@ -231,17 +231,6 @@ impl TextLayout {
         })
     }
 
-    /// Byte offset of the caret nearest to a text-space point.
-    pub fn hit_test(&self, x: f32, y: f32) -> usize {
-        let (x, y) = self.to_line(x, y);
-        self.hit_test_line(x, y)
-    }
-
-    /// Byte offset of the caret nearest to a line-space point.
-    pub fn hit_test_line(&self, x: f32, y: f32) -> usize {
-        self.nearest_line(y).map_or(0, |li| self.hit_in_line(li, x).0)
-    }
-
     /// Index of the line nearest to a line-space y.
     pub(crate) fn nearest_line(&self, y: f32) -> Option<usize> {
         let d = |l: &LineInfo| {
@@ -276,14 +265,8 @@ impl TextLayout {
         (best.1, best.2)
     }
 
-    /// The caret for a byte offset as a text-space segment (its two end points).
-    pub fn caret_segment(&self, offset: usize) -> [(f32, f32); 2] {
-        let (x, top, bottom) = self.caret(offset);
-        [self.to_text(x, top), self.to_text(x, bottom)]
-    }
-
     /// Caret geometry for a byte offset: (x, top, bottom) in line space (the same as text space
-    /// for horizontal type; see [`Self::caret_segment`]).
+    /// for horizontal type).
     pub fn caret(&self, offset: usize) -> (f32, f32, f32) {
         for c in &self.clusters {
             if c.range.start == offset
@@ -337,12 +320,6 @@ pub fn line_index(layout: &TextLayout, byte: usize) -> usize {
     layout.lines.iter().position(|ln| byte >= ln.range.start && byte <= ln.range.end).unwrap_or_else(|| layout.lines.len().saturating_sub(1))
 }
 
-/// Nearest caret to a text-space point: character index and the line it sits on.
-pub fn hit_char(layout: &TextLayout, text: &str, x: f32, y: f32) -> (usize, usize) {
-    let byte = layout.hit_test(x, y);
-    (char_index(text, byte), line_index(layout, byte))
-}
-
 /// Text-space point inside the laid-out line boxes, expanded by `slop` px on every side.
 pub fn text_point_inside(layout: &TextLayout, x: f32, y: f32, slop: f32) -> bool {
     let slop = if slop.is_finite() { slop.max(0.0) } else { 0.0 };
@@ -381,35 +358,6 @@ pub fn grapheme_step(text: &str, idx: usize, forward: bool) -> usize {
     let to =
         if forward { bounds.iter().copied().find(|&b| b > byte).unwrap_or(text.len()) } else { bounds.iter().rev().copied().find(|&b| b < byte).unwrap_or(0) };
     char_index(text, to)
-}
-
-/// Caret on the neighbouring line (`dir` < 0 previous, otherwise next), keeping `x`
-/// (line space: the position along the line). Past the first or last line the caret
-/// goes to the start or end of the text. Line space is the same for both orientations,
-/// so a column of vertical type steps the same way a line of horizontal type does.
-pub fn line_step(layout: &TextLayout, text: &str, idx: usize, x: f32, dir: i32) -> usize {
-    let n = text.chars().count();
-    let idx = idx.min(n);
-    let (_, top, bottom) = layout.caret(byte_index(text, idx));
-    let h = (bottom - top).max(1.0);
-    let y = if dir < 0 { top - h * 0.5 } else { bottom + h * 0.5 };
-    let Some(bounds) = layout.line_bounds() else { return idx };
-    if y < bounds[1] {
-        return 0;
-    }
-    if y > bounds[3] {
-        return n;
-    }
-    char_index(text, layout.hit_test_line(x, y))
-}
-
-/// Line start (`end` false) or end for the line containing `idx`, as a character index.
-pub fn line_edge(layout: &TextLayout, text: &str, idx: usize, end: bool) -> usize {
-    let n = text.chars().count();
-    let idx = idx.min(n);
-    let byte = byte_index(text, idx);
-    let line = layout.lines.iter().find(|ln| byte >= ln.range.start && byte <= ln.range.end).or(layout.lines.last());
-    line.map_or(idx, |ln| char_index(text, if end { ln.range.end } else { ln.range.start }))
 }
 
 const LRM: &str = "\u{200E}";
