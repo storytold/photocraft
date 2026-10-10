@@ -114,7 +114,7 @@ animation rendering and GIMP's frame exports require separate timing/codec work.
 1. Make existing encoders discoverable everywhere: one capability-derived catalog, macOS format
    chooser, BMP and other missing native filters, separate PSB, and the full raster Export As list.
 2. Baseline OpenRaster now round-trips PNG layers/groups, order, names, opacity, visibility and
-   Gray/RGB 8/16-bit. ZIP/XML reads, decoded layers, nesting, coordinates and output size are bounded.
+   8/16-bit pixels. The upstream PR uses main's OpenRaster implementation; grayscale is saved as RGB, and ICC/EXIF/XMP/text are discarded with warnings. The older fork retains the standalone ORA port. ZIP/XML reads, decoded layers and nesting are bounded.
    Masks, text, shapes and effects are baked; advanced blending, clipping, adjustments and artboards
    trigger a warned composite fallback. Imported mixed colour models/profiles are rejected rather
    than silently misinterpreted. Zip64 input and non-PNG layer sources remain unsupported.

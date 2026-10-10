@@ -28,8 +28,15 @@
 	New from Clipboard	Nieuw vanaf klembord
 	Open…	Openen…
 	Open As…	Openen als…
+	Open EXR Parts…	EXR-delen openen…
+	Add beauty precomp from the AOVs	Schoonheidsvoorcompositie toevoegen vanuit de AOV's
+	Both	Beide
+	Left	Links
+	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Remove from Recent	Verwijderen uit recente bestanden
+	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
 	Minimize	Minimaliseren
 	Maximize	Maximaliseren
@@ -77,6 +84,8 @@
 	Import	Importeren
 	Browse…	Bladeren…
 	Reveal in Finder	Weergeven in Finder
+	Show in Explorer	Weergeven in Verkenner
+	Show in Folder	Weergeven in map
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
 	Print One Copy	Eén exemplaar afdrukken
@@ -798,7 +807,6 @@
 	Blending Options	Overvloeiopties
 	Blue	Blauw
 	Blue, Red, Yellow	Blauw, rood, geel
-	Both	Beide
 	Both Axes	Beide assen
 	Bottom	Onder
 	Brightness	Helderheid
@@ -1120,7 +1128,6 @@
 	Leading	Interlinie
 	Leading (set to the font size × auto-leading when Auto)	Interlinie (bij Automatisch: lettergrootte × automatische interlinie)
 	Leave as is (don't color manage)	Ongewijzigd laten (geen kleurbeheer)
-	Left	Links
 	Left align text	Tekst links uitlijnen
 	Length:	Lengte:
 	Level	Niveau
@@ -1292,6 +1299,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Neem ● een reeks bewerkingen op en speel deze ▶ af op elk document.
 	Red	Rood
 	Redefine style by current selection	Stijl opnieuw definiëren op basis van huidige selectie
+	Refine	Verfijnen
 	Reflected Gradient	Gespiegeld verloop
 	Registration Marks	Pastekens
 	Regular	Normaal
@@ -1316,6 +1324,11 @@
 	{n} commands are not in PhotoCraft.	{n} opdrachten bestaan niet in PhotoCraft.
 	Keyboard shortcuts imported	Sneltoetsen geïmporteerd
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
+	Import keyboard shortcuts?	Sneltoetsen importeren?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft heeft op deze computer je sneltoetsenset {set} van een andere beeldbewerker gevonden: {n} van de sneltoetsen wijken af van die van PhotoCraft. Importeren?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Bewerken › Sneltoetsen › Alles terugzetten naar standaard maakt een import ongedaan.
+	Don't Import	Niet importeren
+	The keyboard shortcut set was not imported: {error}	De sneltoetsenset is niet geïmporteerd: {error}
 	Reset Section	Sectie herstellen
 	Reset Transform	Transformatie herstellen
 	Reset to defaults	Terugzetten naar standaardwaarden
@@ -1324,7 +1337,6 @@
 	Restore All	Alles herstellen
 	Restore Defaults	Standaardwaarden herstellen
 	Restrictive (Web)	Beperkt (web)
-	Right	Rechts
 	Right align text	Tekst rechts uitlijnen
 	Rigid	Star
 	Rotate:	Roteren:
@@ -1504,6 +1516,7 @@
 	Blur Tool	Vervagingsgereedschap
 	Bold	Vet
 	Brush	Penseel
+	Block	Blok
 	Brush Pose	Penseelhouding
 	Brush Tip Shape	Vorm penseelpunt
 	Brush Tool	Penseelgereedschap
@@ -1609,6 +1622,7 @@
 	Mobile	Mobiel
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
+	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -1982,8 +1996,7 @@
 	Brush Preset Options	Opties penseelvoorinstelling
 	Group name	Groepsnaam
 	Brush name	Penseelnaam
-	Grid view	Rasterweergave
-	List view	Lijstweergave
+	Brush Name	Penseelnaam
 	Off: the speed of the pointer sets the spacing	Uit: de snelheid van de aanwijzer bepaalt de tussenruimte
 	Tilt Scale	Kantelschaal
 	Brush Projection	Penseelprojectie
@@ -2166,6 +2179,10 @@
 	Show Vectorscope	Vectorscoop tonen
 	Tone Histogram	Toonhistogram
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -2236,6 +2253,7 @@
 	Knockout	Uitsparing
 	Apply At Canvas Bounds	Toepassen op canvasgrenzen
 	Color Picker (Text Color)	Kleurkiezer (tekstkleur)
+	Color Picker ({name})	Kleurkiezer ({name})
 	Color Picker (Fill Color)	Kleurkiezer (vulkleur)
 	Fill color	Vulkleur
 	Color Picker (Stroke Color)	Kleurkiezer (lijnkleur)
@@ -3558,6 +3576,25 @@ cameraRaw	Whites	Witten
 	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+	Stroke Options	Lijnopties
+	Solid	Ononderbroken
+	Dashed	Gestreept
+	Dotted	Gestippeld
+	Caps	Uiteinden
+	Butt / Flat	Plat
+	Miter	Verstek
+	Round	Rond
+	Bevel	Afgeschuind
+	Miter limit	Versteklimiet
+	Dashed line	Gestreepte lijn
+	Dash	Streep
+	Gap	Ruimte
+	Dash / gap lengths × stroke width	Streep- / ruimtelengte × lijnbreedte
+	Add pair	Paar toevoegen
+	Remove pair	Paar verwijderen
+	Dash offset	Streepverschuiving
+	Open paths use centered strokes	Open paden gebruiken gecentreerde lijnen
+	Use finite lengths and a positive pattern total	Gebruik eindige lengtes en een positief patroontotaal
 	No subject found — try Object Selection or the Lasso	Geen onderwerp gevonden — probeer Objectselectie of de Lasso
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
@@ -3566,3 +3603,10 @@ cameraRaw	Whites	Witten
 # Save format chooser
 	This format saves a flattened image. Use Save a Copy to keep your editable document.	Dit formaat slaat een samengevoegde afbeelding op. Gebruik Een kopie opslaan om uw bewerkbare document te behouden.
 	Netpbm chooses the subtype from the image depth and channels.	Netpbm kiest het subtype op basis van de bitdiepte en kanalen van de afbeelding.
+	Use Classic Mode	Klassieke modus gebruiken
+	Auto Center Preview	Voorvertoning automatisch centreren
+	Next Document	Volgend document
+	Previous Document	Vorig document
+	W x H x Resolution	B x H x Resolutie
+	Front Image	Voorste afbeelding
+	PhotoCraft — Screen Color Picker	PhotoCraft — Schermkleurkiezer

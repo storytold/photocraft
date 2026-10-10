@@ -44,15 +44,19 @@ const DISCARDING: &[(&str, Reach)] = &[
     (EXIT, Reach::All),
 ];
 
+fn reach(id: &str) -> Option<Reach> {
+    DISCARDING.iter().find(|(c, _)| *c == id).map(|(_, r)| *r)
+}
+
 /// The command's target document and the unsaved documents it would discard (empty for commands
 /// that discard nothing).
 fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, Vec<DocId>) {
     let docs = app.session.documents();
     let target = params.get("document").and_then(Value::as_u64).map(|i| i as usize).or(app.session.active_index());
-    let affected: Vec<usize> = match DISCARDING.iter().find(|(c, _)| *c == id) {
-        Some((_, Reach::Target)) => target.into_iter().collect(),
-        Some((_, Reach::AllButTarget)) => (0..docs.len()).filter(|&i| Some(i) != target).collect(),
-        Some((_, Reach::All)) => (0..docs.len()).collect(),
+    let affected: Vec<usize> = match reach(id) {
+        Some(Reach::Target) => target.into_iter().collect(),
+        Some(Reach::AllButTarget) => (0..docs.len()).filter(|&i| Some(i) != target).collect(),
+        Some(Reach::All) => (0..docs.len()).collect(),
         None => Vec::new(),
     };
     let dirty = affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty()).map(|d| d.doc.id).collect();
@@ -67,9 +71,9 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     }
     let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
     match &app.discard {
-        None => app.discard = Some(prompt),
+        None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
-        Some(open) if id == EXIT && open.id != EXIT => app.discard = Some(prompt),
+        Some(open) if id == EXIT && open.id != EXIT => ask(app, prompt),
         // Repeated quit requests (the X pressed again) keep the prompt, and the answers so far.
         Some(open) if open.id == id => {}
         Some(_) => {
@@ -78,6 +82,22 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         }
     }
     true
+}
+
+/// Puts up `prompt`. One over several documents shows the document it asks about first; each
+/// later one is shown as it comes up (see [`advance`]).
+fn ask(app: &mut PhotocraftApp, prompt: Prompt) {
+    if !matches!(reach(&prompt.id), Some(Reach::Target)) {
+        show_tab(app, prompt.docs.first().copied());
+    }
+    app.discard = Some(prompt);
+}
+
+/// Makes `doc` the active tab, if it is still open.
+fn show_tab(app: &mut PhotocraftApp, doc: Option<DocId>) {
+    if let Some(i) = doc.and_then(|d| index_of(app, d)) {
+        app.session.set_active(i);
+    }
 }
 
 impl PhotocraftApp {
@@ -118,10 +138,21 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Moves on to the next document, or runs the parked action once none are left.
 fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = app.discard.as_mut() else { return };
-    if !p.docs.is_empty() {
-        p.docs.remove(0);
+    let answered = (!p.docs.is_empty()).then(|| p.docs.remove(0));
+    let (next, one_by_one) = (p.docs.first().copied(), !matches!(reach(&p.id), Some(Reach::Target)));
+    // Close All, Close Others and quitting close each document once it is answered, as Photoshop
+    // does, and show the next one asked about: otherwise the tab just answered stays up and it
+    // looks like it is being asked about again (#2547). Cancel then keeps only the unanswered ones.
+    if one_by_one {
+        if let Some(i) = answered.and_then(|d| index_of(app, d))
+            && let Err(e) = crate::menus::invoke_unguarded(app, ctx, "file.close", json!({"document": i}))
+        {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        show_tab(app, next);
     }
-    if !p.docs.is_empty() {
+    if next.is_some() {
         return;
     }
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
@@ -132,8 +163,12 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if let Some(target) = target {
         // The tab may have moved since the command was issued; aim it at the same document.
-        let Some(i) = index_of(app, target) else { return };
-        params = json!({"document": i});
+        params = match index_of(app, target) {
+            Some(i) => json!({"document": i}),
+            // Close All may have closed its target above already; it still closes the rest.
+            None if matches!(reach(&id), Some(Reach::All)) => json!({}),
+            None => return,
+        };
     }
     if let Err(e) = crate::menus::invoke_unguarded(app, ctx, &id, params) {
         app.ui.status = e;
@@ -344,9 +379,25 @@ mod tests {
         make_dirty(&mut app, 2);
         crate::menus::invoke(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
         advance(&mut app, &ctx);
-        assert_eq!(app.session.documents().len(), 3, "still waiting on the second document");
+        assert_eq!(app.session.documents().len(), 2, "the answered document closes; still waiting on the second");
         advance(&mut app, &ctx);
         assert!(app.session.documents().is_empty());
+    }
+
+    #[test]
+    fn close_others_closes_each_answered_document_and_keeps_its_target() {
+        let mut app = app_with_docs(3);
+        let ctx = egui::Context::default();
+        (0..3).for_each(|i| make_dirty(&mut app, i));
+        let kept = doc_id(&app, 1);
+        crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 1})).unwrap();
+        assert_eq!(app.session.active_index(), Some(0), "the first one asked about is shown");
+        advance(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 2);
+        assert_eq!(app.session.active().map(|d| d.doc.id), Some(doc_id(&app, 1)), "the next one asked about is shown");
+        advance(&mut app, &ctx);
+        assert!(app.discard.is_none());
+        assert_eq!(app.session.documents().iter().map(|d| d.doc.id).collect::<Vec<_>>(), [kept]);
     }
 
     #[test]
@@ -468,8 +519,64 @@ mod tests {
             h.key_press(Key::Escape);
             h.run_steps(2);
             assert!(h.state().discard.is_none());
-            assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
+            assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
         }
+    }
+
+    /// Whether the prompt is asking about the document called `name`.
+    fn asks_about(h: &Prompted, name: &str) -> bool {
+        use egui_kittest::kittest::Queryable;
+        h.query_by_label_contains(&format!("“{name}”")).is_some()
+    }
+
+    /// No on one of several documents closes it and asks about the next one (#2547).
+    #[test]
+    fn answering_no_closes_that_document_and_asks_about_the_next() {
+        for command in [EXIT, "file.closeAll"] {
+            let mut app = app_with_docs(2);
+            make_dirty(&mut app, 0);
+            make_dirty(&mut app, 1);
+            let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+            let second = doc_id(&app, 1);
+            let first = doc_id(&app, 0);
+            assert_eq!(app.session.active_index(), Some(1), "the last new document is active");
+            let mut h = prompt_for(app, command, egui::os::OperatingSystem::Windows);
+            assert!(asks_about(&h, &names[0]), "{command}");
+            assert_eq!(h.state().session.active().map(|d| d.doc.id), Some(first), "{command}: the first tab asked about is shown");
+            h.key_press(Key::N);
+            h.run_steps(2);
+            assert_eq!(h.state().session.documents().len(), 1, "{command}: No closed the first document");
+            assert_eq!(doc_id(h.state(), 0), second);
+            assert_eq!(h.state().session.active_index(), Some(0), "{command}: the tab asked about is shown");
+            assert!(asks_about(&h, &names[1]), "{command}: then about the second");
+            assert!(!h.state().allow_close);
+            h.key_press(Key::N);
+            h.run_steps(2);
+            assert!(h.state().discard.is_none());
+            if command == EXIT {
+                assert!(h.state().allow_close, "answering the last document lets the app quit");
+            } else {
+                assert!(h.state().session.documents().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_after_no_keeps_the_unanswered_documents_and_the_app_open() {
+        let mut app = app_with_docs(2);
+        make_dirty(&mut app, 0);
+        make_dirty(&mut app, 1);
+        let second = doc_id(&app, 1);
+        let mut h = prompt_for(app, EXIT, egui::os::OperatingSystem::Windows);
+        h.key_press(Key::N);
+        h.run_steps(2);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().discard.is_none());
+        assert!(!h.state().allow_close, "Cancel aborts the quit");
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_eq!(doc_id(h.state(), 0), second);
+        assert!(h.state().session.documents()[0].is_dirty(), "the unanswered document keeps its changes");
     }
 
     #[test]
@@ -491,7 +598,7 @@ mod tests {
         h.key_press(Key::C);
         h.run_steps(2);
         assert!(h.state().discard.is_none());
-        assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
+        assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
     }
 
     #[test]

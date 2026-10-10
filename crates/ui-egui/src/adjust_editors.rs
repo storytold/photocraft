@@ -86,6 +86,9 @@ pub struct EditorCx {
     /// Hosted by an Image › Adjustments dialog (false: the Properties panel). Photoshop's dialog
     /// sliders follow the mouse wheel; the panel's don't.
     pub dialog: bool,
+    /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
+    /// (off: the plain track).
+    pub dynamic_color_sliders: bool,
 }
 
 /// The Levels/Curves channel space the values address.
@@ -120,7 +123,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "vibrance" => sliders(ui, v, &[("vibrance", "Vibrance", -100.0, 100.0, 0.0, "%"), ("saturation", "Saturation", -100.0, 100.0, 0.0, "%")]),
         "hueSaturation" => hue_saturation(ui, v, cx),
         "colorBalance" => color_balance(ui, v, cx),
-        "blackWhite" => black_white(ui, v),
+        "blackWhite" => black_white(ui, v, cx),
         "photoFilter" => photo_filter(ui, v, cx),
         "channelMixer" => channel_mixer(ui, v, cx),
         "posterize" => sliders(ui, v, &[("levels", "Levels", 2.0, 255.0, 4.0, "")]),
@@ -200,9 +203,15 @@ fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[(&str, &str, f32, f32, f32,
     e
 }
 
-fn gradient_slider(ui: &mut egui::Ui, text: &str, x: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, from: Color32, to: Color32) -> Edit {
-    let r = widgets::slider_row(ui, text, x, range, unit, Some(&[from, to]));
+fn gradient_slider(ui: &mut egui::Ui, text: &str, x: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, stops: [Color32; 2], dynamic: bool) -> Edit {
+    let r = widgets::slider_row(ui, text, x, range, unit, dynamic.then_some(&stops));
     Edit::of(&r)
+}
+
+/// Preferences ▸ Interface ▸ Dynamic Color Sliders: the colour track for a slider, or the plain
+/// track when it is off.
+fn track_stops<'a>(cx: &EditorCx, stops: &'a [Color32]) -> Option<&'a [Color32]> {
+    cx.dynamic_color_sliders.then_some(stops)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -763,7 +772,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if range == 0 {
         let (hlo, hhi, slo) = if colorize { (0.0, 360.0, 0.0) } else { (-180.0, 180.0, -100.0) };
         let mut h = num(v, "hue", 0.0).clamp(hlo, hhi);
-        let r = widgets::slider_row(ui, tl!("Hue"), &mut h, hlo..=hhi, "°", Some(&hue_grad));
+        let r = widgets::slider_row(ui, tl!("Hue"), &mut h, hlo..=hhi, "°", track_stops(cx, &hue_grad));
         if r.changed() {
             v["hue"] = json!(h.round());
         }
@@ -771,14 +780,14 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         // The Saturation and Lightness tracks follow the current hue, as in Photoshop (UI-217-16).
         let sat_track = saturation_track(h);
         let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
-        let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", Some(&sat_track));
+        let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", track_stops(cx, &sat_track));
         if r.changed() {
             v["saturation"] = json!(s.round());
         }
         e.add(Edit::of(&r));
         let light_track = lightness_track(h);
         let mut l = num(v, "lightness", 0.0).clamp(-100.0, 100.0);
-        let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", Some(&light_track));
+        let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", track_stops(cx, &light_track));
         if r.changed() {
             v["lightness"] = json!(l.round());
         }
@@ -791,7 +800,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let mut o = v[key].clone();
         let mut sub = Edit::default();
         let mut h = num(&o, "hue", 0.0);
-        let r = widgets::slider_row(ui, tl!("Hue"), &mut h, -180.0..=180.0, "°", Some(&hue_grad));
+        let r = widgets::slider_row(ui, tl!("Hue"), &mut h, -180.0..=180.0, "°", track_stops(cx, &hue_grad));
         if r.changed() {
             o["hue"] = json!(h.round());
         }
@@ -946,13 +955,14 @@ fn color_balance(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 // ---------------------------------------------------------------------------------------------
 // Black & White
 
-fn black_white(ui: &mut egui::Ui, v: &mut Value) -> Edit {
+fn black_white(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut e = Edit::default();
     let colors = [[230, 50, 50], [235, 215, 40], [50, 200, 70], [40, 200, 220], [50, 90, 235], [220, 50, 210]];
     for (i, key) in HUE_RANGES.iter().enumerate() {
         let mut x = num(v, key, adjust_params::BW_DEFAULTS[i]).clamp(-200.0, 300.0);
         let c = colors[i];
-        let r = gradient_slider(ui, RANGE_LABELS[i], &mut x, -200.0..=300.0, "%", Color32::BLACK, Color32::from_rgb(c[0], c[1], c[2]));
+        let r =
+            gradient_slider(ui, RANGE_LABELS[i], &mut x, -200.0..=300.0, "%", [Color32::BLACK, Color32::from_rgb(c[0], c[1], c[2])], cx.dynamic_color_sliders);
         if r.changed {
             v[*key] = json!(x.round());
         }
@@ -1050,7 +1060,7 @@ fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut e = Edit::default();
     let mut changed = false;
     for (i, (text, c)) in [(tl!("Red"), [225, 50, 50]), (tl!("Green"), [50, 190, 70]), (tl!("Blue"), [60, 100, 235])].iter().enumerate() {
-        let r = gradient_slider(ui, text, &mut row[i], -200.0..=200.0, "%", Color32::BLACK, Color32::from_rgb(c[0], c[1], c[2]));
+        let r = gradient_slider(ui, text, &mut row[i], -200.0..=200.0, "%", [Color32::BLACK, Color32::from_rgb(c[0], c[1], c[2])], cx.dynamic_color_sliders);
         changed |= r.changed;
         e.add(r);
     }
@@ -1352,7 +1362,15 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     let gray = app.session.active().is_some_and(|s| is_gray(s.doc.mode));
     let hist = needs_histogram(kind).then(|| tone::histograms(app, HistSource::BelowLayer(id), space_of(&values)));
-    let cx = EditorCx { mem: layer_mem(id), hist, gray, swatches: swatches(app), gradients: gradient_presets(app, kind), dialog: false };
+    let cx = EditorCx {
+        mem: layer_mem(id),
+        hist,
+        gray,
+        swatches: swatches(app),
+        gradients: gradient_presets(app, kind),
+        dialog: false,
+        dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+    };
     let e = editor(ui, kind, &mut values, &cx);
     if e.changed {
         app.live_adjust = Some((id, values.clone()));
@@ -1386,6 +1404,23 @@ mod tests {
         assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
         assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
         assert_eq!(lightness_track(200.0), [Color32::BLACK, hue_color(200.0), Color32::WHITE]);
+    }
+
+    /// Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the colour sliders get plain tracks.
+    #[test]
+    fn dynamic_color_sliders_switch_the_tracks_off() {
+        let cx = |dynamic: bool| EditorCx {
+            mem: egui::Id::NULL,
+            hist: None,
+            gray: false,
+            swatches: [[0.0; 3]; 2],
+            gradients: Vec::new(),
+            dialog: false,
+            dynamic_color_sliders: dynamic,
+        };
+        let stops = [Color32::BLACK, Color32::RED];
+        assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
+        assert_eq!(track_stops(&cx(false), &stops), None);
     }
 
     #[test]

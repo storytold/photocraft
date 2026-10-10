@@ -5,8 +5,7 @@
 //! The mapping matches the Gradient tool's destructive drag (`photocraft_algo::paint`): a
 //! Linear gradient runs from the start (t = 0) to the end point (t = 1); Radial, Angle,
 //! Reflected and Diamond gradients are centred on the start point and reach t = 1 at the end
-//! point's distance. A fill made from a drag therefore renders the same pixels as painting that
-//! drag (see the tests).
+//! point's distance. Fill and painted gradients share this geometry (see the tests).
 
 use photocraft_doc::{Fill, GradientStyle};
 use photocraft_geom::Rect;
@@ -19,8 +18,8 @@ const MIN_LEN: f32 = 0.5;
 /// A gradient fill's colour ramp, prepared for one render (colours converted once, while the
 /// document's CMYK profile is active).
 #[derive(Clone, Debug)]
-pub struct Ramp {
-    color: Vec<(f32, [f32; 4])>,
+pub struct Ramp<const N: usize = 4> {
+    color: Vec<(f32, [f32; N])>,
     mids: Vec<f32>,
     opacity: Vec<(f32, f32)>,
 }
@@ -28,14 +27,17 @@ pub struct Ramp {
 impl Ramp {
     /// The ramp of a gradient fill (`None` for other fills).
     pub fn new(f: &Fill) -> Option<Ramp> {
+        Self::with_colors(f, |c| {
+            let rgb = c.to_rgb();
+            [rgb[0], rgb[1], rgb[2], c.alpha]
+        })
+    }
+}
+
+impl<const N: usize> Ramp<N> {
+    fn with_colors(f: &Fill, convert: impl Fn(photocraft_doc::Color) -> [f32; N]) -> Option<Self> {
         let Fill::Gradient { stops, opacity_stops, midpoints, .. } = f else { return None };
-        let mut color: Vec<(f32, [f32; 4])> = stops
-            .iter()
-            .map(|(p, c)| {
-                let rgb = c.to_rgb();
-                (*p, [rgb[0], rgb[1], rgb[2], c.alpha])
-            })
-            .collect();
+        let mut color: Vec<_> = stops.iter().map(|(p, c)| (*p, convert(*c))).collect();
         color.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut opacity = opacity_stops.clone();
         opacity.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -43,10 +45,10 @@ impl Ramp {
     }
 
     /// Colour and alpha at `t` (`0..=1`).
-    pub fn sample(&self, t: f32) -> [f32; 4] {
+    pub fn sample(&self, t: f32) -> [f32; N] {
         let mut c = sample_color(&self.color, &self.mids, t);
-        if !self.opacity.is_empty() {
-            c[3] *= sample_opacity(&self.opacity, t);
+        if let Some(alpha) = c.last_mut() {
+            *alpha *= sample_opacity(&self.opacity, t);
         }
         c
     }
@@ -65,8 +67,8 @@ pub fn midpoint_remap(u: f32, m: f32) -> f32 {
     }
 }
 
-fn sample_color(stops: &[(f32, [f32; 4])], mids: &[f32], t: f32) -> [f32; 4] {
-    let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return [0.0; 4] };
+fn sample_color<const N: usize>(stops: &[(f32, [f32; N])], mids: &[f32], t: f32) -> [f32; N] {
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return [0.0; N] };
     if t <= first.0 {
         return first.1;
     }
@@ -97,29 +99,74 @@ fn sample_opacity(stops: &[(f32, f32)], t: f32) -> f32 {
 
 /// Adds one level of the shared dither noise to a colour (as the Gradient tool does).
 pub fn dither(c: &mut [f32; 4], x: i32, y: i32) {
+    dither_channels(&mut c[..3], x, y);
+}
+
+fn dither_channels(c: &mut [f32], x: i32, y: i32) {
+    dither_channels_to(c, x, y, None);
+}
+
+/// [`dither_channels`], then rounded to `quantum` steps when given. The noise is a fraction of a
+/// level that only means something once the value lands on a level, as it does in a painted
+/// gradient: left in float, a dark channel lifted 0.002 above black is still 0.002 to the next
+/// blend, and Color Dodge under a bright layer turns that into visible speckle (#2755).
+fn dither_channels_to(c: &mut [f32], x: i32, y: i32, quantum: Option<f32>) {
     let n = (photocraft_color::dither_noise(x, y) - 0.5) / 255.0;
-    for ch in c.iter_mut().take(3) {
+    for ch in c {
         *ch = (*ch + n).clamp(0.0, 1.0);
+        if let Some(q) = quantum {
+            *ch = (*ch * q + 0.5).floor() / q;
+        }
     }
 }
 
 /// Renders a gradient fill over `rect`, laid out in `frame` (row-major RGBA).
 pub fn render(f: &Fill, rect: Rect, frame: Rect) -> Vec<[f32; 4]> {
-    let mut px = vec![[0.0f32; 4]; rect.width() as usize * rect.height() as usize];
-    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (Ramp::new(f), f) else { return px };
+    render_quantized(f, rect, frame, None)
+}
+
+/// [`render`] with dithered pixels rounded to `quantum` steps (the document depth's levels, see
+/// [`crate::adjustment_quantum`]), as a gradient painted into a layer of that depth stores them.
+pub fn render_quantized(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>) -> Vec<[f32; 4]> {
+    render_ramp(f, rect, frame, Ramp::new(f), quantum)
+}
+
+/// Native CMYK solid/gradient pixels at document depth; patterns return `None`.
+/// Use the same samples for rendering and PSD caches to avoid a lossy RGB separation.
+pub fn render_cmyk_fill(f: &Fill, rect: Rect, frame: Rect, depth: photocraft_color::SampleType) -> Option<photocraft_raster::Surface> {
+    let native = |c: photocraft_doc::Color| {
+        let c = c.in_mode(photocraft_color::ColorMode::Cmyk);
+        [c.c[0], c.c[1], c.c[2], c.c[3], c.alpha]
+    };
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Cmyk, depth, true));
+    match f {
+        Fill::Solid(c) => surface.fill_rect(rect, &native(*c)),
+        Fill::Gradient { .. } => {
+            let px = render_ramp(f, rect, frame, Ramp::with_colors(f, native), None);
+            surface.write_region(rect, px.as_flattened());
+        }
+        Fill::Pattern { .. } => return None,
+    }
+    surface.prune();
+    Some(surface)
+}
+
+fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>) -> Vec<[f32; N]> {
+    let mut px = vec![[0.0f32; N]; rect.width() as usize * rect.height() as usize];
+    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else { return px };
     let w = rect.width() as usize;
     if w == 0 {
         return px;
     }
     // Linear and Reflected end points on whole pixels, as Photoshop (crate::fill_layout).
     let (angle, scale, offset) = &crate::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
-    let row = |y: i32, out: &mut [[f32; 4]]| {
+    let row = |y: i32, out: &mut [[f32; N]]| {
         for (i, p) in out.iter_mut().enumerate() {
             let x = rect.x0 + i as i32;
             let t = crate::effects::gradient_t(*style, *angle, *scale, *reverse, *offset, frame, x as f32 + 0.5, y as f32 + 0.5);
             *p = ramp.sample(t);
             if *dith {
-                dither(p, x, y);
+                dither_channels_to(p.get_mut(..N.saturating_sub(1)).unwrap_or_default(), x, y, quantum);
             }
         }
     };
@@ -204,6 +251,29 @@ mod tests {
     use photocraft_doc::Color;
 
     const STYLES: [GradientStyle; 5] = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
+
+    #[test]
+    fn native_cmyk_ramp_interpolates_black_and_alpha_separately() {
+        let a = Color { mode: photocraft_color::ColorMode::Cmyk, c: [0.0, 0.2, 0.4, 0.6], alpha: 0.5 };
+        let b = Color { c: [0.4, 0.6, 0.8, 1.0], alpha: 1.0, ..a };
+        let mut f = Fill::gradient(vec![(1.0, b), (0.0, a)], 0.0, 1.0, GradientStyle::Linear, false);
+        if let Fill::Gradient { midpoints, opacity_stops, .. } = &mut f {
+            *midpoints = vec![0.25];
+            *opacity_stops = vec![(1.0, 0.0), (0.0, 1.0)];
+        }
+        let ramp = Ramp::with_colors(&f, |c| [c.c[0], c.c[1], c.c[2], c.c[3], c.alpha]).unwrap();
+        let expected = [0.2, 0.4, 0.6, 0.8, 0.5625];
+        for (v, expected) in ramp.sample(0.25).into_iter().zip(expected) {
+            assert!((v - expected).abs() < 1e-6);
+        }
+        let mut dithered = ramp.sample(0.25);
+        dither_channels(&mut dithered[..4], 3, 7);
+        assert_eq!(dithered[4], expected[4]);
+        let noise = (photocraft_color::dither_noise(3, 7) - 0.5) / 255.0;
+        for i in 0..4 {
+            assert!((dithered[i] - expected[i] - noise).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn handles_round_trip() {

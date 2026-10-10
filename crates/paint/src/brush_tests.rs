@@ -547,6 +547,23 @@ fn dual_brush_intersects() {
 }
 
 #[test]
+fn wet_edges_shape_the_stroke_not_each_dab() {
+    // #2088: Wet Edges darkens the rim of the whole stroke. Along the centre of a straight stroke
+    // of overlapping dabs the paint is even (no chain of per-dab rings), and the stroke's sides are
+    // darker than its centre.
+    let b = BrushSettings { size: 40.0, hardness: 0.8, wet_edges: true, ..brush() };
+    let s = paint(&b, &line(20.0, 220.0, 50.0), 240, 100);
+    let centre: Vec<f32> = (60..180).map(|x| s.rgba(x, 50)[3]).collect();
+    let (lo, hi) = centre.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &a| (lo.min(a), hi.max(a)));
+    assert!(hi - lo < 0.02, "centre line is even: {lo}..{hi}");
+    assert!(hi < 0.6, "wet interior is lighter: {hi}");
+    for x in [80, 120, 160] {
+        let side = s.rgba(x, 50 + 16)[3];
+        assert!(side > hi + 0.15, "the side at x={x} is darker than the centre: {side} vs {hi}");
+    }
+}
+
+#[test]
 fn wet_edges_and_noise() {
     let b = BrushSettings { size: 40.0, hardness: 0.0, wet_edges: true, ..brush() };
     let s = paint(&b, &line(20.0, 120.0, 50.0), 140, 100);
@@ -1097,4 +1114,16 @@ fn the_tip_falls_off_from_the_hard_core_to_zero_at_the_edge() {
     let v: Vec<f32> = (0..=20).map(|i| tip_falloff(i as f32 * 0.5, 10.0, 0.0)).collect();
     assert!(v.windows(2).all(|w| w[1] <= w[0]), "{v:?}");
     assert!((tip_falloff(5.0, 10.0, 0.0) - 0.75f32.powi(4)).abs() < 1e-6);
+}
+
+#[test]
+fn half_coverage_radius_is_the_tips_50_percent_contour() {
+    use crate::{half_coverage_radius, tip_falloff};
+    // The Normal Brush Tip cursor ring (#2744): where the soft falloff crosses 50 %.
+    for h in [0.0, 0.25, 0.5, 0.75, 0.99] {
+        let d = half_coverage_radius(10.5, h);
+        assert!((tip_falloff(d, 10.5, h) - 0.5).abs() < 1e-3, "hardness {h}: ring at {d}");
+    }
+    assert_eq!(half_coverage_radius(10.5, 1.0), 10.5);
+    assert!(half_coverage_radius(10.5, f32::NAN).is_finite());
 }

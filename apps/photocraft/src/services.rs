@@ -16,13 +16,13 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
-    "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm",
+    "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco",
+    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -39,7 +39,12 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// An explicit SVG filter keeps vector artwork discoverable even when a native picker defaults to
 /// the PhotoCraft-only filter. SVG is also included in All Formats for normal multi-format opens.
 fn open_filters() -> Vec<(&'static str, Vec<String>)> {
-    vec![("All Formats", open_filter_extensions(OPEN_EXTS)), ("PhotoCraft", open_filter_extensions(&["pcraft"])), ("SVG", open_filter_extensions(SVG_EXTS))]
+    vec![
+        ("All Formats", open_filter_extensions(OPEN_EXTS)),
+        ("PhotoCraft", open_filter_extensions(&["pcraft"])),
+        ("OpenRaster", open_filter_extensions(&["ora"])),
+        ("SVG", open_filter_extensions(SVG_EXTS)),
+    ]
 }
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog

@@ -1044,8 +1044,7 @@ fn lock_layers(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
-    let name =
-        p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
+    let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
@@ -1126,15 +1125,11 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let buf = photocraft_compose::flatten(&solo);
         let fmt = doc.pixel_format();
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
         let mut merged = Layer::raster(top.name.clone(), fmt);
         merged.locks = top.locks;
-        let surf = crate::pixels_mut(&mut merged)?;
-        surf.write_region(doc.bounds(), &data);
-        surf.prune();
+        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, None);
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {
@@ -1202,8 +1197,9 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
         let mut copies = Vec::new();
         let mut new_active = None;
         for id in top_level(doc, &sel) {
-            let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-            dup.name = doc.copy_name(&dup.name);
+            // Match the single-layer duplicate path: Background copies become
+            // ordinary layers, while normal copies retain their original locks.
+            let dup = crate::commands::layer_copy(doc, id)?;
             let nid = doc.insert_above(Some(id), dup);
             if !in_place {
                 crate::artboard_cmds::place_copy(doc, nid)?;
@@ -1250,7 +1246,7 @@ pub fn specs() -> Vec<CommandSpec> {
     const ALIGN: &str = r##"{"to":"auto|layers|selection|canvas"="auto"} (auto: the selection bounds with one layer and an active selection, else the selected layers' bounds)"##;
     vec![
         spec!("select.allLayers", "All Layers", &["Select"], Some("Cmd+Alt+A"), "{}", has_doc, |s, _| select_all_layers(s)),
-        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_layer, |s, _| {
+        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {
             set_selection(s, Vec::new(), None, None)?;
             if let Some(st) = s.active_mut() {
                 st.active_layer = None;
@@ -1531,6 +1527,18 @@ mod tests {
         s.execute("select.deselectLayers", json!({})).unwrap();
         assert!(sel(&s).is_empty());
         assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // Nothing selected: a no-op, not an error (#2457).
+        s.execute("select.deselectLayers", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // An explicit layer needs no active layer.
+        s.execute("layer.hideLayers", json!({"layer": a.0})).unwrap();
+        assert!(!s.active().unwrap().doc.layer(a).unwrap().visible);
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": "x"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layer(a).unwrap().name, "x");
+        s.execute("layer.showLayers", json!({"layer": a.0})).unwrap();
+        assert!(s.active().unwrap().doc.layer(a).unwrap().visible);
+        assert!(s.execute("layer.hideLayers", json!({"layer": 999_999})).is_err());
+        assert!(s.execute("layer.hideLayers", json!({})).is_err());
         assert!(!s.is_enabled("layer.align.topEdges"));
     }
 
@@ -1546,6 +1554,16 @@ mod tests {
         assert_eq!(r["selected"], json!([a.0, b.0]));
         assert!(s.execute("select.findLayers", json!({"name": "nothing"})).is_err());
         assert!(s.execute("layer.renameLayer", json!({})).is_err());
+    }
+
+    #[test]
+    fn rename_layer_keeps_surrounding_spaces() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": " black skin bw "})).unwrap();
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
+        assert!(s.execute("layer.renameLayer", json!({"layer": a.0, "name": "   "})).is_err());
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
     }
 
     #[test]
@@ -1704,6 +1722,65 @@ mod tests {
             s.execute("layer.select", json!({"layer": c.0})).unwrap();
             s.execute("layer.mergeLayers", json!({})).unwrap();
             assert_eq!(doc(&s).layer_count(), before - 1);
+        }
+    }
+
+    #[test]
+    fn merging_group_children_preserves_their_composite() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 12, 40, 42));
+            let upper = rect_layer(&mut s, Rect::new(25, 20, 55, 50));
+            select_all(&mut s, &[lower, upper]);
+            let group = LayerId(s.execute("layer.groupLayers", json!({"name": "Merge test group"})).unwrap()["layer"].as_u64().unwrap());
+            let doc_before = doc(&s);
+            let expected = photocraft_compose::render(doc_before, doc_before.bounds());
+            let children = doc_before.layer(group).unwrap().children().unwrap().iter().map(|layer| layer.id).collect::<Vec<_>>();
+
+            select_all(&mut s, &children);
+            s.execute("layer.mergeLayers", json!({})).unwrap();
+            let doc_after = doc(&s);
+            let actual = photocraft_compose::render(doc_after, doc_after.bounds());
+            assert_eq!(actual, expected, "depth {depth}: group merge changed rendered pixels");
+            assert_eq!(doc_after.layer(group).unwrap().children().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn merging_keeps_layer_effects_outside_the_pixels() {
+        // A drop shadow reaches past the layer's pixels; the merge must render that far.
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+            let upper = rect_layer(&mut s, Rect::new(40, 20, 60, 40));
+            s.execute("layer.layerStyle.dropShadow", json!({"layer": upper.0, "blend": "normal", "distance": 12, "size": 4})).unwrap();
+            let before = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            select_all(&mut s, &[lower, upper]);
+            s.execute("layer.mergeLayers", json!({})).unwrap();
+            let after = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            let worst = before.px.iter().zip(&after.px).map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+            assert!(worst <= 1.5 / 255.0, "depth {depth}: merge layers dropped the shadow (off by {worst})");
+        }
+    }
+
+    #[test]
+    fn merging_a_group_down_preserves_the_composite() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 12, 50, 52));
+            let child_a = rect_layer(&mut s, Rect::new(24, 20, 64, 60));
+            let child_b = rect_layer(&mut s, Rect::new(35, 28, 75, 68));
+            select_all(&mut s, &[child_a, child_b]);
+            let group = LayerId(s.execute("layer.groupLayers", json!({"name": "Merge down group"})).unwrap()["layer"].as_u64().unwrap());
+            let doc_before = doc(&s);
+            let expected = photocraft_compose::render(doc_before, doc_before.bounds());
+
+            s.execute("layer.mergeDown", json!({"layer": group.0})).unwrap();
+            let doc_after = doc(&s);
+            let actual = photocraft_compose::render(doc_after, doc_after.bounds());
+            assert_eq!(actual, expected, "depth {depth}: group merge down changed rendered pixels");
+            assert!(doc_after.layer(lower).is_some());
+            assert!(doc_after.layer(group).is_none());
         }
     }
 

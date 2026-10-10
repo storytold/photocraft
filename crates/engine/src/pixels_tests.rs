@@ -1,5 +1,8 @@
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{Document, Layer, Size};
+use photocraft_raster::from_rgba;
 use serde_json::json;
+use std::time::Instant;
 
 use super::*;
 
@@ -30,6 +33,41 @@ fn layer(fmt: PixelFormat) -> Surface {
     }
     assert!(!s.has_tiles_in(Rect::new(200, 512, 256, 530)), "a hole inside the content bounds");
     s
+}
+
+/// Release-only comparison for the 5000×7073 px group-merge report (#1561). The reference path
+/// models the old full-canvas composite plus a second converted float buffer; the optimized path
+/// renders only the group's visible content bounds in bands.
+#[test]
+#[ignore = "manual 35 MP merge benchmark; run in release with --ignored --nocapture"]
+fn benchmark_large_group_merge() {
+    let fmt = PixelFormat::RGBA8;
+    let mut doc = Document::new("merge benchmark", Size::new(5000, 7073), ColorMode::Rgb, SampleType::U8);
+    let content = Rect::new(1700, 2200, 2700, 3200);
+    let mut children = Vec::new();
+    for i in 0..4 {
+        let mut child = Layer::raster(format!("Layer {i}"), fmt);
+        if let Some(surface) = child.surface_mut() {
+            surface.fill_rect(content, &[(i as f32 + 1.0) / 5.0, 0.2, 0.4, 0.5]);
+        }
+        children.push(child);
+    }
+    doc.layers.push(Layer::group("Group", children));
+    let expected_area = photocraft_compose::layer_bounds(&doc.layers[0], doc.bounds()).intersect(&doc.bounds());
+
+    let start = Instant::now();
+    let reference = photocraft_compose::flatten(&doc);
+    let reference_data: Vec<f32> = reference.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
+    let mut reference_surface = Surface::new(fmt);
+    reference_surface.write_region(doc.bounds(), &reference_data);
+    reference_surface.prune();
+    let reference_time = start.elapsed();
+
+    let start = Instant::now();
+    let optimized = composite_layers(&doc, fmt, None);
+    let optimized_time = start.elapsed();
+    assert_eq!(reference_surface.read_region(expected_area), optimized.read_region(expected_area));
+    println!("#1561 5000x7073, 4x 1000x1000 layers: full-canvas {:?}, bounded/banded {:?}", reference_time, optimized_time);
 }
 
 #[test]

@@ -32,8 +32,15 @@
 	New from Clipboard	Nuevo desde el portapapeles
 	Open…	Abrir…
 	Open As…	Abrir como…
+	Open EXR Parts…	Abrir partes EXR…
+	Add beauty precomp from the AOVs	Añadir la precomposición de belleza a partir de los AOV
+	Both	Ambas
+	Left	Izquierda
+	Right	Derecha
 	Open Recent	Archivos recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Remove from Recent	Quitar de recientes
+	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
 	Minimize	Minimizar
 	Maximize	Maximizar
@@ -81,6 +88,8 @@
 	Import	Importar
 	Browse…	Examinar…
 	Reveal in Finder	Mostrar en Finder
+	Show in Explorer	Mostrar en el Explorador
+	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
 	Print One Copy	Imprimir un ejemplar
@@ -583,6 +592,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -808,7 +821,6 @@
 	Blending Options	Opciones de fusión
 	Blue	Azul
 	Blue, Red, Yellow	Azul, rojo, amarillo
-	Both	Ambos
 	Both Axes	Ambos ejes
 	Bottom	Inferior
 	Brightness	Brillo
@@ -1127,7 +1139,6 @@
 	Leading	Interlínea
 	Leading (set to the font size × auto-leading when Auto)	Interlínea (al estar en Automático se iguala al tamaño de fuente × interlínea automática)
 	Leave as is (don't color manage)	Dejar como está (no gestionar el color)
-	Left	Izquierda
 	Left align text	Alinear texto a la izquierda
 	Length:	Longitud:
 	Level	Nivel
@@ -1299,6 +1310,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Graba ● una secuencia de ediciones y reprodúcela ▶ en cualquier documento.
 	Red	Rojo
 	Redefine style by current selection	Redefinir el estilo con la selección actual
+	Refine	Refinar
 	Reflected Gradient	Degradado reflejado
 	Registration Marks	Marcas de registro
 	Regular	Normal
@@ -1324,6 +1336,11 @@
 	{n} commands are not in PhotoCraft.	{n} comandos no existen en PhotoCraft.
 	Keyboard shortcuts imported	Atajos de teclado importados
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Tu conjunto de atajos de teclado {set} se usa aquí: {n} atajos difieren de los predeterminados. Edición › Atajos de teclado los muestra; Restablecer todo a valores predeterminados lo deshace.
+	Import keyboard shortcuts?	¿Importar atajos de teclado?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft encontró en este equipo tu conjunto de atajos de teclado {set} de otro editor de imágenes: {n} de sus atajos difieren de los de PhotoCraft. ¿Importarlo?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edición › Atajos de teclado › Restablecer todo a valores predeterminados deshace una importación.
+	Don't Import	No importar
+	The keyboard shortcut set was not imported: {error}	No se importó el conjunto de atajos de teclado: {error}
 	Reset Section	Restablecer sección
 	Reset Transform	Restablecer transformación
 	Reset to defaults	Restablecer a los valores predeterminados
@@ -1332,7 +1349,6 @@
 	Restore All	Restaurar todo
 	Restore Defaults	Restaurar valores predeterminados
 	Restrictive (Web)	Restrictivo (web)
-	Right	Derecha
 	Right align text	Alinear texto a la derecha
 	Rigid	Rígido
 	Rotate:	Rotación:
@@ -1516,6 +1532,7 @@
 	Blur Tool	Herramienta Desenfocar
 	Bold	Negrita
 	Brush	Pincel
+	Block	Bloque
 	Brush Pose	Postura del pincel
 	Brush Tip Shape	Forma de la punta del pincel
 	Brush Tool	Herramienta Pincel
@@ -1622,6 +1639,7 @@
 	Mobile	Móvil
 	Move Tool	Herramienta Mover
 	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
+	Could not complete the Free Transform command because the layer is locked.	No se pudo completar el comando Transformación libre porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -2005,8 +2023,9 @@
 	Brush Preset Options	Opciones de preajustes de pincel
 	Group name	Nombre del grupo
 	Brush name	Nombre del pincel
-	Grid view	Vista de cuadrícula
-	List view	Vista de lista
+	Brush Name	Nombre del pincel
+	Brush Stroke	Trazo de pincel
+	Brush Tip	Punta del pincel
 	Off: the speed of the pointer sets the spacing	Desactivado: la velocidad del puntero establece el espaciado
 	Tilt Scale	Escala de inclinación
 	Brush Projection	Proyección del pincel
@@ -2287,6 +2306,7 @@ cameraRaw	Amount	Cantidad
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selector de color (Color del texto)
+	Color Picker ({name})	Selector de color ({name})
 	Color Picker (Fill Color)	Selector de color (Color de relleno)
 	Fill color	Color de relleno
 	Color Picker (Stroke Color)	Selector de color (Color del trazo)
@@ -2386,6 +2406,7 @@ fontWeight	Italic	Cursiva
 	Color to Alpha…	Color a alfa…
 	Transparency Threshold	Umbral de transparencia
 	Opacity Threshold	Umbral de opacidad
+	PhotoCraft — Screen Color Picker	PhotoCraft — Selector de color de pantalla
 
 	Rasterize svg groups deeper than	Rasterizar grupos SVG con mayor profundidad
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desactiva este umbral; los grupos SVG anidados a más de 100 niveles siempre se rasterizan.
@@ -2443,6 +2464,27 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
 	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	Stroke Options	Opciones de trazo
+	Solid	Continuo
+	Dashed	Discontinuo
+	Dotted	Punteado
+	Alignment	Alineación
+	Caps	Extremos
+	Butt / Flat	Plano
+	Corners	Esquinas
+	Miter	Inglete
+	Round	Redondo
+	Bevel	Bisel
+	Miter limit	Límite de inglete
+	Dashed line	Línea discontinua
+	Dash	Guion
+	Gap	Espacio
+	Dash / gap lengths × stroke width	Longitudes de guion / espacio × anchura del trazo
+	Add pair	Añadir par
+	Remove pair	Quitar par
+	Dash offset	Desplazamiento de guiones
+	Open paths use centered strokes	Los trazados abiertos usan trazos centrados
+	Use finite lengths and a positive pattern total	Usa longitudes finitas y un total de patrón positivo
 	No subject found — try Object Selection or the Lasso	No se encontró ningún sujeto — pruebe Selección de objeto o el Lazo
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
@@ -2452,3 +2494,20 @@ fontWeight	Italic	Cursiva
 	Continue	Continuar
 	This format saves a flattened image. Use Save a Copy to keep your editable document.	Este formato guarda una imagen acoplada. Usa Guardar una copia para conservar el documento editable.
 	Netpbm chooses the subtype from the image depth and channels.	Netpbm elige el subtipo según la profundidad de bits y los canales de la imagen.
+# Add Noise, Reduce Noise and Smart Sharpen dialog controls (Filter > Noise, Filter > Sharpen).
+	Distribution	Distribución
+	Uniform	Uniforme
+	Gaussian	Gaussiana
+	Monochromatic	Monocromático
+	Seed	Semilla
+	Strength	Intensidad
+	Reduce Color Noise	Reducir ruido de color
+	Remove Jpeg Artifact	Quitar artefactos JPEG
+	Sharpen Details	Enfocar detalles
+	Reduce Noise	Reducir ruido
+	Use Classic Mode	Usar modo clásico
+	Auto Center Preview	Centrar previsualización automáticamente
+	Next Document	Documento siguiente
+	Previous Document	Documento anterior
+	W x H x Resolution	An. x Al. x Resolución
+	Front Image	Imagen frontal

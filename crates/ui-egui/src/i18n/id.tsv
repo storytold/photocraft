@@ -31,8 +31,15 @@
 	New…	Baru…
 	Open…	Buka…
 	Open As…	Buka Sebagai…
+	Open EXR Parts…	Buka bagian EXR…
+	Add beauty precomp from the AOVs	Tambahkan prakomposisi beauty dari AOV
+	Both	Keduanya
+	Left	Kiri
+	Right	Kanan
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
+	Remove from Recent	Hapus dari Daftar Terakhir
+	Remove {name} from Recent	Hapus {name} dari Daftar Terakhir
 	Close	Tutup
 	Minimize	Minimalkan
 	Maximize	Maksimalkan
@@ -80,6 +87,8 @@
 	Import	Impor
 	Browse…	Telusuri…
 	Reveal in Finder	Tampilkan di Finder
+	Show in Explorer	Tampilkan di Explorer
+	Show in Folder	Tampilkan di Folder
 	File Info…	Info Berkas…
 	Print…	Cetak…
 	Print One Copy	Cetak Satu Salinan
@@ -568,6 +577,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -792,7 +805,6 @@
 	Blending Options	Opsi Blending
 	Blue	Biru
 	Blue, Red, Yellow	Biru, Merah, Kuning
-	Both	Keduanya
 	Both Axes	Kedua Sumbu
 	Bottom	Bawah
 	Brightness	Kecerahan
@@ -1105,7 +1117,6 @@
 	Leading	Leading
 	Leading (set to the font size × auto-leading when Auto)	Leading (diatur ke ukuran font × auto-leading saat Auto)
 	Leave as is (don't color manage)	Biarkan apa adanya (tanpa manajemen warna)
-	Left	Kiri
 	Left align text	Teks rata kiri
 	Length:	Panjang:
 	Level	Level
@@ -1277,6 +1288,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Rekam ● urutan pengeditan, lalu putar ▶ di dokumen apa saja.
 	Red	Merah
 	Redefine style by current selection	Definisikan ulang gaya dengan seleksi saat ini
+	Refine	Perhalus
 	Reflected Gradient	Gradien Pantulan
 	Registration Marks	Tanda Registrasi
 	Regular	Reguler
@@ -1302,6 +1314,11 @@
 	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
 	Keyboard shortcuts imported	Pintasan keyboard diimpor
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan keyboard Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
+	Import keyboard shortcuts?	Impor pintasan keyboard?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft menemukan set pintasan keyboard Anda {set} dari editor gambar lain di komputer ini: {n} pintasannya berbeda dari PhotoCraft. Impor?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edit › Pintasan Keyboard › Setel Ulang Semua ke Bawaan membatalkan impor.
+	Don't Import	Jangan Impor
+	The keyboard shortcut set was not imported: {error}	Set pintasan keyboard tidak diimpor: {error}
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default
@@ -1310,7 +1327,6 @@
 	Restore All	Pulihkan Semua
 	Restore Defaults	Pulihkan Default
 	Restrictive (Web)	Restriktif (Web)
-	Right	Kanan
 	Right align text	Teks rata kanan
 	Rigid	Kaku
 	Rotate:	Putar:
@@ -1490,6 +1506,7 @@
 	Blur Tool	Alat Blur
 	Bold	Tebal
 	Brush	Kuas
+	Block	Blok
 	Brush Pose	Pose Kuas
 	Brush Tip Shape	Bentuk Ujung Kuas
 	Brush Tool	Alat Kuas
@@ -1595,6 +1612,7 @@
 	Mobile	Seluler
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
+	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -1966,8 +1984,8 @@
 	Brush Preset Options	Opsi Preset Kuas
 	Group name	Nama grup
 	Brush name	Nama kuas
-	Grid view	Tampilan grid
-	List view	Tampilan daftar
+	Brush Name	Nama kuas
+	Brush Stroke	Sapuan kuas
 	Off: the speed of the pointer sets the spacing	Mati: kecepatan penunjuk menentukan jarak
 	Tilt Scale	Skala Kemiringan
 	Brush Projection	Proyeksi Kuas
@@ -2631,6 +2649,7 @@ cameraRaw	Blending	Pembauran
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Pemilih Warna (Warna Teks)
+	Color Picker ({name})	Pemilih Warna ({name})
 	Color Picker (Fill Color)	Pemilih Warna (Warna Isian)
 	Fill color	Warna isian
 	Color Picker (Stroke Color)	Pemilih Warna (Warna Stroke)
@@ -2726,6 +2745,7 @@ fontWeight	Italic	Miring
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
+	PhotoCraft — Screen Color Picker	PhotoCraft — Pemilih Warna Layar
 
 	Rasterize svg groups deeper than	Rasterisasi grup SVG yang lebih dalam dari ini
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 menonaktifkan ambang ini; grup SVG yang bersarang lebih dari 100 tingkat selalu dirasterisasi.
@@ -2783,6 +2803,26 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+	Stroke Options	Opsi goresan
+	Solid	Utuh
+	Dashed	Putus-putus
+	Dotted	Titik-titik
+	Caps	Ujung
+	Butt / Flat	Datar
+	Corners	Sudut
+	Miter	Tajam
+	Round	Bulat
+	Bevel	Miring
+	Miter limit	Batas sudut tajam
+	Dashed line	Garis putus-putus
+	Dash	Garis
+	Gap	Celah
+	Dash / gap lengths × stroke width	Panjang garis / celah × lebar goresan
+	Add pair	Tambah pasangan
+	Remove pair	Hapus pasangan
+	Dash offset	Offset garis
+	Open paths use centered strokes	Jalur terbuka menggunakan goresan tengah
+	Use finite lengths and a positive pattern total	Gunakan panjang terbatas dan total pola positif
 	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
@@ -2792,3 +2832,9 @@ fontWeight	Italic	Miring
 	Continue	Lanjutkan
 	This format saves a flattened image. Use Save a Copy to keep your editable document.	Format ini menyimpan gambar yang diratakan. Gunakan Simpan Salinan untuk mempertahankan dokumen yang dapat diedit.
 	Netpbm chooses the subtype from the image depth and channels.	Netpbm memilih subtipe berdasarkan kedalaman bit dan kanal gambar.
+	Use Classic Mode	Gunakan Mode Klasik
+	Auto Center Preview	Pusatkan Pratinjau Otomatis
+	Next Document	Dokumen Berikutnya
+	Previous Document	Dokumen Sebelumnya
+	W x H x Resolution	L x T x Resolusi
+	Front Image	Gambar Depan

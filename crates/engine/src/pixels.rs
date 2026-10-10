@@ -3,7 +3,51 @@
 use photocraft_compose::{Buffer, adjust};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 use photocraft_geom::Rect;
-use photocraft_raster::{Surface, from_rgba, to_rgba};
+use photocraft_raster::{Surface, to_rgba};
+
+/// Composite `layers` inside their visible composite bounds (effects included) and write the result directly into a
+/// tiled surface. Large merges used to hold both a full-canvas RGBA buffer and a second converted
+/// float buffer at once; banded rendering keeps only one compositor band plus the destination.
+pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+    let canvas = solo.bounds();
+    let area = solo
+        .layers
+        .iter()
+        .filter(|layer| layer.visible)
+        // Composite bounds include layer effects (a drop shadow reaches past the pixels); `None`
+        // means the layer may draw anywhere.
+        .map(|layer| photocraft_compose::composite_bounds(layer, canvas).unwrap_or(canvas))
+        .filter(|bounds| !bounds.is_empty())
+        .reduce(|a, b| a.union(&b))
+        .unwrap_or(Rect::EMPTY)
+        .intersect(&canvas);
+    let mut surface = Surface::new(format);
+    if area.is_empty() {
+        return surface;
+    }
+
+    let channels = format.channels();
+    let mut data = Vec::new();
+    let _ = photocraft_compose::render_bands(solo, area, 0, |mut band| -> Result<(), ()> {
+        if let Some(color) = background {
+            for pixel in &mut band.px {
+                let alpha = pixel[3];
+                for channel in 0..3 {
+                    pixel[channel] = pixel[channel] * alpha + color[channel] * (1.0 - alpha);
+                }
+                pixel[3] = 1.0;
+            }
+        }
+        data.resize(band.px.len() * channels, 0.0);
+        for (pixel, encoded) in band.px.iter().zip(data.chunks_exact_mut(channels)) {
+            photocraft_raster::from_rgba_into(&format, *pixel, encoded);
+        }
+        surface.write_region(band.rect, &data);
+        Ok(())
+    });
+    surface.prune();
+    surface
+}
 
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
@@ -86,10 +130,24 @@ fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>,
 }
 
 /// Fill (respecting selection coverage) with a straight RGBA colour.
-pub fn fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Option<&Surface>, lock_transparency: bool) {
+pub(crate) fn try_fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Option<&Surface>, lock_transparency: bool) -> crate::Result<()> {
     let fmt = s.format();
     let n = fmt.channels();
-    let mut region = s.read_region(area);
+    let mut region = crate::allocation::read_region(s, area, "filling pixels")?;
+    fill_region(&mut region, fmt, n, area, color, selection, lock_transparency);
+    s.try_write_region(area, &region)
+        .map_err(|e| crate::EngineError::Other(format!("not enough memory while writing filled pixels ({e}); the document was not changed")))
+}
+
+fn fill_region(
+    region: &mut [f32],
+    fmt: photocraft_color::PixelFormat,
+    n: usize,
+    area: Rect,
+    color: [f32; 4],
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+) {
     let w = area.width() as usize;
     for (i, px) in region.chunks_exact_mut(n).enumerate() {
         let x = area.x0 + (i % w) as i32;
@@ -112,17 +170,24 @@ pub fn fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Opt
         photocraft_raster::from_rgba_into(&fmt, o, &mut enc);
         px.copy_from_slice(&enc[..n]);
     }
-    s.write_region(area, &region);
 }
 
 /// Clear pixels (make transparent) within the selection.
-pub fn clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) {
+pub(crate) fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) -> crate::Result<()> {
     let fmt = s.format();
     let n = fmt.channels();
     if !fmt.alpha {
-        return;
+        return Ok(());
     }
-    let mut region = s.read_region(area);
+    let mut region = crate::allocation::read_region(s, area, "erasing pixels")?;
+    clear_region(&mut region, n, area, selection);
+    s.try_write_region(area, &region)
+        .map_err(|e| crate::EngineError::Other(format!("not enough memory while erasing pixels ({e}); the document was not changed")))?;
+    s.prune();
+    Ok(())
+}
+
+fn clear_region(region: &mut [f32], n: usize, area: Rect, selection: Option<&Surface>) {
     let w = area.width() as usize;
     for (i, px) in region.chunks_exact_mut(n).enumerate() {
         let k = selection.map_or(1.0, |sel| sel.sample_channel(area.x0 + (i % w) as i32, area.y0 + (i / w) as i32, 0));
@@ -132,8 +197,6 @@ pub fn clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) {
             px.fill(0.0);
         }
     }
-    s.write_region(area, &region);
-    s.prune();
 }
 
 /// Remap a surface through a pixel-coordinate mapping (used for flips/rotations).
@@ -153,20 +216,16 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
 pub fn merge_down(doc_bounds: Rect, lower: &Layer, upper: &Layer, format: photocraft_color::PixelFormat) -> Layer {
-    let area = [lower, upper].iter().map(|l| l.surface().map(|s| s.content_bounds()).unwrap_or(doc_bounds)).fold(Rect::EMPTY, |a, b| a.union(&b));
     let stack = vec![lower.clone(), upper.clone()];
     let mut tmp = Document::new("merge", doc_bounds.size(), format.mode, format.sample);
     tmp.layers = stack;
-    let buf = photocraft_compose::render(&tmp, area);
-    let mut s = Surface::new(format);
-    let data: Vec<f32> = buf.px.iter().flat_map(|p| from_rgba(&format, *p)).collect();
-    if !area.is_empty() {
-        s.write_region(area, &data);
-        s.prune();
-    }
+    let s = composite_layers(&tmp, format, None);
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
+    // Merge Down replaces the lower layer, so keep its editing restrictions.
+    // In particular, a merged Background must remain opaque and position-locked.
+    merged.locks = lower.locks;
     merged
 }
