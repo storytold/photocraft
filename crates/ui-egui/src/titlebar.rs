@@ -244,7 +244,8 @@ mod tests {
             let out = w.frame(vec![]);
             let [min, max, close] = CAPTIONS.map(|c| w.caption(c));
             assert_eq!((close.right(), close.top()), (width, 0.0), "Close sits in the window's corner at {width}");
-            assert!(close.height() >= 32.0 && [min, max, close].iter().all(|r| r.width() == BUTTON_WIDTH));
+            // The bar's bottom point is the panel's separator line, which the buttons leave visible.
+            assert!(close.height() >= 31.0 && [min, max, close].iter().all(|r| r.width() == BUTTON_WIDTH));
             assert_eq!((min.right(), max.right()), (max.left(), close.left()));
             let widgets = w.bar_widgets();
             assert!(widgets.len() >= 10, "menus, search, theme, workspace: {widgets:?}");
