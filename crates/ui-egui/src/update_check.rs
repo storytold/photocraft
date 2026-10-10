@@ -87,7 +87,8 @@ fn fetch(current: &str) -> UpdateCheckOutcome {
 /// Polls for completed update checks and updates UI state accordingly.
 pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(rx) = &app.update_rx else { return };
-    if !app.ui.dialogs.is_empty() {
+    // Unsaved-changes and layered-TIFF confirmations are not `ui.dialogs` entries.
+    if !app.ui.dialogs.is_empty() || app.discard.is_some() || app.tiff_options.is_some() {
         return;
     }
     match rx.try_recv() {
@@ -286,6 +287,40 @@ mod tests {
         poll(&mut app, &ctx);
         assert_eq!(app.ui.dialogs[0].kind, DialogKind::Update);
         assert_eq!(app.ui.dialogs[0].fields["version"], "99.0.0");
+        assert!(app.update_rx.is_none());
+    }
+
+    #[test]
+    fn background_prompt_waits_for_unsaved_changes() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.discard = Some(crate::discard_ui::parked_for_tests());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.update_rx = Some(rx);
+        tx.send((false, UpdateCheckOutcome::Available(available()))).unwrap();
+        poll(&mut app, &ctx);
+        assert!(app.ui.dialogs.is_empty());
+        assert!(app.update_rx.is_some());
+        app.discard = None;
+        poll(&mut app, &ctx);
+        assert_eq!(app.ui.dialogs[0].kind, DialogKind::Update);
+        assert!(app.update_rx.is_none());
+    }
+
+    #[test]
+    fn background_prompt_waits_for_tiff_options() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.tiff_options = Some(crate::tiff_options_ui::parked_for_tests());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.update_rx = Some(rx);
+        tx.send((false, UpdateCheckOutcome::Available(available()))).unwrap();
+        poll(&mut app, &ctx);
+        assert!(app.ui.dialogs.is_empty());
+        assert!(app.update_rx.is_some());
+        app.tiff_options = None;
+        poll(&mut app, &ctx);
+        assert_eq!(app.ui.dialogs[0].kind, DialogKind::Update);
         assert!(app.update_rx.is_none());
     }
 
