@@ -55,6 +55,34 @@ fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
     (area, sel::mask_from_surface(doc.selection.as_ref(), area))
 }
 
+/// Grayscale the canvas is actually showing, as opaque RGBA, when that is not the colour
+/// composite: a gray layer-mask view, or — with every colour channel hidden — the first
+/// visible alpha, Quick Mask, or the active layer's mask. The Magic Wand selects from this
+/// so a white alpha stays one region instead of breaking up along the RGB underneath.
+fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
+    let st = s.active()?;
+    let doc = &st.doc;
+    let area = doc.bounds();
+    let v = &st.channel_view;
+    let colors_off = v.visible_colors(crate::channel_cmds::color_count(doc)) == 0;
+    let surf = if let Some((mask, crate::mask_view_cmds::MaskViewMode::Gray)) = v.shown_layer_mask(doc) {
+        &mask.surface
+    } else if colors_off {
+        if let Some(i) = (0..doc.channels.len()).find(|i| v.alpha_shown(*i)) {
+            &doc.channels[i].surface
+        } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
+            &q.surface
+        } else if let Some((mask, _)) = v.shown_layer_mask(doc) {
+            &mask.surface
+        } else {
+            &st.active_layer.and_then(|id| doc.layer(id))?.mask.as_ref()?.surface
+        }
+    } else {
+        return None;
+    };
+    Some((area, sel::rgba8_image(surf, area)))
+}
+
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
 pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -71,7 +99,10 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
 
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = sample_rgba8(s, b(p, "sampleAllLayers", false))?;
+    let (area, img) = match shown_gray(s) {
+        Some(plane) => plane,
+        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
+    };
     let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
     drop(img);
     let m = mode(p);
@@ -541,7 +572,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
             has_doc,
             magic_wand
         ),
@@ -610,6 +641,45 @@ mod tests {
 
     fn coverage(s: &Session, x: i32, y: i32) -> f32 {
         s.active().unwrap().doc.selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0))
+    }
+
+    #[test]
+    fn magic_wand_selects_the_visible_alpha_or_mask_not_the_rgb() {
+        let mut s = session();
+        // Alpha covers the first red square and the pixels beside it. RGB would stop at the red.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+        s.execute("channel.new", json!({"fill": "selection", "name": "Alpha"})).unwrap();
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+        assert_eq!(coverage(&s, 7, 7), 1.0);
+        assert_eq!(coverage(&s, 2, 2), 1.0, "the white alpha includes pixels that are not the red square");
+        assert_eq!(coverage(&s, 30, 10), 0.0, "outside the alpha stays unselected");
+        // Colour channels back on: the wand reads RGB again.
+        s.execute("channel.setVisible", json!({"channel": "composite", "visible": true})).unwrap();
+        s.execute("channel.setVisible", json!({"channel": 0, "visible": false})).unwrap();
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+        assert_eq!(coverage(&s, 7, 7), 1.0);
+        assert_eq!(coverage(&s, 2, 2), 0.0, "RGB sampling stops at the red square");
+        // Eyes off again, Alpha still the picture.
+        s.execute("channel.setVisible", json!({"channel": 0, "visible": true})).unwrap();
+        s.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+        assert_eq!(coverage(&s, 2, 2), 1.0);
+
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+        assert_eq!(coverage(&s, 2, 2), 1.0, "gray mask view selects the mask");
+        assert_eq!(coverage(&s, 30, 10), 0.0);
+        s.execute("view.layerMask", json!({"mode": "off"})).unwrap();
+        for name in ["red", "green", "blue"] {
+            s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
+        }
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+        assert_eq!(coverage(&s, 2, 2), 1.0, "a layer mask shown alone is what the wand reads");
+        assert_eq!(coverage(&s, 30, 10), 0.0);
     }
 
     #[test]

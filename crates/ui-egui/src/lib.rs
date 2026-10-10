@@ -1266,12 +1266,20 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if !self.ui.mask_target || !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
+        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
             return params;
         }
         let Some(st) = self.session.active() else { return params };
+        let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
+        let colors_off = st.channel_view.visible_colors(photocraft_engine::channel_cmds::color_count(&st.doc)) == 0;
+        let alpha_on = (0..st.doc.channels.len()).any(|i| st.channel_view.alpha_shown(i));
+        // RGB eyes all off, and the layer mask is what's left: paint edits that mask.
+        let solo_mask = colors_off && has_mask && !alpha_on && st.doc.quick_mask.is_none();
+        if !self.ui.mask_target && !solo_mask {
+            return params;
+        }
         let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
-        if !composite || st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) {
+        if !composite || !has_mask {
             return params;
         }
         match params {

@@ -229,7 +229,7 @@ fn mask_view(h: &Harness<'_, PhotocraftApp>) -> serde_json::Value {
 
 fn canvas_px(h: &Harness<'_, PhotocraftApp>) -> Option<Vec<egui::Color32>> {
     let st = h.state().session.active().unwrap();
-    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false)
+    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false, st.active_layer)
 }
 
 fn near(a: Rect, b: Rect) -> bool {

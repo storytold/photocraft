@@ -169,6 +169,49 @@ fn channel_management_and_view_state() {
 }
 
 #[test]
+fn every_colour_channel_can_hide_while_alpha_stays() {
+    let mut s = session();
+    s.execute("channel.new", json!({"fill": "white", "name": "Alpha"})).unwrap();
+    // A new channel is shown alone. Bring RGB back (the overlay), then turn the RGB eye off.
+    s.execute("channel.setVisible", json!({"channel": "composite", "visible": true})).unwrap();
+    assert!(s.active().unwrap().channel_view.alpha_shown(0));
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 3);
+    s.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.channel_view.visible_colors(3), 0, "the RGB eye can turn R, G and B off together");
+    assert!(st.channel_view.alpha_shown(0), "Alpha stays on");
+    s.execute("channel.setVisible", json!({"channel": "composite", "visible": true})).unwrap();
+    for name in ["red", "green", "blue"] {
+        s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
+    }
+    let st = s.active().unwrap();
+    assert_eq!(st.channel_view.visible_colors(3), 0, "R, G and B can each be turned off");
+    assert!(st.channel_view.alpha_shown(0));
+}
+
+#[test]
+fn quick_mask_and_a_layer_mask_can_be_the_only_visible_channel() {
+    let mut s = session();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 0);
+    assert!(s.active().unwrap().doc.quick_mask.is_some());
+    s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+    // Nothing else to show: the colour channels come back.
+    s.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 3);
+
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    for name in ["red", "green", "blue"] {
+        s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
+    }
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 0, "a transparency mask can be shown alone");
+}
+
+#[test]
 fn shortcut_slots_target_channels() {
     let mut s = session();
     s.execute("channel.new", json!({})).unwrap();
