@@ -92,6 +92,7 @@ pub mod layer_tree_ui;
 pub mod links;
 pub mod liquify_ui;
 pub mod magnetic_lasso_ui;
+mod mask_props_ui;
 pub mod mask_thumbs_ui;
 pub mod menu_catalog;
 pub mod menu_nav;
@@ -370,6 +371,9 @@ pub struct PhotocraftApp {
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
+    /// The tool pointer events go to this frame when it isn't the selected one: the Move tool
+    /// while ⌘ is held (`hold_keys::cmd_moves`). Set by the canvas for its gestures, never saved.
+    pub(crate) tool_override: Option<state::Tool>,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
@@ -567,6 +571,7 @@ impl PhotocraftApp {
             monitors: Default::default(),
             checker: None,
             drag: None,
+            tool_override: None,
             live_stroke: None,
             trail: None,
             move_preview: None,
@@ -831,6 +836,12 @@ impl PhotocraftApp {
 
     /// Keep one view per document, in tab order: a view and its windows stay with their document
     /// when tabs move (`document.move`) or close.
+    /// The tool pointer events go to: a held temporary tool when there is one (⌘ is the Move
+    /// tool, `hold_keys::cmd_moves`), else the selected tool.
+    pub fn active_tool(&self) -> state::Tool {
+        self.tool_override.unwrap_or(self.ui.tool)
+    }
+
     pub fn sync_views(&mut self) {
         type_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);

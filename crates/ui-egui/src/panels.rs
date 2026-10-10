@@ -2325,6 +2325,13 @@ fn layer_row(
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
+        } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
+            if kind == crate::mask_thumbs_ui::MaskKind::Pixel {
+                actions.push(("ui.maskTarget".into(), json!(true)));
+            }
+            if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
+                actions.push((cmd.into(), val));
+            }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
                 LayerContent::Adjustment(_) | LayerContent::Fill(_) if on(thumb) => "layer.layerContentOptions",
@@ -2511,12 +2518,13 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(st) = app.session.active() else { return };
     let Some(id) = st.active_layer else { return };
-    let Some(layer) = st.doc.layer(id) else { return };
-    // The floating card appears for adjustment and fill layers (their controls live here).
-    if !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    let doc = st.doc.clone();
+    let Some(layer) = doc.layer(id) else { return };
+    // Pixel-mask controls also belong here when their thumbnail is targeted.
+    let mask_target = crate::mask_props_ui::targeted(app, layer);
+    if !mask_target && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
-    let layer = layer.clone();
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     let width = 320.0;
@@ -2575,10 +2583,12 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             // Per-layer ids, so text still being typed for one layer can't commit to the next.
             ui.push_id(id, |ui| {
-                if let LayerContent::Adjustment(adj) = &layer.content {
+                if mask_target {
+                    crate::mask_props_ui::properties(app, ui, layer);
+                } else if let LayerContent::Adjustment(adj) = &layer.content {
                     adjustment_controls(app, ui, id, adj);
                 } else {
-                    layer_controls(app, ui, &layer);
+                    layer_controls(app, ui, layer);
                 }
             });
         });
@@ -2650,6 +2660,14 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No properties"));
         return;
     };
+    let doc = st.doc.clone();
+    if let Some(layer) = st.active_layer.and_then(|id| doc.layer(id))
+        && crate::mask_props_ui::targeted(app, layer)
+    {
+        crate::props_layout::header(ui, layer);
+        crate::mask_props_ui::properties(app, ui, layer);
+        return;
+    }
     // Photoshop shows the Document properties when nothing or the Background layer is selected.
     if crate::doc_props_ui::shows_document(&st.doc, st.active_layer) {
         crate::doc_props_ui::properties(app, ui);
@@ -2657,7 +2675,6 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let Some(id) = st.active_layer else { return };
     // Borrowed from the document snapshot: cloning the layer every frame copied whole groups.
-    let doc = st.doc.clone();
     let Some(layer) = doc.layer(id) else { return };
     // Header: kind icon, layer name and kind (#155); sections below draw their own separators.
     crate::props_layout::header(ui, layer);
@@ -4092,3 +4109,7 @@ mod group_drag_selection_tests {
         assert!((uv.width() - 0.25).abs() < 1e-3 && (uv.height() - 1.0).abs() < 1e-3, "{uv:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "mask_props_ui_tests.rs"]
+mod mask_properties_tests;

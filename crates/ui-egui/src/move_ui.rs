@@ -21,7 +21,8 @@ use crate::state::Tool;
 /// float (type, shape, Smart Object, group, position-locked), a hidden layer or several selected
 /// layers still move whole, as without one.
 pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
-    moves_selected_pixels_with(app, app.ui.tool)
+    // The Move tool, or ⌘ held with a painting tool (`hold_keys::cmd_moves`).
+    moves_selected_pixels_with(app, app.active_tool())
 }
 
 /// [`moves_selected_pixels`] with `tool` in effect (the canvas cursor asks before the press).
