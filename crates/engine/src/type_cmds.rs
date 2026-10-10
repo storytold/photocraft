@@ -606,6 +606,52 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// A type layer (not yet rendered or added) from `type.create`'s params: text, point `x`/`y` or
+/// paragraph `box`, `orientation`, character and paragraph keys, starting from the default type
+/// styles in the foreground colour. Shared with the Type Mask tools' `type.createSelection`.
+pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLayer> {
+    let orientation = match p.get("orientation") {
+        None => Orientation::Horizontal,
+        Some(Value::String(value)) if value == "horizontal" => Orientation::Horizontal,
+        Some(Value::String(value)) if value == "vertical" => Orientation::Vertical,
+        _ => return Err(bad(cmd, "orientation must be horizontal or vertical")),
+    };
+    check_kerning(p).map_err(|m| bad(cmd, m))?;
+    check_size_tracking(p).map_err(|m| bad(cmd, m))?;
+    let text = norm_text(p.get("text").and_then(Value::as_str).unwrap_or(""));
+    // Type › Save Default Type Styles sets the starting styles; the colour is always
+    // the foreground colour, as in Photoshop.
+    let (mut style, mut para) = s
+        .type_defaults
+        .clone()
+        .unwrap_or_else(|| (CharStyle { font_family: photocraft_text::fonts::DEFAULT_FAMILY.into(), ..Default::default() }, ParagraphStyle::default()));
+    let fg = s.tools.foreground;
+    style.color = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    apply_char_props(&mut style, p);
+    apply_para_props(&mut para, p);
+    let (shape, transform) = match p.get("box").and_then(Value::as_array) {
+        Some(b) if b.len() == 4 => {
+            let v: Vec<f32> = b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+            if v[2] <= 0.0 || v[3] <= 0.0 {
+                return Err(bad(cmd, "box width and height must be positive"));
+            }
+            (TextShape::Box { x: 0.0, y: 0.0, width: v[2], height: v[3] }, Affine::translate(f64::from(v[0]), f64::from(v[1])))
+        }
+        _ => (TextShape::Point, Affine::translate(f32p(p, "x").unwrap_or(0.0).into(), f32p(p, "y").unwrap_or(0.0).into())),
+    };
+    let mut t = TextLayer {
+        runs: vec![TextRun { len: text.len(), style }],
+        paragraphs: vec![ParagraphRun { len: text.len(), style: para }],
+        text,
+        shape,
+        transform,
+        orientation,
+        ..Default::default()
+    };
+    t.sync_summary();
+    Ok(t)
+}
+
 const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -619,42 +665,7 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: has_doc,
             journal: true,
             run: |s, p| {
-                let orientation = match p.get("orientation") {
-                    None => Orientation::Horizontal,
-                    Some(Value::String(value)) if value == "horizontal" => Orientation::Horizontal,
-                    Some(Value::String(value)) if value == "vertical" => Orientation::Vertical,
-                    _ => return Err(bad("type.create", "orientation must be horizontal or vertical")),
-                };
-                check_kerning(p).map_err(|m| bad("type.create", m))?;
-                check_size_tracking(p).map_err(|m| bad("type.create", m))?;
-                let text = norm_text(p.get("text").and_then(Value::as_str).unwrap_or(""));
-                // Type › Save Default Type Styles sets the starting styles; the colour is always
-                // the foreground colour, as in Photoshop.
-                let (mut style, mut para) = s.type_defaults.clone().unwrap_or_else(|| (CharStyle { font_family: photocraft_text::fonts::DEFAULT_FAMILY.into(), ..Default::default() }, ParagraphStyle::default()));
-                let fg = s.tools.foreground;
-                style.color = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-                apply_char_props(&mut style, p);
-                apply_para_props(&mut para, p);
-                let (shape, transform) = match p.get("box").and_then(Value::as_array) {
-                    Some(b) if b.len() == 4 => {
-                        let v: Vec<f32> = b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
-                        if v[2] <= 0.0 || v[3] <= 0.0 {
-                            return Err(bad("type.create", "box width and height must be positive"));
-                        }
-                        (TextShape::Box { x: 0.0, y: 0.0, width: v[2], height: v[3] }, Affine::translate(f64::from(v[0]), f64::from(v[1])))
-                    }
-                    _ => (TextShape::Point, Affine::translate(f32p(p, "x").unwrap_or(0.0).into(), f32p(p, "y").unwrap_or(0.0).into())),
-                };
-                let mut t = TextLayer {
-                    runs: vec![TextRun { len: text.len(), style }],
-                    paragraphs: vec![ParagraphRun { len: text.len(), style: para }],
-                    text,
-                    shape,
-                    transform,
-                    orientation,
-                    ..Default::default()
-                };
-                t.sync_summary();
+                let mut t = new_text_layer(s, p, "type.create")?;
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| layer_name(&t.text));
                 let id = s.edit("New Type Layer", |doc, active| {
                     refresh(doc, &mut t);

@@ -41,7 +41,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Fill | Gradient, Paint Bucket | |
 | Focus, toning | Blur, Sharpen, Smudge, Dodge, Burn, Sponge | |
 | Pen | Pen | Freeform Pen, Curvature Pen (#1054), Add Anchor Point, Delete Anchor Point, Convert Point (⌥ with Pen only) |
-| Type | Horizontal, Vertical | Horizontal Type Mask, Vertical Type Mask |
+| Type | Horizontal, Vertical, Vertical Type Mask, Horizontal Type Mask | |
 | Path selection | Path Selection, Direct Selection | |
 | Shapes | Rectangle, Ellipse, Triangle, Polygon, Line, Custom Shape | (Star is a Polygon option in Photoshop) |
 | View | Hand, Rotate View, Zoom | |
