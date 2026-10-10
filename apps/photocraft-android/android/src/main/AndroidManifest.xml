@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ai.storyteller.photocraft">
+
+    <!-- Only Android system APIs. No storage permission is required for the
+         app-private Documents folder. Public-gallery access needs SAF later. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.level"
+        android:version="0x00400000" android:required="false" />
+
+    <application
+        android:label="PhotoCraft"
+        android:hasCode="true"
+        android:allowBackup="false">
+        <activity
+            android:name=".PhotocraftActivity"
+            android:exported="true"
+            android:screenOrientation="unspecified"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|density">
+            <!-- NativeActivity loads libphotocraft_android.so using this name. -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="photocraft_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
