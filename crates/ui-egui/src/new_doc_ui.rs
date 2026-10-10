@@ -423,7 +423,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-                if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut w, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
@@ -435,7 +435,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-                if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut h, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
