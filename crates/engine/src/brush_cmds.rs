@@ -353,6 +353,7 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    push_count: u32,
 }
 
 impl LiveStroke {
@@ -401,6 +402,7 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             tail: Rect::EMPTY,
+            push_count: 0,
         };
         live.push(&pts)?;
         Ok(live)
@@ -462,16 +464,21 @@ impl LiveStroke {
             self.tail = bounds;
             return Ok(damage.union(&bounds));
         }
+        self.push_count = self.push_count.wrapping_add(1);
+        let update_tail = self.push_count <= 1 || self.push_count.is_multiple_of(2);
         let mut dmg = Rect::EMPTY;
-        let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-        if !old.is_empty() {
-            // Back to the stroke without the previous tail.
-            surf.write_region(old, &self.pre.read_region(old));
-            self.renderer.mark_dirty(old);
-            dmg = old;
+        if update_tail {
+            let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+            if !old.is_empty() {
+                surf.write_region(old, &self.pre.read_region(old));
+                self.renderer.mark_dirty(old);
+                dmg = old;
+            }
         }
         dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-        if let Some(mut tail) = self.renderer.tail_preview() {
+        if update_tail
+            && let Some(mut tail) = self.renderer.tail_preview()
+        {
             self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
             dmg = dmg.union(&self.tail);
         }
