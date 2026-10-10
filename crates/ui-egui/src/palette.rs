@@ -36,6 +36,13 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     Some(score - (t.len() as i32 / 8))
 }
 
+/// Bonus that puts a command or tool whose name is exactly the query ahead of every fuzzy match
+/// ("settings" finds Settings before Color Settings).
+fn exact_bonus(query: &str, names: &[&str]) -> i32 {
+    let q = query.trim();
+    if !q.is_empty() && names.iter().any(|n| n.trim_end_matches('…').trim().to_lowercase() == q.to_lowercase()) { 1000 } else { 0 }
+}
+
 /// How many recently run commands the palette remembers.
 const RECENT_CAP: usize = 8;
 
@@ -98,7 +105,7 @@ fn menu_hits(menus: Vec<crate::menus::MenuItem>, q: &str, lang: crate::i18n::Lan
             let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
             let label = crate::i18n::tr_id(lang, &m.id, &m.label);
             // Match what is shown and the English name (commands are documented in English).
-            let s = fuzzy_score(q, &format!("{label} {path} {} {path_en}", m.label))?;
+            let s = fuzzy_score(q, &format!("{label} {path} {} {path_en}", m.label))? + exact_bonus(q, &[label, &m.label]);
             Some((
                 s,
                 m.id,
@@ -170,6 +177,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         hits.extend(menu_hits(menus, &q, lang));
                         for tool in crate::state::Tool::ALL {
                             if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
+                                let s = s + exact_bonus(&q, &[tl!(tool.label()).as_ref(), tool.label()]);
                                 hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
                             }
                         }
@@ -250,7 +258,7 @@ mod tests {
     use egui_kittest::Harness;
     use serde_json::json;
 
-    use super::{fuzzy_score, push_recent};
+    use super::{exact_bonus, fuzzy_score, push_recent};
     use crate::PhotocraftApp;
 
     #[test]
@@ -345,6 +353,17 @@ mod tests {
         assert!(fuzzy_score("gblur", "Gaussian Blur").is_some());
         assert!(fuzzy_score("xyz", "Gaussian Blur").is_none());
         assert_eq!(fuzzy_score("", "anything"), Some(0));
+    }
+
+    /// Typing a command's exact name ranks it first, even when a longer name scores the same.
+    #[test]
+    fn exact_name_ranks_first() {
+        let settings = fuzzy_score("settings", "Settings Edit › Preferences Settings Edit › Preferences").unwrap() + exact_bonus("settings", &["Settings"]);
+        let color = fuzzy_score("settings", "Color Settings… Edit Color Settings… Edit").unwrap() + exact_bonus("settings", &["Color Settings…"]);
+        assert!(settings > color);
+        assert_eq!(exact_bonus("Color settings", &["Color Settings…"]), 1000);
+        assert_eq!(exact_bonus(" ", &[""]), 0);
+        assert_eq!(exact_bonus("set", &["Settings"]), 0);
     }
 
     /// #536: Edit › Search → "Keyboard Shortcuts" must open the dialog, with and without a document.

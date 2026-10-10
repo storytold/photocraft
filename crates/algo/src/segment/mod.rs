@@ -3,7 +3,8 @@
 //!
 //! Everything here is classical (no learned models) and implemented from the published papers:
 //!
-//! * [`maxflow`]: Boykov–Kolmogorov min-cut / max-flow (Boykov & Kolmogorov, "An Experimental
+//! * [`maxflow`]: hybrid push/relabel (Goldberg & Tarjan, JACM 1988) and Boykov–Kolmogorov
+//!   min-cut / max-flow (Boykov & Kolmogorov, "An Experimental
 //!   Comparison of Min-Cut/Max-Flow Algorithms for Energy Minimization in Vision", PAMI 2004).
 //! * [`gmm`]: Gaussian mixture colour models (k-means++ initialisation, Arthur & Vassilvitskii
 //!   2007; EM refinement).
@@ -232,60 +233,25 @@ pub const HARD_BG: u8 = 2;
 /// become graph nodes (links to fixed neighbours fold into terminal capacities). Returns
 /// `true` for foreground.
 pub fn grid_cut(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], gamma: f32, beta: f32) -> Vec<bool> {
-    let (w, h) = (img.w as i32, img.h as i32);
-    let n = img.w * img.h;
-    let mut idx = vec![u32::MAX; n];
-    let mut count = 0u32;
-    for i in 0..n {
-        if fixed[i] == FREE {
-            idx[i] = count;
-            count += 1;
-        }
-    }
-    let mut out: Vec<bool> = fixed.iter().map(|f| *f == HARD_FG).collect();
-    if count == 0 {
-        return out;
-    }
-    let mut g = Graph::with_capacity(count as usize, count as usize * 4);
-    for i in 0..n {
-        if idx[i] != u32::MAX {
-            g.add_tweights(idx[i] as usize, cost_bg[i], cost_fg[i]);
-        }
-    }
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            let a = img.px[i];
-            for (dx, dy, len) in NB {
-                let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || nx >= w || ny >= h {
-                    continue;
-                }
-                let j = (ny * w + nx) as usize;
-                let wt = gamma * (-beta * d2(a, img.px[j])).exp() / len;
-                match (idx[i] != u32::MAX, idx[j] != u32::MAX) {
-                    (true, true) => g.add_edge(idx[i] as usize, idx[j] as usize, wt, wt),
-                    // Neighbour fixed: disagreeing with it costs `wt`.
-                    (true, false) => add_fixed_link(&mut g, idx[i] as usize, fixed[j], wt),
-                    (false, true) => add_fixed_link(&mut g, idx[j] as usize, fixed[i], wt),
-                    (false, false) => {}
-                }
-            }
-        }
-    }
-    g.maxflow();
-    for i in 0..n {
-        if idx[i] != u32::MAX {
-            out[i] = g.in_source(idx[i] as usize);
-        }
-    }
-    out
+    grid_cut_weighted::<true>(img, cost_fg, cost_bg, fixed, |d2| gamma * (-beta * d2).exp())
 }
 
 /// [`grid_cut`] with any edge weight: separating neighbours costs `weight(‖z_p−z_q‖²) / dist(p,q)`.
+/// Only links touching a free pixel need a weight; fixed/fixed links cannot change the cut.
 pub fn grid_cut_with(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], weight: impl Fn(f32) -> f32) -> Vec<bool> {
+    grid_cut_weighted::<true>(img, cost_fg, cost_bg, fixed, weight)
+}
+
+mod edge_starts;
+
+// The const parameter also runs the previous full scan in before/after workflow tests.
+fn grid_cut_weighted<const OPTIMIZED: bool>(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], weight: impl Fn(f32) -> f32) -> Vec<bool> {
     let (w, h) = (img.w as i32, img.h as i32);
-    let n = img.w * img.h;
+    let Some(n) = img.w.checked_mul(img.h).filter(|&n| n < u32::MAX as usize - 2) else { return Vec::new() };
+    if img.w > i32::MAX as usize || img.h > i32::MAX as usize || [img.px.len(), cost_fg.len(), cost_bg.len(), fixed.len()].iter().any(|&len| len < n) {
+        return Vec::new();
+    }
+    let mut free = Vec::new();
     let mut idx = vec![u32::MAX; n];
     let mut count = 0u32;
     for i in 0..n {
@@ -304,27 +270,47 @@ pub fn grid_cut_with(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[
             g.add_tweights(idx[i] as usize, cost_bg[i], cost_fg[i]);
         }
     }
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            let a = img.px[i];
-            for (dx, dy, len) in NB {
-                let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || nx >= w || ny >= h {
-                    continue;
-                }
-                let j = (ny * w + nx) as usize;
-                let wt = weight(d2(a, img.px[j])) / len;
-                match (idx[i] != u32::MAX, idx[j] != u32::MAX) {
-                    (true, true) => g.add_edge(idx[i] as usize, idx[j] as usize, wt, wt),
-                    (true, false) => add_fixed_link(&mut g, idx[i] as usize, fixed[j], wt),
-                    (false, true) => add_fixed_link(&mut g, idx[j] as usize, fixed[i], wt),
-                    (false, false) => {}
-                }
+    let use_sparse = OPTIMIZED && (count as usize) < n / 8;
+    if use_sparse {
+        free.extend((0..n).filter(|&i| idx[i] != u32::MAX))
+    }
+    let mut visit = |i: usize, x: i32, y: i32| {
+        let a = img.px[i];
+        for (dx, dy, len) in NB {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || nx >= w || ny >= h {
+                continue;
+            }
+            let j = (ny as usize) * img.w + nx as usize;
+            if OPTIMIZED && idx[i] == u32::MAX && idx[j] == u32::MAX {
+                continue;
+            }
+            let wt = weight(d2(a, img.px[j])) / len;
+            match (idx[i] != u32::MAX, idx[j] != u32::MAX) {
+                (true, true) => g.add_edge(idx[i] as usize, idx[j] as usize, wt, wt),
+                (true, false) => add_fixed_link(&mut g, idx[i] as usize, fixed[j], wt),
+                (false, true) => add_fixed_link(&mut g, idx[j] as usize, fixed[i], wt),
+                (false, false) => {}
+            }
+        }
+    };
+    if use_sparse {
+        for i in edge_starts::Starts::new(&free, img.w) {
+            visit(i, (i % img.w) as i32, (i / img.w) as i32);
+        }
+    } else {
+        // Keep the original dense raster traversal, including its arithmetic order.
+        for y in 0..h {
+            for x in 0..w {
+                visit((y as usize) * img.w + x as usize, x, y)
             }
         }
     }
-    g.maxflow();
+    if OPTIMIZED {
+        g.maxflow();
+    } else {
+        g.maxflow_bk();
+    }
     for i in 0..n {
         if idx[i] != u32::MAX {
             out[i] = g.in_source(idx[i] as usize);
@@ -686,3 +672,6 @@ pub fn subsample<T: Copy>(v: &[T], max: usize) -> Vec<T> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod workflow_tests;

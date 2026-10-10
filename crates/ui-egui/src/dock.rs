@@ -419,6 +419,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.set_min_height(inner);
                 body(app, ui, g, tab);
             } else {
+                // The pro Color field stretches to the group's height instead of a fixed 120 pt.
+                if t.pro && g == Group::Color && tab == 0 {
+                    ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("dock-scroll", g.key(), tab))
                     .max_height(inner)
@@ -464,6 +468,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         egui::Popup::menu(&resp.menu).show(|ui| {
+            crate::widgets::style_spectrum_popup_menu(ui);
             ui.set_min_width(170.0);
             if tabs.get(sel) == Some(&"Layers") {
                 crate::layer_row_ui::panel_menu(app, ui);

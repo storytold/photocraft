@@ -272,6 +272,94 @@ fn inside_stroke() -> Effect {
     })
 }
 
+fn outside_stroke() -> Effect {
+    Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 6.0,
+        position: StrokePosition::Outside,
+        paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+    })
+}
+
+#[test]
+fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
+    use photocraft_doc::BlendRange;
+
+    let modes = [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Difference];
+    for depth in DEPTHS {
+        for position in [StrokePosition::Outside, StrokePosition::Inside, StrokePosition::Center] {
+            for blend in modes {
+                for fill in [0.0, 0.5, 1.0] {
+                    for blend_if in [false, true] {
+                        let mut d = Document::with_background("t", Size::new(80, 768), ColorMode::Rgb, depth, Color::WHITE);
+                        let mut l = solid(&d, "stroke", Rect::new(28, 318, 52, 342), BLUE);
+                        l.effects.items = vec![Effect::Stroke(StrokeFx {
+                            common: FxCommon::new(BlendMode::Normal, 1.0),
+                            size: 6.0,
+                            position,
+                            paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+                        })];
+                        l.blend = blend;
+                        l.fill_opacity = fill;
+                        l.advanced.transparency_shapes = false;
+                        if blend_if {
+                            l.blend_if.set(0, [BlendRange::FULL, BlendRange { black: [128, 128], white: [255, 255] }]);
+                        }
+                        d.layers.push(l);
+
+                        let rect = Rect::new(0, 0, 80, 768);
+                        let whole = render_tiled(&d, rect, 1024);
+                        let tiled = render_tiled(&d, rect, 64);
+                        assert_eq!(whole.px, tiled.px, "{depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
+
+                        let mut bands = Vec::new();
+                        render_bands(&d, rect, 256, |band| -> Result<(), ()> {
+                            bands.push(band);
+                            Ok(())
+                        })
+                        .unwrap();
+                        let mut band_pixels = Vec::with_capacity(whole.px.len());
+                        for band in bands {
+                            band_pixels.extend(band.px);
+                        }
+                        assert_eq!(whole.px, band_pixels, "banded: {depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn shapeless_stroke_skip_rejects_advanced_blending_and_masks() {
+    use photocraft_doc::{BlendRange, Path, Subpath, VectorMask};
+
+    let d = doc(SampleType::U8, true);
+    let mut l = solid(&d, "stroke", Rect::new(2, 2, 8, 8), BLUE);
+    l.effects.items = vec![outside_stroke()];
+    l.advanced.transparency_shapes = false;
+    assert!(shapeless_stroke_bounds(&l).is_some());
+
+    l.advanced.knockout = Knockout::Deep;
+    assert!(shapeless_stroke_bounds(&l).is_none(), "knockout changes the backdrop outside the content");
+    l.advanced.knockout = Knockout::None;
+
+    l.advanced.blend_interior = true;
+    assert!(shapeless_stroke_bounds(&l).is_none(), "Blend Interior effects remain on the uncropped path");
+    l.advanced.blend_interior = false;
+
+    l.blend_if.set(0, [BlendRange::FULL, BlendRange { black: [128, 128], white: [255, 255] }]);
+    assert!(shapeless_stroke_bounds(&l).is_none(), "Blend If remains on the uncropped path");
+    l.blend_if = Default::default();
+
+    l.mask = Some(LayerMask::hide_all());
+    assert!(shapeless_stroke_bounds(&l).is_none(), "enabled masks remain on the uncropped path");
+    l.mask = None;
+
+    l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)])])));
+    assert!(shapeless_stroke_bounds(&l).is_none(), "enabled vector masks remain on the uncropped path");
+}
+
 #[test]
 fn layer_mask_hides_effects() {
     for depth in DEPTHS {

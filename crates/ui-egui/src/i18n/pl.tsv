@@ -1304,6 +1304,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Nagraj ● sekwencję edycji, a następnie odtwórz ▶ ją na dowolnym dokumencie.
 	Red	Czerwony
 	Redefine style by current selection	Zdefiniuj styl ponownie na podstawie bieżącego zaznaczenia
+	Refine	Dopracuj
 	Reflected Gradient	Gradient odbity
 	Registration Marks	Znaczniki pasowania
 	Regular	Zwykła
@@ -1628,6 +1629,7 @@
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
+	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -3245,6 +3247,7 @@ cameraRaw	Roughness	Chropowatość
 
 # Text Color Picker and screen sampling
 	Color Picker (Text Color)	Próbnik kolorów (Kolor tekstu)
+	Color Picker ({name})	Próbnik kolorów ({name})
 	Color Picker (Fill Color)	Próbnik kolorów (Kolor wypełnienia)
 	Fill color	Kolor wypełnienia
 	Color Picker (Stroke Color)	Próbnik kolorów (Kolor obrysu)
@@ -3430,5 +3433,9 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Use Classic Mode	Użyj trybu klasycznego
+	Auto Center Preview	Automatycznie wyśrodkuj podgląd
+	Next Document	Następny dokument
+	Previous Document	Poprzedni dokument
 	W x H x Resolution	Szer. x Wys. x Rozdzielczość
 	Front Image	Obraz na wierzchu

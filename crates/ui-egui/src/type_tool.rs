@@ -334,6 +334,53 @@ fn insert(app: &mut PhotocraftApp, s: &str) {
     }
 }
 
+/// Typed text (not a paste): with Preferences ▸ Type ▸ Use Smart Quotes, straight quotes become
+/// typographic (Photoshop does not rewrite pasted text).
+fn insert_typed(app: &mut PhotocraftApp, s: &str) {
+    if !app.session.prefs().type_.smart_quotes {
+        return insert(app, s);
+    }
+    let prev = app.ui.text_edit.clone().and_then(|ed| {
+        let at = ed.caret.min(ed.anchor);
+        let text = current_text(app, LayerId(ed.layer))?;
+        (at > 0).then(|| text.chars().nth(at - 1)).flatten()
+    });
+    insert(app, &smart_quotes(s, prev));
+}
+
+/// Straight quotes become “ ” and ‘ ’: opening after whitespace, a bracket or a dash (or at the
+/// start of the text), closing next to a letter or another quote. `prev` is the character before
+/// the caret.
+fn smart_quotes(s: &str, mut prev: Option<char>) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        let c = match c {
+            '"' => {
+                if opens_quote(prev) {
+                    '\u{201c}'
+                } else {
+                    '\u{201d}'
+                }
+            }
+            '\'' => {
+                if opens_quote(prev) {
+                    '\u{2018}'
+                } else {
+                    '\u{2019}'
+                }
+            }
+            _ => c,
+        };
+        out.push(c);
+        prev = Some(c);
+    }
+    out
+}
+
+fn opens_quote(prev: Option<char>) -> bool {
+    prev.is_none_or(|p| p.is_whitespace() || matches!(p, '(' | '[' | '{' | '-' | '\u{2013}' | '\u{2014}'))
+}
+
 /// Alt+←/→: kern the pair before the caret by `by` (1/1000 em). No pair (caret at a text or line
 /// edge): nothing happens, like Photoshop. Not coalesced: one history step per press.
 fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: f32) {
@@ -476,7 +523,8 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         };
         handled[k] = true;
         match ev {
-            egui::Event::Text(s) | egui::Event::Paste(s) => insert(app, s),
+            egui::Event::Text(s) => insert_typed(app, s),
+            egui::Event::Paste(s) => insert(app, s),
             // A bare line break from the IME is the Enter key, which the key arm handles.
             egui::Event::Ime(egui::ImeEvent::Preedit { text: s, .. } | egui::ImeEvent::Commit(s)) if s == "\n" || s == "\r" => handled[k] = false,
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => ime_update(app, text, false),
@@ -1626,6 +1674,29 @@ mod tests {
         commit(&mut app);
         assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "an empty type layer is removed on commit");
         assert!(app.ui.text_edit.is_none());
+    }
+
+    /// Pure smart-quote mapping: opening after whitespace, a bracket or a dash, closing next to a
+    /// letter or another quote.
+    #[test]
+    fn smart_quotes_are_typographic() {
+        assert_eq!(smart_quotes("\"Hello\"", None), "\u{201c}Hello\u{201d}");
+        assert_eq!(smart_quotes("don't", None), "don\u{2019}t");
+        assert_eq!(smart_quotes("(\"x\")", None), "(\u{201c}x\u{201d})");
+        assert_eq!(smart_quotes("--'x'", None), "--\u{2018}x\u{2019}", "a dash stays a dash, the quote opens after it");
+        assert_eq!(smart_quotes("\"\"", None), "\u{201c}\u{201d}");
+    }
+
+    /// Preferences ▸ Type ▸ Use Smart Quotes switches typed quotes (typed text only, not paste).
+    #[test]
+    fn smart_quotes_preference_controls_typed_quotes() {
+        for (smart, expected) in [(true, "hi \u{201c}you\u{201d}"), (false, "hi \"you\"")] {
+            let mut app = app();
+            app.run("prefs.set", json!({"path": "type.smartQuotes", "value": smart})).unwrap();
+            pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+            insert_typed(&mut app, "hi \"you\"");
+            assert_eq!(layer_text(&app), expected, "smartQuotes={smart}");
+        }
     }
 
     #[test]
