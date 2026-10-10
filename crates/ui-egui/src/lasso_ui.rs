@@ -54,9 +54,10 @@ fn moving_selection(app: &PhotocraftApp) -> bool {
 }
 
 /// A drag the canvas handles rather than this module, which only feeds it the events: moving the
-/// selection, or a guide that ⌘ took (`canvas::command_guide_at`, #2690).
+/// selection, a guide that ⌘ took (`canvas::command_guide_at`, #2690), or the layer that ⌘ moves
+/// (`canvas::command_moves_layer`, refused on a locked layer: `move_blocked`, #2725).
 fn handed_over(app: &PhotocraftApp) -> bool {
-    moving_selection(app) || app.guide_drag.is_some_and(|d| d.index.is_some())
+    moving_selection(app) || app.guide_drag.is_some_and(|d| d.index.is_some()) || app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) || app.move_blocked
 }
 
 pub fn cancel_stale(app: &mut PhotocraftApp) {
@@ -112,11 +113,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     let p = match ev {
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
     };
-    // A press inside the selection (no outline in progress) drags the selection instead.
+    // A press inside the selection (no outline in progress) drags the selection instead; a ⌘
+    // press outside it moves the layer, as the Move tool (#2725).
     if matches!(ev, ToolEvent::Down { .. })
         && !active(app)
         && p.iter().all(|n| n.is_finite())
-        && crate::canvas::selection_drag_kind(app, Tool::Lasso, p, mods).is_some()
+        && (crate::canvas::selection_drag_kind(app, Tool::Lasso, p, mods).is_some() || crate::canvas::command_moves_layer(app, Tool::Lasso, p, mods))
     {
         return false;
     }
