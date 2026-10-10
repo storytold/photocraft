@@ -43,38 +43,40 @@ pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Sampl
     let ch = planes.len();
     let row = ch * bps;
     let mut out = vec![0u8; n * row];
-    // One band of rows per core, written straight into its slice of the shared output: the
-    // per-pixel channel loop stays, but a band holds ~1/cores of a 20 MP image's iterations
-    // instead of all of them.
+    if out.is_empty() {
+        return out;
+    }
     let bs = bands(n);
-    let parts: Vec<Vec<u8>> = par_map(bs.clone(), |band| {
-        let mut part = vec![0u8; band.len() * row];
-        for (i, p) in band.clone().enumerate() {
-            for (c, plane) in planes.iter().enumerate() {
-                let dst = &mut part[(i * ch + c) * bps..(i * ch + c + 1) * bps];
-                match plane {
-                    Some(pl) if pl.len() >= (p + 1) * bps => {
-                        let src = &pl[p * bps..(p + 1) * bps];
-                        for k in 0..bps {
-                            dst[k] = src[bps - 1 - k];
-                        }
-                        if cfg!(target_endian = "big") {
-                            dst.copy_from_slice(src);
-                        }
-                        if invert[c] {
-                            invert_sample(dst, s);
-                        }
-                    }
-                    _ => dst.copy_from_slice(&fill[c]),
-                }
+    let step = bs.first().map_or(n, |b| b.len()) * row;
+    par_map(bs.into_iter().zip(out.chunks_mut(step)).collect(), |(band, part)| {
+        for (c, plane) in planes.iter().enumerate() {
+            let src = plane.and_then(|p| p.get(band.start * bps..)).unwrap_or_default();
+            let inv = invert[c];
+            match s {
+                SampleType::U8 => write_channel(part, ch, c, src, &fill[c], |[v]| [if inv { 255 - v } else { v }]),
+                SampleType::U16 => write_channel(part, ch, c, src, &fill[c], |v| {
+                    let v = u16::from_be_bytes(v);
+                    (if inv { 65535 - v } else { v }).to_ne_bytes()
+                }),
+                SampleType::F32 => write_channel(part, ch, c, src, &fill[c], |v| {
+                    // Preserve float bits when no inversion is requested.
+                    if inv { (1.0 - f32::from_be_bytes(v)).to_ne_bytes() } else { u32::from_be_bytes(v).to_ne_bytes() }
+                }),
             }
         }
-        part
     });
-    for (band, part) in bs.into_iter().zip(parts) {
-        out[band.start * row..band.end * row].copy_from_slice(&part);
-    }
     out
+}
+
+fn write_channel<const N: usize>(out: &mut [u8], ch: usize, c: usize, src: &[u8], fill: &[u8], decode: impl Fn([u8; N]) -> [u8; N]) {
+    let mut samples = src.as_chunks::<N>().0.iter();
+    for pixel in out.chunks_exact_mut(ch * N) {
+        let dst = &mut pixel[c * N..(c + 1) * N];
+        match samples.next() {
+            Some(sample) => dst.copy_from_slice(&decode(*sample)),
+            None => dst.copy_from_slice(fill),
+        }
+    }
 }
 
 /// Splits interleaved native-endian bytes into big-endian planes.
@@ -155,6 +157,7 @@ pub fn zero_sample(s: SampleType) -> Vec<u8> {
 }
 
 /// Quantizes a normalized value to big-endian bytes.
+#[inline]
 pub fn encode_be(v: f32, s: SampleType, out: &mut Vec<u8>) {
     match s {
         SampleType::U8 => out.push((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
@@ -260,12 +263,13 @@ mod tests {
             planes
         }
         // Odd pixel counts cross band boundaries; a missing plane exercises the fill path.
-        for n in [1usize, 7, 64, 1000] {
+        for n in [0usize, 1, 7, 64, 1000] {
             for s in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 let bps = s.bytes();
                 let planes: Vec<Vec<u8>> = (0..4).map(|c| (0..n * bps).map(|i| (i * 13 + c * 5) as u8).collect()).collect();
                 let mut refs: Vec<Option<&[u8]>> = planes.iter().map(|p| Some(&p[..])).collect();
                 refs[2] = None;
+                refs[3] = Some(&planes[3][..(n * bps).saturating_sub(1)]);
                 let fill: Vec<Vec<u8>> = (0..4).map(|c| vec![c as u8 * 40; bps]).collect();
                 let invert = [false, true, false, true];
                 let got = interleave(&refs, &fill, n, s, &invert);

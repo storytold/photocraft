@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 
 use crate::error::{PsdError, Result};
 use crate::header::{Version, row_bytes};
-use crate::io::{Reader, WriteExt};
+use crate::io::Reader;
 
 /// Maximum number of decoded bytes a single decode call may produce: 8 GiB on
 /// 64-bit targets, 2 GiB elsewhere (the same budget as `photocraft-codecs`'
@@ -327,11 +327,10 @@ fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     let rb = layout.row_bytes();
     let cs = layout.count_size();
     let mut out = vec![0u8; rows * cs];
-    let mut enc = Vec::new();
     for row in 0..rows {
-        let start = enc.len();
-        packbits::encode(&decoded[row * rb..(row + 1) * rb], &mut enc);
-        let n = enc.len() - start;
+        let start = out.len();
+        packbits::encode(&decoded[row * rb..(row + 1) * rb], &mut out);
+        let n = out.len() - start;
         if cs == 2 {
             let n = u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?;
             out[row * 2..row * 2 + 2].copy_from_slice(&n.to_be_bytes());
@@ -340,7 +339,6 @@ fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
             out[row * 4..row * 4 + 4].copy_from_slice(&n.to_be_bytes());
         }
     }
-    out.put(&enc);
     Ok(out)
 }
 

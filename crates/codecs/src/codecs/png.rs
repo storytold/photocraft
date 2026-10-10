@@ -461,8 +461,15 @@ fn filter_row(row: &[u8], prev: Option<&[u8]>, bpp: usize, scratch: &mut [u8], o
         }
     };
     let cost = |v: &[u8]| v.iter().map(|&b| u64::from((b as i8).unsigned_abs())).sum::<u64>();
-    let mut best = (cost(row), 0u8);
+    let mut best = cost(row);
+    let start = out.len();
+    out.push(0);
+    out.extend_from_slice(row);
     for kind in 1u8..=4 {
+        if best == 0 {
+            break;
+        }
+        let mut c = 0u64;
         for i in 0..n {
             let x = row[i];
             scratch[i] = match kind {
@@ -471,27 +478,14 @@ fn filter_row(row: &[u8], prev: Option<&[u8]>, bpp: usize, scratch: &mut [u8], o
                 3 => x.wrapping_sub(((u16::from(left(i)) + u16::from(up(i))) / 2) as u8),
                 _ => x.wrapping_sub(paeth(left(i), up(i), ul(i))),
             };
+            c += u64::from((scratch[i] as i8).unsigned_abs());
         }
-        let c = cost(&scratch[..n]);
-        if c < best.0 {
-            best = (c, kind);
+        if c < best {
+            best = c;
+            out[start] = kind;
+            out[start + 1..].copy_from_slice(&scratch[..n]);
         }
     }
-    out.push(best.1);
-    if best.1 == 0 {
-        out.extend_from_slice(row);
-        return;
-    }
-    for i in 0..n {
-        let x = row[i];
-        scratch[i] = match best.1 {
-            1 => x.wrapping_sub(left(i)),
-            2 => x.wrapping_sub(up(i)),
-            3 => x.wrapping_sub(((u16::from(left(i)) + u16::from(up(i))) / 2) as u8),
-            _ => x.wrapping_sub(paeth(left(i), up(i), ul(i))),
-        };
-    }
-    out.extend_from_slice(&scratch[..n]);
 }
 
 const ADLER_MOD: u32 = 65_521;
@@ -570,6 +564,50 @@ mod indexed_tests {
 #[cfg(test)]
 mod parallel_tests {
     use super::*;
+
+    #[test]
+    fn adaptive_filter_preserves_minimum_cost_and_ties() {
+        for bpp in [1, 3, 4, 6, 8] {
+            for seed in 0..32usize {
+                let row: Vec<u8> = (0..137).map(|i| (i * seed + i / 5) as u8).collect();
+                let prev: Vec<u8> = row.iter().map(|v| v.wrapping_add(seed as u8)).collect();
+                for prev in [None, Some(prev.as_slice())] {
+                    let mut candidates = vec![row.clone()];
+                    for kind in 1..=4 {
+                        candidates.push(
+                            row.iter()
+                                .enumerate()
+                                .map(|(i, &x)| {
+                                    let a = i.checked_sub(bpp).map_or(0, |j| row[j]);
+                                    let b = prev.map_or(0, |p| p[i]);
+                                    let c = i.checked_sub(bpp).map_or(0, |j| prev.map_or(0, |p| p[j]));
+                                    let p = i16::from(a) + i16::from(b) - i16::from(c);
+                                    let distances = [(p - i16::from(a)).abs(), (p - i16::from(b)).abs(), (p - i16::from(c)).abs()];
+                                    let predictor = match kind {
+                                        1 => a,
+                                        2 => b,
+                                        3 => ((u16::from(a) + u16::from(b)) / 2) as u8,
+                                        _ => [a, b, c][distances.iter().enumerate().min_by_key(|(_, d)| *d).unwrap().0],
+                                    };
+                                    x.wrapping_sub(predictor)
+                                })
+                                .collect(),
+                        );
+                    }
+                    let (kind, expected) =
+                        candidates.iter().enumerate().min_by_key(|(_, v)| v.iter().map(|&b| u64::from((b as i8).unsigned_abs())).sum::<u64>()).unwrap();
+                    let mut out = vec![99];
+                    filter_row(&row, prev, bpp, &mut vec![0; row.len()], &mut out);
+                    assert_eq!(out[0], 99);
+                    assert_eq!(out[1], kind as u8);
+                    assert_eq!(&out[2..], expected);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        filter_row(&[0; 16], None, 4, &mut [0; 16], &mut out);
+        assert_eq!(out, vec![0; 17]);
+    }
 
     #[test]
     fn adler_combine_matches_one_pass() {

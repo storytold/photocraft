@@ -120,11 +120,7 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             })
         }
         Adjustment::Levels { space, .. } | Adjustment::Curves { space, .. } => {
-            let luts = tone_luts_depth(adj, depth);
-            match space {
-                ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| lut(&luts[i], c[i]))),
-                ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(*space, &luts, c)),
-            }
+            apply_tone(buf, *space, &tone_luts_depth(adj, depth));
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges));
@@ -215,6 +211,13 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
         }
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
+    }
+}
+
+pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4]) {
+    match space {
+        ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| lut(&luts[i], c[i]))),
+        ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(space, luts, c)),
     }
 }
 

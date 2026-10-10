@@ -122,6 +122,7 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
 
 /// Straight-alpha source over straight-alpha backdrop (W3C/PDF general
 /// formula) using [`blend_rgb`].
+#[inline]
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
@@ -205,6 +206,7 @@ pub fn text_decode(v: f32, gamma: f32) -> f32 {
 
 /// [`composite`] with the coverage mix done in the text blending space of `gamma`
 /// ([`text_encode`]; `gamma == 1` is [`composite`], the setting switched off).
+#[inline]
 pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, gamma: f32) -> [f32; 4] {
     if gamma == 1.0 {
         return composite(mode, backdrop, source, opacity);

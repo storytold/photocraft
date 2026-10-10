@@ -14,6 +14,49 @@ fn doc_white(w: u32, h: u32) -> Document {
     Document::with_background("t", Size::new(w, h), ColorMode::Rgb, SampleType::U8, Color::WHITE)
 }
 
+#[test]
+fn prepared_tones_match_fresh_tables_and_stay_bounded() {
+    use photocraft_doc::adjust::ToneSpace;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for space in [ToneSpace::Rgb, ToneSpace::Cmyk, ToneSpace::Lab] {
+            for mut adj in [Adjustment::identity_levels(), Adjustment::identity_curves()] {
+                match &mut adj {
+                    Adjustment::Levels { master, space: s, .. } => {
+                        master.gamma = 1.4;
+                        *s = space;
+                    }
+                    Adjustment::Curves { master, space: s, .. } => {
+                        master[1].output = 0.8;
+                        *s = space;
+                    }
+                    _ => {}
+                }
+                let mut doc = Document::new("tones", Size::new(2, 1), ColorMode::Rgb, depth);
+                doc.layers.push(Layer::group("group", vec![Layer::new("tone", LayerContent::Adjustment(adj.clone()))]));
+                let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
+                let cx = Ctx::for_doc(&doc, &patterns);
+                let cached_adj = cx.tone_luts[0].0;
+                let input = Buffer { rect: doc.bounds(), px: vec![[0.2, 0.4, 0.7, 0.6], [2.0, -0.2, 0.5, 0.0]] };
+                let mut expected = input.clone();
+                adjust::apply_depth(&adj, &mut expected, cx.transfer, Some(depth));
+                for a in [cached_adj, cached_adj, &adj] {
+                    let mut actual = input.clone();
+                    cx.apply_adjustment(a, &mut actual);
+                    assert_eq!(actual.px, expected.px);
+                }
+                assert!(cx.tone_luts[0].1.get().is_some());
+            }
+        }
+    }
+    let mut layers: Vec<_> = (0..20).map(|_| Layer::new("tone", LayerContent::Adjustment(Adjustment::identity_levels()))).collect();
+    layers[0].visible = false;
+    let tables = prepare_tones(&layers, 0);
+    assert_eq!(tables.len(), 16);
+    assert!(tables.iter().all(|(_, cell)| cell.get().is_none()));
+    assert!(matches!(&layers[1].content, LayerContent::Adjustment(a) if std::ptr::eq(tables[0].0, a)));
+    assert!(prepare_tones(&[Layer::group("deep", layers)], PREPARE_DEPTH).is_empty());
+}
+
 fn solid_layer(name: &str, rect: Rect, rgba: [f32; 4]) -> Layer {
     let mut l = Layer::raster(name, PixelFormat::RGBA8);
     l.surface_mut().unwrap().fill_rect(rect, &rgba);

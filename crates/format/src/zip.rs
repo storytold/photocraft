@@ -11,25 +11,9 @@ const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
 const EOCD_SIG: u32 = 0x0605_4b50;
 
-/// CRC-32 (IEEE), table-driven.
+/// CRC-32 (IEEE).
 pub fn crc32(data: &[u8]) -> u32 {
-    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
-    let t = TABLE.get_or_init(|| {
-        let mut t = [0u32; 256];
-        for (i, e) in t.iter_mut().enumerate() {
-            let mut c = i as u32;
-            for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-            }
-            *e = c;
-        }
-        t
-    });
-    let mut c = 0xFFFF_FFFFu32;
-    for &b in data {
-        c = t[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
-    }
-    !c
+    crc32fast::hash(data)
 }
 
 /// Streaming writer for STORE entries.
@@ -245,6 +229,7 @@ mod tests {
 
     #[test]
     fn crc_known_value() {
+        assert_eq!(crc32(&[]), 0);
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
 

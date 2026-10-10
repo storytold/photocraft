@@ -21,6 +21,7 @@ thiserror = { workspace = true }
 flate2 = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 ruzstd = "0.9"
+crc32fast = "1.5"
 
 # A plain fsync where a file system refuses the full flush (`sync_file`, atomic.rs). Already in
 # Cargo.lock on Apple targets (cap-std), so this adds no new crate.
