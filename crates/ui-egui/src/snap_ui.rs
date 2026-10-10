@@ -140,6 +140,13 @@ fn override_held(mods: egui::Modifiers) -> bool {
     mods.ctrl && !mods.mac_cmd
 }
 
+/// The Move tool's press at `p` picked other layers (Auto-Select): the drag moves those, so its
+/// box, what it snaps and what it leaves out of the targets are theirs, not the ones selected
+/// before (a group or an empty layer selected before had no box at all).
+pub(crate) fn retarget_move(app: &mut PhotocraftApp, p: [f64; 2]) {
+    begin(app, p);
+}
+
 /// Start snapping for a drag beginning at `p` (called on pointer down).
 fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap = None;
@@ -362,6 +369,35 @@ mod tests {
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
         assert_eq!(mover_bounds(&app).x0, 300);
         assert!(app.prefs_rt.snap.is_none());
+    }
+
+    /// The drag's box and snapping belong to the layer Auto-Select picks on the press, not to the
+    /// one selected before: another layer (its box would move instead), or an empty layer (no box,
+    /// no snapping at all).
+    #[test]
+    fn move_tool_box_and_snapping_follow_the_auto_selected_layer() {
+        for before in ["target", "empty"] {
+            let mut app = app_with_box();
+            let mover = app.session.active().unwrap().active_layer.unwrap();
+            if before == "empty" {
+                app.run("layer.new.layer", json!({"name": "empty"})).unwrap();
+            } else {
+                let st = app.session.active().unwrap();
+                let target = st.doc.walk().into_iter().find(|(_, _, l)| l.name == "target").unwrap().2.id;
+                app.run("layer.select", json!({"layer": target.0})).unwrap();
+            }
+            app.ui.tool = Tool::Move;
+            app.ui.tool_options.move_auto_select = true;
+            let m = egui::Modifiers::NONE;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+            assert_eq!(app.session.active().unwrap().active_layer, Some(mover), "{before}: Auto-Select picked the mover");
+            let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
+            assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 90.0, 80.0] }), "{before}: the box is the mover's");
+            // The mover's left edge lands 3 px right of the target's and snaps to it.
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
+            assert_eq!(mover_bounds(&app).x0, 300, "{before}: snapped to the target's edge");
+        }
     }
 
     #[test]
