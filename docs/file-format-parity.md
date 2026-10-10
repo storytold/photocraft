@@ -36,6 +36,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |
 | Radiance HDR | R/W | yes | yes | f32 |
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |
+| FITS | R/W (FITS Liberator plug-in) | yes | yes | 8/16/32f gray or RGB, header cards kept; no fpack, no debayer |
 | Targa | R/W | yes | yes | 8-bit |
 | Photoshop PDF | R/W | no (#2541) | raster only (print, artboards to PDF) | No vector/text PDF, no multi-page save, no PDF presentation (FILE-215-10) |
 | Photoshop EPS, DCS 1.0/2.0, EPS TIFF/PICT preview | R/W | no | no | |
