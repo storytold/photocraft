@@ -39,8 +39,16 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// An explicit SVG filter keeps vector artwork discoverable even when a native picker defaults to
 /// the PhotoCraft-only filter. SVG is also included in All Formats for normal multi-format opens.
 fn open_filters() -> Vec<(&'static str, Vec<String>)> {
+    let mut extensions = OPEN_EXTS.to_vec();
+    for codec in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+        for ext in codec.extensions() {
+            if !extensions.contains(ext) {
+                extensions.push(ext);
+            }
+        }
+    }
     vec![
-        ("All Formats", open_filter_extensions(OPEN_EXTS)),
+        ("All Formats", open_filter_extensions(&extensions)),
         ("PhotoCraft", open_filter_extensions(&["pcraft"])),
         ("OpenRaster", open_filter_extensions(&["ora"])),
         ("SVG", open_filter_extensions(SVG_EXTS)),
@@ -453,6 +461,17 @@ mod tests {
     use serde_json::{Value, json};
 
     #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn every_readable_codec_is_discoverable_in_the_native_open_panel() {
+        let filters = open_filters();
+        let all = &filters.iter().find(|(name, _)| *name == "All Formats").unwrap().1;
+        for codec in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+            for ext in open_filter_extensions(codec.extensions()) {
+                assert!(all.contains(&ext), "{codec:?}: {ext}");
+            }
+        }
+    }
+
     #[test]
     fn open_filters_cover_uppercase_and_mixed_case_extensions() {
         // Matches `text` against a glob of literals and `[..]` classes, as the portal would after `*.`.
