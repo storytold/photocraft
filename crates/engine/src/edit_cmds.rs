@@ -70,7 +70,7 @@ fn active_id(s: &Session) -> Result<LayerId> {
 }
 
 /// The pixels of `src` inside the selection (or all of them), as a straight-alpha surface.
-fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Clip {
+fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     let fmt = src.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let area = match sel {
@@ -79,34 +79,45 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Clip {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Clip { surface: out, bounds: Rect::EMPTY };
+        return Ok(Clip { surface: out, bounds: Rect::EMPTY });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
     let n = with_alpha.channels();
     let mut px = if fmt.alpha {
-        src.read_region(area)
+        crate::allocation::read_region(src, area, "copying pixels")?
     } else {
-        let opaque = src.read_region(area);
+        let opaque = crate::allocation::read_region(src, area, "copying pixels")?;
         let k = fmt.channels();
-        let mut v = Vec::with_capacity(opaque.len() / k.max(1) * n);
+        let len = opaque
+            .len()
+            .checked_div(k.max(1))
+            .and_then(|pixels| pixels.checked_mul(n))
+            .ok_or_else(|| EngineError::Other("not enough memory for copying pixels (requested size overflowed); the document was not changed".into()))?;
+        let mut v = crate::allocation::filled(len, 0.0, "copying pixels")?;
+        let mut at = 0;
         for p in opaque.chunks_exact(k.max(1)) {
-            v.extend_from_slice(p);
-            v.push(1.0);
+            let Some(dst) = v.get_mut(at..at + k.max(1)) else { break };
+            dst.copy_from_slice(p);
+            at += k.max(1);
+            if let Some(alpha) = v.get_mut(at) {
+                *alpha = 1.0;
+            }
+            at += 1;
         }
         v
     };
     if let Some(m) = sel {
-        let mask = m.read_region(area);
+        let mask = crate::allocation::read_region(m, area, "applying the selection to copied pixels")?;
         let mk = m.format().channels().max(1);
         for (p, a) in px.chunks_exact_mut(n).zip(mask.chunks_exact(mk)) {
             p[n - 1] *= a[0];
         }
     }
-    out.write_region(area, &px);
+    out.try_write_region(area, &px).map_err(|e| EngineError::Other(format!("not enough memory while copying pixels ({e}); the document was not changed")))?;
     out.prune();
     let bounds = out.content_bounds();
-    Clip { surface: out, bounds }
+    Ok(Clip { surface: out, bounds })
 }
 
 /// Merged composite of the visible document as a surface in the document's format.
@@ -119,11 +130,11 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let clip = if merged {
-        lift(&merged_surface(&d.doc), d.doc.selection.as_ref(), canvas)
+        lift(&merged_surface(&d.doc), d.doc.selection.as_ref(), canvas)?
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
         let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
-        lift(surf, d.doc.selection.as_ref(), canvas)
+        lift(surf, d.doc.selection.as_ref(), canvas)?
     };
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
@@ -146,9 +157,9 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
     let bg = crate::extra_cmds::is_background(doc.layer(id).ok_or(EngineError::NoLayer(id))?);
     let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
     if bg {
-        crate::pixels::fill_surface(surf, area, background, sel, true);
+        crate::pixels::try_fill_surface(surf, area, background, sel, true)?;
     } else {
-        crate::pixels::clear_surface(surf, area, sel);
+        crate::pixels::try_clear_surface(surf, area, sel)?;
     }
     surf.prune();
     Ok(())
@@ -157,6 +168,7 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
+    crate::allocation::checkpoint("pasting pixels")?;
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let Some(d) = s.active() else {
         // Nothing open to paste into: the clipboard becomes a document of its own (#368).
@@ -208,6 +220,7 @@ pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
 /// over what was there. Their transparency, and `limit` (Paste Into / Outside), let it show
 /// through. One history step.
 pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
+    crate::allocation::checkpoint("pasting pixels")?;
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
@@ -217,7 +230,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
     let area = src.content_bounds().intersect(&canvas);
     s.edit(label, |doc, _| {
         let (surf, _) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        crate::fill_cmds::composite_over(surf, &src, area, limit);
+        crate::fill_cmds::composite_over(surf, &src, area, limit)?;
         surf.prune();
         doc.selection = None;
         Ok(())
@@ -263,7 +276,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         return Ok(json!({"layer": nid.0}));
     }
     let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
-    let clip = lift(surf, d.doc.selection.as_ref(), d.doc.bounds());
+    let clip = lift(surf, d.doc.selection.as_ref(), d.doc.bounds())?;
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not complete the command: the selected area is empty".into()));
     }
@@ -639,6 +652,104 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    #[test]
+    fn injected_clear_buffer_failure_leaves_the_document_unchanged() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.clear", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for erasing pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+    }
+
+    #[test]
+    fn injected_copy_buffer_failure_does_not_change_document_or_clipboard() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.copy", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for copying pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert!(s.clipboard.is_none());
+    }
+
+    #[test]
+    fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.fill", json!({"color": "#00ff00"}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for blending pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
+    }
+
+    #[test]
+    fn injected_paste_failure_does_not_change_document_or_clipboard() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let before_clip = s.clipboard.clone();
+        let st = s.active().unwrap();
+        let before_doc = (*st.doc).clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.paste", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for pasting pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(*st.doc, before_doc);
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
+        let after_clip = s.clipboard.as_ref().expect("clipboard remains available");
+        let before_clip = before_clip.as_ref().expect("clipboard was populated");
+        assert_eq!(after_clip.bounds, before_clip.bounds);
+        assert_eq!(after_clip.surface, before_clip.surface);
+    }
+
+    #[test]
+    fn injected_transform_failure_keeps_pixels_and_history() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 20, 30]}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for transforming pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
     }
 
     fn active_bounds(s: &Session) -> Rect {

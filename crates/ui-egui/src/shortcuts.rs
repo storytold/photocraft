@@ -175,6 +175,10 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// held, so ⇧⌘C is Copy Merged), and a ⌘V release without a ⌘V press (a paste event, or the Mac
 /// menu's key equivalent) becomes a ⌘V press.
 ///
+/// The web build gets both: eframe forwards the ⌘V key-down, then the browser's `paste` event
+/// (the key-down's default action) arrives as `Event::Paste` in the same frame. A clipboard event
+/// right after its own ⌘ key press is that press, not a second one (#2638).
+///
 /// Ctrl+Insert copies and Shift+Insert pastes: egui-winit maps them on Windows (a Shift+Insert
 /// release without a paste event pastes the image, like ⌘V), and we map them here on Linux.
 pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInput) {
@@ -196,12 +200,36 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         });
     }
     if typing {
+        // A text field copies and pastes on egui's Copy / Cut / Paste events, which egui-winit
+        // makes from the window's key and so never sends as key presses. A ⌘C / ⌘X / ⌘V press
+        // here is the Mac menu's key equivalent (AppKit takes the key while Edit › Copy, Cut or
+        // Paste is enabled), which a text field ignores: pasting text worked only while
+        // PhotoCraft's own clipboard was empty. Give those presses back as the events; Paste asks
+        // the window for the clipboard text, which arrives as a Paste event next frame.
+        raw.events.retain_mut(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers: m, .. } = *e else { return true };
+            if !m.command || m.alt || m.shift {
+                return true;
+            }
+            match key {
+                Key::C => *e = egui::Event::Copy,
+                Key::X => *e = egui::Event::Cut,
+                Key::V => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    return false;
+                }
+                _ => {}
+            }
+            true
+        });
         return;
     }
     let seen = egui::Id::new("pc-paste-key-seen");
     // The modifiers held at each event: last frame's, updated as the events report changes.
     let mut mods = ctx.input(|i| i.modifiers);
     let mut out = Vec::with_capacity(raw.events.len());
+    // The last ⌘C/⌘X/⌘V press this frame whose clipboard event hasn't arrived (yet).
+    let mut unpaired: Option<Key> = None;
     for e in raw.events.drain(..) {
         if let egui::Event::ModifiersChanged(m) | egui::Event::Key { modifiers: m, .. } = &e {
             mods = *m;
@@ -210,14 +238,20 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
             if key == Key::V {
                 ctx.data_mut(|d| d.insert_temp(seen, true));
             }
-            out.push(press(key, held));
+            if unpaired.take_if(|k| *k == key).is_none() {
+                out.push(press(key, held));
+            }
             continue;
         }
         match &e {
-            // A ⌘V press egui-winit didn't swallow (the Mac menu's key equivalent, Shift+Insert on
-            // Linux): its release must not paste a second time (#1638).
-            egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.command => {
-                ctx.data_mut(|d| d.insert_temp(seen, true));
+            // A ⌘C/⌘X/⌘V press egui-winit didn't swallow (the web, the Mac menu's key equivalent,
+            // Shift+Insert on Linux): its clipboard event and, for ⌘V, its release must not run
+            // the command a second time (#2638, #1638).
+            egui::Event::Key { key: key @ (Key::C | Key::X | Key::V), pressed: true, modifiers, .. } if modifiers.command => {
+                unpaired = Some(*key);
+                if *key == Key::V {
+                    ctx.data_mut(|d| d.insert_temp(seen, true));
+                }
             }
             // A paste key's release ends that press, with or without ⌘ still held (else a stale
             // mark would swallow the next image paste); without a press it is the paste itself.
@@ -242,6 +276,9 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 }
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
+    // it back later (#2608).
+    app.ui.remember_group_tool();
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -378,6 +415,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::crop_shield::keys(app, ctx) {
         return;
     }
+    // ... and I fills W x H x Resolution from the document (Front Image, #2443).
+    if crate::crop_size::keys(app, ctx) {
+        return;
+    }
     // Single-key tools (no modifiers). D and X (`tools.defaultColors` / `tools.swapColors`) and the
     // brush keys [ ] ⇧[ ⇧] (`tools.decreaseBrushSize`…) are commands, dispatched above with any
     // Keyboard Shortcuts override.
@@ -412,7 +453,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
-    // group's current tool.
+    // group's current tool. From another group, the key picks the group's last-used tool.
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     for t in Tool::ALL {
         let Some(k) = Key::from_name(&t.key().to_string()) else { continue };
@@ -422,7 +463,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => group[0],
+                None => app.ui.group_tool(t.key()).unwrap_or(group[0]),
             };
             return;
         }
@@ -434,6 +475,40 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_key_brings_back_the_groups_last_used_tool() {
+        use crate::state::Tool;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key, modifiers| {
+            let raw = egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            ctx.begin_pass(raw);
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+        // Polygonal Lasso picked from the toolbar flyout, then the Brush (#2608).
+        app.ui.tool = Tool::PolygonLasso;
+        press(&mut app, Key::B, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::Brush);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::PolygonLasso);
+        // Within the group, L still cycles; leaving and coming back keeps the new pick.
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+        press(&mut app, Key::M, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::RectMarquee);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+        // Use Shift Key for Tool Switch: the plain key also returns to the last-used tool.
+        app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+        press(&mut app, Key::B, Modifiers::NONE);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+    }
 
     #[test]
     fn pen_command_z_and_backspace_retract_points_before_document_undo() {
@@ -600,6 +675,47 @@ mod tests {
         assert!(matches!(r.events.as_slice(), [_, egui::Event::Paste(_)]));
     }
 
+    /// In a text field the Mac menu's ⌘C / ⌘X key equivalents become the field's Copy / Cut, and
+    /// its ⌘V asks the window for the clipboard text, which the field pastes. Other keys, and ⇧ / ⌥
+    /// chords, pass through.
+    #[test]
+    fn menu_key_equivalents_reach_a_text_field_as_clipboard_events() {
+        let ctx = egui::Context::default();
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+        let cmd = Modifiers::COMMAND;
+        let events = vec![
+            key(Key::C, true, cmd),
+            key(Key::X, true, cmd),
+            key(Key::V, true, cmd),
+            key(Key::V, false, cmd),
+            key(Key::A, true, cmd),
+            key(Key::C, true, cmd | Modifiers::SHIFT),
+        ];
+        let mut r = egui::RawInput { events: [vec![egui::Event::ModifiersChanged(cmd)], events].concat(), ..Default::default() };
+        // In a frame, as the app calls it, so the request for the clipboard text is in its output.
+        ctx.begin_pass(egui::RawInput::default());
+        clipboard_keys(&ctx, true, &mut r);
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        assert!(
+            matches!(
+                &r.events[1..],
+                [
+                    egui::Event::Copy,
+                    egui::Event::Cut,
+                    egui::Event::Key { key: Key::V, pressed: false, .. },
+                    egui::Event::Key { key: Key::A, .. },
+                    egui::Event::Key { key: Key::C, .. }
+                ]
+            ),
+            "{:?}",
+            r.events
+        );
+        // The ⌘V press became a request for the clipboard's text.
+        let asked = out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste));
+        assert!(asked, "the window is asked for the clipboard text");
+    }
+
     /// #1638: every ⌘V is one press, however its key-down and key-up arrive.
     #[test]
     fn each_paste_key_is_one_press() {
@@ -617,6 +733,21 @@ mod tests {
         assert_eq!(presses(vec![egui::Event::Paste("x".into())]), 1);
         assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::NONE), key(Key::V, false, Modifiers::NONE)]), 0);
         assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), key(Key::V, false, Modifiers::COMMAND)]), 1, "image paste");
+    }
+
+    /// #2638: on the web one ⌘V brings its key press and the browser's paste event; that is one paste.
+    #[test]
+    fn web_paste_key_and_paste_event_are_one_press() {
+        let ctx = egui::Context::default();
+        let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::COMMAND };
+        let mut r =
+            egui::RawInput { events: vec![key(Key::V, true), egui::Event::Paste("x".into()), key(Key::X, true), egui::Event::Cut], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        let presses = |k| r.events.iter().filter(|e| matches!(e, egui::Event::Key { key, pressed: true, .. } if *key == k)).count();
+        assert_eq!((presses(Key::V), presses(Key::X)), (1, 1));
+        let mut r = egui::RawInput { events: vec![key(Key::V, false)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        assert!(!r.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })), "its release doesn't paste again");
     }
 
     /// #530: egui-winit sends Cut for Shift+Delete on Windows; on the canvas it opens Fill.

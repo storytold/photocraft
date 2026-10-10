@@ -11,6 +11,7 @@ pub mod actions_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
 pub mod align_cmds;
+mod allocation;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
 pub mod automate_cmds;
@@ -32,6 +33,7 @@ pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
 pub mod eraser_cmds;
+pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
 pub mod fill_cmds;
@@ -140,6 +142,12 @@ pub enum EngineError {
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+impl From<photocraft_raster::AllocationError> for EngineError {
+    fn from(error: photocraft_raster::AllocationError) -> Self {
+        Self::Other(format!("not enough memory for this operation ({error}); the document was not changed"))
+    }
+}
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
@@ -490,7 +498,17 @@ impl Session {
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if self.names_existing_layer(spec.id, params) {
+            return Ok(());
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
+    }
+
+    /// Whether `id` is a layer command whose `"layer"` param names an existing layer, so it needs no
+    /// active layer (#2457). Matches how `layer_param` resolves the layer when the command runs.
+    fn names_existing_layer(&self, id: &str, params: &Value) -> bool {
+        matches!(id, "layer.hideLayers" | "layer.showLayers" | "layer.renameLayer")
+            && params.get("layer").and_then(Value::as_u64).is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()))
     }
 
     /// Apply an undoable edit to the active document.

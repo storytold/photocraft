@@ -504,7 +504,12 @@ impl Ex {
             let keep = raw.iter().any(|(k, d)| matches!(k, b"SoCo" | b"GdFl" | b"PtFl") && blocks::parse_fill(k, d).as_ref() == Some(f));
             if !keep {
                 raw.retain(|(k, _)| !matches!(k, b"SoCo" | b"GdFl" | b"PtFl"));
-                regenerated.push(blocks::write_fill(f));
+                // Photoshop pads layer-level blocks to a multiple of 4 inside the length (every
+                // one in its own files is). A fill descriptor of 2 mod 4 bytes, as a pattern
+                // name of the wrong length gives, left the record's extra data unaligned.
+                let (key, mut data) = blocks::write_fill(f);
+                data.resize(data.len().next_multiple_of(4), 0);
+                regenerated.push((key, data));
             }
         };
         match &l.content {
@@ -715,7 +720,13 @@ impl Ex {
                         }
                         None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
                     };
-                    crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt)
+                    match unfiltered {
+                        Ok(unfiltered) => crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt),
+                        Err(e) => {
+                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -890,6 +901,12 @@ impl Ex {
             && c.fill == *f
         {
             return c.surface.clone();
+        }
+        if self.cmyk
+            && let Some(s) =
+                photocraft_compose::gradient_fill::render_cmyk_fill(f, self.canvas, photocraft_compose::fill_frame(l, self.canvas), self.fmt.sample)
+        {
+            return s;
         }
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
@@ -1320,7 +1337,8 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
             ex.text_index.insert(l.id, index);
         }
     }
-    ex.emit(&doc.layers);
+    let space = photocraft_compose::cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers));
 
     // Merged composite, rendered and encoded in bands (no full-size float composite). Matting
     // against white only changes pixels with alpha < 1; if some are slightly translucent but all
@@ -1457,6 +1475,12 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         if txt2.is_some() && key == *b"Txt2" {
             continue;
         }
+        // A kept layer block (one the import could not read, #2700) describes layers the
+        // document doesn't have. The document's own layers are written below, and a file holds
+        // one layer list: a second `Lr16`/`Lr32` would contradict it.
+        if !ex.records.is_empty() && matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
+            continue;
+        }
         let mut tb = TaggedBlock::new(key, data.to_vec());
         tb.signature = sig;
         // Photoshop pads document-level (global) blocks to a multiple of 4, and readers such as
@@ -1564,6 +1588,22 @@ mod tests {
 
     fn document(width: u32, height: u32) -> Document {
         Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
+    }
+
+    #[test]
+    fn unreadable_lr16_warns_on_import_and_is_not_saved_twice() {
+        // #2700: a 16-bit file whose Lr16 block claims five layers but holds none.
+        let mut file = photocraft_psd::testgen::merged_only(Version::Psd, PsdMode::Rgb, 16, Compression::Raw, 8, 6);
+        file.global_layer_mask = Some(GlobalLayerMask::default());
+        file.global_blocks.push(TaggedBlock::new(*b"Lr16", vec![0, 5, 0, 0]));
+        let imported = crate::import("broken.psd", &file.to_bytes().unwrap()).unwrap();
+        assert!(imported.warnings.iter().any(|w| w.contains("Lr16") && w.contains("could not be read")), "{:?}", imported.warnings);
+
+        let saved = PsdFile::from_bytes(&document_to_psd(&imported.document).to_bytes().unwrap()).unwrap();
+        let ours = matches!(saved.layer_info_placement, LayerInfoPlacement::GlobalBlock { key, .. } if key == *b"Lr16");
+        let kept = saved.global_blocks.iter().filter(|b| b.key == *b"Lr16").count();
+        assert_eq!((ours, kept), (true, 0), "exactly one Lr16 block: the document's own layers");
+        assert_eq!(saved.layers().len(), 1);
     }
 
     #[test]
