@@ -714,6 +714,19 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     })
 }
 
+/// "Reveal in Finder" named after the file manager the engine opens on this platform (UI-217-19):
+/// Explorer on Windows, a plain folder elsewhere (xdg-open, the web). English action key; each
+/// display translates it.
+pub(crate) fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(windows) {
+        "Show in Explorer"
+    } else {
+        "Show in Folder"
+    }
+}
+
 /// Translate the fixed command label and substitute the currently configured export format.
 /// Reuse the existing translated PNG sentence, so dynamic formats work in every UI language.
 fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) -> String {
@@ -844,6 +857,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             }
         };
         item.label = format!("Quick Export as {format}");
+    }
+    // Smart Objects › Reveal in Finder names this platform's file manager (UI-217-19).
+    if let Some(item) = items.iter_mut().find(|i| i.id == "layer.smartObjects.revealInFinder") {
+        item.label = reveal_label().into();
     }
     // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
     if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
@@ -1789,5 +1806,47 @@ mod quick_export_label_tests {
             let layer = items.iter().find(|i| i.id == "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
+    }
+}
+
+#[cfg(test)]
+mod reveal_label_tests {
+    use super::*;
+
+    #[test]
+    fn reveal_label_names_the_platform_file_manager() {
+        let expected = if cfg!(target_os = "macos") {
+            "Reveal in Finder"
+        } else if cfg!(windows) {
+            "Show in Explorer"
+        } else {
+            "Show in Folder"
+        };
+        assert_eq!(reveal_label(), expected);
+    }
+
+    #[test]
+    fn smart_objects_reveal_item_names_the_platform_file_manager() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let id = "layer.smartObjects.revealInFinder";
+        let items = menu_items(&app);
+        let reveal: Vec<_> = items.iter().filter(|i| i.id == id).collect();
+        assert_eq!(reveal.len(), 1);
+        assert_eq!(reveal[0].path, ["Layer", "Smart Objects"]);
+        assert_eq!(reveal[0].label, reveal_label());
+        if !cfg!(target_os = "macos") {
+            assert!(!reveal[0].label.contains("Finder"), "{}", reveal[0].label);
+        }
+        let shortcuts = crate::prefs_ui::shortcut_items(&app);
+        assert!(shortcuts.iter().any(|(i, label, _, _)| i == id && label == reveal_label()), "the shortcut list shows the menu label");
+        let de = crate::i18n::Lang::from_code("de").unwrap();
+        let expected = match reveal_label() {
+            "Reveal in Finder" => "Im Finder anzeigen",
+            "Show in Explorer" => "Im Explorer anzeigen",
+            _ => "Im Ordner anzeigen",
+        };
+        assert_eq!(translated_menu_label(de, reveal[0]), expected);
+        // The menu catalogue (and docs/parity.md) keeps Photoshop's macOS name.
+        assert!(crate::menu_catalog::CATALOG.iter().any(|(_, label, _, i)| *i == id && *label == "Reveal in Finder"));
     }
 }

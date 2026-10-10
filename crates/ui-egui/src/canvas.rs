@@ -1686,7 +1686,7 @@ fn tab_context_items(index: usize, count: usize, has_path: bool) -> [(&'static s
         ("Close", "file.close", json!({"document": index}), true),
         ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
         ("Close All", "file.closeAll", json!({}), true),
-        ("Reveal in Finder", "file.revealInFinder", json!({"document": index}), has_path),
+        (crate::menus::reveal_label(), "file.revealInFinder", json!({"document": index}), has_path),
     ]
 }
 
@@ -4597,6 +4597,12 @@ mod tests {
         assert!(!tab_context_items(2, 3, false)[3].3, "an unsaved document cannot");
         assert!(!tab_context_items(0, 1, false)[1].3);
         assert!(items.iter().all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some()));
+    }
+
+    #[test]
+    fn tab_context_reveal_names_the_platform_file_manager() {
+        let (label, id, _, _) = &tab_context_items(0, 1, true)[3];
+        assert_eq!((*label, *id), (crate::menus::reveal_label(), "file.revealInFinder"));
     }
 
     /// Photoshop's document tab × is after the title on Windows and Linux, before it on macOS (#619).
