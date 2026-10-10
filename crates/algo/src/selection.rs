@@ -728,11 +728,20 @@ pub fn contract(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     expand(&inv, w, h, r).into_iter().map(|v| 1.0 - v).collect()
 }
 
-/// A band of width `r` straddling the selection edge.
+/// Select › Modify › Border: a soft band `2r` wide centred on the selection edge, as in
+/// Photoshop. A pixel `D` away (centre to centre) from the nearest pixel on the other side of the
+/// edge is selected `1 − (D − 1) / r`: fully at the edge, fading to nothing `r` pixels out on
+/// either side (measured on Photoshop 27.11, Border 4: 63, 127, 191, 255 | 255, 191, 127, 63
+/// across a straight edge, the same along the inside of a corner). It used to be a hard band
+/// `r` wide.
 pub fn border(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let outer = expand(m, w, h, r / 2.0);
-    let inner = contract(m, w, h, r / 2.0);
-    outer.iter().zip(inner).map(|(o, i)| (o - i).max(0.0)).collect()
+    let inside: Vec<bool> = m.iter().map(|v| *v >= 0.5).collect();
+    let outside: Vec<bool> = inside.iter().map(|v| !v).collect();
+    let (to_inside, to_outside) = (edt(&inside, w, h), edt(&outside, w, h));
+    if r <= 0.0 || to_inside.len() != m.len() || to_outside.len() != m.len() {
+        return vec![0.0; m.len()];
+    }
+    inside.iter().zip(to_inside.iter().zip(&to_outside)).map(|(&sel, (&di, &dout))| (1.0 - ((if sel { dout } else { di }) - 1.0) / r).clamp(0.0, 1.0)).collect()
 }
 
 /// Smooth: removes specks and rounds corners (box average of radius `round(r)`, edges
@@ -1096,6 +1105,22 @@ mod tests {
         let b = border(&m, 20, 20, 4.0);
         assert_eq!(b[10 * 20 + 10], 0.0);
         assert!(b[10 * 20 + 5] > 0.5 && b[10 * 20 + 4] > 0.5);
+    }
+
+    /// Photoshop 27.11, measured: a 32×32 rectangle at (16,16) in 64×64, Select › Modify ›
+    /// Border 4 px, filled white. Row y = 32 for x = 8..=24, and the diagonal (16,16)..(24,24).
+    #[test]
+    fn border_matches_photoshop() {
+        let (w, h) = (64, 64);
+        let m: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (16..48).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+        let b = border(&m, w, h, 4.0);
+        let v = |x: usize, y: usize| (b[y * w + x] * 255.0).round() as i32;
+        let row: Vec<i32> = (8..=24).map(|x| v(x, 32)).collect();
+        let diag: Vec<i32> = (16..=24).map(|d| v(d, d)).collect();
+        let near = |got: &[i32], want: &[i32]| got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1);
+        let want_row = [0, 0, 0, 0, 63, 127, 191, 255, 255, 191, 127, 63, 0, 0, 0, 0, 0];
+        assert!(near(&row, &want_row), "{row:?}");
+        assert!(near(&diag, &[255, 191, 127, 63, 0, 0, 0, 0, 0]), "{diag:?}");
     }
 
     #[test]
