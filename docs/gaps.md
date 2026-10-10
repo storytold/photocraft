@@ -150,7 +150,7 @@ what an agent can't finish alone.
 - **Missing:** 46 of 149 preferences do nothing (scorecard prefs audit); panel groups can't
   float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); Color panel lacks wheel and
   slider modes (UI-217-17, #2569); UI scale presets (UI-217-9, #2492); more themes (UI-217-11,
-  #2661); shortcut glyphs per platform (UI-217-19); Stamp Visible (UI-217-22); layer clipboard
+  #2661); Stamp Visible (UI-217-22); layer clipboard
   (UI-217-23, #2670); tool-specific context menus beyond brushes, selections and Pen
   ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar
   panels.

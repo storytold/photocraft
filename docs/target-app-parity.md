@@ -34,7 +34,7 @@ ready for real work 25–35%) was closer; ~700 merged PRs since then moved both 
   `Locales/` language packs, `Default Keyboard Shortcuts.kys` (67 toolbox tools, 107 menu commands
   with default shortcuts), `Required/` plug-ins (85 filter entries, 12 format plug-ins), presets,
   and strings in the main binary (81 "… Tool" titles; HDR/EDR, Metal, Touch Bar, pen features).
-- PhotoCraft's own Photoshop menu tree (`crates/ui-egui/src/menu_catalog.rs`, 627 items) was
+- PhotoCraft's own Photoshop menu tree (`crates/ui-egui/src/menu_catalog.rs`, 628 items) was
   written from Photoshop's menus; it is the denominator of the menu number. Photoshop's binary
   `Default Menus.mnu` was not parsed, so items added in 27.x that the catalog lacks would not show
   (Generative and cloud items are the likely ones).
@@ -45,7 +45,7 @@ ready for real work 25–35%) was closer; ~700 merged PRs since then moved both 
 
 | Component | Weight | Ours / Photoshop | % | Kind |
 |---|---:|---|---:|---|
-| Menu commands | 30% | 627 / 627 catalog items dispatch a live command | 100% | measured (`cargo xtask parity`) |
+| Menu commands | 30% | 628 / 628 catalog items dispatch a live command | 100% | measured (`cargo xtask parity`) |
 | Toolbox tools | 15% | 53 / 68 (Photoshop's 67 `.kys` tools plus Remove, Triangle, Curvature Pen; minus legacy Rounded Rectangle and Targeted Adjustment) | 78% | measured (`Tool` enum in `ui-egui/src/state.rs`, `TOOL_SECTIONS` in `panels.rs`) |
 | Panels | 10% | 30 / 35 Window-menu panels | 86% | measured (`view_cmds.rs`, panel modules) |
 | Filters and adjustments | 10% | every Filter and Image › Adjustments item live; Filter Gallery 47 looks | 100% | measured (menu catalog) |

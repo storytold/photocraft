@@ -131,7 +131,8 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Straighten button and ⌘-drag line | done | TOOL-214-21 |
 | Overlays (thirds, grid, diagonal, triangle, golden ratio/spiral), O / ⇧O | done | TOOL-214-20 |
 | Crop shield, Show Cropped Area (H) | done | TOOL-214-22 |
-| W × H × Resolution with units, saved presets | partial | TOOL-214-9, #2443 |
+| W × H × Resolution with units, built-in size presets, Front Image | done | TOOL-214-9 (`crop_size.rs`) |
+| Saved custom crop presets | missing | TOOL-214-9 |
 | Content-Aware crop fill, Delete Cropped Pixels off | partial | |
 
 ## Snapping, guides, rulers, precision
@@ -174,7 +175,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | PhotoCraft | ~199 shortcut assignments, 113 distinct modifier/F-key combos, 20 tool letters, 3 temporary-tool bindings | measured (source) |
 | Shortcut audit | 214 → 0 failures (2026-10-07) | measured then; not re-run here |
 | `.kys` import | done (`engine/src/kys.rs`) | |
-| Shortcut glyphs per platform | missing (UI-217-19) | |
+| Shortcut glyphs per platform | done (UI-217-19) | |
 
 ## Panels and workspace
 

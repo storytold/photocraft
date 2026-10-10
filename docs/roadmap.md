@@ -8,7 +8,7 @@ dimension and area) and the ranked work list in [`gaps.md`](gaps.md); the one-pa
 [`ROADMAP.md`](../ROADMAP.md). Measured numbers: [`scorecard.md`](scorecard.md)
 (`cargo xtask scorecard`: performance budgets, corpus floors, per-area checklists, dead
 preferences) and [`parity-checklist.md`](parity-checklist.md) (`cargo xtask parity`: menu wiring,
-627/627, which says nothing about behaviour).
+628/628, which says nothing about behaviour).
 
 Status legend: ✅ done · 🟡 in progress · ⬜ not started. Hours are Opus 5.5 agent wall-clock hours
 for one agent working sequentially (calibration in

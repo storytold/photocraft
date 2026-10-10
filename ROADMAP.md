@@ -19,7 +19,7 @@ About 80% of the work parallelizes.
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **~76%** | partly measured: menus 627/627, tools 53/68, panels 30/35, formats 13+4 of 31 |
+| **Feature breadth** | **~76%** | partly measured: menus 628/628, tools 53/68, panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
 | Remaining to **beta** | **~1,100–1,800 h** | estimated |
 | Remaining to **full parity** | **~2,300–4,100 h** | estimated; AI and plug-ins need owner decisions |
