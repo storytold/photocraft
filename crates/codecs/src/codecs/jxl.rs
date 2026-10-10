@@ -89,7 +89,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     let l = layout(d.layout);
     let s = sample(d.sample, d.float, d.bits_per_sample);
     let mut img = if s == SampleType::F16 {
-        let floats: Vec<f32> = d.data.chunks_exact(4).map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let floats: Vec<f32> = d.data.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect();
         Image::from_normalized(d.width, d.height, l, s, &floats)?
     } else {
         Image::from_raw(d.width, d.height, l, s, d.data)?
