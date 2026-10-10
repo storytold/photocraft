@@ -2812,3 +2812,18 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+
+# Searchable New Document formats.
+	Popular	Populer
+	Social Media	Media sosial
+	Search formats	Cari format
+	Name, size or aspect ratio	Nama, ukuran, atau rasio
+	No matching formats.	Tidak ada format yang cocok.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Postingan Instagram, 3:4
+	Instagram post, 4:5	Postingan Instagram, 4:5
+	Square post	Postingan persegi
+	Landscape post	Postingan horizontal
+	YouTube thumbnail, 4K	Thumbnail YouTube, 4K
+	Shorts thumbnail, 4K	Thumbnail Shorts, 4K
+	Video thumbnail, HD	Thumbnail video, HD

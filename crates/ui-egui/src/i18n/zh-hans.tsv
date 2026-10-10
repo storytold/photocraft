@@ -2414,3 +2414,18 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+
+# Searchable New Document formats.
+	Popular	热门
+	Social Media	社交媒体
+	Search formats	搜索格式
+	Name, size or aspect ratio	名称、尺寸或纵横比
+	No matching formats.	没有匹配的格式。
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Instagram 帖子, 3:4
+	Instagram post, 4:5	Instagram 帖子, 4:5
+	Square post	方形帖子
+	Landscape post	横版帖子
+	YouTube thumbnail, 4K	YouTube 缩略图，4K
+	Shorts thumbnail, 4K	Shorts 缩略图，4K
+	Video thumbnail, HD	视频缩略图，HD

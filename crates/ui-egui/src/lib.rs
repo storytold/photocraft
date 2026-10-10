@@ -102,6 +102,7 @@ pub mod move_lock;
 pub mod move_mods;
 pub mod move_ui;
 pub mod native_menu;
+mod new_doc_catalog;
 pub mod new_doc_ui;
 pub mod notices;
 mod numeric_expression;

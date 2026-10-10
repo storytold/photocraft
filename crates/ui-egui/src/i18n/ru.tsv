@@ -2690,3 +2690,18 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+
+# Searchable New Document formats.
+	Popular	Популярные
+	Social Media	Социальные сети
+	Search formats	Поиск форматов
+	Name, size or aspect ratio	Название, размер или пропорции
+	No matching formats.	Подходящие форматы не найдены.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Пост Instagram, 3:4
+	Instagram post, 4:5	Пост Instagram, 4:5
+	Square post	Квадратный пост
+	Landscape post	Горизонтальный пост
+	YouTube thumbnail, 4K	Обложка YouTube, 4K
+	Shorts thumbnail, 4K	Обложка Shorts, 4K
+	Video thumbnail, HD	Обложка видео, HD

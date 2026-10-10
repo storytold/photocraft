@@ -2406,3 +2406,18 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+
+# Searchable New Document formats.
+	Popular	Oblíbené
+	Social Media	Sociální sítě
+	Search formats	Hledat formáty
+	Name, size or aspect ratio	Název, velikost nebo poměr stran
+	No matching formats.	Žádné odpovídající formáty.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Příspěvek Instagram, 3:4
+	Instagram post, 4:5	Příspěvek Instagram, 4:5
+	Square post	Čtvercový příspěvek
+	Landscape post	Příspěvek na šířku
+	YouTube thumbnail, 4K	Náhled YouTube, 4K
+	Shorts thumbnail, 4K	Náhled Shorts, 4K
+	Video thumbnail, HD	Náhled videa, HD

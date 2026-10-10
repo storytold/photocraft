@@ -2984,3 +2984,18 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+
+# Searchable New Document formats.
+	Popular	인기
+	Social Media	소셜 미디어
+	Search formats	형식 검색
+	Name, size or aspect ratio	이름, 크기 또는 종횡비
+	No matching formats.	일치하는 형식이 없습니다.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Instagram 게시물, 3:4
+	Instagram post, 4:5	Instagram 게시물, 4:5
+	Square post	정사각형 게시물
+	Landscape post	가로 게시물
+	YouTube thumbnail, 4K	YouTube 썸네일, 4K
+	Shorts thumbnail, 4K	Shorts 썸네일, 4K
+	Video thumbnail, HD	동영상 썸네일, HD

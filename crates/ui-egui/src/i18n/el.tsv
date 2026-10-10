@@ -3514,3 +3514,18 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+
+# Searchable New Document formats.
+	Popular	Δημοφιλή
+	Social Media	Κοινωνικά δίκτυα
+	Search formats	Αναζήτηση μορφών
+	Name, size or aspect ratio	Όνομα, μέγεθος ή αναλογία
+	No matching formats.	Δεν βρέθηκαν μορφές.
+	Stories / Reels / Shorts	Stories / Reels / Shorts
+	Instagram post, 3:4	Ανάρτηση Instagram, 3:4
+	Instagram post, 4:5	Ανάρτηση Instagram, 4:5
+	Square post	Τετράγωνη ανάρτηση
+	Landscape post	Οριζόντια ανάρτηση
+	YouTube thumbnail, 4K	Μικρογραφία YouTube, 4K
+	Shorts thumbnail, 4K	Μικρογραφία Shorts, 4K
+	Video thumbnail, HD	Μικρογραφία βίντεο, HD
