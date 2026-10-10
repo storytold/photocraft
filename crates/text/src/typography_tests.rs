@@ -176,3 +176,63 @@ fn kashida_leaves_marks_with_their_letters() {
         clusters_tile_the_line(&on, i);
     }
 }
+
+fn decorated(text: &str, family: &str, from: usize) -> TextLayer {
+    let plain = CharStyle { font_family: family.into(), size_pt: 20.0, ..Default::default() };
+    let lined = CharStyle { underline: true, strikethrough: true, ..plain.clone() };
+    TextLayer { text: text.into(), runs: vec![TextRun { len: from, style: plain }, TextRun { len: text.len() - from, style: lined }], ..Default::default() }
+}
+
+/// The underline and the strikethrough of a layout (the only decorations of `decorated`).
+fn decorations_span(l: &TextLayout) -> Vec<(f32, f32)> {
+    assert_eq!(l.decorations.len(), 2, "{:?}", l.decorations);
+    l.decorations.iter().map(|d| (d.x0, d.x1)).collect()
+}
+
+fn box_layer(mut t: TextLayer, width: f32, para: ParagraphStyle) -> TextLayer {
+    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: para }];
+    t.shape = TextShape::Box { x: BOX_X, y: 0.0, width, height: 2000.0 };
+    t
+}
+
+#[test]
+fn justify_all_stretches_underlines_and_strikethroughs_with_the_word_gaps() {
+    let mut e = TextEngine::new();
+    let all = ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() };
+    // The whole line is lined; so is only its tail "bb cc", which starts where its cluster starts.
+    let l = e.layout(&box_layer(decorated("aa bb cc", "Inter", 0), 400.0, all.clone()), 72.0);
+    for (x0, x1) in decorations_span(&l) {
+        assert!((x0 - BOX_X).abs() < 0.05 && (x1 - (BOX_X + 400.0)).abs() < 0.5, "full line: {x0}..{x1}");
+    }
+    let l = e.layout(&box_layer(decorated("aa bb cc", "Inter", 3), 400.0, all), 72.0);
+    let from = l.clusters.iter().find(|c| c.range.start == 3).expect("the b cluster").x;
+    for (x0, x1) in decorations_span(&l) {
+        assert!((x0 - from).abs() < 0.05, "starts at the first lined letter: {x0} vs {from}");
+        assert!((x1 - (BOX_X + 400.0)).abs() < 0.5, "ends at the line's ink: {x1}");
+    }
+}
+
+#[test]
+fn justify_all_letter_spacing_carries_the_underline_to_the_last_letter() {
+    let mut e = TextEngine::new();
+    let all = ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() };
+    let l = e.layout(&box_layer(decorated("abc", "Inter", 0), 400.0, all), 72.0);
+    let last = l.clusters.iter().find(|c| c.range.start == 2).expect("the c cluster");
+    for (x0, x1) in decorations_span(&l) {
+        assert!((x0 - BOX_X).abs() < 0.05, "{x0}");
+        assert!((x1 - (last.x + last.advance)).abs() < 0.05 && (x1 - (BOX_X + 400.0)).abs() < 0.5, "{x1} vs {}", last.x + last.advance);
+    }
+}
+
+#[test]
+fn kashida_lines_keep_underlines_over_the_ink() {
+    let mut e = TextEngine::with_system_fonts();
+    let Some(family) = pick_font(&mut e, &ARABIC_FONTS) else { return };
+    let l = e.layout(&box_layer(decorated(PARAGRAPH, &family, 0), 250.0, justified(true)), 72.0);
+    assert!(l.lines.len() > 2);
+    for d in l.decorations.iter().take(l.decorations.len().saturating_sub(2)) {
+        let line = l.lines.iter().find(|ln| ln.baseline > d.y0 - 30.0 && ln.baseline < d.y1 + 30.0).expect("its line");
+        assert!(d.x0 >= line.x0 - 0.05 && d.x1 <= line.x1 + 0.05, "{d:?} inside {line:?}");
+        assert!((d.x0 - line.x0).abs() < 0.1 && (d.x1 - line.x1).abs() < 0.1, "{d:?} spans {line:?}");
+    }
+}

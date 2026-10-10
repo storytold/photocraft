@@ -874,6 +874,7 @@ impl Layouter {
                 let lr = line.text_range();
                 let g0 = out.glyphs.len();
                 let c0 = out.clusters.len();
+                let d0 = out.decorations.len();
                 let mut vinfo: Vec<VGlyph> = Vec::new();
                 let mut extra = 0.0f32; // horizontal-scale growth and kerning along the line
                 let mut seen_runs: Vec<usize> = Vec::new();
@@ -1006,7 +1007,9 @@ impl Layouter {
                         };
                         let joins = self.plan_joins(fonts, &cx, &line, &kashida_cands);
                         let ap = kashida_justify::Apply { text, rtl, baseline, spread_all: ps.align == TextAlign::JustifyAll && last_line };
-                        let (added, shift) = kashida_justify::justify_line(&mut out.clusters[c0..], &mut out.glyphs, g0, &joins, slack, &ap);
+                        let mut parts =
+                            JustifyLine { clusters: &mut out.clusters[c0..], glyphs: &mut out.glyphs, g0, decorations: &mut out.decorations[d0..], vertical };
+                        let (added, shift) = kashida_justify::justify_line(&mut parts, &joins, slack, &ap);
                         extra += added;
                         line_shift = shift;
                     }
@@ -1014,7 +1017,9 @@ impl Layouter {
                 if justify_all {
                     let slack = avail.unwrap_or(0.0) - (adv + extra);
                     if slack > 0.0 {
-                        let (added, shift) = justify_all_line(&mut out.clusters[c0..], &mut out.glyphs[g0..], text, slack, rtl);
+                        let mut parts =
+                            JustifyLine { clusters: &mut out.clusters[c0..], glyphs: &mut out.glyphs, g0, decorations: &mut out.decorations[d0..], vertical };
+                        let (added, shift) = justify_all_line(&mut parts, text, slack, rtl);
                         extra += added;
                         line_shift = shift;
                     }
@@ -1356,11 +1361,36 @@ fn word_gap_indices(clusters: &[ClusterInfo], text: &str) -> Vec<usize> {
     clusters.iter().enumerate().filter(|(_, c)| blank(c) && c.x > lo && c.x < hi).map(|(i, _)| i).collect()
 }
 
+/// The placed parts of one line that justification moves. `clusters` and `decorations` start at
+/// the line's first entry; the line's glyphs start at `g0` in `glyphs` (kashida appends tatweel
+/// copies to it).
+struct JustifyLine<'a> {
+    clusters: &'a mut [ClusterInfo],
+    glyphs: &'a mut Vec<PlacedGlyph>,
+    g0: usize,
+    decorations: &'a mut [DecorationRect],
+    /// Vertical type: decorations run along `y`.
+    vertical: bool,
+}
+
+/// Moves the ends of the line's underlines and strikethroughs along the line: `by(x, is_end)` is
+/// how far the point at `x` moves, with the same "width added before this x" rule as the clusters.
+fn shift_decorations(decorations: &mut [DecorationRect], vertical: bool, by: impl Fn(f32, bool) -> f32) {
+    for d in decorations {
+        let (start, end) = if vertical { (&mut d.y0, &mut d.y1) } else { (&mut d.x0, &mut d.x1) };
+        *start += by(*start, false);
+        *end += by(*end, true);
+    }
+}
+
 /// Spreads the slack of a "Justify all" last line over its word gaps (Photoshop's default letter
 /// spacing is 0%). A line without gaps is letter-spaced instead, except cursive text, which
-/// can't be: it moves whole to its start edge. `clusters` and `glyphs` are the line's, in visual
-/// order. Returns (width added to the line, shift of the whole line).
-fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], text: &str, slack: f32, rtl: bool) -> (f32, f32) {
+/// can't be: it moves whole to its start edge. The line's underlines and strikethroughs follow
+/// its clusters. Returns (width added to the line, shift of the whole line).
+fn justify_all_line(line: &mut JustifyLine<'_>, text: &str, slack: f32, rtl: bool) -> (f32, f32) {
+    let JustifyLine { clusters, glyphs, g0, decorations, vertical } = line;
+    let glyphs = glyphs.get_mut(*g0..).unwrap_or_default();
+    let vertical = *vertical;
     let gaps = word_gap_indices(clusters, text);
     if !gaps.is_empty() {
         let step = slack / gaps.len() as f32;
@@ -1375,6 +1405,7 @@ fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], te
         for g in glyphs.iter_mut() {
             g.x += step * before(g.x);
         }
+        shift_decorations(decorations, vertical, |x, _| step * before(x));
         return (slack, 0.0);
     }
     let cursive = clusters.iter().any(|c| text.get(c.range.clone()).is_some_and(|s| s.chars().any(crate::segment::is_cursive_letter)));
@@ -1388,6 +1419,7 @@ fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], te
         for g in glyphs.iter_mut() {
             g.x += slack;
         }
+        shift_decorations(decorations, vertical, |_, _| slack);
         return (0.0, slack);
     }
     let n = clusters.len();
@@ -1403,6 +1435,11 @@ fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], te
         let i = starts.iter().rposition(|&s| s <= g.x + 1e-3).unwrap_or(0);
         g.x += step * i as f32;
     }
+    // A start moves with the cluster it opens, an end with the last cluster that begins before it.
+    shift_decorations(decorations, vertical, |x, is_end| {
+        let at = if is_end { starts.iter().rposition(|&s| s < x - 1e-3) } else { starts.iter().rposition(|&s| s <= x + 1e-3) };
+        step * at.unwrap_or(0) as f32
+    });
     (slack, 0.0)
 }
 

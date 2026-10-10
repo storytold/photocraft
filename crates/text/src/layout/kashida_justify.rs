@@ -12,8 +12,12 @@
 //!    and its metrics come from the probe, never from the cmap, because a font may substitute a
 //!    contextual tatweel. Words with no accepted join keep word-gap justification.
 //! 3. **Lengths and rendering** ([`justify_line`]): the slack is split evenly over the accepted
-//!    joins, each capped at 0.5 em; the rest goes to the word gaps. Copies of the probe's tatweel
-//!    fill each gap (the last overlapping the one before to hit the exact width). The added width
+//!    joins, each capped at 0.5 em and at [`MAX_COPIES`] tatweels; the rest goes to the word gaps.
+//!    A join whose share would be under one tatweel advance is dropped (widest tatweel first) and
+//!    its word keeps word-gap justification, because a copy narrower than the gap would start left
+//!    of it, over the next letter. Copies of the probe's tatweel fill each gap (the last
+//!    overlapping the one before to hit the exact width). Underlines and strikethroughs grow with
+//!    the gaps. The added width
 //!    belongs to the logically preceding letter's cluster, so carets, hit tests and selections
 //!    stay consistent. The text itself never changes.
 //!
@@ -31,7 +35,7 @@ use parley::{FontData, Line, StyleProperty};
 use photocraft_doc::text::CharStyle;
 use skrifa::MetadataProvider;
 
-use super::{ClusterInfo, Layouter, PlacedGlyph, RunBrush, SmallCapsMode, justify_all_line, style_props, word_gap_indices};
+use super::{ClusterInfo, JustifyLine, Layouter, PlacedGlyph, RunBrush, SmallCapsMode, justify_all_line, shift_decorations, style_props, word_gap_indices};
 use crate::fonts::FontDb;
 
 /// Kashida needs `raqim-kashida`, which the web build leaves out.
@@ -325,55 +329,72 @@ pub(super) struct Apply<'a> {
     pub spread_all: bool,
 }
 
+/// Keeps the joins that can each take an even share of `slack` as at least one whole tatweel: a
+/// narrower gap would put the copy over the next letter. Joins that cannot (their cap is under
+/// one tatweel) are dropped first, then the widest tatweels until the rest fit; their words keep
+/// word-gap justification.
+fn viable(mut placed: Vec<Placed>, slack: f32) -> Vec<Placed> {
+    placed.retain(|p| p.cap >= p.tatweel.advance);
+    while let Some((i, widest)) = placed.iter().enumerate().map(|(i, p)| (i, p.tatweel.advance)).max_by(|a, b| a.1.total_cmp(&b.1)) {
+        if slack / placed.len() as f32 >= widest {
+            break;
+        }
+        placed.remove(i);
+    }
+    placed
+}
+
 /// Spreads `slack` px over a justified line: kashida at the accepted `joins` first, the word gaps
-/// second. `clusters` and `glyphs[g0..]` are the line's; the tatweel copies are appended to
-/// `glyphs`. The line is anchored at its left edge. Returns (width added to the line, shift of
-/// the whole line).
-pub(super) fn justify_line(clusters: &mut [ClusterInfo], glyphs: &mut Vec<PlacedGlyph>, g0: usize, joins: &[Join], slack: f32, ap: &Apply<'_>) -> (f32, f32) {
-    let mut placed: Vec<Placed> = joins.iter().filter_map(|j| glyphs.get(g0..).and_then(|g| place(j, clusters, g))).collect();
+/// second. `line` holds the line's clusters, glyphs and decorations (line space); the tatweel
+/// copies are appended to its glyphs and its underlines grow with it. The line is anchored at its
+/// left edge. Returns (width added to the line, shift of the whole line).
+pub(super) fn justify_line(line: &mut JustifyLine<'_>, joins: &[Join], slack: f32, ap: &Apply<'_>) -> (f32, f32) {
+    let placed: Vec<Placed> = joins.iter().filter_map(|j| line.glyphs.get(line.g0..).and_then(|g| place(j, line.clusters, g))).collect();
+    let mut placed = viable(placed, slack);
     placed.sort_by(|a, b| a.gap_x.total_cmp(&b.gap_x));
     let mut added = 0.0;
     if !placed.is_empty() {
         let share = slack / placed.len() as f32;
         for p in &mut placed {
-            p.width = share.min(p.cap).max(0.0);
+            p.width = share.min(p.cap).min(MAX_COPIES as f32 * p.tatweel.advance);
         }
-        added = widen(clusters, glyphs, g0, &placed, ap.baseline);
+        added = widen(line, &placed, ap.baseline);
     }
     let leftover = slack - added;
     if leftover <= EPS {
         return (added, 0.0);
     }
-    let rest = glyphs.get_mut(g0..).unwrap_or_default();
-    if ap.spread_all || !word_gap_indices(clusters, ap.text).is_empty() {
-        let (a, shift) = justify_all_line(clusters, rest, ap.text, leftover, ap.rtl);
+    if ap.spread_all || !word_gap_indices(line.clusters, ap.text).is_empty() {
+        let (a, shift) = justify_all_line(line, ap.text, leftover, ap.rtl);
         return (added + a, shift);
     }
     if ap.rtl {
         // No gap to take the rest: the line stays short on its start (right) side.
-        for c in clusters.iter_mut() {
+        for c in line.clusters.iter_mut() {
             c.x += leftover;
         }
-        for g in rest {
+        for g in line.glyphs.iter_mut().skip(line.g0) {
             g.x += leftover;
         }
+        shift_decorations(line.decorations, line.vertical, |_, _| leftover);
         return (added, leftover);
     }
     (added, 0.0)
 }
 
 /// Opens the gaps and fills them with tatweel copies. Returns the width added.
-fn widen(clusters: &mut [ClusterInfo], glyphs: &mut Vec<PlacedGlyph>, g0: usize, placed: &[Placed], baseline: f32) -> f32 {
-    for (ci, c) in clusters.iter_mut().enumerate() {
-        let shift: f32 = placed.iter().filter(|p| p.gap_x < c.x - EPS).map(|p| p.width).sum();
-        c.x += shift;
+fn widen(line: &mut JustifyLine<'_>, placed: &[Placed], baseline: f32) -> f32 {
+    let opened_before = |x: f32| placed.iter().filter(|p| p.gap_x < x - EPS).map(|p| p.width).sum::<f32>();
+    for (ci, c) in line.clusters.iter_mut().enumerate() {
+        c.x += opened_before(c.x);
         if let Some(p) = placed.iter().find(|p| p.cluster == ci) {
             c.advance += p.width;
         }
     }
-    for g in glyphs.iter_mut().skip(g0) {
+    for g in line.glyphs.iter_mut().skip(line.g0) {
         g.x += placed.iter().filter(|p| p.glyph_from <= g.x).map(|p| p.width).sum::<f32>();
     }
+    shift_decorations(line.decorations, line.vertical, |x, _| opened_before(x));
     let mut before = 0.0;
     for p in placed {
         let start = p.gap_x + before;
@@ -384,7 +405,7 @@ fn widen(clusters: &mut [ClusterInfo], glyphs: &mut Vec<PlacedGlyph>, g0: usize,
         let copies = ((p.width / p.tatweel.advance).ceil() as usize).clamp(1, MAX_COPIES);
         for i in 0..copies {
             let at = (i as f32 * p.tatweel.advance).min(p.width - p.tatweel.advance);
-            glyphs.push(PlacedGlyph {
+            line.glyphs.push(PlacedGlyph {
                 face: p.face,
                 id: p.tatweel.id,
                 x: start + at + p.tatweel.x,
@@ -464,6 +485,71 @@ mod tests {
         // Cached: the same answer again.
         assert_eq!(probe(&mut e, amiri, "كتاب", 2), None);
         assert_eq!(probe(&mut e, amiri, "سلام", 1), Some(t));
+    }
+
+    use super::super::{DecorationRect, GlyphOrient};
+
+    const WORD: &str = "سلمم";
+
+    /// WORD laid out right-to-left, 10 px per letter: visually م م ل س, the first letter س at 30.
+    fn rtl_word() -> (Vec<ClusterInfo>, Vec<PlacedGlyph>) {
+        let letters = [(6..8, 0.0), (4..6, 10.0), (2..4, 20.0), (0..2, 30.0)];
+        let clusters = letters.iter().map(|(r, x)| ClusterInfo { range: r.clone(), x: *x, advance: 10.0, line: 0, rtl: true }).collect();
+        let glyphs = letters.iter().map(|(_, x)| PlacedGlyph { face: 0, id: 1, x: *x, y: 0.0, style: 0, orient: GlyphOrient::Horizontal }).collect();
+        (clusters, glyphs)
+    }
+
+    fn join(offset: usize, advance: f32, cap: f32) -> Join {
+        Join { offset, tatweel: Tatweel { id: 99, advance, x: 0.0, y: 0.0 }, cap }
+    }
+
+    /// Justifies `rtl_word` with `joins`; returns the result, the tatweel copies and the line.
+    fn run(joins: &[Join], slack: f32) -> ((f32, f32), Vec<PlacedGlyph>, Vec<ClusterInfo>, DecorationRect) {
+        let (mut clusters, mut glyphs) = rtl_word();
+        let mut under = [DecorationRect { x0: 0.0, y0: 0.0, x1: 40.0, y1: 1.0, style: 0 }];
+        let ap = Apply { text: WORD, rtl: true, baseline: 0.0, spread_all: false };
+        let mut line = JustifyLine { clusters: &mut clusters, glyphs: &mut glyphs, g0: 0, decorations: &mut under, vertical: false };
+        let out = justify_line(&mut line, joins, slack, &ap);
+        let copies = glyphs.iter().filter(|g| g.id == 99).cloned().collect();
+        (out, copies, clusters, under[0])
+    }
+
+    #[test]
+    fn a_share_under_one_tatweel_drops_the_widest_join_to_the_rest() {
+        // Joins after the seen (offset 2) and after the second meem (offset 6); 10 px for two
+        // joins is 5 each, under the 12 px tatweel of the second: it is dropped, the first (4 px)
+        // takes all 10.
+        let ((added, shift), copies, clusters, under) = run(&[join(2, 4.0, 20.0), join(6, 12.0, 20.0)], 10.0);
+        assert_eq!((added, shift), (10.0, 0.0));
+        assert_eq!(copies.len(), 3, "10 px of 4 px tatweels");
+        for t in &copies {
+            assert!(t.x >= 30.0 - 1e-3 && t.x + 4.0 <= 40.0 + 1e-3, "inside the gap 30..40: {}", t.x);
+        }
+        let span = |start: usize| clusters.iter().find(|c| c.range.start == start).map(|c| (c.x, c.advance));
+        assert_eq!((span(0), span(4)), (Some((30.0, 20.0)), Some((10.0, 10.0))), "the first join opened, the dropped one did not");
+        assert_eq!((under.x0, under.x1), (0.0, 50.0), "the underline grew with the gap");
+    }
+
+    #[test]
+    fn no_join_is_kept_when_none_fits_a_tatweel() {
+        let ((added, shift), copies, clusters, under) = run(&[join(2, 12.0, 20.0)], 10.0);
+        assert!(copies.is_empty(), "{copies:?}");
+        // No word gap either: the right-to-left line stays short on its start side.
+        assert_eq!((added, shift), (0.0, 10.0));
+        assert_eq!(clusters.iter().map(|c| c.x).collect::<Vec<_>>(), [10.0, 20.0, 30.0, 40.0]);
+        assert_eq!((under.x0, under.x1), (10.0, 50.0));
+        // A cap under one tatweel can never be filled.
+        assert!(run(&[join(2, 4.0, 3.0)], 10.0).1.is_empty());
+    }
+
+    #[test]
+    fn a_kashida_never_grows_past_the_copy_limit() {
+        let ((added, shift), copies, ..) = run(&[join(2, 1.0, 1000.0)], 500.0);
+        assert_eq!(copies.len(), MAX_COPIES);
+        assert_eq!((added, shift), (MAX_COPIES as f32, 500.0 - MAX_COPIES as f32));
+        let mut xs: Vec<f32> = copies.iter().map(|t| t.x).collect();
+        xs.sort_by(f32::total_cmp);
+        assert!(xs.windows(2).all(|w| (w[1] - w[0] - 1.0).abs() < 1e-3), "the copies tile without overlap");
     }
 
     #[test]
