@@ -846,8 +846,11 @@ impl<'a> Planner<'a> {
                 p.params[0] = [angle, scale, if *reverse { 1.0 } else { 0.0 }, style_index(*style)];
                 let c = frame;
                 p.params[1] = [c.x0 as f32, c.y0 as f32, c.width() as f32, c.height() as f32];
-                // p2.xy: centre offset; p2.w: dither (the shared position hash, see the shader).
-                p.params[2] = [offset.0, offset.1, 0.0, if *dither { 1.0 } else { 0.0 }];
+                // p2.xy: centre offset; p2.z: the depth's levels a dithered pixel is rounded to
+                // (0: float, compose::gradient_fill::render_quantized); p2.w: dither (the shared
+                // position hash, see the shader).
+                let quantum = photocraft_compose::adjustment_quantum(self.cx.depth).unwrap_or(0.0);
+                p.params[2] = [offset.0, offset.1, quantum, if *dither { 1.0 } else { 0.0 }];
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
                 let mut rows = vec![[0.0f32; 4096]; 4];
                 for k in 0..4096 {
