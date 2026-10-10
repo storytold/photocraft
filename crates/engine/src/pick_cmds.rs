@@ -109,17 +109,90 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": target.0 }))
 }
 
+/// Layers whose content touches document rect `r`, top to bottom: visible, not fully locked, not
+/// the locked Background (as Select › All Layers). A layer on an artboard counts only where the
+/// board shows it. With `group`, each counts as its outermost group (deduplicated).
+pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
+    let mut out = Vec::new();
+    if r.is_empty() {
+        return out;
+    }
+    let canvas = doc.bounds();
+    for (path, _, l) in doc.walk().iter().rev() {
+        if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_))
+            || crate::layer_multi_cmds::is_locked_background(l)
+            || doc.effective_locks(l.id).all
+            || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
+        {
+            continue;
+        }
+        let mut b = photocraft_compose::layer_bounds(l, canvas);
+        if let Some(board) = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard()) {
+            b = b.intersect(&board.rect);
+        }
+        if b.is_empty() || b.intersect(&r).is_empty() {
+            continue;
+        }
+        let id = if group { top_group(doc, l.id) } else { l.id };
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// `layer.selectInRect`: the Move tool's marquee with Auto-Select, dragged from an empty spot.
+fn select_in_rect(s: &mut Session, p: &Value) -> Result<Value> {
+    let num = |k: &str| {
+        p.get(k)
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| EngineError::BadParams { cmd: "layer.selectInRect".into(), msg: format!("missing or invalid `{k}`") })
+    };
+    let (x, y, w, h) = (num("x")?, num("y")?, num("width")?, num("height")?);
+    let px = |v: f64| v.clamp(f64::from(i32::MIN / 2), f64::from(i32::MAX / 2)) as i32;
+    // A rect dragged up or left has a negative size.
+    let r = Rect::new(px(x.min(x + w).floor()), px(y.min(y + h).floor()), px(x.max(x + w).ceil()), px(y.max(y + h).ceil()));
+    let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let group = p.get("target").and_then(Value::as_str) == Some("group");
+    let hits = layers_in_rect(&doc, r, group);
+    let add = match p.get("mode").and_then(Value::as_str).unwrap_or("replace") {
+        "replace" => false,
+        "add" => true,
+        other => return Err(EngineError::BadParams { cmd: "layer.selectInRect".into(), msg: format!("unknown mode `{other}`") }),
+    };
+    // Nothing touched leaves the layer selection as it is.
+    if !hits.is_empty() {
+        let mut ids = if add { s.active().map(|st| st.selected_layers()).unwrap_or_default() } else { Vec::new() };
+        ids.extend(hits.iter().filter(|id| !ids.contains(id)).copied().collect::<Vec<_>>());
+        crate::layer_multi_cmds::set_selection(s, ids, hits.first().copied(), hits.first().copied())?;
+    }
+    Ok(json!({ "layers": hits.iter().map(|id| id.0).collect::<Vec<_>>() }))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec {
-        id: "layer.pickAt",
-        label: "Auto-Select Layer",
-        menu: &[],
-        shortcut: None,
-        params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return every layer with pixels there, topmost first)} → {layer} | {layers}"##,
-        enabled: has_doc,
-        journal: false,
-        run: pick,
-    }]
+    vec![
+        CommandSpec {
+            id: "layer.selectInRect",
+            label: "Select Layers in Marquee",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (the layers whose content touches the rect, topmost first; none leaves the selection as it is)"##,
+            enabled: has_doc,
+            journal: true,
+            run: select_in_rect,
+        },
+        CommandSpec {
+            id: "layer.pickAt",
+            label: "Auto-Select Layer",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return every layer with pixels there, topmost first)} → {layer} | {layers}"##,
+            enabled: has_doc,
+            journal: false,
+            run: pick,
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -322,6 +395,37 @@ mod tests {
         let Some(x) = gap else { return };
         assert_eq!(layers_at(&doc, x, y), vec![bg], "no type pixels at the gap");
         assert_eq!(s.execute("layer.pickAt", json!({"x": x, "y": y, "select": false})).unwrap()["layer"], t);
+    }
+
+    #[test]
+    fn a_marquee_selects_the_layers_it_touches() {
+        let (mut s, a, b) = two_squares();
+        s.execute("layer.new.layer", json!({"name": "Empty"})).unwrap();
+        let sel = |s: &mut Session, r: [f64; 4], target: &str, mode: &str| {
+            let p = json!({"x": r[0], "y": r[1], "width": r[2], "height": r[3], "target": target, "mode": mode});
+            let hit: Vec<u64> = s.execute("layer.selectInRect", p).unwrap()["layers"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            let mut now: Vec<u64> = s.active().unwrap().selected_layers().iter().map(|l| l.0).collect();
+            now.sort_unstable();
+            (hit, now)
+        };
+        // Touching A's corner only (dragged up and left); never the empty layer or the Background.
+        assert_eq!(sel(&mut s, [-5.0, -5.0, 6.0, 6.0], "layer", "replace"), (vec![a.0], vec![a.0]));
+        assert_eq!(sel(&mut s, [50.0, 50.0, -27.0, -27.0], "layer", "replace"), (vec![b.0], vec![b.0]));
+        // ⇧ adds; a box over nothing leaves the selection alone.
+        assert_eq!(sel(&mut s, [0.0, 0.0, 5.0, 5.0], "layer", "add"), (vec![a.0], vec![a.0, b.0]));
+        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "replace"), (vec![], vec![a.0, b.0]));
+        assert_eq!(sel(&mut s, [-10.0, -10.0, 60.0, 60.0], "layer", "replace"), (vec![b.0, a.0], vec![a.0, b.0]));
+        // Group mode selects the outermost group; a hidden or fully locked layer is skipped.
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        let g = s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+        assert_eq!(sel(&mut s, [0.0, 0.0, 40.0, 40.0], "group", "replace").0, vec![b.0, g]);
+        s.execute("layer.setProps", json!({"layer": b.0, "locks": {"all": true}})).unwrap();
+        s.execute("layer.setProps", json!({"layer": g, "visible": false})).unwrap();
+        assert_eq!(sel(&mut s, [0.0, 0.0, 40.0, 40.0], "layer", "replace").0, Vec::<u64>::new());
+        for bad in [json!({}), json!({"x": 0, "y": 0, "width": f64::NAN, "height": 1}), json!({"x": 0, "y": 0, "width": 1, "height": 1, "mode": "x"})] {
+            assert!(s.execute("layer.selectInRect", bad).is_err());
+        }
+        assert!(s.execute("layer.selectInRect", json!({"x": -1e300, "y": 1e300, "width": 1e308, "height": -1e308})).is_ok());
     }
 
     #[test]

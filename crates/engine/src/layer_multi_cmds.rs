@@ -143,7 +143,7 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"selected": selected(s).iter().map(|l| l.0).collect::<Vec<_>>()}))
 }
 
-fn is_locked_background(l: &Layer) -> bool {
+pub(crate) fn is_locked_background(l: &Layer) -> bool {
     l.name == "Background" && l.locks.transparency && matches!(l.content, LayerContent::Raster(_))
 }
 
