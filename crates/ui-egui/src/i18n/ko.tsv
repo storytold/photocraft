@@ -3389,3 +3389,77 @@ curves	Smooth	매끄럽게
 	Replace	대치
 	{name} was changed by another app after it was opened or saved here.	{name}이(가) 여기서 열거나 저장한 뒤 다른 앱에서 변경되었습니다.
 	Replace it with this document, or cancel and use File › Save As to keep both.	이 문서로 대치하거나, 취소하고 파일 › 다른 이름으로 저장을 사용해 둘 다 보관하세요.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	아트보드 개요 · 모든 형식
+	Artboard Overview	아트보드 개요
+	Overview · all formats	모든 형식 보기
+	Responsive layout role	반응형 레이아웃 역할
+	artboards	아트보드
+	This document has no artboards yet.	이 문서에는 아직 아트보드가 없습니다.
+	Select on canvas	캔버스에서 선택
+	Reflow	리플로우
+	Responsive variants	반응형 변형
+	Semantic reflow	시맨틱 리플로우
+	Proportional fit	비례 맞춤
+	Semantic reflow · keep type size	시맨틱 리플로우 · 글자 크기 유지
+	Proportional fit · scale all	비례 맞춤 · 모두 크기 조정
+	suggested	추천
+	Set as master	마스터로 설정
+	Switch variant	변형 전환
+	Variant	변형
+	Badge	배지
+	Price	가격
+	Disclaimer	면책 조항
+	Image mark	이미지 마크
+	Size limits in pixels (0 = none)	크기 제한(픽셀, 0 = 제한 없음)
+	Maximum size must be at least the minimum size	최대 크기는 최소 크기 이상이어야 합니다
+	Safe area	안전 영역
+	Insets as a fraction of artboard size	아트보드 크기에 대한 여백 비율
+	Reset to master rule	마스터 규칙으로 재설정
+	Update variants	변형 업데이트
+	Variant name	변형 이름
+	Arrow keys navigate; Enter selects and zooms	화살표 키로 이동하고 Enter로 선택 및 확대
+	Review findings	진단 결과 검토
+	Results are capped; some findings are omitted	결과 수가 제한되어 일부 진단 결과가 생략되었습니다
+	No findings to review	검토할 진단 결과가 없습니다
+	Safe Areas	안전 영역
+	Responsive Template…	반응형 템플릿…
+	Text reflow	텍스트 다시 배치
+	Rewrap	다시 줄 바꿈
+	Rewrap with auto height	자동 높이로 다시 줄 바꿈
+	Rewrap and shrink	다시 줄 바꾸고 축소
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	반응형 경고
+	All findings	모든 진단 결과
+	Outside artboard	아트보드 밖
+	Semantic collision	의미 충돌
+	Safe-area violation	안전 영역 위반
+	Review all findings	모든 진단 결과 검토
+	Filter findings	진단 결과 필터
+	From file	파일에서
+	Manual	수동
+	Suggested	제안
+	Suggested role	제안된 역할
+	Apply role to similar layers	유사한 레이어에 역할 적용
+	Layer name or text	레이어 이름 또는 텍스트
+	Layer name	레이어 이름
+	Text layer	텍스트 레이어
+	Covers most of artboard	아트보드 대부분을 덮음
+	Shape layer	도형 레이어
+	No strong role signal	강한 역할 신호 없음
+	Explicit role	명시적 역할
+	Layer unavailable	레이어를 사용할 수 없음
+	Master layers removed from variant: {count}	변형에서 제거된 마스터 레이어: {count}
+	Overrides dropped because their layers no longer exist: {count}	레이어가 더 이상 없어 제거된 재정의: {count}
+	Previous Artboard Variant	이전 아트보드 변형
+	Next Artboard Variant	다음 아트보드 변형
+	Select {name} ({layer})	{name} 선택 ({layer})
+	Could not select conflict layer	충돌 레이어를 선택할 수 없습니다
+	The conflict layer no longer exists	충돌 레이어가 더 이상 없습니다
+	Layout review: {findings} findings on {boards} artboards.	레이아웃 검사: 아트보드 {boards}개에서 문제 {findings}개를 찾았습니다.
+	Some artboards could not be checked and count as affected.	검사하지 못한 아트보드는 문제가 있는 것으로 처리됩니다.
+	Skip artboards with findings or incomplete checks	문제가 있거나 검사가 완료되지 않은 아트보드 건너뛰기
+	No layout findings on {boards} artboards.	아트보드 {boards}개에서 레이아웃 문제가 발견되지 않았습니다.
+	Some artboard checks were incomplete; they count as affected.	검사가 완료되지 않은 아트보드는 문제가 있는 것으로 처리됩니다.

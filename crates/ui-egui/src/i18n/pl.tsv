@@ -3809,3 +3809,77 @@ curves	Smooth	Wygładź
 	Replace	Zastąp
 	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zastąp go tym dokumentem albo anuluj i użyj Plik › Zapisz jako, aby zachować oba.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Przegląd obszarów roboczych · Wszystkie formaty
+	Artboard Overview	Przegląd obszarów roboczych
+	Overview · all formats	Pokaż wszystkie formaty
+	Responsive layout role	Rola układu responsywnego
+	artboards	obszary robocze
+	This document has no artboards yet.	Ten dokument nie zawiera jeszcze obszarów roboczych.
+	Select on canvas	Wybierz na obszarze roboczym
+	Reflow	Przepływ układu
+	Responsive variants	Warianty responsywne
+	Semantic reflow	Semantyczny przepływ układu
+	Proportional fit	Dopasowanie proporcjonalne
+	Semantic reflow · keep type size	Semantyczny przepływ · zachowaj rozmiar tekstu
+	Proportional fit · scale all	Dopasowanie proporcjonalne · skaluj wszystko
+	suggested	sugerowane
+	Set as master	Ustaw jako główny
+	Switch variant	Przełącz wariant
+	Variant	Wariant
+	Badge	Odznaka
+	Price	Cena
+	Disclaimer	Zastrzeżenie
+	Image mark	Znak graficzny
+	Size limits in pixels (0 = none)	Limity rozmiaru w pikselach (0 = brak)
+	Maximum size must be at least the minimum size	Maksymalny rozmiar musi być co najmniej równy minimalnemu
+	Safe area	Obszar bezpieczny
+	Insets as a fraction of artboard size	Marginesy jako część rozmiaru obszaru roboczego
+	Reset to master rule	Przywróć regułę wzorca
+	Update variants	Aktualizuj warianty
+	Variant name	Nazwa wariantu
+	Arrow keys navigate; Enter selects and zooms	Strzałki nawigują; Enter wybiera i powiększa
+	Review findings	Przejrzyj wyniki
+	Results are capped; some findings are omitted	Liczba wyników jest ograniczona; część pominięto
+	No findings to review	Brak wyników do przejrzenia
+	Safe Areas	Obszary bezpieczne
+	Responsive Template…	Szablon responsywny…
+	Text reflow	Zawijanie tekstu
+	Rewrap	Zawijaj ponownie
+	Rewrap with auto height	Zawijaj z automatyczną wysokością
+	Rewrap and shrink	Zawijaj i zmniejsz
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Ostrzeżenia responsywne
+	All findings	Wszystkie wyniki
+	Outside artboard	Poza obszarem roboczym
+	Semantic collision	Kolizja semantyczna
+	Safe-area violation	Naruszenie bezpiecznego obszaru
+	Review all findings	Przejrzyj wszystkie wyniki
+	Filter findings	Filtruj wyniki
+	From file	Z pliku
+	Manual	Ręcznie
+	Suggested	Sugestia
+	Suggested role	Sugerowana rola
+	Apply role to similar layers	Zastosuj rolę do podobnych warstw
+	Layer name or text	Nazwa warstwy lub tekst
+	Layer name	Nazwa warstwy
+	Text layer	Warstwa tekstowa
+	Covers most of artboard	Pokrywa większość obszaru roboczego
+	Shape layer	Warstwa kształtu
+	No strong role signal	Brak silnego sygnału roli
+	Explicit role	Jawna rola
+	Layer unavailable	Warstwa niedostępna
+	Master layers removed from variant: {count}	Warstwy wzorca usunięte z wariantu: {count}
+	Overrides dropped because their layers no longer exist: {count}	Nadpisania usunięte, ponieważ ich warstwy już nie istnieją: {count}
+	Previous Artboard Variant	Poprzedni wariant obszaru roboczego
+	Next Artboard Variant	Następny wariant obszaru roboczego
+	Select {name} ({layer})	Wybierz {name} ({layer})
+	Could not select conflict layer	Nie można wybrać konfliktowej warstwy
+	The conflict layer no longer exists	Konfliktowa warstwa już nie istnieje
+	Layout review: {findings} findings on {boards} artboards.	Kontrola układu: {findings} uwag na {boards} obszarach roboczych.
+	Some artboards could not be checked and count as affected.	Niektórych obszarów roboczych nie udało się sprawdzić i są uznawane za problematyczne.
+	Skip artboards with findings or incomplete checks	Pomiń obszary z uwagami lub niepełną kontrolą
+	No layout findings on {boards} artboards.	Brak uwag dotyczących układu na {boards} obszarach roboczych.
+	Some artboard checks were incomplete; they count as affected.	Niektóre kontrole obszarów były niepełne i są uznawane za problematyczne.

@@ -1122,6 +1122,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     crate::layer_multi_cmds::set_selection(s, vec![nid], Some(nid), Some(nid))?;
     Ok(json!({"layer": nid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
 
 
 fn semantic_transform_for(role: &str, source: Rect, current_board: Rect, target: Rect, proportional: Affine) -> Affine {
