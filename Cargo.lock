@@ -5574,6 +5574,7 @@ dependencies = [
  "epaint_default_fonts",
  "flate2",
  "log",
+ "memory-stats",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
