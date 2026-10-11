@@ -36,6 +36,12 @@ USAGE:
       when the set holds more than one) with the whole set loaded, so its steps can play other actions
       of the set. An --out folder that is the --in folder is refused, as the results would replace
       the originals; --in-place allows it.
+      (a list, or wrapped in {\"actions\": …}, {\"steps\": …} or a droplet). An --out folder that is the
+      --in folder is refused, as the results would replace the originals; --in-place allows it.
+  photocraft-cli responsive-batch --presets <presets.json> --in <dir> --out <dir> [--format <ext>] [--quality <1-100>]
+      For every layered document and every responsive preset, create a semantic/proportional artboard
+      variant, optionally apply a .responsive.json template, and export that artboard. Config format:
+      {\"presets\":[{\"name\":\"Story\",\"width\":1080,\"height\":1920,\"template\":\"story.responsive.json\"}]}.
   photocraft-cli droplet <file.pcdroplet> <file-or-dir>… [--out <dir>]
       Run a droplet (File › Automate › Create Droplet) on images and folders.
   photocraft-cli commands [--json] [--filter <text>]
@@ -83,6 +89,9 @@ const SUBCOMMANDS: &[Subcommand] = &[
         bare: &["--in-place", "--tiff-layers"],
         run: batch,
     },
+    Subcommand { name: "run", values: &["--new", "--cmd", "--params", "--out", "--format", "--quality"], bare: &["--tiff-layers"], run: run_cmds },
+    Subcommand { name: "batch", values: &["--actions", "--in", "--out", "--format", "--quality"], bare: &["--in-place", "--tiff-layers"], run: batch },
+    Subcommand { name: "responsive-batch", values: &["--presets", "--in", "--out", "--format", "--quality"], bare: &[], run: responsive_batch },
     Subcommand { name: "droplet", values: &["--out"], bare: &[], run: droplet },
     Subcommand { name: "commands", values: &["--filter"], bare: &["--json"], run: |a, out, _| commands(a, out) },
     Subcommand {
@@ -511,6 +520,179 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     if failed > 0 { Err(format!("{failed} file(s) failed")) } else { Ok(()) }
 }
 
+struct ResponsivePreset {
+    name: String,
+    width: u32,
+    height: u32,
+    layout: String,
+    template: Option<Value>,
+}
+
+const MAX_RESPONSIVE_BATCH_CONFIG_BYTES: usize = 1_048_576;
+
+fn responsive_presets(path: &Path) -> Result<Vec<ResponsivePreset>, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if bytes.len() > MAX_RESPONSIVE_BATCH_CONFIG_BYTES {
+        return Err("responsive preset config exceeds the 1 MiB limit".into());
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| format!("responsive preset JSON: {error}"))?;
+    let root = value.as_object().ok_or("responsive preset config must be an object")?;
+    if root.keys().any(|key| key != "presets") {
+        return Err("responsive preset config only accepts the `presets` key".into());
+    }
+    let entries = root.get("presets").and_then(Value::as_array).ok_or("responsive preset config needs a `presets` array")?;
+    if entries.is_empty() || entries.len() > photocraft_doc::responsive::MAX_RESPONSIVE_VARIANTS {
+        return Err("responsive preset count must be between 1 and 64".into());
+    }
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut presets = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let object = entry.as_object().ok_or_else(|| format!("preset {index} must be an object"))?;
+        if object.keys().any(|key| !matches!(key.as_str(), "name" | "width" | "height" | "layout" | "template")) {
+            return Err(format!("preset {index} contains an unknown field"));
+        }
+        let name = object.get("name").and_then(Value::as_str).ok_or_else(|| format!("preset {index} needs a string `name`"))?.trim();
+        if name.is_empty() || name.len() > 128 {
+            return Err(format!("preset {index} name must contain 1..128 UTF-8 bytes"));
+        }
+        let width = object
+            .get("width")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| format!("preset `{name}` width must be an unsigned integer"))?;
+        let height = object
+            .get("height")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| format!("preset `{name}` height must be an unsigned integer"))?;
+        let area = width.checked_mul(height).ok_or_else(|| format!("preset `{name}` dimensions overflow"))?;
+        if width == 0 || height == 0 || width > 300_000 || height > 300_000 || area > 36_000_000 {
+            return Err(format!("preset `{name}` must be positive, at most 300,000 px per side, and no more than 36 megapixels"));
+        }
+        let layout = object.get("layout").and_then(Value::as_str).unwrap_or("semantic");
+        if !matches!(layout, "semantic" | "proportional") {
+            return Err(format!("preset `{name}` layout must be `semantic` or `proportional`"));
+        }
+        let template = match object.get("template") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(template_path)) if !template_path.trim().is_empty() => {
+                let template_path = Path::new(template_path);
+                let template_path = if template_path.is_absolute() { template_path.to_path_buf() } else { base.join(template_path) };
+                let template_bytes = std::fs::read(&template_path).map_err(|error| format!("{}: {error}", template_path.display()))?;
+                if template_bytes.len() > MAX_RESPONSIVE_BATCH_CONFIG_BYTES {
+                    return Err(format!("{} exceeds the 1 MiB template limit", template_path.display()));
+                }
+                Some(serde_json::from_slice(&template_bytes).map_err(|error| format!("{}: invalid template JSON: {error}", template_path.display()))?)
+            }
+            Some(_) => return Err(format!("preset `{name}` template must be a non-empty path string")),
+        };
+        presets.push(ResponsivePreset { name: name.to_owned(), width, height, layout: layout.to_owned(), template });
+    }
+    Ok(presets)
+}
+
+/// Apply a set of named artboard sizes and optional responsive templates to every layered input.
+fn responsive_batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
+    let presets_path = PathBuf::from(a.get("--presets").ok_or("responsive-batch needs --presets <presets.json>")?);
+    let in_dir = PathBuf::from(a.get("--in").ok_or("responsive-batch needs --in <dir>")?);
+    let out_dir = PathBuf::from(a.get("--out").ok_or("responsive-batch needs --out <dir>")?);
+    if same_dir(&in_dir, &out_dir) {
+        return Err("--out cannot be the --in folder for responsive-batch".into());
+    }
+    let presets = responsive_presets(&presets_path)?;
+    let opts = export_opts(a)?;
+    let format = a.get("--format").unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    std::fs::create_dir_all(&out_dir).map_err(|error| format!("{}: {error}", out_dir.display()))?;
+    let mut inputs: Vec<PathBuf> = std::fs::read_dir(&in_dir)
+        .map_err(|error| format!("{}: {error}", in_dir.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| is_input(path))
+        .collect();
+    inputs.sort();
+    if inputs.is_empty() {
+        return Err(format!("{} contains no supported layered documents", in_dir.display()));
+    }
+    let (mut succeeded, mut failed) = (0usize, 0usize);
+    for (index, input) in inputs.iter().enumerate() {
+        let result = (|| -> Result<usize, String> {
+            let mut headless = Headless::trusted_local();
+            let opened = headless.open(input).map_err(|error| error.to_string())?;
+            warn_all(err, &opened["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>());
+            let state = headless.session.active().ok_or("opened document is unavailable")?;
+            let master = state
+                .doc
+                .responsive
+                .master
+                .filter(|id| state.doc.layer(*id).is_some_and(|layer| layer.artboard().is_some()))
+                .or_else(|| state.doc.artboards().first().map(|board| board.0))
+                .ok_or_else(|| format!("{} has no artboard to use as a master", input.display()))?;
+            let stem = input.file_stem().map(|value| value.to_string_lossy().into_owned()).unwrap_or_else(|| format!("document-{index}"));
+            let export_dir = out_dir.join(format!("{index:04}"));
+            std::fs::create_dir_all(&export_dir).map_err(|error| format!("{}: {error}", export_dir.display()))?;
+            let mut output_count = 0usize;
+            let mut output_claims = photocraft_engine::file_cmds::OutputClaims::default();
+            for preset in &presets {
+                if let Some(template) = &preset.template {
+                    headless
+                        .command_run("file.import.responsiveTemplate", json!({"layer":master.0,"template":template}))
+                        .map_err(|error| format!("preset `{}` template: {error}", preset.name))?;
+                }
+                let created = headless
+                    .command_run(
+                        "layer.artboard.createVariant",
+                        json!({"layer":master.0,"width":preset.width,"height":preset.height,"name":preset.name,"layout":preset.layout}),
+                    )
+                    .map_err(|error| format!("preset `{}`: {error}", preset.name))?;
+                let artboard = created.get("layer").and_then(Value::as_u64).ok_or_else(|| format!("preset `{}` returned no artboard ID", preset.name))?;
+                let state = headless.session.active().ok_or("active document disappeared during batch")?;
+                let one = photocraft_engine::artboard_cmds::artboard_document(&state.doc, photocraft_doc::LayerId(artboard))
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("preset `{}` artboard disappeared before export", preset.name))?;
+                let filename = format!("{}_{}.{}", safe_file_stem(&stem), safe_file_stem(&preset.name), format);
+                let target = export_dir.join(filename);
+                let target_text = target.to_string_lossy();
+                output_claims.check(&target_text)?;
+                let warnings = files::save(&one, &target, Some(&format), &opts, None).map_err(|error| error.to_string())?;
+                output_claims.record(&target_text, &input.to_string_lossy());
+                warn_all(err, &warnings);
+                output_count = output_count.saturating_add(1);
+            }
+            Ok(output_count)
+        })();
+        match result {
+            Ok(count) => {
+                succeeded += 1;
+                let _ = writeln!(out, "ok    {} -> {} ({} preset exports)", input.display(), out_dir.display(), count);
+            }
+            Err(error) => {
+                failed += 1;
+                let _ = writeln!(err, "FAIL  {}: {error}", input.display());
+            }
+        }
+    }
+    let _ = writeln!(out, "{succeeded} succeeded, {failed} failed; {} presets", presets.len());
+    if failed > 0 { Err(format!("{failed} document(s) failed")) } else { Ok(()) }
+}
+
+fn safe_file_stem(value: &str) -> String {
+    let mut output = String::with_capacity(value.len().min(128));
+    let mut separator = false;
+    for character in value.chars().take(128) {
+        if character.is_ascii_alphanumeric() {
+            output.push(character);
+            separator = false;
+        } else if !separator && !output.is_empty() {
+            output.push('_');
+            separator = true;
+        }
+    }
+    while output.ends_with('_') {
+        output.pop();
+    }
+    if output.is_empty() { "document".into() } else { output }
+}
+
 fn droplet(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let (file, inputs) = a.positional.split_first().ok_or("droplet needs <file.pcdroplet> and inputs")?;
     if inputs.is_empty() {
@@ -699,6 +881,67 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn responsive_batch_exports_each_preset_for_every_document_and_loads_templates_relative_to_config() {
+        let root = std::env::temp_dir().join(format!("photocraft-cli-responsive-batch-{}", std::process::id()));
+        let input = root.join("in");
+        let output = root.join("out");
+        std::fs::create_dir_all(&input).unwrap();
+        let source = input.join("master.pcraft");
+        let source_text = source.to_string_lossy().to_string();
+        let (code, _, stderr) = invoke(&[
+            "run",
+            "--new",
+            r#"{"width":32,"height":24,"background":"white"}"#,
+            "--cmd",
+            "layer.new.artboard",
+            "--params",
+            r#"{"rect":[0,0,32,24],"name":"Master"}"#,
+            "--out",
+            &source_text,
+        ]);
+        assert_eq!(code, 0, "{stderr}");
+        std::fs::copy(&source, input.join("second.pcraft")).unwrap();
+
+        let template = root.join("basic.responsive.json");
+        std::fs::write(&template, r#"{"schemaVersion":1,"name":"Basic","artboard":"Master","layers":[],"safeAreas":[]}"#).unwrap();
+        let presets = root.join("presets.json");
+        std::fs::write(
+            &presets,
+            r#"{"presets":[{"name":"Square","width":24,"height":24},{"name":"Portrait","width":20,"height":30,"template":"basic.responsive.json"}]}"#,
+        )
+        .unwrap();
+        let (code, stdout, stderr) =
+            invoke(&["responsive-batch", "--presets", &presets.to_string_lossy(), "--in", &input.to_string_lossy(), "--out", &output.to_string_lossy()]);
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(stdout.contains("2 succeeded, 0 failed; 2 presets"), "{stdout}");
+        for index in 0..2 {
+            let folder = output.join(format!("{index:04}"));
+            let mut files: Vec<_> = std::fs::read_dir(folder).unwrap().flatten().map(|entry| entry.path()).collect();
+            files.sort();
+            assert_eq!(files.len(), 2, "document {index}: {files:?}");
+            assert!(files.iter().all(|path| path.extension().is_some_and(|ext| ext == "png")));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn responsive_batch_rejects_invalid_presets_before_creating_output() {
+        let root = std::env::temp_dir().join(format!("photocraft-cli-responsive-invalid-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("in");
+        let output = root.join("out");
+        std::fs::create_dir_all(&input).unwrap();
+        let presets = root.join("presets.json");
+        std::fs::write(&presets, r#"{"presets":[{"name":"Zero","width":0,"height":20}]}"#).unwrap();
+        let (code, _, stderr) =
+            invoke(&["responsive-batch", "--presets", &presets.to_string_lossy(), "--in", &input.to_string_lossy(), "--out", &output.to_string_lossy()]);
+        assert_eq!(code, 1, "{stderr}");
+        assert!(stderr.contains("must be positive"), "{stderr}");
+        assert!(!output.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
