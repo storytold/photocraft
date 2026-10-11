@@ -3887,3 +3887,5 @@ navigator	Zoom	Zvětšení
 	Skip artboards with findings or incomplete checks	Přeskočit plátna s nálezy nebo neúplnou kontrolou
 	No layout findings on {boards} artboards.	Na {boards} plátnech nebyly nalezeny problémy s rozvržením.
 	Some artboard checks were incomplete; they count as affected.	Některé kontroly pláten nebyly úplné a jsou považovány za problematické.
+
+@plural	files|Saved for Web: {n} file	Souborů: {n}|Souborů: {n}|Uloženo pro web: {n} souborů

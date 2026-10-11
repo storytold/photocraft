@@ -3961,3 +3961,17 @@ curves	Smooth	スムーズ
 	Skip artboards with findings or incomplete checks	問題または未完了の確認があるアートボードをスキップ
 	No layout findings on {boards} artboards.	{boards} 個のアートボードにレイアウトの問題はありません。
 	Some artboard checks were incomplete; they count as affected.	確認が不完全なアートボードは問題ありとして扱われます。
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{file} に {n} 個のスウォッチをエクスポートしました
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} から {n} 個のブラシをインポートしました
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} から {n} 個のスウォッチをインポートしました
+@plural	Played {n} step|Played {n} steps	{n} ステップを再生しました
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	ディスク上で変更されたリンクスマートオブジェクト {n} 個を更新しました
+@plural	files|Saved for Web: {n} file	Web 用に {n} 個のファイルを保存しました
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	このコンポジションが記録した {n} 個のレイヤーが削除されました。コンポジションを更新するか、この警告を消去してください。
+@plural	{n} plane|{n} planes	{n} 個の平面
+@plural	{n} preset|{n} presets	{n} 個のプリセット
+@plural	{n} sample point removed|{n} sample points removed	{n} 個のサンプルポイントを削除しました
+@plural	{n} slice|{n} slices	{n} 個のスライス
+@plural	{n} step|{n} steps	{n} ステップ
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning}（ほか {n} 件のブラシプリセット警告）
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}（警告 {n} 件）

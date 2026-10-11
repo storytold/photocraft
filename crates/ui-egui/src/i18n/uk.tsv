@@ -3984,3 +3984,17 @@ curves	Smooth	Згладити
 	Skip artboards with findings or incomplete checks	Пропуск областей із зауваженнями або неповною перевіркою
 	No layout findings on {boards} artboards.	На {boards} монтажних областях проблем із макетом не виявлено.
 	Some artboard checks were incomplete; they count as affected.	Деякі перевірки областей не завершені; вони вважаються проблемними.
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Експортовано {n} зразок до {file}|Експортовано {n} зразків до {file}|Експортовано {n} зразків до {file}
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Імпортовано {n} пензель із групи {group}|Імпортовано {n} пензлів із групи {group}|Імпортовано {n} пензлів із групи {group}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Імпортовано {n} зразок із {file}|Імпортовано {n} зразків із {file}|Імпортовано {n} зразків із {file}
+@plural	Played {n} step|Played {n} steps	Відтворено {n} крок|Відтворено {n} кроків|Відтворено {n} кроків
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Оновлено {n} пов’язаний смарт-об’єкт, змінений на диску|Оновлено {n} пов’язаних смарт-об’єктів, змінених на диску|Оновлено {n} пов’язаних смарт-об’єктів, змінених на диску
+@plural	files|Saved for Web: {n} file	Файлів: {n}|Файли: {n}|Збережено для вебу: {n} файлів
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Видалено {n} шар, записаний у цій композиції. Оновіть композицію або очистьте попередження.|Видалено {n} шарів, записаних у цій композиції. Оновіть композицію або очистьте попередження.|Видалено {n} шарів, записаних у цій композиції. Оновіть композицію або очистьте попередження.
+@plural	{n} plane|{n} planes	{n} площина|{n} площин|{n} площин
+@plural	{n} preset|{n} presets	{n} набір налаштувань|{n} наборів налаштувань|{n} наборів налаштувань
+@plural	{n} sample point removed|{n} sample points removed	Видалено {n} точку вибірки|Видалено {n} точок вибірки|Видалено {n} точок вибірки
+@plural	{n} slice|{n} slices	{n} зріз|{n} зрізів|{n} зрізів
+@plural	{n} step|{n} steps	{n} крок|{n} кроків|{n} кроків
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (ще {n} попередження про набір пензлів)|{warning} (ще {n} попереджень про набори пензлів)|{warning} (ще {n} попереджень про набори пензлів)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}: {n} попередження|{what}: {n} попереджень|{what}: {n} попереджень
