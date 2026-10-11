@@ -844,7 +844,9 @@ mod tests {
     }
 
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
-        if matches!(id, "prefs.get" | "prefs.reset") {
+        // These commands return settings or installed-profile paths; they do not accept a host
+        // filesystem path as an automation input.
+        if matches!(id, "prefs.get" | "prefs.reset" | "edit.installedProfiles") {
             return false;
         }
         // These registry descriptions refer to document vector paths, not host files.
