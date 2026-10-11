@@ -1069,6 +1069,39 @@ mod form_reset_tests {
 
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if f.get("__responsivePreflight").and_then(Value::as_bool) == Some(true) {
+        let findings = f.get("__responsiveFindingCount").and_then(Value::as_u64).unwrap_or(0);
+        let boards = f.get("__responsiveBoardCount").and_then(Value::as_u64).unwrap_or(0);
+        let affected = f.get("__responsiveAffectedCount").and_then(Value::as_u64).unwrap_or(0);
+        let unverified = f.get("__responsiveUnverifiedCount").and_then(Value::as_u64).unwrap_or(0);
+        let boards = boards.to_string();
+        if affected == 0 {
+            ui.label(crate::i18n::fmt(tl!("No layout findings on {boards} artboards."), &[("boards", &boards)]));
+        } else {
+            let findings = findings.to_string();
+            ui.colored_label(
+                crate::theme::Tokens::get(ui.ctx()).warning,
+                crate::i18n::fmt(tl!("Layout review: {findings} findings on {boards} artboards."), &[("findings", &findings), ("boards", &boards)]),
+            );
+        }
+        if unverified != 0 {
+            ui.label(tl!("Some artboards could not be checked and count as affected."));
+        }
+        if f.get("__responsiveIncompleteCount").and_then(Value::as_u64).unwrap_or(0) != 0 {
+            ui.label(tl!("Some artboard checks were incomplete; they count as affected."));
+        }
+        let mut skip = f.get("__skipResponsiveAffected").and_then(Value::as_bool).unwrap_or(false);
+        if ui.checkbox(&mut skip, tl!("Skip artboards with findings or incomplete checks")).changed() {
+            f.insert("__skipResponsiveAffected".into(), json!(skip));
+        }
+        let all = f.get("__responsiveAllBoards").and_then(Value::as_array).cloned().unwrap_or_default();
+        let affected = f.get("__responsiveAffectedBoards").and_then(Value::as_array).cloned().unwrap_or_default();
+        let all: Vec<u64> = all.iter().filter_map(Value::as_u64).collect();
+        let affected: Vec<u64> = affected.iter().filter_map(Value::as_u64).collect();
+        let selected = crate::dialogs::responsive_artboards_to_export(&all, &affected, skip);
+        f.insert("artboards".into(), json!(selected));
+        ui.add_space(6.0);
+    }
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.

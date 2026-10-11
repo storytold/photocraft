@@ -11,6 +11,7 @@
 | `photocraft-transform.jpg` | Photocraft UI screenshot (offscreen snapshot) with *The Tetons and the Snake River*, Ansel Adams, 1942 (U.S. National Archives) | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Adams_The_Tetons_and_the_Snake_River.jpg). UI: this project. |
 | `photocraft-type.jpg` | Photocraft UI screenshot (offscreen snapshot) with *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg). UI: this project. |
 | `photocraft-export-light.jpg` | Photocraft UI screenshot (offscreen snapshot) with *The Kiss*, Gustav Klimt, 1907–1908 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg). UI: this project. |
+| `responsive-artboards-overview.png` | PhotoCraft responsive artboard overview rendered offscreen with synthetic shapes created in the app | UI and shapes: this project; no third-party artwork. |
 
 Screenshots must use famous public-domain artwork (or content made in the app), never personal photos.
 

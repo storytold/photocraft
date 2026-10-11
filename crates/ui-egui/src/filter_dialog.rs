@@ -2219,7 +2219,7 @@ mod tests {
     /// plain 1/4 proxy and at its chosen factor, on each test image.
     /// `cargo test -p photocraft-ui-egui --lib filter_dialog::tests::sweep_all_previews -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "exhaustive preview accuracy/scale report; intentionally opt-in because it renders every preview case"]
     fn sweep_all_previews() {
         let images = test_images(256);
         println!("command | params | image | k | diff k=4 | scale k=4 | change k=4 | diff k | scale k | change k");

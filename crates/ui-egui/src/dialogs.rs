@@ -10,6 +10,14 @@ use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 /// Where this frame's dialogs are on screen (the canvas reads last frame's: it draws first).
 const RECTS: &str = "pc-dialog-rects";
 
+pub(crate) fn responsive_artboards_to_export(all: &[u64], affected: &[u64], skip: bool) -> Vec<u64> {
+    if !skip {
+        return all.to_vec();
+    }
+    let affected: std::collections::HashSet<u64> = affected.iter().copied().collect();
+    all.iter().copied().filter(|id| !affected.contains(id)).collect()
+}
+
 fn rects(ctx: &egui::Context) -> Vec<egui::Rect> {
     ctx.data(|m| m.get_temp(egui::Id::new(RECTS))).unwrap_or_default()
 }
@@ -103,6 +111,59 @@ fn older_dialog_above(ctx: &egui::Context, live: egui::LayerId, dialogs: &[Dialo
         dialogs.iter().map(|d| egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("dialog", d.id)))).filter(|l| *l != live).collect();
     ctx.memory(|m| m.layer_ids().skip_while(|l| *l != live).skip(1).any(|l| others.contains(&l)))
 }
+/// Prepare the responsive-artboard export dialog once per document revision. Any board whose
+/// diagnostics report findings, truncation, or an error is considered affected for the optional
+/// skip action; uncertainty is never treated as a clean board.
+fn refresh_artboard_export_preflight(app: &PhotocraftApp, fields: &mut serde_json::Map<String, Value>) {
+    let Some(command) = fields.get("__command").and_then(Value::as_str) else { return };
+    if !matches!(command, "file.export.artboardsToFiles" | "file.export.artboardsToPdf") {
+        return;
+    }
+    let Some(state) = app.session.active() else { return };
+    if fields.get("__responsiveRevision").and_then(Value::as_u64) == Some(state.revision) {
+        return;
+    }
+    let board_ids: Vec<u64> = state.doc.artboards().into_iter().rev().map(|board| board.0.0).collect();
+    let mut affected = Vec::new();
+    let mut findings = 0usize;
+    let mut unverified = 0usize;
+    let mut incomplete = 0usize;
+    for id in &board_ids {
+        match photocraft_engine::artboard_cmds::diagnose_document_artboard(&state.doc, photocraft_doc::LayerId(*id), state.revision) {
+            Ok(diagnostics) => {
+                let count = ["overflow", "collisions", "safeAreas"]
+                    .iter()
+                    .filter_map(|key| diagnostics.get(*key).and_then(Value::as_array))
+                    .map(Vec::len)
+                    .sum::<usize>();
+                let truncated = diagnostics.get("truncated").and_then(Value::as_bool).unwrap_or(false);
+                findings = findings.saturating_add(count);
+                if count > 0 || truncated {
+                    affected.push(*id);
+                }
+                if truncated {
+                    incomplete = incomplete.saturating_add(1);
+                }
+            }
+            Err(_) => {
+                affected.push(*id);
+                unverified = unverified.saturating_add(1);
+            }
+        }
+    }
+    let skip = fields.get("__skipResponsiveAffected").and_then(Value::as_bool).unwrap_or(false);
+    let chosen = responsive_artboards_to_export(&board_ids, &affected, skip);
+    fields.insert("artboards".into(), json!(chosen));
+    fields.insert("__responsiveAllBoards".into(), json!(board_ids));
+    fields.insert("__responsiveAffectedBoards".into(), json!(affected.clone()));
+    fields.insert("__responsiveFindingCount".into(), json!(findings));
+    fields.insert("__responsiveAffectedCount".into(), json!(affected.len()));
+    fields.insert("__responsiveBoardCount".into(), json!(board_ids.len()));
+    fields.insert("__responsiveUnverifiedCount".into(), json!(unverified));
+    fields.insert("__responsiveIncompleteCount".into(), json!(incomplete));
+    fields.insert("__responsiveRevision".into(), json!(state.revision));
+    fields.insert("__responsivePreflight".into(), json!(true));
+}
 
 fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> bool {
     fields.contains_key("__web") || crate::prefs_ui::is_preferences(fields)
@@ -171,6 +232,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let _language = crate::i18n::language_scope(lang);
         let interactive = top == Some(d.id);
         let mut fields = d.fields.clone();
+        refresh_artboard_export_preflight(app, &mut fields);
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
         let title = display_title(&d);
@@ -641,7 +703,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.filter_preview = None;
                 return Err("dialog has no command".into());
             };
-            let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
+            let mut fields = d.fields.clone();
+            refresh_artboard_export_preflight(app, &mut fields);
+            let (cmd, params) = crate::smart_ui::confirm_command(&fields, cmd, crate::filter_dialog::params_of(&fields));
             let result = app.run(&cmd, params.clone());
             // A filter that runs as a background job keeps its preview on screen until the job
             // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
@@ -716,6 +780,59 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responsive_export_can_skip_only_affected_artboards() {
+        assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], false), vec![9, 5, 2]);
+        assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], true), vec![9, 2]);
+        assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5, 5, 99], true), vec![9, 2]);
+        assert!(responsive_artboards_to_export(&[9], &[9], true).is_empty());
+        assert_eq!(
+            crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "Skip artboards with findings or incomplete checks"),
+            "Zeichenflächen mit Befunden oder unvollständiger Prüfung überspringen"
+        );
+        assert_eq!(
+            crate::i18n::fmt(crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "No layout findings on {boards} artboards."), &[("boards", "1")]),
+            "Keine Layout-Befunde auf den Zeichenflächen (1)."
+        );
+    }
+
+    #[test]
+    fn artboard_export_dialog_preflights_every_board_for_its_revision() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+        let created = app.run("layer.new.artboard", serde_json::json!({"rect": [0, 0, 20, 20]})).unwrap();
+        let id = created["layer"].as_u64().unwrap();
+        let layer = app
+            .session
+            .edit("create test layer", |doc, _| {
+                let format = doc.pixel_format();
+                let mut layer = photocraft_doc::Layer::raster(doc.next_layer_name("Layer"), format);
+                let Some(surface) = layer.surface_mut() else {
+                    return Err(photocraft_engine::EngineError::Other("test raster layer has no surface".into()));
+                };
+                surface.fill_rect(photocraft_geom::Rect::new(30, 30, 40, 40), &photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 1.0]));
+                Ok(doc.insert_above(None, layer))
+            })
+            .unwrap();
+        app.run("layer.moveTo", json!({"layer":layer.0,"target":id,"position":"into"})).unwrap();
+        let revision = app.session.active().unwrap().revision;
+        for command in ["file.export.artboardsToFiles", "file.export.artboardsToPdf"] {
+            let mut fields = serde_json::Map::new();
+            fields.insert("__command".into(), json!(command));
+            refresh_artboard_export_preflight(&app, &mut fields);
+            assert_eq!(fields.get("__responsiveRevision").and_then(Value::as_u64), Some(revision));
+            assert_eq!(fields.get("__responsiveFindingCount").and_then(Value::as_u64), Some(1));
+            assert_eq!(fields.get("__responsiveBoardCount").and_then(Value::as_u64), Some(1));
+            assert_eq!(fields.get("__responsiveAffectedBoards"), Some(&json!([id])));
+            assert_eq!(fields.get("artboards"), Some(&json!([id])));
+            assert_eq!(fields.get("__responsivePreflight"), Some(&json!(true)));
+        }
+        let mut skip_fields =
+            serde_json::Map::from_iter([("__command".to_owned(), json!("file.export.artboardsToFiles")), ("__skipResponsiveAffected".to_owned(), json!(true))]);
+        refresh_artboard_export_preflight(&app, &mut skip_fields);
+        assert_eq!(skip_fields.get("artboards"), Some(&json!([])));
+    }
 
     /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
     fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {

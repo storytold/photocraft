@@ -1023,11 +1023,17 @@ pub struct Extras {
     pub guides: bool,
     pub snap: bool,
     pub lock_guides: bool,
+    /// Responsive artboard safe-area boundaries (`View › Show › Safe Areas`).
+    #[serde(default)]
+    pub safe_areas: bool,
+    /// Responsive artboard overflow, collision and safe-area markers (`View › Show`).
+    #[serde(default)]
+    pub responsive_warnings: bool,
 }
 
 impl Default for Extras {
     fn default() -> Self {
-        Self { rulers: false, grid: false, guides: true, snap: true, lock_guides: false }
+        Self { rulers: false, grid: false, guides: true, snap: true, lock_guides: false, safe_areas: false, responsive_warnings: false }
     }
 }
 
@@ -1241,6 +1247,9 @@ pub struct UiState {
     /// Which chip the Color panel edits.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// Responsive-artboard findings filter (0 all, 1 overflow, 2 collisions, 3 safe areas).
+    #[serde(default)]
+    pub responsive_findings_filter: u8,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
     #[serde(default)]
     pub brush_section: usize,
@@ -1372,6 +1381,7 @@ impl Default for UiState {
             docking_collapsed: Vec::new(),
             docking_reveal: None,
             color_panel: Default::default(),
+            responsive_findings_filter: 0,
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),
@@ -1514,10 +1524,15 @@ mod tests {
 
     #[test]
     fn ui_state_serializes() {
-        let s = UiState::default();
+        let s = UiState { responsive_findings_filter: 2, ..UiState::default() };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["tool"], "Brush");
         let back: UiState = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
+
+        let mut legacy = serde_json::to_value(UiState::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("responsive_findings_filter");
+        let back: UiState = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.responsive_findings_filter, 0);
     }
 }

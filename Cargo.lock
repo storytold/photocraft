@@ -4706,7 +4706,6 @@ version = "0.9.0"
 dependencies = [
  "photocraft-automation",
  "photocraft-codecs",
- "photocraft-doc",
  "photocraft-engine",
  "photocraft-format",
  "photocraft-io",

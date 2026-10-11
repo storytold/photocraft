@@ -34,6 +34,24 @@ pub struct Notice {
     /// and is reset while the pointer rests on the stack (issue #2022). `None` until first shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown_at: Option<f64>,
+    /// Safe, layer-selection actions offered for recoverable workflow conflicts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<NoticeAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoticeAction {
+    pub label: String,
+    pub layer: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<(String, String)>,
+}
+
+impl NoticeAction {
+    fn text(&self) -> String {
+        let args: Vec<(&str, &str)> = self.args.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
+        crate::i18n::fmt(crate::i18n::t(&self.label), &args)
+    }
 }
 
 impl Notice {
@@ -46,8 +64,28 @@ impl Notice {
 
 /// Show a notice (newest last); returns its id.
 pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
+    post_with_actions(app, title, lines, error, dismiss_pref, Vec::new())
+}
+
+pub fn post_with_actions(
+    app: &mut PhotocraftApp,
+    title: impl Into<String>,
+    lines: Vec<String>,
+    error: bool,
+    dismiss_pref: Option<&str>,
+    actions: Vec<NoticeAction>,
+) -> u64 {
     let id = app.ui.alloc_id();
-    app.ui.notices.push(Notice { id, title: title.into(), lines, error, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new(), shown_at: None });
+    app.ui.notices.push(Notice {
+        id,
+        title: title.into(),
+        lines,
+        error,
+        dismiss_pref: dismiss_pref.map(str::to_owned),
+        args: Vec::new(),
+        shown_at: None,
+        actions,
+    });
     cap_notices(app);
     id
 }
@@ -195,6 +233,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
+    let mut selected_layer = None;
     // Clear the status bar (~24 px) and leave the dock's edge some air.
     let area = egui::Area::new(egui::Id::new("photocraft-notices"))
         .order(egui::Order::Foreground)
@@ -228,12 +267,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             let text = crate::i18n::fmt(tl!("…and {n} more"), &[("n", &(n.lines.len() - MAX_LINES).to_string())]);
                             ui.label(egui::RichText::new(text).color(t.text_faint));
                         }
+                        for action in n.actions.iter().take(8) {
+                            if ui.button(action.text()).clicked() {
+                                selected_layer = Some(action.layer);
+                            }
+                        }
                     });
                 ui.add_space(6.0);
             }
         });
     if let Some(id) = dismiss_id {
         dismiss(app, id);
+    }
+    if let Some(layer) = selected_layer {
+        let exists = app.session.active().is_some_and(|state| state.doc.layer(photocraft_doc::LayerId(layer)).is_some());
+        if exists {
+            if let Err(err) = app.run("layer.select", serde_json::json!({"layer":layer})) {
+                error(app, format!("{}: {err}", tl!("Could not select conflict layer")));
+            }
+        } else {
+            error(app, tl!("The conflict layer no longer exists").to_owned());
+        }
     }
     let (auto_hide, duration) = {
         let i = &app.session.prefs().interface;
