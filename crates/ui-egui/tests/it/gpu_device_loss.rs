@@ -178,12 +178,15 @@ fn system_info_lists_the_graphics_state() {
     app.perf.gpu_info.preference = "auto".into();
     app.perf.gpu_info.selected = "dx12".into();
     app.perf.gpu_info.fallback = Some("the previous start didn't finish on vulkan; using dx12".into());
-    let lines = gpu_status::system_info(&app);
-    let text = lines.join("\n");
-    for want in ["Graphics adapter: Test GPU", "Backend: dx12", "Selected at launch: dx12", "Fallback: the previous start", "Image compositor: CPU"] {
-        assert!(text.contains(want), "{want} missing from\n{text}");
-    }
-    let v = gpu_status::system_info_json(&app);
+    let report = photocraft_ui_egui::system_info::report(&app, None);
+    let graphics = &report.iter().find(|s| s.title == "Graphics").expect("a Graphics section").rows;
+    let row = |label: &str| graphics.iter().find(|(l, _)| l == label).map(|(_, v)| v.as_str()).unwrap_or("");
+    assert_eq!(row("Adapter"), "Test GPU");
+    assert_eq!(row("Graphics API"), "DirectX 12");
+    assert_eq!(row("Backend preference"), "Auto, chosen at launch: DirectX 12");
+    assert!(row("Startup fallback").starts_with("the previous start"), "{graphics:?}");
+    assert_eq!(row("Image compositor"), "CPU");
+    let v = photocraft_ui_egui::system_info::json(&app, &report);
     assert_eq!(v["gpu"]["adapter"], "Test GPU");
 }
 
