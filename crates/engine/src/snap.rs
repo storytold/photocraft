@@ -22,6 +22,7 @@ pub enum SnapKind {
     LayerEdge,
     LayerCenter,
     Selection,
+    SafeArea,
 }
 
 impl SnapKind {
@@ -106,11 +107,28 @@ impl SnapTargets {
             t.add_rect([0.0, 0.0, w, h], SnapKind::DocumentEdge, SnapKind::DocumentCenter);
         }
         if opts.guides {
+            let artboards: std::collections::HashMap<_, _> = doc.artboards().into_iter().map(|(id, _, board)| (id, board.rect)).collect();
             for g in &doc.guides.vertical {
                 t.x.push(Target { pos: *g, kind: SnapKind::Guide, span: (0.0, h) });
             }
             for g in &doc.guides.horizontal {
                 t.y.push(Target { pos: *g, kind: SnapKind::Guide, span: (0.0, w) });
+            }
+            for area in &doc.responsive.safe_areas {
+                let Some(rect) = artboards.get(&area.artboard) else { continue };
+                let inset = area.insets;
+                if [inset.top, inset.right, inset.bottom, inset.left].into_iter().any(|value| !value.is_finite() || !(0.0..=0.5).contains(&value)) {
+                    continue;
+                }
+                let rect = [
+                    f64::from(rect.x0) + f64::from(rect.width()) * f64::from(inset.left),
+                    f64::from(rect.y0) + f64::from(rect.height()) * f64::from(inset.top),
+                    f64::from(rect.x1) - f64::from(rect.width()) * f64::from(inset.right),
+                    f64::from(rect.y1) - f64::from(rect.height()) * f64::from(inset.bottom),
+                ];
+                if rect[0] < rect[2] && rect[1] < rect[3] {
+                    t.add_rect(rect, SnapKind::SafeArea, SnapKind::SafeArea);
+                }
             }
         }
         if opts.grid && opts.grid_step.iter().all(|step| step.is_finite() && *step > 0.0) {
@@ -299,6 +317,31 @@ mod tests {
         let mut t = targets();
         t.x.push(Target { pos: 120.0, kind: SnapKind::LayerEdge, span: (0.0, 10.0) });
         assert_eq!(t.nearest(true, 121.0, 5.0).unwrap().kind, SnapKind::Guide);
+    }
+
+    #[test]
+    fn safe_area_edges_are_snap_targets_only_when_guides_are_enabled() {
+        use photocraft_doc::responsive::{ArtboardSafeArea, ResponsiveLayout, SafeInsets};
+        use photocraft_doc::{Artboard, Document, Layer, LayerContent};
+        use photocraft_geom::Rect;
+        let mut doc = Document::new("snap", Size::new(200, 100), ColorMode::Rgb, SampleType::U8);
+        let id = doc.insert_above(None, Layer::group("Board", Vec::new()));
+        if let LayerContent::Group(group) = &mut doc.layer_mut(id).unwrap().content {
+            group.artboard = Some(Artboard::new(Rect::new(20, 10, 120, 90)));
+        }
+        doc.responsive = ResponsiveLayout::default();
+        doc.responsive.safe_areas.push(ArtboardSafeArea {
+            artboard: id,
+            name: "content".into(),
+            insets: SafeInsets { top: 0.1, right: 0.1, bottom: 0.1, left: 0.1 },
+            required_roles: Vec::new(),
+        });
+        let options = SnapOptions { guides: true, grid: false, layers: false, document: false, selection: false, grid_step: [0.0; 2] };
+        let targets = SnapTargets::from_document(&doc, &options, &[]);
+        assert_eq!(targets.nearest(true, 29.0, 2.0).map(|target| target.kind), Some(SnapKind::SafeArea));
+        assert_eq!(targets.nearest(false, 18.0, 2.0).map(|target| target.kind), Some(SnapKind::SafeArea));
+        let options = SnapOptions { guides: false, ..options };
+        assert!(SnapTargets::from_document(&doc, &options, &[]).is_empty());
     }
 
     #[test]

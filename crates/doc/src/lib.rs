@@ -16,6 +16,7 @@ pub mod comps;
 pub mod effects;
 pub mod mode;
 pub mod pattern;
+pub mod responsive;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -915,6 +916,8 @@ pub struct Document {
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless), so
     /// a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
+    /// Responsive layout rules and variant relationships (native `.pcraft` data).
+    pub responsive: responsive::ResponsiveLayout,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -978,6 +981,7 @@ impl Document {
             variables: Variables::default(),
             timeline: None,
             file_encoding: FileEncoding::default(),
+            responsive: responsive::ResponsiveLayout::default(),
         }
     }
 
@@ -1187,7 +1191,19 @@ impl Document {
     pub fn remove(&mut self, id: LayerId) -> Option<Layer> {
         let path = self.path_of(id)?;
         let (sib, idx) = self.siblings_mut(&path)?;
-        Some(sib.remove(idx))
+        let removed = sib.remove(idx);
+        fn collect(layer: &Layer, ids: &mut std::collections::HashSet<LayerId>) {
+            ids.insert(layer.id);
+            if let Some(children) = layer.children() {
+                for child in children {
+                    collect(child, ids);
+                }
+            }
+        }
+        let mut ids = std::collections::HashSet::new();
+        collect(&removed, &mut ids);
+        self.responsive.remove_layers(&ids);
+        Some(removed)
     }
 
     /// Move a layer up (+1) or down (-1) among its siblings. Returns false at the ends.

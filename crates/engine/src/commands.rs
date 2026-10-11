@@ -1463,6 +1463,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::warp_cmds::specs());
     v.extend(crate::comps_cmds::specs());
     v.extend(crate::artboard_cmds::specs());
+    v.extend(crate::responsive_template_cmds::specs());
     v.extend(crate::distort_cmds::specs());
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());

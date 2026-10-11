@@ -20,6 +20,43 @@ use photocraft_psd::metadata::{MetadataItem, parse_shmd, write_shmd};
 
 use crate::blocks::{color_from_desc, color_to_desc, num};
 
+const ARTBOARD_ROLE_KEY: [u8; 4] = *b"pcrl";
+pub(crate) const ARTBOARD_ROLE_PREFIX: &str = "photocraft.artboard-role.";
+const ARTBOARD_ROLES: [&str; 8] = ["background", "headline", "body", "footer", "logo", "cta", "decoration", "free"];
+
+pub(crate) fn artboard_role_data(data: &[u8]) -> Option<&'static str> {
+    let item = parse_shmd(data).ok()?.into_iter().find(|item| item.key == ARTBOARD_ROLE_KEY)?;
+    let value = item.data.strip_prefix(b"PCR1")?;
+    let value = std::str::from_utf8(value).ok()?.trim_end_matches('\0');
+    ARTBOARD_ROLES.iter().copied().find(|role| *role == value)
+}
+
+/// Adds, updates or removes PhotoCraft's semantic artboard role in `shmd`, preserving other items.
+pub(crate) fn set_artboard_role(raw: &mut Vec<([u8; 4], Vec<u8>)>, role: Option<&str>) {
+    let pos = raw.iter().position(|(key, _)| key == b"shmd");
+    let mut items = match pos {
+        Some(i) => match parse_shmd(&raw[i].1) {
+            Ok(items) => items,
+            Err(_) => return, // Preserve malformed/unknown metadata rather than replacing it.
+        },
+        None => Vec::new(),
+    };
+    items.retain(|item| item.key != ARTBOARD_ROLE_KEY);
+    if let Some(role) = role.filter(|role| ARTBOARD_ROLES.contains(role)) {
+        let mut data = b"PCR1".to_vec();
+        data.extend_from_slice(role.as_bytes());
+        items.push(MetadataItem::new(ARTBOARD_ROLE_KEY, data));
+    }
+    match (pos, items.is_empty()) {
+        (Some(i), true) => {
+            raw.remove(i);
+        }
+        (Some(i), false) => raw[i].1 = write_shmd(&items),
+        (None, false) => raw.push((*b"shmd", write_shmd(&items))),
+        (None, true) => {}
+    }
+}
+
 /// Image resource id of the layer comp list.
 pub const LAYER_COMPS: u16 = 1065;
 /// Per-layer artboard block keys, preferred first.
@@ -404,6 +441,26 @@ mod tests {
         let mut only = vec![(*b"shmd", write_shmd(&[MetadataItem::new(*b"cmls", vec![0, 0])]))];
         set_cmls(&mut only, None);
         assert!(only.is_empty());
+    }
+
+    #[test]
+    fn semantic_artboard_role_roundtrips_and_preserves_other_shmd_items() {
+        let mut raw = vec![(*b"shmd", write_shmd(&[MetadataItem::new(*b"cust", vec![1, 2, 3])]))];
+        set_artboard_role(&mut raw, Some("headline"));
+        assert_eq!(artboard_role_data(&raw[0].1), Some("headline"));
+        let items = parse_shmd(&raw[0].1).unwrap();
+        assert_eq!(items.iter().find(|item| item.key == *b"cust").map(|item| item.data.as_slice()), Some(&[1, 2, 3, 0][..]));
+
+        set_artboard_role(&mut raw, Some("footer"));
+        assert_eq!(artboard_role_data(&raw[0].1), Some("footer"));
+        set_artboard_role(&mut raw, None);
+        assert_eq!(artboard_role_data(&raw[0].1), None);
+        assert_eq!(parse_shmd(&raw[0].1).unwrap().len(), 1);
+
+        let malformed = vec![(*b"shmd", vec![0, 0, 0, 1])];
+        let mut unchanged = malformed.clone();
+        set_artboard_role(&mut unchanged, Some("logo"));
+        assert_eq!(unchanged, malformed);
     }
 
     /// A layer at origin (4, 4) whose `shmd` carries a `cmls` item with one `layerSettings`

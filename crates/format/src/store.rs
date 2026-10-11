@@ -163,6 +163,13 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     let layers = take_array(&mut v, "/document/layers");
     let mut m: Manifest = serde_json::from_value(v)?;
     m.document.layers = layers_from_json(layers)?;
+    fn count_layers(layers: &[LayerM]) -> usize {
+        layers.iter().fold(layers.len(), |count, layer| match &layer.content {
+            ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
+            _ => count,
+        })
+    }
+    m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
     Ok(m)
 }
 
@@ -728,6 +735,7 @@ impl PcraftWriter {
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        doc.responsive.validate(doc.walk().len()).map_err(|message| FormatError::LimitExceeded(message.into()))?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
         let mut previews = Vec::new();

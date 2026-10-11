@@ -183,6 +183,54 @@ fn empty_document_roundtrips() {
 }
 
 #[test]
+fn responsive_layout_roundtrips_in_native_manifest() {
+    let mut doc = Document::new("responsive", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let master = LayerId(40);
+    let variant = LayerId(41);
+    let text = LayerId(42);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = master;
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = variant;
+    doc.responsive.master = Some(master);
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant { artboard: variant, master, name: "Square".into(), layers: vec![] });
+    doc.responsive.rules.push(photocraft_doc::responsive::LayerLayoutRule {
+        layer: text,
+        anchor: photocraft_doc::responsive::Anchor {
+            horizontal: photocraft_doc::responsive::HorizontalAnchor::Center,
+            vertical: photocraft_doc::responsive::VerticalAnchor::Bottom,
+        },
+        mode: photocraft_doc::responsive::ResizeMode::Fit,
+        min_size: Some(photocraft_doc::responsive::Dimensions { width: 16, height: 12 }),
+        max_size: None,
+        text_flow: photocraft_doc::responsive::TextFlow::Rewrap,
+        min_font_size_pt: None,
+        stack: None,
+    });
+    // The layer rule points at a live layer so it survives loader ID remapping.
+    doc.layers[0].children_mut().unwrap().push(Layer::new("Text", LayerContent::Text(TextLayer::default())));
+    doc.layers[0].children_mut().unwrap()[0].id = text;
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap().responsive, doc.responsive);
+    let remapped = load_from_bytes_with(&bytes, &LoadOptions { preserve_ids: false, ..Default::default() }).unwrap();
+    let loaded_master = remapped.layers.iter().find(|layer| layer.name == "Master").unwrap().id;
+    let loaded_variant = remapped.layers.iter().find(|layer| layer.name == "Square").unwrap().id;
+    let loaded_text = remapped.layers[0].children().unwrap()[0].id;
+    assert_eq!(remapped.responsive.master, Some(loaded_master));
+    assert_eq!(remapped.responsive.variants[0].artboard, loaded_variant);
+    assert_eq!(remapped.responsive.variants[0].master, loaded_master);
+    assert_eq!(remapped.responsive.rules[0].layer, loaded_text);
+    assert_eq!(photocraft_format::FORMAT_VERSION, 2);
+}
+
+#[test]
+fn invalid_responsive_layout_is_rejected_before_native_save() {
+    let mut doc = Document::new("invalid layout", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.responsive.schema_version = u32::MAX;
+    assert!(save_to_bytes(&doc, &SaveOptions::default()).is_err());
+}
+
+#[test]
 fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
     let mut doc = Document::new("exhausted", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
     doc.slices.list.push(Slice { id: u32::MAX, ..Default::default() });
@@ -444,7 +492,7 @@ fn manifest_is_human_readable_json() {
     let r = zip::ZipReader::new(&bytes).unwrap();
     assert_eq!(r.entries[0].name, "manifest.json");
     let text = String::from_utf8(r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
-    assert!(text.contains("\"format_version\": 1"));
+    assert!(text.contains("\"format_version\": 2"));
     assert!(text.contains("\"Hue/Sat\""));
     assert!(text.contains("filter.blur.gaussian"));
     assert!(r.entries.iter().any(|e| e.name.starts_with("tiles/") && e.name.ends_with(".zst")));
