@@ -1039,7 +1039,6 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
-
 /// The Artboard tool's "+" buttons: a board the size of board `layer` on one of its sides, a
 /// [`GAP`] away (further out past any board in the way), empty or (`duplicate`, the ⌥-click) a
 /// copy with its contents. A board left of or above the canvas origin shifts the whole document
@@ -1766,7 +1765,6 @@ fn update_variants(s: &mut Session, p: &Value) -> Result<Value> {
         },
         move |(added, removed, conflicts)| json!({"master":master_id.0,"updated":updated_count,"addedLayers":added,"removedLayers":removed,"overridesPreserved":true,"conflicts":conflicts}),
     )
-
 }
 
 fn clear_artboard_guides(s: &mut Session) -> Result<Value> {
