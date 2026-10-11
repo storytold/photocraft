@@ -140,6 +140,13 @@ fn scaled(s: &Surface, area: Rect, w: u32, h: u32) -> Surface {
 
 /// Largest mean difference (0..1) around the selection still treated as colour drift.
 const MAX_DRIFT: f64 = 0.25;
+/// Mean difference past which a pixel outside the selection counts as changed by the model, not
+/// just relit.
+const CHANGED: f32 = 0.25;
+/// Difference in fine detail past which a pixel outside the selection counts as changed.
+const DETAIL: f32 = 0.03;
+/// Levels in the fitted tone curves.
+const BINS: usize = 32;
 /// Grey that transparent parts of the image are shown on when sent.
 const HOLE: f32 = 128.0;
 
@@ -286,57 +293,123 @@ fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
     }
 }
 
+/// Brightness of an RGBA or RGB pixel (0..1), Rec. 709 weights.
+fn luma(p: &[f32]) -> f32 {
+    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+}
+
+/// A tone curve taking brightness `from` to brightness `to`, fitted over the pixels with weight
+/// `wt`: the mean change at each of [`BINS`] levels, so a model that lifts the shadows and leaves
+/// the highlights is undone level by level. Levels without enough samples take their neighbours'
+/// change; the curve never turns downward.
+fn fit_curve(from: &[f32], to: &[f32], wt: &[f32]) -> [f32; BINS] {
+    let (mut n, mut d) = ([0.0f64; BINS], [0.0f64; BINS]);
+    for (i, &o) in wt.iter().enumerate() {
+        let x = from[i].clamp(0.0, 1.0);
+        let b = ((x * BINS as f32) as usize).min(BINS - 1);
+        n[b] += f64::from(o);
+        d[b] += f64::from(o) * f64::from(to[i] - x);
+    }
+    let known: Vec<usize> = (0..BINS).filter(|&b| n[b] >= 32.0).collect();
+    let at = |k: usize| (d[k] / n[k]) as f32;
+    let mut curve = [0.0f32; BINS];
+    for (b, v) in curve.iter_mut().enumerate() {
+        *v = match (known.iter().rev().find(|&&k| k <= b), known.iter().find(|&&k| k >= b)) {
+            (Some(&lo), Some(&hi)) if lo != hi => at(lo) + (at(hi) - at(lo)) * (b - lo) as f32 / (hi - lo) as f32,
+            (Some(&k), _) | (None, Some(&k)) => at(k),
+            (None, None) => 0.0,
+        };
+    }
+    // Rising: each level's output at least the one below it.
+    for b in 1..BINS {
+        curve[b] = curve[b].max(curve[b - 1] - 1.0 / BINS as f32);
+    }
+    curve
+}
+
+/// `v` through a curve from [`fit_curve`] (the change at each level's centre, interpolated).
+fn apply_curve(curve: &[f32; BINS], v: f32) -> f32 {
+    let t = (v.clamp(0.0, 1.0) * BINS as f32 - 0.5).clamp(0.0, (BINS - 1) as f32);
+    let (b, f) = (t as usize, t.fract());
+    v + curve[b] + (curve[(b + 1).min(BINS - 1)] - curve[b]) * f
+}
+
+/// An RGBA pixel's brightness moved along `curve`, its hue and saturation kept: scaled while
+/// bright enough to scale, shifted near black.
+fn tone(curve: &[f32; BINS], p: &mut [f32]) {
+    let y = luma(p);
+    let target = apply_curve(curve, y);
+    for v in &mut p[..3] {
+        *v = if y > 0.05 { *v * (target / y) } else { *v + (target - y) };
+    }
+}
+
 /// Take out the colour drift a model adds when it redraws the whole image, so the fill meets the
 /// photo around it without a seam. Everything outside the selection should have come back
-/// unchanged; comparing it with the original measures the drift. First a per-channel gain and
-/// offset fitted over all of it, then what is left near the edge, spread smoothly inward
-/// (normalized convolution), as Photoshop's fills blend into their surroundings.
-/// `px` is RGBA (0..1) at the reference size.
+/// unchanged; comparing it with the original measures the drift. First a tone curve on brightness
+/// (models relight: shadows lifted, highlights kept), hue untouched, fitted again without the pixels the model
+/// actually changed (an object it moved), then
+/// what is left at the edge carried smoothly inward by push-pull, as Photoshop's fills blend into
+/// their surroundings. `px` is RGBA (0..1) at the reference size.
 fn match_surroundings(px: &mut [f32], r: &Reference) -> String {
     let (w, h) = (r.w as usize, r.h as usize);
-    let outside: Vec<f32> = r.coverage.iter().map(|c| 1.0 - c.clamp(0.0, 1.0)).collect();
+    let mut outside: Vec<f32> = r.coverage.iter().map(|c| 1.0 - c.clamp(0.0, 1.0)).collect();
     let weight: f64 = outside.iter().map(|&o| f64::from(o)).sum();
     if weight < 16.0 || px.len() != w * h * 4 {
         return "not matched: too little outside the selection".into();
     }
-    // Drift is a few percent. A result that doesn't resemble the original around the selection
-    // (reframed, restyled) is left alone rather than forced onto it.
+    // A result that doesn't resemble the original around the selection (reframed, restyled) is
+    // left alone rather than forced onto it.
     let diff: f64 = (0..w * h).map(|i| f64::from(outside[i]) * (0..3).map(|c| f64::from((px[i * 4 + c] - r.original[i * 3 + c]).abs())).sum::<f64>()).sum();
     let drift = diff / (weight * 3.0);
     if drift > MAX_DRIFT {
         return format!("not matched: mean difference outside the selection {drift:.3} > {MAX_DRIFT}");
     }
-    let mut stats = format!("mean difference outside the selection {drift:.3}; gain/offset per channel:");
-    let radius = (w.max(h) / 16).max(2);
-    for c in 0..3 {
-        let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-        for i in 0..w * h {
-            let (o, x, y) = (f64::from(outside[i]), f64::from(px[i * 4 + c]), f64::from(r.original[i * 3 + c]));
-            sx += o * x;
-            sy += o * y;
-            sxx += o * x * x;
-            sxy += o * x * y;
+    let target: Vec<f32> = r.original.as_chunks::<3>().0.iter().map(|p| luma(p)).collect();
+    let fit = |px: &[f32], wt: &[f32]| fit_curve(&px.as_chunks::<4>().0.iter().map(|p| luma(p)).collect::<Vec<_>>(), &target, wt);
+    // What the model changed rather than relit: different detail (an edge moved, an object
+    // redrawn), or a different colour by far more than relighting explains.
+    let first = fit(px, &outside);
+    let detail = |mut v: Vec<f32>| {
+        let mut smooth = v.clone();
+        box_blur(&mut smooth, w, h, 2);
+        box_blur(&mut smooth, w, h, 2);
+        v.iter_mut().zip(&smooth).for_each(|(a, b)| *a -= b);
+        v
+    };
+    let (got, want) = (detail(px.as_chunks::<4>().0.iter().map(|p| luma(p)).collect()), detail(target.clone()));
+    let mut differs: Vec<f32> = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).collect();
+    box_blur(&mut differs, w, h, 4);
+    let mut changed = 0.0f64;
+    for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
+        let mut q = *p;
+        tone(&first, &mut q);
+        let far = (0..3).map(|c| (q[c] - r.original[i * 3 + c]).abs()).sum::<f32>() / 3.0 > CHANGED;
+        if outside[i] > 0.0 && (far || differs[i] > DETAIL) {
+            changed += f64::from(outside[i]);
+            outside[i] = 0.0;
         }
-        let (mx, my) = (sx / weight, sy / weight);
-        let var = sxx / weight - mx * mx;
-        let gain = if var > 1e-5 { ((sxy / weight - mx * my) / var).clamp(0.5, 2.0) } else { 1.0 };
-        let (gain, offset) = (gain as f32, (my - gain * mx) as f32);
-        stats.push_str(&format!(" {gain:.3}/{offset:+.3}"));
-        let mut num = vec![0.0f32; w * h];
-        for i in 0..w * h {
+    }
+    let curve = if outside.iter().map(|&o| f64::from(o)).sum::<f64>() >= 16.0 { fit(px, &outside) } else { first };
+    let stats = format!(
+        "mean difference outside the selection {drift:.3}; {:.0}% of it changed; brightness change in shadows/midtones/highlights: {:+.3}/{:+.3}/{:+.3}",
+        100.0 * changed / weight,
+        curve[BINS / 8],
+        curve[BINS / 2],
+        curve[BINS * 7 / 8]
+    );
+    for p in px.as_chunks_mut::<4>().0 {
+        tone(&curve, p);
+    }
+    // What the curve leaves, known only where the result kept the original, spread over the rest.
+    let residual: Vec<f32> = (0..w * h).flat_map(|i| [0, 1, 2].map(|c| if outside[i] > 0.0 { r.original[i * 3 + c] - px[i * 4 + c] } else { 0.0 })).collect();
+    let unknown: Vec<f32> = outside.iter().map(|o| 1.0 - o).collect();
+    let spread = surroundings_fill(&residual, &unknown, w, h);
+    for i in 0..w * h {
+        for c in 0..3 {
             let v = &mut px[i * 4 + c];
-            *v = *v * gain + offset;
-            num[i] = outside[i] * (r.original[i * 3 + c] - *v);
-        }
-        let mut den = outside.clone();
-        for _ in 0..3 {
-            box_blur(&mut num, w, h, radius);
-            box_blur(&mut den, w, h, radius);
-        }
-        for i in 0..w * h {
-            let v = &mut px[i * 4 + c];
-            if r.coverage[i] > 0.0 && den[i] > 1e-4 {
-                *v += num[i] / den[i];
+            if r.coverage[i] > 0.0 {
+                *v += spread[i * 3 + c];
             }
             *v = v.clamp(0.0, 1.0);
         }

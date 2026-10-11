@@ -47,16 +47,20 @@ variation (so three requests by default, each billed to the user's key):
 
 Gemini takes no mask parameter, so the mask is a second image and the instruction says what it
 means. PhotoCraft keeps only the masked pixels of the result, so anything the model changes
-outside the selection is discarded. The model redraws the whole image and its colours drift a
-little, differently each time, which would leave a seam at the selection's edge; the area outside
-the selection should come back unchanged, so comparing it with the original measures the drift.
-A per-channel gain and offset fitted there, then the remaining difference near the edge spread
-smoothly inward, bring the fill back in line (`match_surroundings`). A result that doesn't
-resemble the original around the selection (over 25% mean difference) is left as it came.
+outside the selection is discarded. The model redraws the whole image and relights it,
+differently each time (Gemini often lifts dark shadows to nearly double), which would leave a
+seam at the selection's edge; the area outside the selection should come back unchanged, so
+comparing it with the original measures the change (`match_surroundings`). A tone curve on
+brightness, hue kept, undoes the relighting; then what is left is carried smoothly inward from
+the edge by push-pull. Pixels the model actually changed (different fine detail, as where it
+moved an object, or a far different colour) are left out of both. A result that doesn't resemble
+the original around the selection (over 25% mean difference) is left as it came.
 
 To debug a provider, start the app with `PHOTOCRAFT_GENAI_DUMP=<folder>`: each request's image,
 mask, prompt, raw results and colour-matching figures are written to a new subfolder there. Nothing
-is written without it. Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
+is written without it. For tuning, the ignored test `live_fill` in `apps/photocraft/src/genai.rs`
+runs one fill from the command line with the saved key, or replays saved results without a
+request (`PHOTOCRAFT_LIVE_REPLAY`). Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
 
 ## Keys and privacy
 

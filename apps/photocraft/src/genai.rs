@@ -133,6 +133,82 @@ mod tests {
         assert!(build("other", "", key()).is_err());
     }
 
+    /// Developer harness for tuning Generative Fill against the real service: runs one fill with
+    /// the key saved in Generative AI Settings and writes what was sent, the raw results and the
+    /// finished picture for each variation to a folder. Each run is billed to that key, so it is
+    /// ignored unless asked for:
+    ///
+    /// PHOTOCRAFT_LIVE_IMAGE=photo.png PHOTOCRAFT_LIVE_RECT=x,y,w,h PHOTOCRAFT_GENAI_DUMP=dir
+    /// [PHOTOCRAFT_LIVE_PROMPT=…] [PHOTOCRAFT_LIVE_COUNT=1] [PHOTOCRAFT_LIVE_MODEL=…]
+    /// [PHOTOCRAFT_LIVE_REPLAY=result-1.jpg,… (no request: reuse saved results)]
+    /// cargo test -p photocraft --release live_fill -- --ignored --nocapture
+    #[test]
+    #[ignore = "calls the real provider, billed to the saved key"]
+    fn live_fill() {
+        use photocraft_engine::genai_cmds::{FILL, SELECT_VARIATION};
+        use serde_json::json;
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let image = var("PHOTOCRAFT_LIVE_IMAGE").expect("PHOTOCRAFT_LIVE_IMAGE");
+        // The engine's debug dump writes what was sent and the raw results here too.
+        let out = std::path::PathBuf::from(var("PHOTOCRAFT_GENAI_DUMP").expect("PHOTOCRAFT_GENAI_DUMP"));
+        let rect: Vec<i64> = var("PHOTOCRAFT_LIVE_RECT").expect("PHOTOCRAFT_LIVE_RECT").split(',').map(|v| v.trim().parse().unwrap()).collect();
+        let count: u64 = var("PHOTOCRAFT_LIVE_COUNT").map_or(1, |c| c.parse().unwrap());
+        let provider: photocraft_engine::genai_cmds::SharedProvider = match var("PHOTOCRAFT_LIVE_REPLAY") {
+            // Free: answer with results saved from an earlier run, to tune what happens after.
+            Some(files) => Arc::new(Replay { results: files.split(',').map(|f| std::fs::read(f.trim()).unwrap()).collect(), next: Default::default() }),
+            None => {
+                let key = store::load(photocraft_genai::gemini::ID).unwrap().expect("no Gemini key saved in Generative AI Settings");
+                build("gemini", &var("PHOTOCRAFT_LIVE_MODEL").unwrap_or_default(), ApiKey::new(&key).unwrap()).unwrap()
+            }
+        };
+
+        std::fs::create_dir_all(&out).unwrap();
+        let mut s = photocraft_engine::Session::new();
+        let name = std::path::Path::new(&image).file_name().unwrap().to_string_lossy().into_owned();
+        photocraft_engine::file_cmds::open_bytes_as(&mut s, &name, &std::fs::read(&image).unwrap(), None, None).unwrap();
+        s.execute("select.rect", json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).unwrap();
+        s.set_image_provider(Some(provider));
+        let started = std::time::Instant::now();
+        let r = s.execute(FILL, json!({"prompt": var("PHOTOCRAFT_LIVE_PROMPT").unwrap_or_default(), "variations": count})).unwrap();
+        eprintln!("fill took {:.1}s", started.elapsed().as_secs_f32());
+        let group = r["layer"].as_u64().unwrap();
+        let children = s.active().unwrap().doc.layer(photocraft_doc::LayerId(group)).and_then(|l| l.children()).map_or(0, <[_]>::len);
+        for i in 0..children {
+            s.execute(SELECT_VARIATION, json!({"layer": group, "index": i})).unwrap();
+            let flat = photocraft_compose::flatten(&s.active().unwrap().doc);
+            let px: Vec<u8> = flat.px.iter().flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            let img =
+                photocraft_codecs::Image::from_u8(flat.rect.width() as u32, flat.rect.height() as u32, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
+            let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+            std::fs::write(out.join(format!("final-{}.png", i + 1)), png).unwrap();
+        }
+        eprintln!("wrote {children} variations to {}", out.display());
+    }
+
+    /// Answers edits with saved results in turn.
+    struct Replay {
+        results: Vec<Vec<u8>>,
+        next: std::sync::atomic::AtomicUsize,
+    }
+
+    impl photocraft_genai::ImageProvider for Replay {
+        fn info(&self) -> photocraft_genai::ProviderInfo {
+            photocraft_genai::ProviderInfo { id: "replay", name: "Replay", model: "replay".into(), host: "example.invalid" }
+        }
+        fn capabilities(&self) -> photocraft_genai::Capabilities {
+            photocraft_genai::Capabilities { generate: false, edit: true, variations: false }
+        }
+        fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
+            // The aspect Gemini would be asked for, so replays are placed as the real run was.
+            let gemini = photocraft_genai::gemini::GeminiProvider::new(ApiKey::new("k").unwrap(), "", Https::new()).unwrap();
+            photocraft_genai::ImageProvider::edit_aspect(&gemini, w, h)
+        }
+        fn edit(&self, _: &photocraft_genai::EditRequest) -> photocraft_genai::Result<photocraft_genai::GeneratedImage> {
+            let n = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(photocraft_genai::GeneratedImage { bytes: self.results[n % self.results.len()].clone(), mime: "image/jpeg".into() })
+        }
+    }
+
     #[test]
     fn the_transport_refuses_plain_http_without_sending() {
         let r = Https::new().post(HttpRequest { url: "http://example.invalid/".into(), headers: vec![("x-goog-api-key", "secret".into())], body: Vec::new() });
