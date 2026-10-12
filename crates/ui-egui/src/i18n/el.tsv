@@ -3983,17 +3983,4 @@ curves	Smooth	Εξομάλυνση
 	Skip artboards with findings or incomplete checks	Παράλειψη artboards με ευρήματα ή μη ολοκληρωμένο έλεγχο
 	No layout findings on {boards} artboards.	Δεν βρέθηκαν προβλήματα διάταξης σε {boards} artboards.
 	Some artboard checks were incomplete; they count as affected.	Ορισμένοι έλεγχοι artboard ήταν ελλιπείς και θεωρούνται προβληματικοί.
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Εξήχθη {n} δείγμα στο {file}|Εξήχθησαν {n} δείγματα στο {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Εισήχθη {n} πινέλο από την ομάδα {group}|Εισήχθησαν {n} πινέλα από την ομάδα {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Εισήχθη {n} δείγμα από το {file}|Εισήχθησαν {n} δείγματα από το {file}
-@plural	Played {n} step|Played {n} steps	Εκτελέστηκε {n} βήμα|Εκτελέστηκαν {n} βήματα
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Ενημερώθηκε {n} συνδεδεμένο έξυπνο αντικείμενο που άλλαξε στον δίσκο|Ενημερώθηκαν {n} συνδεδεμένα έξυπνα αντικείμενα που άλλαξαν στον δίσκο
 @plural	files|Saved for Web: {n} file	Αρχεία: {n}|Αποθηκεύτηκε για web: {n} αρχείο
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Διαγράφηκε {n} επίπεδο που καταγράφηκε από αυτή τη σύνθεση. Ενημερώστε τη σύνθεση ή εκκαθαρίστε την προειδοποίηση.|Διαγράφηκαν {n} επίπεδα που καταγράφηκαν από αυτή τη σύνθεση. Ενημερώστε τη σύνθεση ή εκκαθαρίστε την προειδοποίηση.
-@plural	{n} plane|{n} planes	{n} επίπεδο|{n} επίπεδα
-@plural	{n} preset|{n} presets	{n} προεπιλογή|{n} προεπιλογές
-@plural	{n} sample point removed|{n} sample points removed	Αφαιρέθηκε {n} σημείο δειγματοληψίας|Αφαιρέθηκαν {n} σημεία δειγματοληψίας
-@plural	{n} slice|{n} slices	{n} φέτα|{n} φέτες
-@plural	{n} step|{n} steps	{n} βήμα|{n} βήματα
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+ {n} ακόμη προειδοποίηση προεπιλογής πινέλου)|{warning} (+ {n} ακόμη προειδοποιήσεις προεπιλογών πινέλου)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} με {n} προειδοποίηση|{what} με {n} προειδοποιήσεις

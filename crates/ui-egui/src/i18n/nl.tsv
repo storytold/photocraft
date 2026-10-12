@@ -4043,17 +4043,4 @@ curves	Smooth	Vloeiend maken
 	Skip artboards with findings or incomplete checks	Tekengebieden met bevindingen of onvolledige controles overslaan
 	No layout findings on {boards} artboards.	Geen lay-outbevindingen op {boards} tekengebieden.
 	Some artboard checks were incomplete; they count as affected.	Sommige controles van tekengebieden waren onvolledig; deze gelden als getroffen.
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} staal geëxporteerd naar {file}|{n} stalen geëxporteerd naar {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} penseel geïmporteerd uit {group}|{n} penselen geïmporteerd uit {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} staal geïmporteerd uit {file}|{n} stalen geïmporteerd uit {file}
-@plural	Played {n} step|Played {n} steps	{n} stap afgespeeld|{n} stappen afgespeeld
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} gewijzigd gekoppeld slim object op schijf bijgewerkt|{n} gewijzigde gekoppelde slimme objecten op schijf bijgewerkt
 @plural	files|Saved for Web: {n} file	Bestanden: {n}|Opgeslagen voor web: {n} bestand
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} laag uit deze compositie is verwijderd. Werk de compositie bij of wis de waarschuwing.|{n} lagen uit deze compositie zijn verwijderd. Werk de compositie bij of wis de waarschuwing.
-@plural	{n} plane|{n} planes	{n} vlak|{n} vlakken
-@plural	{n} preset|{n} presets	{n} voorinstelling|{n} voorinstellingen
-@plural	{n} sample point removed|{n} sample points removed	{n} meetpunt verwijderd|{n} meetpunten verwijderd
-@plural	{n} slice|{n} slices	{n} segment|{n} segmenten
-@plural	{n} step|{n} steps	{n} stap|{n} stappen
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} extra waarschuwing voor penseelvoorinstelling)|{warning} (+{n} extra waarschuwingen voor penseelvoorinstellingen)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} met {n} waarschuwing|{what} met {n} waarschuwingen

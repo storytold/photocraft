@@ -4404,17 +4404,4 @@ shape	Appearance	Aspetto
 	Skip artboards with findings or incomplete checks	Salta le tavole con problemi o verifiche incomplete
 	No layout findings on {boards} artboards.	Nessun problema di layout su {boards} tavole da disegno.
 	Some artboard checks were incomplete; they count as affected.	Alcuni controlli delle tavole sono incompleti e vengono considerate interessate.
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Esportato {n} campione in {file}|Esportati {n} campioni in {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Importato {n} pennello da {group}|Importati {n} pennelli da {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Importato {n} campione da {file}|Importati {n} campioni da {file}
-@plural	Played {n} step|Played {n} steps	Riprodotto {n} passaggio|Riprodotti {n} passaggi
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Aggiornato {n} oggetto avanzato collegato modificato su disco|Aggiornati {n} oggetti avanzati collegati modificati su disco
 @plural	files|Saved for Web: {n} file	File: {n}|Salvato per il Web: {n} file
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Eliminato {n} livello registrato in questa composizione. Aggiorna la composizione o cancella l’avviso.|Eliminati {n} livelli registrati in questa composizione. Aggiorna la composizione o cancella l’avviso.
-@plural	{n} plane|{n} planes	{n} piano|{n} piani
-@plural	{n} preset|{n} presets	{n} preimpostazione|{n} preimpostazioni
-@plural	{n} sample point removed|{n} sample points removed	Rimosso {n} punto campione|Rimossi {n} punti campione
-@plural	{n} slice|{n} slices	{n} sezione|{n} sezioni
-@plural	{n} step|{n} steps	{n} passaggio|{n} passaggi
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+ altri {n} avviso sui predefiniti pennello)|{warning} (+ altri {n} avvisi sui predefiniti pennello)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} con {n} avviso|{what} con {n} avvisi

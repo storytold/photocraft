@@ -2888,17 +2888,4 @@ curves	Smooth	平滑
 	Skip artboards with findings or incomplete checks	略過有問題或檢查未完成的畫板
 	No layout findings on {boards} artboards.	{boards} 個畫板皆未發現版面問題。
 	Some artboard checks were incomplete; they count as affected.	部分畫板檢查未完成，將視為有問題。
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	已將 {n} 個色票匯出至 {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	已從 {group} 匯入 {n} 個筆刷
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	已從 {file} 匯入 {n} 個色票
-@plural	Played {n} step|Played {n} steps	已播放 {n} 個步驟
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	已更新磁碟上變更的 {n} 個連結智慧型物件
 @plural	files|Saved for Web: {n} file	已為網頁儲存 {n} 個檔案
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	此合成記錄的 {n} 個圖層已刪除。請更新合成或清除警告。
-@plural	{n} plane|{n} planes	{n} 個平面
-@plural	{n} preset|{n} presets	{n} 個預設集
-@plural	{n} sample point removed|{n} sample points removed	已移除 {n} 個取樣點
-@plural	{n} slice|{n} slices	{n} 個切片
-@plural	{n} step|{n} steps	{n} 個步驟
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning}（另有 {n} 個筆刷預設集警告）
-@plural	{what} with {n} warning|{what} with {n} warnings	{what}（{n} 個警告）

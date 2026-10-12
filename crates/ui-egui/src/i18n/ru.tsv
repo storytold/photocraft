@@ -3258,17 +3258,4 @@ curves	Smooth	Сгладить
 	Skip artboards with findings or incomplete checks	Пропуск областей с замечаниями или неполной проверкой
 	No layout findings on {boards} artboards.	На {boards} монтажных областях проблем с макетом не обнаружено.
 	Some artboard checks were incomplete; they count as affected.	Некоторые проверки областей не завершены; они считаются проблемными.
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Экспортирован {n} образец в {file}|Экспортировано {n} образцов в {file}|Экспортировано {n} образцов в {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Импортирована {n} кисть из группы {group}|Импортировано {n} кистей из группы {group}|Импортировано {n} кистей из группы {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Импортирован {n} образец из {file}|Импортировано {n} образцов из {file}|Импортировано {n} образцов из {file}
-@plural	Played {n} step|Played {n} steps	Воспроизведён {n} шаг|Воспроизведено {n} шагов|Воспроизведено {n} шагов
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Обновлён {n} связанный смарт-объект, изменённый на диске|Обновлено {n} связанных смарт-объектов, изменённых на диске|Обновлено {n} связанных смарт-объектов, изменённых на диске
 @plural	files|Saved for Web: {n} file	Файлов: {n}|Файла: {n}|Сохранено для веба: {n} файлов
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Удалён {n} слой, записанный в этой композиции. Обновите композицию или очистите предупреждение.|Удалено {n} слоёв, записанных в этой композиции. Обновите композицию или очистите предупреждение.|Удалено {n} слоёв, записанных в этой композиции. Обновите композицию или очистите предупреждение.
-@plural	{n} plane|{n} planes	{n} плоскость|{n} плоскостей|{n} плоскостей
-@plural	{n} preset|{n} presets	{n} набор настроек|{n} наборов настроек|{n} наборов настроек
-@plural	{n} sample point removed|{n} sample points removed	Удалена {n} точка выборки|Удалено {n} точек выборки|Удалено {n} точек выборки
-@plural	{n} slice|{n} slices	{n} срез|{n} срезов|{n} срезов
-@plural	{n} step|{n} steps	{n} шаг|{n} шагов|{n} шагов
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (ещё {n} предупреждение о наборе кистей)|{warning} (ещё {n} предупреждений о наборах кистей)|{warning} (ещё {n} предупреждений о наборах кистей)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what}: {n} предупреждение|{what}: {n} предупреждений|{what}: {n} предупреждений

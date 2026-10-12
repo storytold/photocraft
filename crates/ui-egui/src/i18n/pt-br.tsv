@@ -4073,17 +4073,4 @@ layerLabel	No Color	Sem cor
 	Skip artboards with findings or incomplete checks	Ignorar pranchetas com problemas ou verificações incompletas
 	No layout findings on {boards} artboards.	Nenhum problema de layout em {boards} pranchetas.
 	Some artboard checks were incomplete; they count as affected.	Algumas verificações de pranchetas ficaram incompletas e são consideradas afetadas.
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} amostra exportada para {file}|{n} amostras exportadas para {file}
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} pincel importado de {group}|{n} pincéis importados de {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} amostra importada de {file}|{n} amostras importadas de {file}
-@plural	Played {n} step|Played {n} steps	{n} etapa reproduzida|{n} etapas reproduzidas
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} objeto inteligente vinculado alterado no disco atualizado|{n} objetos inteligentes vinculados alterados no disco atualizados
 @plural	files|Saved for Web: {n} file	Arquivos: {n}|Salvo para Web: {n} arquivo
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} camada registrada nesta composição foi excluída. Atualize a composição ou limpe o aviso.|{n} camadas registradas nesta composição foram excluídas. Atualize a composição ou limpe o aviso.
-@plural	{n} plane|{n} planes	{n} plano|{n} planos
-@plural	{n} preset|{n} presets	{n} predefinição|{n} predefinições
-@plural	{n} sample point removed|{n} sample points removed	{n} ponto de amostra removido|{n} pontos de amostra removidos
-@plural	{n} slice|{n} slices	{n} fatia|{n} fatias
-@plural	{n} step|{n} steps	{n} etapa|{n} etapas
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+ mais {n} aviso de predefinição de pincel)|{warning} (+ mais {n} avisos de predefinição de pincel)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} com {n} aviso|{what} com {n} avisos
