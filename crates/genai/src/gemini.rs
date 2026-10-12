@@ -98,7 +98,14 @@ impl<T: HttpTransport> GeminiProvider<T> {
     }
 
     fn http_error(&self, status: u16, body: &[u8]) -> GenError {
-        let error = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("error").cloned());
+        // Some errors (402 when prepaid credit runs out) come wrapped in a one-element array.
+        let error = serde_json::from_slice::<Value>(body).ok().and_then(|v| {
+            let v = match v {
+                Value::Array(mut items) if !items.is_empty() => items.swap_remove(0),
+                v => v,
+            };
+            v.get("error").cloned()
+        });
         let message = error.as_ref().and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("");
         let reason = error.as_ref().and_then(|e| e.get("status")).and_then(Value::as_str).unwrap_or("");
         let invalid_key = message.contains("API key") || message.contains("API_KEY") || reason == "UNAUTHENTICATED";
@@ -335,6 +342,10 @@ mod tests {
             (Fake::status(403, json!({})), GenError::Auth),
             (Fake::status(429, json!({"error": {"message": "Resource exhausted"}})), GenError::Quota),
             (Fake::status(500, json!({"error": {"message": "boom AIza-test-secret"}})), GenError::Http { status: 500, message: "boom [key]".into() }),
+            (
+                Fake::status(402, json!([{"error": {"code": 402, "message": "Your prepayment credits are depleted.", "status": "RESOURCE_EXHAUSTED"}}])),
+                GenError::Http { status: 402, message: "Your prepayment credits are depleted.".into() },
+            ),
             (Fake::ok(json!({"output_text": "I can't help with that."})), GenError::Refused("I can't help with that.".into())),
             (Fake::ok(json!({})), GenError::Refused("it returned no image".into())),
             (Ok(HttpResponse { status: 200, body: b"<html>".to_vec() }), GenError::BadResponse("not JSON")),
