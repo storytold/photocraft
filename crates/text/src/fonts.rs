@@ -266,6 +266,14 @@ impl FontDb {
             // The generic directory scanner registers each file separately; on macOS that
             // repeatedly merges the growing font database and can stall the UI for minutes.
             self.fcx.collection.load_system_fonts();
+            // PingFang (the macOS Chinese UI font) lives outside the normal font folders.
+            // CoreText's collection usually lists it, but the CJK fallback relies on the
+            // family being present, so add the files when the collection missed them.
+            if !self.has_family("PingFang SC") && !self.has_family("PingFang TC") {
+                if let Some(f) = crate::cjk::mac_pingfang() {
+                    self.fcx.collection.load_fonts_from_paths([f]);
+                }
+            }
             self.ps_cache.clear();
             self.face_cache.clear();
             self.refresh_generics();
@@ -866,7 +874,7 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;

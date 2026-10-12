@@ -249,7 +249,7 @@ pub fn candidates(script: Script, files: &[std::path::PathBuf]) -> Vec<std::path
 
 /// Every font file in the platform font directories, listed on first use and cached for the
 /// process (names only; nothing is opened).
-#[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn system_font_files() -> &'static [std::path::PathBuf] {
     static FILES: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
     FILES.get_or_init(|| {
