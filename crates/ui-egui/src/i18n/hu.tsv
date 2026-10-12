@@ -4399,3 +4399,7 @@ cameraRaw	Yellow	Sárga
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	A ⌘H elrejti a PhotoCraftot
+	View › Extras uses ⌃⌘H.	A Nézet › Segédelemek a ⌃⌘H billentyűt használja.
+	Hide PhotoCraft uses ⌃⌘H.	A PhotoCraft elrejtése a ⌃⌘H billentyűt használja.

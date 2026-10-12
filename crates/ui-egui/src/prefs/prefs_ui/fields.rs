@@ -74,6 +74,9 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();
     }
+    if key == "cmdHHidesApp" {
+        return "⌘H Hides PhotoCraft".into();
+    }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
         if i == 0 {
@@ -418,6 +421,12 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     ui.vertical(|ui| {
                         crate::widgets::checkbox(ui, &mut b, &label);
                         ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    });
+                } else if path == "interface.cmdHHidesApp" {
+                    ui.vertical(|ui| {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                        let note = if b { tl!("View › Extras uses ⌃⌘H.") } else { tl!("Hide PhotoCraft uses ⌃⌘H.") };
+                        ui.label(RichText::new(note).color(t.text_dim));
                     });
                 } else {
                     crate::widgets::checkbox(ui, &mut b, &label);

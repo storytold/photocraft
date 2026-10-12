@@ -4213,3 +4213,7 @@ cameraData	Lens	Lens
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H PhotoCraft'ı Gizler
+	View › Extras uses ⌃⌘H.	Görünüm › Ekstralar ⌃⌘H kullanır.
+	Hide PhotoCraft uses ⌃⌘H.	PhotoCraft'ı Gizle ⌃⌘H kullanır.

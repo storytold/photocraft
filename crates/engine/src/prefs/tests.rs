@@ -389,6 +389,33 @@ fn keyboard_shortcuts_reassign_and_reset() {
     assert!(r["commands"].as_array().unwrap().iter().any(|c| c["id"] == "filter.blur.gaussianBlur"));
 }
 
+/// ⌘H Hides PhotoCraft is opt-in: a fresh profile and an older preferences file without the
+/// field keep Photoshop's ⌘H on View › Extras. On, Extras's default moves to ⌃⌘H, and a key the
+/// user gave Extras (or took from it) still wins either way.
+#[test]
+fn cmd_h_hides_app_is_opt_in_and_moves_only_the_extras_default() {
+    let fresh = Preferences::default();
+    assert!(!fresh.interface.cmd_h_hides_app);
+    assert_eq!(fresh.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+    let old: Preferences = serde_json::from_value(json!({"interface": {"showTooltips": true}})).unwrap();
+    assert!(!old.interface.cmd_h_hides_app, "an older file without the field stays off");
+    assert_eq!(old.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+
+    let mut p = Preferences::default();
+    p.interface.cmd_h_hides_app = true;
+    assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
+    assert_eq!(p.interface.default_shortcut("view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
+    assert_eq!(p.shortcut("edit.undo", Some("Cmd+Z")), Some("Cmd+Z"), "other commands keep theirs");
+    for on in [false, true] {
+        p.interface.cmd_h_hides_app = on;
+        p.shortcuts.insert("view.extras".into(), "Cmd+Alt+E".into());
+        assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+Alt+E"), "custom Extras key, pref {on}");
+        p.shortcuts.insert("view.extras".into(), String::new());
+        assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), None, "unbound Extras, pref {on}");
+        p.shortcuts.remove("view.extras");
+    }
+}
+
 /// #249: temporary tools (held keys) and the fill / colour keys are bindable like commands.
 #[test]
 fn temporary_tools_and_fill_keys_are_rebindable() {

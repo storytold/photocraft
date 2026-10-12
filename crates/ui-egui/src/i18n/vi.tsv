@@ -3983,3 +3983,7 @@ curves	Smooth	Làm mượt
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H ẩn PhotoCraft
+	View › Extras uses ⌃⌘H.	Hiển thị › Thành phần phụ dùng ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Ẩn PhotoCraft dùng ⌃⌘H.

@@ -4557,3 +4557,7 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H sakriva PhotoCraft
+	View › Extras uses ⌃⌘H.	Prikaz › Dodatni elementi koristi ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Sakrij PhotoCraft koristi ⌃⌘H.
