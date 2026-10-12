@@ -78,8 +78,11 @@ fn fill_enabled(s: &Session) -> std::result::Result<(), String> {
 /// provider's output shape so the result isn't stretched, inside the canvas.
 pub(crate) fn context_area(selected: Rect, canvas: Rect, aspect: impl Fn(u32, u32) -> (u32, u32)) -> Rect {
     let side = selected.width().max(selected.height());
-    // Half the selection's size on each side: enough of the scene to read what runs into it.
-    let margin = (side / 2).clamp(64, 1024) as i32;
+    // Twice the selection's size on each side, so the model can read a pattern or trend that
+    // runs through it (a row of panels stepping down) and not just what touches its edge. Half
+    // the size was tried first: Gemini saw two panels of seven and carried the pattern under
+    // the selection straight up instead of continuing the row's curve.
+    let margin = side.saturating_mul(2).clamp(64, 2048) as i32;
     let r = Rect::new(selected.x0 - margin, selected.y0 - margin, selected.x1.saturating_add(margin), selected.y1.saturating_add(margin)).intersect(&canvas);
     let (a, b) = aspect(r.width(), r.height());
     if a == 0 || b == 0 || r.is_empty() {
@@ -149,6 +152,11 @@ const DETAIL: f32 = 0.03;
 const BINS: usize = 32;
 /// Grey that transparent parts of the image are shown on when sent.
 const HOLE: f32 = 128.0;
+/// How bright the placeholder over the selection is, as a share of the colours around it.
+/// At full brightness, bright content running into the selection (lit panels below an empty
+/// sky) smears through it and reads as that content carrying on to the far edge; dimmed, it
+/// reads as a gap to fill. Dimming didn't make Gemini draw dark shapes into bright scenes.
+const PLACEHOLDER: f32 = 0.35;
 
 fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
     let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).map_err(other)?;
@@ -156,7 +164,7 @@ fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
 }
 
 /// The image and mask sent, both `w`×`h`: `image` (sRGB, already scaled) with the selection
-/// replaced by a soft blur of the colours around it, and an opaque black-and-white PNG of the
+/// replaced by a dimmed soft blur of the colours around it, and an opaque black-and-white PNG of the
 /// selection (white = fill). The provider never sees what is being replaced, as Photoshop's fill
 /// doesn't, so it can't paint it back. A flat grey hole was tried first: Gemini read it as an
 /// object (a grey box, a lamp) and drew it in.
@@ -177,7 +185,7 @@ fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) ->
     let mut mask = Vec::with_capacity(rgba.len());
     for (i, &m) in coverage.iter().enumerate() {
         for c in 0..3 {
-            cleared.push(((original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * m) * 255.0).round().clamp(0.0, 255.0) as u8);
+            cleared.push(((original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * PLACEHOLDER * m) * 255.0).round().clamp(0.0, 255.0) as u8);
         }
         cleared.push(255);
         let g = (m * 255.0).round() as u8;

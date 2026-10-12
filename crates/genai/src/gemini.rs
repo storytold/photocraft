@@ -151,7 +151,7 @@ impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
 }
 
 /// The instruction that stands in for a mask parameter. The selected area arrives blurred out (a
-/// smooth placeholder made of the colours around it), so the model can't copy what was there and
+/// smooth, dimmed placeholder made of the colours around it), so the model can't copy what was there and
 /// has no flat shape to mistake for an object. An empty prompt means "what would be there without
 /// whatever stood in it": the background and anything crossing the edge carry on through it.
 pub fn fill_instruction(prompt: &str) -> String {
