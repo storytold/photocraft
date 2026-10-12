@@ -1630,6 +1630,36 @@ fn preferences_apply_button_saves_without_closing_and_cancel_keeps_applied_value
     assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
 }
 
+/// Interface › ⌘H Hides PhotoCraft: macOS only, off by default; the note says where the other
+/// item went.
+#[test]
+fn cmd_h_hides_photocraft_is_an_opt_in_mac_checkbox() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut app, _store) = app_with_store();
+    assert!(!app.session.prefs().interface.cmd_h_hides_app);
+    app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    if !cfg!(target_os = "macos") {
+        assert!(h.query_by_label("⌘H Hides PhotoCraft").is_none());
+        return;
+    }
+    h.get_by_label("⌘H Hides PhotoCraft").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Hide PhotoCraft uses ⌃⌘H.");
+    h.get_by_label("⌘H Hides PhotoCraft").click();
+    h.run_steps(4);
+    h.get_by_label("View › Extras uses ⌃⌘H.");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert!(h.state().session.prefs().interface.cmd_h_hides_app);
+}
+
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
 #[test]
 fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {

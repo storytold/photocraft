@@ -4248,3 +4248,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H PhotoCraft'ı Gizler
+	View › Extras uses ⌃⌘H.	Görünüm › Ekstralar ⌃⌘H kullanır.
+	Hide PhotoCraft uses ⌃⌘H.	PhotoCraft'ı Gizle ⌃⌘H kullanır.

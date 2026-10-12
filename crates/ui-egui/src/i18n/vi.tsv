@@ -4021,3 +4021,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H ẩn PhotoCraft
+	View › Extras uses ⌃⌘H.	Hiển thị › Thành phần phụ dùng ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Ẩn PhotoCraft dùng ⌃⌘H.

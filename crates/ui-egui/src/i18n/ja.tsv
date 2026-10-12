@@ -4191,3 +4191,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+	⌘H Hides PhotoCraft	⌘H で PhotoCraft を隠す
+	View › Extras uses ⌃⌘H.	表示 › エクストラは ⌃⌘H を使います。
+	Hide PhotoCraft uses ⌃⌘H.	PhotoCraft を隠すは ⌃⌘H を使います。
