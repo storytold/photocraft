@@ -3697,3 +3697,44 @@ curves	Smooth	Làm mượt
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.
+	Artboard Overview	Tổng quan artboard
+	Next Artboard Variant	Biến thể artboard tiếp theo
+	Previous Artboard Variant	Biến thể artboard trước đó
+	Responsive Template…	Mẫu responsive…
+	Responsive Warnings	Cảnh báo responsive
+	Safe Areas	Vùng an toàn
+	Apply role to similar layers	Áp dụng vai trò cho các lớp tương tự
+	Could not select conflict layer	Không thể chọn lớp xung đột
+	Insets as a fraction of artboard size	Lồng vào theo tỷ lệ kích thước artboard
+	Layout review: {findings} findings on {boards} artboards.	Xem lại bố cục: {findings} phát hiện trên {boards} artboard.
+	Master layers removed from variant: {count}	Các lớp chính đã bị xóa khỏi biến thể: {count}
+	Maximum size must be at least the minimum size	Kích thước tối đa phải ít nhất bằng kích thước tối thiểu
+	More preserved layers are listed in the command result.	Các lớp được giữ lại khác được liệt kê trong kết quả lệnh.
+	No layout findings on {boards} artboards.	Không có phát hiện bố cục trên {boards} artboard.
+	Overrides dropped because their layers no longer exist: {count}	Các ghi đè bị bỏ vì lớp của chúng không còn tồn tại: {count}
+	Overview · all formats	Tổng quan · mọi định dạng
+	Proportional fit	Vừa tỉ lệ
+	Proportional fit · scale all	Vừa tỉ lệ · co giãn tất cả
+	Reflow	Bố cục lại
+	Reset to master rule	Đặt lại về quy tắc chính
+	Responsive layout role	Vai trò bố cục responsive
+	Responsive variants	Biến thể responsive
+	Responsive variants updated with conflicts	Biến thể responsive đã được cập nhật kèm xung đột
+	Safe area	Vùng an toàn
+	Semantic reflow	Bố cục lại theo ngữ nghĩa
+	Semantic reflow · keep type size	Bố cục lại theo ngữ nghĩa · giữ cỡ chữ
+	Set as master	Đặt làm bản chính
+	Size limits in pixels (0 = none)	Giới hạn kích thước theo pixel (0 = không có)
+	Skip artboards with findings or incomplete checks	Bỏ qua các artboard có phát hiện hoặc kiểm tra chưa hoàn tất
+	Some artboard checks were incomplete; they count as affected.	Một số kiểm tra artboard chưa hoàn tất; chúng được tính là bị ảnh hưởng.
+	Some artboards could not be checked and count as affected.	Không thể kiểm tra một số artboard và chúng được tính là bị ảnh hưởng.
+	Suggested	Đề xuất
+	Suggested role	Vai trò đề xuất
+	Switch variant	Chuyển biến thể
+	Text reflow	Bố cục lại chữ
+	The conflict layer no longer exists	Lớp xung đột không còn tồn tại
+	These local layers were preserved: {layers}	Các lớp cục bộ sau được giữ lại: {layers}
+	Update variants	Cập nhật biến thể
+	Variant	Biến thể
+	Variant name	Tên biến thể
+	suggested	đề xuất
