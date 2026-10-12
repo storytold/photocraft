@@ -230,3 +230,57 @@ fn the_dialog_shows_each_section_and_a_copy_button() {
     assert!(h.query_by_label("Graphics API").is_some());
     assert!(h.query_by_label("Copy").is_some());
 }
+
+/// The dialog's labels are built at run time, so the `tl!` scanner can't see them: every section
+/// title and row label (with a document open, and the per-display monitor lines) has a System Info
+/// entry in every complete language.
+#[test]
+fn every_label_has_a_translation_in_every_complete_language() {
+    let mut app = app();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let sections = report(&app, None);
+    let mut labels: Vec<&str> = sections.iter().flat_map(|s| std::iter::once(s.title.as_str()).chain(s.rows.iter().map(|(l, _)| l.as_str()))).collect();
+    labels.retain(|l| *l != "Document 1" && !l.starts_with("Monitor profile on "));
+    // Rows that only some machines or sessions have.
+    let rare = ["Kernel", "Desktop", "CPU", "Startup fallback", "This session", "GPU memory budget", "Window's display", "UI scale", "Window", "Running for"];
+    let templates = ["Document {n}", "Monitor profile on {display}", "Monitor profile on {display} (main window)", "Display profiles"];
+    labels.extend(rare.iter().chain(&templates));
+    for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
+        let missing: Vec<&&str> = labels.iter().filter(|l| !crate::i18n::has_ctx(lang, CONTEXT, l)).collect();
+        assert!(missing.is_empty(), "{}: System Info labels without a translation: {missing:?}", lang.code());
+    }
+}
+
+/// #3196 review: the dialog shows its labels in the UI language; the values and Copy stay English.
+#[test]
+fn the_dialog_labels_follow_the_ui_language() {
+    let cs = crate::i18n::Lang::from_code("cs").unwrap();
+    assert_eq!(label(cs, "Graphics"), "Grafika");
+    assert_eq!(label(cs, "Type"), "Typ", "the System Info sense, not the Type tool");
+    assert_eq!(label(cs, "Document 3"), "Dokument 3");
+    assert_eq!(label(cs, "Monitor profile on DELL U2720Q (main window)"), "Profil monitoru na DELL U2720Q (hlavní okno)");
+    assert_eq!(label(cs, "Document x"), "Document x", "not a numbered document: unchanged");
+    assert_eq!(label(crate::i18n::Lang::EN, "Monitor profile on Built-in"), "Monitor profile on Built-in");
+    let mut app = app();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "help.systemInfo", Value::Null).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            crate::i18n::with_language(crate::i18n::Lang::from_code("cs").unwrap(), || crate::dialogs::show(app, &ctx));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    for title in ["Aplikace", "Systém", "Grafika", "Displeje", "Vstup pera", "Písma", "Relace", "Soubory", "Grafické API"] {
+        assert!(h.query_by_label(title).is_some(), "no {title} label");
+    }
+    assert!(h.query_by_label("Graphics API").is_none(), "the English label is replaced");
+    let fields = &h.state().ui.dialogs[0].fields;
+    let sections: Vec<Section> = serde_json::from_value(fields["report"].clone()).unwrap();
+    assert!(text(&sections).contains("Graphics API"), "Copy stays English");
+}

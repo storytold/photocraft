@@ -3,7 +3,9 @@
 //! questions. The report is taken when the dialog opens; the dialog shows it in sections, Copy
 //! puts it on the clipboard as aligned plain text, and `help.systemInfo` returns it as JSON.
 //!
-//! The report is in English whatever the UI language: it is read by maintainers. It holds no
+//! The report is in English whatever the UI language: it is read by maintainers. The dialog shows
+//! its section titles and row labels in the UI language ([`label`]); the values, Copy and
+//! `help.systemInfo` stay in English. It holds no
 //! document names, document paths or pixels, and paths under the home folder are written `~/…`,
 //! so it can be pasted into a public issue as is.
 
@@ -489,7 +491,28 @@ pub fn meminfo_available(text: &str) -> Option<u64> {
     kb.checked_mul(1024)
 }
 
-/// The System Info dialog's body: the report in sections, then Copy.
+/// Catalog context of the dialog's labels: some ("Type", "Kernel", "Source") mean something else
+/// elsewhere in the app.
+const CONTEXT: &str = "System Info";
+
+/// A section title or row label of the report in `lang`, for the dialog. Labels with a number or
+/// a display name in them ("Document 2", "Monitor profile on DELL U2720Q") keep it as is.
+pub fn label(lang: crate::i18n::Lang, s: &str) -> String {
+    use crate::i18n::{fmt, tr_ctx};
+    if let Some(n) = s.strip_prefix("Document ").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) {
+        return fmt(tr_ctx(lang, CONTEXT, "Document {n}"), &[("n", n)]);
+    }
+    if let Some(display) = s.strip_prefix("Monitor profile on ") {
+        let (display, template) = match display.strip_suffix(" (main window)") {
+            Some(d) => (d, "Monitor profile on {display} (main window)"),
+            None => (display, "Monitor profile on {display}"),
+        };
+        return fmt(tr_ctx(lang, CONTEXT, template), &[("display", display)]);
+    }
+    tr_ctx(lang, CONTEXT, s).to_string()
+}
+
+/// The System Info dialog's body: the report in sections (labels in the UI language), then Copy.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
     let sections = match fields.get("report").cloned().and_then(|v| serde_json::from_value::<Vec<Section>>(v).ok()) {
         Some(s) => s,
@@ -500,17 +523,18 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut serde_json::Map
         }
     };
     let t = crate::theme::Tokens::get(ui.ctx());
+    let lang = crate::i18n::current();
     let max_h = (ui.ctx().content_rect().height() * 0.7).clamp(240.0, 640.0);
     egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
         for (i, s) in sections.iter().enumerate() {
             if i > 0 {
                 ui.add_space(10.0);
             }
-            ui.add(egui::Label::new(egui::RichText::new(&s.title).font(crate::theme::semibold(13.0)).color(t.text)).selectable(false));
+            ui.add(egui::Label::new(egui::RichText::new(label(lang, &s.title)).font(crate::theme::semibold(13.0)).color(t.text)).selectable(false));
             ui.add_space(2.0);
             egui::Grid::new(("system-info", i)).num_columns(2).spacing([16.0, 3.0]).min_col_width(140.0).show(ui, |ui| {
-                for (label, value) in &s.rows {
-                    ui.add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).selectable(false));
+                for (name, value) in &s.rows {
+                    ui.add(egui::Label::new(egui::RichText::new(label(lang, name)).color(t.text_dim)).selectable(false));
                     ui.add(egui::Label::new(egui::RichText::new(value).font(crate::theme::mono(12.0)).color(t.text)).wrap().selectable(true));
                     ui.end_row();
                 }
