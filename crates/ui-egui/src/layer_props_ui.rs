@@ -162,6 +162,7 @@ fn responsive_rule_params(
 /// Actions, all with the same collapsible headers (#155).
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut run: Vec<(String, Value)> = Vec::new();
+    let t = Tokens::get(ui.ctx());
     if let Some(st) = app.session.active()
         && st.doc.artboard_of(layer.id).is_some_and(|board| board != layer.id)
     {

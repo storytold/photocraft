@@ -4283,3 +4283,44 @@ shape	Appearance	Izgled
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
 	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.
+	Artboard Overview	Pregled artborda
+	Next Artboard Variant	Sledeća varijanta artborda
+	Previous Artboard Variant	Prethodna varijanta artborda
+	Responsive Template…	Responzivni šablon…
+	Responsive Warnings	Responzivna upozorenja
+	Safe Areas	Bezbedne zone
+	Apply role to similar layers	Primeni ulogu na slične slojeve
+	Could not select conflict layer	Sloj sukoba nije moguće izabrati
+	Insets as a fraction of artboard size	Uvlačenja kao deo veličine artborda
+	Layout review: {findings} findings on {boards} artboards.	Pregled rasporeda: {findings} nalaza na {boards} artbordova.
+	Master layers removed from variant: {count}	Glavni slojevi uklonjeni iz varijante: {count}
+	Maximum size must be at least the minimum size	Najveća veličina mora biti bar najmanja veličina
+	More preserved layers are listed in the command result.	Ostali očuvani slojevi su navedeni u rezultatu komande.
+	No layout findings on {boards} artboards.	Nema nalaza rasporeda na {boards} artbordova.
+	Overrides dropped because their layers no longer exist: {count}	Zaobilaženja odbačena jer njihovi slojevi više ne postoje: {count}
+	Overview · all formats	Pregled · svi formati
+	Proportional fit	Srazmerno uklapanje
+	Proportional fit · scale all	Srazmerno uklapanje · skaliraj sve
+	Reflow	Ponovni tok
+	Reset to master rule	Vrati na glavno pravilo
+	Responsive layout role	Uloga responzivnog rasporeda
+	Responsive variants	Responzivne varijante
+	Responsive variants updated with conflicts	Responzivne varijante ažurirane sa sukobima
+	Safe area	Bezbedna zona
+	Semantic reflow	Semantički ponovni tok
+	Semantic reflow · keep type size	Semantički ponovni tok · zadrži veličinu slova
+	Set as master	Postavi kao glavni
+	Size limits in pixels (0 = none)	Ograničenja veličine u pikselima (0 = nema)
+	Skip artboards with findings or incomplete checks	Preskoči artborde sa nalazima ili nepotpunim proverama
+	Some artboard checks were incomplete; they count as affected.	Neke provere artbordova su bile nepotpune; računaju se kao pogođene.
+	Some artboards could not be checked and count as affected.	Neki artbordi nisu mogli biti provereni i računaju se kao pogođeni.
+	Suggested	Predloženo
+	Suggested role	Predložena uloga
+	Switch variant	Promeni varijantu
+	Text reflow	Ponovni tok teksta
+	The conflict layer no longer exists	Sloj sukoba više ne postoji
+	These local layers were preserved: {layers}	Ovi lokalni slojevi su očuvani: {layers}
+	Update variants	Ažuriraj varijante
+	Variant	Varijanta
+	Variant name	Naziv varijante
+	suggested	predloženo

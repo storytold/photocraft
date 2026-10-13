@@ -1123,9 +1123,6 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": nid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
-
-
-
 fn semantic_transform_for(role: &str, source: Rect, current_board: Rect, target: Rect, proportional: Affine) -> Affine {
     let dx = (i64::from(target.x0) - i64::from(current_board.x0)) as f64;
     let dy = (i64::from(target.y0) - i64::from(current_board.y0)) as f64;
