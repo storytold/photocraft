@@ -126,9 +126,10 @@ fn print_dry_run_renders_a_pdf_and_reports_the_platform_backend() {
         assert_eq!((w, h), (300, 150));
         assert_eq!(cs, "/DeviceRGB");
         assert_eq!(&data[..3], &[0x33, 0x66, 0xcc]);
-        // 300 px at 72 ppi = 300 pt, centred.
+        // Auto-rotation fits the landscape source to the portrait A4 page: 150 × 300 pt.
         let rect: Vec<f64> = serde_json::from_value(r["imageRect"].clone()).unwrap();
-        assert!((rect[2] - 300.0).abs() < 1e-6 && (rect[0] - (595.28 - 300.0) / 2.0).abs() < 1e-6);
+        assert!((rect[2] - 150.0).abs() < 1e-6 && (rect[3] - 300.0).abs() < 1e-6);
+        assert!((rect[0] - (595.28 - 150.0) / 2.0).abs() < 1e-6);
     }
     // Print to PDF: no spooling by default.
     let mut s = session("gray", 8);
@@ -298,6 +299,7 @@ fn page_of(channels: usize, data: Vec<u8>, emulsion_down: bool) -> PrintPage {
         description: None,
         label: None,
         emulsion_down,
+        rotate_image: false,
     }
 }
 
@@ -670,6 +672,72 @@ fn print_dry_run_without_output_retains_no_pdf() {
     assert!(result["bytes"].as_u64().unwrap() > 100);
     assert!(result["command"].is_array());
     assert!(s.file_menu.last_print.as_ref().unwrap().get("dryRun").is_none());
+}
+
+#[test]
+fn print_dry_run_preserves_system_printer_job_settings() {
+    let mut s = session("rgb", 8);
+    let result = s
+        .execute(
+            "file.print",
+            json!({
+                "dryRun": true,
+                "printer": "Office Printer",
+                "copies": 2,
+                "collate": false,
+                "duplex": "shortEdge",
+                "grayscale": true,
+                "driverOptions": {"InputSlot": "Tray2"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["printer"], "Office Printer");
+    assert_eq!(result["copies"], 2);
+    assert_eq!(result["collate"], false);
+    assert_eq!(result["duplex"], "shortEdge");
+    assert_eq!(result["grayscale"], true);
+    assert_eq!(result["driverOptions"], json!([["InputSlot", "Tray2"], ["orientation-requested", "3"]]));
+    #[cfg(unix)]
+    {
+        let command: Vec<String> = serde_json::from_value(result["command"].clone()).unwrap();
+        assert!(command.windows(2).any(|pair| pair == ["-d", "Office Printer"]));
+        assert!(command.iter().any(|argument| argument == "collate=false"));
+        assert!(command.iter().any(|argument| argument == "sides=two-sided-short-edge"));
+        assert!(command.iter().any(|argument| argument == "print-color-mode=monochrome"));
+        assert!(command.iter().any(|argument| argument == "InputSlot=Tray2"));
+    }
+}
+
+#[test]
+fn c5_envelope_selects_c5_media_and_keeps_requested_orientation() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("c5-orientation");
+    for (orientation, expected_paper) in [("portrait", [459.21, 649.13]), ("landscape", [649.13, 459.21])] {
+        let output = format!("{dir}/{orientation}.pdf");
+        let result = s.execute("file.print", json!({"paper": "c5", "orientation": orientation, "output": output, "send": true, "dryRun": true})).unwrap();
+        let paper: Vec<f64> = serde_json::from_value(result["paper"].clone()).unwrap();
+        assert!((paper[0] - expected_paper[0]).abs() < 0.01, "{orientation}: {paper:?}");
+        assert!((paper[1] - expected_paper[1]).abs() < 0.01, "{orientation}: {paper:?}");
+        let should_rotate = orientation == "portrait";
+        assert_eq!(result["rotateImage"], should_rotate);
+        let pdf = std::fs::read(result["pdf"].as_str().unwrap()).unwrap();
+        let content = pdf_content(&pdf);
+        if should_rotate {
+            assert!(content.contains("q 0 300.000 -150.000 0"), "{content}");
+        } else {
+            assert!(content.contains("q 300.000 0 0 150.000"), "{content}");
+        }
+        #[cfg(unix)]
+        {
+            let command: Vec<String> = serde_json::from_value(result["command"].clone()).unwrap();
+            assert!(command.iter().any(|argument| argument == "media=iso_c5_162x229mm"), "{command:?}");
+            let requested_orientation = if orientation == "landscape" { "orientation-requested=4" } else { "orientation-requested=3" };
+            assert!(command.iter().any(|argument| argument == requested_orientation), "{command:?}");
+        }
+    }
+    let fixed_orientation = s.execute("file.print", json!({"paper": "c5", "orientation": "portrait", "autoRotate": false, "dryRun": true})).unwrap();
+    assert_eq!(fixed_orientation["rotateImage"], false);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

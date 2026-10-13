@@ -1162,10 +1162,17 @@ their own modes, an upper stroke covering lower ones.
 
 `file.print` and `file.printOneCopy` keep PDF layout, scaling, marks and ICC conversion in
 PhotoCraft and submit the rendered bytes through `craft-print` at the Git revision pinned in
-`Cargo.toml`. CUPS streams the PDF on macOS/Linux; Windows uses the shared Windows PDF backend.
-The driver receives exact physical sheet size so it does not scale PhotoCraft's layout twice.
-Windows raster printing does not establish physical-printer colour fidelity; test critical
-photo output with the actual printer and its profile.
+`Cargo.toml`. The print dialog lists system printers on macOS, Windows and Linux; CUPS-backed
+systems expose their available driver options, while Windows can open the selected driver's saved
+preferences. The job settings include copies, collation, duplex and grayscale where the backend
+supports them. Paper orientation is sent explicitly to CUPS and is represented by the PDF page
+dimensions for Windows. **Auto-Rotate Image** is on by default: when artwork and page orientations
+differ, the image rotates 90 degrees counterclockwise and the preview shows that rotation; turn it
+off to keep the document's original direction. The driver receives the PDF's exact physical sheet size so it does
+not scale PhotoCraft's layout twice. The OS-specific driver preferences are not a unified native per-job
+dialog: CUPS settings are applied to the submitted job, while Windows' preferences are saved as
+that printer's defaults. Windows raster printing does not establish physical-printer colour
+fidelity; test critical photo output with the actual printer and its profile.
 
 Desktop commands run composition and submission on a background worker. The UI reports success
 only when the spooler accepts the job; remove submitted jobs in the system print queue. Headless
