@@ -3,6 +3,9 @@
 fn main() {
     // May re-execute this process with glibc tuned to return freed document memory (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // The git commit of a dev build's checkout, for `--version` (build.rs, #5247). Before `run`:
+    // clap reads the version string once.
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // `args_os`, not `args`: a non-Unicode argument (a Latin-1 file name on Linux) must reach clap,
     // not panic before anything is printed (issue #1108).
     let code = photocraft_cli::run(std::env::args_os().skip(1), &mut std::io::stdout(), &mut std::io::stderr());
