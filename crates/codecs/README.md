@@ -157,9 +157,10 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **JPEG XL (read-only, feature `jxl`).** Decoding lives in the optional `photocraft-jxl` crate
-  behind the non-default `jxl` feature (official builds enable it). Without it, JPEG XL is still
-  detected and decoding returns `CodecError::Unsupported` ("JPEG XL support isn't included in this
-  build"). `jxl-oxide` (pure Rust) decodes bare codestreams and the container, Modular and VarDCT,
+  behind the non-default `jxl` feature (official desktop builds enable it; the web build leaves it
+  out, since the decoder's ~140 KB would push the wasm over its 25 MiB cap). Without it, JPEG XL is
+  still detected and decoding returns `CodecError::Unsupported` ("JPEG XL support isn't included in
+  this build"). `jxl-oxide` (pure Rust) decodes bare codestreams and the container, Modular and VarDCT,
   lossless and lossy, integer samples of any depth (up to 8 bits as U8, 9 to 32 as U16 scaled to
   the full range) and 16/32-bit floats (F16/F32, HDR values above 1 kept), gray and RGB with
   straight alpha (associated alpha is divided out), spot colours rendered in, and losslessly
