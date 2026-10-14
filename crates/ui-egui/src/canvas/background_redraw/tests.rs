@@ -120,6 +120,70 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     assert!(cache.entries.is_empty());
 }
 
+#[test]
+fn the_reduced_picture_goes_to_the_mip_level_the_view_samples() {
+    // The canvas shader samples level -log2(scale) when zoomed out (trilinear between the two
+    // around it): the picture goes to the finer one.
+    assert_eq!(preview_level(1.0), None);
+    assert_eq!(preview_level(0.6), None);
+    assert_eq!(preview_level(0.5), Some(1));
+    assert_eq!(preview_level(0.3), Some(1));
+    assert_eq!(preview_level(0.25), Some(2));
+    assert_eq!(preview_level(0.1), Some(3));
+    assert_eq!(preview_level(0.01), Some(MAX_PREVIEW_LEVEL));
+    for bad in [0.0, -0.5, f32::NAN, f32::INFINITY] {
+        assert_eq!(preview_level(bad), None, "{bad}");
+    }
+    assert_eq!(reduce(Rect::new(0, 1024, 2600, 1700), 4), Rect::new(0, 256, 650, 425));
+    assert_eq!(reduce(Rect::new(1024, 0, 2047, 5), 2), Rect::new(512, 0, 1024, 3));
+}
+
+#[test]
+fn the_reduced_picture_covers_only_blocks_still_to_draw_in_view() {
+    let b = blocks(Rect::new(0, 0, 8192, 4096));
+    let all: Vec<usize> = (0..b.len()).collect();
+    // Zoomed out over the whole document, or onto part of it.
+    assert_eq!(preview_area(&b, &all, Rect::new(-500, -500, 9000, 5000)), Rect::new(0, 0, 8192, 4096));
+    assert_eq!(preview_area(&b, &all, Rect::new(1500, 900, 3000, 2100)), Rect::new(1024, 0, 3072, 3072));
+    // Blocks already drawn are left out, and a view of none of the rest gets no picture.
+    let rest: Vec<usize> = all.iter().copied().filter(|&i| b[i].x0 >= 4096).collect();
+    assert_eq!(preview_area(&b, &rest, Rect::new(0, 0, 9000, 5000)), Rect::new(4096, 0, 8192, 4096));
+    assert!(preview_area(&b, &rest, Rect::new(0, 0, 2000, 2000)).is_empty());
+}
+
+#[test]
+fn the_reduced_document_scales_what_is_measured_in_document_pixels() {
+    use photocraft_doc::vector::{Path, Subpath, VectorMask};
+    use photocraft_doc::{Effect, LayerMask};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).expect("new");
+    s.execute("layer.new.layer", json!({})).expect("layer");
+    s.execute("edit.fill", json!({"color": "#cc8844"})).expect("fill");
+    s.execute("layer.layerStyle.dropShadow", json!({"distance": 12, "size": 16})).expect("shadow");
+    let mut doc = (*s.active().expect("document").doc).clone();
+    let l = doc.layers.last_mut().expect("layer");
+    l.mask = Some(LayerMask { feather: 8.0, ..LayerMask::reveal_all() });
+    l.vector_mask = Some(VectorMask { feather: 4.0, ..VectorMask::new(Path::new(vec![Subpath::polygon(&[(40.0, 40.0), (400.0, 40.0), (400.0, 320.0)])])) });
+    // In a group too.
+    let inner = l.clone();
+    doc.layers.push(photocraft_doc::Layer::group("group", vec![inner]));
+    let p = preview_document(&doc, 4);
+    assert_eq!((p.size.width, p.size.height), (200, 150));
+    for l in [&p.layers[1], &p.layers[2].children().expect("group")[0]] {
+        match &l.effects.items[0] {
+            Effect::DropShadow(sh) => assert_eq!((sh.distance, sh.size), (3.0, 4.0)),
+            e => panic!("{e:?}"),
+        }
+        assert_eq!(l.mask.as_ref().map(|m| m.feather), Some(2.0));
+        let v = l.vector_mask.as_ref().expect("vector mask");
+        assert_eq!(v.feather, 1.0);
+        let a = v.path.subpaths[0].knots[1].anchor;
+        assert_eq!((a.x, a.y), (100.0, 10.0));
+    }
+    // The original is untouched.
+    assert!(matches!(&doc.layers[1].effects.items[0], Effect::DropShadow(sh) if sh.size == 16.0));
+}
+
 struct Gpu {
     harness: egui_kittest::Harness<'static, PhotocraftApp>,
     observer: GpuCanvas,
@@ -709,4 +773,35 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     g.harness.state_mut().ui.view.flip_horizontal = false;
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");
+}
+
+#[test]
+fn a_zoomed_out_redraw_shows_a_reduced_picture_before_its_blocks() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    // 4×3 blocks, fit in a 1000×700 window: about 22%, so level 2.
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    g.harness.step();
+    let level = g.harness.state().redraws.get(&doc).and_then(|r| r.preview).expect("a redraw with a reduced first picture");
+    assert_eq!(level, 2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while g.harness.state().redraws.get(&doc).is_some_and(|r| r.preview.is_some()) {
+        assert!(std::time::Instant::now() < deadline, "the reduced picture didn't land");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        g.harness.step();
+    }
+    // It came first: most blocks are still to draw (the worker can only queue a few ahead).
+    let left = g.harness.state().redraws.get(&doc).map_or(0, |r| r.left);
+    assert!(left >= 6, "{left} blocks left when the reduced picture landed");
+    let (_, size, early) = g.observer.read_level(doc.0, level).expect("level");
+    assert_eq!(size, [1024, 768]);
+    settle(&mut g);
+    let (_, _, done) = g.observer.read_level(doc.0, level).expect("level");
+    // The document is flat colour, so the reduced picture is already the finished level (the
+    // texture starts out transparent).
+    assert!(done.iter().all(|t| t[3] > 0.99), "the finished level is opaque");
+    let differ = early.iter().zip(&done).filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| (x - y).abs() > 2.0 / 255.0)).count();
+    assert_eq!(differ, 0, "{differ} texels of the reduced picture differ from the finished level");
+    assert_eq!(g.harness.state().perf.last_refresh, "background");
+    assert_matches_synchronous(&mut g, doc);
 }

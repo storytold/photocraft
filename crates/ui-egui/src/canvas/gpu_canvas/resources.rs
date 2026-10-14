@@ -171,6 +171,16 @@ pub(super) struct Tile {
     pub(super) page: Option<(u64, u32)>,
 }
 
+impl Tile {
+    /// The tile's rect (x, y, w, h) in mip `level`'s pixels, or `None` when it has no such level
+    /// or doesn't start on that level's grid.
+    pub(super) fn level_rect(&self, level: u32) -> Option<[u32; 4]> {
+        let [tx, ty, tw, th] = self.rect;
+        let k = 1u32.checked_shl(level)?;
+        (level < self.levels.len() as u32 && tx % k == 0 && ty % k == 0).then(|| [tx >> level, ty >> level, (tw >> level).max(1), (th >> level).max(1)])
+    }
+}
+
 fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
