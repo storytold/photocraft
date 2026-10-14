@@ -64,13 +64,13 @@ mod services;
 #[cfg(any(not(target_os = "macos"), test))]
 mod single_instance;
 mod startup_report;
+mod system_print;
 // Tablet support (macOS AppKit monitor, Linux X11/Wayland, Windows barrel button).
 mod tablet;
 mod ui_state;
 mod window_frame;
 
 use photocraft_engine::Session;
-#[cfg(target_os = "linux")]
 use photocraft_engine::print_cmds::PrintExt;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
@@ -701,6 +701,8 @@ fn main() -> eframe::Result {
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
+            let mut session = session;
+            *session.system_print_dialog_mut() = Some(system_print::dialog());
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
             PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
