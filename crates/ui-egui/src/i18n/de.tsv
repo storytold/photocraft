@@ -3242,7 +3242,6 @@ curves	Smooth	Glätten
 	Price	Preis
 	Disclaimer	Haftungsausschluss
 	Image mark	Bildmarke
-	Stretch	Strecken
 	Size limits in pixels (0 = none)	Größenlimits in Pixeln (0 = unbegrenzt)
 	Maximum size must be at least the minimum size	Die maximale Größe muss mindestens der Mindestgröße entsprechen
 	Safe area	Sicherheitsbereich
@@ -3257,7 +3256,6 @@ curves	Smooth	Glätten
 	Safe Areas	Sicherheitsbereiche
 	Responsive Template…	Responsive Vorlage…
 	Text reflow	Textumbruch
-	Preserve	Beibehalten
 	Rewrap	Neu umbrechen
 	Rewrap with auto height	Mit automatischer Höhe umbrechen
 	Rewrap and shrink	Umbrechen und verkleinern
