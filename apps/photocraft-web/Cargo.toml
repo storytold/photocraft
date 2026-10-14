@@ -10,9 +10,9 @@ publish = false
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
-# Open JPEG XL images (the optional photocraft-jxl crate); official builds build with
-# `--features heif,jxl`.
-jxl = ["photocraft-codecs/jxl"]
+# No `jxl` feature here: the JPEG XL decoder adds ~140 KB to the wasm and the bundle sits at
+# Cloudflare's 25 MiB per-file cap (the `web build and wasm size gate` check), so the web build
+# leaves JPEG XL out and `.jxl` files report "not included in this build".
 
 [lints]
 workspace = true

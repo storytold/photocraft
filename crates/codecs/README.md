@@ -46,14 +46,13 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
 | FITS | yes | yes | U8, U16, F32 | Gray, RGB | no | no | no | no | no | yes (header cards) | no | built in |
-| JPEG XL (.jxl) | **no** (see #2868) | yes | U8, U16 | Gray, RGB, RGBA (GrayA expands to RGBA) | yes | no (bare codestream) | no | no | no | no | no | `zune-jpegxl` |
+| JPEG XL | with feature `jxl` | yes (lossless) | read: U8, U16 (9–32-bit decodes to U16), F16, F32; write: U8, U16 | read: Gray, GrayA, RGB, RGBA; write: Gray, RGB, RGBA (GrayA expands to RGBA) | yes | read: yes (embedded, or built from the enum encoding); write: no (bare codestream) | read: yes (`Exif` box); write: no | read: yes (`xml ` box); write: no | no | no | no | `jxl-oxide` (read), `zune-jpegxl` (write) |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
-| JPEG XL | with feature `jxl` | **no** | U8, U16 (9–32-bit decodes to U16), F16, F32 | Gray, GrayA, RGB, RGBA | yes | yes (embedded, or built from the enum encoding) | yes (`Exif` box) | yes (`xml ` box) | no | no | n/a | `jxl-oxide` |
 
 "Native" means the data is stored and read back without conversion. Anything else is converted by
 the encode plan, and `fidelity_warnings` reports the conversion when it loses information:
@@ -74,17 +73,6 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP.
 
 ## Documented asymmetries and limitations
-
-* **JPEG XL export.** Writes lossless 8/16-bit bare codestreams with `zune-jpegxl`.
-  Native layouts are Gray, RGB and RGBA. GrayA is expanded to RGBA at the
-  original depth. For 16-bit RGBA (including expanded GrayA), we correct
-  zune-jpegxl 0.5.2's extra-channel header, which otherwise describes the
-  16-bit alpha samples as 8-bit. This preserves alpha precision; the independent
-  jxl-oxide decoder test checks the actual gray and alpha samples. The expansion
-  is not a native GrayA layout. No ICC, EXIF, XMP or DPI container boxes are written; the
-  document pipeline converts tagged images to sRGB and reports metadata loss.
-  Reading remains in the separate #2868 PR. The `ASYMMETRIC_EXCEPTIONS`
-  entry stays until import is merged.
 
 * **DDS.** The top mip level of a 2D texture: uncompressed pixels described by channel masks
   (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha) or BC1/BC2/BC3 (DXT1/DXT3/DXT5),
@@ -173,21 +161,29 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
-* **JPEG XL (read-only, feature `jxl`).** Decoding lives in the optional `photocraft-jxl` crate
-  behind the non-default `jxl` feature (official builds enable it). Without it, JPEG XL is still
-  detected and decoding returns `CodecError::Unsupported` ("JPEG XL support isn't included in this
-  build"). `jxl-oxide` (pure Rust) decodes bare codestreams and the container, Modular and VarDCT,
+* **JPEG XL.** Decoding lives in the optional `photocraft-jxl` crate
+  behind the non-default `jxl` feature (official desktop builds enable it; the web build leaves it
+  out, since the decoder's ~140 KB would push the wasm over its 25 MiB cap). Without it, JPEG XL is
+  still detected and decoding returns `CodecError::Unsupported` ("JPEG XL support isn't included in
+  this build"). `jxl-oxide` (pure Rust) decodes bare codestreams and the container, Modular and VarDCT,
   lossless and lossy, integer samples of any depth (up to 8 bits as U8, 9 to 32 as U16 scaled to
   the full range) and 16/32-bit floats (F16/F32, HDR values above 1 kept), gray and RGB with
   straight alpha (associated alpha is divided out), spot colours rendered in, and losslessly
   recompressed JPEGs. The header's orientation is applied and EXIF/XMP Orientation rewritten to 1
   (`keep_orientation` turns the pixels back as coded). The ICC profile is the embedded one, or one
   built from the header's colour encoding when it is not plain sRGB. Animations decode to their
-  first frame with `DecodeWarning::MoreFrames`. CMYK files return `Unsupported`. Writing needs an
-  encoder and the only complete one, libjxl, is C++, so JPEG XL is listed in
-  `ASYMMETRIC_EXCEPTIONS`. Oracles: `corpus/jxl/` (photocraft-corpus `jxl/`, encoded by libjxl's
+  first frame with `DecodeWarning::MoreFrames`. CMYK files return `Unsupported`. Without the
+  feature the format is write-only, so it is listed in `ASYMMETRIC_EXCEPTIONS`. Oracles: `corpus/jxl/` (photocraft-corpus `jxl/`, encoded by libjxl's
   `cjxl` from procedural images; `cargo xtask corpus --jxl`), checked sample for sample in
   `tests/it/jxl.rs` (features `corpus` and `jxl`).
+  Writing is lossless 8/16-bit bare codestreams with `zune-jpegxl`.
+  Native layouts are Gray, RGB and RGBA. GrayA is expanded to RGBA at the
+  original depth. For 16-bit RGBA (including expanded GrayA), we correct
+  zune-jpegxl 0.5.2's extra-channel header, which otherwise describes the
+  16-bit alpha samples as 8-bit. This preserves alpha precision; the independent
+  jxl-oxide decoder test checks the actual gray and alpha samples. The expansion
+  is not a native GrayA layout. No ICC, EXIF, XMP or DPI container boxes are written; the
+  document pipeline converts tagged images to sRGB and reports metadata loss.
 * **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
   needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
   behind the non-default `avif` feature. In a default build it is neither readable nor writable,
