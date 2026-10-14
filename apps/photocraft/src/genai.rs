@@ -196,7 +196,7 @@ mod tests {
             photocraft_genai::ProviderInfo { id: "replay", name: "Replay", model: "replay".into(), host: "example.invalid" }
         }
         fn capabilities(&self) -> photocraft_genai::Capabilities {
-            photocraft_genai::Capabilities { generate: false, edit: true, variations: false }
+            photocraft_genai::Capabilities { generate: false, edit: true, variations: false, edit_in_place: true, max_references: 4 }
         }
         fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
             // The aspect Gemini would be asked for, so replays are placed as the real run was.

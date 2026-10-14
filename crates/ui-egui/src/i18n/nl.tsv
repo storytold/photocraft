@@ -4242,3 +4242,19 @@ curves	Smooth	Vloeiend maken
 	Sends the same area and prompt to {name} again for three more.	Stuurt hetzelfde gebied en dezelfde beschrijving opnieuw naar {name} voor nog drie.
 	Generate More	Meer genereren
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Elk Generatief vullen maakt drie variaties en stuurt dus drie verzoeken, die elk op uw sleutel worden gefactureerd.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Selectie vullen
+	Edit selection	Selectie bewerken
+	Generate new content in the selection, or remove what is there	Nieuwe inhoud in de selectie genereren of verwijderen wat er staat
+	Keep what is in the selection and change only what you ask for	Behouden wat in de selectie staat en alleen veranderen wat u vraagt
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Beschrijf wat er in de selectie moet veranderen: wat er staat blijft behouden, behalve wat u laat veranderen (een kleur, een tekst, een materiaal).
+	What to change	Wat moet veranderen
+	Empty: removes what is selected and continues the image through it.	Leeg: verwijdert wat geselecteerd is en zet de afbeelding erdoorheen voort.
+	Empty: places what the reference images show in the selection.	Leeg: plaatst wat de referentieafbeeldingen tonen in de selectie.
+	Reference images	Referentieafbeeldingen
+	Optional: an object or product to show, or a design, colour or look to match.	Optioneel: een object of product om te tonen, of een ontwerp, kleur of stijl om na te bootsen.
+	Add Reference…	Referentie toevoegen…
+	Image File…	Afbeeldingsbestand…
+	Open Documents	Geopende documenten
+	The reference images are sent too, at most 1024 pixels on their long side.	De referentieafbeeldingen worden ook verstuurd, met hoogstens 1024 pixels aan de lange zijde.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	In de modus Selectie bewerken wordt het geselecteerde gebied verstuurd zoals het is. Toegevoegde referentieafbeeldingen worden ook verstuurd.

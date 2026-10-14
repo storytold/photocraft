@@ -4685,3 +4685,19 @@ shape	Appearance	Оформление
 	Sends the same area and prompt to {name} again for three more.	Снова отправляет ту же область и описание в {name}, чтобы получить ещё три.
 	Generate More	Создать ещё
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Каждая Генеративная заливка создаёт три варианта, поэтому отправляет три запроса, каждый оплачивается по вашему ключу.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Заполнить выделение
+	Edit selection	Изменить выделение
+	Generate new content in the selection, or remove what is there	Создать новое содержимое в выделенной области или удалить то, что в ней есть
+	Keep what is in the selection and change only what you ask for	Сохранить содержимое выделенной области и изменить только то, что вы просите
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Опишите, что изменить в выделенной области: её содержимое сохранится, кроме того, что вы попросите изменить (цвет, текст, материал).
+	What to change	Что изменить
+	Empty: removes what is selected and continues the image through it.	Пусто: удаляет выделенное и продолжает изображение через выделенную область.
+	Empty: places what the reference images show in the selection.	Пусто: помещает в выделенную область то, что показано на референсных изображениях.
+	Reference images	Референсные изображения
+	Optional: an object or product to show, or a design, colour or look to match.	Необязательно: объект или товар, который нужно показать, либо дизайн, цвет или стиль, на который нужно ориентироваться.
+	Add Reference…	Добавить референс…
+	Image File…	Файл изображения…
+	Open Documents	Открытые документы
+	The reference images are sent too, at most 1024 pixels on their long side.	Референсные изображения тоже отправляются, не более 1024 пикселей по длинной стороне.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	В режиме «Изменить выделение» выделенная область отправляется как есть. Добавленные референсные изображения тоже отправляются.

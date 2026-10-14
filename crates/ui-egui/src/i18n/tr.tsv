@@ -4211,3 +4211,19 @@ cameraData	Lens	Lens
 	Sends the same area and prompt to {name} again for three more.	Üç tane daha için aynı alanı ve istemi yeniden şuraya gönderir: {name}.
 	Generate More	Daha Fazla Üret
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Her Üretken Dolgu üç varyasyon oluşturur; bu yüzden her biri anahtarınıza faturalandırılan üç istek gönderir.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Seçimi doldur
+	Edit selection	Seçimi düzenle
+	Generate new content in the selection, or remove what is there	Seçimde yeni içerik oluştur veya içindekini kaldır
+	Keep what is in the selection and change only what you ask for	Seçimdekini koru ve yalnızca istediğiniz kısmı değiştir
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Seçimde neyin değişeceğini açıklayın: istediğiniz değişiklik (renk, metin, malzeme) dışında içerik korunur.
+	What to change	Ne değişecek
+	Empty: removes what is selected and continues the image through it.	Boş: seçili içeriği kaldırır ve görüntüyü seçimin içinden sürdürür.
+	Empty: places what the reference images show in the selection.	Boş: referans görüntülerde görüneni seçime yerleştirir.
+	Reference images	Referans görüntüler
+	Optional: an object or product to show, or a design, colour or look to match.	İsteğe bağlı: gösterilecek bir nesne veya ürün ya da uyulacak bir tasarım, renk veya stil.
+	Add Reference…	Referans Ekle…
+	Image File…	Görüntü Dosyası…
+	Open Documents	Açık Belgeler
+	The reference images are sent too, at most 1024 pixels on their long side.	Referans görüntüler de gönderilir; uzun kenarları en fazla 1024 piksel olur.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	"Seçimi düzenle" modunda seçili alan olduğu gibi gönderilir. Eklediğiniz referans görüntüler de gönderilir.

@@ -4161,3 +4161,19 @@ curves	Smooth	スムーズ
 	Sends the same area and prompt to {name} again for three more.	同じ範囲と説明文を {name} にもう一度送り、さらに 3 つ生成します。
 	Generate More	さらに生成
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	生成塗りつぶしは毎回 3 つのバリエーションを作るため、3 回リクエストを送信し、それぞれがお使いのキーに課金されます。
+# Generative Fill: Edit mode and reference images
+	Fill selection	選択範囲を塗りつぶし
+	Edit selection	選択範囲を編集
+	Generate new content in the selection, or remove what is there	選択範囲に新しい内容を生成するか、そこにあるものを削除します
+	Keep what is in the selection and change only what you ask for	選択範囲の内容を残し、指示した部分だけを変更します
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	選択範囲で変更する内容を入力してください。指示した部分（色、文字、素材など）以外は、元の内容がそのまま残ります。
+	What to change	変更する内容
+	Empty: removes what is selected and continues the image through it.	空欄：選択した内容を削除し、周囲の画像を選択範囲内に続けます。
+	Empty: places what the reference images show in the selection.	空欄：参照画像に写っているものを選択範囲に配置します。
+	Reference images	参照画像
+	Optional: an object or product to show, or a design, colour or look to match.	省略可：表示したい物や製品、または合わせたいデザイン、色、雰囲気。
+	Add Reference…	参照を追加…
+	Image File…	画像ファイル…
+	Open Documents	開いているドキュメント
+	The reference images are sent too, at most 1024 pixels on their long side.	参照画像も送信されます（長辺は最大 1024 ピクセル）。
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	「選択範囲を編集」モードでは、選択範囲はそのまま送信されます。追加した参照画像も送信されます。

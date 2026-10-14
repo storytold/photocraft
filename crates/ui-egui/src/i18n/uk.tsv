@@ -4194,3 +4194,19 @@ curves	Smooth	Згладити
 	Sends the same area and prompt to {name} again for three more.	Знову надсилає ту саму область і опис до {name}, щоб отримати ще три.
 	Generate More	Створити ще
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Кожна Генеративна заливка створює три варіанти, тож надсилає три запити, кожен оплачується за вашим ключем.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Заповнити виділення
+	Edit selection	Змінити виділення
+	Generate new content in the selection, or remove what is there	Створити новий вміст у виділеній області або видалити те, що в ній є
+	Keep what is in the selection and change only what you ask for	Зберегти вміст виділеної області й змінити лише те, що ви просите
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Опишіть, що змінити у виділеній області: її вміст збережеться, крім того, що ви попросите змінити (колір, текст, матеріал).
+	What to change	Що змінити
+	Empty: removes what is selected and continues the image through it.	Порожньо: видаляє виділене й продовжує зображення крізь виділену область.
+	Empty: places what the reference images show in the selection.	Порожньо: розміщує у виділеній області те, що показують референсні зображення.
+	Reference images	Референсні зображення
+	Optional: an object or product to show, or a design, colour or look to match.	Необов’язково: об’єкт або товар, який треба показати, чи дизайн, колір або стиль, на який треба орієнтуватися.
+	Add Reference…	Додати референс…
+	Image File…	Файл зображення…
+	Open Documents	Відкриті документи
+	The reference images are sent too, at most 1024 pixels on their long side.	Референсні зображення теж надсилаються, не більше 1024 пікселів по довшій стороні.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	У режимі «Змінити виділення» виділена область надсилається як є. Додані референсні зображення теж надсилаються.

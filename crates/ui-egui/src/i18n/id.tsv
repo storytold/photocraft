@@ -3503,3 +3503,19 @@ curves	Smooth	Haluskan
 	Sends the same area and prompt to {name} again for three more.	Mengirim area dan deskripsi yang sama ke {name} lagi untuk tiga lagi.
 	Generate More	Buat Lagi
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Setiap Isian generatif membuat tiga variasi, jadi mengirim tiga permintaan, masing-masing ditagihkan ke kunci Anda.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Isi seleksi
+	Edit selection	Edit seleksi
+	Generate new content in the selection, or remove what is there	Buat konten baru di dalam seleksi, atau hapus yang ada di sana
+	Keep what is in the selection and change only what you ask for	Pertahankan isi seleksi dan ubah hanya yang Anda minta
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Jelaskan apa yang akan diubah di dalam seleksi: isinya dipertahankan, kecuali yang Anda minta untuk diubah (warna, teks, bahan).
+	What to change	Apa yang diubah
+	Empty: removes what is selected and continues the image through it.	Kosong: menghapus yang diseleksi dan melanjutkan gambar di dalam seleksi.
+	Empty: places what the reference images show in the selection.	Kosong: menempatkan apa yang ditunjukkan gambar referensi di dalam seleksi.
+	Reference images	Gambar referensi
+	Optional: an object or product to show, or a design, colour or look to match.	Opsional: objek atau produk yang akan ditampilkan, atau desain, warna, atau gaya yang akan ditiru.
+	Add Reference…	Tambah Referensi…
+	Image File…	File Gambar…
+	Open Documents	Dokumen Terbuka
+	The reference images are sent too, at most 1024 pixels on their long side.	Gambar referensi juga dikirim, maksimal 1024 piksel pada sisi panjangnya.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Dalam mode Edit seleksi, area yang diseleksi dikirim apa adanya. Gambar referensi yang Anda tambahkan juga dikirim.

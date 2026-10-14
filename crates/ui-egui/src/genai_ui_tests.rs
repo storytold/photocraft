@@ -23,7 +23,7 @@ impl ImageProvider for Fake {
         ProviderInfo { id: "gemini", name: "Google Gemini", model: self.model.clone(), host: "example.invalid" }
     }
     fn capabilities(&self) -> Capabilities {
-        Capabilities { generate: false, edit: true, variations: false }
+        Capabilities { generate: false, edit: true, variations: false, edit_in_place: true, max_references: 4 }
     }
     fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
         let (w, h) = photocraft_genai::png_size(&r.image).unwrap();
@@ -151,7 +151,104 @@ fn the_prompt_dialog_runs_the_fill_and_remembers_the_prompt() {
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.layers.len(), layers + 1);
     assert_eq!(doc.layers.last().unwrap().name, "a red square");
-    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "a red square"})));
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "a red square", "mode": "fill"})));
+    let (cmd, params) = app.session.journal.iter().rev().find(|(c, _)| c == FILL).unwrap();
+    assert_eq!((cmd.as_str(), params), (FILL, &json!({"prompt": "a red square", "mode": "fill"})), "no references: none sent");
+}
+
+/// An app with the provider set up, an open 64² document with a selection, and the prompt
+/// dialog's id.
+fn prompt_ready(store: &Store) -> PhotocraftApp {
+    store.borrow_mut().insert("gemini".into(), SECRET.into());
+    let mut app = app_with(store);
+    app.session.prefs.edit(|p| p.dialogs.insert(PREF.into(), json!({"provider": "gemini", "model": "m"})));
+    restore(&mut app).unwrap();
+    app
+}
+
+fn open_prompt_dialog(app: &mut PhotocraftApp) -> u64 {
+    let ctx = egui::Context::default();
+    crate::menus::invoke(app, &ctx, FILL, json!({})).unwrap()["dialog"].as_u64().unwrap()
+}
+
+fn fields(app: &PhotocraftApp, id: u64) -> &Map<String, Value> {
+    &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields
+}
+
+fn last_fill(app: &PhotocraftApp) -> Value {
+    app.session.journal.iter().rev().find(|(c, _)| c == FILL).map(|(_, p)| p.clone()).unwrap()
+}
+
+#[test]
+fn edit_mode_and_reference_documents_reach_the_command_and_are_remembered() {
+    let store = Store::default();
+    let mut app = prompt_ready(&store);
+    // A green document to use as a reference, then the one to edit.
+    app.run("file.new", json!({"width": 32, "height": 32, "background": "#00ff00"})).unwrap();
+    let green = app.session.active().unwrap().doc.id.0;
+    app.run("file.new", json!({"width": 64, "height": 64, "background": "#ffffff"})).unwrap();
+    app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let id = open_prompt_dialog(&mut app);
+    assert_eq!(fields(&app, id)["mode"], "fill", "Fill until Edit is chosen");
+    assert_eq!(fields(&app, id)["references"], json!([]));
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("mode".into(), json!("edit"));
+    f.insert("prompt".into(), json!("  make it blue "));
+    f.insert("references".into(), json!([{"document": green}]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(last_fill(&app), json!({"prompt": "make it blue", "mode": "edit", "references": [{"document": green}]}));
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "make it blue", "mode": "edit"})));
+    assert_eq!(app.session.active().unwrap().doc.layers.last().unwrap().name, "make it blue");
+
+    // The next prompt starts in Edit with the same reference.
+    let id = open_prompt_dialog(&mut app);
+    assert_eq!(fields(&app, id)["mode"], "edit");
+    assert_eq!(fields(&app, id)["references"], json!([{"document": green}]));
+    // Edit with no prompt removes, as Fill does: Edit needs something to change.
+    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!(""));
+    app.ui.dialog_mut(id).unwrap().fields.insert("references".into(), json!([]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(last_fill(&app), json!({"prompt": "", "mode": "fill"}));
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "", "mode": "edit"})), "the tab chosen is kept");
+
+    // A reference to a document that has been closed since is dropped.
+    app.genai.references = vec![json!({"document": 987_654_321}), json!({"document": green})];
+    let id = open_prompt_dialog(&mut app);
+    assert_eq!(fields(&app, id)["references"], json!([{"document": green}]));
+}
+
+#[test]
+fn image_files_are_added_as_references_by_path_after_they_open() {
+    let dir = std::env::temp_dir().join(format!("photocraft-genai-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("bottle.png");
+    let px: Vec<u8> = (0..40 * 20).flat_map(|_| [200u8, 30, 40, 255]).collect();
+    let img = photocraft_codecs::Image::from_u8(40, 20, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
+    std::fs::write(&good, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+    let bad = dir.join("broken.png");
+    std::fs::write(&bad, b"not an image").unwrap();
+    let store = Store::default();
+    let mut app = prompt_ready(&store);
+    app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let answers = [&bad, &good].map(|p| Some(crate::file_dialog::FileDialogAnswer::Paths(vec![p.to_string_lossy().into_owned()])));
+    app.services.file_dialog = Some(crate::file_dialog::fake(answers.into()).0);
+    let id = open_prompt_dialog(&mut app);
+    let ctx = egui::Context::default();
+    // A file that doesn't open is reported now and not added.
+    pick_reference_file(&mut app).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(app.ui.status.contains("broken.png"), "{}", app.ui.status);
+    assert_eq!(fields(&app, id)["references"], json!([]));
+    pick_reference_file(&mut app).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let entry = json!({"path": good.to_string_lossy()});
+    assert_eq!(fields(&app, id)["references"], json!([entry.clone()]));
+    assert!(matches!(app.genai.previews.get(&reference_key(&entry)), Some(Preview::Image(i)) if i.size == [40, 20]), "a preview, never enlarged");
+    assert_eq!(reference_name(&app, &entry).as_deref(), Some("bottle.png"));
+    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("this bottle"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(last_fill(&app)["references"], json!([entry]));
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Renders Generative AI Settings and the prompt for a look (`GENAI_SNAPSHOT_DIR=… cargo test`).
@@ -182,9 +279,39 @@ fn the_dialogs_render() {
     crate::menus::invoke(h.state_mut(), &ctx, FILL, json!({})).unwrap();
     h.run_steps(6);
     h.get_by_label("Generate");
+    h.get_by_label("Fill selection");
+    h.get_by_label("Add Reference…");
     if let (Some(dir), Ok(img)) = (&dir, h.render()) {
         img.save(std::path::Path::new(dir).join("genai-prompt.png")).unwrap();
     }
+    // Edit, with the document itself as a reference.
+    h.get_by_label("Edit selection").click();
+    h.run_steps(2);
+    let doc = h.state().session.active().unwrap().doc.id.0;
+    let prompt = h.state().ui.dialogs[0].id;
+    let f = &mut h.state_mut().ui.dialog_mut(prompt).unwrap().fields;
+    assert_eq!(f["mode"], "edit");
+    f.insert("prompt".into(), json!("make the label black and the text white"));
+    f.insert("references".into(), json!([{"document": doc}]));
+    h.run_steps(6);
+    h.get_by_label("Remove");
+    if let Some(dir) = &dir
+        && let Ok(img) = h.render()
+    {
+        img.save(std::path::Path::new(dir).join("genai-prompt-edit.png")).unwrap();
+    }
+    // Add Reference… offers an image file or an open document.
+    h.get_by_label("Add Reference…").click();
+    h.run_steps(4);
+    h.get_by_label("Image File…");
+    h.get_by_label("Open Documents");
+    if let Some(dir) = &dir
+        && let Ok(img) = h.render()
+    {
+        img.save(std::path::Path::new(dir).join("genai-add-reference.png")).unwrap();
+    }
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
     // The options bar of a selection tool: the button sits after Select and Mask….
     let prompt = h.state().ui.dialogs[0].id;
     crate::dialogs::cancel(h.state_mut(), prompt).unwrap();

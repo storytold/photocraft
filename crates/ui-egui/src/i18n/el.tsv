@@ -4184,3 +4184,19 @@ curves	Smooth	Εξομάλυνση
 	Sends the same area and prompt to {name} again for three more.	Στέλνει ξανά την ίδια περιοχή και περιγραφή στο {name} για τρεις ακόμη.
 	Generate More	Δημιουργία περισσότερων
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Κάθε Παραγωγικό γέμισμα δημιουργεί τρεις παραλλαγές, άρα στέλνει τρία αιτήματα, το καθένα χρεώνεται στο κλειδί σας.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Γέμισμα επιλογής
+	Edit selection	Επεξεργασία επιλογής
+	Generate new content in the selection, or remove what is there	Δημιουργία νέου περιεχομένου στην επιλογή ή αφαίρεση όσων υπάρχουν σε αυτήν
+	Keep what is in the selection and change only what you ask for	Διατήρηση του περιεχομένου της επιλογής και αλλαγή μόνο όσων ζητάτε
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Περιγράψτε τι θα αλλάξει στην επιλογή: το περιεχόμενό της διατηρείται, εκτός από όσα ζητάτε να αλλάξουν (ένα χρώμα, ένα κείμενο, ένα υλικό).
+	What to change	Τι θα αλλάξει
+	Empty: removes what is selected and continues the image through it.	Κενό: αφαιρεί το επιλεγμένο περιεχόμενο και συνεχίζει την εικόνα μέσα από την επιλογή.
+	Empty: places what the reference images show in the selection.	Κενό: τοποθετεί στην επιλογή ό,τι δείχνουν οι εικόνες αναφοράς.
+	Reference images	Εικόνες αναφοράς
+	Optional: an object or product to show, or a design, colour or look to match.	Προαιρετικά: ένα αντικείμενο ή προϊόν που θα εμφανιστεί ή ένα σχέδιο, χρώμα ή ύφος που θα ακολουθηθεί.
+	Add Reference…	Προσθήκη αναφοράς…
+	Image File…	Αρχείο εικόνας…
+	Open Documents	Ανοιχτά έγγραφα
+	The reference images are sent too, at most 1024 pixels on their long side.	Αποστέλλονται και οι εικόνες αναφοράς, έως 1024 εικονοστοιχεία στη μεγάλη πλευρά τους.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Στη λειτουργία «Επεξεργασία επιλογής» η επιλεγμένη περιοχή αποστέλλεται όπως είναι. Αποστέλλονται επίσης οι εικόνες αναφοράς που προσθέτετε.

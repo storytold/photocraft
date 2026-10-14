@@ -4231,3 +4231,19 @@ cameraRaw	Dehaze	Odstranění oparu
 	Sends the same area and prompt to {name} again for three more.	Odešle stejnou oblast a popis znovu do {name} pro tři další.
 	Generate More	Generovat další
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Každá generativní výplň vytvoří tři varianty, takže odešle tři požadavky a každý se účtuje na váš klíč.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Vyplnit výběr
+	Edit selection	Upravit výběr
+	Generate new content in the selection, or remove what is there	Vytvořit ve výběru nový obsah, nebo odstranit, co v něm je
+	Keep what is in the selection and change only what you ask for	Zachovat obsah výběru a změnit jen to, o co požádáte
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Popište, co se má ve výběru změnit: jeho obsah se zachová, kromě toho, co chcete změnit (barva, text, materiál).
+	What to change	Co změnit
+	Empty: removes what is selected and continues the image through it.	Prázdné: odstraní vybraný obsah a obraz bude výběrem plynule pokračovat.
+	Empty: places what the reference images show in the selection.	Prázdné: vloží do výběru to, co ukazují referenční obrázky.
+	Reference images	Referenční obrázky
+	Optional: an object or product to show, or a design, colour or look to match.	Nepovinné: objekt nebo produkt, který se má zobrazit, nebo design, barva či styl, kterým se řídit.
+	Add Reference…	Přidat referenci…
+	Image File…	Soubor obrázku…
+	Open Documents	Otevřené dokumenty
+	The reference images are sent too, at most 1024 pixels on their long side.	Odešlou se i referenční obrázky, nejvýše 1024 pixelů na delší straně.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	V režimu Upravit výběr se vybraná oblast odešle tak, jak je. Přidané referenční obrázky se odešlou také.

@@ -4555,3 +4555,19 @@ shape	Appearance	Izgled
 	Sends the same area and prompt to {name} again for three more.	Ponovo šalje istu oblast i opis ka {name} za još tri.
 	Generate More	Napravi još
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Svaka Generativna popuna pravi tri varijacije, pa šalje tri zahteva, a svaki se naplaćuje na vaš ključ.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Popuni selekciju
+	Edit selection	Uredi selekciju
+	Generate new content in the selection, or remove what is there	Generiši novi sadržaj u selekciji ili ukloni ono što je u njoj
+	Keep what is in the selection and change only what you ask for	Zadrži ono što je u selekciji i promeni samo ono što tražite
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Opišite šta treba promeniti u selekciji: ono što je u njoj ostaje, osim onoga što tražite da se promeni (boja, tekst, materijal).
+	What to change	Šta promeniti
+	Empty: removes what is selected and continues the image through it.	Prazno: uklanja selektovano i nastavlja sliku kroz selekciju.
+	Empty: places what the reference images show in the selection.	Prazno: postavlja u selekciju ono što prikazuju referentne slike.
+	Reference images	Referentne slike
+	Optional: an object or product to show, or a design, colour or look to match.	Opciono: predmet ili proizvod koji treba prikazati, ili dizajn, boja ili stil koji treba pratiti.
+	Add Reference…	Dodaj referencu…
+	Image File…	Datoteka slike…
+	Open Documents	Otvoreni dokumenti
+	The reference images are sent too, at most 1024 pixels on their long side.	Šalju se i referentne slike, najviše 1024 piksela po dužoj strani.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	U režimu „Uredi selekciju“ selektovana oblast se šalje onakva kakva jeste. Šalju se i referentne slike koje dodate.

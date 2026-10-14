@@ -4444,3 +4444,19 @@ navigator	Zoom	Zoom
 	Sends the same area and prompt to {name} again for three more.	Vuelve a enviar la misma área y descripción a {name} para obtener tres más.
 	Generate More	Generar más
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Cada Relleno generativo crea tres variaciones, así que envía tres solicitudes, cada una facturada a tu clave.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Rellenar selección
+	Edit selection	Editar selección
+	Generate new content in the selection, or remove what is there	Generar contenido nuevo en la selección o quitar lo que hay
+	Keep what is in the selection and change only what you ask for	Conservar lo que hay en la selección y cambiar solo lo que pidas
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Describe qué cambiar en la selección: se conserva lo que hay, salvo lo que pidas cambiar (un color, un texto, un material).
+	What to change	Qué cambiar
+	Empty: removes what is selected and continues the image through it.	Vacío: quita lo seleccionado y continúa la imagen a través de la selección.
+	Empty: places what the reference images show in the selection.	Vacío: coloca en la selección lo que muestran las imágenes de referencia.
+	Reference images	Imágenes de referencia
+	Optional: an object or product to show, or a design, colour or look to match.	Opcional: un objeto o producto que mostrar, o un diseño, color o estilo que imitar.
+	Add Reference…	Añadir referencia…
+	Image File…	Archivo de imagen…
+	Open Documents	Documentos abiertos
+	The reference images are sent too, at most 1024 pixels on their long side.	También se envían las imágenes de referencia, con 1024 píxeles como máximo en su lado más largo.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	En el modo Editar, el área seleccionada se envía tal cual. Las imágenes de referencia que añadas también se envían.

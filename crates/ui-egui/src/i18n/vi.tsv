@@ -3979,3 +3979,19 @@ curves	Smooth	Làm mượt
 	Sends the same area and prompt to {name} again for three more.	Gửi lại cùng vùng và lời nhắc tới {name} để có thêm ba biến thể.
 	Generate More	Tạo thêm
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Mỗi lần Tô tạo sinh tạo ba biến thể, nên gửi ba yêu cầu, mỗi yêu cầu được tính phí vào khóa của bạn.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Tô vùng chọn
+	Edit selection	Sửa vùng chọn
+	Generate new content in the selection, or remove what is there	Tạo nội dung mới trong vùng chọn hoặc xóa những gì đang có
+	Keep what is in the selection and change only what you ask for	Giữ nội dung trong vùng chọn và chỉ thay đổi phần bạn yêu cầu
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Mô tả điều cần thay đổi trong vùng chọn: nội dung hiện có được giữ nguyên, trừ phần bạn yêu cầu thay đổi (màu sắc, chữ, chất liệu).
+	What to change	Điều cần thay đổi
+	Empty: removes what is selected and continues the image through it.	Để trống: xóa nội dung được chọn và tiếp nối hình ảnh qua vùng chọn.
+	Empty: places what the reference images show in the selection.	Để trống: đặt nội dung trong ảnh tham chiếu vào vùng chọn.
+	Reference images	Ảnh tham chiếu
+	Optional: an object or product to show, or a design, colour or look to match.	Không bắt buộc: một vật thể hoặc sản phẩm cần hiển thị, hoặc một thiết kế, màu sắc hay phong cách cần theo.
+	Add Reference…	Thêm tham chiếu…
+	Image File…	Tệp hình ảnh…
+	Open Documents	Tài liệu đang mở
+	The reference images are sent too, at most 1024 pixels on their long side.	Ảnh tham chiếu cũng được gửi đi, cạnh dài tối đa 1024 pixel.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Ở chế độ Sửa vùng chọn, vùng được chọn được gửi nguyên trạng. Ảnh tham chiếu bạn thêm cũng được gửi đi.

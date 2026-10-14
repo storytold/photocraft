@@ -6,6 +6,11 @@
 //! sRGB) and sent with a mask of the selection, once per variation (three by default, as
 //! Photoshop makes). The results land in a new group masked by the selection, one layer per
 //! variation with the first showing, so nothing under it changes and one undo removes it.
+//!
+//! Two modes: `fill` (the default) blurs the selected area out before sending, so the provider
+//! fills a hole (an empty prompt removes what was there); `edit` sends it as it is, so the provider
+//! changes only what the prompt asks for and keeps the rest (Photoshop's Prompt to Edit). Either
+//! can carry reference images (files or open documents) for the provider to follow.
 //! `layer.generative.selectVariation` flips between them and `layer.generative.more` asks for
 //! more. The network calls run as one cancellable background job.
 //!
@@ -18,7 +23,7 @@ use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CodecSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerId, LayerMask};
-use photocraft_genai::{EditRequest, ImageProvider, ImageSize};
+use photocraft_genai::{EditMode, EditRequest, ImageProvider, ImageSize, ReferenceImage};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -37,6 +42,9 @@ const DEFAULT_VARIATIONS: usize = 3;
 const MAX_VARIATIONS: u64 = 4;
 /// Largest result accepted, per side.
 const RESULT_SIDE: u32 = 8192;
+/// Longest side of a reference image as sent: enough to show an object or a design, small enough
+/// that a few of them add little to each request.
+const REFERENCE_SIDE: u32 = 1024;
 
 /// A configured provider, shared with the background job that calls it.
 pub type SharedProvider = Arc<dyn ImageProvider>;
@@ -163,12 +171,13 @@ fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
     codecs::encode(&img, Format::Png, &Default::default()).map_err(other)
 }
 
-/// The image and mask sent, both `w`×`h`: `image` (sRGB, already scaled) with the selection
-/// replaced by a dimmed soft blur of the colours around it, and an opaque black-and-white PNG of the
-/// selection (white = fill). The provider never sees what is being replaced, as Photoshop's fill
-/// doesn't, so it can't paint it back. A flat grey hole was tried first: Gemini read it as an
-/// object (a grey box, a lamp) and drew it in.
-fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) -> Result<(Vec<u8>, Vec<u8>, Reference)> {
+/// The image and mask sent, both `w`×`h`: `image` (sRGB, already scaled) and an opaque
+/// black-and-white PNG of the selection (white = fill). In [`EditMode::Fill`] the selection is
+/// replaced by a dimmed soft blur of the colours around it: the provider never sees what is being
+/// replaced, as Photoshop's fill doesn't, so it can't paint it back. A flat grey hole was tried
+/// first: Gemini read it as an object (a grey box, a lamp) and drew it in. In [`EditMode::Edit`]
+/// it is sent as it is, since the provider is to change what is there.
+fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32, mode: EditMode) -> Result<(Vec<u8>, Vec<u8>, Reference)> {
     let r = Rect::from_xywh(0, 0, w, h);
     let rgba = image.convert(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true)).to_interleaved(r);
     let coverage: Vec<f32> = scaled(sel, area, w, h).read_region(r).into_iter().map(|v| v.clamp(0.0, 1.0)).collect();
@@ -180,12 +189,16 @@ fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) ->
             original.push((f32::from(c) * a + HOLE * (1.0 - a)) / 255.0);
         }
     }
-    let fill = surroundings_fill(&original, &coverage, w as usize, h as usize);
+    let fill = (mode == EditMode::Fill).then(|| surroundings_fill(&original, &coverage, w as usize, h as usize));
     let mut cleared = Vec::with_capacity(rgba.len());
     let mut mask = Vec::with_capacity(rgba.len());
     for (i, &m) in coverage.iter().enumerate() {
         for c in 0..3 {
-            cleared.push(((original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * PLACEHOLDER * m) * 255.0).round().clamp(0.0, 255.0) as u8);
+            let v = match &fill {
+                Some(fill) => original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * PLACEHOLDER * m,
+                None => original[i * 3 + c],
+            };
+            cleared.push((v * 255.0).round().clamp(0.0, 255.0) as u8);
         }
         cleared.push(255);
         let g = (m * 255.0).round() as u8;
@@ -445,6 +458,108 @@ fn decode(bytes: &[u8]) -> Result<(Surface, Rect)> {
     Ok((s, r))
 }
 
+/// A file's image as a document, for use as a reference image (any format File › Open reads).
+pub fn reference_document(name: &str, bytes: &[u8]) -> Result<Document> {
+    let imported = photocraft_io::import(name, bytes).map_err(|e| other(format!("{name}: {e}")))?;
+    if imported.preview_only {
+        return Err(other(format!("{name}: only this file's embedded preview could be read")));
+    }
+    Ok(imported.document)
+}
+
+/// A document's composite reduced to at most `side` pixels on its long side, in 8-bit sRGB matted
+/// over white: (width, height, RGB). What a reference image is made of, and its preview.
+pub fn reference_pixels(doc: &Document, side: u32) -> Result<(u32, u32, Vec<u8>)> {
+    let mut buf = photocraft_compose::thumbnail_buffer(doc, side.max(1));
+    let (w, h) = (buf.rect.width(), buf.rect.height());
+    if w == 0 || h == 0 || buf.px.len() != (w as usize) * (h as usize) {
+        return Err(other("the reference image is empty"));
+    }
+    let t = Transform::new(&crate::color_cmds::composite_profile(doc), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).map_err(other)?;
+    t.apply(buf.px.as_flattened_mut(), 4);
+    let finite = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let mut rgb = Vec::with_capacity(buf.px.len() * 3);
+    for p in &buf.px {
+        let a = finite(p[3]);
+        for &c in &p[..3] {
+            // Over white: a cut-out product reads as one on a plain backdrop.
+            rgb.push(((finite(c) * a + (1.0 - a)) * 255.0).round() as u8);
+        }
+    }
+    Ok((w, h, rgb))
+}
+
+/// A document as a reference image: at most [`REFERENCE_SIDE`] pixels, sRGB, JPEG.
+pub fn reference_image(doc: &Document) -> Result<ReferenceImage> {
+    let (w, h, rgb) = reference_pixels(doc, REFERENCE_SIDE)?;
+    let img = Image::from_raw(w, h, ChannelLayout::Rgb, CodecSample::U8, rgb).map_err(other)?;
+    let opts = codecs::EncodeOptions { jpeg_quality: 90, embed_icc: false, embed_metadata: false, ..Default::default() };
+    Ok(ReferenceImage { bytes: codecs::encode(&img, Format::Jpeg, &opts).map_err(other)?, mime: "image/jpeg".into() })
+}
+
+/// Where a reference image comes from: a file (read when the job runs) or an open document.
+enum ReferenceSource {
+    File(String),
+    Document(Arc<Document>),
+}
+
+impl ReferenceSource {
+    fn image(&self) -> Result<ReferenceImage> {
+        match self {
+            ReferenceSource::File(path) => {
+                let bytes = crate::file_cmds::read_file(path)?;
+                reference_image(&reference_document(path, &bytes)?)
+            }
+            ReferenceSource::Document(doc) => reference_image(doc),
+        }
+    }
+}
+
+/// `references`: a list of file paths (or `{"path": …}`) and open documents (`{"document": id}`),
+/// at most `max`.
+fn references_param(s: &Session, p: &Value, max: usize, provider: &str) -> Result<Vec<ReferenceSource>> {
+    const WHAT: &str = "`references` must be a list of file paths and {\"document\": id} entries";
+    let list = match p.get("references") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(list)) => list,
+        Some(_) => return Err(bad(WHAT)),
+    };
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+    if max == 0 {
+        return Err(bad(format!("{provider} can't use reference images")));
+    }
+    if list.len() > max {
+        return Err(bad(format!("at most {max} reference images can be sent")));
+    }
+    let file = |path: &str| if path.trim().is_empty() { Err(bad(WHAT)) } else { Ok(ReferenceSource::File(path.to_owned())) };
+    list.iter()
+        .map(|v| match v {
+            Value::String(path) => file(path),
+            Value::Object(o) => match (o.get("path"), o.get("document")) {
+                (Some(Value::String(path)), None) => file(path),
+                (None, Some(id)) => {
+                    let id = id.as_u64().ok_or_else(|| bad(WHAT))?;
+                    let st = s.documents().iter().find(|d| d.doc.id.0 == id).ok_or_else(|| bad(format!("no open document has id {id}")))?;
+                    Ok(ReferenceSource::Document(st.doc.clone()))
+                }
+                _ => Err(bad(WHAT)),
+            },
+            _ => Err(bad(WHAT)),
+        })
+        .collect()
+}
+
+fn mode_param(p: &Value) -> Result<EditMode> {
+    match p.get("mode") {
+        None | Some(Value::Null) => Ok(EditMode::Fill),
+        Some(Value::String(m)) if m == "fill" => Ok(EditMode::Fill),
+        Some(Value::String(m)) if m == "edit" => Ok(EditMode::Edit),
+        Some(_) => Err(bad("`mode` must be \"fill\" or \"edit\"")),
+    }
+}
+
 /// The new layer's name: Photoshop names a generative layer after its prompt.
 fn layer_name(prompt: &str) -> String {
     let p = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -528,9 +643,9 @@ fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<(Surface, St
     Ok((placed, stats))
 }
 
-/// Debugging aid: with `PHOTOCRAFT_GENAI_DUMP` set to a folder, each request's image, mask, raw
-/// results and colour-matching figures are written to a new subfolder of it. Nothing is written
-/// unless the variable is set.
+/// Debugging aid: with `PHOTOCRAFT_GENAI_DUMP` set to a folder, each request's image, mask, mode,
+/// reference images, raw results and colour-matching figures are written to a new subfolder of it.
+/// Nothing is written unless the variable is set.
 fn dump(request: &EditRequest, results: &[Vec<u8>], stats: &[String]) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -543,6 +658,11 @@ fn dump(request: &EditRequest, results: &[Vec<u8>], stats: &[String]) {
         let _ = std::fs::write(dir.join("sent-image.png"), &request.image);
         let _ = std::fs::write(dir.join("sent-mask.png"), &request.mask);
         let _ = std::fs::write(dir.join("prompt.txt"), &request.prompt);
+        let _ = std::fs::write(dir.join("mode.txt"), format!("{:?}", request.mode));
+        for (i, r) in request.references.iter().enumerate() {
+            let ext = if r.mime == "image/png" { "png" } else { "jpg" };
+            let _ = std::fs::write(dir.join(format!("sent-reference-{}.{ext}", i + 1)), &r.bytes);
+        }
         for (i, bytes) in results.iter().enumerate() {
             let ext = if bytes.starts_with(b"\x89PNG") { "png" } else { "jpg" };
             let _ = std::fs::write(dir.join(format!("result-{}.{ext}", i + 1)), bytes);
@@ -577,8 +697,17 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     };
     photocraft_genai::check_prompt(&prompt, false).map_err(|e| bad(e.to_string()))?;
     let count = variations_param(p, "variations")?;
+    let mode = mode_param(p)?;
+    if mode == EditMode::Edit && prompt.is_empty() {
+        return Err(bad("Edit needs a prompt: say what to change in the selection"));
+    }
     fill_enabled(s).map_err(bad)?;
     let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider"))?;
+    let (caps, provider_name) = (provider.capabilities(), provider.info().name);
+    if mode == EditMode::Edit && !caps.edit_in_place {
+        return Err(bad(format!("{provider_name} can't edit what is in the selection; use Fill")));
+    }
+    let references = references_param(s, p, caps.max_references.min(photocraft_genai::MAX_REFERENCES), provider_name)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
     let sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
@@ -593,9 +722,14 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.05, "Preparing image");
-            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
+            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h, mode)?;
             ctx.check()?;
-            let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
+            if !references.is_empty() {
+                ctx.progress(0.1, "Preparing reference images");
+            }
+            let references = references.iter().map(ReferenceSource::image).collect::<Result<Vec<_>>>()?;
+            ctx.check()?;
+            let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)), mode, references };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
             let placed = place_all(&request, &results, area, &reference)?;
@@ -722,7 +856,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generative Fill…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"prompt":str?,"variations":1..4=3} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation."#,
+            params: r#"{"prompt":str?,"variations":1..4=3,"mode":"fill"|"edit"="fill","references":[path|{"path":str}|{"document":id}]?} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. `fill` blurs the selected area out first, so the provider fills a hole (an empty prompt continues the surrounding image through it, removing what was there); `edit` sends it as it is and changes only what the prompt asks for (a prompt is required). `references` (at most 4) are images from files or open documents the provider should follow. Sends the selected area, its surroundings and any reference images to that provider, once per variation."#,
             enabled: fill_enabled,
             run: fill,
             journal: true,

@@ -3162,3 +3162,19 @@ curves	Smooth	平滑
 	Sends the same area and prompt to {name} again for three more.	再次将相同区域和描述发送到 {name}，再生成三个。
 	Generate More	生成更多
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	每次生成式填充会生成三个变体，因此会发送三个请求，每个都计费到你的密钥。
+# Generative Fill: Edit mode and reference images
+	Fill selection	填充选区
+	Edit selection	编辑选区
+	Generate new content in the selection, or remove what is there	在选区中生成新内容，或移除其中的内容
+	Keep what is in the selection and change only what you ask for	保留选区中的内容，只更改你要求的部分
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	描述要在选区中更改的内容：除你要求更改的部分（颜色、文字、材质）外，其余内容都会保留。
+	What to change	要更改的内容
+	Empty: removes what is selected and continues the image through it.	留空：移除所选内容，并让周围的图像在选区中延续。
+	Empty: places what the reference images show in the selection.	留空：将参考图像中的内容放入选区。
+	Reference images	参考图像
+	Optional: an object or product to show, or a design, colour or look to match.	可选：要显示的物体或产品，或要参照的设计、颜色或风格。
+	Add Reference…	添加参考…
+	Image File…	图像文件…
+	Open Documents	打开的文档
+	The reference images are sent too, at most 1024 pixels on their long side.	参考图像也会一并发送，长边最多 1024 像素。
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	在“编辑选区”模式下，所选区域会按原样发送。你添加的参考图像也会一并发送。

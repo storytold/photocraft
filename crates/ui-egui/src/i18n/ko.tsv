@@ -3700,3 +3700,19 @@ curves	Smooth	매끄럽게
 	Sends the same area and prompt to {name} again for three more.	같은 영역과 설명을 {name}에 다시 보내 세 개를 더 만듭니다.
 	Generate More	더 생성
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	생성형 채우기는 매번 변형 세 개를 만들므로 요청을 세 번 보내며, 각 요청은 사용자의 키로 청구됩니다.
+# Generative Fill: Edit mode and reference images
+	Fill selection	선택 영역 채우기
+	Edit selection	선택 영역 편집
+	Generate new content in the selection, or remove what is there	선택 영역에 새 내용을 생성하거나 그 안의 내용을 제거합니다
+	Keep what is in the selection and change only what you ask for	선택 영역의 내용을 유지하고 요청한 부분만 변경합니다
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	선택 영역에서 변경할 내용을 설명하세요. 요청한 부분(색상, 텍스트, 재질 등)을 제외한 나머지는 그대로 유지됩니다.
+	What to change	변경할 내용
+	Empty: removes what is selected and continues the image through it.	비워 두면: 선택한 내용을 제거하고 주변 이미지를 선택 영역에 이어 그립니다.
+	Empty: places what the reference images show in the selection.	비워 두면: 참조 이미지에 보이는 것을 선택 영역에 배치합니다.
+	Reference images	참조 이미지
+	Optional: an object or product to show, or a design, colour or look to match.	선택 사항: 표시할 물체나 제품, 또는 따라 할 디자인, 색상, 스타일.
+	Add Reference…	참조 추가…
+	Image File…	이미지 파일…
+	Open Documents	열린 문서
+	The reference images are sent too, at most 1024 pixels on their long side.	참조 이미지도 전송되며, 긴 변은 최대 1024픽셀입니다.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	선택 영역 편집 모드에서는 선택 영역이 그대로 전송됩니다. 추가한 참조 이미지도 전송됩니다.

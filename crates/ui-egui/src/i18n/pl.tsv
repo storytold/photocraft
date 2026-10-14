@@ -4101,3 +4101,19 @@ curves	Smooth	Wygładź
 	Sends the same area and prompt to {name} again for three more.	Wysyła ten sam obszar i opis ponownie do {name}, aby uzyskać trzy kolejne.
 	Generate More	Generuj więcej
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Każde Wypełnienie generatywne tworzy trzy warianty, więc wysyła trzy żądania, a każde jest rozliczane z Twojego klucza.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Wypełnij zaznaczenie
+	Edit selection	Edytuj zaznaczenie
+	Generate new content in the selection, or remove what is there	Wygeneruj nową zawartość w zaznaczeniu albo usuń to, co w nim jest
+	Keep what is in the selection and change only what you ask for	Zachowaj zawartość zaznaczenia i zmień tylko to, o co prosisz
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Opisz, co zmienić w zaznaczeniu: jego zawartość zostaje zachowana, z wyjątkiem tego, co każesz zmienić (kolor, tekst, materiał).
+	What to change	Co zmienić
+	Empty: removes what is selected and continues the image through it.	Puste: usuwa zaznaczoną zawartość i kontynuuje w niej obraz.
+	Empty: places what the reference images show in the selection.	Puste: umieszcza w zaznaczeniu to, co pokazują obrazy referencyjne.
+	Reference images	Obrazy referencyjne
+	Optional: an object or product to show, or a design, colour or look to match.	Opcjonalnie: obiekt lub produkt do pokazania albo wzór, kolor lub styl do naśladowania.
+	Add Reference…	Dodaj obraz referencyjny…
+	Image File…	Plik obrazu…
+	Open Documents	Otwarte dokumenty
+	The reference images are sent too, at most 1024 pixels on their long side.	Obrazy referencyjne też są wysyłane, najwyżej 1024 piksele na dłuższym boku.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	W trybie Edytuj zaznaczenie zaznaczony obszar jest wysyłany bez zmian. Dodane obrazy referencyjne też są wysyłane.

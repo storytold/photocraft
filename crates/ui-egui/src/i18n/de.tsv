@@ -3505,3 +3505,19 @@ curves	Smooth	Glätten
 	Sends the same area and prompt to {name} again for three more.	Sendet denselben Bereich und dieselbe Beschreibung erneut an {name}, für drei weitere.
 	Generate More	Weitere generieren
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Jedes Generative Füllen erzeugt drei Varianten und sendet daher drei Anfragen, die jeweils über Ihren Schlüssel abgerechnet werden.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Auswahl füllen
+	Edit selection	Auswahl bearbeiten
+	Generate new content in the selection, or remove what is there	Neue Inhalte in der Auswahl erzeugen oder entfernen, was dort ist
+	Keep what is in the selection and change only what you ask for	Den Inhalt der Auswahl behalten und nur ändern, worum Sie bitten
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Beschreiben Sie, was in der Auswahl geändert werden soll: Der vorhandene Inhalt bleibt erhalten, bis auf das, was Sie ändern lassen (eine Farbe, ein Text, ein Material).
+	What to change	Was geändert werden soll
+	Empty: removes what is selected and continues the image through it.	Leer: Entfernt den ausgewählten Inhalt und setzt das Bild darin fort.
+	Empty: places what the reference images show in the selection.	Leer: Setzt das, was die Referenzbilder zeigen, in die Auswahl ein.
+	Reference images	Referenzbilder
+	Optional: an object or product to show, or a design, colour or look to match.	Optional: ein Objekt oder Produkt, das gezeigt werden soll, oder ein Design, eine Farbe oder ein Stil als Vorbild.
+	Add Reference…	Referenz hinzufügen…
+	Image File…	Bilddatei…
+	Open Documents	Geöffnete Dokumente
+	The reference images are sent too, at most 1024 pixels on their long side.	Die Referenzbilder werden ebenfalls gesendet, an der längsten Seite höchstens 1024 Pixel groß.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Im Modus „Auswahl bearbeiten“ wird der ausgewählte Bereich unverändert gesendet. Hinzugefügte Referenzbilder werden ebenfalls gesendet.

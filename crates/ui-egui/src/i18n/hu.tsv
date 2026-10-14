@@ -4397,3 +4397,19 @@ cameraRaw	Yellow	Sárga
 	Sends the same area and prompt to {name} again for three more.	Ugyanazt a területet és leírást újra elküldi ide: {name}, további háromért.
 	Generate More	Továbbiak létrehozása
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Minden Generatív kitöltés három változatot készít, ezért három kérést küld, mindegyiket a kulcsodra számlázzák.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Kijelölés kitöltése
+	Edit selection	Kijelölés szerkesztése
+	Generate new content in the selection, or remove what is there	Új tartalom létrehozása a kijelölésben, vagy a benne lévők eltávolítása
+	Keep what is in the selection and change only what you ask for	A kijelölés tartalmának megtartása, csak a kért rész módosítása
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Írja le, mit kell módosítani a kijelölésben: a tartalma megmarad, kivéve amit módosíttatni szeretne (szín, szöveg, anyag).
+	What to change	Mit kell módosítani
+	Empty: removes what is selected and continues the image through it.	Üres: eltávolítja a kijelölt tartalmat, és a képet a kijelölésen át folytatja.
+	Empty: places what the reference images show in the selection.	Üres: a referenciaképeken látható dolgot helyezi a kijelölésbe.
+	Reference images	Referenciaképek
+	Optional: an object or product to show, or a design, colour or look to match.	Nem kötelező: megjelenítendő tárgy vagy termék, illetve követendő minta, szín vagy stílus.
+	Add Reference…	Referencia hozzáadása…
+	Image File…	Képfájl…
+	Open Documents	Megnyitott dokumentumok
+	The reference images are sent too, at most 1024 pixels on their long side.	A referenciaképek is elküldésre kerülnek, a hosszabb oldalukon legfeljebb 1024 képpontban.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	„Kijelölés szerkesztése” módban a kijelölt terület változatlanul kerül elküldésre. A hozzáadott referenciaképek is elküldésre kerülnek.

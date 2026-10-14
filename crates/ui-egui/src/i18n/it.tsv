@@ -4599,3 +4599,19 @@ shape	Appearance	Aspetto
 	Sends the same area and prompt to {name} again for three more.	Invia di nuovo la stessa area e la stessa descrizione a {name} per altre tre.
 	Generate More	Genera altre
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Ogni Riempimento generativo crea tre varianti, quindi invia tre richieste, ognuna addebitata sulla tua chiave.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Riempi selezione
+	Edit selection	Modifica selezione
+	Generate new content in the selection, or remove what is there	Genera nuovi contenuti nella selezione o rimuovi ciò che c’è
+	Keep what is in the selection and change only what you ask for	Mantieni ciò che è nella selezione e cambia solo ciò che chiedi
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Descrivi cosa cambiare nella selezione: ciò che c’è viene mantenuto, tranne ciò che chiedi di cambiare (un colore, un testo, un materiale).
+	What to change	Cosa cambiare
+	Empty: removes what is selected and continues the image through it.	Vuoto: rimuove il contenuto selezionato e prosegue l’immagine al suo interno.
+	Empty: places what the reference images show in the selection.	Vuoto: inserisce nella selezione ciò che mostrano le immagini di riferimento.
+	Reference images	Immagini di riferimento
+	Optional: an object or product to show, or a design, colour or look to match.	Facoltativo: un oggetto o un prodotto da mostrare, o un design, un colore o uno stile da imitare.
+	Add Reference…	Aggiungi riferimento…
+	Image File…	File immagine…
+	Open Documents	Documenti aperti
+	The reference images are sent too, at most 1024 pixels on their long side.	Vengono inviate anche le immagini di riferimento, al massimo 1024 pixel sul lato lungo.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	In modalità Modifica selezione l’area selezionata viene inviata così com’è. Anche le immagini di riferimento aggiunte vengono inviate.

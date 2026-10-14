@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use photocraft_genai::{Capabilities, EditRequest, GenError, GeneratedImage, ProviderInfo};
+use photocraft_genai::{Capabilities, EditMode, EditRequest, GenError, GeneratedImage, ProviderInfo, ReferenceImage};
 
 use super::*;
 
@@ -47,7 +47,7 @@ impl ImageProvider for Fake {
         ProviderInfo { id: "fake", name: "Fake", model: "fake-1".into(), host: "example.invalid" }
     }
     fn capabilities(&self) -> Capabilities {
-        Capabilities { generate: false, edit: true, variations: false }
+        Capabilities { generate: false, edit: true, variations: false, edit_in_place: true, max_references: 4 }
     }
     fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
         self.aspect.unwrap_or((w, h))
@@ -469,4 +469,183 @@ fn drift_that_varies_across_the_image_leaves_no_seam() {
     assert!(stats.starts_with("mean difference"), "{stats}");
     let worst = (0..n).filter(|&i| inside(i)).map(|i| (px[i * 4] - 0.5).abs()).fold(0.0f32, f32::max);
     assert!(worst < 0.02, "worst {worst}");
+}
+
+/// The image a request sent, as RGBA8, and the colour at document (`x`, `y`) given the area's
+/// top-left corner.
+fn sent_rgb(sent: &EditRequest, origin: (i32, i32), x: i32, y: i32) -> [u8; 3] {
+    let img = codecs::decode(&sent.image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+    let i = ((y - origin.1) as usize * img.width() as usize + (x - origin.0) as usize) * 4;
+    [img.data()[i], img.data()[i + 1], img.data()[i + 2]]
+}
+
+#[test]
+fn edit_mode_sends_the_selected_pixels_as_they_are() {
+    // The same red square as `the_selected_pixels_are_never_sent`: in Edit mode the provider sees
+    // it, since it is to change what is there.
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 40, "y": 40, "width": 40, "height": 40})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let fake = Fake::new([0, 0, 255]);
+    s.set_image_provider(Some(fake.clone()));
+    let r = s.execute(FILL, json!({"prompt": "make it blue", "mode": "edit", "variations": 1})).unwrap();
+    let origin = (r["bounds"][0].as_i64().unwrap() as i32, r["bounds"][1].as_i64().unwrap() as i32);
+    let sent = fake.sent.lock().unwrap();
+    assert_eq!(sent[0].mode, EditMode::Edit);
+    assert_eq!(sent[0].prompt, "make it blue");
+    for (x, y) in [(60, 60), (41, 41), (79, 60)] {
+        assert_eq!(sent_rgb(&sent[0], origin, x, y), [255, 0, 0], "({x},{y})");
+    }
+    assert_eq!(sent_rgb(&sent[0], origin, 30, 30), [255, 255, 255]);
+    let mask = codecs::decode(&sent[0].mask).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+    let at = |x: i32, y: i32| mask.data()[((y - origin.1) as usize * mask.width() as usize + (x - origin.0) as usize) * 4];
+    assert_eq!((at(60, 60), at(30, 30)), (255, 0), "the mask is the same as in Fill");
+    drop(sent);
+    // The result lands like a fill's: masked by the selection, one undo step.
+    assert_eq!(rgb_at(&s, 60, 60), [0, 0, 255]);
+    assert_eq!(rgb_at(&s, 30, 30), [255, 255, 255]);
+    assert_eq!(doc(&s).layers.last().unwrap().name, "make it blue");
+}
+
+#[test]
+fn fill_stays_the_default_and_edit_needs_a_prompt() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let fake = Fake::new([0, 0, 0]);
+    s.set_image_provider(Some(fake.clone()));
+    s.execute(FILL, json!({"variations": 1})).unwrap();
+    s.execute(FILL, json!({"variations": 1, "mode": "fill"})).unwrap();
+    {
+        let sent = fake.sent.lock().unwrap();
+        assert!(sent.iter().all(|r| r.mode == EditMode::Fill && r.references.is_empty()));
+    }
+    for p in [json!({"mode": "edit"}), json!({"mode": "edit", "prompt": "   "})] {
+        let e = s.execute(FILL, p.clone()).unwrap_err().to_string();
+        assert!(e.contains("prompt"), "{p}: {e}");
+    }
+    for bad in [json!("Edit"), json!(1), json!(true), json!(["edit"]), json!("")] {
+        assert!(s.execute(FILL, json!({"prompt": "x", "mode": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(fake.sent.lock().unwrap().len(), 2, "nothing sent for bad params");
+}
+
+/// A provider that fills but neither edits in place nor takes references.
+#[test]
+fn a_provider_without_edit_or_references_says_so() {
+    struct Plain(Arc<Fake>);
+    impl ImageProvider for Plain {
+        fn info(&self) -> ProviderInfo {
+            self.0.info()
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities { generate: false, edit: true, variations: false, edit_in_place: false, max_references: 0 }
+        }
+        fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
+            self.0.edit(r)
+        }
+    }
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let fake = Fake::new([0, 0, 0]);
+    s.set_image_provider(Some(Arc::new(Plain(fake.clone()))));
+    let e = s.execute(FILL, json!({"prompt": "x", "mode": "edit"})).unwrap_err().to_string();
+    assert!(e.contains("can't edit"), "{e}");
+    let id = doc(&s).id.0;
+    let e = s.execute(FILL, json!({"prompt": "x", "references": [{"document": id}]})).unwrap_err().to_string();
+    assert!(e.contains("can't use reference images"), "{e}");
+    s.execute(FILL, json!({"prompt": "x", "variations": 1, "references": []})).unwrap();
+    assert_eq!(fake.sent.lock().unwrap().len(), 1);
+}
+
+/// A unique scratch folder under the system temp dir.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("photocraft-genai-{name}-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn reference_images_come_from_files_and_open_documents() {
+    // A 3000×1500 green picture on disk and an open 200×400 red document as references.
+    let dir = scratch("refs");
+    let path = dir.join("green.png");
+    let px: Vec<u8> = (0..3000 * 1500).flat_map(|_| [0u8, 200, 0, 255]).collect();
+    let png = codecs::encode(&Image::from_u8(3000, 1500, ChannelLayout::Rgba, px).unwrap(), Format::Png, &Default::default()).unwrap();
+    std::fs::write(&path, png).unwrap();
+    let mut s = session(64, 64);
+    s.execute("file.new", json!({"width": 200, "height": 400, "background": "#ff0000"})).unwrap();
+    let red = doc(&s).id.0;
+    s.execute("file.new", json!({"width": 64, "height": 64, "background": "#ffffff"})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let fake = Fake::new([0, 0, 255]);
+    s.set_image_provider(Some(fake.clone()));
+    let refs = json!([path.to_string_lossy(), {"document": red}]);
+    let r = s.execute(FILL, json!({"prompt": "this bottle", "mode": "edit", "references": refs, "variations": 2})).unwrap();
+    {
+        let sent = fake.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        let refs = &sent[0].references;
+        assert_eq!(refs.len(), 2);
+        assert_eq!(sent[1].references, *refs, "every variation gets them");
+        let look = |r: &ReferenceImage| {
+            assert_eq!(r.mime, "image/jpeg");
+            let img = codecs::decode(&r.bytes).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+            let mid = ((img.height() / 2 * img.width() + img.width() / 2) * 4) as usize;
+            ((img.width(), img.height()), [img.data()[mid], img.data()[mid + 1], img.data()[mid + 2]])
+        };
+        let (size, [r0, g0, b0]) = look(&refs[0]);
+        assert_eq!(size, (1024, 512), "scaled down to 1024 on the long side");
+        assert!(r0 < 10 && (190..=210).contains(&g0) && b0 < 10, "{r0} {g0} {b0}");
+        let (size, [r1, g1, b1]) = look(&refs[1]);
+        assert_eq!(size, (200, 400), "small enough to go as it is");
+        assert!(r1 > 245 && g1 < 10 && b1 < 10, "{r1} {g1} {b1}");
+    }
+    // Generate More sends the same references again.
+    let group = r["layer"].as_u64().unwrap();
+    s.execute(MORE, json!({"layer": group, "count": 1})).unwrap();
+    let sent = fake.sent.lock().unwrap();
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2].references, sent[0].references);
+    assert_eq!(sent[2].mode, EditMode::Edit);
+    drop(sent);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bad_references_fail_with_a_reason_and_send_nothing() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let fake = Fake::new([0, 0, 0]);
+    s.set_image_provider(Some(fake.clone()));
+    let id = doc(&s).id.0;
+    let missing = scratch("missing").join("nope.png");
+    let not_image = scratch("junk").join("junk.png");
+    std::fs::write(&not_image, b"not an image").unwrap();
+    let cases = [
+        json!("x"),
+        json!({"document": id}),
+        json!([1]),
+        json!([""]),
+        json!([{"document": "1"}]),
+        json!([{"document": -1}]),
+        json!([{"document": 999_999_999}]),
+        json!([{"path": 5}]),
+        json!([{"path": "a", "document": id}]),
+        json!([{}]),
+        json!([null]),
+        json!([[]]),
+        json!([{"document": id}, {"document": id}, {"document": id}, {"document": id}, {"document": id}]),
+        json!([missing.to_string_lossy()]),
+        json!([not_image.to_string_lossy()]),
+    ];
+    for refs in cases {
+        assert!(s.execute(FILL, json!({"prompt": "x", "references": refs})).is_err(), "{refs}");
+    }
+    let e = s.execute(FILL, json!({"prompt": "x", "references": [missing.to_string_lossy()]})).unwrap_err().to_string();
+    assert!(e.contains("nope.png"), "names the file: {e}");
+    assert!(fake.sent.lock().unwrap().is_empty());
+    // Four is the most, and the active document itself may be one.
+    s.execute(FILL, json!({"prompt": "x", "variations": 1, "references": [{"document": id}, {"document": id}, {"document": id}, {"document": id}]})).unwrap();
+    assert_eq!(fake.sent.lock().unwrap()[0].references.len(), 4);
 }

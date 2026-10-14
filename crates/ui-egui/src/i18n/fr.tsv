@@ -4524,3 +4524,19 @@ shape	Appearance	Apparence
 	Sends the same area and prompt to {name} again for three more.	Renvoie la même zone et la même description à {name} pour trois de plus.
 	Generate More	En générer plus
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Chaque Remplissage génératif crée trois variantes : il envoie donc trois requêtes, chacune facturée sur votre clé.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Remplir la sélection
+	Edit selection	Modifier la sélection
+	Generate new content in the selection, or remove what is there	Générer un nouveau contenu dans la sélection, ou supprimer ce qui s’y trouve
+	Keep what is in the selection and change only what you ask for	Conserver le contenu de la sélection et ne changer que ce que vous demandez
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Décrivez ce qu’il faut changer dans la sélection : son contenu est conservé, sauf ce que vous demandez de changer (une couleur, un texte, une matière).
+	What to change	Ce qu’il faut changer
+	Empty: removes what is selected and continues the image through it.	Vide : supprime le contenu sélectionné et prolonge l’image à travers la sélection.
+	Empty: places what the reference images show in the selection.	Vide : place dans la sélection ce que montrent les images de référence.
+	Reference images	Images de référence
+	Optional: an object or product to show, or a design, colour or look to match.	Facultatif : un objet ou un produit à montrer, ou un motif, une couleur ou un style à reproduire.
+	Add Reference…	Ajouter une référence…
+	Image File…	Fichier image…
+	Open Documents	Documents ouverts
+	The reference images are sent too, at most 1024 pixels on their long side.	Les images de référence sont aussi envoyées, à 1024 pixels au plus sur leur grand côté.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	En mode Modifier la sélection, la zone sélectionnée est envoyée telle quelle. Les images de référence que vous ajoutez sont aussi envoyées.

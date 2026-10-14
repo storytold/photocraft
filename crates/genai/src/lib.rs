@@ -97,6 +97,10 @@ pub struct Capabilities {
     pub generate: bool,
     pub edit: bool,
     pub variations: bool,
+    /// Edits in [`EditMode::Edit`]: changes what is in the masked area instead of refilling it.
+    pub edit_in_place: bool,
+    /// How many [`ReferenceImage`]s an edit takes (0: none).
+    pub max_references: usize,
 }
 
 /// Who a request goes to, for the privacy notice and error messages.
@@ -144,15 +148,43 @@ pub struct GenerateRequest {
     pub size: ImageSize,
 }
 
-/// Change the masked part of `image` (Generative Fill). The engine sends `image` with the masked
-/// area already cleared to flat grey, so the provider fills a hole rather than repainting what
-/// was there. An empty prompt asks it to continue the surroundings through the hole.
+/// Most reference images one edit sends. Gemini takes up to 14, but each one adds to the cost and
+/// the time of every variation, and a few cover what people use them for.
+pub const MAX_REFERENCES: usize = 4;
+
+/// What an edit does with the masked area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditMode {
+    /// Generative Fill: the engine sends `image` with the masked area blurred out, so the provider
+    /// fills a hole rather than repainting what was there. An empty prompt asks it to continue the
+    /// surroundings through the hole (removing what was there).
+    #[default]
+    Fill,
+    /// Change what is there: the masked area arrives as it is and the provider changes only what
+    /// the prompt asks for (a colour, a text, a material), keeping the rest. Needs a prompt.
+    Edit,
+}
+
+/// An image the user supplies to guide an edit: an object or product to show, a design or look to
+/// match. Encoded (PNG or JPEG) in sRGB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceImage {
+    pub bytes: Vec<u8>,
+    /// `image/png` or `image/jpeg`.
+    pub mime: String,
+}
+
+/// Change the masked part of `image` (Generative Fill), as `mode` says, optionally guided by
+/// reference images.
 #[derive(Debug, Clone)]
 pub struct EditRequest {
     pub image: Vec<u8>,
     pub mask: Vec<u8>,
     pub prompt: String,
     pub size: ImageSize,
+    pub mode: EditMode,
+    /// At most [`MAX_REFERENCES`].
+    pub references: Vec<ReferenceImage>,
 }
 
 /// Another take on a whole image, optionally steered by a prompt.
@@ -200,6 +232,26 @@ pub fn check_prompt(prompt: &str, required: bool) -> Result<()> {
     }
     if required && prompt.trim().is_empty() {
         return Err(GenError::Invalid("the prompt is empty".into()));
+    }
+    Ok(())
+}
+
+/// Largest encoded reference image, in bytes.
+pub const MAX_REFERENCE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Checks on an edit's reference images, run before anything is sent: no more than `max`, each a
+/// non-empty PNG or JPEG of a reasonable size.
+pub fn check_references(references: &[ReferenceImage], max: usize) -> Result<()> {
+    if references.len() > max {
+        return Err(GenError::Invalid(format!("at most {max} reference images can be sent")));
+    }
+    for r in references {
+        if !matches!(r.mime.as_str(), "image/png" | "image/jpeg") {
+            return Err(GenError::Invalid("reference images must be PNG or JPEG".into()));
+        }
+        if r.bytes.is_empty() || r.bytes.len() > MAX_REFERENCE_BYTES {
+            return Err(GenError::Invalid("a reference image is empty or too large".into()));
+        }
     }
     Ok(())
 }
@@ -258,6 +310,17 @@ mod tests {
         assert_eq!(ImageSize::for_long_side(900), ImageSize::Small);
         assert_eq!(ImageSize::for_long_side(2000), ImageSize::Medium);
         assert_eq!(ImageSize::for_long_side(5000), ImageSize::Large);
+    }
+
+    #[test]
+    fn reference_checks() {
+        let jpeg = |n: usize| ReferenceImage { bytes: vec![1; n], mime: "image/jpeg".into() };
+        assert!(check_references(&[], 0).is_ok());
+        assert!(check_references(&[jpeg(10), jpeg(10)], 2).is_ok());
+        assert!(check_references(&[jpeg(10)], 0).is_err());
+        assert!(check_references(&[jpeg(0)], 4).is_err());
+        assert!(check_references(&[jpeg(MAX_REFERENCE_BYTES + 1)], 4).is_err());
+        assert!(check_references(&[ReferenceImage { bytes: vec![1], mime: "image/gif".into() }], 4).is_err());
     }
 
     #[test]

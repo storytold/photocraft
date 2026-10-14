@@ -2,15 +2,16 @@
 //! with the user's own API key.
 //!
 //! Gemini edits from instructions and reference images; it takes no mask parameter. Generative
-//! Fill sends the mask as a second image and says what it means; the engine then keeps only the
-//! masked pixels of the result, so anything the model changes outside the mask is discarded.
+//! Fill sends the mask as a second image and says what it means, then any reference images; the
+//! engine keeps only the masked pixels of the result, so anything the model changes outside the
+//! mask is discarded.
 
 use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::{
-    ApiKey, Capabilities, EditRequest, GenError, GenerateRequest, GeneratedImage, HttpRequest, HttpTransport, ImageProvider, ImageSize, ProviderInfo, Result,
-    VariationRequest,
+    ApiKey, Capabilities, EditMode, EditRequest, GenError, GenerateRequest, GeneratedImage, HttpRequest, HttpTransport, ImageProvider, ImageSize, ProviderInfo,
+    Result, VariationRequest,
 };
 
 pub const ID: &str = "gemini";
@@ -124,7 +125,7 @@ impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { generate: true, edit: true, variations: true }
+        Capabilities { generate: true, edit: true, variations: true, edit_in_place: true, max_references: crate::MAX_REFERENCES }
     }
 
     fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
@@ -137,12 +138,20 @@ impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
     }
 
     fn edit(&self, r: &EditRequest) -> Result<GeneratedImage> {
-        crate::check_prompt(&r.prompt, false)?;
+        crate::check_prompt(&r.prompt, r.mode == EditMode::Edit)?;
+        crate::check_references(&r.references, crate::MAX_REFERENCES)?;
         let size = crate::png_size(&r.image).ok_or_else(|| GenError::Invalid("the image must be a PNG".into()))?;
         if crate::png_size(&r.mask) != Some(size) {
             return Err(GenError::Invalid("the mask must be a PNG the size of the image".into()));
         }
-        self.request(vec![text(&fill_instruction(&r.prompt)), png(&r.image), png(&r.mask)], size, r.size)
+        let n = r.references.len();
+        let instruction = match r.mode {
+            EditMode::Fill => fill_instruction(&r.prompt, n),
+            EditMode::Edit => edit_instruction(&r.prompt, n),
+        };
+        let mut input = vec![text(&instruction), png(&r.image), png(&r.mask)];
+        input.extend(r.references.iter().map(|i| image(&i.bytes, &i.mime)));
+        self.request(input, size, r.size)
     }
 
     fn variations(&self, r: &VariationRequest) -> Result<GeneratedImage> {
@@ -157,12 +166,33 @@ impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
     }
 }
 
+/// What the instructions say about the images after the mask, if any. Empty without them, so a
+/// request without references reads exactly as it did before they existed.
+fn references_note(references: usize, use_for: &str) -> String {
+    match references {
+        0 => String::new(),
+        1 => format!("The third image is a reference the user supplied: {use_for} "),
+        n => format!("The {n} images after the mask are references the user supplied: {use_for} "),
+    }
+}
+
 /// The instruction that stands in for a mask parameter. The selected area arrives blurred out (a
 /// smooth, dimmed placeholder made of the colours around it), so the model can't copy what was there and
 /// has no flat shape to mistake for an object. An empty prompt means "what would be there without
-/// whatever stood in it": the background and anything crossing the edge carry on through it.
-pub fn fill_instruction(prompt: &str) -> String {
-    let what = if prompt.trim().is_empty() {
+/// whatever stood in it": the background and anything crossing the edge carry on through it,
+/// unless reference images came with it: then it means "put what they show there".
+pub fn fill_instruction(prompt: &str, references: usize) -> String {
+    let refs = references_note(
+        references,
+        "use them for what the request asks (an object, product, person, material or style to show in the placeholder) and match them closely.",
+    );
+    let what = if prompt.trim().is_empty() && references > 0 {
+        "Replace the placeholder with the subject of the reference images. Make it belong to the scene: the right size for \
+         its place in the perspective, lit from the same direction, casting and receiving shadows and reflections, and \
+         interacting with whatever touches it. Around it, continue the background and anything that crosses the \
+         placeholder's edge."
+            .to_owned()
+    } else if prompt.trim().is_empty() {
         "Replace the placeholder with what would be there if whatever stood in it had never existed: continue the \
          background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, \
          edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new \
@@ -179,11 +209,28 @@ pub fn fill_instruction(prompt: &str) -> String {
     };
     format!(
         "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has \
-         been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it \
+         been blurred out as a placeholder, black the area to keep. {refs}The blur is not part of the scene: replace all of it \
          with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study \
          the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs \
          up to the placeholder. {what} Keep everything in the black area, the framing, the scale and the position of \
          every object exactly as they are. Reply with the edited image only."
+    )
+}
+
+/// The instruction for [`EditMode::Edit`]: the selected area arrives as it is, and the model
+/// changes only what the prompt asks for there (Photoshop's Prompt to Edit, or its partner models
+/// in Generative Fill), keeping shapes, texture, lettering and light.
+pub fn edit_instruction(prompt: &str, references: usize) -> String {
+    let refs =
+        references_note(references, "use them as the request says (for example a colour, material, design, logo or object to match) and match them closely.");
+    format!(
+        "Edit the first image. The second image is a mask the same size: white marks the area of the first image to edit, \
+         black the area to keep. {refs}In the white area: {}. Change only what that asks for. Keep the shape, size, \
+         position, perspective, lighting, texture and material of everything there, and keep any text, logo or pattern \
+         with the same lettering, layout and alignment, except where the request changes it. The edited area must look \
+         like part of the same photograph, with the same focus, noise and grain. Keep everything in the black area, the \
+         framing and the scale exactly as they are. Reply with the edited image only.",
+        prompt.trim().trim_end_matches('.')
     )
 }
 
@@ -192,7 +239,11 @@ fn text(t: &str) -> Value {
 }
 
 fn png(bytes: &[u8]) -> Value {
-    json!({"type": "image", "mime_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+    image(bytes, "image/png")
+}
+
+fn image(bytes: &[u8], mime: &str) -> Value {
+    json!({"type": "image", "mime_type": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
 }
 
 /// The first image in a response: `output_image`, else an image block in `steps[].content[]` or
@@ -246,7 +297,7 @@ fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HttpResponse;
+    use crate::{HttpResponse, ReferenceImage};
     use std::sync::Mutex;
 
     /// A request as sent: URL, headers, JSON body.
@@ -295,7 +346,7 @@ mod tests {
     }
 
     fn edit(prompt: &str, w: u32, h: u32) -> EditRequest {
-        EditRequest { image: png_of(w, h), mask: png_of(w, h), prompt: prompt.into(), size: ImageSize::Medium }
+        EditRequest { image: png_of(w, h), mask: png_of(w, h), prompt: prompt.into(), size: ImageSize::Medium, mode: EditMode::Fill, references: Vec::new() }
     }
 
     #[test]
@@ -321,9 +372,71 @@ mod tests {
 
     #[test]
     fn an_empty_prompt_asks_for_removal() {
-        let empty = fill_instruction("");
+        let empty = fill_instruction("", 0);
         assert!(empty.contains("had never existed") && empty.contains("Do not add a new"), "{empty}");
-        assert!(fill_instruction("  a boat. ").contains("placeholder with: a boat."));
+        assert!(fill_instruction("  a boat. ", 0).contains("placeholder with: a boat."));
+    }
+
+    /// Without references, Fill sends exactly the instruction it sent before Edit mode and
+    /// reference images existed: removal (an empty prompt) works well and must not drift.
+    #[test]
+    fn fill_without_references_is_unchanged() {
+        const EMPTY: &str = "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs up to the placeholder. Replace the placeholder with what would be there if whatever stood in it had never existed: continue the background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new object, light or shape that nothing around it suggests. Keep everything in the black area, the framing, the scale and the position of every object exactly as they are. Reply with the edited image only.";
+        const BALLOON: &str = "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs up to the placeholder. Replace the placeholder with: a red balloon. Make it belong to the scene: the right size for its place in the perspective, lit from the same direction, casting and receiving shadows and reflections, and interacting with whatever touches it. Around the new content, continue the background and anything that crosses the placeholder's edge. Keep everything in the black area, the framing, the scale and the position of every object exactly as they are. Reply with the edited image only.";
+        assert_eq!(fill_instruction("", 0), EMPTY);
+        assert_eq!(fill_instruction("  a red balloon. ", 0), BALLOON);
+        assert!(!EMPTY.contains("reference"));
+    }
+
+    #[test]
+    fn edit_mode_keeps_what_is_there_and_needs_a_prompt() {
+        let p = provider(vec![Fake::ok(json!({"output_image": {"data": b64(b"r")}}))]);
+        let r = EditRequest { mode: EditMode::Edit, ..edit("make the label black. ", 800, 800) };
+        p.edit(&r).unwrap();
+        let sent = p.transport().sent.lock().unwrap();
+        let input = sent[0].2["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        let t = input[0]["text"].as_str().unwrap();
+        assert!(t.contains("In the white area: make the label black. Change only what that asks for."), "{t}");
+        assert!(t.contains("same lettering") && !t.contains("blurred out"), "{t}");
+        drop(sent);
+        let empty = EditRequest { mode: EditMode::Edit, ..edit("  ", 8, 8) };
+        assert!(matches!(p.edit(&empty), Err(GenError::Invalid(_))));
+        assert_eq!(p.transport().sent.lock().unwrap().len(), 1, "nothing sent for an empty edit");
+    }
+
+    #[test]
+    fn reference_images_follow_the_mask() {
+        let reply = || Fake::ok(json!({"output_image": {"data": b64(b"r")}}));
+        let p = provider(vec![reply(), reply(), reply()]);
+        let jpeg = |b: &[u8]| ReferenceImage { bytes: b.to_vec(), mime: "image/jpeg".into() };
+        let one = EditRequest { references: vec![jpeg(b"bottle")], ..edit("this bottle", 64, 64) };
+        p.edit(&one).unwrap();
+        let two = EditRequest { mode: EditMode::Edit, references: vec![jpeg(b"a"), jpeg(b"b")], ..edit("like these", 64, 64) };
+        p.edit(&two).unwrap();
+        // An empty Fill prompt with a reference puts what the reference shows in the selection.
+        let placed = EditRequest { references: vec![jpeg(b"bottle")], ..edit("", 64, 64) };
+        p.edit(&placed).unwrap();
+        let sent = p.transport().sent.lock().unwrap();
+        let input = |i: usize| sent[i].2["input"].as_array().unwrap().clone();
+        assert_eq!(input(0).len(), 4);
+        assert_eq!(input(0)[3], json!({"type": "image", "mime_type": "image/jpeg", "data": b64(b"bottle")}));
+        assert!(input(0)[0]["text"].as_str().unwrap().contains("The third image is a reference"));
+        assert_eq!(input(1).len(), 5);
+        assert!(input(1)[0]["text"].as_str().unwrap().contains("The 2 images after the mask are references"));
+        let t = input(2)[0]["text"].as_str().unwrap().to_owned();
+        assert!(t.contains("subject of the reference images") && !t.contains("had never existed"), "{t}");
+    }
+
+    #[test]
+    fn bad_references_fail_before_anything_is_sent() {
+        let p = provider(Vec::new());
+        let jpeg = ReferenceImage { bytes: b"x".to_vec(), mime: "image/jpeg".into() };
+        let too_many = EditRequest { references: vec![jpeg.clone(); crate::MAX_REFERENCES + 1], ..edit("x", 8, 8) };
+        assert!(matches!(p.edit(&too_many), Err(GenError::Invalid(_))));
+        let gif = EditRequest { references: vec![ReferenceImage { mime: "image/gif".into(), ..jpeg }], ..edit("x", 8, 8) };
+        assert!(matches!(p.edit(&gif), Err(GenError::Invalid(_))));
+        assert!(p.transport().sent.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -380,7 +493,7 @@ mod tests {
         assert_eq!(sent[0].2["input"].as_array().unwrap().len(), 1);
         assert_eq!(sent[0].2["response_format"]["aspect_ratio"], "3:4");
         assert_eq!(sent[1].2["input"].as_array().unwrap().len(), 2);
-        assert_eq!(p.capabilities(), Capabilities { generate: true, edit: true, variations: true });
+        assert_eq!(p.capabilities(), Capabilities { generate: true, edit: true, variations: true, edit_in_place: true, max_references: 4 });
         assert_eq!(p.edit_aspect(1920, 1080), (16, 9));
     }
 }

@@ -1,5 +1,6 @@
 //! Generative AI in the shell (#41): Generative AI Settings (provider, model and API key), the
-//! Edit › Generative Fill prompt, and installing the configured provider on the session.
+//! Edit › Generative Fill prompt (Fill or Edit, with optional reference images), and installing
+//! the configured provider on the session.
 //!
 //! Off by default: until the user picks a provider and saves a key, no provider exists, the
 //! Generative Fill menu item is hidden and nothing is ever contacted. The provider and model live
@@ -20,6 +21,8 @@ const SELECT_VARIATION: &str = photocraft_engine::genai_cmds::SELECT_VARIATION;
 const MORE: &str = photocraft_engine::genai_cmds::MORE;
 /// Long side of a variation thumbnail, in texels.
 const THUMB: u32 = 96;
+/// Long side of a reference image's preview in the prompt dialog, in texels.
+const REFERENCE_THUMB: u32 = 64;
 const SETTINGS_MARK: &str = "__genaiSettings";
 const PROMPT_MARK: &str = "__genaiPrompt";
 /// `prefs.dialogs` entry holding `{"provider", "model"}`.
@@ -34,6 +37,17 @@ pub struct Runtime {
     /// Variation thumbnails for the Properties panel, by variation layer: (pixels fingerprint,
     /// texture).
     thumbs: std::collections::HashMap<LayerId, (u64, egui::TextureHandle)>,
+    /// The reference images of the last Generative Fill (`references` entries), offered again the
+    /// next time the prompt opens. Kept for this session only.
+    references: Vec<Value>,
+    /// Previews of reference images, by entry ([`reference_key`]).
+    previews: std::collections::HashMap<String, Preview>,
+}
+
+/// A reference image's preview: decoded when it was added, uploaded on first draw.
+enum Preview {
+    Image(egui::ColorImage),
+    Texture(egui::TextureHandle),
 }
 
 /// Providers the settings offer: (id, name). Only providers the app can build appear.
@@ -127,12 +141,97 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.fields.contains_key(PROMPT_MARK)) {
         return d.id;
     }
-    let last = app.session.prefs().dialogs.get(FILL).and_then(|v| v.get("prompt")).and_then(Value::as_str).unwrap_or("").to_owned();
+    let last = app.session.prefs().dialogs.get(FILL).cloned().unwrap_or(Value::Null);
+    let get = |k: &str| last.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let mode = if get("mode") == "edit" { "edit" } else { "fill" };
+    let references: Vec<Value> = app.genai.references.iter().filter(|r| reference_name(app, r).is_some()).cloned().collect();
+    // Previews of references no longer offered go; an open document's is made afresh.
+    app.genai.previews.retain(|key, _| references.iter().any(|r| reference_key(r) == *key && r.get("path").is_some()));
     let mut f = Map::new();
     f.insert(PROMPT_MARK.into(), json!(true));
     f.insert("__label".into(), json!("Generative Fill"));
-    f.insert("prompt".into(), json!(last));
+    f.insert("prompt".into(), json!(get("prompt")));
+    f.insert("mode".into(), json!(mode));
+    f.insert("references".into(), Value::Array(references));
     app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// What the configured provider can do in the prompt dialog: (edit in place, most references).
+fn prompt_capabilities(app: &PhotocraftApp) -> (bool, usize) {
+    let caps = app.session.image_provider().map(|p| p.capabilities()).unwrap_or_default();
+    (caps.edit_in_place, caps.max_references.min(photocraft_genai::MAX_REFERENCES))
+}
+
+/// A `references` entry's identity, for its preview.
+fn reference_key(r: &Value) -> String {
+    r.to_string()
+}
+
+/// What a `references` entry is called: its file's name, or its open document's (`None` once that
+/// document is closed).
+fn reference_name(app: &PhotocraftApp, r: &Value) -> Option<String> {
+    if let Some(path) = r.get("path").and_then(Value::as_str) {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        return Some(name.to_owned());
+    }
+    let id = r.get("document")?.as_u64()?;
+    app.session.documents().iter().find(|d| d.doc.id.0 == id).map(|d| d.doc.name.clone())
+}
+
+/// The preview of a reference image, at most [`REFERENCE_THUMB`] texels on its long side.
+fn preview_image(doc: &photocraft_doc::Document) -> Result<egui::ColorImage, String> {
+    let (w, h, rgb) = photocraft_engine::genai_cmds::reference_pixels(doc, REFERENCE_THUMB).map_err(|e| e.to_string())?;
+    Ok(egui::ColorImage::from_rgb([w as usize, h as usize], &rgb))
+}
+
+fn references_of(f: &Map<String, Value>) -> Vec<Value> {
+    f.get("references").and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
+/// Add a reference image to the open prompt dialog (if it is still open and has room).
+fn add_reference(app: &mut PhotocraftApp, entry: Value, preview: Option<egui::ColorImage>) {
+    let (_, max) = prompt_capabilities(app);
+    let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.fields.contains_key(PROMPT_MARK)) else { return };
+    let mut refs = references_of(&d.fields);
+    if refs.len() >= max || refs.contains(&entry) {
+        return;
+    }
+    if let Some(img) = preview {
+        app.genai.previews.insert(reference_key(&entry), Preview::Image(img));
+    }
+    refs.push(entry);
+    d.fields.insert("references".into(), Value::Array(refs));
+}
+
+/// Image File…: pick a file, check it opens (so a bad one is reported now, not at Generate) and
+/// add it by path; the engine reads it again when the fill runs.
+fn pick_reference_file(app: &mut PhotocraftApp) -> Result<Value, String> {
+    app.pick_file_bytes(|app, path, bytes| {
+        let doc = photocraft_engine::genai_cmds::reference_document(&path, &bytes).map_err(|e| e.to_string())?;
+        let preview = preview_image(&doc).ok();
+        add_reference(app, json!({"path": path}), preview);
+        Ok(Value::Null)
+    })
+}
+
+/// The texture of a reference's preview, making it (for an open document) or uploading it on
+/// first use.
+fn preview_texture(app: &mut PhotocraftApp, ctx: &egui::Context, r: &Value) -> Option<(egui::TextureId, egui::Vec2)> {
+    let key = reference_key(r);
+    if !app.genai.previews.contains_key(&key) {
+        let id = r.get("document").and_then(Value::as_u64)?;
+        let doc = app.session.documents().iter().find(|d| d.doc.id.0 == id).map(|d| d.doc.clone())?;
+        app.genai.previews.insert(key.clone(), Preview::Image(preview_image(&doc).ok()?));
+    }
+    let preview = app.genai.previews.get_mut(&key)?;
+    if let Preview::Image(img) = preview {
+        let tex = ctx.load_texture(format!("genai-reference-{key}"), std::mem::take(img), egui::TextureOptions::LINEAR);
+        *preview = Preview::Texture(tex);
+    }
+    match preview {
+        Preview::Texture(tex) => Some((tex.id(), tex.size_vec2())),
+        Preview::Image(_) => None,
+    }
 }
 
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -148,12 +247,119 @@ fn faint(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_faint).size(12.0)).wrap());
 }
 
+/// Fill / Edit, as tabs: Fill blurs the selection out and generates into it (or removes what was
+/// there), Edit keeps what is there and changes what the prompt says.
+fn mode_tabs(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let edit = f.get("mode").and_then(Value::as_str) == Some("edit");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (mode, label, tip, on) in [
+            ("fill", tl!("Fill selection"), tl!("Generate new content in the selection, or remove what is there"), !edit),
+            ("edit", tl!("Edit selection"), tl!("Keep what is in the selection and change only what you ask for"), edit),
+        ] {
+            let r = crate::widgets::pill_tab(ui, label, on);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+            if r.on_hover_text(tip).clicked() {
+                f.insert("mode".into(), json!(mode));
+            }
+        }
+    });
+}
+
+/// Reference images: a preview per image with a remove button, and Add Reference (an image file
+/// or an open document).
+fn references_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, max: usize) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    // An open document that was closed since it was added is dropped.
+    let mut refs: Vec<Value> = references_of(f).into_iter().filter(|r| reference_name(app, r).is_some()).collect();
+    ui.label(egui::RichText::new(tl!("Reference images")).font(crate::theme::semibold(12.5)).color(t.text));
+    faint(ui, tl!("Optional: an object or product to show, or a design, colour or look to match."));
+    ui.add_space(4.0);
+    let ctx = ui.ctx().clone();
+    let mut remove = None;
+    let mut pick_file = false;
+    let mut add_doc = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for (i, r) in refs.iter().enumerate() {
+            let name = reference_name(app, r).unwrap_or_default();
+            let tex = preview_texture(app, &ctx, r);
+            egui::Frame::new().fill(t.field).corner_radius(t.radius_sm).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+                    if let Some((tex, size)) = tex {
+                        let fit = (rect.width() / size.x.max(1.0)).min(rect.height() / size.y.max(1.0));
+                        let img = egui::Rect::from_center_size(rect.center(), size * fit);
+                        ui.painter().image(tex, img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    }
+                    let short: String = if name.chars().count() > 22 { format!("{}…", name.chars().take(21).collect::<String>()) } else { name.clone() };
+                    ui.label(egui::RichText::new(short).size(12.0).color(t.text)).on_hover_text(&name);
+                    if crate::icons::button(ui, "x", 20.0, false, tl!("Remove")).clicked() {
+                        remove = Some(i);
+                    }
+                });
+            });
+        }
+        if refs.len() < max {
+            let add = crate::widgets::secondary_button(ui, tl!("Add Reference…"), 0.0);
+            egui::Popup::menu(&add).show(|ui| {
+                crate::widgets::style_spectrum_popup_menu(ui);
+                ui.set_min_width(200.0);
+                if ui.button(tl!("Image File…")).clicked() {
+                    pick_file = true;
+                    ui.close();
+                }
+                let docs: Vec<(u64, String)> = app.session.documents().iter().map(|d| (d.doc.id.0, d.doc.name.clone())).collect();
+                if !docs.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("Open Documents")).size(11.5).color(t.text_faint));
+                    for (id, name) in docs {
+                        let entry = json!({"document": id});
+                        if ui.add_enabled(!refs.contains(&entry), egui::Button::new(name)).clicked() {
+                            add_doc = Some(entry);
+                            ui.close();
+                        }
+                    }
+                }
+            });
+        }
+    });
+    if let Some(i) = remove
+        && i < refs.len()
+    {
+        refs.remove(i);
+    }
+    if let Some(entry) = add_doc
+        && refs.len() < max
+        && !refs.contains(&entry)
+    {
+        refs.push(entry);
+    }
+    if references_of(f) != refs {
+        f.insert("references".into(), Value::Array(refs));
+    }
+    if pick_file && let Err(e) = pick_reference_file(app) {
+        app.ui.status = e;
+    }
+}
+
 fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let (can_edit, max_references) = prompt_capabilities(app);
     let mut prompt = f.get("prompt").and_then(Value::as_str).unwrap_or("").to_owned();
-    ui.label(tl!("Describe what to generate in the selection, or leave it empty to continue the image through it."));
+    if can_edit {
+        mode_tabs(ui, f);
+        ui.add_space(8.0);
+    }
+    let edit = can_edit && f.get("mode").and_then(Value::as_str) == Some("edit");
+    if edit {
+        ui.label(tl!("Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material)."));
+    } else {
+        ui.label(tl!("Describe what to generate in the selection, or leave it empty to continue the image through it."));
+    }
     ui.add_space(6.0);
-    let r = ui
-        .add(egui::TextEdit::singleline(&mut prompt).hint_text(tl!("Prompt (optional)")).desired_width(f32::INFINITY).char_limit(photocraft_genai::MAX_PROMPT));
+    let hint = if edit { tl!("What to change") } else { tl!("Prompt (optional)") };
+    let r = ui.add(egui::TextEdit::singleline(&mut prompt).hint_text(hint).desired_width(f32::INFINITY).char_limit(photocraft_genai::MAX_PROMPT));
     crate::field_tab::register(ui.ctx(), r.id);
     if !f.contains_key("__focused") {
         f.insert("__focused".into(), json!(true));
@@ -165,7 +371,20 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     if r.changed() {
         f.insert("prompt".into(), json!(prompt));
     }
-    ui.add_space(6.0);
+    // An empty prompt always runs Fill: Edit needs something to change.
+    if prompt.trim().is_empty() {
+        ui.add_space(2.0);
+        if references_of(f).is_empty() {
+            faint(ui, tl!("Empty: removes what is selected and continues the image through it."));
+        } else {
+            faint(ui, tl!("Empty: places what the reference images show in the selection."));
+        }
+    }
+    if max_references > 0 {
+        ui.add_space(10.0);
+        references_section(app, ui, f, max_references);
+    }
+    ui.add_space(8.0);
     if let Some(info) = app.session.image_provider().map(|p| p.info()) {
         faint(
             ui,
@@ -174,6 +393,9 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
                 &[("name", info.name), ("model", &info.model)],
             ),
         );
+        if !references_of(f).is_empty() {
+            faint(ui, tl!("The reference images are sent too, at most 1024 pixels on their long side."));
+        }
     }
 }
 
@@ -238,6 +460,8 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
             ),
         );
         ui.add_space(4.0);
+        faint(ui, tl!("In Edit mode the selected area is sent as it is. Reference images you add are sent too."));
+        ui.add_space(4.0);
         faint(ui, tl!("Each Generative Fill makes three variations, so it sends three requests, each billed to your key."));
         ui.add_space(4.0);
         let store = app.services.genai.as_ref().map_or("", |s| s.key_store_name);
@@ -249,8 +473,20 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     if f.contains_key(PROMPT_MARK) {
         let prompt = f.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_owned();
-        app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt})));
-        return app.run(FILL, json!({"prompt": prompt}));
+        let (can_edit, max_references) = prompt_capabilities(app);
+        let chosen = if can_edit && f.get("mode").and_then(Value::as_str) == Some("edit") { "edit" } else { "fill" };
+        let references: Vec<Value> = references_of(f).into_iter().filter(|r| reference_name(app, r).is_some()).take(max_references).collect();
+        app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt, "mode": chosen})));
+        app.genai.references = references.clone();
+        // Edit needs something to change: with no prompt it removes, as Fill does.
+        let mode = if prompt.is_empty() { "fill" } else { chosen };
+        let mut params = Map::new();
+        params.insert("prompt".into(), json!(prompt));
+        params.insert("mode".into(), json!(mode));
+        if !references.is_empty() {
+            params.insert("references".into(), Value::Array(references));
+        }
+        return app.run(FILL, Value::Object(params));
     }
     let typed = std::mem::take(&mut app.genai.key_input);
     let provider = f.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();

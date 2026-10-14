@@ -4412,3 +4412,19 @@ layerLabel	No Color	Sem cor
 	Sends the same area and prompt to {name} again for three more.	Envia a mesma área e descrição para {name} de novo para mais três.
 	Generate More	Gerar mais
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Cada Preenchimento generativo cria três variações, então envia três solicitações, cada uma cobrada na sua chave.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Preencher seleção
+	Edit selection	Editar seleção
+	Generate new content in the selection, or remove what is there	Gerar conteúdo novo na seleção ou remover o que há nela
+	Keep what is in the selection and change only what you ask for	Manter o que está na seleção e mudar só o que você pedir
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Descreva o que mudar na seleção: o que está nela é mantido, exceto o que você pedir para mudar (uma cor, um texto, um material).
+	What to change	O que mudar
+	Empty: removes what is selected and continues the image through it.	Vazio: remove o que está selecionado e continua a imagem através da seleção.
+	Empty: places what the reference images show in the selection.	Vazio: coloca na seleção o que as imagens de referência mostram.
+	Reference images	Imagens de referência
+	Optional: an object or product to show, or a design, colour or look to match.	Opcional: um objeto ou produto a mostrar, ou um design, cor ou estilo a imitar.
+	Add Reference…	Adicionar referência…
+	Image File…	Arquivo de imagem…
+	Open Documents	Documentos abertos
+	The reference images are sent too, at most 1024 pixels on their long side.	As imagens de referência também são enviadas, com no máximo 1024 pixels no lado maior.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	No modo Editar seleção, a área selecionada é enviada como está. As imagens de referência que você adicionar também são enviadas.
