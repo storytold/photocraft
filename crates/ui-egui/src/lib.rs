@@ -938,6 +938,8 @@ mod filter_preview_locator_tests;
 
 #[cfg(test)]
 mod move_outline_tests;
+#[cfg(test)]
+mod release_frame_tests;
 
 #[cfg(test)]
 mod move_bar_distribute_gear_tests;
