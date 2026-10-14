@@ -132,10 +132,16 @@ impl DocTextures {
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride
     /// `stride` pixels) into every overlapping tile's level 0.
     pub(super) fn write(&self, queue: &wgpu::Queue, origin: [u32; 2], size: [u32; 2], stride: u32, texels: &[u8]) {
+        self.write_level(queue, 0, origin, size, stride, texels);
+    }
+
+    /// [`Self::write`] into mip `level`: `origin` and `size` are in that level's pixels (document
+    /// pixels / 2^level). Tiles that don't start on that level's grid are left alone.
+    pub(super) fn write_level(&self, queue: &wgpu::Queue, level: u32, origin: [u32; 2], size: [u32; 2], stride: u32, texels: &[u8]) {
         let bpp = texel_bytes(self.format);
         let (x0, y0, x1, y1) = (origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]);
         for t in &self.tiles {
-            let [tx, ty, tw, th] = t.rect;
+            let Some([tx, ty, tw, th]) = t.level_rect(level) else { continue };
             let (ix0, iy0, ix1, iy1) = (x0.max(tx), y0.max(ty), x1.min(tx + tw), y1.min(ty + th));
             if ix0 >= ix1 || iy0 >= iy1 {
                 continue;
@@ -144,7 +150,7 @@ impl DocTextures {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &t.texture,
-                    mip_level: 0,
+                    mip_level: level,
                     origin: wgpu::Origin3d { x: ix0 - tx, y: iy0 - ty, z: 0 },
                     aspect: wgpu::TextureAspect::All,
                 },
@@ -157,16 +163,22 @@ impl DocTextures {
 
     /// Rebuild the mip chain inside document rect `r` (x0, y0, x1, y1) with 2×2 box filtering.
     pub(super) fn regenerate_mips(&self, device: &wgpu::Device, queue: &wgpu::Queue, res: &Resources, r: [u32; 4]) {
+        self.regenerate_mips_from(device, queue, res, 0, r);
+    }
+
+    /// Rebuild the levels below mip `from` inside `r`, in that level's pixels.
+    pub(super) fn regenerate_mips_from(&self, device: &wgpu::Device, queue: &wgpu::Queue, res: &Resources, from: u32, r: [u32; 4]) {
         let Some(mip_pipeline) = res.mip_pipeline(self.format) else { return };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_mips") });
         for t in &self.tiles {
-            let [tx, ty, tw, th] = t.rect;
-            let (mut x0, mut y0, mut x1, mut y1) = (r[0].max(tx), r[1].max(ty), r[2].min(tx + tw), r[3].min(ty + th));
+            let [tw, th] = [t.rect[2], t.rect[3]];
+            let Some([tx, ty, lw, lh]) = t.level_rect(from) else { continue };
+            let (mut x0, mut y0, mut x1, mut y1) = (r[0].max(tx), r[1].max(ty), r[2].min(tx + lw), r[3].min(ty + lh));
             if x0 >= x1 || y0 >= y1 {
                 continue;
             }
             (x0, y0, x1, y1) = (x0 - tx, y0 - ty, x1 - tx, y1 - ty);
-            for level in 1..t.levels.len() {
+            for level in from as usize + 1..t.levels.len() {
                 let (lw, lh) = ((tw >> level).max(1), (th >> level).max(1));
                 [x0, y0, x1, y1] = mip_damage([x0, y0, x1, y1], lw, lh);
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
