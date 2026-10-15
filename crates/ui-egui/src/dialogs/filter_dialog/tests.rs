@@ -1110,7 +1110,12 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, k).unwrap();
     let full = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, 1).unwrap();
     let photocraft_doc::LayerContent::Smart(full_sm) = &full.layer(layer).unwrap().content else { panic!("a smart object") };
-    let reference = photocraft_algo::resample::resize_surface(full_sm.cache.as_ref().unwrap(), 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic);
+    // The placement render reduces within the content's rect and repeats its edge pixels (#5746):
+    // an opaque source keeps its boundary alpha instead of blending with transparent kernel
+    // support. Mirror that here, or the boundary comparison demands the old alpha loss.
+    let cache = full_sm.cache.as_ref().unwrap();
+    let reference =
+        photocraft_algo::resample::resize_surface_in_canvas(cache, 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic, cache.content_bounds());
     let photocraft_doc::LayerContent::Smart(sm) = &shown.layer(layer).unwrap().content else { panic!("a smart object") };
     assert_eq!(sm.smart_filters.len(), 1, "the preview adds the Curves smart filter");
     assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
