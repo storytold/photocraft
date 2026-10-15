@@ -47,7 +47,9 @@ pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
     if app.camera_raw.is_some() || app.smart_svg.modal_open() || crate::distort_ui::modal_workspace(app).is_some() || crate::crop_ui::blocks(app, id) {
         return false;
     }
-    (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+    (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none())
+        || crate::shortcuts::NAV_COMMANDS.contains(&id)
+        || matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "select.all")
 }
 
 /// Top-level menus in Photoshop order.

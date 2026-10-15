@@ -703,22 +703,25 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         _ => shown.trim_start_matches('#').to_ascii_uppercase(),
                     },
                 };
-                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6)).accessible_name(tl!("Color"));
+                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(7)).accessible_name(tl!("Color"));
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }
                 if r.gained_focus() {
                     crate::field_tab::select_all(ui.ctx(), id, &h);
                 }
+                if r.changed() {
+                    if h.starts_with('#') {
+                        h = h.trim_start_matches('#').to_string();
+                    }
+                    if let Some(c) = parse_hex(&h) {
+                        edit = Some((c, Keep::Nothing));
+                    }
+                }
                 if r.has_focus() {
                     ui.data_mut(|d| d.insert_temp(id, h.clone()));
                 } else {
                     ui.data_mut(|d| d.remove::<String>(id));
-                }
-                if r.changed()
-                    && let Some(c) = parse_hex(&h)
-                {
-                    edit = Some((c, Keep::Nothing));
                 }
             });
         });

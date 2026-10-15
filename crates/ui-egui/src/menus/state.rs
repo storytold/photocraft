@@ -83,6 +83,12 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "view.editSelectedGuides" | "view.clearSelectedGuides" => crate::guide_select::selected(app).is_some(),
         "edit.cut" | "edit.copy" if app.ui.text_edit.is_some() => crate::type_tool::selected_range(app).is_some(),
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
+        // While a dialog is open, clipboard commands are enabled for the dialog's fields (#5904).
+        "edit.cut" | "edit.copy" | "edit.paste" | "select.all"
+            if !app.ui.dialogs.is_empty() || app.ui.layers_panel_dialog.is_some() || app.discard.is_some() =>
+        {
+            true
+        }
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
         // on an explicit paste: with a clipboard service these stay enabled. Paste and New from
         // Clipboard need no document (with none open, Paste makes one); Paste in Place does.
