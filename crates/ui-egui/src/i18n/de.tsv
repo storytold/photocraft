@@ -3475,3 +3475,5 @@ curves	Smooth	Glätten
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+# PNG export compression (#5409)
+	Fast	Schnell

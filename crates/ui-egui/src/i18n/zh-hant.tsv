@@ -3090,3 +3090,6 @@ curves	Smooth	平滑
 	Profile	描述檔
 	Target	目標
 	Units	單位
+# PNG export compression (#5409)
+	Fast	快速
+	Best	最佳

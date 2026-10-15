@@ -3670,3 +3670,5 @@ curves	Smooth	매끄럽게
 	Category	카테고리
 	Target	대상
 	Units	단위
+# PNG export compression (#5409)
+	Fast	빠름

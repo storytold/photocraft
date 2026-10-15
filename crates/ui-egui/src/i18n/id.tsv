@@ -3473,3 +3473,5 @@ curves	Smooth	Haluskan
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+# PNG export compression (#5409)
+	Best	Terbaik

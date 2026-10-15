@@ -4071,3 +4071,5 @@ curves	Smooth	Wygładź
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+# PNG export compression (#5409)
+	Best	Najlepsza
