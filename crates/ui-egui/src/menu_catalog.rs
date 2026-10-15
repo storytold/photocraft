@@ -243,6 +243,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Image", "Analysis"], "Count Tool", None, "image.analysis.countTool"),
     (&["Image", "Analysis"], "---", None, "---"),
     (&["Image", "Analysis"], "Place Scale Marker…", None, "image.analysis.placeScaleMarker"),
+    (&["Layer", "Matting"], "Remove Background (AI)…", None, "layer.removeBackgroundAI"),
     (&["Layer", "New"], "Layer…", Some("Cmd+Shift+N"), "layer.new.layer"),
     (&["Layer", "New"], "Layer from Background…", None, "layer.new.layerFromBackground"),
     (&["Layer", "New"], "Background from Layer", None, "layer.new.backgroundFromLayer"),
