@@ -276,12 +276,93 @@ fn variants(p: &Value) -> Vec<Value> {
 type WebProxy = (Arc<Vec<[f32; 4]>>, u32, u32, f64, egui::Vec2);
 type WebCache = (String, Arc<egui::TextureHandle>, Option<(usize, Option<usize>, &'static str)>);
 
+/// The longest side of the proxy a still image is previewed with, and an animation (each frame of which
+/// is prepared as it plays, and sized while the dialog is open, on the UI thread).
+const STILL_PROXY: f64 = 2048.0;
+const ANIMATION_PROXY: f64 = 1024.0;
+
+/// The bounded proxy a preview works on: `frame` of `doc` at the export's size, scaled down to at most
+/// `longest_side` px, flattened.
+fn web_proxy(doc: &photocraft_doc::Document, base: &Value, frame: Option<usize>, longest_side: f64) -> Result<WebProxy, String> {
+    let (fw, fh) = web_preview::dimensions(doc, base)?;
+    let k = (longest_side / fw.max(fh)).min(1.0);
+    let st = WebSettings::from_params(base, "preview").unwrap_or_default();
+    let shown = web_frame_document(doc, frame).map_err(|e| e.to_string())?;
+    let (wd, _, _) =
+        web_cmds::web_document(&shown, &json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": "bilinear"}), &st)
+            .map_err(|e| e.to_string())?;
+    let buf = photocraft_compose::flatten(&wd);
+    Ok((
+        Arc::new(buf.px),
+        wd.size.width,
+        wd.size.height,
+        (fw * fh) / (f64::from(wd.size.width) * f64::from(wd.size.height)).max(1.0),
+        egui::vec2(fw as f32, fh as f32),
+    ))
+}
+
+/// The sizes of an animation's frames as GIFs, found one frame to a repaint so the dialog stays responsive.
+#[derive(Clone)]
+struct FrameSizes {
+    signature: String,
+    sizes: Vec<Option<usize>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+/// What an animated GIF of `count` frames comes to, whichever frame is on show: the sum of the frames' own
+/// sizes. While frames remain to be sized it is their average times the count, and `false` says so.
+fn animation_bytes(
+    ui: &mut egui::Ui,
+    doc: &Arc<photocraft_doc::Document>,
+    rev: u64,
+    p: &Value,
+    key: egui::Id,
+    count: usize,
+    playing: bool,
+    shown: usize,
+) -> (usize, bool) {
+    let mut base = p.clone();
+    if let Some(m) = base.as_object_mut() {
+        m.remove("colorTableEdits");
+    }
+    let signature = format!("{}|{rev}|{base}", doc.id.0);
+    let mut found: FrameSizes = ui
+        .data(|d| d.get_temp::<FrameSizes>(key))
+        .filter(|c| c.signature == signature && c.sizes.len() == count)
+        .unwrap_or(FrameSizes { signature, sizes: vec![None; count] });
+    // Playing already prepares a frame at every step: sizing waits until it is paused.
+    let next = found.sizes.iter().position(Option::is_none).filter(|_| !playing);
+    if let Some(i) = next {
+        let bytes = web_proxy(doc, &base, Some(i), ANIMATION_PROXY).ok().and_then(|(px, w, h, ratio, _)| {
+            let st = WebSettings::from_params(&base, "preview").ok()?;
+            let o = web_cmds::optimize(&px, w as usize, photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &st, None, None, None, 72.0, false).ok()?;
+            Some((o.bytes.len() as f64 * ratio) as usize)
+        });
+        found.sizes[i] = Some(bytes.unwrap_or(0));
+        ui.ctx().request_repaint();
+    }
+    ui.data_mut(|d| d.insert_temp(key, found.clone()));
+    let known: Vec<usize> = found.sizes.iter().flatten().copied().collect();
+    let sum: usize = known.iter().sum();
+    let done = known.len() == count;
+    // Nothing sized yet (it was playing from the start): the shown frame's size for each stands in.
+    let total = if done {
+        sum
+    } else if known.is_empty() {
+        shown.saturating_mul(count)
+    } else {
+        sum / known.len() * count
+    };
+    (total, done)
+}
+
 /// Renders one preview pane: the original (`None`) or an optimised variant.
 fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, pane: usize, frame: Option<usize>) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };
     let doc = st.doc.clone();
     let rev = st.revision;
+    let playing = b(f, "__web_playing", false);
     // A bounded proxy; navigation never recomposites or re-encodes it.
     let base = p.cloned().unwrap_or_else(|| json!({}));
     let size_sig = format!("{}|{}|{}|{}", base["percent"], base["width"], base["height"], base["convertToSrgb"]);
@@ -292,29 +373,13 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
     let (px, w, h, ratio, source_size) = match proxy {
         Some(v) => v,
         None => {
-            let (fw, fh) = match web_preview::dimensions(&doc, &base) {
-                Ok(size) => size,
+            let v = match web_proxy(&doc, &base, frame, if animation_frames(&doc).is_some() { ANIMATION_PROXY } else { STILL_PROXY }) {
+                Ok(v) => v,
                 Err(error) => {
                     ui.label(error);
                     return;
                 }
             };
-            let k = (2048.0 / fw.max(fh)).min(1.0);
-            let st = WebSettings::from_params(&base, "preview").unwrap_or_default();
-            let Ok(doc) = web_frame_document(&doc, frame) else { return };
-            let Ok((wd, _, _)) =
-                web_cmds::web_document(&doc, &json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": "bilinear"}), &st)
-            else {
-                return;
-            };
-            let buf = photocraft_compose::flatten(&wd);
-            let v = (
-                Arc::new(buf.px),
-                wd.size.width,
-                wd.size.height,
-                (fw * fh) / (f64::from(wd.size.width) * f64::from(wd.size.height)).max(1.0),
-                egui::vec2(fw as f32, fh as f32),
-            );
             ui.data_mut(|d| d.insert_temp(wkey, (proxy_sig, v.clone())));
             v
         }
@@ -351,14 +416,35 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         crate::widgets::checker(ui.painter(), r, 8.0);
         web_preview::paint(ui, r, &response, &tex, source_size, f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+        let frames = animation_frames(&doc);
+        let count_label = |n: usize| crate::i18n::fmt(tl!("{n} frames"), &[("n", &n.to_string())]);
         let (l1, l2) = match (p, info) {
-            (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
+            (None, _) => (
+                "Original".to_string(),
+                format!(
+                    "{}  ·  {} × {} px{}",
+                    doc.name,
+                    doc.size.width,
+                    doc.size.height,
+                    frames.map(|n| format!("  ·  {}", count_label(n))).unwrap_or_default()
+                ),
+            ),
             (Some(_), Some((bytes, colors, ext))) => {
+                // Only a GIF keeps the frames: its size is all of theirs, the same whichever frame is shown.
+                let frames = frames.filter(|_| ext == "gif");
+                let (bytes, whole) = match (frames, p) {
+                    (Some(n), Some(p)) => animation_bytes(ui, &doc, rev, p, key.with("animation-size"), n, playing, bytes),
+                    _ => (bytes, true),
+                };
                 // Photoshop's download estimate at 56.6 Kbps.
                 let secs = (bytes as f64 * 8.0 / 56_600.0).ceil();
                 (
-                    format!("{}  {}", ext.to_uppercase(), crate::sizing::human_bytes(bytes as f64)),
-                    format!("{secs} sec @ 56.6 Kbps{}", colors.map(|c| format!("  ·  {c} colors")).unwrap_or_default()),
+                    format!("{}  {}{}", ext.to_uppercase(), if whole { "" } else { "~" }, crate::sizing::human_bytes(bytes as f64)),
+                    format!(
+                        "{secs} sec @ 56.6 Kbps{}{}",
+                        colors.map(|c| format!("  ·  {c} colors")).unwrap_or_default(),
+                        frames.map(|n| format!("  ·  {}", count_label(n))).unwrap_or_default()
+                    ),
                 )
             }
             (Some(_), None) => ("—".into(), String::new()),
@@ -440,39 +526,115 @@ fn advance_preview(frame: usize, duration: usize, fps: f32, last: f64, now: f64)
     (next, now - (elapsed_frames - steps) / fps)
 }
 
-fn web_playback(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) -> Option<usize> {
-    let mut timeline = doc.timeline.clone()?;
+/// How many frames `doc`'s frame animation has, when it has more than one (a GIF of it is animated).
+fn animation_frames(doc: &photocraft_doc::Document) -> Option<usize> {
+    doc.frame_animation.as_ref().map(|a| a.frames.len()).filter(|n| *n > 1)
+}
+
+/// The frame a frame animation is on `now` when it was on `frame` at `last`: each frame holds for its own
+/// delay (a delay of 10 ms or less plays as 100 ms, as browsers do), and the animation loops. Returns the
+/// time the frame began, keeping the fraction of a delay that has passed.
+fn advance_frames(frame: usize, delays_ms: &[u32], last: f64, now: f64) -> (usize, f64) {
+    let n = delays_ms.len().max(1);
+    let mut frame = frame.min(n - 1);
+    if !now.is_finite() || !last.is_finite() || now < last {
+        return (frame, if now.is_finite() { now } else { last });
+    }
+    let hold = |i: usize| match delays_ms.get(i).copied().unwrap_or(100) {
+        0..=10 => 0.1,
+        ms => f64::from(ms) / 1000.0,
+    };
+    let total: f64 = (0..n).map(hold).sum();
+    let mut elapsed = (now - last) % total;
+    // Under one pass of the animation: each step takes at least a hundredth of a second.
+    while elapsed >= hold(frame) {
+        elapsed -= hold(frame);
+        frame = (frame + 1) % n;
+    }
+    (frame, now - elapsed)
+}
+
+/// What the playback bar below the previews shows.
+struct PlaybackBar {
+    /// The frame being previewed (0-based) and how many there are.
+    frame: usize,
+    count: usize,
+    playing: bool,
+    /// Names the frame count, as a frame animation (a GIF of it is animated) does.
+    names_count: bool,
+}
+
+/// Moves a frame animation's preview on to the frame it is on now. Returns that frame and the bar to draw.
+fn web_frame_playback(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) -> (Option<usize>, Option<PlaybackBar>) {
+    let Some(a) = doc.frame_animation.as_ref().filter(|a| a.frames.len() > 1) else { return (None, None) };
+    let delays: Vec<u32> = a.frames.iter().map(|fr| fr.delay_ms).collect();
+    let count = delays.len();
+    let now = ui.input(|i| i.time);
+    let mut frame = f.get("__web_frame").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).unwrap_or(a.current).min(count - 1);
+    let mut last = n(f, "__web_time", now);
+    let playing = b(f, "__web_playing", false);
+    if playing {
+        (frame, last) = advance_frames(frame, &delays, last, now);
+        let hold = match delays.get(frame).copied().unwrap_or(100) {
+            0..=10 => 0.1,
+            ms => f64::from(ms) / 1000.0,
+        };
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((hold - (now - last)).clamp(0.0, 1.0)));
+    }
+    f.insert("__web_frame".into(), json!(frame));
+    f.insert("__web_time".into(), json!(last));
+    f.insert("__web_playing".into(), json!(playing));
+    (Some(frame), Some(PlaybackBar { frame, count, playing, names_count: true }))
+}
+
+/// Draws the playback bar: Play or Pause, and where the preview is. Pressing the button restarts the
+/// preview's clock, so the time spent paused never counts.
+fn web_playback_bar(ui: &mut egui::Ui, f: &mut Map<String, Value>, bar: &PlaybackBar) {
+    ui.horizontal(|ui| {
+        let label = if bar.playing { tl!("Pause") } else { tl!("Play") };
+        if crate::icons::button(ui, if bar.playing { "pause" } else { "play" }, 22.0, bar.playing, label).clicked() {
+            f.insert("__web_playing".into(), json!(!bar.playing));
+            f.insert("__web_time".into(), json!(ui.input(|i| i.time)));
+        }
+        ui.label(format!("{} / {}", bar.frame + 1, bar.count));
+        if bar.names_count {
+            ui.label(crate::i18n::fmt(tl!("{n} frames"), &[("n", &bar.count.to_string())]));
+        }
+    });
+}
+
+fn web_playback(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) -> (Option<usize>, Option<PlaybackBar>) {
+    if animation_frames(doc).is_some() {
+        return web_frame_playback(ui, f, doc);
+    }
+    let Some(mut timeline) = doc.timeline.clone() else { return (None, None) };
     timeline.clamp();
     if timeline.duration < 2 {
-        return None;
+        return (None, None);
     }
     let now = ui.input(|i| i.time);
     let mut frame = f.get("__web_frame").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).unwrap_or(timeline.current).min(timeline.duration - 1);
     let mut last = n(f, "__web_time", now);
-    let mut playing = b(f, "__web_playing", false);
+    let playing = b(f, "__web_playing", false);
     if playing {
         (frame, last) = advance_preview(frame, timeline.duration, timeline.fps, last, now);
-    }
-    ui.horizontal(|ui| {
-        if crate::icons::button(ui, if playing { "pause" } else { "play" }, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
-            playing = !playing;
-            last = now;
-        }
-        ui.label(format!("{} / {}", frame + 1, timeline.duration));
-    });
-    f.insert("__web_frame".into(), json!(frame));
-    f.insert("__web_time".into(), json!(last));
-    f.insert("__web_playing".into(), json!(playing));
-    if playing {
         let remaining = (1.0 / f64::from(timeline.fps) - (now - last)).clamp(0.0, 1.0);
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
     }
-    Some(frame)
+    f.insert("__web_frame".into(), json!(frame));
+    f.insert("__web_time".into(), json!(last));
+    f.insert("__web_playing".into(), json!(playing));
+    (Some(frame), Some(PlaybackBar { frame, count: timeline.duration, playing, names_count: false }))
 }
 
 /// Seek a preview copy, preserving any edits to the source's currently displayed frame.
 fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<usize>) -> Result<photocraft_doc::Document, photocraft_engine::EngineError> {
     let Some(frame) = frame else { return Ok(doc.clone()) };
+    if animation_frames(doc).is_some() {
+        let mut shown = doc.clone();
+        shown.select_animation_frame(frame);
+        return Ok(shown);
+    }
     let mut preview = photocraft_engine::Session::new();
     preview.add_document(doc.clone(), None);
     preview.execute("timeline.setFrame", json!({"frame": frame}))?;
@@ -491,14 +653,17 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         f.insert("__view".into(), json!(view));
     });
     ui.add_space(4.0);
-    let frame = web_playback(ui, f, &doc);
+    let (frame, bar) = web_playback(ui, f, &doc);
     web_preview::controls(ui, f);
     if let Err(error) = web_preview::prepare_table(app, f) {
         ui.colored_label(t.text_dim, error);
     }
     let p = params(f);
     f.insert("__previewRects".into(), json!([]));
-    let area = egui::vec2((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0), (ui.available_height() - 48.0).max(180.0));
+    let area = egui::vec2(
+        (ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0),
+        (ui.available_height() - 48.0 - if bar.is_some() { 30.0 } else { 0.0 }).max(180.0),
+    );
     ui.horizontal_top(|ui| {
         // Previews grow with the dialog; settings retain their compact width.
         ui.vertical(|ui| {
@@ -524,6 +689,11 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         web_pane(app, ui, cell, Some(&v[2]), f, 3, frame);
                     });
                 }
+            }
+            // Below the previews, as a player's controls are.
+            if let Some(bar) = &bar {
+                ui.add_space(4.0);
+                web_playback_bar(ui, f, bar);
             }
         });
         ui.add_space(10.0);
@@ -1563,6 +1733,156 @@ mod web_playback_tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(3);
         h
+    }
+
+    /// A document whose frame animation shows one of three layers per frame, each held for 100 ms; the last is noisy.
+    fn frame_animation_app() -> PhotocraftApp {
+        sized_frame_animation_app(32, 24)
+    }
+
+    fn sized_frame_animation_app(width: u32, height: u32) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": width, "height": height})).unwrap();
+        for color in ["#ff0000", "#00ff00"] {
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("edit.fill", json!({"color": color})).unwrap();
+        }
+        // The last layer is noisy, so its frame is much bigger than the others as a GIF.
+        app.run("filter.noise.addNoise", json!({"amount": 60})).unwrap();
+        app.run("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+        app
+    }
+
+    #[test]
+    fn a_frame_animation_save_for_web_says_it_is_animated_and_plays() {
+        let mut app = frame_animation_app();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("original"));
+        fields.insert("format".into(), json!("gif"));
+        let mut h = harness(app, fields);
+        assert!(h.query_by_label("3 frames").is_some(), "the bar says how many frames the GIF has");
+        assert!(h.query_all_by_label_contains("3 frames").count() >= 2, "and so does the original pane, which also names the frame count");
+        let st = h.state().0.session.active().unwrap();
+        let (doc, revision, past) = (st.doc.clone(), st.revision, st.history.past_len());
+        h.get_by_label("Play").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__web_playing"], true);
+        h.run_steps(6);
+        assert_ne!(h.state().1["__web_frame"], 0, "the preview moves on through the frames");
+        h.get_by_label("Pause").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__web_playing"], false);
+        let st = h.state().0.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &doc) && st.revision == revision && st.history.past_len() == past, "previewing changes nothing in the document");
+        assert!(params(&h.state().1).as_object().unwrap().keys().all(|k| !k.starts_with("__")));
+    }
+
+    #[test]
+    fn the_estimated_gif_size_is_the_same_whichever_frame_is_shown() {
+        let mut app = sized_frame_animation_app(320, 240);
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("optimized"));
+        fields.insert("format".into(), json!("gif"));
+        let mut h = harness(app, fields);
+        // The frames are sized one to a repaint; once all are, the size stops moving.
+        h.run_steps(12);
+        use egui_kittest::kittest::NodeT;
+        let size = |h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>| {
+            h.query_all_by_label_contains("GIF")
+                .filter_map(|n| {
+                    let a = n.accesskit_node();
+                    a.value().or_else(|| a.label())
+                })
+                .find(|l| l.starts_with("GIF  "))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let whole = size(&h);
+        assert!(!params(&h.state().1).as_object().unwrap().contains_key("colorTable"), "no one colour table is forced on every frame");
+        // The frames really do differ in size on their own, so a size that followed the shown frame would show.
+        let doc = h.state().0.session.active().unwrap().doc.clone();
+        let params = params(&h.state().1);
+        let alone: Vec<usize> = (0..3)
+            .map(|i| {
+                let (px, w, rows, _, _) = web_proxy(&doc, &params, Some(i), ANIMATION_PROXY).unwrap();
+                let st = WebSettings::from_params(&params, "test").unwrap();
+                web_cmds::optimize(&px, w as usize, photocraft_geom::Rect::new(0, 0, w as i32, rows as i32), &st, None, None, None, 72.0, false)
+                    .unwrap()
+                    .bytes
+                    .len()
+            })
+            .collect();
+        assert!(alone.iter().any(|b| *b != alone[0]), "{alone:?}");
+        let expected = format!("GIF  {}", crate::sizing::human_bytes(alone.iter().sum::<usize>() as f64));
+        assert_eq!(whole, expected, "the size is all the frames', not the shown frame's times the count");
+        assert!(whole.starts_with("GIF  ") && !whole.contains('~'), "all frames are sized: {whole:?}");
+        for frame in [1, 2, 0] {
+            h.state_mut().1.insert("__web_frame".into(), json!(frame));
+            h.run_steps(3);
+            assert_eq!(size(&h), whole, "frame {frame}");
+        }
+    }
+
+    #[test]
+    fn sizing_the_frames_waits_while_playing_and_finishes_once_paused() {
+        use egui_kittest::kittest::NodeT;
+        let mut app = sized_frame_animation_app(320, 240);
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("optimized"));
+        fields.insert("format".into(), json!("gif"));
+        fields.insert("__web_playing".into(), json!(true));
+        let mut h = harness(app, fields);
+        let size = |h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>| {
+            h.query_all_by_label_contains("GIF")
+                .filter_map(|n| {
+                    let a = n.accesskit_node();
+                    a.value().or_else(|| a.label())
+                })
+                .find(|l| l.starts_with("GIF  "))
+                .unwrap_or_default()
+        };
+        h.run_steps(12);
+        assert_eq!(h.state().1["__web_playing"], true);
+        assert!(size(&h).starts_with("GIF  ~"), "still an estimate while it plays: {:?}", size(&h));
+        h.get_by_label("Pause").click();
+        h.run_steps(14);
+        assert_eq!(h.state().1["__web_playing"], false);
+        assert!(!size(&h).contains('~'), "every frame is sized once it is paused: {:?}", size(&h));
+    }
+
+    #[test]
+    fn the_play_bar_is_below_the_previews() {
+        let mut app = frame_animation_app();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("original"));
+        fields.insert("format".into(), json!("gif"));
+        let h = harness(app, fields);
+        let play = h.get_by_label("Play").rect();
+        let rects = h.state().1["__previewRects"].as_array().unwrap().clone();
+        let bottom = rects.iter().filter_map(|r| r.get(3).and_then(Value::as_f64)).fold(0.0, f64::max);
+        assert!(f64::from(play.top()) >= bottom, "the bar is under the preview: bar {} preview {bottom}", play.top());
+    }
+
+    #[test]
+    fn frames_play_for_their_own_delays_and_loop() {
+        let delays = [100, 500, 0];
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.05).0, 0, "still on the first frame");
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.1).0, 1);
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.59).0, 1, "the second frame holds for half a second");
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.6).0, 2);
+        // A delay of 0 plays as 100 ms, and then the loop starts again.
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.7).0, 0);
+        // Many loops later, and a clock that runs backwards, give a valid frame.
+        assert!(advance_frames(0, &delays, 0.0, 1.0e9).0 < 3);
+        assert_eq!(advance_frames(2, &delays, 5.0, 1.0).0, 2);
+        // The fraction of a delay already shown is kept.
+        let (frame, began) = advance_frames(0, &delays, 0.0, 0.13);
+        assert_eq!(frame, 1);
+        assert!((began - 0.1).abs() < 1e-9);
     }
 
     #[test]

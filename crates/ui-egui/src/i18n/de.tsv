@@ -3245,3 +3245,14 @@ curves	Smooth	Glätten
 	In Front	Davor
 	Behind	Dahinter
 	Blend	Mischen
+	Create Frame Animation	Frame-Animation erstellen
+	Make Frames From Layers	Frames aus Ebenen erstellen
+	Forever	Endlos
+	Once	Einmal
+	No delay	Keine Verzögerung
+	First frame	Erster Frame
+	Duplicate Selected Frame	Ausgewählten Frame duplizieren
+	Delete Selected Frame	Ausgewählten Frame löschen
+	{seconds} sec.	{seconds} Sek.
+	{count} times	{count}-mal
+	{n} frames	{n} Einzelbilder

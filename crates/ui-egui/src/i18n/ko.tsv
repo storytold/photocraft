@@ -3426,3 +3426,14 @@ curves	Smooth	매끄럽게
 	In Front	앞
 	Behind	뒤
 	Blend	혼합
+	Create Frame Animation	프레임 애니메이션 만들기
+	Make Frames From Layers	레이어에서 프레임 만들기
+	Forever	무한
+	Once	한 번
+	No delay	지연 없음
+	First frame	첫 프레임
+	Duplicate Selected Frame	선택한 프레임 복제
+	Delete Selected Frame	선택한 프레임 삭제
+	{seconds} sec.	{seconds}초
+	{count} times	{count}회
+	{n} frames	프레임 {n}개

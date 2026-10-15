@@ -4034,3 +4034,14 @@ layerLabel	No Color	Sem cor
 	Use	Usar
 	In Front	Na frente
 	Behind	Atrás
+	Create Frame Animation	Criar animação de quadros
+	Make Frames From Layers	Criar quadros a partir de camadas
+	Forever	Sempre
+	Once	Uma vez
+	No delay	Sem atraso
+	First frame	Primeiro quadro
+	Duplicate Selected Frame	Duplicar quadro selecionado
+	Delete Selected Frame	Excluir quadro selecionado
+	{seconds} sec.	{seconds} s
+	{count} times	{count} vezes
+	{n} frames	{n} quadros

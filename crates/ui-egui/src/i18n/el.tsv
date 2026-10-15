@@ -3944,3 +3944,14 @@ curves	Smooth	Εξομάλυνση
 	Use	Χρήση
 	In Front	Μπροστά
 	Behind	Πίσω
+	Create Frame Animation	Δημιουργία κίνησης καρέ
+	Make Frames From Layers	Δημιουργία καρέ από επίπεδα
+	Forever	Για πάντα
+	Once	Μία φορά
+	No delay	Χωρίς καθυστέρηση
+	First frame	Πρώτο καρέ
+	Duplicate Selected Frame	Δημιουργία αντιγράφου επιλεγμένου καρέ
+	Delete Selected Frame	Διαγραφή επιλεγμένου καρέ
+	{seconds} sec.	{seconds} δ
+	{count} times	{count} φορές
+	{n} frames	{n} καρέ

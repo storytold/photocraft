@@ -2853,3 +2853,14 @@ curves	Smooth	平滑
 	In Front	前面
 	Behind	後面
 	Blend	混合
+	Create Frame Animation	建立影格動畫
+	Make Frames From Layers	從圖層建立影格
+	Forever	永遠
+	Once	一次
+	No delay	無延遲
+	First frame	第一個影格
+	Duplicate Selected Frame	複製選取的影格
+	Delete Selected Frame	刪除選取的影格
+	{seconds} sec.	{seconds} 秒
+	{count} times	{count} 次
+	{n} frames	{n} 個影格

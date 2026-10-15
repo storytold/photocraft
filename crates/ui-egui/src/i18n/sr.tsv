@@ -4317,3 +4317,14 @@ shape	Appearance	Izgled
 	Use	Koristi
 	In Front	Ispred
 	Behind	Iza
+	Create Frame Animation	Napravi animaciju kadrova
+	Make Frames From Layers	Napravi kadrove od slojeva
+	Forever	Zauvek
+	Once	Jednom
+	No delay	Bez kašnjenja
+	First frame	Prvi kadar
+	Duplicate Selected Frame	Dupliraj izabrani kadar
+	Delete Selected Frame	Obriši izabrani kadar
+	{seconds} sec.	{seconds} s
+	{count} times	{count} puta
+	{n} frames	{n} кадрова

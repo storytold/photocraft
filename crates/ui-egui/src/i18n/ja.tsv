@@ -3921,3 +3921,14 @@ curves	Smooth	スムーズ
 	Use	使用
 	In Front	前面
 	Behind	背面
+	Create Frame Animation	フレームアニメーションを作成
+	Make Frames From Layers	レイヤーからフレームを作成
+	Forever	無限
+	Once	1 回
+	No delay	遅延なし
+	First frame	最初のフレーム
+	Duplicate Selected Frame	選択したフレームを複製
+	Delete Selected Frame	選択したフレームを削除
+	{seconds} sec.	{seconds} 秒
+	{count} times	{count} 回
+	{n} frames	{n} フレーム

@@ -4361,3 +4361,14 @@ shape	Appearance	Aspetto
 	Use	Usa
 	In Front	Davanti
 	Behind	Dietro
+	Create Frame Animation	Crea animazione fotogrammi
+	Make Frames From Layers	Crea fotogrammi da livelli
+	Forever	Per sempre
+	Once	Una volta
+	No delay	Nessun ritardo
+	First frame	Primo fotogramma
+	Duplicate Selected Frame	Duplica fotogramma selezionato
+	Delete Selected Frame	Elimina fotogramma selezionato
+	{seconds} sec.	{seconds} sec.
+	{count} times	{count} volte
+	{n} frames	{n} fotogrammi

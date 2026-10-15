@@ -98,6 +98,7 @@ mod filter_preview_ui;
 mod filter_preview_worker;
 pub mod flick_pan;
 mod font_preview;
+mod frame_strip_ui;
 pub mod frame_tool;
 pub mod gallery_ui;
 pub mod gpu_canvas;
@@ -2073,6 +2074,10 @@ impl eframe::App for PhotocraftApp {
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
         }
+        // The docked Timeline spans the canvas column: after the side panels, before the canvas.
+        if chrome {
+            timeline_ui::dock(self, ui);
+        }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
@@ -2869,6 +2874,8 @@ mod alt_click_tests;
 mod status_bar_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
+#[cfg(test)]
+mod timeline_dock_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;

@@ -3731,3 +3731,14 @@ curves	Smooth	Làm mượt
 	Use	Dùng
 	In Front	Phía trước
 	Behind	Phía sau
+	Create Frame Animation	Tạo hoạt ảnh khung hình
+	Make Frames From Layers	Tạo khung hình từ các lớp
+	Forever	Mãi mãi
+	Once	Một lần
+	No delay	Không trễ
+	First frame	Khung hình đầu tiên
+	Duplicate Selected Frame	Nhân bản khung hình đã chọn
+	Delete Selected Frame	Xóa khung hình đã chọn
+	{seconds} sec.	{seconds} giây
+	{count} times	{count} lần
+	{n} frames	{n} khung hình

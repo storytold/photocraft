@@ -3974,3 +3974,14 @@ cameraData	Lens	Lens
 	Use	Kullan
 	In Front	Önde
 	Behind	Arkada
+	Create Frame Animation	Kare Animasyonu Oluştur
+	Make Frames From Layers	Katmanlardan Kareler Oluştur
+	Forever	Sürekli
+	Once	Bir kez
+	No delay	Gecikme yok
+	First frame	İlk kare
+	Duplicate Selected Frame	Seçili kareyi çoğalt
+	Delete Selected Frame	Seçili kareyi sil
+	{seconds} sec.	{seconds} sn.
+	{count} times	{count} kez
+	{n} frames	{n} kare

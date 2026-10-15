@@ -2868,3 +2868,14 @@ curves	Smooth	平滑
 	In Front	前面
 	Behind	后面
 	Blend	混合
+	Create Frame Animation	创建帧动画
+	Make Frames From Layers	从图层建立帧
+	Forever	永远
+	Once	一次
+	No delay	无延迟
+	First frame	第一帧
+	Duplicate Selected Frame	复制所选帧
+	Delete Selected Frame	删除所选帧
+	{seconds} sec.	{seconds} 秒
+	{count} times	{count} 次
+	{n} frames	{n} 帧

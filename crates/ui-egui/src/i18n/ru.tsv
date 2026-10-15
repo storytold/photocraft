@@ -3218,3 +3218,14 @@ curves	Smooth	Сгладить
 	Use	Использовать
 	In Front	Спереди
 	Behind	Сзади
+	Create Frame Animation	Создать покадровую анимацию
+	Make Frames From Layers	Создать кадры из слоёв
+	Forever	Постоянно
+	Once	Один раз
+	No delay	Без задержки
+	First frame	Первый кадр
+	Duplicate Selected Frame	Дублировать выбранный кадр
+	Delete Selected Frame	Удалить выбранный кадр
+	{seconds} sec.	{seconds} с
+	{count} times	{count} раз
+	{n} frames	{n} кадров

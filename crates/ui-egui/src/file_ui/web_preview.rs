@@ -23,6 +23,14 @@ pub fn prepare_table(app: &PhotocraftApp, f: &mut Map<String, Value>) -> Result<
         return Ok(());
     }
     let st = app.session.active().ok_or("no document")?;
+    // An animated GIF gives each frame its own colours: one table made from the frame on show would be
+    // forced on all of them. It has no table to edit, so none is made (nor kept from another format).
+    if s(f, "format", "jpeg") == "gif" && super::animation_frames(&st.doc).is_some() {
+        for key in ["colorTable", "colorTableEdits", "__tableSignature", "__selectedColor", "__transparentIndex"] {
+            f.remove(key);
+        }
+        return Ok(());
+    }
     let mut source = params(f);
     let Some(m) = source.as_object_mut() else { return Err("invalid web settings".into()) };
     // Only palette-affecting options invalidate index-based edits. Metadata, interlacing,

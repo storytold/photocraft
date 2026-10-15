@@ -4163,3 +4163,14 @@ cameraRaw	Yellow	Sárga
 	Use	Használat
 	In Front	Elöl
 	Behind	Mögött
+	Create Frame Animation	Képkockás animáció létrehozása
+	Make Frames From Layers	Képkockák létrehozása rétegekből
+	Forever	Folyamatosan
+	Once	Egyszer
+	No delay	Nincs késleltetés
+	First frame	Első képkocka
+	Duplicate Selected Frame	Kijelölt képkocka kettőzése
+	Delete Selected Frame	Kijelölt képkocka törlése
+	{seconds} sec.	{seconds} mp
+	{count} times	{count}×
+	{n} frames	{n} képkocka
