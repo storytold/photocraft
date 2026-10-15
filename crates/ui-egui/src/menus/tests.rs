@@ -535,3 +535,35 @@ fn proof_setup_presets_and_checkmarks() {
     let params = crate::filter_dialog::parse_spec(spec.params);
     assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice { options, .. } if options[0] == "srgb" && !options.iter().any(|v| v.contains('/'))));
 }
+
+#[test]
+fn modal_dialog_clipboard_commands_route_to_egui_and_keep_document_unchanged() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+    app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 50, 50], "fill": "#ff0000"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("edit.copy", json!({})).unwrap();
+
+    let rev_before = app.session.active().unwrap().revision;
+    let layers_before = app.session.active().unwrap().doc.layers.len();
+
+    // Open a modal dialog
+    app.ui.open_dialog(crate::state::DialogKind::NewDocument, Default::default());
+
+    // In menus::is_enabled(), clipboard commands are enabled for dialogs
+    assert!(is_enabled(&app, "edit.copy"));
+    assert!(is_enabled(&app, "edit.cut"));
+    assert!(is_enabled(&app, "edit.paste"));
+    assert!(is_enabled(&app, "select.all"));
+
+    // In menus::invoke(), clipboard commands route to egui without modifying the document
+    invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+    invoke(&mut app, &ctx, "edit.cut", json!({})).unwrap();
+    invoke(&mut app, &ctx, "edit.copy", json!({})).unwrap();
+    invoke(&mut app, &ctx, "select.all", json!({})).unwrap();
+
+    let active = app.session.active().unwrap();
+    assert_eq!(active.revision, rev_before, "document revision must remain unchanged");
+    assert_eq!(active.doc.layers.len(), layers_before, "layer count must remain unchanged");
+}
