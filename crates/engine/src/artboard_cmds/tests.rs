@@ -580,7 +580,8 @@ fn create_variant_keeps_editable_layers_and_is_one_undo_step() {
     assert_eq!((rect.width(), rect.height()), (200, 100));
     let copied_child = variant_board.children().unwrap().first().unwrap();
     assert_ne!(copied_child.id, content);
-    assert_eq!(copied_child.surface().unwrap().content_bounds().width(), 27, "bicubic edge support is retained around the proportionally scaled content");
+    // 26 since main's measured Photoshop resampling (#2451): the bicubic edge support is one pixel narrower.
+    assert_eq!(copied_child.surface().unwrap().content_bounds().width(), 26, "bicubic edge support is retained around the proportionally scaled content");
     assert_eq!(doc(&s).layer(content).unwrap().surface().unwrap().content_bounds(), Rect::new(10, 10, 30, 30));
     s.undo();
     assert_eq!(doc(&s).artboards().len(), 1);
