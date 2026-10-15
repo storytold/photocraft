@@ -46,7 +46,7 @@ pub fn orf_padded12(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
     assert_eq!(width % 10, 0);
     assert_eq!(data.len(), width * height);
     let mut strip = Vec::new();
-    for samples in data.chunks_exact(10) {
+    for samples in data.as_chunks::<10>().0 {
         let mut block = [0u8; 16];
         for (sample, &value) in samples.iter().enumerate() {
             assert!(value < 4096);
