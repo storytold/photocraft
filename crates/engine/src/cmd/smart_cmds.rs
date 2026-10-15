@@ -313,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartFilter.setParams",
             "Edit Smart Filter",
             &[],
-            r##"{"layer":id?,"index":u32?,"params":{…} (merged)}"##,
+            r##"{"layer":id?,"index":u32?,"params":{…} (merged),"replace":bool?=false (params replace the filter's instead)}"##,
             has_smart_filters,
             set_filter_params
         ),

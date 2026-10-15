@@ -507,6 +507,26 @@ fn adjustments_on_a_smart_object_record_a_smart_filter() {
     assert_eq!(flatten(&s), original);
 }
 
+/// `setParams` merges, so a key the new params leave out stays; with `replace` the new params
+/// are the filter's complete settings. A Channel Mixer turned off Monochrome keeps its gray row
+/// when merged (still mixing red from it) and is back to the identity mix when replaced.
+#[test]
+fn smart_filter_params_merge_or_replace() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [50, 30, 20, 0]})).unwrap();
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}})).unwrap();
+    assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "merged: the gray row stays");
+    assert!(max_diff(&flatten(&s), &original) > 0.05, "and still mixes the red channel");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}, "replace": true})).unwrap();
+    assert_eq!(smart_filters_of(&s)[0].params, json!({"monochrome": false}));
+    assert!(max_diff(&flatten(&s), &original) < 1e-6, "the identity mix");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+    s.undo();
+    assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "undo brings the old params back");
+}
+
 /// A selection becomes the smart filter's mask, and the adjustment with its own command
 /// (Shadows/Highlights) records a filter too.
 #[test]
