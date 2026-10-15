@@ -166,7 +166,8 @@ fn info_and_convert_report_decode_warnings() {
     let cases = [
         ("whole.jpg", &jpeg[..], None),
         ("half.jpg", &jpeg[..jpeg.len() / 2], Some("JPEG data ends early (the file is truncated or damaged); part of the image is missing")),
-        ("anim.gif", &gif[..], Some("only the first of 3 frames was imported")),
+        // An animated GIF opens with every frame as a layer, so nothing is left out to warn about.
+        ("anim.gif", &gif[..], None),
     ];
     for (name, bytes, warning) in cases {
         let file = d.join(name);
@@ -175,7 +176,13 @@ fn info_and_convert_report_decode_warnings() {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["warnings"], json!(warning.into_iter().collect::<Vec<_>>()), "{name}");
         let (_, err) = ok(bin().arg("convert").arg(&file).arg(d.join(format!("{name}.png"))));
-        assert_eq!(err.trim(), warning.map(|w| format!("warning: {w}")).unwrap_or_default(), "{name}");
+        // Converting the animation flattens its frame layers to the frame it shows.
+        let expected = match (warning, name) {
+            (Some(w), _) => format!("warning: {w}"),
+            (None, "anim.gif") => "warning: 3 layer(s) flattened; layers, masks and blend modes are not kept".to_string(),
+            (None, _) => String::new(),
+        };
+        assert_eq!(err.trim(), expected, "{name}");
     }
     std::fs::remove_dir_all(d).unwrap();
 }

@@ -36,6 +36,14 @@ impl LoopCount {
         }
     }
 
+    /// The same count with a `Times` of fewer than two made the `Once` or `Forever` it means.
+    pub fn normalized(self) -> Self {
+        match self {
+            LoopCount::Times(n) => LoopCount::from_plays(n),
+            other => other,
+        }
+    }
+
     /// The number of plays; 0 for forever.
     pub fn plays(self) -> u32 {
         match self {
@@ -97,9 +105,7 @@ impl FrameAnimation {
         }
         self.current = self.current.min(self.frames.len() - 1);
         // `Times` holds two or more plays; one is `Once` and none is `Forever`.
-        if let LoopCount::Times(n) = self.loops {
-            self.loops = LoopCount::from_plays(n);
-        }
+        self.loops = self.loops.normalized();
     }
 
     /// Rewrites the layer ids the frames name through `map`, dropping those it has no layer for.

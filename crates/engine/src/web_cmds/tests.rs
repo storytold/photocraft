@@ -977,3 +977,36 @@ fn web_exif_that_does_not_fit_is_reported_and_bad_exif_is_harmless() {
         assert_eq!(decode(&path).dimensions(), (64, 48));
     }
 }
+
+/// How many frames an animated GIF holds, and their delays in hundredths of a second.
+fn gif_frames(path: &str) -> Vec<u32> {
+    let mut delays = Vec::new();
+    photocraft_codecs::decode_gif_frames(&std::fs::read(path).unwrap(), &photocraft_codecs::DecodeOptions::default())
+        .unwrap()
+        .iter()
+        .for_each(|f| delays.push(f.delay_ms / 10));
+    delays
+}
+
+#[test]
+fn save_for_web_writes_a_gif_of_a_frame_animation_as_an_animation() {
+    let dir = tmp("animated");
+    let mut s = session(8);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+    s.execute("animation.setDelay", json!({"delayMs": 400, "frames": [1]})).unwrap();
+    let path = format!("{dir}/a.gif");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "gif", "colors": 16, "path": path})).unwrap();
+    assert_eq!(gif_frames(&path), [10, 40], "every frame, each with its delay");
+    assert!(r["bytes"].as_u64().unwrap() > 0);
+    // Other formats and a one-frame result stay stills.
+    let png = format!("{dir}/a.png");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": png})).unwrap();
+    assert_eq!(decode(&png).dimensions(), (64, 48));
+    // The dialog's estimate counts the frames.
+    let one = s.execute("file.export.saveForWebLegacy", json!({"format": "gif"})).unwrap()["bytes"].as_u64().unwrap();
+    s.execute("animation.delete", json!({})).unwrap();
+    let still = s.execute("file.export.saveForWebLegacy", json!({"format": "gif"})).unwrap()["bytes"].as_u64().unwrap();
+    assert_eq!(one, still * 2, "two frames of a size the still has");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "gif", "path": format!("{dir}/still.gif")})).unwrap();
+    assert_eq!(gif_frames(&format!("{dir}/still.gif")).len(), 1);
+}
