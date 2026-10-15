@@ -189,8 +189,12 @@ fn packed_orfs_develop_and_survive_native_save_and_16_bit_export() {
     for (bytes, expected_size) in [(padded, (36, 29)), (fields, (40, 33)), (words, (36, 29))] {
         let initial = import("shot.ORF", &bytes).unwrap();
         assert!(initial.warnings.iter().any(|w| w.contains("ORF") && w.contains("developed with default settings")));
-        let (tuned, wb_applied) =
-            photocraft_io::raw::import_raw_tuned("shot.ORF", &bytes, &photocraft_io::raw::RawTuning { exposure: 0.5, temperature: 5.0, tint: 0.0 }).unwrap();
+        let (tuned, wb_applied) = photocraft_io::raw::import_raw_tuned(
+            "shot.ORF",
+            &bytes,
+            &photocraft_io::raw::RawTuning { exposure: 0.5, temperature: 5.0, tint: 0.0, ..Default::default() },
+        )
+        .unwrap();
         assert!(wb_applied, "Camera Raw must apply the file's white balance during development");
         let doc = tuned.document;
         assert_eq!((doc.size.width, doc.size.height), expected_size);
