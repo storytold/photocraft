@@ -365,7 +365,10 @@ fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usiz
 fn drop_menu(ui: &mut egui::Ui, label: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
     // Trailing spaces leave room for the arrow.
-    let r = ui.menu_button(RichText::new(format!("{label}   ")).small(), add_contents);
+    // Only a click outside, or a choice, closes it: a click in the "Other…" field must not.
+    let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, _) = egui::containers::menu::MenuButton::new(RichText::new(format!("{label}   ")).small()).config(config).ui(ui, add_contents);
+    let r = egui::InnerResponse::new((), response);
     let c = pos2(r.response.rect.right() - 9.0, r.response.rect.center().y + 0.5);
     ui.painter().add(egui::Shape::convex_polygon(vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)], t.text_dim, Stroke::NONE));
 }
@@ -424,7 +427,14 @@ fn other_field(ui: &mut egui::Ui, label: &str, initial: &str, apply: impl FnOnce
     let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| initial.to_string());
     ui.horizontal(|ui| {
         ui.label(label);
-        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(52.0));
+        let mut out = egui::TextEdit::singleline(&mut text).desired_width(52.0).show(ui);
+        // Clicking in selects the old value, so typing replaces it.
+        if out.response.gained_focus() {
+            let end = egui::text::CCursor::new(out.galley.text().chars().count());
+            out.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+            out.state.store(ui.ctx(), out.response.id);
+        }
+        let r = out.response;
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             apply(ui, &text);
         }

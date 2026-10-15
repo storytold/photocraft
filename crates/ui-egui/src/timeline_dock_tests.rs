@@ -327,3 +327,24 @@ fn delete_over_the_timeline_keeps_the_last_frame_and_changes_nothing_else() {
     assert_eq!(anim(&h).frames.len(), 1, "the only frame stays");
     assert_eq!(steps(&h), before, "and nothing else happened");
 }
+
+/// The delay menu's "Other…" field, which starts at the frame's 0.2 seconds.
+fn other_field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some("0.2")).expect("the Other… field")
+}
+
+#[test]
+fn clicking_the_other_field_keeps_the_delay_menu_open_for_typing() {
+    let mut h = harness();
+    h.query_all_by_label_contains("0.2 sec.").next().unwrap().click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Other…").is_some(), "the menu opened");
+    other_field(&h).click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Other…").is_some(), "a click in the field leaves the menu open");
+    other_field(&h).type_text("1.5");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(anim(&h).frames[0].delay_ms, 1500);
+    assert!(h.query_by_label("Other…").is_none(), "Enter applies it and closes the menu");
+}
