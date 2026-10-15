@@ -1948,6 +1948,9 @@ impl eframe::App for PhotocraftApp {
             filter_preview_worker::discard_closed(self);
             shortcuts::handle(self, ctx);
         }
+        // The Timeline's keys use where the panel was drawn last frame; a frame that doesn't draw it
+        // (full-screen modes hide the docked panel) must not leave the old place behind.
+        self.ui.timeline.panel_rect = None;
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
         for (name, bytes) in arrived {

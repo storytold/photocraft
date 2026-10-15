@@ -184,6 +184,27 @@ pub fn playback_period(ms: u32) -> f64 {
     f64::from(ms.max(20)) / 1000.0
 }
 
+/// Where a dragged frame would be dropped: the gap (0 = before the first frame, `n` = after the
+/// last) nearest the pointer, given the horizontal centre of each cell.
+pub fn drop_slot(centers: &[f32], x: f32) -> usize {
+    centers.iter().take_while(|c| **c < x).count()
+}
+
+/// The index frame `from` ends up at when dropped into gap `slot` (`animation.moveFrame`'s `to`).
+pub fn move_target(from: usize, slot: usize) -> usize {
+    if slot > from { slot - 1 } else { slot }
+}
+
+/// Id of the frame being dragged, kept in egui memory between frames.
+fn drag_id() -> egui::Id {
+    egui::Id::new("frame-strip-drag")
+}
+
+/// How far the pointer may stray above or below the strip before a drop cancels the drag.
+const DRAG_SLACK: f32 = 60.0;
+/// Pointer distance from the strip's edge at which a drag scrolls the strip.
+const EDGE_SCROLL_ZONE: f32 = 28.0;
+
 /// What the strip shows and what it hands back.
 pub struct Strip<'a> {
     pub doc: &'a Arc<Document>,
@@ -205,13 +226,16 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
     let t = Tokens::get(ctx);
     refresh_thumbs(ctx, doc, revision, no_damage, a);
 
+    let dragging: Option<usize> = ctx.data(|d| d.get_temp(drag_id()));
     egui::ScrollArea::horizontal().id_salt("frame-strip").auto_shrink([false, true]).show(ui, |ui| {
+        let mut cells: Vec<Rect> = Vec::with_capacity(a.frames.len());
         ui.horizontal(|ui| {
             for (i, frame) in a.frames.iter().enumerate() {
                 ui.vertical(|ui| {
                     ui.set_width(CELL_W);
                     let selected = i == a.current;
-                    let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, 66.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, 66.0), Sense::click_and_drag());
+                    cells.push(rect);
                     let fill = if selected { t.accent_soft } else { t.field };
                     ui.painter().rect_filled(rect, t.radius_sm, fill);
                     let inner = rect.shrink(3.0);
@@ -226,14 +250,24 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
                     if selected {
                         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
                     }
-                    if resp.clicked() {
+                    if resp.clicked() || (resp.drag_started() && !selected) {
                         acts.push(("animation.selectFrame", json!({ "frame": i })));
+                    }
+                    if resp.drag_started() {
+                        ctx.data_mut(|d| d.insert_temp(drag_id(), i));
+                    }
+                    if dragging == Some(i) {
+                        // The frame being carried stays put, dimmed, until it is dropped.
+                        ui.painter().rect_filled(rect, t.radius_sm, t.chrome.gamma_multiply(0.5));
                     }
                     delay_menu(ui, i, frame.delay_ms, acts);
                 });
                 ui.add_space(2.0);
             }
         });
+        if let Some(from) = dragging {
+            drag_frame(ui, ctx, &cells, from, acts);
+        }
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -246,7 +280,8 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
             acts.push(("animation.previousFrame", json!({})));
         }
         let play_icon = if playing { "pause" } else { "play" };
-        if crate::icons::button(ui, play_icon, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
+        let play_tip = format!("{} ({})", if playing { tl!("Pause") } else { tl!("Play") }, crate::shortcuts::pretty("Space"));
+        if crate::icons::button(ui, play_icon, 22.0, playing, &play_tip).clicked() {
             *toggle_play = true;
         }
         if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next frame")).clicked() {
@@ -272,6 +307,58 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
             }
         });
     });
+}
+
+/// The drag of frame `from`: scrolls the strip near its edges, marks the gap the frame would drop
+/// into, and moves it on release. Esc or a release away from the strip cancels.
+fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usize, acts: &mut Vec<Act>) {
+    let t = Tokens::get(ctx);
+    let end = |ctx: &egui::Context| ctx.data_mut(|d| d.remove::<usize>(drag_id()));
+    let Some(pos) = ctx.pointer_interact_pos() else {
+        end(ctx);
+        return;
+    };
+    let view = ui.clip_rect();
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        end(ctx);
+        return;
+    }
+    if pos.x < view.left() + EDGE_SCROLL_ZONE {
+        ui.scroll_with_delta(vec2(12.0, 0.0));
+    } else if pos.x > view.right() - EDGE_SCROLL_ZONE {
+        ui.scroll_with_delta(vec2(-12.0, 0.0));
+    }
+    let centers: Vec<f32> = cells.iter().map(|r| r.center().x).collect();
+    let slot = drop_slot(&centers, pos.x);
+    let inside = pos.y > view.top() - DRAG_SLACK && pos.y < view.bottom() + DRAG_SLACK;
+    if inside {
+        // The gap marker, a vertical bar between the cells.
+        let x = match (cells.get(slot), slot.checked_sub(1).and_then(|p| cells.get(p))) {
+            (Some(next), Some(prev)) => (prev.right() + next.left()) / 2.0,
+            (Some(next), None) => next.left() - 1.0,
+            (None, Some(prev)) => prev.right() + 1.0,
+            (None, None) => view.left(),
+        };
+        let top = cells.first().map_or(view.top(), |r| r.top());
+        let bottom = cells.first().map_or(view.bottom(), |r| r.bottom());
+        ui.painter().line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(3.0, t.accent));
+    }
+    // A ghost of the carried frame follows the pointer.
+    if let Some(src) = cells.get(from) {
+        let ghost = Rect::from_center_size(pos, src.size());
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("frame-strip-ghost"));
+        let p = ui.ctx().layer_painter(layer);
+        p.rect_filled(ghost, t.radius_sm, t.accent_soft.gamma_multiply(0.8));
+        p.text(ghost.center(), Align2::CENTER_CENTER, (from + 1).to_string(), FontId::monospace(14.0), t.text);
+    }
+    ctx.request_repaint();
+    if ctx.input(|i| i.pointer.any_released()) {
+        end(ctx);
+        let to = move_target(from, slot);
+        if inside && to != from {
+            acts.push(("animation.moveFrame", json!({ "from": from, "to": to })));
+        }
+    }
 }
 
 /// A menu button with a drop-down arrow drawn after its label (the font has no ▾ to type).
@@ -394,6 +481,18 @@ mod tests {
         assert_eq!(next_playback_frame(2, 3, LoopCount::Times(2), 0), Some((0, 1)));
         assert_eq!(next_playback_frame(2, 3, LoopCount::Times(2), 1), None);
         assert_eq!(next_playback_frame(0, 1, LoopCount::Once, 0), None, "one frame has nothing to play");
+    }
+
+    #[test]
+    fn a_dragged_frame_drops_into_the_nearest_gap() {
+        let centers = [10.0, 30.0, 50.0];
+        assert_eq!(drop_slot(&centers, 0.0), 0);
+        assert_eq!(drop_slot(&centers, 25.0), 1);
+        assert_eq!(drop_slot(&centers, 500.0), 3);
+        assert_eq!(drop_slot(&[], 5.0), 0);
+        // Dropping beside itself changes nothing; dropping past it lands one earlier.
+        assert_eq!((move_target(1, 1), move_target(1, 2)), (1, 1));
+        assert_eq!((move_target(0, 3), move_target(2, 0)), (2, 0));
     }
 
     #[test]

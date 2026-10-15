@@ -437,6 +437,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         dispatch_pressed(app, ctx, focus, false);
         return;
     }
+    // The Timeline's own keys (Space plays, ← → step, ⌘C / ⌘V copy and paste frames) while the
+    // pointer is over it.
+    if crate::timeline_ui::keys(app, ctx) {
+        return;
+    }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
     if crate::distort_ui::keys(app, ctx) {
         return;

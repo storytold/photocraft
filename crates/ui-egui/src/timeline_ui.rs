@@ -25,6 +25,12 @@ pub struct TimelineUi {
     /// Frame animation: passes through the frames played so far, for a finite loop count.
     #[serde(default, skip)]
     pub plays_done: u32,
+    /// Frames copied with ⌘C, for ⌘V to paste after the selected frame.
+    #[serde(default, skip)]
+    pub clipboard: Vec<std::sync::Arc<photocraft_doc::AnimFrame>>,
+    /// Where the panel was drawn last frame: the timeline's keys work while the pointer is over it.
+    #[serde(default, skip)]
+    pub panel_rect: Option<egui::Rect>,
 }
 
 /// Menu checkmark for Window › Timeline.
@@ -57,11 +63,13 @@ struct Out {
     close: bool,
     toggle_play: bool,
     toggle_float: bool,
+    rect: Option<egui::Rect>,
 }
 
 /// The panel's contents, the same whether it is docked or floating.
 fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &mut Out) {
     let t = Tokens::get(ctx);
+    out.rect = Some(ui.max_rect());
     let playing = app.ui.timeline.playing;
     let floating = app.ui.timeline.floating;
     // Borrowed from the document's Arc: this runs on every UI frame, and a long animation is big.
@@ -149,6 +157,7 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
 
 /// Carries out what the contents asked for.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
+    app.ui.timeline.panel_rect = out.rect;
     if out.close {
         app.ui.timeline.open = false;
         app.ui.timeline.playing = false;
@@ -157,13 +166,7 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
         app.ui.timeline.floating = !app.ui.timeline.floating;
     }
     if out.toggle_play {
-        let starting = !app.ui.timeline.playing;
-        app.ui.timeline.playing = starting;
-        app.ui.timeline.last_time = ctx.input(|i| i.time);
-        app.ui.timeline.plays_done = 0;
-        if starting {
-            restart_if_finished(app, ctx);
-        }
+        toggle_play(app, ctx);
     }
     if let Some((cmd, p)) = out.act {
         let _ = app.run(cmd, p);
@@ -186,6 +189,107 @@ fn restart_if_finished(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let _ = app.run("animation.selectFrame", json!({ "frame": 0 }));
         crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
     }
+}
+
+/// Starts or stops playback.
+fn toggle_play(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let starting = !app.ui.timeline.playing;
+    app.ui.timeline.playing = starting;
+    app.ui.timeline.last_time = ctx.input(|i| i.time);
+    app.ui.timeline.plays_done = 0;
+    if starting {
+        restart_if_finished(app, ctx);
+    }
+}
+
+/// Runs a frame-animation command from a key, keeping the thumbnails in step.
+fn act(app: &mut PhotocraftApp, ctx: &egui::Context, cmd: &'static str, params: Value) {
+    let _ = app.run(cmd, params);
+    crate::frame_strip_ui::ran(app, ctx, cmd);
+}
+
+/// Is the pointer over the Timeline panel? Its keys only work there, so Space, the arrows and ⌘C
+/// keep their usual meaning on the canvas and in the other panels.
+fn pointer_over(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    app.ui.timeline.open && app.ui.timeline.panel_rect.is_some_and(|r| ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p)))
+}
+
+/// Do the Timeline's keys apply now? Not while typing on the canvas, which owns Space and the arrows
+/// even with the pointer resting over the panel.
+pub(crate) fn keys_apply(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    app.ui.text_edit.is_none() && pointer_over(app, ctx)
+}
+
+/// Keys for the Timeline, while the pointer is over it (and no text field has the keyboard):
+/// Space plays or pauses; ← → step the selected frame, Home / End jump to the first / last;
+/// ⌥← ⌥→ move the selected frame; ⌘C copies it and ⌘V pastes it after the selected frame;
+/// Delete removes it. True when a key was taken.
+pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use egui::{Key, Modifiers};
+    if !keys_apply(app, ctx) {
+        return false;
+    }
+    let Some((has_timeline, anim)) = app.session.active().map(|d| (d.doc.timeline.is_some(), d.doc.frame_animation.clone())) else {
+        return false;
+    };
+    let press = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+    if (has_timeline || anim.is_some()) && press(Modifiers::NONE, Key::Space) {
+        toggle_play(app, ctx);
+        return true;
+    }
+    let Some(a) = anim else { return false };
+    let last = a.frames.len().saturating_sub(1);
+    // Copy and Paste reach egui as clipboard events, not key presses; take both forms.
+    let clip = |ctx: &egui::Context, copy: bool| {
+        ctx.input_mut(|i| {
+            let n = i.events.len();
+            i.events.retain(|e| if copy { !matches!(e, egui::Event::Copy) } else { !matches!(e, egui::Event::Paste(_)) });
+            n != i.events.len()
+        })
+    };
+    if clip(ctx, true) | press(Modifiers::COMMAND, Key::C) {
+        app.ui.timeline.clipboard = a.frames.get(a.current).cloned().into_iter().collect();
+        return true;
+    }
+    // With no frames copied, ⌘V is left alone for Edit › Paste (an image on the system clipboard, say).
+    if !app.ui.timeline.clipboard.is_empty() && (clip(ctx, false) | press(Modifiers::COMMAND, Key::V)) {
+        let frames: Vec<Value> =
+            app.ui.timeline.clipboard.iter().map(|f| json!({ "delayMs": f.delay_ms, "hidden": f.hidden.iter().map(|l| l.0).collect::<Vec<_>>() })).collect();
+        act(app, ctx, "animation.pasteFrames", json!({ "frames": frames }));
+        return true;
+    }
+    if press(Modifiers::ALT, Key::ArrowLeft) {
+        if a.current > 0 {
+            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current - 1 }));
+        }
+        return true;
+    }
+    if press(Modifiers::ALT, Key::ArrowRight) {
+        if a.current < last {
+            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current + 1 }));
+        }
+        return true;
+    }
+    let target = if press(Modifiers::NONE, Key::ArrowLeft) {
+        Some(a.current.saturating_sub(1))
+    } else if press(Modifiers::NONE, Key::ArrowRight) {
+        Some((a.current + 1).min(last))
+    } else if press(Modifiers::NONE, Key::Home) {
+        Some(0)
+    } else if press(Modifiers::NONE, Key::End) {
+        Some(last)
+    } else {
+        None
+    };
+    if let Some(frame) = target {
+        act(app, ctx, "animation.selectFrame", json!({ "frame": frame }));
+        return true;
+    }
+    if (press(Modifiers::NONE, Key::Delete) || press(Modifiers::NONE, Key::Backspace)) && a.frames.len() > 1 {
+        act(app, ctx, "animation.deleteFrame", json!({}));
+        return true;
+    }
+    false
 }
 
 /// The docked panel, along the bottom of the window under the canvas. Add it after the side
