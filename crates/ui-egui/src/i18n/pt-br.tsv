@@ -4428,3 +4428,24 @@ layerLabel	No Color	Sem cor
 	Open Documents	Documentos abertos
 	The reference images are sent too, at most 1024 pixels on their long side.	As imagens de referência também são enviadas, com no máximo 1024 pixels no lado maior.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	No modo Editar seleção, a área selecionada é enviada como está. As imagens de referência que você adicionar também são enviadas.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Cancelar este preenchimento generativo
+	Discard	Descartar
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Cada área vira um preenchimento generativo próprio, com sua camada, gerados ao mesmo tempo; cada uma envia as próprias solicitações.
+	Failed: {name}	Falhou: {name}
+	Generated {name}	Gerado: {name}
+	Generating	Gerando
+	Generating: {name}	Gerando: {name}
+	Generative Fill	Preenchimento generativo
+	Generative Fill failed: {error}	O preenchimento generativo falhou: {error}
+	Generative Fills in progress	Preenchimentos generativos em andamento
+	Go to area	Ir para a área
+	Locked until its layer lands	Bloqueada até a camada chegar
+	No prompt: removes what is selected	Sem descrição: remove o que está selecionado
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A seleção tem {n} áreas separadas, demais para preencher uma a uma (no máximo {max}): ela é preenchida como um todo.
+	Waiting ({n})	Aguardando ({n})
+	Waiting: {name}	Aguardando: {name}
+@plural	{n} generating|{n} generating	{n} em andamento|{n} em andamento
+@plural	{n} waiting|{n} waiting	{n} aguardando|{n} aguardando
+@plural	{n} failed|{n} failed	{n} com falha|{n} com falha
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Preencher separadamente cada uma das {n} áreas|Preencher separadamente cada uma das {n} áreas

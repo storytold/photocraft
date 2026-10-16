@@ -1,4 +1,4 @@
-//! The separate areas of a selection (this fork): Generative Fill can fill each one on its own,
+//! The separate areas of a selection: Generative Fill can fill each one on its own,
 //! so several objects selected together are generated side by side, each in its own layer.
 //!
 //! Areas are the 8-connected parts of the selection, found on a grid of at most [`MAX_CELLS`]

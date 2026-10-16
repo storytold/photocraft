@@ -1,4 +1,4 @@
-//! Generative Fill's turns at the provider (this fork): at most [`MAX_PARALLEL`] fills (and
+//! Generative Fill's turns at the provider: at most [`MAX_PARALLEL`] fills (and
 //! Generate More requests) talk to it at once; the others wait in the order they were started.
 //! A request the service turns down for its rate limit is sent again after a pause.
 
@@ -16,6 +16,7 @@ use crate::{EngineError, Result};
 pub const MAX_PARALLEL: usize = 5;
 
 /// How often a waiting fill looks at its place in line and at Cancel, in milliseconds.
+#[cfg(not(target_arch = "wasm32"))]
 const POLL_MS: u64 = 100;
 
 /// Pauses before sending a request again after the service answered that it is over its rate
@@ -27,11 +28,18 @@ const BUSY_PAUSES_MS: [u64; 3] = [5, 10, 20];
 
 #[derive(Default)]
 struct Line {
-    /// Fills holding a turn.
-    busy: usize,
+    /// The fills holding a turn: ticket and job. A cancelled one's request may still be on the
+    /// way (it can't be called back), but its turn goes to the next in line at once.
+    holders: Vec<(u64, JobCtx)>,
     /// Tickets of the fills waiting, first in line first.
     waiting: VecDeque<u64>,
     next: u64,
+}
+
+impl Line {
+    fn busy(&self) -> usize {
+        self.holders.iter().filter(|(_, ctx)| !ctx.cancelled()).count()
+    }
 }
 
 /// The provider's turns, shared by every fill of a session.
@@ -47,13 +55,13 @@ impl Default for Turns {
     }
 }
 
-/// A turn at the provider: given back when dropped.
-pub(crate) struct Turn<'a>(&'a Turns);
+/// A turn at the provider (its ticket): given back when dropped.
+pub(crate) struct Turn<'a>(&'a Turns, u64);
 
 impl Drop for Turn<'_> {
     fn drop(&mut self) {
         let mut line = self.0.line.lock().unwrap_or_else(PoisonError::into_inner);
-        line.busy = line.busy.saturating_sub(1);
+        line.holders.retain(|(t, _)| *t != self.1);
         self.0.changed.notify_all();
     }
 }
@@ -73,13 +81,13 @@ impl Turns {
         loop {
             let place = line.waiting.iter().position(|t| *t == ticket).unwrap_or(0);
             // The web runs jobs inline, one at a time: nothing else could give a turn back.
-            if place == 0 && (line.busy < self.max || cfg!(target_arch = "wasm32")) {
+            if place == 0 && (line.busy() < self.max || cfg!(target_arch = "wasm32")) {
                 line.waiting.pop_front();
-                line.busy += 1;
+                line.holders.push((ticket, ctx.clone()));
                 queued.store(0, Ordering::Relaxed);
                 // The next in line may have a turn too.
                 self.changed.notify_all();
-                return Ok(Turn(self));
+                return Ok(Turn(self, ticket));
             }
             if ctx.cancelled() {
                 line.waiting.retain(|t| *t != ticket);
@@ -166,6 +174,17 @@ mod tests {
         drop(a);
         assert!(third.join().unwrap());
         assert_eq!(waiting.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_cancelled_fills_turn_goes_to_the_next_at_once() {
+        let turns = Turns::new(1);
+        let q = AtomicUsize::new(0);
+        let first = JobCtx::new();
+        // Its request is still on the way (the turn isn't dropped), but it was cancelled.
+        let _held = turns.take(&first, &q).unwrap();
+        first.cancel();
+        assert!(turns.take(&JobCtx::new(), &q).is_ok());
     }
 
     #[test]

@@ -432,7 +432,7 @@ pub fn run<T: Send + 'static>(
     Ok(json!({"job": id.0}))
 }
 
-/// [`run`] for a job that edits document `doc` without locking it (this fork's Generative Fill):
+/// [`run`] for a job that edits document `doc` without locking it (Generative Fill):
 /// the document stays editable while the job runs, so several can run on it at once, and `apply`
 /// runs on it wherever the user is, failing only if it was closed. `apply` must cope with
 /// whatever was done to the document meanwhile.

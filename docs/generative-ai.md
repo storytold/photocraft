@@ -30,6 +30,30 @@ the maintainers asked for in issue #41.
    and masked by the selection, one layer per variation (Variation 1, 2, 3), with the first
    showing. Nothing under it changes; one undo removes it. The requests run side by side as one
    background job that can be cancelled; if some fail and others succeed, the successes are kept.
+
+   Fills don't wait for each other, and nothing waits for them (Photoshop holds the
+   window until each one is done). Press Generate and the selection is let go: select the next
+   thing and start another while the first generates. Each fill in progress shows:
+   - on the canvas, its area under a moving shimmer with a running outline, and a tag
+     (Generating, Waiting (n) or Failed, the seconds it has taken, ✕ to cancel, ↻ to retry);
+   - in the Layers panel, a locked "Generating: …" row right above the layer that was active
+     when it started, where its group will land;
+   - in the status bar, how many are generating, waiting and failed; click it for the list (go
+     to an area, retry, cancel).
+
+   At most 5 fills talk to the provider at once (each sends 3 requests, and the service limits
+   how many it takes a minute); the rest wait their turn in order. A request the service turns
+   down for its rate limit is sent again after 4, 8 and 16 s. The result lands where it was
+   started, on its own document, without becoming the active layer, so whatever the user is
+   doing meanwhile goes on; it is one undo step of its own, and a later one lands right above the
+   same layer, under the earlier ones. It is dropped if the canvas changed size meanwhile (it
+   would no longer line up) or the document was closed. A fill that failed (no network, the
+   service refused it) keeps its tag and row until Retry (sent again exactly as started) or ✕.
+
+   **Several objects at once.** Select them together (⇧ adds to the selection) and the dialog
+   offers *Fill each of the n separate areas on its own* (on by default, up to 16 areas): each
+   area becomes its own fill and layer, generated side by side, from one prompt. Off, the whole
+   selection is filled as one, as Photoshop does.
 4. With the group (or one of its variations) active, Properties › Variations shows a thumbnail
    per variation: click one to show it alone (`layer.generative.selectVariation`, one undo step).
    Generate More sends the same image, mask, prompt, mode and reference images again and adds
@@ -105,20 +129,33 @@ request (`PHOTOCRAFT_LIVE_REPLAY`). Gemini returns JPEG (its only output format)
 
 `edit.generativeFill` is a normal engine command (one undo step, a cancellable job; params
 `prompt`, `variations` (1 to 4, default 3), `mode` (`"fill"`, the default, or `"edit"`, which
-needs a prompt) and `references` (up to 4 file paths, `{"path": …}` or `{"document": id}` of an
-open document)) so scripts and recorded actions can run it locally, but
-automation (the control channel and MCP) may not: `authorize_engine_command` refuses it and
-`layer.generative.more`, because they upload document pixels. `layer.generative.selectVariation`
-sends nothing and is allowed. An
-explicit opt-in for automation can come later.
+needs a prompt), `references` (up to 4 file paths, `{"path": …}` or `{"document": id}` of an
+open document) and `area` (fill only that one of the selection's separate areas, numbered from
+0 top to bottom, as `layer.generative.areas` lists them)) so scripts and recorded actions can run
+it locally, but automation (the control channel and MCP) may not: `authorize_engine_command`
+refuses it, `layer.generative.more` and `layer.generative.retry`, because they upload document
+pixels. `layer.generative.selectVariation` sends nothing and is allowed. An explicit opt-in for
+automation can come later.
+
+Started in the background, a fill returns `{job, fill}` at once. `layer.generative.fills` lists
+those that haven't landed (`id`, `job`, `document`, `anchor` (the layer it lands above), `name`,
+`prompt`, `bounds`, `state` (`queued`, `running` or `failed`), `queue_position`, `progress`,
+`elapsed_ms`, `error`); `layer.generative.retry {"fill": id}` sends a failed one again and
+`layer.generative.discard {"fill": id}` stops one or forgets a failed one. Run inline (a script,
+the CLI) a fill still lands before the command returns, and its group becomes the active layer as
+before.
 
 ## Code
 
 | Where | What |
 |---|---|
 | `crates/genai` | `ImageProvider` (generate, edit with mask in Fill or Edit mode with reference images, variations; capabilities, including `edit_in_place` and `max_references`; output shape), `HttpTransport` (the network seam), `ApiKey`, and the Gemini backend. No network code: it builds for wasm and its tests use a fake transport. |
-| `crates/engine/src/genai_cmds.rs` | `edit.generativeFill`, `layer.generative.selectVariation`, `layer.generative.more`: context area, pixel interchange (after #730's approach), reference images (`reference_image`), the job, the masked group of variations. `Session::set_image_provider` installs a provider. |
-| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog (Fill / Edit tabs, reference images), the options bar button, Properties › Variations, `restore` at launch. |
+| `crates/engine/src/genai_cmds.rs` | `edit.generativeFill`, `layer.generative.selectVariation`, `layer.generative.more`, `.retry`, `.discard`, `.fills`, `.areas`: context area, pixel interchange (after #730's approach), reference images (`reference_image`), the job, the masked group of variations, the fills that haven't landed (`GenState`). `Session::set_image_provider` installs a provider. |
+| `crates/engine/src/genai_cmds/queue.rs` | Turns at the provider (at most 5 fills at once, in order) and the pauses after a rate-limit answer. |
+| `crates/engine/src/genai_cmds/areas.rs` | A selection's separate areas (8-connected parts, on a grid of at most a million cells) and the mask of one of them. |
+| `crates/engine/src/jobs.rs` (`run_on`) | A job that edits a document without locking it: the fills' jobs. |
+| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog (Fill / Edit tabs, reference images, each area on its own), the options bar button, Properties › Variations, `restore` at launch. |
+| `crates/ui-egui/src/genai_ui/pending.rs` | Fills in progress: the canvas shimmer, outline and tags, the Layers panel's "Generating…" rows, the status bar's readout and list, the flash when one lands. |
 | `apps/photocraft/src/genai.rs` | The desktop `GenAiServices`: credential store (`keyring`) and HTTPS transport (`ureq` + rustls). |
 
 ### Adding a provider

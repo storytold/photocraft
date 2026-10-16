@@ -1809,6 +1809,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Background job progress with Cancel, at the far end (#210).
                     ui.with_layout(crate::direction::trailing(), |ui| {
                         crate::jobs_ui::status_progress(app, ui);
+                        crate::genai_ui::status_fills(app, ui);
                         crate::background_redraw::status(app, ui);
                         crate::chrome_ui::gpu_memory_status(app, ui);
                     });
@@ -2854,7 +2855,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The drawn rows, top to bottom (#1721): the space between them and below the last
             // one is a drop zone too.
             let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
-            // This fork: where Generative Fills still generating will land.
+            // Where Generative Fills still generating will land.
             crate::genai_ui::layer_rows_unplaced(app, ui, doc.id, &rows);
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.

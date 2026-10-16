@@ -4117,3 +4117,26 @@ curves	Smooth	Wygładź
 	Open Documents	Otwarte dokumenty
 	The reference images are sent too, at most 1024 pixels on their long side.	Obrazy referencyjne też są wysyłane, najwyżej 1024 piksele na dłuższym boku.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	W trybie Edytuj zaznaczenie zaznaczony obszar jest wysyłany bez zmian. Dodane obrazy referencyjne też są wysyłane.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Anuluj to wypełnienie generatywne
+	Discard	Odrzuć
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Każdy obszar staje się osobnym wypełnieniem generatywnym z własną warstwą, generowanym równolegle; każdy wysyła własne żądania.
+	Failed: {name}	Niepowodzenie: {name}
+	Generated {name}	Wygenerowano: {name}
+	Generating	Generowanie
+	Generating: {name}	Generowanie: {name}
+	Generative Fill	Wypełnienie generatywne
+	Generative Fill failed: {error}	Wypełnienie generatywne nie powiodło się: {error}
+	Generative Fills in progress	Trwające wypełnienia generatywne
+	Go to area	Przejdź do obszaru
+	Locked until its layer lands	Zablokowane, dopóki nie pojawi się jego warstwa
+	No prompt: removes what is selected	Bez opisu: usuwa zaznaczoną zawartość
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Zaznaczenie ma {n} oddzielnych obszarów, za dużo, by wypełniać je po kolei (najwyżej {max}): zostanie wypełnione jako całość.
+	Waiting ({n})	Oczekuje ({n})
+	Waiting: {name}	Oczekuje: {name}
+	Retry	Spróbuj ponownie
+	Failed	Niepowodzenie
+@plural	{n} generating|{n} generating	{n} w toku|{n} w toku|{n} w toku
+@plural	{n} waiting|{n} waiting	{n} oczekuje|{n} oczekują|{n} oczekuje
+@plural	{n} failed|{n} failed	{n} nieudane|{n} nieudane|{n} nieudanych
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Wypełnij osobno każdy z {n} oddzielnych obszarów|Wypełnij osobno każdy z {n} oddzielnych obszarów|Wypełnij osobno każdy z {n} oddzielnych obszarów

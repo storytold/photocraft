@@ -4247,3 +4247,24 @@ cameraRaw	Dehaze	Odstranění oparu
 	Open Documents	Otevřené dokumenty
 	The reference images are sent too, at most 1024 pixels on their long side.	Odešlou se i referenční obrázky, nejvýše 1024 pixelů na delší straně.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	V režimu Upravit výběr se vybraná oblast odešle tak, jak je. Přidané referenční obrázky se odešlou také.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Zrušit tuto generativní výplň
+	Discard	Zahodit
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Každá oblast se stane samostatnou generativní výplní a vrstvou, generují se souběžně; každá posílá vlastní požadavky.
+	Failed: {name}	Selhalo: {name}
+	Generated {name}	Vygenerováno: {name}
+	Generating	Generuje se
+	Generating: {name}	Generuje se: {name}
+	Generative Fill	Generativní výplň
+	Generative Fill failed: {error}	Generativní výplň selhala: {error}
+	Generative Fills in progress	Probíhající generativní výplně
+	Go to area	Přejít na oblast
+	Locked until its layer lands	Zamčeno, dokud nedorazí její vrstva
+	No prompt: removes what is selected	Bez popisu: odstraní vybrané
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Výběr má {n} samostatných oblastí, příliš mnoho na vyplnění po jedné (nejvýše {max}): vyplní se jako celek.
+	Waiting ({n})	Čeká ({n})
+	Waiting: {name}	Čeká: {name}
+@plural	{n} generating|{n} generating	{n} se generuje|{n} se generují|{n} se generuje
+@plural	{n} waiting|{n} waiting	{n} čeká|{n} čekají|{n} čeká
+@plural	{n} failed|{n} failed	{n} selhala|{n} selhaly|{n} selhalo
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť

@@ -4210,3 +4210,26 @@ curves	Smooth	Згладити
 	Open Documents	Відкриті документи
 	The reference images are sent too, at most 1024 pixels on their long side.	Референсні зображення теж надсилаються, не більше 1024 пікселів по довшій стороні.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	У режимі «Змінити виділення» виділена область надсилається як є. Додані референсні зображення теж надсилаються.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Скасувати цю генеративну заливку
+	Discard	Відкинути
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Кожна область стане окремою генеративною заливкою з власним шаром; вони створюються одночасно, і кожна надсилає власні запити.
+	Failed: {name}	Помилка: {name}
+	Generated {name}	Створено: {name}
+	Generating	Створюється
+	Generating: {name}	Створюється: {name}
+	Generative Fill	Генеративна заливка
+	Generative Fill failed: {error}	Генеративна заливка не вдалася: {error}
+	Generative Fills in progress	Генеративні заливки в роботі
+	Go to area	Перейти до області
+	Locked until its layer lands	Заблоковано, доки не з’явиться шар
+	No prompt: removes what is selected	Без опису: видаляє виділене
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	У виділенні {n} окремих областей — забагато, щоб заливати їх по одній (не більше {max}): воно заливається цілком.
+	Waiting ({n})	У черзі ({n})
+	Waiting: {name}	У черзі: {name}
+	Retry	Повторити
+	Failed	Помилка
+@plural	{n} generating|{n} generating	{n} створюється|{n} створюються|{n} створюються
+@plural	{n} waiting|{n} waiting	{n} у черзі|{n} у черзі|{n} у черзі
+@plural	{n} failed|{n} failed	{n} з помилкою|{n} з помилкою|{n} з помилкою
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо

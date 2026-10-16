@@ -4460,3 +4460,24 @@ navigator	Zoom	Zoom
 	Open Documents	Documentos abiertos
 	The reference images are sent too, at most 1024 pixels on their long side.	También se envían las imágenes de referencia, con 1024 píxeles como máximo en su lado más largo.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	En el modo Editar, el área seleccionada se envía tal cual. Las imágenes de referencia que añadas también se envían.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Cancelar este relleno generativo
+	Discard	Descartar
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Cada área se convierte en su propio relleno generativo y su propia capa, y se generan a la vez; cada una envía sus propias solicitudes.
+	Failed: {name}	Falló: {name}
+	Generated {name}	Generado: {name}
+	Generating	Generando
+	Generating: {name}	Generando: {name}
+	Generative Fill	Relleno generativo
+	Generative Fill failed: {error}	El relleno generativo falló: {error}
+	Generative Fills in progress	Rellenos generativos en curso
+	Go to area	Ir a la zona
+	Locked until its layer lands	Bloqueada hasta que llegue su capa
+	No prompt: removes what is selected	Sin descripción: quita lo seleccionado
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	La selección tiene {n} áreas separadas, demasiadas para rellenarlas una por una (como máximo {max}): se rellena como una sola.
+	Waiting ({n})	En espera ({n})
+	Waiting: {name}	En espera: {name}
+@plural	{n} generating|{n} generating	{n} en curso|{n} en curso
+@plural	{n} waiting|{n} waiting	{n} en espera|{n} en espera
+@plural	{n} failed|{n} failed	{n} con error|{n} con error
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Rellenar por separado cada una de las {n} áreas|Rellenar por separado cada una de las {n} áreas

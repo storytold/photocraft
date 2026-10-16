@@ -4177,3 +4177,26 @@ curves	Smooth	スムーズ
 	Open Documents	開いているドキュメント
 	The reference images are sent too, at most 1024 pixels on their long side.	参照画像も送信されます（長辺は最大 1024 ピクセル）。
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	「選択範囲を編集」モードでは、選択範囲はそのまま送信されます。追加した参照画像も送信されます。
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	この生成塗りつぶしをキャンセル
+	Discard	破棄
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	各領域がそれぞれ別の生成塗りつぶしとレイヤーになり、同時に生成されます。リクエストは領域ごとに送信されます。
+	Failed: {name}	失敗：{name}
+	Generated {name}	生成完了：{name}
+	Generating	生成中
+	Generating: {name}	生成中：{name}
+	Generative Fill	生成塗りつぶし
+	Generative Fill failed: {error}	生成塗りつぶしに失敗しました：{error}
+	Generative Fills in progress	実行中の生成塗りつぶし
+	Go to area	領域へ移動
+	Locked until its layer lands	レイヤーが届くまでロックされています
+	No prompt: removes what is selected	説明文なし：選択した内容を削除します
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	選択範囲に {n} 個の離れた領域があり、1 つずつ塗りつぶすには多すぎます（最大 {max}）。まとめて塗りつぶします。
+	Waiting ({n})	待機中（{n}）
+	Waiting: {name}	待機中：{name}
+	Retry	再試行
+	Failed	失敗
+@plural	{n} generating|{n} generating	{n} 件生成中
+@plural	{n} waiting|{n} waiting	{n} 件待機中
+@plural	{n} failed|{n} failed	{n} 件失敗
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} 個の離れた領域をそれぞれ個別に塗りつぶす

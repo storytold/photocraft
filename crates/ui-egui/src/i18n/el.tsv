@@ -4200,3 +4200,24 @@ curves	Smooth	Εξομάλυνση
 	Open Documents	Ανοιχτά έγγραφα
 	The reference images are sent too, at most 1024 pixels on their long side.	Αποστέλλονται και οι εικόνες αναφοράς, έως 1024 εικονοστοιχεία στη μεγάλη πλευρά τους.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Στη λειτουργία «Επεξεργασία επιλογής» η επιλεγμένη περιοχή αποστέλλεται όπως είναι. Αποστέλλονται επίσης οι εικόνες αναφοράς που προσθέτετε.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Ακύρωση αυτού του παραγωγικού γεμίσματος
+	Discard	Απόρριψη
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Κάθε περιοχή γίνεται ξεχωριστό παραγωγικό γέμισμα και επίπεδο, και δημιουργούνται ταυτόχρονα· η καθεμία στέλνει τα δικά της αιτήματα.
+	Failed: {name}	Απέτυχε: {name}
+	Generated {name}	Δημιουργήθηκε: {name}
+	Generating	Δημιουργείται
+	Generating: {name}	Δημιουργείται: {name}
+	Generative Fill	Παραγωγικό γέμισμα
+	Generative Fill failed: {error}	Το παραγωγικό γέμισμα απέτυχε: {error}
+	Generative Fills in progress	Παραγωγικά γεμίσματα σε εξέλιξη
+	Go to area	Μετάβαση στην περιοχή
+	Locked until its layer lands	Κλειδωμένο μέχρι να έρθει το επίπεδό του
+	No prompt: removes what is selected	Χωρίς περιγραφή: αφαιρεί ό,τι είναι επιλεγμένο
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Η επιλογή έχει {n} ξεχωριστές περιοχές, πάρα πολλές για να γεμίσουν μία μία (το πολύ {max}): γεμίζει ως μία.
+	Waiting ({n})	Σε αναμονή ({n})
+	Waiting: {name}	Σε αναμονή: {name}
+@plural	{n} generating|{n} generating	{n} δημιουργείται|{n} δημιουργούνται
+@plural	{n} waiting|{n} waiting	{n} σε αναμονή|{n} σε αναμονή
+@plural	{n} failed|{n} failed	{n} απέτυχε|{n} απέτυχαν
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά|Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά

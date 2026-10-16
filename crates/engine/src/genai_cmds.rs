@@ -14,7 +14,7 @@
 //! `layer.generative.selectVariation` flips between them and `layer.generative.more` asks for
 //! more. The network calls run as one cancellable background job.
 //!
-//! Fills don't lock the document (this fork): each one's job edits it with
+//! Fills don't lock the document: each one's job edits it with
 //! [`crate::jobs::run_on`], so while one is generating the user selects the next area and starts
 //! another. Up to [`MAX_PARALLEL`] talk to the provider at once and the rest wait their turn
 //! (`queue`). A started fill is remembered until its layer lands (above the layer that was active
@@ -107,7 +107,7 @@ impl Session {
     }
 }
 
-/// The session's generative state (this fork).
+/// The session's generative state.
 #[derive(Default)]
 pub(crate) struct GenState {
     /// What each generative layer made in this session was generated from.
@@ -156,6 +156,8 @@ struct FillInput {
     doc: Arc<Document>,
     /// The selection (or the area of it) filled; the result is masked by it.
     sel: Surface,
+    /// Its bounds on the canvas.
+    bounds: Rect,
     /// The canvas when it started: the result lands only on a canvas of that size.
     canvas: Rect,
     area: Rect,
@@ -210,7 +212,7 @@ impl Fill {
         } else {
             "running"
         };
-        let b = self.input.sel.content_bounds().intersect(&self.input.canvas);
+        let b = self.input.bounds;
         Some(FillInfo {
             id: self.id,
             job: self.job,
@@ -900,6 +902,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let (doc_id, anchor) = (doc.id, st.active_layer);
     let input = FillInput {
         name: layer_name(&prompt),
+        bounds: sel.content_bounds().intersect(&canvas),
         doc,
         sel,
         canvas,
@@ -968,7 +971,8 @@ fn start(s: &mut Session, id: u64) -> Result<Value> {
 fn fill_work(ctx: &JobCtx, input: &FillInput, provider: &dyn ImageProvider, turns: &queue::Turns, status: &FillStatus) -> Result<(Vec<Surface>, Source)> {
     let (w, h) = input.size;
     ctx.progress(0.05, "Preparing image");
-    let (image, mask, reference) = request_images(&scaled(&srgb_composite(&input.doc, input.area)?, input.area, w, h), &input.sel, input.area, w, h, input.mode)?;
+    let (image, mask, reference) =
+        request_images(&scaled(&srgb_composite(&input.doc, input.area)?, input.area, w, h), &input.sel, input.area, w, h, input.mode)?;
     ctx.check()?;
     if !input.references.is_empty() {
         ctx.progress(0.1, "Preparing reference images");
@@ -1016,7 +1020,9 @@ fn land(s: &mut Session, id: u64, placed: Vec<Surface>, source: Source) -> Resul
 }
 
 fn fill_param(p: &Value, cmd: &str) -> Result<u64> {
-    p.get("fill").and_then(Value::as_u64).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`fill` must be a fill id (see layer.generative.fills)".into() })
+    p.get("fill")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`fill` must be a fill id (see layer.generative.fills)".into() })
 }
 
 fn retry_enabled(s: &Session) -> std::result::Result<(), String> {

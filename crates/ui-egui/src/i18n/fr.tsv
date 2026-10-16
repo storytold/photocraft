@@ -4540,3 +4540,24 @@ shape	Appearance	Apparence
 	Open Documents	Documents ouverts
 	The reference images are sent too, at most 1024 pixels on their long side.	Les images de référence sont aussi envoyées, à 1024 pixels au plus sur leur grand côté.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	En mode Modifier la sélection, la zone sélectionnée est envoyée telle quelle. Les images de référence que vous ajoutez sont aussi envoyées.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Annuler ce remplissage génératif
+	Discard	Abandonner
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Chaque zone devient son propre remplissage génératif, avec son calque, généré en parallèle ; chacune envoie ses propres requêtes.
+	Failed: {name}	Échec : {name}
+	Generated {name}	Généré : {name}
+	Generating	Génération
+	Generating: {name}	Génération : {name}
+	Generative Fill	Remplissage génératif
+	Generative Fill failed: {error}	Échec du remplissage génératif : {error}
+	Generative Fills in progress	Remplissages génératifs en cours
+	Go to area	Aller à la zone
+	Locked until its layer lands	Verrouillé jusqu’à l’arrivée de son calque
+	No prompt: removes what is selected	Sans description : supprime le contenu sélectionné
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	La sélection compte {n} zones distinctes, trop pour les remplir une par une (au plus {max}) : elle est remplie d’un seul tenant.
+	Waiting ({n})	En attente ({n})
+	Waiting: {name}	En attente : {name}
+@plural	{n} generating|{n} generating	{n} en cours|{n} en cours
+@plural	{n} waiting|{n} waiting	{n} en attente|{n} en attente
+@plural	{n} failed|{n} failed	{n} en échec|{n} en échec
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Remplir séparément chacune des {n} zones|Remplir séparément chacune des {n} zones

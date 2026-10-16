@@ -4413,3 +4413,24 @@ cameraRaw	Yellow	Sárga
 	Open Documents	Megnyitott dokumentumok
 	The reference images are sent too, at most 1024 pixels on their long side.	A referenciaképek is elküldésre kerülnek, a hosszabb oldalukon legfeljebb 1024 képpontban.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	„Kijelölés szerkesztése” módban a kijelölt terület változatlanul kerül elküldésre. A hozzáadott referenciaképek is elküldésre kerülnek.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Generatív kitöltés megszakítása
+	Discard	Elvetés
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Minden terület külön generatív kitöltés és réteg lesz, egyszerre készülnek; mindegyik saját kéréseket küld.
+	Failed: {name}	Sikertelen: {name}
+	Generated {name}	Elkészült: {name}
+	Generating	Generálás
+	Generating: {name}	Generálás: {name}
+	Generative Fill	Generatív kitöltés
+	Generative Fill failed: {error}	A generatív kitöltés sikertelen: {error}
+	Generative Fills in progress	Folyamatban lévő generatív kitöltések
+	Go to area	Ugrás a területre
+	Locked until its layer lands	Zárolva, amíg meg nem érkezik a rétege
+	No prompt: removes what is selected	Nincs leírás: eltávolítja a kijelölt részt
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A kijelölésnek {n} különálló területe van, túl sok ahhoz, hogy egyenként legyen kitöltve (legfeljebb {max}): egyben lesz kitöltve.
+	Waiting ({n})	Várakozik ({n})
+	Waiting: {name}	Várakozik: {name}
+@plural	{n} generating|{n} generating	{n} készül
+@plural	{n} waiting|{n} waiting	{n} várakozik
+@plural	{n} failed|{n} failed	{n} sikertelen
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	A(z) {n} különálló terület kitöltése egyenként

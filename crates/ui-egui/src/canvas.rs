@@ -3891,7 +3891,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // in (`layer_edges_rect`), so a press that Auto-Selects a layer outlines that layer.
         let layer_edges = painter.add(egui::Shape::Noop);
 
-        // This fork: Generative Fills still generating shimmer over their areas, under the ants.
+        // Generative Fills still generating shimmer over their areas, under the ants.
         crate::genai_ui::paint_pending(app, &ctx, &painter, &xf, doc.id);
 
         // Select and Mask outlines its refined selection (on its preview proxy, reduced by `k`) in

@@ -4227,3 +4227,24 @@ cameraData	Lens	Lens
 	Open Documents	Açık Belgeler
 	The reference images are sent too, at most 1024 pixels on their long side.	Referans görüntüler de gönderilir; uzun kenarları en fazla 1024 piksel olur.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	"Seçimi düzenle" modunda seçili alan olduğu gibi gönderilir. Eklediğiniz referans görüntüler de gönderilir.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Bu Üretken Dolguyu iptal et
+	Discard	Vazgeç
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Her alan kendi Üretken Dolgusu ve katmanı olur, aynı anda üretilir; her biri kendi isteklerini gönderir.
+	Failed: {name}	Başarısız: {name}
+	Generated {name}	Oluşturuldu: {name}
+	Generating	Oluşturuluyor
+	Generating: {name}	Oluşturuluyor: {name}
+	Generative Fill	Üretken Dolgu
+	Generative Fill failed: {error}	Üretken Dolgu başarısız oldu: {error}
+	Generative Fills in progress	Süren Üretken Dolgular
+	Go to area	Alana git
+	Locked until its layer lands	Katmanı gelene kadar kilitli
+	No prompt: removes what is selected	Açıklama yok: seçili olanı kaldırır
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seçimde {n} ayrı alan var; tek tek doldurmak için çok fazla (en fazla {max}): tek parça olarak doldurulur.
+	Waiting ({n})	Bekliyor ({n})
+	Waiting: {name}	Bekliyor: {name}
+@plural	{n} generating|{n} generating	{n} oluşturuluyor
+@plural	{n} waiting|{n} waiting	{n} bekliyor
+@plural	{n} failed|{n} failed	{n} başarısız
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} ayrı alanın her birini ayrı ayrı doldur

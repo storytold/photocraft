@@ -3519,3 +3519,26 @@ curves	Smooth	Haluskan
 	Open Documents	Dokumen Terbuka
 	The reference images are sent too, at most 1024 pixels on their long side.	Gambar referensi juga dikirim, maksimal 1024 piksel pada sisi panjangnya.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Dalam mode Edit seleksi, area yang diseleksi dikirim apa adanya. Gambar referensi yang Anda tambahkan juga dikirim.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Batalkan isian generatif ini
+	Discard	Buang
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Setiap area menjadi isian generatif dan lapisan tersendiri, dibuat bersamaan; masing-masing mengirim permintaannya sendiri.
+	Failed: {name}	Gagal: {name}
+	Generated {name}	Selesai dibuat: {name}
+	Generating	Sedang membuat
+	Generating: {name}	Sedang membuat: {name}
+	Generative Fill	Isian generatif
+	Generative Fill failed: {error}	Isian generatif gagal: {error}
+	Generative Fills in progress	Isian generatif yang sedang berjalan
+	Go to area	Ke area
+	Locked until its layer lands	Terkunci sampai lapisannya tiba
+	No prompt: removes what is selected	Tanpa deskripsi: menghapus yang dipilih
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seleksi memiliki {n} area terpisah, terlalu banyak untuk diisi satu per satu (paling banyak {max}): diisi sebagai satu kesatuan.
+	Waiting ({n})	Menunggu ({n})
+	Waiting: {name}	Menunggu: {name}
+	Retry	Coba lagi
+	Failed	Gagal
+@plural	{n} generating|{n} generating	{n} sedang dibuat
+@plural	{n} waiting|{n} waiting	{n} menunggu
+@plural	{n} failed|{n} failed	{n} gagal
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Isi masing-masing dari {n} area terpisah secara tersendiri

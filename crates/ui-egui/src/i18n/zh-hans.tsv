@@ -3178,3 +3178,26 @@ curves	Smooth	平滑
 	Open Documents	打开的文档
 	The reference images are sent too, at most 1024 pixels on their long side.	参考图像也会一并发送，长边最多 1024 像素。
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	在“编辑选区”模式下，所选区域会按原样发送。你添加的参考图像也会一并发送。
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	取消此生成式填充
+	Discard	丢弃
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	每个区域都会成为单独的生成式填充和图层，同时生成；每个区域各自发送请求。
+	Failed: {name}	失败：{name}
+	Generated {name}	已生成：{name}
+	Generating	正在生成
+	Generating: {name}	正在生成：{name}
+	Generative Fill	生成式填充
+	Generative Fill failed: {error}	生成式填充失败：{error}
+	Generative Fills in progress	进行中的生成式填充
+	Go to area	转到区域
+	Locked until its layer lands	在图层生成之前保持锁定
+	No prompt: removes what is selected	无描述：移除所选内容
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	选区有 {n} 个分离的区域，太多，无法逐个填充（最多 {max} 个）：将作为整体填充。
+	Waiting ({n})	等待中（{n}）
+	Waiting: {name}	等待中：{name}
+	Retry	重试
+	Failed	失败
+@plural	{n} generating|{n} generating	{n} 个正在生成
+@plural	{n} waiting|{n} waiting	{n} 个等待中
+@plural	{n} failed|{n} failed	{n} 个失败
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	分别填充 {n} 个分离的区域

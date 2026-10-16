@@ -4258,3 +4258,24 @@ curves	Smooth	Vloeiend maken
 	Open Documents	Geopende documenten
 	The reference images are sent too, at most 1024 pixels on their long side.	De referentieafbeeldingen worden ook verstuurd, met hoogstens 1024 pixels aan de lange zijde.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	In de modus Selectie bewerken wordt het geselecteerde gebied verstuurd zoals het is. Toegevoegde referentieafbeeldingen worden ook verstuurd.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Deze generatieve vulling annuleren
+	Discard	Verwerpen
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Elk gebied wordt een eigen generatieve vulling met een eigen laag, tegelijk gegenereerd; elk stuurt zijn eigen verzoeken.
+	Failed: {name}	Mislukt: {name}
+	Generated {name}	Gegenereerd: {name}
+	Generating	Bezig met genereren
+	Generating: {name}	Bezig met genereren: {name}
+	Generative Fill	Generatief vullen
+	Generative Fill failed: {error}	Generatief vullen mislukt: {error}
+	Generative Fills in progress	Generatieve vullingen bezig
+	Go to area	Naar gebied
+	Locked until its layer lands	Vergrendeld tot de laag binnenkomt
+	No prompt: removes what is selected	Geen beschrijving: verwijdert wat geselecteerd is
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	De selectie heeft {n} losse gebieden, te veel om één voor één te vullen (maximaal {max}): ze wordt als geheel gevuld.
+	Waiting ({n})	Wachtend ({n})
+	Waiting: {name}	Wachtend: {name}
+@plural	{n} generating|{n} generating	{n} bezig|{n} bezig
+@plural	{n} waiting|{n} waiting	{n} wachtend|{n} wachtend
+@plural	{n} failed|{n} failed	{n} mislukt|{n} mislukt
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Elk van de {n} losse gebieden apart vullen|Elk van de {n} losse gebieden apart vullen

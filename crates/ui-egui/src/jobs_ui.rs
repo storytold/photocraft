@@ -421,7 +421,7 @@ pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
         return Some(j);
     }
     // Generative Fills show their own progress (`genai_ui::status_fills`); Esc doesn't stop them.
-    app.session.active_job().or_else(|| app.session.jobs().into_iter().filter(|j| !crate::genai_ui::is_generative(&j.command)).next_back())
+    app.session.active_job().or_else(|| app.session.jobs().into_iter().rfind(|j| !crate::genai_ui::is_generative(&j.command)))
 }
 
 /// Cancel job `id` (the status bar's ×, the dialog's Cancel, Esc, closing an opening tab).

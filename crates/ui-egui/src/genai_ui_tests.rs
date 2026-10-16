@@ -151,7 +151,7 @@ fn the_prompt_dialog_runs_the_fill_and_remembers_the_prompt() {
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.layers.len(), layers + 1);
     assert_eq!(doc.layers.last().unwrap().name, "a red square");
-    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "a red square", "mode": "fill"})));
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "a red square", "mode": "fill", "separate": true})));
     let (cmd, params) = app.session.journal.iter().rev().find(|(c, _)| c == FILL).unwrap();
     assert_eq!((cmd.as_str(), params), (FILL, &json!({"prompt": "a red square", "mode": "fill"})), "no references: none sent");
 }
@@ -197,7 +197,7 @@ fn edit_mode_and_reference_documents_reach_the_command_and_are_remembered() {
     f.insert("references".into(), json!([{"document": green}]));
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(last_fill(&app), json!({"prompt": "make it blue", "mode": "edit", "references": [{"document": green}]}));
-    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "make it blue", "mode": "edit"})));
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "make it blue", "mode": "edit", "separate": true})));
     assert_eq!(app.session.active().unwrap().doc.layers.last().unwrap().name, "make it blue");
 
     // The next prompt starts in Edit with the same reference.
@@ -209,7 +209,7 @@ fn edit_mode_and_reference_documents_reach_the_command_and_are_remembered() {
     app.ui.dialog_mut(id).unwrap().fields.insert("references".into(), json!([]));
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(last_fill(&app), json!({"prompt": "", "mode": "fill"}));
-    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "", "mode": "edit"})), "the tab chosen is kept");
+    assert_eq!(app.session.prefs().dialogs.get(FILL), Some(&json!({"prompt": "", "mode": "edit", "separate": true})), "the tab chosen is kept");
 
     // A reference to a document that has been closed since is dropped.
     app.genai.references = vec![json!({"document": 987_654_321}), json!({"document": green})];
@@ -371,4 +371,302 @@ fn properties_show_the_variations() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(shown(&h), [false, false, false, true, false, false]);
+}
+
+// ---- Fills that run side by side --------------------------------------------------------------
+
+/// Answers after `delay` with solid blue, or (with `fail`) says the service can't be reached.
+struct Slow {
+    delay: std::time::Duration,
+    fail: bool,
+}
+
+impl ImageProvider for Slow {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo { id: "gemini", name: "Google Gemini", model: "slow".into(), host: "example.invalid" }
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { generate: false, edit: true, variations: false, edit_in_place: true, max_references: 4 }
+    }
+    fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
+        std::thread::sleep(self.delay);
+        if self.fail {
+            return Err(photocraft_genai::GenError::Network("offline".into()));
+        }
+        let (w, h) = photocraft_genai::png_size(&r.image).unwrap();
+        let px: Vec<u8> = (0..w * h).flat_map(|_| [0u8, 0, 255, 255]).collect();
+        let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
+        let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        Ok(GeneratedImage { bytes, mime: "image/png".into() })
+    }
+}
+
+/// [`prompt_ready`], running jobs in the background as the desktop app does, with `provider`.
+fn background(store: &Store, provider: Slow) -> PhotocraftApp {
+    let mut app = prompt_ready(store);
+    app.background_jobs = true;
+    app.session.set_image_provider(Some(Arc::new(provider)));
+    app
+}
+
+fn generate(app: &mut PhotocraftApp, prompt: &str) {
+    let id = open_prompt_dialog(app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!(prompt));
+    crate::dialogs::confirm(app, id).unwrap();
+}
+
+/// Tick the shell until `done` holds (at most 10 s).
+fn tick_until(app: &mut PhotocraftApp, done: impl Fn(&PhotocraftApp) -> bool) {
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done(app) {
+        assert!(std::time::Instant::now() < deadline, "timed out: {:?}", app.session.generative_fills());
+        crate::jobs_ui::tick(app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn groups(app: &PhotocraftApp) -> Vec<(String, photocraft_geom::Rect)> {
+    let doc = &app.session.active().unwrap().doc;
+    doc.layers.iter().filter(|l| l.is_group()).map(|l| (l.name.clone(), l.mask.as_ref().unwrap().surface.content_bounds())).collect()
+}
+
+#[test]
+fn separate_areas_are_filled_one_by_one_unless_asked_otherwise() {
+    let store = Store::default();
+    let mut app = prompt_ready(&store);
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16, "mode": "add"})).unwrap();
+    let id = open_prompt_dialog(&mut app);
+    assert_eq!(fields(&app, id)["__areas"], 2);
+    assert_eq!(fields(&app, id)["separate"], true, "on unless turned off");
+    app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("x"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let r = |x, y, w, h| photocraft_geom::Rect::from_xywh(x, y, w, h);
+    assert_eq!(groups(&app), [("x".into(), r(4, 4, 12, 12)), ("x".into(), r(40, 40, 16, 16))]);
+    // Turned off, the selection is filled as one; the choice is remembered.
+    let id = open_prompt_dialog(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("prompt".into(), json!("y"));
+    f.insert("separate".into(), json!(false));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(groups(&app).last().unwrap(), &("y".into(), r(4, 4, 52, 52)));
+    assert_eq!(app.session.prefs().dialogs.get(FILL).unwrap()["separate"], false);
+    let id = open_prompt_dialog(&mut app);
+    assert_eq!(fields(&app, id)["separate"], false);
+}
+
+#[test]
+fn in_the_background_fills_block_nothing_and_land_where_they_were_started() {
+    let store = Store::default();
+    let mut app = background(&store, Slow { delay: std::time::Duration::from_millis(300), fail: false });
+    let bg = app.session.active().unwrap().active_layer;
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    generate(&mut app, "a");
+    // No progress window, no lock, and the selection let go for the next one.
+    assert!(app.session.active_job().is_none());
+    assert!(crate::jobs_ui::job_in_view(&app).is_none(), "the status bar's job readout leaves it to its own");
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    app.run("select.rect", json!({"x": 40, "y": 40, "width": 16, "height": 16})).unwrap();
+    generate(&mut app, "b");
+    let fills = app.session.generative_fills();
+    assert_eq!(fills.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    // The status bar counts them.
+    let mut h = egui_kittest::Harness::new_ui_state(|ui, app: &mut PhotocraftApp| crate::genai_ui::status_fills(app, ui), app);
+    h.run_steps(2);
+    let shown = h.query_by_label("2 generating").is_some() || h.query_by_label("1 generating · 1 waiting").is_some();
+    assert!(shown, "status readout");
+    let mut app = h.into_state();
+    tick_until(&mut app, |app| app.session.generative_fills().is_empty() && !app.session.has_jobs());
+    assert_eq!(groups(&app).len(), 2);
+    assert_eq!(app.session.active().unwrap().active_layer, bg, "the user's layer stays active");
+    assert!(app.ui.status.starts_with("Generated"), "{}", app.ui.status);
+}
+
+#[test]
+fn a_failed_fill_keeps_its_row_offers_retry_and_can_be_discarded() {
+    let store = Store::default();
+    let mut app = background(&store, Slow { delay: std::time::Duration::from_millis(20), fail: true });
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    generate(&mut app, "lamp");
+    // Failed, and its job's end reported.
+    tick_until(&mut app, |app| app.session.generative_fills().first().is_some_and(|f| f.state == "failed") && !app.session.has_jobs());
+    assert!(app.ui.status_error && app.ui.status.contains("offline"), "{}", app.ui.status);
+    let doc = app.session.active().unwrap().doc.id;
+    // Its row stands where the layer will land, with Retry and Discard.
+    let mut h = egui_kittest::Harness::new_ui_state(move |ui, app: &mut PhotocraftApp| crate::genai_ui::layer_rows_unplaced(app, ui, doc, &[]), app);
+    h.run_steps(2);
+    h.get_by_label("Failed: lamp");
+    let mut app = h.into_state();
+    // Retry with a working service lands it.
+    app.session.set_image_provider(Some(Arc::new(Slow { delay: std::time::Duration::from_millis(20), fail: false })));
+    let id = app.session.generative_fills()[0].id;
+    app.run(photocraft_engine::genai_cmds::RETRY, json!({"fill": id})).unwrap();
+    tick_until(&mut app, |app| app.session.generative_fills().is_empty() && !app.session.has_jobs());
+    assert_eq!(groups(&app).len(), 1);
+    // Discard stops one that is still generating; nothing lands.
+    app.session.set_image_provider(Some(Arc::new(Slow { delay: std::time::Duration::from_millis(300), fail: false })));
+    app.run("select.rect", json!({"x": 30, "y": 30, "width": 12, "height": 12})).unwrap();
+    generate(&mut app, "gone");
+    let id = app.session.generative_fills()[0].id;
+    app.run(photocraft_engine::genai_cmds::DISCARD, json!({"fill": id})).unwrap();
+    app.session.join_cancelled_jobs();
+    tick_until(&mut app, |app| !app.session.has_jobs());
+    assert!(app.session.generative_fills().is_empty());
+    assert_eq!(groups(&app).len(), 1);
+}
+
+#[test]
+fn the_canvas_draws_fills_in_progress() {
+    let store = Store::default();
+    let mut app = background(&store, Slow { delay: std::time::Duration::from_millis(500), fail: false });
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    generate(&mut app, "a");
+    let doc = app.session.active().unwrap().doc.id;
+    let mut h = egui_kittest::Harness::new_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            let xf = crate::canvas::ViewXform { rect: ui.max_rect(), zoom: 4.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            let painter = ui.painter().clone();
+            crate::genai_ui::paint_pending(app, &ui.ctx().clone(), &painter, &xf, doc);
+        },
+        app,
+    );
+    h.run_steps(2);
+    // Its tag: what it is doing, with Cancel.
+    assert!(h.query_by_label("Generating").is_some() || h.query_by_label_contains("Waiting").is_some());
+    h.get_by_label("Cancel this Generative Fill").click();
+    h.run_steps(2);
+    let mut app = h.into_state();
+    app.session.join_cancelled_jobs();
+    tick_until(&mut app, |app| !app.session.has_jobs());
+    assert!(app.session.generative_fills().is_empty());
+}
+
+/// Renders fills side by side for a look (`GENAI_SNAPSHOT_DIR=… cargo test`): six objects
+/// selected together and filled each on its own (five generating, one waiting its turn), one
+/// that failed, the Layers panel's rows and the status bar's list.
+#[test]
+fn fills_side_by_side_render() {
+    let Some(dir) = std::env::var_os("GENAI_SNAPSHOT_DIR") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    let store = Store::default();
+    store.borrow_mut().insert("gemini".into(), SECRET.into());
+    let store2 = store.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 860.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = background(&store2, Slow { delay: std::time::Duration::from_millis(30), fail: true });
+        app.run("file.new", json!({"width": 1200, "height": 800, "background": "#d9d2c3"})).unwrap();
+        // A floor, and seven "objects" to remove.
+        app.run("select.rect", json!({"x": 0, "y": 520, "width": 1200, "height": 280})).unwrap();
+        app.run("edit.fill", json!({"color": "#8a7a66"})).unwrap();
+        for (i, (x, y, w, hh, c)) in [
+            (90, 380, 90, 160, "#2f5d8a"),
+            (300, 430, 70, 110, "#a8432f"),
+            (470, 300, 60, 60, "#e0b03c"),
+            (640, 420, 120, 120, "#3c7d4a"),
+            (860, 360, 80, 180, "#6b3d8a"),
+            (1020, 460, 100, 80, "#c76a2b"),
+            (560, 600, 140, 60, "#444444"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let _ = i;
+            app.run("select.rect", json!({"x": x, "y": y, "width": w, "height": hh})).unwrap();
+            app.run("edit.fill", json!({"color": c})).unwrap();
+        }
+        app.run("select.deselect", json!({})).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let save = |h: &mut egui_kittest::Harness<PhotocraftApp>, name: &str| {
+        if let Ok(img) = h.render() {
+            img.save(dir.join(name)).unwrap();
+        }
+    };
+    // One that failed: the service couldn't be reached.
+    h.state_mut().run("select.rect", json!({"x": 545, "y": 590, "width": 170, "height": 80})).unwrap();
+    generate(h.state_mut(), "remove the rug");
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().session.generative_fills().first().is_some_and(|f| f.state == "failed") && !h.state().session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // Six objects selected together, filled each on its own: five at a time, one waits.
+    h.state_mut().session.set_image_provider(Some(Arc::new(Slow { delay: std::time::Duration::from_secs(30), fail: false })));
+    for (i, (x, y, w, hh)) in [(80, 370, 110, 180), (290, 420, 90, 130), (460, 290, 80, 80), (630, 410, 140, 140), (850, 350, 100, 200), (1010, 450, 120, 100)]
+        .into_iter()
+        .enumerate()
+    {
+        let mode = if i == 0 { "replace" } else { "add" };
+        h.state_mut().run("select.rect", json!({"x": x, "y": y, "width": w, "height": hh, "mode": mode})).unwrap();
+    }
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, FILL, json!({})).unwrap();
+    let id = h.state().ui.dialogs[0].id;
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!(""));
+    h.run_steps(6);
+    h.get_by_label("Fill each of the 6 separate areas on its own");
+    save(&mut h, "genai-areas-prompt.png");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    for _ in 0..30 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(h.state().session.generative_fills().len(), 7);
+    save(&mut h, "genai-side-by-side.png");
+    // The status bar's list.
+    h.get_by_label_contains("generating").click();
+    h.run_steps(4);
+    save(&mut h, "genai-side-by-side-list.png");
+    h.state_mut().session.cancel_all_jobs();
+}
+
+/// The tags sit over the canvas: clicking one's Cancel stops that fill and nothing else; the
+/// tool under it (the Brush here) never sees the click.
+#[test]
+fn a_tags_cancel_takes_the_click_from_the_canvas() {
+    let store = Store::default();
+    store.borrow_mut().insert("gemini".into(), SECRET.into());
+    let store2 = store.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = background(&store2, Slow { delay: std::time::Duration::from_secs(20), fail: false });
+        app.run("file.new", json!({"width": 600, "height": 400, "background": "#ffffff"})).unwrap();
+        app.ui.tool = crate::state::Tool::Brush;
+        app
+    });
+    h.run_steps(4);
+    for x in [100, 350] {
+        h.state_mut().run("select.rect", json!({"x": x, "y": 200, "width": 60, "height": 60})).unwrap();
+        generate(h.state_mut(), "");
+        h.run_steps(2);
+    }
+    h.run_steps(4);
+    assert_eq!(h.state().session.generative_fills().len(), 2);
+    let history = h.state().session.active().unwrap().history.past_len();
+    // The tag on the canvas, not the Layers panel row's × (leftmost of the two).
+    let tag = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.get_all_by_label("Cancel this Generative Fill").min_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().rect();
+    let r = tag(&h);
+    h.input_mut().events.push(egui::Event::PointerMoved(r.center()));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    assert_eq!(h.state().session.generative_fills().len(), 1, "that one stopped");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "no brush stroke under the tag");
+    // The same click on the canvas itself paints.
+    let at = tag(&h).center() + egui::vec2(0.0, 80.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.run_steps(2);
+    }
+    h.run_steps(4);
+    assert!(h.state().session.active().unwrap().history.past_len() > history, "a click on the canvas paints");
+    h.state_mut().session.cancel_all_jobs();
 }

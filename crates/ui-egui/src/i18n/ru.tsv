@@ -4701,3 +4701,24 @@ shape	Appearance	Оформление
 	Open Documents	Открытые документы
 	The reference images are sent too, at most 1024 pixels on their long side.	Референсные изображения тоже отправляются, не более 1024 пикселей по длинной стороне.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	В режиме «Изменить выделение» выделенная область отправляется как есть. Добавленные референсные изображения тоже отправляются.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Отменить эту генеративную заливку
+	Discard	Отбросить
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Каждая область станет отдельной генеративной заливкой со своим слоем; они создаются одновременно, и каждая отправляет свои запросы.
+	Failed: {name}	Ошибка: {name}
+	Generated {name}	Создано: {name}
+	Generating	Создаётся
+	Generating: {name}	Создаётся: {name}
+	Generative Fill	Генеративная заливка
+	Generative Fill failed: {error}	Генеративная заливка не удалась: {error}
+	Generative Fills in progress	Генеративные заливки в работе
+	Go to area	Перейти к области
+	Locked until its layer lands	Заблокировано, пока не появится слой
+	No prompt: removes what is selected	Без описания: удаляет выделенное
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	В выделении {n} отдельных областей — слишком много, чтобы заливать их по одной (не больше {max}): оно заливается целиком.
+	Waiting ({n})	В очереди ({n})
+	Waiting: {name}	В очереди: {name}
+@plural	{n} generating|{n} generating	{n} создаётся|{n} создаются|{n} создаются
+@plural	{n} waiting|{n} waiting	{n} в очереди|{n} в очереди|{n} в очереди
+@plural	{n} failed|{n} failed	{n} с ошибкой|{n} с ошибкой|{n} с ошибкой
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Залить каждую из {n} отдельных областей по отдельности|Залить каждую из {n} отдельных областей по отдельности|Залить каждую из {n} отдельных областей по отдельности

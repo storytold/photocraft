@@ -3521,3 +3521,26 @@ curves	Smooth	Glätten
 	Open Documents	Geöffnete Dokumente
 	The reference images are sent too, at most 1024 pixels on their long side.	Die Referenzbilder werden ebenfalls gesendet, an der längsten Seite höchstens 1024 Pixel groß.
 	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Im Modus „Auswahl bearbeiten“ wird der ausgewählte Bereich unverändert gesendet. Hinzugefügte Referenzbilder werden ebenfalls gesendet.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Diese generative Füllung abbrechen
+	Discard	Verwerfen
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Jeder Bereich wird zu einer eigenen generativen Füllung mit eigener Ebene; sie entstehen gleichzeitig, und jeder sendet eigene Anfragen.
+	Failed: {name}	Fehlgeschlagen: {name}
+	Generated {name}	Generiert: {name}
+	Generating	Wird generiert
+	Generating: {name}	Wird generiert: {name}
+	Generative Fill	Generatives Füllen
+	Generative Fill failed: {error}	Generatives Füllen fehlgeschlagen: {error}
+	Generative Fills in progress	Laufende generative Füllungen
+	Go to area	Zum Bereich
+	Locked until its layer lands	Gesperrt, bis die Ebene ankommt
+	No prompt: removes what is selected	Keine Beschreibung: Entfernt den ausgewählten Inhalt
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Die Auswahl hat {n} getrennte Bereiche, zu viele, um sie einzeln zu füllen (höchstens {max}): Sie wird als Ganzes gefüllt.
+	Waiting ({n})	Wartet ({n})
+	Waiting: {name}	Wartet: {name}
+	Retry	Erneut versuchen
+	Failed	Fehlgeschlagen
+@plural	{n} generating|{n} generating	{n} wird generiert|{n} werden generiert
+@plural	{n} waiting|{n} waiting	{n} wartet|{n} warten
+@plural	{n} failed|{n} failed	{n} fehlgeschlagen|{n} fehlgeschlagen
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Jeden der {n} getrennten Bereiche einzeln füllen|Jeden der {n} getrennten Bereiche einzeln füllen
