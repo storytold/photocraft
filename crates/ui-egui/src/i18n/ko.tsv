@@ -3439,3 +3439,6 @@ curves	Smooth	매끄럽게
 	{n} frames	프레임 {n}개
 	Frames before	이전 프레임
 	Frames after	이후 프레임
+	Tween	트위닝
+	Last frame	마지막 프레임
+	Frames to add	추가할 프레임 수

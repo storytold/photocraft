@@ -35,6 +35,9 @@ pub struct TimelineUi {
     /// because not everyone animates by drawing frames.
     #[serde(default)]
     pub show_onion: bool,
+    /// Shows the Tween menu in the frame strip's bar.
+    #[serde(default)]
+    pub show_tween: bool,
     /// The selected frames of a frame animation (the shown frame is always among them).
     #[serde(default, skip)]
     pub sel: std::collections::BTreeSet<usize>,
@@ -82,6 +85,7 @@ struct Out {
     clicked: Option<(usize, crate::frame_strip_ui::Click)>,
     onion: Option<crate::onion_skin::OnionSkin>,
     show_onion: Option<bool>,
+    show_tween: Option<bool>,
     rect: Option<egui::Rect>,
 }
 
@@ -106,9 +110,13 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
             if anim.is_some() {
                 let more = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Options"));
                 egui::Popup::menu(&more).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-                    let mut show = app.ui.timeline.show_onion;
-                    if ui.checkbox(&mut show, tl!("Onion Skin")).changed() {
-                        out.show_onion = Some(show);
+                    let mut tween = app.ui.timeline.show_tween;
+                    if ui.checkbox(&mut tween, tl!("Tween")).changed() {
+                        out.show_tween = Some(tween);
+                    }
+                    let mut onion = app.ui.timeline.show_onion;
+                    if ui.checkbox(&mut onion, tl!("Onion Skin")).changed() {
+                        out.show_onion = Some(onion);
                     }
                 });
             }
@@ -138,6 +146,7 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
                 acts: &mut out.acts,
                 onion: app.ui.timeline.onion,
                 show_onion: app.ui.timeline.show_onion,
+                show_tween: app.ui.timeline.show_tween,
                 onion_out: &mut out.onion,
                 clicked: &mut out.clicked,
                 toggle_play: &mut out.toggle_play,
@@ -201,6 +210,9 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
     }
     if out.toggle_play {
         toggle_play(app, ctx);
+    }
+    if let Some(show) = out.show_tween {
+        app.ui.timeline.show_tween = show;
     }
     if let Some(show) = out.show_onion {
         app.ui.timeline.show_onion = show;
@@ -356,8 +368,19 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     // With no frames copied, ⌘V is left alone for Edit › Paste (an image on the system clipboard, say).
     if !app.ui.timeline.clipboard.is_empty() && (clip(ctx, false) | press(Modifiers::COMMAND, Key::V)) {
-        let frames: Vec<Value> =
-            app.ui.timeline.clipboard.iter().map(|f| json!({ "delayMs": f.delay_ms, "hidden": f.hidden.iter().map(|l| l.0).collect::<Vec<_>>() })).collect();
+        let frames: Vec<Value> = app
+            .ui
+            .timeline
+            .clipboard
+            .iter()
+            .map(|f| {
+                json!({
+                    "delayMs": f.delay_ms,
+                    "hidden": f.hidden.iter().map(|l| l.0).collect::<Vec<_>>(),
+                    "opacities": f.opacities.iter().map(|(l, o)| json!([l.0, o])).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
         act(app, ctx, "animation.pasteFrames", json!({ "frames": frames, "after": last_sel }));
         return true;
     }

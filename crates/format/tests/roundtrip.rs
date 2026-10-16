@@ -704,8 +704,13 @@ fn frame_animation_survives_roundtrip_with_its_hidden_layers_remapped() {
         v.sort();
         v
     };
-    let frames = vec![AnimFrame { delay_ms: 100, hidden: hide(0) }, AnimFrame { delay_ms: 250, hidden: hide(1) }, AnimFrame { delay_ms: 0, hidden: hide(2) }];
-    doc.frame_animation = Some(FrameAnimation { frames: frames.into_iter().map(Into::into).collect(), current: 1, loops: LoopCount::Times(4) });
+    let frames = vec![
+        AnimFrame { delay_ms: 100, hidden: hide(0), opacities: vec![(id(0), 0.25)] },
+        AnimFrame { delay_ms: 250, hidden: hide(1), ..Default::default() },
+        AnimFrame { delay_ms: 0, hidden: hide(2), ..Default::default() },
+    ];
+    doc.frame_animation =
+        Some(FrameAnimation { frames: frames.into_iter().map(Into::into).collect(), current: 1, loops: LoopCount::Times(4), defaults: Default::default() });
     doc.select_animation_frame(1);
 
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
@@ -713,6 +718,9 @@ fn frame_animation_survives_roundtrip_with_its_hidden_layers_remapped() {
     let a = back.frame_animation.clone().expect("animation survived");
     assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [100, 250, 0]);
     assert_eq!((a.current, a.loops), (1, LoopCount::Times(4)));
+    // Opacities follow their layers through id remapping; frames saved without any get the layers' own.
+    assert_eq!(a.opacity_in(&a.frames[0], back.layers[0].id), Some(0.25));
+    assert_eq!(a.opacity_in(&a.frames[1], back.layers[0].id), Some(back.layers[0].opacity));
     // Whatever ids the layers got, frame N hides exactly the other two.
     for n in 0..3 {
         assert!(back.select_animation_frame(n));
@@ -735,8 +743,9 @@ fn a_layer_added_after_the_frames_shows_in_every_frame_after_a_roundtrip() {
         }
     }
     let (one, two) = (doc.layers[0].id, doc.layers[1].id);
-    let frames = vec![AnimFrame { delay_ms: 10, hidden: vec![two] }, AnimFrame { delay_ms: 20, hidden: vec![one] }];
-    doc.frame_animation = Some(FrameAnimation { frames: frames.into_iter().map(Into::into).collect(), current: 0, loops: LoopCount::Forever });
+    let frames = vec![AnimFrame { delay_ms: 10, hidden: vec![two], ..Default::default() }, AnimFrame { delay_ms: 20, hidden: vec![one], ..Default::default() }];
+    doc.frame_animation =
+        Some(FrameAnimation { frames: frames.into_iter().map(Into::into).collect(), current: 0, loops: LoopCount::Forever, defaults: Default::default() });
     doc.select_animation_frame(0);
     let mut late = Layer::raster("Late", fmt);
     late.name = "Late".into();
@@ -765,17 +774,24 @@ fn a_malformed_frame_animation_is_repaired_on_load() {
         d.frame_animation = Some(a);
         load_from_bytes(&save_to_bytes(&d, &SaveOptions::default()).unwrap()).unwrap().frame_animation.unwrap()
     };
-    let none = load(FrameAnimation { frames: Vec::new(), current: 9, loops: LoopCount::Forever });
+    let none = load(FrameAnimation { frames: Vec::new(), current: 9, loops: LoopCount::Forever, defaults: Default::default() });
     assert_eq!((none.frames.len(), none.current), (1, 0));
     let wild = load(FrameAnimation {
-        frames: vec![AnimFrame { delay_ms: u32::MAX, hidden: vec![photocraft_doc::LayerId(u64::MAX)] }.into()],
+        frames: vec![AnimFrame { delay_ms: u32::MAX, hidden: vec![photocraft_doc::LayerId(u64::MAX)], ..Default::default() }.into()],
         current: usize::MAX,
         loops: LoopCount::Times(0),
+        defaults: Default::default(),
     });
     assert_eq!((wild.frames[0].delay_ms, wild.current), (MAX_DELAY_MS, 0));
     assert_eq!(wild.loops, LoopCount::Forever, "Times(0) is forever");
     assert!(wild.frames[0].hidden.is_empty(), "an id with no layer is dropped, so a later layer can't be handed it");
-    let many = load(FrameAnimation { frames: vec![AnimFrame::default().into(); MAX_FRAMES + 50], current: MAX_FRAMES + 10, loops: LoopCount::Forever });
+    assert!(wild.frames[0].opacities.iter().all(|(l, _)| l.0 != u64::MAX), "so is an opacity for one");
+    let many = load(FrameAnimation {
+        frames: vec![AnimFrame::default().into(); MAX_FRAMES + 50],
+        current: MAX_FRAMES + 10,
+        loops: LoopCount::Forever,
+        defaults: Default::default(),
+    });
     assert_eq!((many.frames.len(), many.current), (MAX_FRAMES, MAX_FRAMES - 1));
 }
 
@@ -791,7 +807,12 @@ fn a_loaded_animation_shows_its_selected_frame() {
     let id = |n: usize| doc.layers[n].id;
     // Every layer is saved visible, but the animation's selected frame hides One and Three (stored unsorted).
     let hidden = vec![id(2), id(0)];
-    doc.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame { delay_ms: 50, hidden }.into()], current: 0, loops: LoopCount::Forever });
+    doc.frame_animation = Some(FrameAnimation {
+        frames: vec![AnimFrame { delay_ms: 50, hidden, ..Default::default() }.into()],
+        current: 0,
+        loops: LoopCount::Forever,
+        defaults: Default::default(),
+    });
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     let shown: Vec<&str> = back.layers.iter().filter(|l| l.visible).map(|l| l.name.as_str()).collect();
     assert_eq!(shown, ["Two"]);

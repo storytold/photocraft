@@ -576,3 +576,150 @@ fn every_command_that_leaves_frames_selected_says_so_in_its_description() {
         assert!(spec.params.contains("selection"), "{id}: {}", spec.params);
     }
 }
+
+fn opacity(s: &Session, frame: usize, name: &str) -> f32 {
+    let a = doc(s).frame_animation.as_ref().unwrap();
+    a.opacity_in(&a.frames[frame], id_of(s, name)).unwrap()
+}
+
+fn hidden(s: &Session, frame: usize, name: &str) -> bool {
+    doc(s).frame_animation.as_ref().unwrap().frames[frame].hidden.contains(&id_of(s, name))
+}
+
+#[test]
+fn tween_fades_between_two_frames() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let r = s.execute("animation.tween", json!({"frames": 3})).unwrap();
+    assert_eq!(delays(&s), [100; 5]);
+    assert_eq!(r["selection"], json!([1, 2, 3]));
+    assert_eq!(current(&s), 3);
+    // Frame 0 shows only the Background, frame 4 only A: the new frames cross-fade.
+    for (f, bg, a) in [(1, 0.75, 0.25), (2, 0.5, 0.5), (3, 0.25, 0.75)] {
+        assert!((opacity(&s, f, "Background") - bg).abs() < 1e-5, "frame {f}");
+        assert!((opacity(&s, f, "A") - a).abs() < 1e-5, "frame {f}");
+        assert!(!hidden(&s, f, "Background") && !hidden(&s, f, "A"), "both show while fading");
+    }
+    // The selected frame's look is on the layers.
+    assert!((doc(&s).layers.iter().find(|l| l.name == "A").unwrap().opacity - 0.75).abs() < 1e-5);
+    // The ends are untouched.
+    assert!(hidden(&s, 0, "A") && hidden(&s, 4, "Background"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(delays(&s).len(), 2);
+}
+
+#[test]
+fn tween_can_go_the_other_way_and_pick_layers() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("animation.tween", json!({"with": "next", "frames": 1, "layers": [a.0]})).unwrap();
+    assert_eq!(delays(&s).len(), 3);
+    assert!((opacity(&s, 1, "A") - 0.5).abs() < 1e-5);
+    assert!(!hidden(&s, 1, "Background") && opacity(&s, 1, "Background") == 1.0, "a layer that isn't tweened keeps the selected frame's look");
+    assert_eq!(current(&s), 1);
+}
+
+#[test]
+fn tween_with_first_or_last_runs_round_the_loop_from_the_selected_frame() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 10})).unwrap();
+    s.execute("animation.newFrame", json!({})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 2})).unwrap();
+    // First: the new frame follows the selected one, so the fade carries on towards frame 0.
+    s.execute("animation.tween", json!({"with": "first"})).unwrap();
+    assert_eq!(delays(&s).len(), 4);
+    assert_eq!(current(&s), 3);
+    assert!(hidden(&s, 0, "A") && !hidden(&s, 3, "A"), "the ends are in place: frame 0 is the Background alone, the selected frame is last");
+    // Last: the new frame goes before the selected one, fading up to it from the last frame.
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    s.execute("animation.tween", json!({"with": "last"})).unwrap();
+    assert_eq!(delays(&s).len(), 5);
+    assert_eq!(current(&s), 0);
+}
+
+#[test]
+fn tween_refuses_what_it_cannot_do() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    for bad in [
+        json!({}),
+        json!({"with": "first"}),
+        json!({"with": "sideways"}),
+        json!({"with": "next", "frames": 0}),
+        json!({"with": "next", "frames": 501}),
+        json!({"with": "next", "layers": "x"}),
+        json!({"with": 5}),
+        json!({"with": true}),
+        json!({"with": "next", "layers": []}),
+        json!({"with": "next", "layers": [999_999]}),
+    ] {
+        assert!(s.execute("animation.tween", bad).is_err());
+    }
+    assert_eq!(delays(&s).len(), 2);
+}
+
+#[test]
+fn opacity_edits_change_only_the_selected_frame() {
+    let mut s = session(&["A"]);
+    s.execute("animation.create", json!({})).unwrap();
+    s.execute("animation.newFrame", json!({})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("layer.setProps", json!({"layer": a.0, "opacity": 0.3})).unwrap();
+    assert!((opacity(&s, 1, "A") - 0.3).abs() < 1e-5);
+    assert_eq!(opacity(&s, 0, "A"), 1.0);
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    assert_eq!(doc(&s).layer(a).unwrap().opacity, 1.0);
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    assert!((doc(&s).layer(a).unwrap().opacity - 0.3).abs() < 1e-5);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).layer(a).unwrap().opacity, 1.0);
+}
+
+#[test]
+fn pasted_frames_carry_their_opacities() {
+    let mut s = session(&["A"]);
+    s.execute("animation.create", json!({})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("animation.pasteFrames", json!({"frames": [{"delayMs": 10, "opacities": [[a.0, 0.4], [999_999, 0.1]]}]})).unwrap();
+    assert!((opacity(&s, 1, "A") - 0.4).abs() < 1e-5);
+    assert_eq!(doc(&s).frame_animation.as_ref().unwrap().frames[1].opacities.len(), 1, "an unknown layer is dropped, a known one recorded");
+    assert!(s.execute("animation.pasteFrames", json!({"frames": [{"opacities": [[1]]}]})).is_err());
+}
+
+#[test]
+fn frames_read_from_info_paste_back_with_their_fades() {
+    let mut s = session(&["A"]);
+    s.execute("animation.create", json!({})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("layer.setProps", json!({"layer": a.0, "opacity": 0.3})).unwrap();
+    let info = s.execute("animation.info", json!({})).unwrap();
+    let frame = info["animation"]["frames"][0].clone();
+    assert!(frame["opacities"].as_array().is_some_and(|o| o.iter().any(|p| p[0] == a.0 && (p[1].as_f64().unwrap() - 0.3).abs() < 1e-5)), "{frame}");
+    s.execute("animation.pasteFrames", json!({"frames": [frame]})).unwrap();
+    assert!((opacity(&s, 1, "A") - 0.3).abs() < 1e-5, "the copy keeps the fade");
+}
+
+#[test]
+fn an_edit_in_one_frame_leaves_the_other_frames_shared_and_tweens_store_only_what_fades() {
+    let mut s = session(&["A", "B", "C"]);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 10})).unwrap();
+    let before = doc(&s).frame_animation.clone().unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let c = id_of(&s, "C");
+    s.execute("layer.showLayers", json!({"layer": c.0})).unwrap();
+    let after = doc(&s).frame_animation.clone().unwrap();
+    let shared: Vec<bool> = before.frames.iter().zip(&after.frames).map(|(x, y)| Arc::ptr_eq(x, y)).collect();
+    assert_eq!(shared, [true, false, true, true], "only the edited frame was copied");
+    // A tween fades the layers that differ; the frames it makes record those and nothing else.
+    s.execute("animation.selectFrame", json!({"frame": 2})).unwrap();
+    s.execute("animation.tween", json!({"with": "previous", "frames": 2})).unwrap();
+    let a = doc(&s).frame_animation.as_ref().unwrap();
+    for f in &a.frames[2..4] {
+        assert!(f.opacities.len() <= 3, "{:?}", f.opacities);
+    }
+    assert!(a.frames[0].opacities.is_empty() && a.frames[1].opacities.is_empty());
+}

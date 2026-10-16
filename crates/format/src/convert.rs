@@ -640,6 +640,8 @@ impl Loader<'_> {
             } else {
                 a.remap_layers(|l| self.id_map.get(&l.0).copied());
             }
+            // Frames saved without opacities (older files) show every layer at the opacity it has.
+            a.fill_opacities(&layers);
             // The layers show the selected frame, whatever the manifest's layers say.
             a.apply(a.current, &mut layers);
         }

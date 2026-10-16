@@ -108,19 +108,21 @@ fn import_gif_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, I
         }
         let doc = &mut r.document;
         let ids: Vec<_> = doc.layers.iter().map(|l| l.id).collect();
-        let animation = photocraft_doc::FrameAnimation {
+        let mut animation = photocraft_doc::FrameAnimation {
             frames: delays
                 .iter()
                 .enumerate()
                 .map(|(shown, &delay_ms)| {
                     let mut hidden: Vec<_> = ids.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, id)| *id).collect();
                     hidden.sort();
-                    std::sync::Arc::new(photocraft_doc::AnimFrame { delay_ms, hidden })
+                    std::sync::Arc::new(photocraft_doc::AnimFrame { delay_ms, hidden, ..Default::default() })
                 })
                 .collect(),
             current: 0,
             loops: gif_loop_count(bytes),
+            defaults: Default::default(),
         };
+        animation.fill_opacities(&doc.layers);
         animation.apply(0, &mut doc.layers);
         doc.frame_animation = Some(animation);
     }

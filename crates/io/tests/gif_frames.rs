@@ -136,7 +136,8 @@ fn an_animated_export_can_be_cancelled_between_frames_and_is_bounded() {
     use photocraft_io::gif_anim::{MAX_STAGED_BYTES, export_stepped};
     let animated = |side: u32, n: usize| {
         let mut d = Document::new("a", photocraft_geom::Size { width: side, height: side }, ColorMode::Rgb, SampleType::U8);
-        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever });
+        d.frame_animation =
+            Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
         d
     };
     // Stopping at the second step stops the export with `Cancelled`, having rendered one frame.
@@ -161,7 +162,7 @@ fn unnormalised_loop_counts_export_as_they_are_defined() {
     use photocraft_io::gif_anim::export_stepped;
     let bytes = |loops: LoopCount| {
         let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
-        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops });
+        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops, defaults: Default::default() });
         export_stepped(&d, &mut |_, _| true).unwrap().unwrap()
     };
     let repeats = |g: &[u8]| g.windows(11).position(|w| w == b"NETSCAPE2.0").map(|i| u16::from_le_bytes([g[i + 13], g[i + 14]]));
@@ -215,7 +216,8 @@ fn tagged(mode: photocraft_doc::ColorMode, icc: Vec<u8>, colour: &[f32]) -> phot
     l.surface_mut().unwrap().fill_rect(d.bounds(), colour);
     d.layers = vec![l];
     d.icc_profile = Some(std::sync::Arc::new(icc));
-    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever });
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
     d
 }
 
@@ -274,7 +276,8 @@ fn an_export_that_cannot_be_held_at_once_is_refused_and_compression_can_be_cance
     use photocraft_io::gif_anim::{MAX_STAGED_BYTES, WORKING_BYTES_PER_PIXEL, export_stepped};
     let animated = |side: u32, n: usize| {
         let mut d = Document::new("a", photocraft_geom::Size { width: side, height: side }, ColorMode::Rgb, SampleType::U8);
-        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever });
+        d.frame_animation =
+            Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
         d
     };
     // One frame of 4500 × 4500 is within the old frame limit, but rendering it takes more than the budget.

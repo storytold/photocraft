@@ -3265,3 +3265,6 @@ curves	Smooth	Lisser
 	{n} frames	{n} images
 	Frames before	Images avant
 	Frames after	Images après
+	Tween	Interpolation
+	Last frame	Dernière image
+	Frames to add	Images à ajouter

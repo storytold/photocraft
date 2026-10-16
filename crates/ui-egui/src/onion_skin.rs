@@ -2,8 +2,10 @@
 //! earlier ones tinted red and the later ones green, so the next pose can be drawn against them.
 //! It only changes what the canvas shows; nothing is saved or exported.
 
+use std::sync::Arc;
+
 use egui::{Color32, TextureHandle, TextureOptions};
-use photocraft_doc::{AnimFrame, DocId, Document, FrameAnimation, LayerId, layer_ids};
+use photocraft_doc::{AnimFrame, DocId, Document, FrameAnimation, Layer, LayerId};
 use serde::{Deserialize, Serialize};
 
 use crate::PhotocraftApp;
@@ -63,9 +65,16 @@ pub fn ghost_tint(s: OnionSkin, distance: u32, earlier: bool) -> Color32 {
     base.gamma_multiply(alpha)
 }
 
+/// What a ghost was drawn from: the ghost frame's hidden layers and opacities, the shown frame's, and the pixel version.
+type GhostKey = (Vec<LayerId>, Vec<(LayerId, f32)>, Vec<LayerId>, Vec<(LayerId, f32)>, u64);
+
+fn ghost_key(a: &FrameAnimation, i: usize, epoch: u64) -> GhostKey {
+    let (ghost, shown) = (&a.frames[i], &a.frames[a.current]);
+    (ghost.hidden.clone(), ghost.opacities.clone(), shown.hidden.clone(), shown.opacities.clone(), epoch)
+}
+
 struct Ghost {
-    /// The layers the ghost frame and the shown frame hid when this was drawn, and the pixel version.
-    key: (Vec<LayerId>, Vec<LayerId>, u64),
+    key: GhostKey,
     tex: TextureHandle,
 }
 
@@ -125,7 +134,7 @@ pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Ve
         // One new ghost per UI frame, so stepping through a long animation stays smooth.
         let mut budget = 1;
         for &(i, distance, earlier) in &wanted {
-            let key = (a.frames[i].hidden.clone(), a.frames[a.current].hidden.clone(), c.epoch);
+            let key = ghost_key(a, i, c.epoch);
             if c.ghosts.get(&i).is_none_or(|g| g.key != key) {
                 if budget == 0 {
                     ctx.request_repaint();
@@ -145,24 +154,40 @@ pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Ve
 }
 
 /// What a ghost of frame `i` shows while frame `current` is on the canvas: the layers that look different
-/// there (shown in one and not the other). A layer both frames show the same
+/// there (shown in one and not the other, or at another opacity). A layer both frames show the same
 /// way, such as an opaque Background, would only wash out what is drawn on top of it.
-pub fn ghost_frame(all: &std::collections::HashSet<LayerId>, a: &FrameAnimation, i: usize) -> AnimFrame {
+pub fn ghost_frame(layers: &[Layer], a: &FrameAnimation, i: usize) -> AnimFrame {
     let (ghost, now) = (&a.frames[i], &a.frames[a.current]);
-    let differs = |id: &LayerId| {
-        let shown_there = ghost.hidden.binary_search(id).is_err();
-        let shown_now = now.hidden.binary_search(id).is_err();
-        shown_there && !shown_now
+    let differs = |id: LayerId| {
+        let shown_there = ghost.hidden.binary_search(&id).is_err();
+        let shown_now = now.hidden.binary_search(&id).is_err();
+        shown_there && (!shown_now || a.opacity_in(ghost, id).zip(a.opacity_in(now, id)).is_some_and(|(x, y)| (x - y).abs() > 0.001))
     };
-    let mut hidden: Vec<LayerId> = all.iter().filter(|id| !differs(id)).copied().collect();
+    // A group that holds a layer which differs stays shown, whatever the group itself does, or the
+    // compositor would skip the layer inside it.
+    fn walk(layers: &[Layer], differs: &dyn Fn(LayerId) -> bool, hidden: &mut Vec<LayerId>) -> bool {
+        let mut any = false;
+        for l in layers {
+            let inside = l.children().is_some_and(|c| walk(c, differs, hidden));
+            let shown = differs(l.id) || inside;
+            if !shown {
+                hidden.push(l.id);
+            }
+            any |= shown;
+        }
+        any
+    }
+    let mut hidden = Vec::new();
+    walk(layers, &differs, &mut hidden);
     hidden.sort();
-    AnimFrame { delay_ms: 0, hidden }
+    AnimFrame { delay_ms: 0, hidden, opacities: ghost.opacities.clone() }
 }
 
 /// Frame `i` of the animation as a ghost, composited and reduced.
 fn render(ctx: &egui::Context, doc: &Document, a: &FrameAnimation, i: usize, reuse: Option<TextureHandle>) -> TextureHandle {
     let mut d = doc.clone();
-    let only = FrameAnimation { frames: vec![std::sync::Arc::new(ghost_frame(&layer_ids(&d.layers), a, i))], current: 0, loops: Default::default() };
+    let only =
+        FrameAnimation { frames: vec![Arc::new(ghost_frame(&d.layers, a, i))], current: 0, loops: Default::default(), defaults: Arc::clone(&a.defaults) };
     only.apply(0, &mut d.layers);
     let img = photocraft_compose::thumbnail(&d, GHOST_SIDE);
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
@@ -189,14 +214,19 @@ mod tests {
 
     #[test]
     fn a_ghost_shows_only_what_differs_from_the_shown_frame() {
-        let all: std::collections::HashSet<LayerId> = [1, 2].map(LayerId).into();
+        let all = [layer(1), layer(2)];
+        let frame = |hidden: Vec<LayerId>, op2: f32| Arc::new(AnimFrame { delay_ms: 0, hidden, opacities: vec![(LayerId(1), 1.0), (LayerId(2), op2)] });
         // Layer 1 (a Background) is shown in both frames; layer 2 only in the ghost frame.
         let a = FrameAnimation {
-            frames: vec![AnimFrame { delay_ms: 0, hidden: vec![] }.into(), AnimFrame { delay_ms: 0, hidden: vec![LayerId(2)] }.into()],
+            frames: vec![frame(vec![], 1.0), frame(vec![LayerId(2)], 1.0)],
             current: 1,
             loops: Default::default(),
+            defaults: Default::default(),
         };
         assert_eq!(ghost_frame(&all, &a, 0).hidden, [LayerId(1)], "the shared Background stays out of the ghost");
+        // A layer both frames show at different opacities (a fade) is part of the ghost.
+        let fade = FrameAnimation { frames: vec![frame(vec![], 1.0), frame(vec![], 0.4)], current: 1, loops: Default::default(), defaults: Default::default() };
+        assert_eq!(ghost_frame(&all, &fade, 0).hidden, [LayerId(1)]);
         // A frame ghosted against itself shows nothing.
         let same = FrameAnimation { current: 0, ..a.clone() };
         assert_eq!(ghost_frame(&all, &same, 0).hidden.len(), 2);
@@ -214,5 +244,35 @@ mod tests {
         let (near, far) = (ghost_tint(s, 1, true), ghost_tint(s, 2, true));
         assert!(near.a() > far.a());
         assert_ne!(ghost_tint(s, 1, true), ghost_tint(s, 1, false));
+    }
+
+    fn layer(id: u64) -> Layer {
+        let mut l = Layer::group("L", Vec::new());
+        l.id = LayerId(id);
+        l
+    }
+
+    #[test]
+    fn a_ghost_keeps_the_group_around_a_layer_that_differs() {
+        // Group 1 is shown in both frames; the layer inside it, 2, only in the ghost frame.
+        let mut group = layer(1);
+        if let Some(c) = group.children_mut() {
+            c.push(layer(2));
+        }
+        let frame = |hidden: Vec<LayerId>| Arc::new(AnimFrame { delay_ms: 0, hidden, opacities: vec![] });
+        let a = FrameAnimation { frames: vec![frame(vec![]), frame(vec![LayerId(2)])], current: 1, loops: Default::default(), defaults: Default::default() };
+        assert!(ghost_frame(&[group], &a, 0).hidden.is_empty(), "the group stays shown, or its child would never draw");
+    }
+
+    #[test]
+    fn a_ghost_is_redrawn_when_only_a_fade_differs() {
+        let frame = |op: f32| Arc::new(AnimFrame { delay_ms: 0, hidden: vec![], opacities: vec![(LayerId(1), op)] });
+        // Tweened frames hide the same layers and differ only in opacity.
+        let mut a = FrameAnimation { frames: vec![frame(0.2), frame(0.5), frame(0.8)], current: 2, loops: Default::default(), defaults: Default::default() };
+        let before = ghost_key(&a, 0, 7);
+        a.current = 1;
+        assert_ne!(before, ghost_key(&a, 0, 7), "the shown frame's fade changed what the ghost differs by");
+        a.frame_mut(0).unwrap().opacities[0].1 = 0.3;
+        assert_ne!(ghost_key(&a, 0, 7), before, "so did the ghost frame's own");
     }
 }

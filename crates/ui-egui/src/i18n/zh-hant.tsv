@@ -2866,3 +2866,6 @@ curves	Smooth	平滑
 	{n} frames	{n} 個影格
 	Frames before	之前的影格
 	Frames after	之後的影格
+	Tween	轉場
+	Last frame	最後一個影格
+	Frames to add	要新增的影格數

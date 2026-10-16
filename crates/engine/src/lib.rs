@@ -129,6 +129,7 @@ mod variables_cmds;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub mod vector_cmds;
 mod video_cmds;
+pub use animation_cmds::MAX_TWEEN;
 pub use video_cmds::render_video_with;
 pub mod vp_cmds;
 pub mod warp_cmds;

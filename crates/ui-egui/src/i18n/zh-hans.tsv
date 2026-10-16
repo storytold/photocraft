@@ -2881,3 +2881,6 @@ curves	Smooth	平滑
 	{n} frames	{n} 帧
 	Frames before	之前的帧
 	Frames after	之后的帧
+	Tween	过渡
+	Last frame	最后一帧
+	Frames to add	要添加的帧数

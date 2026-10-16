@@ -581,3 +581,35 @@ fn no_onion_ghosts_are_drawn_while_playing() {
     h.state_mut().ui.timeline.playing = true;
     assert!(crate::onion_skin::ghosts(h.state(), &h.ctx, active).is_empty());
 }
+
+#[test]
+fn the_tween_menu_adds_frames_between_two() {
+    let mut h = harness();
+    assert!(h.query_all_by_label_contains("Tween").next().is_none(), "not on the bar by default");
+    h.state_mut().ui.timeline.show_tween = true;
+    h.run_steps(3);
+    h.state_mut().run("animation.selectFrame", json!({"frame": 1})).unwrap();
+    h.run_steps(3);
+    h.query_all_by_label_contains("Tween").next().expect("the Tween button").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Frames to add").is_some(), "the menu opened");
+    // The count starts at 3; tween with the previous frame.
+    let items: Vec<_> = h.query_all_by_label("Previous frame").collect();
+    items.last().expect("the menu's Previous frame item").click();
+    h.run_steps(4);
+    let a = anim(&h);
+    assert_eq!(a.frames.len(), 6, "three frames added to the three");
+    assert_eq!(a.current, 3, "the last new frame is shown");
+    assert_eq!(selected(&h), [1, 2, 3]);
+}
+
+#[test]
+fn the_options_menu_turns_the_tween_menu_on() {
+    let mut h = harness();
+    h.get_by_label("Options").click();
+    h.run_steps(4);
+    h.query_all_by_label_contains("Tween").next().expect("the checkbox").click();
+    h.run_steps(4);
+    assert!(h.state().ui.timeline.show_tween);
+    assert!(!h.state().ui.timeline.show_onion, "each tool has its own switch");
+}

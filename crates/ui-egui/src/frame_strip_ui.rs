@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
-use photocraft_doc::{Document, FrameAnimation, LayerId, LoopCount};
+use photocraft_doc::{AnimFrame, Document, FrameAnimation, LayerId, LoopCount};
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
@@ -23,7 +23,7 @@ pub type Act = (&'static str, Value);
 
 struct Thumb {
     /// The layers the frame hid when this was drawn.
-    key: Vec<LayerId>,
+    key: (Vec<LayerId>, Vec<(LayerId, f32)>),
     /// Still shows what the document looks like now.
     fresh: bool,
     tex: TextureHandle,
@@ -95,6 +95,11 @@ pub(crate) fn continues_navigation(seen_rev: u64, nav_rev: Option<u64>, rev: u64
     rev.checked_sub(1).is_some_and(|prev| prev == seen_rev || nav_rev == Some(prev))
 }
 
+/// Whether a thumbnail made with `key` still shows `frame`: tweened frames differ only in their opacities.
+fn drawn_from(key: &(Vec<LayerId>, Vec<(LayerId, f32)>), frame: &AnimFrame) -> bool {
+    key.0 == frame.hidden && key.1 == frame.opacities
+}
+
 /// Redraws a few thumbnails (see `thumbs_per_frame`) that are missing or stale.
 fn refresh_thumbs(ctx: &egui::Context, doc: &Arc<Document>, revision: u64, no_damage: bool, a: &FrameAnimation) {
     with_cache(ctx, |c| {
@@ -113,7 +118,7 @@ fn refresh_thumbs(ctx: &egui::Context, doc: &Arc<Document>, revision: u64, no_da
         let mut budget = thumbs_per_frame(u64::from(doc.size.width) * u64::from(doc.size.height));
         for (i, frame) in a.frames.iter().enumerate() {
             let stale = match c.thumbs.get(i).and_then(Option::as_ref) {
-                Some(t) => !t.fresh || t.key != frame.hidden,
+                Some(t) => !t.fresh || !drawn_from(&t.key, frame),
                 None => true,
             };
             if !stale {
@@ -133,13 +138,13 @@ fn refresh_thumbs(ctx: &egui::Context, doc: &Arc<Document>, revision: u64, no_da
             match slot {
                 Some(t) => {
                     t.tex.set(color, TextureOptions::LINEAR);
-                    t.key = frame.hidden.clone();
+                    t.key = (frame.hidden.clone(), frame.opacities.clone());
                     t.fresh = true;
                     t.size = size;
                 }
                 None => {
                     let tex = ctx.load_texture(format!("frame-thumb-{i}"), color, TextureOptions::LINEAR);
-                    *slot = Some(Thumb { key: frame.hidden.clone(), fresh: true, tex, size });
+                    *slot = Some(Thumb { key: (frame.hidden.clone(), frame.opacities.clone()), fresh: true, tex, size });
                 }
             }
         }
@@ -266,6 +271,8 @@ pub struct Strip<'a> {
     pub onion: crate::onion_skin::OnionSkin,
     /// Whether the Onion Skin menu is shown (Options menu in the panel header).
     pub show_onion: bool,
+    /// Whether the Tween menu is shown.
+    pub show_tween: bool,
     pub onion_out: &'a mut Option<crate::onion_skin::OnionSkin>,
     /// A click on a frame, to turn into a selection.
     pub clicked: &'a mut Option<(usize, Click)>,
@@ -275,7 +282,7 @@ pub struct Strip<'a> {
 
 /// Draws the strip and its bar.
 pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
-    let Strip { doc, revision, no_damage, animation: a, selection, playing, acts, onion, show_onion, onion_out, clicked, toggle_play } = strip;
+    let Strip { doc, revision, no_damage, animation: a, selection, playing, acts, onion, show_onion, show_tween, onion_out, clicked, toggle_play } = strip;
     let t = Tokens::get(ctx);
     refresh_thumbs(ctx, doc, revision, no_damage, a);
 
@@ -335,6 +342,9 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         loop_menu(ui, a.loops, acts);
+        if show_tween {
+            tween_menu(ui, acts);
+        }
         if show_onion {
             onion_menu(ui, onion, onion_out);
         }
@@ -490,6 +500,26 @@ fn loop_menu(ui: &mut egui::Ui, loops: LoopCount, acts: &mut Vec<Act>) {
     });
 }
 
+/// The Tween menu: how many frames to add, then which frame to tween the selected one with.
+fn tween_menu(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+    drop_menu(ui, tl!("Tween"), |ui| {
+        let id = ui.id().with("tween-count");
+        let mut count: u32 = ui.data_mut(|d| d.get_temp(id)).unwrap_or(3);
+        ui.horizontal(|ui| {
+            ui.label(tl!("Frames to add"));
+            ui.add(egui::DragValue::new(&mut count).range(1..=photocraft_engine::MAX_TWEEN as u32));
+        });
+        ui.data_mut(|d| d.insert_temp(id, count));
+        ui.separator();
+        for (with, label) in [("previous", tl!("Previous frame")), ("next", tl!("Next frame")), ("first", tl!("First frame")), ("last", tl!("Last frame"))] {
+            if ui.button(label).clicked() {
+                acts.push(("animation.tween", json!({ "with": with, "frames": count })));
+                ui.close();
+            }
+        }
+    });
+}
+
 /// The onion-skin menu: on or off, how many neighbouring frames to show and how strongly.
 fn onion_menu(ui: &mut egui::Ui, onion: crate::onion_skin::OnionSkin, out: &mut Option<crate::onion_skin::OnionSkin>) {
     drop_menu(ui, tl!("Onion Skin"), |ui| {
@@ -556,6 +586,14 @@ pub fn empty(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_thumbnail_is_stale_when_only_the_fade_differs() {
+        let frame = |op: f32| AnimFrame { delay_ms: 0, hidden: vec![], opacities: vec![(LayerId(1), op)] };
+        let key = (vec![], vec![(LayerId(1), 0.5)]);
+        assert!(drawn_from(&key, &frame(0.5)));
+        assert!(!drawn_from(&key, &frame(0.6)), "a reorder of tweened frames leaves each index a different fade");
+    }
 
     #[test]
     fn delays_read_like_photoshops() {
