@@ -348,3 +348,154 @@ fn clicking_the_other_field_keeps_the_delay_menu_open_for_typing() {
     assert_eq!(anim(&h).frames[0].delay_ms, 1500);
     assert!(h.query_by_label("Other…").is_none(), "Enter applies it and closes the menu");
 }
+
+/// Clicks frame `i` of the strip with `modifiers` held.
+fn click_frame(h: &mut Harness<'static, PhotocraftApp>, r: egui::Rect, i: usize, modifiers: egui::Modifiers) {
+    let pos = egui::pos2(r.left() + 42.0 + i as f32 * 90.0, r.top() + 62.0);
+    h.event_modifiers(egui::Event::PointerMoved(pos), modifiers);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event_modifiers(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers }, modifiers);
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+}
+
+fn selected(h: &Harness<'static, PhotocraftApp>) -> Vec<usize> {
+    crate::timeline_ui::selection(h.state()).into_iter().collect()
+}
+
+fn five_frames() -> Harness<'static, PhotocraftApp> {
+    let mut h = harness();
+    for (i, s) in [1.0, 2.0, 3.0].iter().enumerate() {
+        h.state_mut().run("animation.setDelay", json!({"seconds": s, "frames": [i]})).unwrap();
+    }
+    h.state_mut().run("animation.newFrame", json!({"frames": [1, 2]})).unwrap();
+    h.state_mut().run("animation.selectFrame", json!({"frame": 0})).unwrap();
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn ctrl_and_shift_clicks_select_several_frames() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 1, egui::Modifiers::NONE);
+    assert_eq!(selected(&h), [1]);
+    click_frame(&mut h, r, 3, egui::Modifiers::COMMAND);
+    assert_eq!(selected(&h), [1, 3]);
+    assert_eq!(anim(&h).current, 3);
+    click_frame(&mut h, r, 3, egui::Modifiers::COMMAND);
+    assert_eq!(selected(&h), [1], "a second ⌘-click takes it out");
+    click_frame(&mut h, r, 4, egui::Modifiers::SHIFT);
+    assert_eq!(selected(&h), [1, 2, 3, 4], "⇧-click runs from the anchor");
+}
+
+#[test]
+fn commands_cover_every_selected_frame() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 1, egui::Modifiers::NONE);
+    click_frame(&mut h, r, 2, egui::Modifiers::SHIFT);
+    // Copy both, paste after the last selected one.
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.timeline.clipboard.len(), 2);
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    let delays = |h: &Harness<'static, PhotocraftApp>| anim(h).frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>();
+    assert_eq!(delays(&h), [1000, 2000, 3000, 2000, 3000, 2000, 3000]);
+    assert_eq!(selected(&h), [3, 4], "the pasted frames are selected");
+    // Delete the selection.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(delays(&h), [1000, 2000, 3000, 2000, 3000]);
+    // Select all: deleting every frame is refused.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(selected(&h), [0, 1, 2, 3, 4]);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(anim(&h).frames.len(), 5, "deleting every frame is refused");
+}
+
+#[test]
+fn dragging_one_of_the_selected_frames_moves_them_all() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 0, egui::Modifiers::NONE);
+    click_frame(&mut h, r, 1, egui::Modifiers::SHIFT);
+    let y = r.top() + 62.0;
+    let cell = |i: usize| egui::pos2(r.left() + 42.0 + i as f32 * 90.0, y);
+    h.event(egui::Event::PointerMoved(cell(0)));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: cell(0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    for step in 1..=8 {
+        let x = cell(0).x + (cell(4).x + 30.0 - cell(0).x) * step as f32 / 8.0;
+        h.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(cell(4).x + 30.0, y),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    let delays: Vec<u32> = anim(&h).frames.iter().map(|f| f.delay_ms).collect();
+    assert_eq!(delays, [3000, 2000, 3000, 1000, 2000]);
+    assert_eq!(selected(&h), [3, 4]);
+}
+
+#[test]
+fn a_selection_belongs_to_its_document() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 1, egui::Modifiers::NONE);
+    click_frame(&mut h, r, 3, egui::Modifiers::SHIFT);
+    assert_eq!(selected(&h), [1, 2, 3]);
+    // A second document with an animation: it starts with just its own shown frame.
+    let mut s2 = photocraft_engine::Session::new();
+    s2.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s2.execute("layer.new.layer", json!({"name": "X"})).unwrap();
+    s2.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s2.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let other = s2.active().unwrap().doc.clone();
+    h.state_mut().session.active_mut().unwrap().doc = other;
+    h.run_steps(3);
+    assert_eq!(selected(&h), [1], "frames 1..3 were selected in the other document");
+}
+
+#[test]
+fn a_shift_click_range_starts_from_this_documents_anchor() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 4, egui::Modifiers::NONE);
+    assert_eq!(h.state().ui.timeline.anchor, 4);
+    // Switch to a document with three frames: the old anchor (4) is past its end and isn't its own.
+    let mut s2 = photocraft_engine::Session::new();
+    s2.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s2.execute("layer.new.layer", json!({"name": "X"})).unwrap();
+    s2.execute("layer.new.layer", json!({"name": "Y"})).unwrap();
+    s2.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s2.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let other = s2.active().unwrap().doc.clone();
+    h.state_mut().session.active_mut().unwrap().doc = other;
+    h.run_steps(3);
+    click_frame(&mut h, r, 2, egui::Modifiers::SHIFT);
+    assert_eq!(selected(&h), [1, 2], "the range runs from the shown frame, not from the other document's anchor");
+}
+
+#[test]
+fn reversing_the_frames_keeps_the_selection_with_its_frames() {
+    let mut h = five_frames();
+    let r = hover_panel(&mut h);
+    click_frame(&mut h, r, 0, egui::Modifiers::NONE);
+    click_frame(&mut h, r, 1, egui::Modifiers::SHIFT);
+    assert_eq!(selected(&h), [0, 1]);
+    let ctx = h.ctx.clone();
+    crate::timeline_ui::act(h.state_mut(), &ctx, "animation.reverseFrames", json!({}));
+    h.run_steps(2);
+    assert_eq!(selected(&h), [3, 4], "the same two frames, now at the other end");
+}

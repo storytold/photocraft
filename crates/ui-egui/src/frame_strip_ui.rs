@@ -2,6 +2,7 @@
 //! with its delay under it; the bar below holds the loop count, transport, and duplicate/delete.
 //! Everything runs the engine `animation.*` commands, so the control channel drives it the same way.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
@@ -190,9 +191,47 @@ pub fn drop_slot(centers: &[f32], x: f32) -> usize {
     centers.iter().take_while(|c| **c < x).count()
 }
 
-/// The index frame `from` ends up at when dropped into gap `slot` (`animation.moveFrame`'s `to`).
-pub fn move_target(from: usize, slot: usize) -> usize {
-    if slot > from { slot - 1 } else { slot }
+/// How a click on a frame changes the selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Click {
+    /// Selects just that frame.
+    Plain,
+    /// ⌘/Ctrl: adds the frame to the selection, or takes it out.
+    Toggle,
+    /// ⇧: selects every frame from the anchor to that frame.
+    Range,
+}
+
+/// The selection after `click` on frame `i`: the selected frames, the selected (shown) frame and the
+/// anchor a later range starts from.
+pub fn click_selection(sel: &BTreeSet<usize>, current: usize, anchor: usize, i: usize, click: Click) -> (BTreeSet<usize>, usize, usize) {
+    match click {
+        Click::Plain => (BTreeSet::from([i]), i, i),
+        Click::Range => ((anchor.min(i)..=anchor.max(i)).collect(), i, anchor),
+        Click::Toggle if sel.contains(&i) && sel.len() > 1 => {
+            let mut rest = sel.clone();
+            rest.remove(&i);
+            let now = if i == current { rest.iter().next_back().copied().unwrap_or(i) } else { current };
+            (rest, now, now)
+        }
+        Click::Toggle => {
+            let mut more = sel.clone();
+            more.insert(i);
+            (more, i, i)
+        }
+    }
+}
+
+/// The frames a command on frame `i` covers: the whole selection when `i` is in it, else just `i`.
+pub fn targets(sel: &BTreeSet<usize>, i: usize) -> Vec<usize> {
+    if sel.contains(&i) { sel.iter().copied().collect() } else { vec![i] }
+}
+
+/// Would dropping `group` into gap `slot` leave the frames as they are?
+pub fn is_noop_drop(group: &[usize], slot: usize) -> bool {
+    let (Some(first), Some(last)) = (group.first(), group.last()) else { return true };
+    let contiguous = last - first + 1 == group.len();
+    contiguous && (*first..=*last + 1).contains(&slot)
 }
 
 /// Id of the frame being dragged, kept in egui memory between frames.
@@ -213,27 +252,32 @@ pub struct Strip<'a> {
     /// The latest revision changed no pixels (its damage is empty): a rename, a selection, a lock.
     pub no_damage: bool,
     pub animation: &'a FrameAnimation,
+    /// The selected frames (always including the shown one).
+    pub selection: &'a BTreeSet<usize>,
     pub playing: bool,
     /// Commands the user asked for.
     pub acts: &'a mut Vec<Act>,
+    /// A click on a frame, to turn into a selection.
+    pub clicked: &'a mut Option<(usize, Click)>,
     /// Set when Play or Pause was pressed.
     pub toggle_play: &'a mut bool,
 }
 
 /// Draws the strip and its bar.
 pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
-    let Strip { doc, revision, no_damage, animation: a, playing, acts, toggle_play } = strip;
+    let Strip { doc, revision, no_damage, animation: a, selection, playing, acts, clicked, toggle_play } = strip;
     let t = Tokens::get(ctx);
     refresh_thumbs(ctx, doc, revision, no_damage, a);
 
-    let dragging: Option<usize> = ctx.data(|d| d.get_temp(drag_id()));
+    let dragging: Option<(usize, Vec<usize>)> = ctx.data(|d| d.get_temp(drag_id()));
     egui::ScrollArea::horizontal().id_salt("frame-strip").auto_shrink([false, true]).show(ui, |ui| {
         let mut cells: Vec<Rect> = Vec::with_capacity(a.frames.len());
         ui.horizontal(|ui| {
             for (i, frame) in a.frames.iter().enumerate() {
                 ui.vertical(|ui| {
                     ui.set_width(CELL_W);
-                    let selected = i == a.current;
+                    let shown = i == a.current;
+                    let selected = selection.contains(&i);
                     let (rect, resp) = ui.allocate_exact_size(vec2(CELL_W, 66.0), Sense::click_and_drag());
                     cells.push(rect);
                     let fill = if selected { t.accent_soft } else { t.field };
@@ -248,25 +292,34 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
                     }
                     ui.painter().text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, (i + 1).to_string(), FontId::monospace(11.0), t.text);
                     if selected {
-                        ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+                        ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(if shown { 2.0 } else { 1.0 }, t.accent), StrokeKind::Inside);
                     }
                     if resp.clicked() || (resp.drag_started() && !selected) {
-                        acts.push(("animation.selectFrame", json!({ "frame": i })));
+                        let mods = ui.input(|inp| inp.modifiers);
+                        let kind = if mods.shift {
+                            Click::Range
+                        } else if mods.command || mods.ctrl {
+                            Click::Toggle
+                        } else {
+                            Click::Plain
+                        };
+                        *clicked = Some((i, if resp.drag_started() { Click::Plain } else { kind }));
                     }
                     if resp.drag_started() {
-                        ctx.data_mut(|d| d.insert_temp(drag_id(), i));
+                        // Dragging a selected frame carries the whole selection; any other frame alone.
+                        ctx.data_mut(|d| d.insert_temp(drag_id(), (i, targets(selection, i))));
                     }
-                    if dragging == Some(i) {
+                    if dragging.as_ref().is_some_and(|(_, g)| g.contains(&i)) {
                         // The frame being carried stays put, dimmed, until it is dropped.
                         ui.painter().rect_filled(rect, t.radius_sm, t.chrome.gamma_multiply(0.5));
                     }
-                    delay_menu(ui, i, frame.delay_ms, acts);
+                    delay_menu(ui, targets(selection, i), frame.delay_ms, acts);
                 });
                 ui.add_space(2.0);
             }
         });
-        if let Some(from) = dragging {
-            drag_frame(ui, ctx, &cells, from, acts);
+        if let Some((from, group)) = dragging {
+            drag_frame(ui, ctx, &cells, from, &group, acts);
         }
     });
     ui.add_space(4.0);
@@ -299,11 +352,14 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete Selected Frame")).clicked() {
                 // The last frame can't go: deleting it removes the animation, as Photoshop's does.
-                let cmd = if a.frames.len() > 1 { "animation.deleteFrame" } else { "animation.delete" };
-                acts.push((cmd, json!({})));
+                if a.frames.len() == 1 {
+                    acts.push(("animation.delete", json!({})));
+                } else if selection.len() < a.frames.len() {
+                    acts.push(("animation.deleteFrame", json!({ "frames": targets(selection, a.current) })));
+                }
             }
             if crate::icons::button(ui, "copy", 22.0, false, tl!("Duplicate Selected Frame")).clicked() {
-                acts.push(("animation.newFrame", json!({})));
+                acts.push(("animation.newFrame", json!({ "frames": targets(selection, a.current) })));
             }
         });
     });
@@ -311,9 +367,9 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
 
 /// The drag of frame `from`: scrolls the strip near its edges, marks the gap the frame would drop
 /// into, and moves it on release. Esc or a release away from the strip cancels.
-fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usize, acts: &mut Vec<Act>) {
+fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usize, group: &[usize], acts: &mut Vec<Act>) {
     let t = Tokens::get(ctx);
-    let end = |ctx: &egui::Context| ctx.data_mut(|d| d.remove::<usize>(drag_id()));
+    let end = |ctx: &egui::Context| ctx.data_mut(|d| d.remove::<(usize, Vec<usize>)>(drag_id()));
     let Some(pos) = ctx.pointer_interact_pos() else {
         end(ctx);
         return;
@@ -349,14 +405,14 @@ fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usiz
         let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("frame-strip-ghost"));
         let p = ui.ctx().layer_painter(layer);
         p.rect_filled(ghost, t.radius_sm, t.accent_soft.gamma_multiply(0.8));
-        p.text(ghost.center(), Align2::CENTER_CENTER, (from + 1).to_string(), FontId::monospace(14.0), t.text);
+        let label = if group.len() > 1 { format!("{} ×{}", from + 1, group.len()) } else { (from + 1).to_string() };
+        p.text(ghost.center(), Align2::CENTER_CENTER, label, FontId::monospace(14.0), t.text);
     }
     ctx.request_repaint();
     if ctx.input(|i| i.pointer.any_released()) {
         end(ctx);
-        let to = move_target(from, slot);
-        if inside && to != from {
-            acts.push(("animation.moveFrame", json!({ "from": from, "to": to })));
+        if inside && !is_noop_drop(group, slot) {
+            acts.push(("animation.moveFrames", json!({ "frames": group, "slot": slot })));
         }
     }
 }
@@ -374,10 +430,10 @@ fn drop_menu(ui: &mut egui::Ui, label: &str, add_contents: impl FnOnce(&mut egui
 }
 
 /// A frame's delay button and its menu: the presets, then a field for any other value.
-fn delay_menu(ui: &mut egui::Ui, frame: usize, delay_ms: u32, acts: &mut Vec<Act>) {
+fn delay_menu(ui: &mut egui::Ui, frames: Vec<usize>, delay_ms: u32, acts: &mut Vec<Act>) {
     drop_menu(ui, &delay_label(delay_ms), |ui| {
         let mut set = |ui: &mut egui::Ui, ms: u32| {
-            acts.push(("animation.setDelay", json!({ "delayMs": ms, "frames": [frame] })));
+            acts.push(("animation.setDelay", json!({ "delayMs": ms, "frames": frames })));
             ui.close();
         };
         if ui.selectable_label(delay_ms == 0, tl!("No delay")).clicked() {
@@ -500,9 +556,26 @@ mod tests {
         assert_eq!(drop_slot(&centers, 25.0), 1);
         assert_eq!(drop_slot(&centers, 500.0), 3);
         assert_eq!(drop_slot(&[], 5.0), 0);
-        // Dropping beside itself changes nothing; dropping past it lands one earlier.
-        assert_eq!((move_target(1, 1), move_target(1, 2)), (1, 1));
-        assert_eq!((move_target(0, 3), move_target(2, 0)), (2, 0));
+        // Dropping a group beside itself changes nothing; elsewhere it moves.
+        assert!(is_noop_drop(&[1], 1) && is_noop_drop(&[1], 2));
+        assert!(!is_noop_drop(&[1], 3) && !is_noop_drop(&[1], 0));
+        assert!(is_noop_drop(&[1, 2], 3) && !is_noop_drop(&[1, 3], 2), "a split group always moves");
+    }
+
+    #[test]
+    fn clicks_select_one_toggle_or_range() {
+        let none = BTreeSet::new();
+        assert_eq!(click_selection(&none, 0, 0, 2, Click::Plain), (BTreeSet::from([2]), 2, 2));
+        let sel = BTreeSet::from([1]);
+        assert_eq!(click_selection(&sel, 1, 1, 4, Click::Range), (BTreeSet::from([1, 2, 3, 4]), 4, 1));
+        assert_eq!(click_selection(&sel, 1, 1, 0, Click::Range), (BTreeSet::from([0, 1]), 0, 1), "a range can run backwards");
+        assert_eq!(click_selection(&sel, 1, 1, 3, Click::Toggle), (BTreeSet::from([1, 3]), 3, 3));
+        let two = BTreeSet::from([1, 3]);
+        assert_eq!(click_selection(&two, 3, 3, 3, Click::Toggle), (BTreeSet::from([1]), 1, 1), "taking out the shown frame shows another");
+        assert_eq!(click_selection(&two, 3, 3, 1, Click::Toggle), (BTreeSet::from([3]), 3, 3));
+        assert_eq!(click_selection(&sel, 1, 1, 1, Click::Toggle), (sel.clone(), 1, 1), "the last selected frame stays");
+        assert_eq!(targets(&two, 3), [1, 3]);
+        assert_eq!(targets(&two, 2), [2], "a frame outside the selection is alone");
     }
 
     #[test]
