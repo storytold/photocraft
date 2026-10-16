@@ -3932,3 +3932,5 @@ curves	Smooth	スムーズ
 	{seconds} sec.	{seconds} 秒
 	{count} times	{count} 回
 	{n} frames	{n} フレーム
+	Frames before	前のフレーム
+	Frames after	後のフレーム

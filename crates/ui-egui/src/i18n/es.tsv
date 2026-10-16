@@ -4217,3 +4217,5 @@ navigator	Zoom	Zoom
 	{seconds} sec.	{seconds} s
 	{count} times	{count} veces
 	{n} frames	{n} fotogramas
+	Frames before	Fotogramas anteriores
+	Frames after	Fotogramas posteriores

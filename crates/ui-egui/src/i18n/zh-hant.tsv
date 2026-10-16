@@ -2864,3 +2864,5 @@ curves	Smooth	平滑
 	{seconds} sec.	{seconds} 秒
 	{count} times	{count} 次
 	{n} frames	{n} 個影格
+	Frames before	之前的影格
+	Frames after	之後的影格

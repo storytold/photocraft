@@ -3200,21 +3200,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 paint_cpu_document(&painter, &pattern_xf(&xf, c, size), doc.bounds(), rotated, checkerboard, tex);
             }
         }
+        // Onion skin: the neighbouring animation frames, faint, over the document (onion_skin.rs).
+        for (tex, tint) in crate::onion_skin::ghosts(app, &ctx, doc.id) {
+            paint_overlay(&painter, &xf, tex, tint, [doc.size.width as f32, doc.size.height as f32], img_rect, flip);
+        }
         // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
         if let Some(tex) = crate::channel_view::ensure(app, &ctx, idx) {
-            if view.rotation.abs() > 0.05 {
-                paint_mapped_image(
-                    &painter,
-                    &xf,
-                    tex,
-                    Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                    [doc.size.width as f32, doc.size.height as f32],
-                    Color32::WHITE,
-                );
-            } else {
-                let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
-                painter.image(tex, img_rect, uv, Color32::WHITE);
-            }
+            paint_overlay(&painter, &xf, tex, Color32::WHITE, [doc.size.width as f32, doc.size.height as f32], img_rect, flip);
         }
         crate::color_range_ui::paint_selection_preview(app, &ctx, &painter, doc.id, img_rect, flip);
         // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
@@ -4325,6 +4317,16 @@ fn zoom_about(view: &mut View, xf: &ViewXform, p: Pos2, new_zoom: f32, center_on
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let u = xf.unmap_vec((p - xf.rect.center()) / (new_zoom / ppp));
     view.center = [before[0] as f32 - u.x, before[1] as f32 - u.y];
+}
+
+/// A document-sized texture over the canvas, rotated or flipped like the view.
+fn paint_overlay(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, tint: Color32, size: [f32; 2], img_rect: Rect, flip: bool) {
+    if xf.rotation.abs() > 0.05 {
+        paint_mapped_image(painter, xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), size, tint);
+    } else {
+        let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+        painter.image(tex, img_rect, uv, tint);
+    }
 }
 
 /// Textured document quad whose corners follow [`ViewXform`] (rotation + flip).

@@ -3437,3 +3437,5 @@ curves	Smooth	매끄럽게
 	{seconds} sec.	{seconds}초
 	{count} times	{count}회
 	{n} frames	프레임 {n}개
+	Frames before	이전 프레임
+	Frames after	이후 프레임

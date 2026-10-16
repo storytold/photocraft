@@ -28,6 +28,13 @@ pub struct TimelineUi {
     /// Frames copied with ⌘C, for ⌘V to paste after the selected frame.
     #[serde(default, skip)]
     pub clipboard: Vec<std::sync::Arc<photocraft_doc::AnimFrame>>,
+    /// Onion skin: neighbouring frames drawn faintly over the canvas.
+    #[serde(default)]
+    pub onion: crate::onion_skin::OnionSkin,
+    /// Shows the Onion Skin menu in the frame strip's bar (and so the onion skin itself); off by default
+    /// because not everyone animates by drawing frames.
+    #[serde(default)]
+    pub show_onion: bool,
     /// The selected frames of a frame animation (the shown frame is always among them).
     #[serde(default, skip)]
     pub sel: std::collections::BTreeSet<usize>,
@@ -73,6 +80,8 @@ struct Out {
     toggle_play: bool,
     toggle_float: bool,
     clicked: Option<(usize, crate::frame_strip_ui::Click)>,
+    onion: Option<crate::onion_skin::OnionSkin>,
+    show_onion: Option<bool>,
     rect: Option<egui::Rect>,
 }
 
@@ -93,6 +102,15 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                 out.close = true;
+            }
+            if anim.is_some() {
+                let more = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Options"));
+                egui::Popup::menu(&more).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                    let mut show = app.ui.timeline.show_onion;
+                    if ui.checkbox(&mut show, tl!("Onion Skin")).changed() {
+                        out.show_onion = Some(show);
+                    }
+                });
             }
             let (icon, tip) = if floating { ("panels-top-left", tl!("Dock Panel")) } else { ("app-window", tl!("Float Panel")) };
             if crate::icons::button(ui, icon, 20.0, false, tip).clicked() {
@@ -118,6 +136,9 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
                 selection: &selection,
                 playing,
                 acts: &mut out.acts,
+                onion: app.ui.timeline.onion,
+                show_onion: app.ui.timeline.show_onion,
+                onion_out: &mut out.onion,
                 clicked: &mut out.clicked,
                 toggle_play: &mut out.toggle_play,
             },
@@ -180,6 +201,12 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
     }
     if out.toggle_play {
         toggle_play(app, ctx);
+    }
+    if let Some(show) = out.show_onion {
+        app.ui.timeline.show_onion = show;
+    }
+    if let Some(onion) = out.onion {
+        app.ui.timeline.onion = onion;
     }
     if let Some((i, click)) = out.clicked {
         click_frame(app, ctx, i, click);
