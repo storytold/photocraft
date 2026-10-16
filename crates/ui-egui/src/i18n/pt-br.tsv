@@ -4381,3 +4381,5 @@ layerLabel	No Color	Sem cor
 	Tight Curl	Curva cerrada
 	Loose Curl	Curva solta
 	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	A visualização mostra a imagem antes da compactação. Arquivos AVIF não incluem perfil de cores nem metadados.

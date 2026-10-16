@@ -4180,3 +4180,5 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Önizleme, görüntüyü sıkıştırmadan önceki hâliyle gösterir. AVIF dosyaları renk profili veya meta veri içermez.

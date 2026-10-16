@@ -4654,3 +4654,5 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Просмотр показывает изображение до сжатия. Файлы AVIF не содержат цветового профиля и метаданных.

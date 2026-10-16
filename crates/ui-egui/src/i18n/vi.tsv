@@ -3946,6 +3946,7 @@ curves	Smooth	Làm mượt
 	Tight Curl	Xoắn chặt
 	Loose Curl	Xoắn lỏng
 	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Bản xem trước hiển thị ảnh trước khi nén. Tệp AVIF không chứa hồ sơ màu hay siêu dữ liệu.

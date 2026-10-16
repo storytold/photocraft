@@ -4161,6 +4161,7 @@ curves	Smooth	Згладити
 	Tight Curl	Щільний завиток
 	Loose Curl	Вільний завиток
 	Stylized dabs from a history state	Стилізовані мазки зі стану історії
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Попередній перегляд показує зображення до стиснення. Файли AVIF не містять колірного профілю й метаданих.

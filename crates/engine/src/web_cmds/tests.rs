@@ -346,6 +346,38 @@ fn webp_lossy_lossless_transparency_and_metadata() {
     assert!(a.meta.xmp.is_none(), "metadata none");
 }
 
+/// AVIF (#2415, #6391): quality drives the size and translucency gets an alpha item. A build
+/// without the AVIF writer refuses the format instead of writing something else.
+#[test]
+fn avif_quality_and_transparency_or_refused() {
+    let dir = tmp("avif");
+    let mut s = session(8);
+    let path = |name: &str| format!("{dir}/{name}");
+    let mut export = |name: &str, p: Value| {
+        let mut p = p;
+        p["format"] = json!("avif");
+        p["path"] = json!(path(name));
+        s.execute("file.export.saveForWebLegacy", p).map(|_| std::fs::read(path(name)).unwrap())
+    };
+    if !super::WebFormat::Avif.available() {
+        let e = export("no.avif", json!({})).unwrap_err().to_string();
+        assert!(e.contains("can't write"), "{e}");
+        return;
+    }
+    let lo = export("lo.avif", json!({"quality": 5})).unwrap();
+    let hi = export("hi.avif", json!({"quality": 95})).unwrap();
+    let opaque = export("opaque.avif", json!({"quality": 95, "transparency": false})).unwrap();
+    for bytes in [&lo, &hi, &opaque] {
+        assert_eq!((&bytes[4..8], &bytes[8..12]), (&b"ftyp"[..], &b"avif"[..]));
+    }
+    assert!(lo.len() < hi.len(), "quality drives the size: {} vs {}", lo.len(), hi.len());
+    let alpha = |b: &[u8]| b.windows(8).any(|w| w == b"auxiliar");
+    assert!(alpha(&hi), "translucency keeps an alpha item");
+    assert!(!alpha(&opaque), "transparency off composites over the matte");
+    let v = s.execute("file.export.saveForWebLegacy", json!({"format": "avif", "quality": 60})).unwrap();
+    assert!(v["bytes"].as_u64().is_some_and(|n| n > 0), "the dialog's size estimate: {v}");
+}
+
 /// Sizes WebP cannot hold are an error, not a crash.
 #[test]
 fn webp_too_large_is_an_error() {

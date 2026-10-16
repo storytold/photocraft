@@ -3466,7 +3466,6 @@ curves	Smooth	Glätten
 	Tight Curl	Eng gewellt
 	Loose Curl	Locker gewellt
 	Stylized dabs from a history state	Stilisierte Tupfer aus einem Protokollzustand
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Seitenverhältnis
 	Category	Kategorie
@@ -3475,3 +3474,5 @@ curves	Smooth	Glätten
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Die Vorschau zeigt das Bild vor der Komprimierung. AVIF-Dateien enthalten weder Farbprofil noch Metadaten.

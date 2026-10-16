@@ -41,6 +41,9 @@ pub enum WebFormat {
     /// WebP, lossy (our VP8 encoder) or lossless. Not in Photoshop's legacy dialog, but the
     /// format people prepare web images in now (#2415, #6391).
     Webp,
+    /// AVIF (rav1e through the `avif` codecs feature), lossy at `quality`. Builds without the
+    /// feature don't offer it.
+    Avif,
 }
 
 impl WebFormat {
@@ -52,6 +55,7 @@ impl WebFormat {
             "jpeg" | "jpg" => WebFormat::Jpeg,
             "wbmp" => WebFormat::Wbmp,
             "webp" => WebFormat::Webp,
+            "avif" => WebFormat::Avif,
             _ => return None,
         })
     }
@@ -62,7 +66,12 @@ impl WebFormat {
             WebFormat::Jpeg => "jpg",
             WebFormat::Wbmp => "wbmp",
             WebFormat::Webp => "webp",
+            WebFormat::Avif => "avif",
         }
+    }
+    /// Whether this build can write the format (AVIF needs the `avif` codecs feature).
+    pub fn available(self) -> bool {
+        self != WebFormat::Avif || photocraft_codecs::Format::Avif.caps().write
     }
     pub fn indexed(self) -> bool {
         matches!(self, WebFormat::Gif | WebFormat::Png8)
@@ -101,7 +110,7 @@ pub struct WebSettings {
     /// Web Snap: palette entries within this distance (0..=1 of the channel range) snap to the
     /// web-safe cube.
     pub web_snap: f32,
-    /// JPEG and lossy WebP quality 0..=100.
+    /// JPEG, lossy WebP and AVIF quality 0..=100.
     pub quality: u8,
     /// WebP: lossless instead of lossy at `quality`.
     pub lossless: bool,
@@ -159,7 +168,10 @@ impl WebSettings {
         }
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         if let Some(f) = s("format") {
-            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp)")))?;
+            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp|avif)")))?;
+            if !st.format.available() {
+                return Err(bad(cmd, format!("this build of PhotoCraft can't write `{f}`")));
+            }
         }
         if let Some(k) = s("palette") {
             st.palette = match k {
@@ -261,6 +273,7 @@ impl WebSettings {
             WebFormat::Jpeg => "jpeg",
             WebFormat::Wbmp => "wbmp",
             WebFormat::Webp => "webp",
+            WebFormat::Avif => "avif",
         };
         let palette = match self.palette {
             PaletteKind::Exact => "exact",
@@ -529,6 +542,18 @@ pub fn optimize(
                     Some(img) => img.convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8).data().to_vec(),
                     None => rgba(img.data(), layout),
                 };
+            }
+            (bytes, None)
+        }
+        WebFormat::Avif => {
+            // The AVIF writer embeds no profile or metadata, so the file is read as sRGB.
+            let (data, layout) = true_color();
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?;
+            let opts = photocraft_codecs::EncodeOptions { jpeg_quality: st.quality.clamp(1, 100), ..Default::default() };
+            let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Avif, &opts).map_err(e)?;
+            if preview {
+                // PhotoCraft can't decode AVIF, so the preview shows the image before compression.
+                look = rgba(img.data(), layout);
             }
             (bytes, None)
         }
@@ -1620,7 +1645,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save for Web (Legacy)…",
             &["File", "Export"],
             Some("Cmd+Alt+Shift+S"),
-            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp|webp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"colorTable":["#rrggbb",…]? (fixed opaque source palette, 1–256 entries; 255 with transparency),"colorTableEdits":{"0":"#rrggbb",…}? (replace entries after indexing; requires colorTable),"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="none" (a preset's own: white; formats without transparency go over white),"interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60 (JPEG, lossy WebP),"lossless":bool=false (WebP),"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|allExceptCameraInfo|all"="copyright" (EXIF only with all),"convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors,colorTable,transparentIndex} estimate; else {files, html, bytes, warnings}"##,
+            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp|webp|avif"="png24" (avif in builds with the AVIF writer),"palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"colorTable":["#rrggbb",…]? (fixed opaque source palette, 1–256 entries; 255 with transparency),"colorTableEdits":{"0":"#rrggbb",…}? (replace entries after indexing; requires colorTable),"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="none" (a preset's own: white; formats without transparency go over white),"interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60 (JPEG, lossy WebP, AVIF),"lossless":bool=false (WebP),"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|allExceptCameraInfo|all"="copyright" (EXIF only with all),"convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors,colorTable,transparentIndex} estimate; else {files, html, bytes, warnings}"##,
             has_doc,
             save_for_web
         ),

@@ -3467,9 +3467,10 @@ curves	Smooth	Haluskan
 	Loose Curl	Ikal longgar
 	Area	Area
 	Stylized dabs from a history state	Cap bergaya dari sebuah keadaan riwayat
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Color Table	Tabel Warna
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Pratinjau menampilkan gambar sebelum dikompresi. File AVIF tidak membawa profil warna maupun metadata.
