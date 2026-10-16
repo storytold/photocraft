@@ -254,10 +254,10 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
     }
     let cached = guard.as_mut().ok_or_else(|| MattingError::Session("cache empty after fill".to_owned()))?;
 
-    let (shape, logits) = {
+    let (shape, mut logits) = {
         use ort::value::Tensor;
         let side = opts.variant.resolution() as usize;
-        let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
+        let tensor = Tensor::from_array(([1usize, 3, side, side], input.clone().into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
         let outputs = cached.session.run(ort::inputs![tensor]).map_err(|e| MattingError::Inference(e.to_string()))?;
         if outputs.len() == 0 {
             return Err(MattingError::Inference("model returned no outputs".to_owned()));
@@ -273,8 +273,37 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
         // Some exports emit 1×S×S, others 1×1×S×S; the plane is the same.
         return Err(MattingError::Inference(format!("unexpected output plane: {shape} samples, expected {}", side * side)));
     }
+    let max = logits.iter().copied().fold(f32::MIN, f32::max);
+    let mut provider = cached.provider.clone();
+    let mut gpu = cached.gpu.clone();
+    if provider == "DirectML" && max <= 0.0 {
+        // DirectML's EP can collapse BiRefNet-family logits on some drivers:
+        // every output lands below 0, so the matte would be uniformly
+        // transparent — indistinguishable from "whole frame is background", but
+        // a real frame with a subject has positive logits somewhere. Rather than
+        // silently shipping an empty matte, redo the run on CPU where the
+        // collapse never happens, and cache that path for the next call.
+        log::warn!("[matting] DirectML inference collapsed (max logit {max:.2}); re-running on CPU");
+        use ort::value::Tensor;
+        let mut cpu = cpu_session(&path)?;
+        let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
+        let owned = {
+            let outputs = cpu.run(ort::inputs![tensor]).map_err(|e| MattingError::Inference(e.to_string()))?;
+            let ref out = outputs[0];
+            let (_shape, data) = out.try_extract_tensor::<f32>().map_err(|e| MattingError::Inference(e.to_string()))?;
+            data.to_vec()
+        };
+        if owned.len() != side * side {
+            return Err(MattingError::Inference(format!("unexpected output plane: {} samples, expected {}", owned.len(), side * side)));
+        }
+        logits = owned;
+        provider = "CPU".to_owned();
+        gpu = None;
+        drop(cached);
+        *guard = Some(Cached { key: (path, opts.variant.resolution(), device_tag(DevicePref::Cpu)), session: cpu, provider: "CPU".to_owned(), gpu: None });
+    }
     let alpha = build_alpha(&logits, &padding, width, height);
-    Ok(CutoutResult { alpha, provider: cached.provider.clone(), gpu: cached.gpu.clone(), ms: start.elapsed().as_millis() })
+    Ok(CutoutResult { alpha, provider, gpu, ms: start.elapsed().as_millis() })
 }
 
 #[cfg(test)]
