@@ -63,7 +63,7 @@ pub use device::{GpuInfo, Vendor, enumerate_gpus, pick_gpu};
 pub use session::{CutoutOptions, CutoutResult, DevicePref, ModelVariant, cutout, model_candidates, ort_status, release};
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{CutoutOptions, CutoutResult, DevicePref, cutout, ort_status, release};
+pub use wasm::{CutoutOptions, CutoutResult, DevicePref, GpuInfo, ModelVariant, cutout, ort_status, release};
 
 /// Default inference resolution of the BiRefNet-general export (the model is
 /// resolution-agnostic; 1024 is the fast default, 2048 the sharp one).

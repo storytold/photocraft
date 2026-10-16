@@ -5,11 +5,32 @@
 
 use crate::error::{MattingError, Result};
 
+/// Mirror of the native `ModelVariant`; never branched here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ModelVariant {
+    #[default]
+    General,
+    Hr,
+}
+
+/// Mirror of the native `GpuInfo`; never constructed on wasm.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    name: String,
+}
+
+impl GpuInfo {
+    /// One-line adapter description, as the engine reports it.
+    pub fn describe(&self) -> String {
+        self.name.clone()
+    }
+}
+
 /// Same shape as the native options; ignored here.
 #[derive(Debug, Clone, Default)]
 pub struct CutoutOptions {
+    pub variant: ModelVariant,
     pub device: DevicePref,
-    pub resolution: u32,
 }
 
 /// Same shape as the native result; never constructed on wasm.
@@ -17,7 +38,7 @@ pub struct CutoutOptions {
 pub struct CutoutResult {
     pub alpha: Vec<u8>,
     pub provider: String,
-    pub gpu: Option<String>,
+    pub gpu: Option<GpuInfo>,
     pub ms: u128,
 }
 
