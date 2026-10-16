@@ -4525,4 +4525,4 @@ shape	Appearance	Izgled
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Pregled prikazuje sliku pre kompresije. AVIF datoteke ne sadrže profil boja ni metapodatke.
+	AVIF files carry no color profile or metadata.	AVIF datoteke ne sadrže profil boja ni metapodatke.

@@ -4071,4 +4071,4 @@ curves	Smooth	Wygładź
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Podgląd pokazuje obraz przed kompresją. Pliki AVIF nie zawierają profilu kolorów ani metadanych.
+	AVIF files carry no color profile or metadata.	Pliki AVIF nie zawierają profilu kolorów ani metadanych.

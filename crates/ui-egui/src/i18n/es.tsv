@@ -4414,4 +4414,4 @@ navigator	Zoom	Zoom
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	La vista previa muestra la imagen antes de la compresión. Los archivos AVIF no llevan perfil de color ni metadatos.
+	AVIF files carry no color profile or metadata.	Los archivos AVIF no llevan perfil de color ni metadatos.

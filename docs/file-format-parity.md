@@ -30,7 +30,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | GIF | R/W | yes | yes | File › Open keeps the first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the delays (#572). Per-frame delays and keeping the frames in `.pcraft` are not done |
 | BMP | R/W | yes | yes | 8-bit; palette BMPs open in Indexed Color mode and Indexed Color documents save as palette BMPs (no transparency) |
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP; Save keeps an opened file lossy (at its quality) or lossless (#2399); Save for Web (Legacy) writes it too, lossy at its Quality or lossless, a format Photoshop's legacy dialog lacks (#6391). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
-| AVIF | R/W | no (#463) | optional feature, off by default | Write only, without ICC or metadata; with the feature, Save for Web (Legacy) offers it at its Quality, previewed before compression with the size estimated from full-resolution tiles (#6391) |
+| AVIF | R/W | no (#463) | optional feature, off by default | Write only, without ICC or metadata; with the feature, Save for Web (Legacy) offers it at its Quality. Its preview decodes the file (rav1d, pure Rust, used only there) on a worker, with a size estimated from full-resolution tiles until then (#6391) |
 | JPEG XL | R/W | inside DNG only | no | |
 | HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-rs, `heif` feature, on in releases) | no | 8/16-bit |
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |

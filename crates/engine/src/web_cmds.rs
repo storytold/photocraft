@@ -552,8 +552,11 @@ pub fn optimize(
             let opts = photocraft_codecs::EncodeOptions { jpeg_quality: st.quality.clamp(1, 100), ..Default::default() };
             let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Avif, &opts).map_err(e)?;
             if preview {
-                // PhotoCraft can't decode AVIF, so the preview shows the image before compression.
-                look = rgba(img.data(), layout);
+                // The preview shows the compression artefacts (the image itself if decoding fails).
+                look = match photocraft_codecs::decode_avif_preview(&bytes) {
+                    Ok(img) => img.into_data(),
+                    Err(_) => rgba(img.data(), layout),
+                };
             }
             (bytes, None)
         }

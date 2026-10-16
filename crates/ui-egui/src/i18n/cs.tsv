@@ -4201,4 +4201,4 @@ cameraRaw	Dehaze	Odstranění oparu
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Náhled ukazuje obraz před kompresí. Soubory AVIF neobsahují barevný profil ani metadata.
+	AVIF files carry no color profile or metadata.	Soubory AVIF neobsahují barevný profil ani metadata.

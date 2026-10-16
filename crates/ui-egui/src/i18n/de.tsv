@@ -3475,4 +3475,4 @@ curves	Smooth	Glätten
 	Target	Ziel
 	Units	Einheiten
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Die Vorschau zeigt das Bild vor der Komprimierung. AVIF-Dateien enthalten weder Farbprofil noch Metadaten.
+	AVIF files carry no color profile or metadata.	AVIF-Dateien enthalten weder Farbprofil noch Metadaten.

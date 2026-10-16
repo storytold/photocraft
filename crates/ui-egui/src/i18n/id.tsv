@@ -3473,4 +3473,4 @@ curves	Smooth	Haluskan
 	Profile	Profil
 	Target	Target
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Pratinjau menampilkan gambar sebelum dikompresi. File AVIF tidak membawa profil warna maupun metadata.
+	AVIF files carry no color profile or metadata.	File AVIF tidak membawa profil warna maupun metadata.

@@ -4131,4 +4131,4 @@ curves	Smooth	スムーズ
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	プレビューには圧縮前の画像が表示されます。AVIF ファイルにはカラープロファイルもメタデータも含まれません。
+	AVIF files carry no color profile or metadata.	AVIF ファイルにはカラープロファイルもメタデータも含まれません。

@@ -136,6 +136,7 @@ pub fn optimized(ui: &mut egui::Ui, key: egui::Id, signature: &str, p: &Value, p
         m.remove("colorTableEdits");
     }
     let signature = format!("{signature}|{base}");
+    let pane = key;
     let key = key.with("indexed-source");
     let cached: Option<(String, Arc<Optimized>, usize)> = ui.data(|d| d.get_temp(key));
     let (encoded, bytes) = if let Some((_, encoded, bytes)) = cached.filter(|(sig, ..)| sig == &signature) {
@@ -143,6 +144,8 @@ pub fn optimized(ui: &mut egui::Ui, key: egui::Id, signature: &str, p: &Value, p
     } else {
         let settings = WebSettings::from_params(&base, "preview").map_err(|e| e.to_string())?;
         let (encoded, bytes) = if settings.format == WebFormat::Avif {
+            // The estimate shows at once; the real encode replaces it when the worker is done.
+            queue_avif(ui, pane, &signature, &settings, px, w, h);
             avif_estimate(px, w, h, &settings)?
         } else {
             let encoded = web_cmds::optimize(px, w as usize, rect(w, h), &settings, None, None, None, 72.0, true).map_err(|e| e.to_string())?;
@@ -167,6 +170,87 @@ pub fn optimized(ui: &mut egui::Ui, key: egui::Id, signature: &str, p: &Value, p
             .collect()
     };
     Ok((rgba, bytes, encoded.colors, encoded.ext))
+}
+
+/// AVIF's real encode of the proxy takes seconds, so it runs on a worker while the pane shows
+/// [`avif_estimate`]. One worker per pane, and it always takes the newest settings: a slider
+/// dragged through ten values encodes the first and the last, not all ten.
+/// An encode waiting for the worker: signature, settings, proxy pixels and size.
+type AvifRequest = (String, WebSettings, Arc<Vec<[f32; 4]>>, u32, u32);
+
+#[derive(Default)]
+struct AvifWork {
+    next: Option<AvifRequest>,
+    busy: bool,
+    /// The newest finished encode, not yet installed in the pane's cache.
+    done: Option<(String, Optimized)>,
+    /// Bumped whenever a finished encode replaces an estimate (part of the pane's texture key).
+    generation: u64,
+}
+
+type AvifSlot = Arc<std::sync::Mutex<AvifWork>>;
+
+fn avif_slot(ui: &egui::Ui, pane: egui::Id) -> AvifSlot {
+    ui.data_mut(|d| d.get_temp_mut_or_default::<AvifSlot>(pane.with("avif-work")).clone())
+}
+
+fn queue_avif(ui: &egui::Ui, pane: egui::Id, signature: &str, settings: &WebSettings, px: &[[f32; 4]], w: u32, h: u32) {
+    let slot = avif_slot(ui, pane);
+    let Ok(mut work) = slot.lock() else { return };
+    work.next = Some((signature.to_string(), settings.clone(), Arc::new(px.to_vec()), w, h));
+    if work.busy {
+        return;
+    }
+    work.busy = true;
+    drop(work);
+    let ctx = ui.ctx().clone();
+    let run = move || {
+        loop {
+            let Some((signature, settings, px, w, h)) = slot.lock().ok().and_then(|mut work| {
+                let next = work.next.take();
+                work.busy = next.is_some();
+                next
+            }) else {
+                return;
+            };
+            let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                web_cmds::optimize(&px, w as usize, rect(w, h), &settings, None, None, None, 72.0, true)
+            }));
+            if let (Ok(Ok(encoded)), Ok(mut work)) = (encoded, slot.lock()) {
+                work.done = Some((signature, encoded));
+            }
+            ctx.request_repaint();
+        }
+    };
+    // AVIF is native-only (no rav1e in the wasm build), but stay correct without threads.
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::thread::Builder::new().name("avif-preview".into()).spawn(run).is_err()
+        && let Ok(mut work) = avif_slot(ui, pane).lock()
+    {
+        // No thread: the pane keeps the estimate.
+        work.busy = false;
+        work.next = None;
+    }
+    #[cfg(target_arch = "wasm32")]
+    run();
+}
+
+/// Installs a finished AVIF encode over the pane's estimate when its settings are still the
+/// pane's, and says where the pane stands: (generation, still encoding).
+pub fn avif_status(ui: &egui::Ui, pane: egui::Id) -> (u64, bool) {
+    let slot = avif_slot(ui, pane);
+    let Ok(mut work) = slot.lock() else { return (0, false) };
+    if let Some((signature, encoded)) = work.done.take() {
+        let key = pane.with("indexed-source");
+        let current: Option<(String, Arc<Optimized>, usize)> = ui.data(|d| d.get_temp(key));
+        if current.is_some_and(|(sig, ..)| sig == signature) {
+            let bytes = encoded.bytes.len();
+            ui.data_mut(|d| d.insert_temp(key, (signature, Arc::new(encoded), bytes)));
+            work.generation += 1;
+        }
+    }
+    let pending = work.busy || work.next.is_some();
+    (work.generation, pending)
 }
 
 fn rect(w: u32, h: u32) -> photocraft_geom::Rect {
@@ -197,10 +281,10 @@ fn avif_sample(px: &[[f32; 4]], w: u32, h: u32) -> (u32, u32, Vec<[f32; 4]>) {
     (sw, sh, sample)
 }
 
-/// AVIF encodes at about a megapixel a second, too slow to redo on every change of a full
-/// proxy, and PhotoCraft can't decode it to show the artefacts anyway. So the pane shows the
-/// image before compression (PNG-24's look, matte included) and the size comes from encoding a
-/// mosaic of tiles from across it ([`avif_sample`]), scaled up by area.
+/// AVIF encodes at about a megapixel a second, too slow to wait for on every change of a full
+/// proxy. Until the worker's real encode lands ([`queue_avif`]), the pane shows the image before
+/// compression (matte included) and a size from encoding a mosaic of tiles from across it
+/// ([`avif_sample`]), scaled up by area.
 fn avif_estimate(px: &[[f32; 4]], w: u32, h: u32, st: &WebSettings) -> Result<(Optimized, usize), String> {
     let (sw, sh, small) = avif_sample(px, w, h);
     let estimate = web_cmds::optimize(&small, sw as usize, rect(sw, sh), st, None, None, None, 72.0, false).map_err(|e| e.to_string())?;
@@ -385,6 +469,47 @@ mod tests {
 #[cfg(test)]
 mod avif_estimate_tests {
     use super::*;
+
+    /// The pane first shows the source with an estimated size, then the worker's real encode:
+    /// decoded, so the low-quality artefacts show, with the file's actual size.
+    #[test]
+    fn avif_preview_shows_the_estimate_then_the_decoded_file() {
+        if !WebFormat::Avif.available() {
+            return;
+        }
+        let (w, h) = (160u32, 120u32);
+        let px: Vec<[f32; 4]> =
+            (0..w * h).map(|i| [((i % w) as f32 / w as f32), (((i / w) * 7 % 255) as f32 / 255.0), (((i * 31) % 97) as f32 / 97.0), 1.0]).collect();
+        let source: Vec<u8> = px.iter().flat_map(|p| p.map(|v| (v * 255.0).round() as u8)).collect();
+        let ctx = egui::Context::default();
+        let pane = egui::Id::unique("avif-pane");
+        let p = json!({"format": "avif", "quality": 5});
+        let frame = |f: &mut dyn FnMut(&mut egui::Ui)| {
+            ctx.run_ui(egui::RawInput::default(), |ui| f(ui)).textures_delta.clear();
+        };
+        let mut first = None;
+        frame(&mut |ui| first = Some((optimized(ui, pane, "t", &p, &px, w, h).unwrap(), avif_status(ui, pane))));
+        let ((look, _, _, ext), (generation, pending)) = first.unwrap();
+        assert_eq!((ext, generation), ("avif", 0));
+        assert!(pending, "the real encode is running");
+        assert_eq!(look, source, "until then, the image before compression");
+
+        let start = std::time::Instant::now();
+        let mut status = (0, true);
+        while status.1 && start.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            frame(&mut |ui| status = avif_status(ui, pane));
+        }
+        assert_eq!(status, (1, false), "the encode landed once");
+        let mut after = None;
+        frame(&mut |ui| after = Some(optimized(ui, pane, "t", &p, &px, w, h).unwrap()));
+        let (look, bytes, _, _) = after.unwrap();
+        let mse = look.iter().zip(&source).map(|(a, b)| f64::from(a.abs_diff(*b)).powi(2)).sum::<f64>() / look.len() as f64;
+        assert!(mse > 4.0, "quality 5's artefacts show: MSE {mse}");
+        let st = WebSettings::from_params(&p, "t").unwrap();
+        let real = web_cmds::optimize(&px, w as usize, rect(w, h), &st, None, None, None, 72.0, false).unwrap().bytes.len();
+        assert_eq!(bytes, real, "the size is the file's own");
+    }
 
     /// The mosaic takes full-resolution tiles from an even grid; small images are used whole.
     #[test]

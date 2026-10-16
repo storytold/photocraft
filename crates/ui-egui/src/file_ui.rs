@@ -336,8 +336,10 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             v
         }
     };
-    let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
     let key = egui::Id::unique(("web-pane", doc.id.0, pane));
+    // AVIF: a finished background encode replaces the estimate (a new generation).
+    let (avif_generation, encoding) = if p.is_some() { web_preview::avif_status(ui, key) } else { (0, false) };
+    let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}|{avif_generation}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
     let cached: Option<WebCache> = ui.data(|d| d.get_temp(key));
     let (tex, info) = match cached.filter(|c| c.0 == sig) {
         Some((_, tex, info)) => (tex, info),
@@ -381,6 +383,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             (Some(_), None) => ("—".into(), String::new()),
         };
         let l1 = if ratio > 1.001 { format!("{l1}  ·  Proxy preview") } else { l1 };
+        let l1 = if encoding { format!("{l1}  ·  Encoding…") } else { l1 };
         ui.add(egui::Label::new(egui::RichText::new(l1).color(t.text).size(11.5)).truncate());
         ui.add(egui::Label::new(egui::RichText::new(l2).color(t.text_dim).size(11.0)).truncate());
     });
@@ -613,11 +616,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     "avif" => {
                         number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
                         check(ui, f, "transparency", tl!("Transparency"), true);
-                        ui.label(
-                            egui::RichText::new(tl!("The preview shows the image before compression. AVIF files carry no color profile or metadata."))
-                                .color(t.text_dim)
-                                .small(),
-                        );
+                        ui.label(egui::RichText::new(tl!("AVIF files carry no color profile or metadata.")).color(t.text_dim).small());
                     }
                     "wbmp" => {
                         dropdown_str(

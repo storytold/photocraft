@@ -3670,4 +3670,4 @@ curves	Smooth	매끄럽게
 	Target	대상
 	Units	단위
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	미리 보기는 압축 전 이미지를 보여 줍니다. AVIF 파일에는 색상 프로파일과 메타데이터가 포함되지 않습니다.
+	AVIF files carry no color profile or metadata.	AVIF 파일에는 색상 프로파일과 메타데이터가 포함되지 않습니다.
