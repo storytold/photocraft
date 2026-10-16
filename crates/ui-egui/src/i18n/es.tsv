@@ -4516,3 +4516,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
 	Expand layer group on click	Expandir grupo de capas al hacer clic
 	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	La vista previa muestra la imagen antes de la compresión. Los archivos AVIF no llevan perfil de color ni metadatos.

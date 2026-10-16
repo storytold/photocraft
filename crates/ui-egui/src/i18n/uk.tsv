@@ -4327,3 +4327,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Показувати межі шару під час наведення
 	Expand layer group on click	Розгортати групу шарів за клацанням
 	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Попередній перегляд показує зображення до стиснення. Файли AVIF не містять колірного профілю й метаданих.

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use photocraft_engine::web_cmds::{self, Optimized, WebSettings};
+use photocraft_engine::web_cmds::{self, Optimized, WebFormat, WebSettings};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -396,6 +396,22 @@ mod web_playback_tests {
             }
         }
     }
+    /// The AVIF writer embeds no metadata: the dialog says so and doesn't offer a choice of it.
+    #[test]
+    fn avif_offers_no_metadata_choice_and_says_why() {
+        for (format, offered) in [("jpeg", true), ("avif", false)] {
+            let mut app = animated_app(8);
+            let id = open_web(&mut app);
+            let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+            fields.insert("__view".into(), json!("original"));
+            fields.insert("format".into(), json!(format));
+            let mut h = harness(app, fields);
+            h.run_steps(2);
+            assert_eq!(h.query_all_by_label("Metadata").next().is_some(), offered, "{format}");
+            assert_eq!(h.query_by_label("AVIF files carry no color profile or metadata.").is_some(), !offered, "{format}");
+        }
+    }
+
     #[test]
     fn playback_refreshes_indexed_frames_without_resetting_palette_or_navigation() {
         let mut app = animated_app(8);
@@ -412,7 +428,7 @@ mod web_playback_tests {
         h.run_steps(2);
         assert_eq!(h.state().1["colorTable"], expected_palette);
         let key = egui::Id::unique(("web-pane", doc_id, 1usize)).with("indexed-source");
-        let encoded = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<(String, Arc<Optimized>)>(key)).unwrap().1;
+        let encoded = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<(String, Arc<Optimized>, usize)>(key)).unwrap().1;
         let first = encoded(&h.ctx);
         h.state_mut().1.insert("colorTableEdits".into(), json!({"0":"#ffff00"}));
         h.run_steps(2);

@@ -4639,3 +4639,5 @@ shape	Appearance	Apparence
 	Show layer bounds on hover	Afficher les limites du calque au survol
 	Expand layer group on click	Développer le groupe de calques au clic
 	Show hover bounds from Layers	Afficher les limites au survol depuis Calques
+# Save for Web: AVIF (#2415, #6391)
+	The preview shows the image before compression. AVIF files carry no color profile or metadata.	L'aperçu montre l'image avant compression. Les fichiers AVIF ne contiennent ni profil colorimétrique ni métadonnées.
