@@ -30,12 +30,7 @@ pub struct Padding {
 /// NCHW f32 tensor of `resolution` × `resolution` × 3 plus the padding rect.
 ///
 /// `rgba` is `width * height * 4` straight RGBA8 samples.
-pub fn build_input(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    resolution: u32,
-) -> (Vec<f32>, Padding) {
+pub fn build_input(rgba: &[u8], width: u32, height: u32, resolution: u32) -> (Vec<f32>, Padding) {
     // Fit the longest side, keep the aspect ratio (the model sees the whole
     // image; padding is the cheapest honest way to do that on a square input).
     let scale = (resolution as f32 / width as f32).min(resolution as f32 / height as f32);

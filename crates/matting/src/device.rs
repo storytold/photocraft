@@ -72,14 +72,7 @@ pub struct GpuInfo {
 impl GpuInfo {
     /// e.g. `"Intel(R) Arc(TM) A770 Graphics (intel, discrete, Dx12, device 0)"`.
     pub fn describe(&self) -> String {
-        format!(
-            "{} ({}, {}, {}, device {})",
-            self.name,
-            self.vendor.tag(),
-            self.device_type,
-            self.backend,
-            self.index
-        )
+        format!("{} ({}, {}, {}, device {})", self.name, self.vendor.tag(), self.device_type, self.backend, self.index)
     }
 
     /// Ranking key for [`pick_gpu`]: discrete first, then integrated, then the

@@ -257,12 +257,8 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
     let (shape, logits) = {
         use ort::value::Tensor;
         let side = opts.variant.resolution() as usize;
-        let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice()))
-            .map_err(|e| MattingError::Inference(e.to_string()))?;
-        let outputs = cached
-            .session
-            .run(ort::inputs![tensor])
-            .map_err(|e| MattingError::Inference(e.to_string()))?;
+        let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
+        let outputs = cached.session.run(ort::inputs![tensor]).map_err(|e| MattingError::Inference(e.to_string()))?;
         if outputs.len() == 0 {
             return Err(MattingError::Inference("model returned no outputs".to_owned()));
         }
@@ -278,12 +274,7 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
         return Err(MattingError::Inference(format!("unexpected output plane: {shape} samples, expected {}", side * side)));
     }
     let alpha = build_alpha(&logits, &padding, width, height);
-    Ok(CutoutResult {
-        alpha,
-        provider: cached.provider.clone(),
-        gpu: cached.gpu.clone(),
-        ms: start.elapsed().as_millis(),
-    })
+    Ok(CutoutResult { alpha, provider: cached.provider.clone(), gpu: cached.gpu.clone(), ms: start.elapsed().as_millis() })
 }
 
 #[cfg(test)]

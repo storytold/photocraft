@@ -24,20 +24,14 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
         "general" => photocraft_matting::ModelVariant::General,
         "hr" => photocraft_matting::ModelVariant::Hr,
         other => {
-            return Err(EngineError::BadParams {
-                cmd: CMD.into(),
-                msg: format!("`variant` must be \"general\" or \"hr\", got {other:?}"),
-            });
+            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`variant` must be \"general\" or \"hr\", got {other:?}") });
         }
     };
     let device = match p.get("device").and_then(Value::as_str).unwrap_or("auto") {
         "auto" => photocraft_matting::DevicePref::Auto,
         "cpu" => photocraft_matting::DevicePref::Cpu,
         other => {
-            return Err(EngineError::BadParams {
-                cmd: CMD.into(),
-                msg: format!("`device` must be \"auto\" or \"cpu\", got {other:?}"),
-            });
+            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`device` must be \"auto\" or \"cpu\", got {other:?}") });
         }
     };
 
@@ -59,18 +53,14 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
     let rgba: Vec<u8> = f32s.iter().flat_map(|px| [q(px[0]), q(px[1]), q(px[2]), q(px[3])]).collect();
 
     let opts = photocraft_matting::CutoutOptions { variant, device };
-    let run = photocraft_matting::cutout(&rgba, w, h, &opts)
-        .map_err(|e| EngineError::Other(format!("{CMD}: {e}")))?;
+    let run = photocraft_matting::cutout(&rgba, w, h, &opts).map_err(|e| EngineError::Other(format!("{CMD}: {e}")))?;
 
     // Multiply the matte into the layer alpha; one undo step.
     let alphas = run.alpha.clone();
     let ox = area.x0;
     let oy = area.y0;
     s.edit("Remove Background (AI)", |doc, _| {
-        let surf = doc
-            .layer_mut(id)
-            .and_then(|l| l.surface_mut())
-            .ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
+        let surf = doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
         for (i, a) in alphas.iter().enumerate() {
             let (x, y) = (ox + (i as u32 % w) as i32, oy + (i as u32 / w) as i32);
             let old = surf.rgba(x, y);

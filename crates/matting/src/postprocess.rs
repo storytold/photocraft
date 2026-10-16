@@ -33,8 +33,7 @@ pub fn build_alpha(logits: &[f32], padding: &Padding, width: u32, height: u32) -
             let x1 = (x0 + 1).min(side - 1);
             let wx = gx - x0 as f32;
             let s = |yy: usize, xx: usize| 1.0 / (1.0 + (-logits[yy * side + xx]).exp());
-            let v = (s(y0, x0) * (1.0 - wx) + s(y0, x1) * wx) * (1.0 - wy)
-                + (s(y1, x0) * (1.0 - wx) + s(y1, x1) * wx) * wy;
+            let v = (s(y0, x0) * (1.0 - wx) + s(y0, x1) * wx) * (1.0 - wy) + (s(y1, x0) * (1.0 - wx) + s(y1, x1) * wx) * wy;
             out[y * width as usize + x] = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         }
     }
