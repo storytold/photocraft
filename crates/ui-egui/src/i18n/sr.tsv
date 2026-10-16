@@ -4683,4 +4683,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Pregled prikazuje sliku pre kompresije. AVIF datoteke ne sadrže profil boja ni metapodatke.
+	AVIF files carry no color profile or metadata.	AVIF datoteke ne sadrže profil boja ni metapodatke.

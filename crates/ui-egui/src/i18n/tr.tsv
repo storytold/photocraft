@@ -4348,4 +4348,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Expand layer group on click	Tıklayınca katman grubunu genişlet
 	Show hover bounds from Layers	Katmanlar'dan üzerine gelme sınırlarını göster
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Önizleme, görüntüyü sıkıştırmadan önceki hâliyle gösterir. AVIF dosyaları renk profili veya meta veri içermez.
+	AVIF files carry no color profile or metadata.	AVIF dosyaları renk profili veya meta veri içermez.

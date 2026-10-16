@@ -4288,4 +4288,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Expand layer group on click	クリックでレイヤーグループを展開
 	Show hover bounds from Layers	レイヤーパネルからのホバー境界を表示
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	プレビューには圧縮前の画像が表示されます。AVIF ファイルにはカラープロファイルもメタデータも含まれません。
+	AVIF files carry no color profile or metadata.	AVIF ファイルにはカラープロファイルもメタデータも含まれません。

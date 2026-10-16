@@ -4524,4 +4524,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Expand layer group on click	Rétegcsoport kibontása kattintásra
 	Show hover bounds from Layers	Határok megjelenítése a Rétegek panelről rámutatáskor
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Az előnézet a tömörítés előtti képet mutatja. Az AVIF-fájlok nem tartalmaznak színprofilt és metaadatokat.
+	AVIF files carry no color profile or metadata.	Az AVIF-fájlok nem tartalmaznak színprofilt és metaadatokat.
