@@ -186,6 +186,27 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
 
     if device != DevicePref::Cpu {
         if let Some(g) = &gpu {
+            // OpenVINO first on Intel GPUs: it is Intel's own Arc path and
+            // computes BiRefNet correctly where DirectML's EP collapses (see
+            // the logits guard in cutout). The OV plugin DLLs are optional —
+            // without them registration/commit fails here and we fall through
+            // to DirectML, so machines without the plugins behave exactly as
+            // before.
+            if g.vendor_id == 0x8086 {
+                let ov = ort::session::Session::builder(&env()?)
+                    .map_err(|e| MattingError::Session(e.to_string()))?
+                    .with_execution_providers([ort::ep::OpenVINO::default().with_device_type("AUTO").build()])
+                    .map_err(|e| MattingError::Session(e.to_string()))?
+                    .commit_from_file(path)
+                    .map_err(|e| MattingError::Session(e.to_string()));
+                match ov {
+                    Ok(s) => {
+                        log::debug!("[matting] OpenVINO(AUTO) session on {}", g.describe());
+                        return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
+                    }
+                    Err(e) => log::debug!("[matting] OpenVINO unavailable ({e}); trying DirectML"),
+                }
+            }
             log::debug!("[matting] DirectML candidate: {}", g.describe());
             let attempt = ort::session::Session::builder(&env()?)
                 .map_err(|e| MattingError::Session(e.to_string()))?
@@ -276,14 +297,15 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
     let max = logits.iter().copied().fold(f32::MIN, f32::max);
     let mut provider = cached.provider.clone();
     let mut gpu = cached.gpu.clone();
-    if provider == "DirectML" && max <= 0.0 {
-        // DirectML's EP can collapse BiRefNet-family logits on some drivers:
-        // every output lands below 0, so the matte would be uniformly
-        // transparent — indistinguishable from "whole frame is background", but
-        // a real frame with a subject has positive logits somewhere. Rather than
-        // silently shipping an empty matte, redo the run on CPU where the
-        // collapse never happens, and cache that path for the next call.
-        log::warn!("[matting] DirectML inference collapsed (max logit {max:.2}); re-running on CPU");
+    if provider != "CPU" && max <= 0.0 {
+        // A GPU EP can collapse BiRefNet-family logits on some drivers: every
+        // output lands below 0, so the matte would be uniformly transparent
+        // (seen with DirectML on Intel Arc). That is indistinguishable from a
+        // background-only frame, but a real frame with a subject has positive
+        // logits somewhere — rather than silently shipping an empty matte,
+        // redo the run on CPU, where the collapse never happens, and cache
+        // that path so the wasted GPU attempt does not repeat.
+        log::warn!("[matting] {provider} inference collapsed (max logit {max:.2}); re-running on CPU");
         use ort::value::Tensor;
         let mut cpu = cpu_session(&path)?;
         let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
