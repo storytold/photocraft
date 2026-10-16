@@ -193,9 +193,29 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
             // to DirectML, so machines without the plugins behave exactly as
             // before.
             if g.vendor_id == 0x8086 {
+                // (For field diagnostics, launch with OPENVINO_LOG_LEVEL=LOG_INFO;
+                // the OV runtime reads it from the process environment itself.)
+                // FP32 matters: the OV GPU plugin's default fp16 oneDNN kernels
+                // crash executing BiRefNet on Arc (primitive-exec error); FP32
+                // runs correctly at ~7x the CPU speed on an A770. The legacy
+                // `precision` option only accepts accuracy/speed here, so the
+                // hint goes through load_config, which maps straight onto the
+                // GPU plugin's INFERENCE_PRECISION_HINT property. Compile blobs
+                // are cached beside the model so the slow GPU kernel build
+                // happens once per machine, not once per launch.
+                use ort::ep::ArbitrarilyConfigurableExecutionProvider as _;
+                let mut ov_ep = ort::ep::OpenVINO::default()
+                    .with_device_type("GPU")
+                    .with_arbitrary_config("load_config", r#"{"GPU": {"INFERENCE_PRECISION_HINT": "f32"}}"#);
+                if let Some(dir) = path.parent() {
+                    let cache = dir.join("ov-cache");
+                    if std::fs::create_dir_all(&cache).is_ok() {
+                        ov_ep = ov_ep.with_cache_dir(cache.display().to_string());
+                    }
+                }
                 let ov = ort::session::Session::builder(&env()?)
                     .map_err(|e| MattingError::Session(e.to_string()))?
-                    .with_execution_providers([ort::ep::OpenVINO::default().with_device_type("AUTO").build()])
+                    .with_execution_providers([ov_ep.build()])
                     .map_err(|e| MattingError::Session(e.to_string()))?
                     .commit_from_file(path)
                     .map_err(|e| MattingError::Session(e.to_string()));
@@ -321,7 +341,6 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
         logits = owned;
         provider = "CPU".to_owned();
         gpu = None;
-        drop(cached);
         *guard = Some(Cached { key: (path, opts.variant.resolution(), device_tag(DevicePref::Cpu)), session: cpu, provider: "CPU".to_owned(), gpu: None });
     }
     let alpha = build_alpha(&logits, &padding, width, height);
