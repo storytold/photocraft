@@ -21,6 +21,9 @@ const SELECT_VARIATION: &str = photocraft_engine::genai_cmds::SELECT_VARIATION;
 const MORE: &str = photocraft_engine::genai_cmds::MORE;
 /// Long side of a variation thumbnail, in texels.
 const THUMB: u32 = 96;
+/// Most separate areas of a selection the prompt dialog offers to fill one by one (each is its
+/// own Generative Fill, billed on its own).
+const MAX_SEPARATE: usize = 16;
 /// Long side of a reference image's preview in the prompt dialog, in texels.
 const REFERENCE_THUMB: u32 = 64;
 const SETTINGS_MARK: &str = "__genaiSettings";
@@ -28,6 +31,10 @@ const PROMPT_MARK: &str = "__genaiPrompt";
 /// `prefs.dialogs` entry holding `{"provider", "model"}`.
 const PREF: &str = "ui.generativeAiSettings";
 const KEY_PAGE: &str = "https://aistudio.google.com/apikey";
+
+mod pending;
+
+pub use pending::{is_generative, layer_rows, layer_rows_unplaced, on_job_event, paint_canvas as paint_pending, status as status_fills};
 
 /// Shell state that must not be serialised or inspected.
 #[derive(Default)]
@@ -42,6 +49,8 @@ pub struct Runtime {
     references: Vec<Value>,
     /// Previews of reference images, by entry ([`reference_key`]).
     previews: std::collections::HashMap<String, Preview>,
+    /// Fills in progress, as drawn ([`pending`]).
+    pending: pending::Pending,
 }
 
 /// A reference image's preview: decoded when it was added, uploaded on first draw.
@@ -144,6 +153,8 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     let last = app.session.prefs().dialogs.get(FILL).cloned().unwrap_or(Value::Null);
     let get = |k: &str| last.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
     let mode = if get("mode") == "edit" { "edit" } else { "fill" };
+    let separate = last.get("separate").and_then(Value::as_bool).unwrap_or(true);
+    let areas = photocraft_engine::genai_cmds::selection_areas(&app.session).len();
     let references: Vec<Value> = app.genai.references.iter().filter(|r| reference_name(app, r).is_some()).cloned().collect();
     // Previews of references no longer offered go; an open document's is made afresh.
     app.genai.previews.retain(|key, _| references.iter().any(|r| reference_key(r) == *key && r.get("path").is_some()));
@@ -153,6 +164,8 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     f.insert("prompt".into(), json!(get("prompt")));
     f.insert("mode".into(), json!(mode));
     f.insert("references".into(), Value::Array(references));
+    f.insert("separate".into(), json!(separate));
+    f.insert("__areas".into(), json!(areas));
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
@@ -384,6 +397,7 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         ui.add_space(10.0);
         references_section(app, ui, f, max_references);
     }
+    areas_section(ui, f);
     ui.add_space(8.0);
     if let Some(info) = app.session.image_provider().map(|p| p.info()) {
         faint(
@@ -396,6 +410,34 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         if !references_of(f).is_empty() {
             faint(ui, tl!("The reference images are sent too, at most 1024 pixels on their long side."));
         }
+    }
+}
+
+/// The selection's separate areas (several objects selected together): fill each on its own, side
+/// by side, each in its own layer, or all of it as one.
+fn areas_section(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let n = f.get("__areas").and_then(Value::as_u64).unwrap_or(0);
+    if n < 2 {
+        return;
+    }
+    ui.add_space(8.0);
+    if n as usize > MAX_SEPARATE {
+        faint(
+            ui,
+            &crate::i18n::fmt(
+                tl!("The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one."),
+                &[("n", &n.to_string()), ("max", &MAX_SEPARATE.to_string())],
+            ),
+        );
+        return;
+    }
+    let mut separate = f.get("separate").and_then(Value::as_bool).unwrap_or(true);
+    let label = crate::i18n::trn(crate::i18n::current(), n, "Fill each of the {n} separate areas on its own", "Fill each of the {n} separate areas on its own");
+    if ui.checkbox(&mut separate, label).changed() {
+        f.insert("separate".into(), json!(separate));
+    }
+    if separate {
+        faint(ui, tl!("Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests."));
     }
 }
 
@@ -476,7 +518,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         let (can_edit, max_references) = prompt_capabilities(app);
         let chosen = if can_edit && f.get("mode").and_then(Value::as_str) == Some("edit") { "edit" } else { "fill" };
         let references: Vec<Value> = references_of(f).into_iter().filter(|r| reference_name(app, r).is_some()).take(max_references).collect();
-        app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt, "mode": chosen})));
+        let separate = f.get("separate").and_then(Value::as_bool).unwrap_or(true);
+        let areas = f.get("__areas").and_then(Value::as_u64).unwrap_or(0) as usize;
+        app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt, "mode": chosen, "separate": separate})));
         app.genai.references = references.clone();
         // Edit needs something to change: with no prompt it removes, as Fill does.
         let mode = if prompt.is_empty() { "fill" } else { chosen };
@@ -486,7 +530,27 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         if !references.is_empty() {
             params.insert("references".into(), Value::Array(references));
         }
-        return app.run(FILL, Value::Object(params));
+        let r = if separate && (2..=MAX_SEPARATE).contains(&areas) {
+            // One fill per area, side by side.
+            let mut last = Ok(Value::Null);
+            for k in 0..areas {
+                let mut p = params.clone();
+                p.insert("area".into(), json!(k));
+                last = app.run(FILL, Value::Object(p));
+                if last.is_err() {
+                    break;
+                }
+            }
+            last
+        } else {
+            app.run(FILL, Value::Object(params))
+        };
+        // In the background the fill took what it needs: let the selection go, so the next
+        // area can be selected while it generates.
+        if r.is_ok() && app.background_jobs {
+            let _ = app.run("select.deselect", json!({}));
+        }
+        return r;
     }
     let typed = std::mem::take(&mut app.genai.key_input);
     let provider = f.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();

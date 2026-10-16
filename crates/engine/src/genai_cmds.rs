@@ -14,26 +14,48 @@
 //! `layer.generative.selectVariation` flips between them and `layer.generative.more` asks for
 //! more. The network calls run as one cancellable background job.
 //!
+//! Fills don't lock the document (this fork): each one's job edits it with
+//! [`crate::jobs::run_on`], so while one is generating the user selects the next area and starts
+//! another. Up to [`MAX_PARALLEL`] talk to the provider at once and the rest wait their turn
+//! (`queue`). A started fill is remembered until its layer lands (above the layer that was active
+//! when it started, without making it active) or it is discarded; one that failed waits for
+//! `layer.generative.retry` or `layer.generative.discard`, and `layer.generative.fills` lists them
+//! for the shell's progress. `area` fills one of the selection's separate areas (`areas`), so
+//! several objects selected together are generated side by side.
+//!
 //! Pixel interchange follows #730's approach (composite through the document's profile to sRGB,
 //! and back into the document's mode and depth on the way in).
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CodecSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer, LayerId, LayerMask};
+use photocraft_doc::{DocId, Document, Layer, LayerId, LayerMask};
 use photocraft_genai::{EditMode, EditRequest, ImageProvider, ImageSize, ReferenceImage};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::jobs::{JobCtx, JobId};
 use crate::{EngineError, Result, Session};
+
+mod areas;
+mod queue;
+
+pub use areas::MAX_AREAS;
+pub use queue::MAX_PARALLEL;
 
 pub const FILL: &str = "edit.generativeFill";
 pub const SELECT_VARIATION: &str = "layer.generative.selectVariation";
 pub const MORE: &str = "layer.generative.more";
+pub const RETRY: &str = "layer.generative.retry";
+pub const DISCARD: &str = "layer.generative.discard";
+pub const FILLS: &str = "layer.generative.fills";
+pub const AREAS: &str = "layer.generative.areas";
 const LABEL: &str = "Generative Fill";
 /// Longest side sent to the provider; larger areas are scaled down for the request and the
 /// result is scaled back up.
@@ -58,6 +80,151 @@ impl Session {
 
     pub fn image_provider(&self) -> Option<&SharedProvider> {
         self.genai.as_ref()
+    }
+
+    /// The fills started in this session that haven't landed: generating, waiting their turn, or
+    /// failed (waiting for Retry or Discard), oldest first.
+    pub fn generative_fills(&self) -> Vec<FillInfo> {
+        self.genai_state.fills.iter().filter_map(|f| f.info(self)).collect()
+    }
+
+    /// The selection fill `id` fills (its shape, for the shell to draw while it generates).
+    pub fn generative_fill_mask(&self, id: u64) -> Option<&Surface> {
+        self.genai_state.fills.iter().find(|f| f.id == id).map(|f| &f.input.sel)
+    }
+
+    /// Forget fills whose job ended without a result or an error (cancelled) and fills on closed
+    /// documents. The shell calls it when a job ends.
+    pub fn tidy_generative_fills(&mut self) {
+        let fills = std::mem::take(&mut self.genai_state.fills);
+        let (keep, gone): (Vec<_>, Vec<_>) = fills.into_iter().partition(|f| f.info(self).is_some());
+        self.genai_state.fills = keep;
+        for f in gone {
+            if let Some(job) = f.job {
+                self.cancel_job(job);
+            }
+        }
+    }
+}
+
+/// The session's generative state (this fork).
+#[derive(Default)]
+pub(crate) struct GenState {
+    /// What each generative layer made in this session was generated from.
+    sources: std::collections::HashMap<LayerId, Arc<Source>>,
+    /// Fills that haven't landed.
+    fills: Vec<Fill>,
+    next_fill: u64,
+    /// Turns at the provider, shared by every fill and Generate More.
+    turns: Arc<queue::Turns>,
+}
+
+/// A fill that hasn't landed.
+struct Fill {
+    id: u64,
+    /// Its current job (none yet, or the one that failed).
+    job: Option<JobId>,
+    doc: DocId,
+    /// The layer its result goes above: the active layer when it started.
+    anchor: Option<LayerId>,
+    status: Arc<FillStatus>,
+    input: Arc<FillInput>,
+}
+
+/// What a fill's job reports back while it runs.
+#[derive(Default)]
+struct FillStatus {
+    /// Place in line for a turn at the provider (1 = next), 0 when not waiting.
+    queued: AtomicUsize,
+    /// Why it failed, when it did (it waits for Retry or Discard then).
+    error: Mutex<Option<String>>,
+}
+
+impl FillStatus {
+    fn error(&self) -> Option<String> {
+        self.error.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn set_error(&self, e: Option<String>) {
+        *self.error.lock().unwrap_or_else(PoisonError::into_inner) = e;
+    }
+}
+
+/// Everything a fill's job needs, kept so Retry can send it again.
+struct FillInput {
+    /// The document as it was when the fill started: what is sent comes from it.
+    doc: Arc<Document>,
+    /// The selection (or the area of it) filled; the result is masked by it.
+    sel: Surface,
+    /// The canvas when it started: the result lands only on a canvas of that size.
+    canvas: Rect,
+    area: Rect,
+    size: (u32, u32),
+    mode: EditMode,
+    prompt: String,
+    name: String,
+    references: Vec<ReferenceSource>,
+    count: usize,
+    /// Make the result the active layer: run inline (scripts, the CLI), the next command works
+    /// on it. In the background the user has moved on, so the active layer stays.
+    select: bool,
+}
+
+/// A fill that hasn't landed, as `layer.generative.fills` and the shell see it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FillInfo {
+    pub id: u64,
+    pub job: Option<JobId>,
+    pub document: DocId,
+    /// The layer its result goes above (`None`, or a layer since deleted: above the active one).
+    pub anchor: Option<LayerId>,
+    /// The name its layer gets (from the prompt).
+    pub name: String,
+    pub prompt: String,
+    /// The selection's bounds, in document pixels: `[x0, y0, x1, y1]`.
+    pub bounds: [i32; 4],
+    /// `queued` (waiting for a turn), `running` or `failed`.
+    pub state: &'static str,
+    /// Place in line when queued (1 = next).
+    pub queue_position: usize,
+    pub progress: f32,
+    pub elapsed_ms: f64,
+    pub error: Option<String>,
+}
+
+impl Fill {
+    /// How it stands; `None` once there is nothing to show (it was cancelled, or its document
+    /// closed).
+    fn info(&self, s: &Session) -> Option<FillInfo> {
+        s.documents().iter().find(|st| st.doc.id == self.doc)?;
+        let error = self.status.error();
+        let job = self.job.and_then(|j| s.job(j));
+        if job.is_none() && error.is_none() {
+            return None;
+        }
+        let queued = self.status.queued.load(Ordering::Relaxed);
+        let state = if error.is_some() {
+            "failed"
+        } else if queued > 0 {
+            "queued"
+        } else {
+            "running"
+        };
+        let b = self.input.sel.content_bounds().intersect(&self.input.canvas);
+        Some(FillInfo {
+            id: self.id,
+            job: self.job,
+            document: self.doc,
+            anchor: self.anchor,
+            name: self.input.name.clone(),
+            prompt: self.input.prompt.clone(),
+            bounds: [b.x0, b.y0, b.x1, b.y1],
+            state,
+            queue_position: if error.is_some() { 0 } else { queued },
+            progress: job.as_ref().map_or(0.0, |j| j.progress),
+            elapsed_ms: job.as_ref().map_or(0.0, |j| j.elapsed_ms),
+            error,
+        })
     }
 }
 
@@ -498,6 +665,7 @@ pub fn reference_image(doc: &Document) -> Result<ReferenceImage> {
 }
 
 /// Where a reference image comes from: a file (read when the job runs) or an open document.
+#[derive(Clone)]
 enum ReferenceSource {
     File(String),
     Document(Arc<Document>),
@@ -601,15 +769,15 @@ fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request:
     ctx.progress(0.15, &msg);
     #[cfg(not(target_arch = "wasm32"))]
     let results: Vec<_> = if count == 1 {
-        vec![provider.edit(request)]
+        vec![queue::edit(ctx, provider, request)]
     } else {
         std::thread::scope(|scope| {
-            let calls: Vec<_> = (0..count).map(|_| scope.spawn(|| provider.edit(request))).collect();
+            let calls: Vec<_> = (0..count).map(|_| scope.spawn(|| queue::edit(ctx, provider, request))).collect();
             calls.into_iter().map(|c| c.join().unwrap_or(Err(photocraft_genai::GenError::BadResponse("the request failed")))).collect()
         })
     };
     #[cfg(target_arch = "wasm32")]
-    let results: Vec<_> = (0..count).map(|_| provider.edit(request)).collect();
+    let results: Vec<_> = (0..count).map(|_| queue::edit(ctx, provider, request)).collect();
     ctx.check()?;
     let mut first_error = None;
     let mut images = Vec::new();
@@ -689,6 +857,14 @@ fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) ->
     Ok(layer)
 }
 
+/// `area`: which of the selection's separate areas to fill (0-based), if not all of it.
+fn area_param(p: &Value) -> Result<Option<usize>> {
+    match p.get("area") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(|n| Some(n as usize)).ok_or_else(|| bad("`area` must be an area number from 0 (see layer.generative.areas)")),
+    }
+}
+
 fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let prompt = match p.get("prompt") {
         None | Some(Value::Null) => String::new(),
@@ -698,6 +874,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     photocraft_genai::check_prompt(&prompt, false).map_err(|e| bad(e.to_string()))?;
     let count = variations_param(p, "variations")?;
     let mode = mode_param(p)?;
+    let area_index = area_param(p)?;
     if mode == EditMode::Edit && prompt.is_empty() {
         return Err(bad("Edit needs a prompt: say what to change in the selection"));
     }
@@ -710,49 +887,193 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let references = references_param(s, p, caps.max_references.min(photocraft_genai::MAX_REFERENCES), provider_name)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
-    let sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
+    let mut sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
     let canvas = doc.bounds();
+    if let Some(k) = area_index {
+        let areas = areas::Areas::find(&sel, canvas);
+        let n = areas.len();
+        sel = areas.mask(&sel, k).ok_or_else(|| bad(format!("the selection has {n} separate areas; `area` counts them from 0")))?;
+    }
     let area = context_area(sel.content_bounds().intersect(&canvas), canvas, |w, h| provider.edit_aspect(w, h));
     let k = (f64::from(UPLOAD_SIDE) / f64::from(area.width().max(area.height()))).min(1.0);
     let (w, h) = (((f64::from(area.width()) * k).round() as u32).max(1), ((f64::from(area.height()) * k).round() as u32).max(1));
-    let name = layer_name(&prompt);
-    crate::jobs::run(
+    let (doc_id, anchor) = (doc.id, st.active_layer);
+    let input = FillInput {
+        name: layer_name(&prompt),
+        doc,
+        sel,
+        canvas,
+        area,
+        size: (w, h),
+        mode,
+        prompt,
+        references,
+        count,
+        select: !s.spawning(),
+    };
+    let g = &mut s.genai_state;
+    g.next_fill += 1;
+    let id = g.next_fill;
+    g.fills.push(Fill { id, job: None, doc: doc_id, anchor, status: Arc::default(), input: Arc::new(input) });
+    start(s, id)
+}
+
+/// Run fill `id`'s job: in the background (it stays listed until it lands), or inline.
+fn start(s: &mut Session, id: u64) -> Result<Value> {
+    let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider"))?;
+    let fill = s.genai_state.fills.iter().find(|f| f.id == id).ok_or_else(|| bad(format!("no Generative Fill {id} is waiting")))?;
+    let (doc, input, status, turns) = (fill.doc, Arc::clone(&fill.input), Arc::clone(&fill.status), Arc::clone(&s.genai_state.turns));
+    status.set_error(None);
+    let spawning = s.spawning();
+    let worker = Arc::clone(&status);
+    let r = crate::jobs::run_on(
         s,
         LABEL,
-        true,
+        doc,
         move |ctx| {
-            ctx.progress(0.05, "Preparing image");
-            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h, mode)?;
-            ctx.check()?;
-            if !references.is_empty() {
-                ctx.progress(0.1, "Preparing reference images");
+            let r = fill_work(ctx, &input, provider.as_ref(), &turns, &worker);
+            if let Err(e) = &r
+                && !matches!(e, EngineError::Cancelled)
+            {
+                worker.set_error(Some(e.to_string()));
             }
-            let references = references.iter().map(ReferenceSource::image).collect::<Result<Vec<_>>>()?;
-            ctx.check()?;
-            let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)), mode, references };
-            let results = request_all(ctx, provider.as_ref(), &request, count)?;
-            ctx.progress(0.9, "Placing the results");
-            let placed = place_all(&request, &results, area, &reference)?;
-            let source = Source { prompt: request.prompt.clone(), area, request, reference };
-            Ok((placed, sel, source))
+            r
         },
-        move |s, (placed, sel, source)| {
-            let (group, ids) = s.edit(LABEL, |doc, active| {
-                // Photoshop's generative layer holds its variations; here that is a group masked by
-                // the selection with one layer per variation, the first one showing.
-                let children = placed.iter().enumerate().map(|(i, px)| variation_layer(doc, px, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
-                let ids: Vec<u64> = children.iter().map(|l| l.id.0).collect();
-                let mut group = Layer::group(name, children);
-                group.mask = Some(LayerMask { surface: sel, ..LayerMask::reveal_all() });
-                let id = doc.insert_above(*active, group);
-                crate::layer_multi_cmds::check_group_depth(doc, LABEL)?;
-                *active = Some(id);
-                Ok((id, ids))
-            })?;
-            s.genai_sources.insert(group, Arc::new(source));
-            Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()]}))
-        },
-    )
+        move |s, (placed, source)| land(s, id, placed, source),
+    );
+    let started = match &r {
+        Ok(v) if spawning => v.get("job").and_then(Value::as_u64).map(|j| (v.clone(), JobId(j))),
+        _ => None,
+    };
+    match started {
+        Some((mut v, job)) => {
+            if let Some(f) = s.genai_state.fills.iter_mut().find(|f| f.id == id) {
+                f.job = Some(job);
+            }
+            if let Some(o) = v.as_object_mut() {
+                o.insert("fill".into(), json!(id));
+            }
+            Ok(v)
+        }
+        // Inline it landed (and was forgotten) or failed; a job that couldn't start is
+        // forgotten too.
+        None => {
+            s.genai_state.fills.retain(|f| f.id != id);
+            r
+        }
+    }
+}
+
+/// A fill's network part: what is sent, a turn at the provider, the results placed.
+fn fill_work(ctx: &JobCtx, input: &FillInput, provider: &dyn ImageProvider, turns: &queue::Turns, status: &FillStatus) -> Result<(Vec<Surface>, Source)> {
+    let (w, h) = input.size;
+    ctx.progress(0.05, "Preparing image");
+    let (image, mask, reference) = request_images(&scaled(&srgb_composite(&input.doc, input.area)?, input.area, w, h), &input.sel, input.area, w, h, input.mode)?;
+    ctx.check()?;
+    if !input.references.is_empty() {
+        ctx.progress(0.1, "Preparing reference images");
+    }
+    let references = input.references.iter().map(ReferenceSource::image).collect::<Result<Vec<_>>>()?;
+    ctx.check()?;
+    let request = EditRequest { image, mask, prompt: input.prompt.clone(), size: ImageSize::for_long_side(w.max(h)), mode: input.mode, references };
+    let _turn = turns.take(ctx, &status.queued)?;
+    let results = request_all(ctx, provider, &request, input.count)?;
+    ctx.progress(0.9, "Placing the results");
+    let placed = place_all(&request, &results, input.area, &reference)?;
+    Ok((placed, Source { prompt: request.prompt.clone(), area: input.area, request, reference }))
+}
+
+/// Fill `id`'s results arrive (on its document): a new group masked by the selection, one layer
+/// per variation with the first showing, above the layer that was active when it started. One
+/// undo step.
+fn land(s: &mut Session, id: u64, placed: Vec<Surface>, source: Source) -> Result<Value> {
+    // Discarded meanwhile.
+    let i = s.genai_state.fills.iter().position(|f| f.id == id).ok_or(EngineError::Cancelled)?;
+    let fill = s.genai_state.fills.remove(i);
+    let input = &fill.input;
+    let canvas = s.active().map(|st| st.doc.bounds()).ok_or(EngineError::NoDocument)?;
+    if canvas != input.canvas {
+        return Err(other("the canvas changed size while Generative Fill ran; its result was discarded"));
+    }
+    let (group, ids) = s.edit(LABEL, |doc, active| {
+        // Photoshop's generative layer holds its variations; here that is a group masked by
+        // the selection with one layer per variation, the first one showing.
+        let children = placed.iter().enumerate().map(|(i, px)| variation_layer(doc, px, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
+        let ids: Vec<u64> = children.iter().map(|l| l.id.0).collect();
+        let mut group = Layer::group(input.name.clone(), children);
+        group.mask = Some(LayerMask { surface: input.sel.clone(), ..LayerMask::reveal_all() });
+        let above = fill.anchor.filter(|a| doc.layer(*a).is_some()).or(*active);
+        let id = doc.insert_above(above, group);
+        crate::layer_multi_cmds::check_group_depth(doc, LABEL)?;
+        if input.select {
+            *active = Some(id);
+        }
+        Ok((id, ids))
+    })?;
+    let area = source.area;
+    s.genai_state.sources.insert(group, Arc::new(source));
+    Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()], "fill": id}))
+}
+
+fn fill_param(p: &Value, cmd: &str) -> Result<u64> {
+    p.get("fill").and_then(Value::as_u64).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`fill` must be a fill id (see layer.generative.fills)".into() })
+}
+
+fn retry_enabled(s: &Session) -> std::result::Result<(), String> {
+    s.image_provider().map(|_| ()).ok_or_else(|| "set up a generative AI provider first (Generative AI Settings)".into())
+}
+
+/// Send a failed fill again, as it was started.
+fn retry(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = fill_param(p, RETRY)?;
+    let bad = |msg: String| EngineError::BadParams { cmd: RETRY.into(), msg };
+    let fill = s.genai_state.fills.iter().find(|f| f.id == id).ok_or_else(|| bad(format!("no Generative Fill {id} is waiting")))?;
+    if fill.status.error().is_none() {
+        return Err(bad(format!("Generative Fill {id} hasn't failed")));
+    }
+    // Its old job has ended: the error is set as it returns.
+    if let Some(job) = fill.job {
+        s.cancel_job(job);
+    }
+    start(s, id)
+}
+
+/// Stop a fill that is generating or waiting its turn, or forget one that failed.
+fn discard(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = fill_param(p, DISCARD)?;
+    let i = s
+        .genai_state
+        .fills
+        .iter()
+        .position(|f| f.id == id)
+        .ok_or_else(|| EngineError::BadParams { cmd: DISCARD.into(), msg: format!("no Generative Fill {id} is waiting") })?;
+    let fill = s.genai_state.fills.remove(i);
+    if let Some(job) = fill.job {
+        s.cancel_job(job);
+    }
+    Ok(json!({"discarded": id}))
+}
+
+fn fills(s: &mut Session, _: &Value) -> Result<Value> {
+    s.tidy_generative_fills();
+    Ok(json!({"fills": s.generative_fills(), "parallel": MAX_PARALLEL}))
+}
+
+/// The separate areas of the active document's selection, top to bottom: `[x0, y0, x1, y1]` each.
+pub fn selection_areas(s: &Session) -> Vec<Rect> {
+    let Some(st) = s.active() else { return Vec::new() };
+    let Some(sel) = st.doc.selection.as_ref() else { return Vec::new() };
+    areas::Areas::find(sel, st.doc.bounds()).rects().to_vec()
+}
+
+fn areas_enabled(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    st.doc.selection.as_ref().map(|_| ()).ok_or_else(|| "no selection".into())
+}
+
+fn areas(s: &mut Session, _: &Value) -> Result<Value> {
+    let rects: Vec<[i32; 4]> = selection_areas(s).iter().map(|r| [r.x0, r.y0, r.x1, r.y1]).collect();
+    Ok(json!({"areas": rects}))
 }
 
 /// The generative layer `p["layer"]` names, or the active one: the group itself or one of its
@@ -763,7 +1084,7 @@ fn generative_target(s: &Session, p: &Value) -> Option<LayerId> {
         Some(id) => LayerId(id),
         None => st.active_layer?,
     };
-    let is_generative = |id: LayerId| s.genai_sources.contains_key(&id) && st.doc.layer(id).is_some_and(Layer::is_group);
+    let is_generative = |id: LayerId| s.genai_state.sources.contains_key(&id) && st.doc.layer(id).is_some_and(Layer::is_group);
     if is_generative(id) {
         return Some(id);
     }
@@ -781,7 +1102,7 @@ impl Session {
 
     /// The prompt a generative layer was made with.
     pub fn generative_prompt(&self, id: LayerId) -> Option<&str> {
-        self.genai_sources.get(&id).map(|s| s.prompt.as_str())
+        self.genai_state.sources.get(&id).map(|s| s.prompt.as_str())
     }
 }
 
@@ -821,12 +1142,16 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
     more_enabled(s).map_err(bad)?;
     let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first".into()))?;
     let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider".into()))?;
-    let source = s.genai_sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
-    crate::jobs::run(
+    let source = s.genai_state.sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
+    let doc = s.active().map(|st| st.doc.id).ok_or(EngineError::NoDocument)?;
+    let turns = Arc::clone(&s.genai_state.turns);
+    // Like a fill, it doesn't lock the document: its variations join the group when they come.
+    crate::jobs::run_on(
         s,
         LABEL,
-        true,
+        doc,
         move |ctx| {
+            let _turn = turns.take(ctx, &AtomicUsize::new(0))?;
             let results = request_all(ctx, provider.as_ref(), &source.request, count)?;
             ctx.progress(0.9, "Placing the results");
             place_all(&source.request, &results, source.area, &source.reference)
@@ -856,7 +1181,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generative Fill…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"prompt":str?,"variations":1..4=3,"mode":"fill"|"edit"="fill","references":[path|{"path":str}|{"document":id}]?} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. `fill` blurs the selected area out first, so the provider fills a hole (an empty prompt continues the surrounding image through it, removing what was there); `edit` sends it as it is and changes only what the prompt asks for (a prompt is required). `references` (at most 4) are images from files or open documents the provider should follow. Sends the selected area, its surroundings and any reference images to that provider, once per variation."#,
+            params: r#"{"prompt":str?,"variations":1..4=3,"mode":"fill"|"edit"="fill","references":[path|{"path":str}|{"document":id}]?,"area":uint?} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. `fill` blurs the selected area out first, so the provider fills a hole (an empty prompt continues the surrounding image through it, removing what was there); `edit` sends it as it is and changes only what the prompt asks for (a prompt is required). `references` (at most 4) are images from files or open documents the provider should follow. `area` fills only that one of the selection's separate areas (0 = the first, see layer.generative.areas). Started in the background it doesn't lock the document: it returns {job, fill} at once, at most 5 fills talk to the provider at a time (the rest wait their turn), and the group lands above the layer that was active when it started, without becoming active (layer.generative.fills lists those still running or failed). Sends the selected area, its surroundings and any reference images to that provider, once per variation."#,
             enabled: fill_enabled,
             run: fill,
             journal: true,
@@ -880,6 +1205,46 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: more_enabled,
             run: more,
             journal: true,
+        },
+        CommandSpec {
+            id: RETRY,
+            label: "Retry Generative Fill",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"fill":id} sends a Generative Fill that failed again, as it was started (the same area, prompt and references, from the document as it was then). Sends that area to the provider again."#,
+            enabled: retry_enabled,
+            run: retry,
+            journal: false,
+        },
+        CommandSpec {
+            id: DISCARD,
+            label: "Discard Generative Fill",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"fill":id} stops a Generative Fill that is generating or waiting its turn (its result is dropped), or forgets one that failed."#,
+            enabled: |_| Ok(()),
+            run: discard,
+            journal: false,
+        },
+        CommandSpec {
+            id: FILLS,
+            label: "Generative Fills",
+            menu: &[],
+            shortcut: None,
+            params: r#"{} lists the Generative Fills that haven't landed: {fills:[{id, job, document, anchor, name, prompt, bounds:[x0,y0,x1,y1], state:"queued"|"running"|"failed", queue_position, progress, elapsed_ms, error}], parallel}."#,
+            enabled: |_| Ok(()),
+            run: fills,
+            journal: false,
+        },
+        CommandSpec {
+            id: AREAS,
+            label: "Selection Areas",
+            menu: &[],
+            shortcut: None,
+            params: r#"{} the separate areas of the selection, top to bottom: {areas:[[x0,y0,x1,y1]]}. Generative Fill's `area` fills one of them."#,
+            enabled: areas_enabled,
+            run: areas,
+            journal: false,
         },
     ]
 }

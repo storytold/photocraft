@@ -6,7 +6,8 @@ use photocraft_genai::{Capabilities, EditMode, EditRequest, GenError, GeneratedI
 use super::*;
 
 /// Answers every edit with a solid colour at the request's size (or `size` when set), and keeps
-/// what it was sent. With `vary` each call's colour differs; with `flaky` every second call fails.
+/// what it was sent. With `vary` each call's colour differs; with `flaky` every second call fails;
+/// with `busy` the first that many calls answer that the service is over its rate limit.
 struct Fake {
     color: [u8; 3],
     vary: bool,
@@ -21,6 +22,10 @@ struct Fake {
     fail: Option<GenError>,
     aspect: Option<(u32, u32)>,
     jpeg: bool,
+    busy: usize,
+    /// Calls in progress, and the most there were at once.
+    open: AtomicUsize,
+    peak: AtomicUsize,
     sent: Mutex<Vec<EditRequest>>,
 }
 
@@ -37,6 +42,9 @@ impl Fake {
             fail: None,
             aspect: None,
             jpeg: false,
+            busy: 0,
+            open: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
             sent: Mutex::new(Vec::new()),
         })
     }
@@ -55,12 +63,18 @@ impl ImageProvider for Fake {
     fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
         self.sent.lock().unwrap().push(r.clone());
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        let open = self.open.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(open, Ordering::SeqCst);
         std::thread::sleep(self.delay);
+        self.open.fetch_sub(1, Ordering::SeqCst);
         if let Some(e) = &self.fail {
             return Err(e.clone());
         }
-        if self.flaky && n % 2 == 1 {
+        if n < self.busy {
             return Err(GenError::Quota);
+        }
+        if self.flaky && n % 2 == 1 {
+            return Err(GenError::Refused("flaky".into()));
         }
         if let Some(d) = self.echo {
             let img = codecs::decode(&r.image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
@@ -648,4 +662,208 @@ fn bad_references_fail_with_a_reason_and_send_nothing() {
     // Four is the most, and the active document itself may be one.
     s.execute(FILL, json!({"prompt": "x", "variations": 1, "references": [{"document": id}, {"document": id}, {"document": id}, {"document": id}]})).unwrap();
     assert_eq!(fake.sent.lock().unwrap()[0].references.len(), 4);
+}
+
+
+// ---- This fork: fills that run side by side --------------------------------------------------
+
+fn slow(delay_ms: u64) -> Arc<Fake> {
+    Arc::new(Fake { delay: std::time::Duration::from_millis(delay_ms), ..Arc::into_inner(Fake::new([255, 0, 0])).unwrap() })
+}
+
+fn started(s: &mut Session, id: &str, p: Value) -> crate::jobs::JobId {
+    match s.start(id, p).unwrap() {
+        crate::jobs::Started::Job(j) => j,
+        other => panic!("{id} ran inline: {other:?}"),
+    }
+}
+
+#[test]
+fn fills_run_in_the_background_without_locking_and_land_above_their_layer() {
+    let mut s = session(200, 100);
+    let background = s.active().unwrap().active_layer;
+    s.set_image_provider(Some(slow(300)));
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let first = started(&mut s, FILL, json!({"prompt": "a", "variations": 1}));
+    let doc_id = doc(&s).id;
+    assert!(s.job_on(doc_id).is_none(), "the document isn't locked");
+    // The user goes on: a new selection and a second fill while the first generates.
+    s.execute("select.rect", json!({"x": 120, "y": 40, "width": 40, "height": 40})).unwrap();
+    let second = started(&mut s, FILL, json!({"prompt": "b", "variations": 1}));
+    let fills = s.generative_fills();
+    assert_eq!(fills.len(), 2);
+    assert_eq!(fills[0].name, "a");
+    assert_eq!(fills[0].bounds, [10, 10, 40, 40]);
+    assert_eq!(fills[1].bounds, [120, 40, 160, 80]);
+    assert!(fills.iter().all(|f| f.document == doc_id && f.anchor == background && f.state != "failed"));
+    assert_eq!(s.generative_fill_mask(fills[1].id).unwrap().content_bounds(), photocraft_geom::Rect::new(120, 40, 160, 80));
+    let a = s.wait_job(first).unwrap();
+    let b = s.wait_job(second).unwrap();
+    assert!(s.generative_fills().is_empty());
+    // Both landed, each masked by its own selection, and the active layer is still the one
+    // the user was on.
+    assert_eq!(s.active().unwrap().active_layer, background);
+    assert_eq!(rgb_at(&s, 20, 20), [255, 0, 0]);
+    assert_eq!(rgb_at(&s, 130, 50), [255, 0, 0]);
+    assert_eq!(rgb_at(&s, 80, 50), [255, 255, 255]);
+    // Each lands right above the layer that was active, as a new layer would: the later one
+    // under the earlier.
+    let names: Vec<_> = doc(&s).layers.iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, ["Background", "b", "a"]);
+    assert_ne!(a["layer"], b["layer"]);
+    // The second selection plus one step per fill.
+    assert_eq!(s.active().unwrap().history.past_len(), history + 3);
+    assert!(s.undo());
+    assert_eq!(doc(&s).layers.len(), 2, "each fill is its own undo step");
+}
+
+#[test]
+fn a_result_lands_on_its_own_document_wherever_the_user_is() {
+    let mut s = session(64, 64);
+    s.set_image_provider(Some(slow(200)));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    let first = doc(&s).id;
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "#000000"})).unwrap();
+    let viewing = s.active_index();
+    s.wait_job(job).unwrap();
+    assert_eq!(s.active_index(), viewing, "the view stays on the other document");
+    assert_eq!(doc(&s).layers.len(), 1);
+    let filled = s.documents().iter().find(|st| st.doc.id == first).unwrap();
+    assert_eq!(filled.doc.layers.len(), 2);
+}
+
+#[test]
+fn at_most_five_fills_talk_to_the_provider_and_the_rest_wait_their_turn() {
+    let mut s = session(400, 100);
+    let fake = slow(300);
+    s.set_image_provider(Some(fake.clone()));
+    let mut jobs = Vec::new();
+    for i in 0..MAX_PARALLEL + 1 {
+        s.execute("select.rect", json!({"x": i * 60 + 5, "y": 10, "width": 20, "height": 20})).unwrap();
+        jobs.push(started(&mut s, FILL, json!({"prompt": format!("p{i}"), "variations": 1})));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let queued = loop {
+        let fills = s.generative_fills();
+        if let Some(f) = fills.iter().find(|f| f.state == "queued") {
+            break f.clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "none waited: {fills:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert_eq!(queued.queue_position, 1);
+    for j in jobs {
+        s.wait_job(j).unwrap();
+    }
+    assert_eq!(fake.peak.load(Ordering::SeqCst), MAX_PARALLEL);
+    assert_eq!(doc(&s).layers.len(), 1 + MAX_PARALLEL + 1);
+}
+
+#[test]
+fn a_failed_fill_waits_for_retry_or_discard() {
+    let mut s = session(64, 64);
+    s.set_image_provider(Some(Arc::new(Fake { fail: Some(GenError::Network("offline".into())), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() })));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    assert!(s.wait_job(job).unwrap_err().to_string().contains("offline"));
+    let fills = s.generative_fills();
+    assert_eq!(fills.len(), 1);
+    assert_eq!(fills[0].state, "failed");
+    assert!(fills[0].error.as_deref().unwrap().contains("offline"));
+    let id = fills[0].id;
+    // The selection moves on; Retry still sends the area it was started with.
+    s.execute("select.deselect", json!({})).unwrap();
+    s.set_image_provider(Some(Fake::new([0, 255, 0])));
+    let again = started(&mut s, RETRY, json!({"fill": id}));
+    assert_eq!(s.generative_fills()[0].state, "running");
+    s.wait_job(again).unwrap();
+    assert!(s.generative_fills().is_empty());
+    assert_eq!(rgb_at(&s, 16, 16), [0, 255, 0]);
+    // Bad ids and fills that haven't failed are refused.
+    for bad in [json!({}), json!({"fill": "1"}), json!({"fill": 999})] {
+        assert!(s.execute(RETRY, bad.clone()).is_err(), "{bad}");
+        assert!(s.execute(DISCARD, bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn discarding_a_fill_stops_it_and_its_result_never_lands() {
+    let mut s = session(64, 64);
+    s.set_image_provider(Some(slow(300)));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    let id = s.generative_fills()[0].id;
+    s.execute(DISCARD, json!({"fill": id})).unwrap();
+    assert!(s.generative_fills().is_empty());
+    assert!(s.job(job).is_none());
+    s.join_cancelled_jobs();
+    s.poll_jobs();
+    assert_eq!(doc(&s).layers.len(), 1);
+    // A failed one is just forgotten.
+    s.set_image_provider(Some(Arc::new(Fake { fail: Some(GenError::Auth), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() })));
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    let _ = s.wait_job(job);
+    let id = s.generative_fills()[0].id;
+    assert!(s.execute(RETRY, json!({"fill": id + 1})).is_err());
+    s.execute(DISCARD, json!({"fill": id})).unwrap();
+    assert!(s.execute(FILLS, json!({})).unwrap()["fills"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_result_is_dropped_when_the_canvas_changed_size_or_its_document_closed() {
+    let mut s = session(64, 64);
+    s.set_image_provider(Some(slow(300)));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    s.execute("image.canvasSize", json!({"width": 80, "height": 80})).unwrap();
+    assert!(s.wait_job(job).unwrap_err().to_string().contains("canvas"));
+    assert!(s.generative_fills().is_empty(), "not something Retry could place");
+    assert!(doc(&s).layers.iter().all(|l| !l.is_group()));
+
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    let closing = s.active_index().unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.close(closing).unwrap();
+    s.tidy_generative_fills();
+    assert!(s.generative_fills().is_empty());
+    assert!(s.job(job).is_none());
+}
+
+#[test]
+fn a_busy_service_is_asked_again() {
+    let mut s = session(64, 64);
+    let fake = Arc::new(Fake { busy: 2, ..Arc::into_inner(Fake::new([0, 0, 255])).unwrap() });
+    s.set_image_provider(Some(fake.clone()));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(rgb_at(&s, 16, 16), [0, 0, 255]);
+    // Past the pauses the error stands.
+    let fake = Arc::new(Fake { busy: 100, ..Arc::into_inner(Fake::new([0, 0, 255])).unwrap() });
+    s.set_image_provider(Some(fake.clone()));
+    let e = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap_err().to_string();
+    assert!(e.contains("rate limit"), "{e}");
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn each_separate_area_can_be_filled_on_its_own() {
+    let mut s = session(200, 100);
+    s.set_image_provider(Some(Fake::new([255, 0, 0])));
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+    s.execute("select.rect", json!({"x": 120, "y": 50, "width": 40, "height": 40, "mode": "add"})).unwrap();
+    let areas = s.execute(AREAS, json!({})).unwrap();
+    assert_eq!(areas["areas"], json!([[10, 10, 40, 40], [120, 50, 160, 90]]));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1, "area": 1})).unwrap();
+    let mask = &group(&s, r["layer"].as_u64().unwrap()).mask.as_ref().unwrap().surface;
+    assert_eq!(mask.content_bounds(), photocraft_geom::Rect::new(120, 50, 160, 90), "masked by that area alone");
+    assert_eq!(rgb_at(&s, 20, 20), [255, 255, 255]);
+    assert_eq!(rgb_at(&s, 130, 60), [255, 0, 0]);
+    for bad in [json!(2), json!(-1), json!("0")] {
+        assert!(s.execute(FILL, json!({"prompt": "x", "area": bad})).is_err(), "{bad}");
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    assert!(s.execute(AREAS, json!({})).is_err(), "needs a selection");
 }

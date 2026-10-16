@@ -295,6 +295,8 @@ pub struct Jobs {
     draining: Vec<std::thread::JoinHandle<()>>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    /// The document the job [`run_on`] is starting edits without locking it.
+    unlocked: Option<DocId>,
 }
 
 const RECENT: usize = 16;
@@ -371,7 +373,8 @@ pub fn run<T: Send + 'static>(
     let (doc, snapshot, layers) = match (lock_document, s.active()) {
         (true, Some(st)) => (Some(st.doc.id), Some(Arc::downgrade(&st.doc)), Some(LayerSelection::of(st))),
         (true, None) => return Err(EngineError::NoDocument),
-        (false, _) => (None, None, None),
+        // `run_on`: applies to that document, which stays editable (no snapshot to compare).
+        (false, _) => (s.jobs.unlocked.take(), None, None),
     };
     let ctx = JobCtx::new();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
@@ -427,6 +430,34 @@ pub fn run<T: Send + 'static>(
         handle,
     });
     Ok(json!({"job": id.0}))
+}
+
+/// [`run`] for a job that edits document `doc` without locking it (this fork's Generative Fill):
+/// the document stays editable while the job runs, so several can run on it at once, and `apply`
+/// runs on it wherever the user is, failing only if it was closed. `apply` must cope with
+/// whatever was done to the document meanwhile.
+pub fn run_on<T: Send + 'static>(
+    s: &mut Session,
+    label: &str,
+    doc: DocId,
+    work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
+    apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+) -> Result<Value> {
+    let i = s.docs.iter().position(|st| st.doc.id == doc).ok_or_else(|| EngineError::Other(format!("`{label}`: the document was closed")))?;
+    if !s.spawning() {
+        // Inline, it runs on that document too.
+        let prev = s.active;
+        s.active = Some(i);
+        let r = run(s, label, false, work, apply);
+        if s.active == Some(i) {
+            s.active = prev.filter(|p| *p < s.docs.len()).or(s.active);
+        }
+        return r;
+    }
+    s.jobs.unlocked = Some(doc);
+    let r = run(s, label, false, work, apply);
+    s.jobs.unlocked = None;
+    r
 }
 
 /// A document edit whose body is the job: like [`Session::edit`] (one undo step named `label`),
@@ -513,6 +544,12 @@ impl Session {
     /// default, a context nothing can cancel.
     pub fn set_inline_job_ctx(&mut self, ctx: Option<JobCtx>) {
         self.jobs.inline = ctx;
+    }
+
+    /// Will a [`run`] made now spawn a background job (the command was started with
+    /// [`Session::start`], natively), rather than run inline?
+    pub(crate) fn spawning(&self) -> bool {
+        self.jobs.spawn && !cfg!(target_arch = "wasm32")
     }
 
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
@@ -728,7 +765,8 @@ impl Session {
 
     /// The running job that locks document `doc`, if any.
     pub fn job_on(&self, doc: DocId) -> Option<JobInfo> {
-        self.jobs.running.iter().find(|r| r.doc == Some(doc)).map(Running::info)
+        // A `run_on` job (no snapshot) edits it without locking it.
+        self.jobs.running.iter().find(|r| r.doc == Some(doc) && r.snapshot.is_some()).map(Running::info)
     }
 
     /// The running job that locks the active document, if any.
@@ -972,7 +1010,7 @@ impl Session {
             Some(d) => {
                 let i =
                     self.documents().iter().position(|st| st.doc.id == *d).ok_or_else(|| EngineError::Other(format!("`{label}`: the document was closed")))?;
-                let unchanged = snapshot.as_ref().is_some_and(|w| self.documents().get(i).is_some_and(|st| Weak::ptr_eq(w, &Arc::downgrade(&st.doc))));
+                let unchanged = snapshot.as_ref().is_none_or(|w| self.documents().get(i).is_some_and(|st| Weak::ptr_eq(w, &Arc::downgrade(&st.doc))));
                 if !unchanged {
                     return Err(EngineError::Other(format!("`{label}`: the document changed while it ran; the result was discarded")));
                 }

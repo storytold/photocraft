@@ -1853,6 +1853,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui.add_space(6.0);
                         crate::jobs_ui::status_progress(app, ui);
                     }
+                    crate::genai_ui::status_fills(app, ui);
                     crate::background_redraw::status(app, ui);
                     crate::chrome_ui::gpu_memory_status(app, ui);
                 });
@@ -2853,6 +2854,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The drawn rows, top to bottom (#1721): the space between them and below the last
             // one is a drop zone too.
             let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
+            // This fork: where Generative Fills still generating will land.
+            crate::genai_ui::layer_rows_unplaced(app, ui, doc.id, &rows);
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
@@ -2862,6 +2865,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     continue;
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
+                crate::genai_ui::layer_rows(app, ui, doc.id, l.id, depth);
                 let top = ui.cursor().top();
                 drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
                 if reveal == Some(l.id) {

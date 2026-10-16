@@ -420,7 +420,8 @@ pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
     if let Some(j) = app.jobs.focus.and_then(|j| app.session.job(j)) {
         return Some(j);
     }
-    app.session.active_job().or_else(|| app.session.jobs().pop())
+    // Generative Fills show their own progress (`genai_ui::status_fills`); Esc doesn't stop them.
+    app.session.active_job().or_else(|| app.session.jobs().into_iter().filter(|j| !crate::genai_ui::is_generative(&j.command)).next_back())
 }
 
 /// Cancel job `id` (the status bar's ×, the dialog's Cancel, Esc, closing an opening tab).
@@ -471,6 +472,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     });
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
+    if crate::genai_ui::on_job_event(app, ctx, &e) {
+        return;
+    }
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }

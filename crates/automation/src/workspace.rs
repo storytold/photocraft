@@ -261,7 +261,7 @@ fn file_error(operation: &str, path: &str, error: std::io::Error) -> AutomationE
 pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
     // Generative Fill and Generate More upload document pixels to the user's image provider.
     // Automation may not trigger that upload on the user's behalf (#41): they stay hands-on.
-    if id == photocraft_engine::genai_cmds::FILL || id == photocraft_engine::genai_cmds::MORE {
+    if [photocraft_engine::genai_cmds::FILL, photocraft_engine::genai_cmds::MORE, photocraft_engine::genai_cmds::RETRY].contains(&id) {
         return Err(AutomationError::BadRequest(format!(
             "automation command `{id}` sends document pixels to an image service and is disabled; run it from the app"
         )));
@@ -806,6 +806,7 @@ mod tests {
         assert!(fill.contains("image service"), "{fill}");
         assert!(authorize_engine_step("edit.generativeFill", &serde_json::json!({})).is_err());
         assert!(authorize_engine_step("layer.generative.more", &serde_json::json!({})).is_err());
+        assert!(authorize_engine_step("layer.generative.retry", &serde_json::json!({"fill": 1})).is_err());
         // An allowed command can't reach a denied one by running it on its own behalf.
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
