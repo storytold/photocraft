@@ -4326,14 +4326,11 @@ cameraRaw	Yellow	Sárga
 # DDS Options (#1327)
 	DDS Options	DDS-beállítások
 	Generate Mipmaps	Mipmapek létrehozása
-
 # Color Table (.act) dialog
 	There is no color table to save.	Nincs menthető színtábla.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} szín mentve ide: {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stílusok importálása…
 	Export Selected Styles…	Kijelölt stílusok exportálása…
@@ -4382,3 +4379,15 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+	A layer per frame, each with its own delay, edited in Window › Timeline	Képkockánként egy réteg, mindegyik saját késleltetéssel, szerkesztés: Ablak › Idővonal
+	A still image	Állókép
+	Change it later in Preferences › File Handling.	Később módosítható: Beállítások › Fájlkezelés.
+	First frame only	Csak az első képkocka
+	Frame animation	Képkocka-animáció
+	One layer holding every frame, played on the timeline	Egy réteg az összes képkockával, az idővonalon lejátszva
+	Open Animated {format}	Animált {format} megnyitása
+	Remember this choice for {format} files	A választás megjegyzése a(z) {format} fájlokhoz
+	Video layer	Videoréteg
+	“{name}” is an animated {format} with {frames} frames. Open it as:	A(z) „{name}” egy {frames} képkockás animált {format}. Megnyitás mint:
+	Open animated GIF as	Animált GIF megnyitása mint
+	Open animated WebP as	Animált WebP megnyitása mint

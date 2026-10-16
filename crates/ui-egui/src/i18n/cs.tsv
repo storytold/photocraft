@@ -4154,14 +4154,11 @@ cameraRaw	Dehaze	Odstranění oparu
 # DDS Options (#1327)
 	DDS Options	Možnosti DDS
 	Generate Mipmaps	Generovat mipmapy
-
 # Color Table (.act) dialog
 	There is no color table to save.	Neexistuje žádná tabulka barev k uložení.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Uložena {n} barva do {file}|Uloženy {n} barvy do {file}|Uloženo {n} barev do {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptér GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importovat styly…
 	Export Selected Styles…	Exportovat vybrané styly…
@@ -4214,6 +4211,17 @@ cameraRaw	Dehaze	Odstranění oparu
 	Tight Curl	Těsná smyčka
 	Loose Curl	Volná smyčka
 	Stylized dabs from a history state	Stylizované šmouhy ze stavu historie
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	A layer per frame, each with its own delay, edited in Window › Timeline	Vrstva pro každý snímek s vlastní prodlevou, upravuje se v Okno › Časová osa
+	A still image	Statický obrázek
+	Change it later in Preferences › File Handling.	Později to změníte v Předvolby › Práce se soubory.
+	First frame only	Jen první snímek
+	Frame animation	Snímková animace
+	One layer holding every frame, played on the timeline	Jedna vrstva se všemi snímky, přehrává se na časové ose
+	Open Animated {format}	Otevřít animovaný {format}
+	Remember this choice for {format} files	Zapamatovat si tuto volbu pro soubory {format}
+	Video layer	Video vrstva
+	“{name}” is an animated {format} with {frames} frames. Open it as:	„{name}“ je animovaný {format} s {frames} snímky. Otevřít jako:
+	Open animated GIF as	Animovaný GIF otevřít jako
+	Open animated WebP as	Animovaný WebP otevřít jako

@@ -4088,14 +4088,11 @@ curves	Smooth	スムーズ
 	DDS Options	DDS オプション
 	Compression	圧縮
 	Generate Mipmaps	ミップマップを生成
-
 # Color Table (.act) dialog
 	There is no color table to save.	保存するカラーテーブルがありません。
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file} に {n} 色を保存しました
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU アダプター
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	スタイルを読み込み…
 	Export Selected Styles…	選択したスタイルを書き出し…
@@ -4146,3 +4143,15 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+	A layer per frame, each with its own delay, edited in Window › Timeline	フレームごとに 1 つのレイヤー（それぞれ固有の遅延時間）、ウィンドウ › タイムラインで編集
+	A still image	静止画
+	Change it later in Preferences › File Handling.	環境設定 › ファイル管理で後から変更できます。
+	First frame only	最初のフレームのみ
+	Frame animation	フレームアニメーション
+	One layer holding every frame, played on the timeline	すべてのフレームを持つ 1 つのレイヤー、タイムラインで再生
+	Open Animated {format}	アニメーション {format} を開く
+	Remember this choice for {format} files	{format} ファイルではこの選択を記憶
+	Video layer	ビデオレイヤー
+	“{name}” is an animated {format} with {frames} frames. Open it as:	「{name}」は {frames} フレームのアニメーション {format} です。開く方法：
+	Open animated GIF as	アニメーション GIF を開く方法
+	Open animated WebP as	アニメーション WebP を開く方法

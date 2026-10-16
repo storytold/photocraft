@@ -84,7 +84,7 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, import_webp_frames,
+    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, file_encoding, import_animation_frames, import_gif_frames, import_tiff_page, import_webp_frames,
     tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};

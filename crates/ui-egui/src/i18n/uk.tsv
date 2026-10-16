@@ -4119,14 +4119,11 @@ curves	Smooth	Згладити
 	DDS Options	Параметри DDS
 	Compression	Стиснення
 	Generate Mipmaps	Створити MIP-карти
-
 # Color Table (.act) dialog
 	There is no color table to save.	Немає таблиці кольорів для збереження.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Збережено {n} колір у {file}|Збережено {n} кольори у {file}|Збережено {n} кольорів у {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Імпортувати стилі…
 	Export Selected Styles…	Експортувати вибрані стилі…
@@ -4177,6 +4174,17 @@ curves	Smooth	Згладити
 	Tight Curl	Щільний завиток
 	Loose Curl	Вільний завиток
 	Stylized dabs from a history state	Стилізовані мазки зі стану історії
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+	A layer per frame, each with its own delay, edited in Window › Timeline	Шар на кожен кадр, кожен із власною затримкою; редагування у Вікно › Шкала часу
+	A still image	Нерухоме зображення
+	Change it later in Preferences › File Handling.	Змінити можна в Налаштування › Обробка файлів.
+	First frame only	Лише перший кадр
+	Frame animation	Покадрова анімація
+	One layer holding every frame, played on the timeline	Один шар з усіма кадрами, відтворюється на шкалі часу
+	Open Animated {format}	Відкрити анімований {format}
+	Remember this choice for {format} files	Запам’ятати цей вибір для файлів {format}
+	Video layer	Відеошар
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» — анімований {format}, кадрів: {frames}. Відкрити як:
+	Open animated GIF as	Відкривати анімований GIF як
+	Open animated WebP as	Відкривати анімований WebP як

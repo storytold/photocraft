@@ -4526,14 +4526,11 @@ shape	Appearance	Aspetto
 # DDS Options (#1327)
 	DDS Options	Opzioni DDS
 	Generate Mipmaps	Genera mipmap
-
 # Color Table (.act) dialog
 	There is no color table to save.	Non c'è alcuna tabella colori da salvare.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Salvato {n} colore in {file}|Salvati {n} colori in {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adattatore GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…
 	Export Selected Styles…	Esporta stili selezionati…
@@ -4584,3 +4581,15 @@ shape	Appearance	Aspetto
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+	A layer per frame, each with its own delay, edited in Window › Timeline	Un livello per fotogramma, ciascuno con il proprio ritardo, modificabile in Finestra › Timeline
+	A still image	Un’immagine fissa
+	Change it later in Preferences › File Handling.	Puoi cambiarlo in Preferenze › Gestione file.
+	First frame only	Solo il primo fotogramma
+	Frame animation	Animazione a fotogrammi
+	One layer holding every frame, played on the timeline	Un livello con tutti i fotogrammi, riprodotto nella timeline
+	Open Animated {format}	Apri {format} animato
+	Remember this choice for {format} files	Ricorda questa scelta per i file {format}
+	Video layer	Livello video
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» è un {format} animato con {frames} fotogrammi. Aprilo come:
+	Open animated GIF as	Apri GIF animato come
+	Open animated WebP as	Apri WebP animato come

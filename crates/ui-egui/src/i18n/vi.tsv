@@ -3902,14 +3902,11 @@ curves	Smooth	Làm mượt
 	DDS Options	Tùy chọn DDS
 	Compression	Nén
 	Generate Mipmaps	Tạo mipmap
-
 # Color Table (.act) dialog
 	There is no color table to save.	Không có bảng màu nào để lưu.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Đã lưu {n} màu vào {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Bộ điều hợp GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Nhập kiểu…
 	Export Selected Styles…	Xuất các kiểu đã chọn…
@@ -3962,6 +3959,17 @@ curves	Smooth	Làm mượt
 	Tight Curl	Xoắn chặt
 	Loose Curl	Xoắn lỏng
 	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+	A layer per frame, each with its own delay, edited in Window › Timeline	Mỗi khung hình một lớp, mỗi lớp có độ trễ riêng, chỉnh sửa trong Cửa sổ › Dòng thời gian
+	A still image	Ảnh tĩnh
+	Change it later in Preferences › File Handling.	Thay đổi sau trong Tùy chọn › Xử lý tệp.
+	First frame only	Chỉ khung hình đầu tiên
+	Frame animation	Hoạt ảnh khung hình
+	One layer holding every frame, played on the timeline	Một lớp chứa mọi khung hình, phát trên dòng thời gian
+	Open Animated {format}	Mở {format} động
+	Remember this choice for {format} files	Ghi nhớ lựa chọn này cho tệp {format}
+	Video layer	Lớp video
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}” là ảnh {format} động gồm {frames} khung hình. Mở dưới dạng:
+	Open animated GIF as	Mở GIF động dưới dạng
+	Open animated WebP as	Mở WebP động dưới dạng

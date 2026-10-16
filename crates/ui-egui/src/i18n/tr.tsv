@@ -4138,14 +4138,11 @@ cameraData	Lens	Lens
 # DDS Options (#1327)
 	DDS Options	DDS Seçenekleri
 	Generate Mipmaps	Mipmap oluştur
-
 # Color Table (.act) dialog
 	There is no color table to save.	Kaydedilecek renk tablosu yok.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} renk {file} konumuna kaydedildi
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU bağdaştırıcısı
-
 # Styles panel: Import / Export Styles (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} dosyasından {n} stil içe aktarıldı
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stil {file} dosyasına dışa aktarıldı
@@ -4196,3 +4193,15 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+	A layer per frame, each with its own delay, edited in Window › Timeline	Her kare için bir katman, her biri kendi gecikmesiyle; Pencere › Zaman çizelgesi'nde düzenlenir
+	A still image	Durağan görüntü
+	Change it later in Preferences › File Handling.	Daha sonra Tercihler › Dosya İşleme'den değiştirebilirsiniz.
+	First frame only	Yalnızca ilk kare
+	Frame animation	Kare animasyonu
+	One layer holding every frame, played on the timeline	Tüm kareleri tutan tek katman, zaman çizelgesinde oynatılır
+	Open Animated {format}	Animasyonlu {format} Aç
+	Remember this choice for {format} files	Bu seçimi {format} dosyaları için hatırla
+	Video layer	Video katmanı
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}”, {frames} kareli animasyonlu bir {format}. Şu şekilde aç:
+	Open animated GIF as	Animasyonlu GIF'i şu şekilde aç
+	Open animated WebP as	Animasyonlu WebP'yi şu şekilde aç

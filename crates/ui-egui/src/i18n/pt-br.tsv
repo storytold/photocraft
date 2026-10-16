@@ -4199,14 +4199,11 @@ layerLabel	No Color	Sem cor
 # DDS Options (#1327)
 	DDS Options	Opções de DDS
 	Generate Mipmaps	Gerar mipmaps
-
 # Color Table (.act) dialog
 	There is no color table to save.	Não há tabela de cores para salvar.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} cor salva em {file}|{n} cores salvas em {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…
 	Export Selected Styles…	Exportar estilos selecionados…
@@ -4397,3 +4394,15 @@ layerLabel	No Color	Sem cor
 	Tight Curl	Curva cerrada
 	Loose Curl	Curva solta
 	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico
+	A layer per frame, each with its own delay, edited in Window › Timeline	Uma camada por quadro, cada uma com seu próprio atraso, editável em Janela › Linha do tempo
+	A still image	Uma imagem estática
+	Change it later in Preferences › File Handling.	Altere depois em Preferências › Manipulação de arquivos.
+	First frame only	Somente o primeiro quadro
+	Frame animation	Animação de quadros
+	One layer holding every frame, played on the timeline	Uma camada com todos os quadros, reproduzida na linha do tempo
+	Open Animated {format}	Abrir {format} animado
+	Remember this choice for {format} files	Lembrar esta escolha para arquivos {format}
+	Video layer	Camada de vídeo
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}” é um {format} animado com {frames} quadros. Abrir como:
+	Open animated GIF as	Abrir GIF animado como
+	Open animated WebP as	Abrir WebP animado como

@@ -4109,14 +4109,11 @@ curves	Smooth	Εξομάλυνση
 # DDS Options (#1327)
 	DDS Options	Επιλογές DDS
 	Generate Mipmaps	Δημιουργία mipmap
-
 # Color Table (.act) dialog
 	There is no color table to save.	Δεν υπάρχει πίνακας χρωμάτων για αποθήκευση.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Αποθηκεύτηκε {n} χρώμα στο {file}|Αποθηκεύτηκαν {n} χρώματα στο {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Προσαρμογέας GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Εισαγωγή στιλ…
 	Export Selected Styles…	Εξαγωγή επιλεγμένων στιλ…
@@ -4167,6 +4164,17 @@ curves	Smooth	Εξομάλυνση
 	Tight Curl	Σφιχτή μπούκλα
 	Loose Curl	Χαλαρή μπούκλα
 	Stylized dabs from a history state	Στυλιζαρισμένες πινελιές από μια κατάσταση ιστορικού
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+	A layer per frame, each with its own delay, edited in Window › Timeline	Ένα επίπεδο ανά καρέ, το καθένα με δική του καθυστέρηση, επεξεργασία στο Παράθυρο › Χρονογραμμή
+	A still image	Μια στατική εικόνα
+	Change it later in Preferences › File Handling.	Αλλάξτε το αργότερα στις Προτιμήσεις › Διαχείριση αρχείων.
+	First frame only	Μόνο το πρώτο καρέ
+	Frame animation	Κινούμενη εικόνα καρέ
+	One layer holding every frame, played on the timeline	Ένα επίπεδο με όλα τα καρέ, αναπαράγεται στη χρονογραμμή
+	Open Animated {format}	Άνοιγμα κινούμενου {format}
+	Remember this choice for {format} files	Απομνημόνευση αυτής της επιλογής για αρχεία {format}
+	Video layer	Επίπεδο βίντεο
+	“{name}” is an animated {format} with {frames} frames. Open it as:	Το «{name}» είναι κινούμενο {format} με {frames} καρέ. Άνοιγμα ως:
+	Open animated GIF as	Άνοιγμα κινούμενου GIF ως
+	Open animated WebP as	Άνοιγμα κινούμενου WebP ως

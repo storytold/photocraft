@@ -3424,14 +3424,11 @@ curves	Smooth	Haluskan
 	DDS Options	Opsi DDS
 	Compression	Kompresi
 	Generate Mipmaps	Buat mipmap
-
 # Color Table (.act) dialog
 	There is no color table to save.	Tidak ada tabel warna untuk disimpan.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} warna disimpan ke {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptor GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Impor Gaya…
 	Export Selected Styles…	Ekspor Gaya Terpilih…
@@ -3483,9 +3480,20 @@ curves	Smooth	Haluskan
 	Loose Curl	Ikal longgar
 	Area	Area
 	Stylized dabs from a history state	Cap bergaya dari sebuah keadaan riwayat
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Color Table	Tabel Warna
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+	A layer per frame, each with its own delay, edited in Window › Timeline	Satu layer per frame, masing-masing dengan jedanya sendiri, disunting di Jendela › Timeline
+	A still image	Gambar diam
+	Change it later in Preferences › File Handling.	Ubah nanti di Preferensi › Penanganan Berkas.
+	First frame only	Hanya frame pertama
+	Frame animation	Animasi frame
+	One layer holding every frame, played on the timeline	Satu layer berisi semua frame, diputar di timeline
+	Open Animated {format}	Buka {format} Animasi
+	Remember this choice for {format} files	Ingat pilihan ini untuk berkas {format}
+	Video layer	Layer video
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}” adalah {format} animasi dengan {frames} frame. Buka sebagai:
+	Open animated GIF as	Buka GIF animasi sebagai
+	Open animated WebP as	Buka WebP animasi sebagai

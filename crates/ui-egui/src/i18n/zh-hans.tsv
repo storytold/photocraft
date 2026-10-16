@@ -3071,14 +3071,11 @@ curves	Smooth	平滑
 	DDS Options	DDS 选项
 	Compression	压缩
 	Generate Mipmaps	生成 Mipmap
-
 # Color Table (.act) dialog
 	There is no color table to save.	没有可保存的色表。
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	已将 {n} 种颜色保存到 {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 适配器
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	导入样式…
 	Export Selected Styles…	导出所选样式…
@@ -3102,7 +3099,6 @@ curves	Smooth	平滑
 	Not rendered: this adjustment ({key}) is kept as imported.	未渲染：此调整（{key}）按导入时的原样保留。
 # Print preview image (#8236)
 	Print preview image	打印预览图像
-
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	色相立方体
 	Brightness Cube	亮度立方体
@@ -3120,7 +3116,6 @@ curves	Smooth	平滑
 	Grayscale Ramp	灰度色带
 	Current Colors	当前颜色
 	Make Ramp Web Safe	使色带成为 Web 安全色
-
 # File opening, export status and graphics driver information
 	Couldn't open {name}: {error}	无法打开 {name}：{error}
 	Exported {path} ({size})	已导出 {path}（{size}）
@@ -3140,7 +3135,6 @@ curves	Smooth	平滑
 	Loose Curl	宽松卷曲
 	Area	区域
 	Stylized dabs from a history state	从历史状态绘制风格化点涂
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	长宽比
 	Category	类别
@@ -3150,3 +3144,15 @@ curves	Smooth	平滑
 	Profile	配置文件
 	Target	目标
 	Units	单位
+	A layer per frame, each with its own delay, edited in Window › Timeline	每帧一个图层，各有自己的延迟，在“窗口 › 时间轴”中编辑
+	A still image	静态图像
+	Change it later in Preferences › File Handling.	以后可在“首选项 › 文件处理”中更改。
+	First frame only	仅第一帧
+	Frame animation	帧动画
+	One layer holding every frame, played on the timeline	一个包含所有帧的图层，在时间轴上播放
+	Open Animated {format}	打开动画 {format}
+	Remember this choice for {format} files	对 {format} 文件记住此选择
+	Video layer	视频图层
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}”是包含 {frames} 帧的动画 {format}。打开为：
+	Open animated GIF as	动画 GIF 打开为
+	Open animated WebP as	动画 WebP 打开为

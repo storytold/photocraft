@@ -527,9 +527,10 @@ impl Session {
     /// The job's result is `{document, docId, name, warnings, color}`; on wasm it runs inline.
     /// `document` is the tab index at apply time; resolve `docId` before handling a delayed
     /// completion, since earlier handlers may have moved or closed tabs. When
-    /// Color Settings ask about the file's profile, the document is held back instead and the
-    /// result is `{held, name, warnings, color}` (`color` the question): take it with
-    /// [`Session::take_held_open`] once answered.
+    /// Color Settings ask about the file's profile, or it is an animation the File Handling
+    /// preference says to ask about ([`crate::animated_open::question`]), the document is held
+    /// back instead and the result is `{held, name, warnings, color, damaged, animated}` (the
+    /// questions, `null` when not asked): take it with [`Session::take_held_open`] once answered.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         self.start_open_inner(name, source, false)
     }
@@ -548,6 +549,10 @@ impl Session {
         let name_w = name.to_string();
         let name_a = name.to_string();
         let opts = import_options(self.prefs());
+        let path = match &source {
+            OpenSource::Path(p) => Some(p.clone()),
+            OpenSource::Bytes(_) => None,
+        };
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),
@@ -583,14 +588,19 @@ impl Session {
                 // File Handling's ACEScg option, before the colour prompt looks at the profile.
                 crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                 crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
+                // An animated GIF or WebP opens as the preference says, or is held back to ask.
+                let animated = crate::animated_open::question(s.prefs(), &name_a, &r.document);
+                if animated.is_none() {
+                    crate::animated_open::apply_preferred(s.prefs(), &name_a, &mut r.document, path.as_deref())?;
+                }
                 // Ask When Opening: held back until the prompt is answered (`take_held_open`). A
                 // developed raw has no embedded profile to ask about.
                 let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                 let damaged = confirm_damage && damaged;
                 let question = s.color.open_question(&r.document).filter(|_| !raw);
-                if damaged || question.is_some() {
+                if damaged || question.is_some() || animated.is_some() {
                     let held = s.hold_open(r.document, r.source_read_only);
-                    return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
+                    return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged, "animated": animated}));
                 }
                 let (index, color) = s.open_document(r.document, None);
                 // Persisted IDs can collide: report the identity the session actually admitted.

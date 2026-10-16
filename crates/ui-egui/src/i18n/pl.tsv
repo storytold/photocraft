@@ -4026,14 +4026,11 @@ curves	Smooth	Wygładź
 	DDS Options	Opcje DDS
 	Compression	Kompresja
 	Generate Mipmaps	Generuj mipmapy
-
 # Color Table (.act) dialog
 	There is no color table to save.	Brak tabeli kolorów do zapisania.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Zapisano {n} kolor do {file}|Zapisano {n} kolory do {file}|Zapisano {n} kolorów do {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Karta GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importuj style…
 	Export Selected Styles…	Eksportuj zaznaczone style…
@@ -4084,6 +4081,17 @@ curves	Smooth	Wygładź
 	Tight Curl	Ścisły lok
 	Loose Curl	Luźny lok
 	Stylized dabs from a history state	Stylizowane plamy ze stanu historii
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+	A layer per frame, each with its own delay, edited in Window › Timeline	Jedna warstwa na klatkę, każda z własnym opóźnieniem, edycja w Okno › Oś czasu
+	A still image	Obraz nieruchomy
+	Change it later in Preferences › File Handling.	Zmienisz to później w Preferencje › Obsługa plików.
+	First frame only	Tylko pierwsza klatka
+	Frame animation	Animacja poklatkowa
+	One layer holding every frame, played on the timeline	Jedna warstwa ze wszystkimi klatkami, odtwarzana na osi czasu
+	Open Animated {format}	Otwórz animowany {format}
+	Remember this choice for {format} files	Zapamiętaj ten wybór dla plików {format}
+	Video layer	Warstwa wideo
+	“{name}” is an animated {format} with {frames} frames. Open it as:	„{name}” to animowany {format} z liczbą klatek: {frames}. Otwórz jako:
+	Open animated GIF as	Animowany GIF otwieraj jako
+	Open animated WebP as	Animowany WebP otwieraj jako

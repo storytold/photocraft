@@ -3422,14 +3422,11 @@ curves	Smooth	Glätten
 	DDS Options	DDS-Optionen
 	Compression	Komprimierung
 	Generate Mipmaps	Mipmaps erzeugen
-
 # Color Table (.act) dialog
 	There is no color table to save.	Es gibt keine Farbtabelle zum Speichern.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} Farbe in {file} gespeichert|{n} Farben in {file} gespeichert
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-Adapter
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stile importieren…
 	Export Selected Styles…	Ausgewählte Stile exportieren…
@@ -3482,7 +3479,6 @@ curves	Smooth	Glätten
 	Tight Curl	Eng gewellt
 	Loose Curl	Locker gewellt
 	Stylized dabs from a history state	Stilisierte Tupfer aus einem Protokollzustand
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Seitenverhältnis
 	Category	Kategorie
@@ -3491,3 +3487,15 @@ curves	Smooth	Glätten
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+	A layer per frame, each with its own delay, edited in Window › Timeline	Eine Ebene pro Frame, jeder mit eigener Verzögerung, bearbeitet unter Fenster › Zeitleiste
+	A still image	Ein Standbild
+	Change it later in Preferences › File Handling.	Später änderbar unter Voreinstellungen › Dateiverarbeitung.
+	First frame only	Nur erster Frame
+	Frame animation	Frame-Animation
+	One layer holding every frame, played on the timeline	Eine Ebene mit allen Frames, abgespielt auf der Zeitleiste
+	Open Animated {format}	Animiertes {format} öffnen
+	Remember this choice for {format} files	Diese Auswahl für {format}-Dateien merken
+	Video layer	Videoebene
+	“{name}” is an animated {format} with {frames} frames. Open it as:	„{name}“ ist ein animiertes {format} mit {frames} Frames. Öffnen als:
+	Open animated GIF as	Animiertes GIF öffnen als
+	Open animated WebP as	Animiertes WebP öffnen als

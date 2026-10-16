@@ -4169,14 +4169,11 @@ curves	Smooth	Vloeiend maken
 # DDS Options (#1327)
 	DDS Options	DDS-opties
 	Generate Mipmaps	Mipmaps genereren
-
 # Color Table (.act) dialog
 	There is no color table to save.	Er is geen kleurtabel om op te slaan.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} kleur opgeslagen in {file}|{n} kleuren opgeslagen in {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stijlen importeren…
 	Export Selected Styles…	Geselecteerde stijlen exporteren…
@@ -4227,3 +4224,15 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+	A layer per frame, each with its own delay, edited in Window › Timeline	Eén laag per frame, elk met een eigen vertraging, te bewerken in Venster › Tijdlijn
+	A still image	Een stilstaand beeld
+	Change it later in Preferences › File Handling.	Later te wijzigen in Voorkeuren › Bestandsverwerking.
+	First frame only	Alleen het eerste frame
+	Frame animation	Frame-animatie
+	One layer holding every frame, played on the timeline	Eén laag met alle frames, afgespeeld op de tijdlijn
+	Open Animated {format}	Geanimeerde {format} openen
+	Remember this choice for {format} files	Deze keuze onthouden voor {format}-bestanden
+	Video layer	Videolaag
+	“{name}” is an animated {format} with {frames} frames. Open it as:	‘{name}’ is een geanimeerde {format} met {frames} frames. Openen als:
+	Open animated GIF as	Geanimeerde GIF openen als
+	Open animated WebP as	Geanimeerde WebP openen als

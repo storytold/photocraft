@@ -549,7 +549,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>) -> Result<(), String> {
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+    let held = |doc, read_only, question, animated, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
@@ -559,12 +559,14 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         bytes: None,
         slot,
         question,
+        animated,
         policy_applied,
     };
-    // Held back for the profile prompt (Ask When Opening).
+    // Held back for the profile prompt (Ask When Opening) or the animation prompt.
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
         let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let asked = |k: &str| v.get(k).filter(|q| !q.is_null()).cloned();
+        crate::open_prompt::arrive(app, held(doc, read_only, asked("color"), asked("animated"), false));
         return Ok(());
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
@@ -577,7 +579,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     {
         let read_only = st.source_read_only;
         let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(app, held(doc, read_only, None, None, true));
         return Ok(());
     }
     if let Some(slot) = slot {

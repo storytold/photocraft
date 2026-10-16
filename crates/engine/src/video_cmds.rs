@@ -229,7 +229,7 @@ struct Footage {
 /// first one seen on a tie. GIF has a delay per frame but the timeline one rate. Delays under
 /// 20 ms, which includes the 0 and 10 ms many encoders write, are shown at 100 ms, as browsers
 /// do, since they would otherwise play at an unintended 50-100 fps.
-fn fps_from_delays(delays: &[u32]) -> Option<f32> {
+pub(crate) fn fps_from_delays(delays: &[u32]) -> Option<f32> {
     let clean = |d: u32| if d < 20 { 100 } else { d };
     // Count delays with a map keyed on the cleaned delay, recording first-seen order
     // separately. A linear scan per frame (iter_mut().find) was O(n^2) for a GIF with many

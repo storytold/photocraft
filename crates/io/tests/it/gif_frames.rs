@@ -1,7 +1,7 @@
-//! `import_gif_frames`: each GIF frame as a single-layer document, in order, with its delay.
+//! `import_animation_frames`: each GIF frame as a single-layer document, in order, with its delay.
 
 use photocraft_codecs::web::{GifFrame, encode_gif_animated};
-use photocraft_io::{IoError, import_gif_frames};
+use photocraft_io::{IoError, import_animation_frames};
 
 fn gif(colours: &[([u8; 3], u16)]) -> Vec<u8> {
     let frames: Vec<GifFrame> = colours.iter().map(|&(c, delay_cs)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs }).collect();
@@ -12,7 +12,7 @@ fn gif(colours: &[([u8; 3], u16)]) -> Vec<u8> {
 fn frames_arrive_in_order_as_documents_with_their_delays() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 7)]);
     let mut seen = Vec::new();
-    let n = import_gif_frames("a.gif", &bytes, &mut |doc, delay_ms| {
+    let n = import_animation_frames("a.gif", &bytes, &mut |doc, delay_ms| {
         seen.push((doc.layers.len(), doc.bounds().width(), doc.bounds().height(), delay_ms));
         Ok(())
     })
@@ -25,7 +25,7 @@ fn frames_arrive_in_order_as_documents_with_their_delays() {
 fn an_error_from_the_callback_stops_the_import() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 7), ([0, 255, 0], 7)]);
     let mut calls = 0;
-    let r = import_gif_frames("a.gif", &bytes, &mut |_, _| {
+    let r = import_animation_frames("a.gif", &bytes, &mut |_, _| {
         calls += 1;
         Err(IoError::Unsupported("stop".into()))
     });
@@ -35,7 +35,7 @@ fn an_error_from_the_callback_stops_the_import() {
 
 #[test]
 fn garbage_is_an_error() {
-    assert!(import_gif_frames("a.gif", b"not a gif", &mut |_, _| Ok(())).is_err());
+    assert!(import_animation_frames("a.gif", b"not a gif", &mut |_, _| Ok(())).is_err());
 }
 
 /// #3001: opening an animated GIF keeps each frame's own delay and shows one frame's layer at a time.
@@ -51,7 +51,7 @@ fn opening_an_animated_gif_keeps_every_delay() {
 /// The delays of an animated GIF's frames, in milliseconds, read back through the importer.
 fn delays_of(bytes: &[u8]) -> Vec<u32> {
     let mut out = Vec::new();
-    import_gif_frames("x.gif", bytes, &mut |_, ms| {
+    import_animation_frames("x.gif", bytes, &mut |_, ms| {
         out.push(ms);
         Ok(())
     })
@@ -224,7 +224,7 @@ fn tagged(mode: photocraft_doc::ColorMode, icc: Vec<u8>, colour: &[f32]) -> phot
 /// The first pixel of the first frame a GIF holds, as the sRGB bytes it opens with.
 fn first_pixel(gif: &[u8]) -> [u8; 3] {
     let mut out = None;
-    import_gif_frames("a.gif", gif, &mut |d, _| {
+    import_animation_frames("a.gif", gif, &mut |d, _| {
         out.get_or_insert_with(|| {
             let px = photocraft_compose::thumbnail(&d, 2).pixels;
             [px[0], px[1], px[2]]

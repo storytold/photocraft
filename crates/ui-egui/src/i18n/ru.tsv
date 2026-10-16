@@ -3890,14 +3890,11 @@ curves	Smooth	Сгладить
 	DDS Options	Параметры DDS
 	Compression	Сжатие
 	Generate Mipmaps	Создать MIP-карты
-
 # Color Table (.act) dialog
 	There is no color table to save.	Нет таблицы цветов для сохранения.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сохранён {n} цвет в {file}|Сохранены {n} цвета в {file}|Сохранено {n} цветов в {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…
 	Export Selected Styles…	Экспортировать выбранные стили…
@@ -4670,3 +4667,15 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+	A layer per frame, each with its own delay, edited in Window › Timeline	По слою на кадр, у каждого своя задержка; правка в Окно › Шкала времени
+	A still image	Неподвижное изображение
+	Change it later in Preferences › File Handling.	Изменить можно в Настройки › Обработка файлов.
+	First frame only	Только первый кадр
+	Frame animation	Покадровая анимация
+	One layer holding every frame, played on the timeline	Один слой со всеми кадрами, воспроизводится на шкале времени
+	Open Animated {format}	Открыть анимированный {format}
+	Remember this choice for {format} files	Запомнить этот выбор для файлов {format}
+	Video layer	Видеослой
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» — анимированный {format}, кадров: {frames}. Открыть как:
+	Open animated GIF as	Открывать анимированный GIF как
+	Open animated WebP as	Открывать анимированный WebP как

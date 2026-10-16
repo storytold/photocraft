@@ -14,6 +14,7 @@ pub mod adjust_params;
 pub mod align_cmds;
 mod allocation;
 pub mod analysis_cmds;
+pub mod animated_open;
 mod animation_cmds;
 pub mod artboard_cmds;
 pub mod atn_cmds;

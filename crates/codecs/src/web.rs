@@ -254,6 +254,67 @@ pub fn encode_gif_animated_stepped(
     Ok(Some(out))
 }
 
+/// One frame of an animated WebP: straight RGBA8 pixels of the whole canvas and how long it
+/// shows, in milliseconds (WebP stores up to 2^24 − 1).
+pub struct WebpFrame {
+    pub rgba: Vec<u8>,
+    pub delay_ms: u32,
+}
+
+/// Encode a lossless animated WebP (`VP8X` + `ANIM` + one `ANMF` per frame). Every frame covers
+/// the whole canvas and replaces the one before (no blending, no disposal). `loops` 0 plays
+/// forever.
+pub fn encode_webp_animated(width: u32, height: u32, frames: &[WebpFrame], loops: u16) -> Result<Vec<u8>, CodecError> {
+    let err = |m: &str| CodecError::encode(Format::WebP, m.to_string());
+    if width == 0 || height == 0 || width > 1 << 14 || height > 1 << 14 {
+        return Err(err("WebP size must be 1..=16384"));
+    }
+    if frames.is_empty() {
+        return Err(err("an animated WebP needs at least one frame"));
+    }
+    let u24 = |out: &mut Vec<u8>, v: u32| out.extend(&v.to_le_bytes()[..3]);
+    let chunk = |out: &mut Vec<u8>, fourcc: &[u8; 4], payload: &[u8]| {
+        out.extend_from_slice(fourcc);
+        out.extend((payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(payload);
+        if payload.len() % 2 == 1 {
+            out.push(0);
+        }
+    };
+    let mut body = b"WEBP".to_vec();
+    let mut vp8x = vec![0x10 | 0x02, 0, 0, 0]; // alpha, animation
+    u24(&mut vp8x, width - 1);
+    u24(&mut vp8x, height - 1);
+    chunk(&mut body, b"VP8X", &vp8x);
+    let mut anim = vec![0u8; 4]; // background colour: transparent
+    anim.extend(loops.to_le_bytes());
+    chunk(&mut body, b"ANIM", &anim);
+    for f in frames {
+        if f.rgba.len() != width as usize * height as usize * 4 {
+            return Err(err("every frame must be width × height RGBA8"));
+        }
+        let mut still = Vec::new();
+        image_webp::WebPEncoder::new(&mut still)
+            .encode(&f.rgba, width, height, image_webp::ColorType::Rgba8)
+            .map_err(|e| CodecError::encode(Format::WebP, e))?;
+        // The encoder writes RIFF/WEBP then the VP8L chunk; the frame keeps that chunk whole.
+        let bitstream = still.get(12..).ok_or_else(|| err("the still encoder wrote no chunk"))?;
+        let mut anmf = Vec::new();
+        u24(&mut anmf, 0);
+        u24(&mut anmf, 0);
+        u24(&mut anmf, width - 1);
+        u24(&mut anmf, height - 1);
+        u24(&mut anmf, f.delay_ms.min((1 << 24) - 1));
+        anmf.push(0x02); // do not blend, do not dispose
+        anmf.extend_from_slice(bitstream);
+        chunk(&mut body, b"ANMF", &anmf);
+    }
+    let mut out = b"RIFF".to_vec();
+    out.extend((body.len() as u32).to_le_bytes());
+    out.extend(body);
+    Ok(out)
+}
+
 fn put_multibyte(out: &mut Vec<u8>, v: u32) {
     let mut groups = vec![(v & 0x7f) as u8];
     let mut v = v >> 7;
@@ -571,5 +632,55 @@ mod anim_tests {
         assert!(encode_gif_animated(2, 2, &[], false).is_err());
         let bad = GifFrame { indices: vec![0; 3], palette: vec![[0, 0, 0]], transparent: None, delay_cs: 1 };
         assert!(encode_gif_animated(2, 2, &[bad], false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod webp_anim_tests {
+    use super::*;
+
+    fn solid(w: u32, h: u32, px: [u8; 4]) -> Vec<u8> {
+        px.repeat((w * h) as usize)
+    }
+
+    #[test]
+    fn an_animated_webp_decodes_to_every_frame_with_its_delay() {
+        let frames = [([255, 0, 0, 255], 40), ([0, 0, 255, 128], 250), ([0, 255, 0, 255], 0)].map(|(c, delay_ms)| WebpFrame { rgba: solid(5, 3, c), delay_ms });
+        let bytes = encode_webp_animated(5, 3, &frames, 0).unwrap();
+        assert_eq!(crate::detect(&bytes), Some(Format::WebP));
+        let out = crate::decode_webp_frames(&bytes, &crate::DecodeOptions::default()).unwrap();
+        assert_eq!(out.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [40, 250, 0]);
+        for (f, want) in out.iter().zip([[255, 0, 0, 255], [0, 0, 255, 128], [0, 255, 0, 255]]) {
+            let rgba = f.image.convert(crate::ChannelLayout::Rgba, crate::SampleType::U8);
+            assert_eq!(f.image.dimensions(), (5, 3));
+            assert!(rgba.data().chunks(4).all(|p| p == want), "every pixel {want:?}");
+        }
+        // The first-frame decode still says frames were left out.
+        assert!(matches!(crate::decode(&bytes).unwrap().warnings.first(), Some(crate::DecodeWarning::MoreFrames { total: Some(3) })));
+    }
+
+    #[test]
+    fn a_still_webp_is_one_frame() {
+        let still =
+            crate::encode(&crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![9; 12]).unwrap(), Format::WebP, &crate::EncodeOptions::default())
+                .unwrap();
+        let out = crate::decode_frames(&still, &crate::DecodeOptions::default()).unwrap().unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(crate::decode_frames(b"neither", &crate::DecodeOptions::default()).is_none());
+    }
+
+    #[test]
+    fn too_many_animated_frames_for_the_budget_are_refused() {
+        let frames: Vec<WebpFrame> = (0..4).map(|_| WebpFrame { rgba: solid(64, 64, [1, 2, 3, 255]), delay_ms: 10 }).collect();
+        let bytes = encode_webp_animated(64, 64, &frames, 0).unwrap();
+        let mut opts = crate::DecodeOptions::default();
+        opts.limits.max_alloc = 64 * 64 * 4 * 3;
+        assert!(matches!(crate::decode_webp_frames(&bytes, &opts), Err(CodecError::LimitExceeded(_))));
+    }
+
+    #[test]
+    fn bad_frames_are_refused() {
+        assert!(encode_webp_animated(2, 2, &[], 0).is_err());
+        assert!(encode_webp_animated(2, 2, &[WebpFrame { rgba: vec![0; 3], delay_ms: 0 }], 0).is_err());
     }
 }

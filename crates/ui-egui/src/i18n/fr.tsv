@@ -3421,14 +3421,11 @@ curves	Smooth	Lisser
 	DDS Options	Options DDS
 	Compression	Compression
 	Generate Mipmaps	Générer les mipmaps
-
 # Color Table (.act) dialog
 	There is no color table to save.	Il n’y a aucune table de couleurs à enregistrer.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} couleur enregistrée dans {file}|{n} couleurs enregistrées dans {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptateur GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importer des styles…
 	Export Selected Styles…	Exporter les styles sélectionnés…
@@ -4509,3 +4506,15 @@ shape	Appearance	Apparence
 	Tight Curl	Boucle serrée
 	Loose Curl	Boucle lâche
 	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+	A layer per frame, each with its own delay, edited in Window › Timeline	Un calque par image, chacune avec son propre délai, modifiable dans Fenêtre › Montage
+	A still image	Une image fixe
+	Change it later in Preferences › File Handling.	Modifiable plus tard dans Préférences › Gestion des fichiers.
+	First frame only	Première image seulement
+	Frame animation	Animation image par image
+	One layer holding every frame, played on the timeline	Un calque contenant toutes les images, lu dans le montage
+	Open Animated {format}	Ouvrir un {format} animé
+	Remember this choice for {format} files	Mémoriser ce choix pour les fichiers {format}
+	Video layer	Calque vidéo
+	“{name}” is an animated {format} with {frames} frames. Open it as:	« {name} » est un {format} animé de {frames} images. L’ouvrir comme :
+	Open animated GIF as	Ouvrir un GIF animé comme
+	Open animated WebP as	Ouvrir un WebP animé comme
