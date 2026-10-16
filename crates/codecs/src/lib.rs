@@ -33,8 +33,8 @@ pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
-pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with, is_jpeg2000};
-pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
+pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
+pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension, is_jpeg2000, read_unsupported};
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, Image, Metadata, SampleType,
 };
@@ -64,9 +64,10 @@ pub fn decode_as(format: Format, bytes: &[u8]) -> Result<Image, CodecError> {
 
 /// Decode as a specific format.
 pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
-    // HEIF without the `heif` feature: its decoder stub says what is missing from this build.
+    // HEIF without the `heif` feature still goes to its decoder, which names the missing
+    // feature; every other unreadable format is refused with `read_unsupported` by name.
     if !caps(format).read && format != Format::Heif {
-        return Err(CodecError::unsupported(format, "decoding is not available for this format"));
+        return Err(CodecError::unsupported(format, read_unsupported(format)));
     }
     let l = &opts.limits;
     let img = match format {
@@ -83,7 +84,10 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
-        Format::Jp2 | Format::J2k | Format::Jpx | Format::Jpf | Format::Jpm => jpeg2000::decode(bytes, l),
+        Format::Jp2 | Format::J2k | Format::Jpx | Format::Jpf => jpeg2000::decode(bytes, format, l),
+        // The Part 6 compound file and the Part 3 motion container carry a Part 1 codestream per
+        // page/frame; decode the first one and report the rest with a MorePages/MoreFrames warning.
+        Format::Jpm | Format::Mj2 => jpeg2000::decode_multi(bytes, format, l),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
     // Without a resolution of the format's own (PNG pHYs, TIFF tags, JPEG's metadata), the
@@ -259,8 +263,10 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => Err(CodecError::unsupported(format, "Cineon is import-only; save as DPX, TIFF or EXR instead")),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
-        Format::Jp2 | Format::Jpx | Format::Jpf | Format::Jpm => jpeg2000::encode(image, format, plan, opts),
+        Format::Jp2 | Format::Jpx | Format::Jpf => jpeg2000::encode(image, format, plan, opts),
         Format::J2k => jpeg2000::encode_j2k(image, format, plan, opts),
+        // The Part 6 compound file and the Part 3 motion container are recognised, never written.
+        Format::Jpm | Format::Mj2 => Err(CodecError::unsupported(format, "this build cannot write it; save as JP2 or J2K instead")),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }

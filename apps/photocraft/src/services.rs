@@ -23,7 +23,11 @@ const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr",
     "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw",
     "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
-    "jp2", "j2k", "jpx", "jpf", "jpm", "j2c",
+    // JPEG 2000: the Part 1 file, its bare codestream, and the Part 2 JPX/JPF containers, which
+    // carry a Part 1 codestream. `.jpm` (Part 6 compound) and `.mj2` (Part 3 motion) are
+    // multi-image containers: this crate opens the first page/frame of each, so they are listed
+    // here and opening one yields a "more pages/frames" warning rather than a refusal.
+    "jp2", "j2k", "j2c", "jpx", "jpf", "jpm", "mj2",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -59,7 +63,10 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
-    ("JPEG 2000", &["jp2", "j2k", "jpx", "jpf", "jpm"]),
+    // The Part 1 file and its bare codestream, as Photoshop's Save As offers. JPX/JPF are read
+    // (File › Open) but not offered here: a save would write a Part 1 container, and Part 6
+    // (`.jpm`) and Part 3 (`.mj2`) are multi-image containers we do not write.
+    ("JPEG 2000", &["jp2", "j2k"]),
     ("WebP", &["webp"]),
     ("TIFF", &["tif"]),
     ("Targa", &["tga"]),
@@ -723,6 +730,26 @@ mod tests {
             assert_eq!(save_filters(name)[0].1.first().map(String::as_str), Some(ext), "{name}: {:?}", save_filters(name)[0]);
         }
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
+    }
+
+    /// JPEG 2000 is in the Open and Save As extension lists, with the containers we cannot
+    /// open left out so the dialog never offers a file whose only answer is a refusal (#1047).
+    #[test]
+    fn the_extension_lists_carry_jpeg2000() {
+        for ext in ["jp2", "j2k", "j2c", "jpx", "jpf", "jpm", "mj2"] {
+            assert!(OPEN_EXTS.contains(&ext), "File › Open must list .{ext}");
+        }
+        let jpeg2000 = SAVE_FILTERS.iter().find(|(name, _)| *name == "JPEG 2000").expect("Save As must offer JPEG 2000");
+        assert_eq!(jpeg2000.1, &["jp2", "j2k"], "the Part 1 file and its bare codestream, as Photoshop offers");
+        // Part 6 (multi-page compound) and Part 3 (motion) open the first page/frame but are not
+        // single images we can write, so Save As keeps offering JP2/J2K only.
+        for ext in ["jpm", "mj2"] {
+            assert!(!SAVE_FILTERS.iter().any(|(_, exts)| exts.contains(&ext)), "Save As must not offer .{ext}");
+        }
+        // A `.jp2` name leads with its own type, and everything offered is writable.
+        assert_eq!(save_filters("photo.jp2")[0].0, "JPEG 2000");
+        assert_eq!(save_filters("photo.j2k")[0].0, "JPEG 2000");
+        assert_eq!(save_filters("photo.j2k")[0].1, vec!["j2k", "jp2"]);
     }
 
     /// Every flat format Save As offers is one PhotoCraft writes, and ICO is among them (#4357).

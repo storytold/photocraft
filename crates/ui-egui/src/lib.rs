@@ -260,9 +260,9 @@ pub struct ExportSettings {
     pub webp_lossless: bool,
     /// Lossy WebP quality 1–100 (None = codec default).
     pub webp_quality: Option<u8>,
-    /// JPEG 2000 quality 1–100, where 100 is the reversible (exact) wavelet. `Some(100)` by
-    /// default, so a `.jp2` save is lossless like the format is meant to be; Export As moves
-    /// the slider down only when a smaller file is wanted.
+    /// JPEG 2000 quality 1–100, where 100 is the reversible (exact) wavelet. `None` leaves the
+    /// codec's own default, which is that reversible wavelet, so a `.jp2` save is exact like
+    /// the format is meant to be; Export As sets it only from its own slider.
     pub jp2_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
@@ -293,7 +293,7 @@ impl Default for ExportSettings {
             jpeg_quality: None,
             webp_lossless: true,
             webp_quality: None,
-            jp2_quality: Some(100),
+            jp2_quality: None,
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,

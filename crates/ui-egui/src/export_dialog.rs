@@ -13,8 +13,7 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 7] =
-    [("png", "PNG"), ("jpg", "JPG"), ("jp2", "JPEG 2000"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+const FORMATS: [(&str, &str); 7] = [("png", "PNG"), ("jpg", "JPG"), ("jp2", "JPEG 2000"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
 
 /// JPEG 2000's Quality slider starts at 100, the reversible wavelet that makes the format exact,
 /// because that is what it is reached for; JPEG and WebP start at their remembered quality.
@@ -1193,10 +1192,13 @@ mod tests {
         assert_eq!(settings(&fields).jp2_quality, Some(60));
         assert_eq!(settings(&fields).io_options().encode.jp2_quality, Some(60));
         assert_eq!(settings(&fields).io_options().encode.jpeg_quality, 90, "JPEG keeps its own default");
-        // A dialog that has never seen JPEG 2000 is still exact rather than silently lossy.
+        // Another format says nothing about JPEG 2000, which leaves the codec's exact default.
         let mut other = Map::new();
         other.insert("format".into(), json!("png"));
-        assert_eq!(settings(&other).jp2_quality, Some(100));
+        assert_eq!(settings(&other).jp2_quality, None);
+        assert_eq!(settings(&other).io_options().encode.jp2_quality, None);
+        // The codec default is the reversible wavelet, so the file it writes is exact.
+        assert_eq!(photocraft_codecs::EncodeOptions::default().jp2_quality, None);
     }
 
     /// The remembered-dialog seeding accepts JPEG 2000 as a format and keeps its quality.

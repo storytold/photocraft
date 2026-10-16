@@ -65,10 +65,9 @@ impl FidelityWarning {
     }
 }
 
-/// The JPEG 2000 family (JP2, J2K, JPX, JPF, JPM): one codec, five containers.
-pub fn is_jpeg2000(format: Format) -> bool {
-    matches!(format, Format::Jp2 | Format::J2k | Format::Jpx | Format::Jpf | Format::Jpm)
-}
+/// The JPEG 2000 family (JP2, J2K, JPX, JPF): one codec, four containers. See
+/// [`crate::format::is_jpeg2000`].
+pub(crate) use crate::format::is_jpeg2000;
 
 fn depth_name(s: SampleType) -> &'static str {
     match s {
@@ -84,7 +83,13 @@ impl fmt::Display for FidelityWarning {
         use FidelityWarning::*;
         match self {
             WriteUnsupported { format } => {
-                write!(f, "{} cannot be written in this build", format.name())
+                // Name the way out when there is one: the JPEG 2000 containers we only
+                // recognise have a sibling we do write.
+                match format {
+                    Format::Jpm => write!(f, "{} cannot be written in this build; save as JP2 or J2K instead", format.name()),
+                    Format::Mj2 => write!(f, "{} cannot be written in this build; save as JP2 or J2K instead", format.name()),
+                    _ => write!(f, "{} cannot be written in this build", format.name()),
+                }
             }
             DepthReduced { from, to } => write!(f, "{} will be reduced to {}", depth_name(*from), depth_name(*to)),
             RangeClipped => write!(f, "HDR values outside 0..1 will be clipped"),

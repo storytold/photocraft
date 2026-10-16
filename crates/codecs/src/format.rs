@@ -39,12 +39,21 @@ pub enum Format {
     Jp2,
     /// JPEG 2000 codestream (J2K/J2C): raw codestream without JP2 wrapper.
     J2k,
-    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPX extended file format.
+    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPX extended file format. Read (its basic codestream
+    /// is a Part 1 one); a save writes the Part 1 container.
     Jpx,
-    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPF file format (same as JPX).
+    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPF, the JPX *sequence* flavour. Read like
+    /// [`Format::Jpx`]; a save writes a single-frame Part 1 container, not a sequence.
     Jpf,
-    /// JPEG 2000 Part 6 (ISO/IEC 15444-6): JPM compound image file format.
+    /// JPEG 2000 Part 6 (ISO/IEC 15444-6): JPM, the multi-page compound file. Its pages live in
+    /// `page` boxes under a shared `mhdr`, each holding a `jp2c` Part 1 codestream; this crate
+    /// decodes the first page and reports the rest with a `MorePages` warning, and does not write
+    /// the compound container.
     Jpm,
+    /// Motion JPEG 2000 (Part 3): an `.mj2` container with the frame headers in `moov` and the
+    /// codestreams in `mdat`; each frame is a Part 1 codestream. This crate decodes the first
+    /// frame and reports the rest with a `MoreFrames` warning, and does not write the container.
+    Mj2,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -96,6 +105,16 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          imported frame as DPX, TIFF or EXR instead.",
     ),
     (
+        Format::Jpm,
+        "JPEG 2000 Part 6 compound files (.jpm) hold several pages; this crate opens the first \
+         page and refuses to write the container, so save single pages as JP2 or J2K instead.",
+    ),
+    (
+        Format::Mj2,
+        "Motion JPEG 2000 (.mj2) holds several frames; this crate opens the first frame and \
+         refuses to write the container, so save frames as JP2 or J2K instead.",
+    ),
+    (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional photocraft-heif crate behind the \
          non-default `heif` feature, which official builds enable), so iPhone and Mac photos open; \
@@ -114,7 +133,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 25] = [
+    pub const ALL: [Format; 26] = [
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -140,6 +159,7 @@ impl Format {
         Format::Jpx,
         Format::Jpf,
         Format::Jpm,
+        Format::Mj2,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -179,6 +199,7 @@ impl Format {
             Format::Jpx => "JPEG 2000 JPX",
             Format::Jpf => "JPEG 2000 JPF",
             Format::Jpm => "JPEG 2000 JPM",
+            Format::Mj2 => "Motion JPEG 2000",
         }
     }
 
@@ -211,6 +232,7 @@ impl Format {
             Format::Jpx => &["jpx"],
             Format::Jpf => &["jpf"],
             Format::Jpm => &["jpm"],
+            Format::Mj2 => &["mj2", "mjp2"],
         }
     }
 
@@ -241,6 +263,7 @@ impl Format {
             Format::Jpx => "image/jpx",
             Format::Jpf => "image/jpf",
             Format::Jpm => "image/jpm",
+            Format::Mj2 => "video/mjp2",
         }
     }
 
@@ -305,10 +328,16 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Jp2 => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
         // A raw codestream has no boxes, so nothing but the samples survives.
         Format::J2k => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, ..base },
+        // A JPX/JPF save writes the Part 1 container, which every JPX reader opens.
         Format::Jpx => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
         Format::Jpf => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
-        // JPM is the multi-page compound format; this crate writes and reads one page.
-        Format::Jpm => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
+        // The Part 6 compound file and the Part 3 motion container are readable (first page /
+        // frame only, with a MorePages/MoreFrames warning) but never written: their caps say
+        // read-only, so they are whitelisted in `ASYMMETRIC_EXCEPTIONS`. A page/frame is a bare
+        // Part 1 codestream with no `colr`/`cdef` boxes, so they decode the same depths and
+        // layouts as `J2k` and, like it, keep no ICC profile.
+        Format::Jpm => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: RGB_GRAY, ..base },
+        Format::Mj2 => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: RGB_GRAY, animation: true, ..base },
     }
 }
 
@@ -343,10 +372,12 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(b"#?RADIANCE") || b.starts_with(b"#?RGBE") {
         return Some(Format::Hdr);
     }
-    // JPEG 2000 file formats: either the Part 1 signature box that opens every JP2-shaped
-    // file, or an ISO base-media `ftyp` naming a Part 2/6 brand.
-    if b.starts_with(JP2_SIGNATURE_BOX) || (b.len() >= 12 && &b[4..8] == b"ftyp" && is_jp2_ftyp(b)) {
-        return Some(Format::Jp2);
+    // Every JPEG 2000 file opens with the Part 1 signature box, and the ISO base-media `ftyp`
+    // box that follows it names the container: the Part 1/2 still images we decode and write, or
+    // the Part 6 compound file and Part 3 motion stream we decode (first page/frame only) but
+    // do not write.
+    if b.starts_with(JP2_SIGNATURE_BOX) {
+        return Some(jp2_file_brand(b.get(JP2_SIGNATURE_BOX.len()..)));
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         if is_avif_ftyp(b) {
@@ -357,7 +388,7 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
         }
     }
     // JPEG 2000 codestream (J2K/J2C): starts with SOC (0xFF4F) followed by SIZ (0xFF51)
-    if b.len() >= 4 && &b[0..2] == &[0xFF, 0x4F] && &b[2..4] == &[0xFF, 0x51] {
+    if b.starts_with(&[0xFF, 0x4F]) && b.get(2..4) == Some([0xFF, 0x51].as_slice()) {
         return Some(Format::J2k);
     }
     if b.len() >= 14 && b.starts_with(b"BM") {
@@ -390,6 +421,23 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     None
 }
 
+/// The JPEG 2000 family: the containers this codec reads and writes symmetrically (JP2, J2K,
+/// JPX, JPF). Motion JPEG 2000 ([`Format::Mj2`]) and the Part 6 compound file ([`Format::Jpm`])
+/// are recognised and readable (first frame/page only) but not written, so they are not part of
+/// the symmetric family.
+pub fn is_jpeg2000(format: Format) -> bool {
+    matches!(format, Format::Jp2 | Format::J2k | Format::Jpx | Format::Jpf)
+}
+
+/// Why this build cannot read `format`, when the reason is worth more than "not available".
+pub fn read_unsupported(format: Format) -> &'static str {
+    match format {
+        Format::Avif => "AVIF decoding needs the C dav1d decoder, which this build does not use",
+        Format::Heif => "HEIC decoding needs the optional photocraft-heif crate (the `heif` feature)",
+        _ => "decoding is not available for this format",
+    }
+}
+
 /// The `ftyp` brands: the major brand, then the compatible ones (the minor version between them is skipped).
 fn ftyp_brands(b: &[u8]) -> impl Iterator<Item = &[u8; 4]> {
     let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
@@ -409,14 +457,29 @@ fn is_heif_ftyp(b: &[u8]) -> bool {
 }
 
 /// The JP2 signature box (ISO/IEC 15444-1 Annex I): a 12-byte box whose type is `jP  ` and
-/// whose payload is the four bytes `0D 0A 87 0A`. It opens every JP2-shaped file, before the
+/// whose payload is the four bytes `0D 0A 87 0A`. It opens every JP2-family file, before the
 /// `ftyp` box, so it is the reliable marker.
 const JP2_SIGNATURE_BOX: &[u8] = &[0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
 
-/// JPEG 2000 file formats (JP2, JPX, JPF, JPM) also name themselves in the ISO base media
-/// `ftyp` box, which is what distinguishes the Part 2 and Part 6 wrappers from a plain JP2.
-fn is_jp2_ftyp(b: &[u8]) -> bool {
-    ftyp_brands(b).any(|c| matches!(c, b"jp2 " | b"jpx " | b"jpm " | b"jpf "))
+/// The format the `ftyp` box right after the signature box names. `None` means it names
+/// something we do not know, or is absent, in which case the file is still a Part 1 JP2 as far
+/// as we are concerned — a Part 1 file is the one everything else is a superset of.
+fn jp2_file_brand(ftyp: Option<&[u8]>) -> Format {
+    let Some(b) = ftyp else { return Format::Jp2 };
+    if b.len() < 12 || &b[4..8] != b"ftyp" {
+        return Format::Jp2;
+    }
+    let brands: Vec<[u8; 4]> = ftyp_brands(b).copied().collect();
+    if brands.iter().any(|c| matches!(c, b"mjp2" | b"mj2s")) {
+        // Motion JPEG 2000 (Part 3): frame headers in `moov`, codestreams in `mdat`.
+        Format::Mj2
+    } else if brands.iter().any(|c| c == b"jpm ") {
+        // The Part 6 compound file: `mhdr`, `pcol` and a `page` box per page.
+        Format::Jpm
+    } else {
+        // `jp2 `, `jpx `, `jpf `, or nothing we recognise: a still image, decoded as Part 1.
+        Format::Jp2
+    }
 }
 
 fn looks_like_tga(b: &[u8]) -> bool {

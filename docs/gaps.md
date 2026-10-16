@@ -224,11 +224,17 @@ what an agent can't finish alone.
 ### G10. Missing and partial file formats
 - **Missing:** JPEG Options dialog (FILE-215-19), Photoshop PDF read and its vector/text/multi-page
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
-  2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
+  2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL,
   Cineon write (read landed), DICOM, EPS/DCS, Pixar, IFF, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
   Raw; layered TIFF extra alpha channels (FILE-215-7); spot plates (FILE-215-17); .atn, .asl,
   .shc, .csh presets (FILE-215-15); C2PA (#1050).
 - **Detail:** [`file-format-parity.md`](file-format-parity.md).
+- **Progress (2026-10-16):** JPEG 2000 (#1047) reads and writes `.jp2` and bare `.j2k`/`.j2c`, and
+  opens `.jpx`/`.jpf`, through the pure-Rust `j2k` codec: 8/16-bit gray and RGB with alpha, ICC in
+  the JP2 `colr` box, lossless by default and irreversible below Quality 100. Open, Save As and
+  Export As all offer it. `.jpm` (Part 6) and motion `.mj2` (Part 3) open their first page/frame
+  (with a `MorePages`/`MoreFrames` warning) but are not written. Still open: the `res ` resolution
+  box, EXIF/XMP and JPX Part 2 features.
 - **Progress (2026-10-13):** Cineon (`.cin`) 10-bit gray/RGB frames open read-only, sharing the
   DPX header/unpacking (`crates/codecs/src/codecs/dpx.rs`); writing is still open.
 - **Estimate:** 120–220 h.

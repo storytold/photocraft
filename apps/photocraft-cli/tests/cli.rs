@@ -494,6 +494,51 @@ fn dpx_converts_both_ways_with_the_bits_asked_for() {
     }
 }
 
+/// Every JPEG 2000 extension converts both ways, the default is exact, and `--quality` below
+/// 100 asks for the irreversible wavelet (#1047).
+#[test]
+fn jpeg2000_converts_both_ways_and_quality_chooses_lossy_or_exact() {
+    let d = tmp("jpeg2000");
+    let a = d.join("a.png");
+    write_png(&a, 37, 23, 7);
+    let source = photocraft_codecs::decode(&std::fs::read(&a).unwrap()).unwrap();
+    for ext in ["jp2", "j2k", "jpx", "jpf"] {
+        let out = d.join(format!("a.{ext}"));
+        ok(bin().arg("convert").arg(&a).arg(&out));
+        let bytes = std::fs::read(&out).unwrap();
+        if ext == "j2k" {
+            assert_eq!(&bytes[..2], &[0xFF, 0x4F], "a bare codestream starts with SOC");
+        } else {
+            assert_eq!(&bytes[4..8], b"jP  ", "{ext} starts with the JP2 signature box");
+        }
+        let (info, _) = ok(bin().arg("info").arg(&out).arg("--compact"));
+        let v: Value = serde_json::from_str(&info).unwrap();
+        assert_eq!((v["width"].as_u64(), v["height"].as_u64()), (Some(37), Some(23)), "{ext}: {info}");
+        // No `--quality`, so the reversible wavelet runs and the pixels come back untouched.
+        let back = d.join(format!("back-{ext}.png"));
+        ok(bin().arg("convert").arg(&out).arg(&back));
+        let decoded = photocraft_codecs::decode(&std::fs::read(&back).unwrap()).unwrap();
+        assert_eq!(decoded.to_rgba8(), source.to_rgba8(), "{ext} is not lossless by default");
+    }
+    // `--quality` asks for the irreversible wavelet, which keeps the geometry but moves pixels.
+    let lossy = d.join("lossy.jp2");
+    ok(bin().arg("convert").arg(&a).arg(&lossy).args(["--quality", "40"]));
+    let lossy_back = d.join("lossy-back.png");
+    ok(bin().arg("convert").arg(&lossy).arg(&lossy_back));
+    let decoded = photocraft_codecs::decode(&std::fs::read(&lossy_back).unwrap()).unwrap();
+    assert_eq!(decoded.dimensions(), source.dimensions(), "quality must not resize the image");
+    assert_ne!(decoded.to_rgba8(), source.to_rgba8(), "--quality 40 must actually be lossy");
+    // The containers that are not a single image are refused with a message that says so,
+    // rather than written as a Part 1 file under their name.
+    for (ext, name) in [("jpm", "JPEG 2000 JPM"), ("mj2", "Motion JPEG 2000")] {
+        let o = bin().arg("convert").arg(&a).arg(d.join(format!("out.{ext}"))).output().unwrap();
+        assert_eq!(o.status.code(), Some(1), ".{ext} should not be written");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(name) && err.contains("save as JP2 or J2K"), ".{ext} said {err}");
+        assert!(!d.join(format!("out.{ext}")).exists(), ".{ext} wrote a file");
+    }
+}
+
 /// `--tga-bits` picks a TGA's bits per pixel (byte 16 of its header); anything but 24 or 32 is
 /// refused and nothing is written.
 #[test]
