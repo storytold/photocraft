@@ -276,9 +276,24 @@ fn en(ty: &str, v: &str) -> Value {
     Value::Enumerated { type_id: Id::new(ty), value: Id::new(v) }
 }
 
+/// Photoshop's stroke colour has no alpha. Fold the colour's alpha into `strokeStyleOpacity`
+/// so Appearance still matches after a PSD round-trip (#6180).
+fn fold_stroke_color_alpha(s: &ShapeStroke) -> ShapeStroke {
+    let mut out = s.clone();
+    if let Fill::Solid(c) = &mut out.paint
+        && c.alpha.is_finite()
+        && (c.alpha - 1.0).abs() > 1e-6
+    {
+        out.opacity = (out.opacity * c.alpha).clamp(0.0, 1.0);
+        c.alpha = 1.0;
+    }
+    out
+}
+
 pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) -> Vec<u8> {
     let default = ShapeStroke::default();
-    let s = stroke.unwrap_or(&default);
+    let folded = stroke.map(fold_stroke_color_alpha);
+    let s = folded.as_ref().unwrap_or(&default);
     let (_, content) = fill_to_desc(&s.paint);
     let class = match s.paint {
         Fill::Solid(_) => "solidColorLayer",
@@ -658,6 +673,16 @@ mod tests {
         }
         let off = parse_vstk(&vstk_bytes(None, true, 72.0), 72.0).unwrap();
         assert!(off.stroke.is_none() && off.fill_enabled);
+    }
+
+    #[test]
+    fn vstk_folds_color_alpha_into_stroke_opacity() {
+        let s = ShapeStroke { width: 2.0, paint: Fill::Solid(Color::rgba(0.0, 0.0, 1.0, 0.4)), opacity: 0.5, ..ShapeStroke::default() };
+        let got = parse_vstk(&vstk_bytes(Some(&s), true, 72.0), 72.0).unwrap().stroke.unwrap();
+        assert!((got.opacity - 0.2).abs() < 1e-4);
+        let Fill::Solid(c) = got.paint else { panic!("solid") };
+        assert!((c.alpha - 1.0).abs() < 1e-5);
+        assert!((c.to_rgb()[2] - 1.0).abs() < 1e-3);
     }
 
     #[test]

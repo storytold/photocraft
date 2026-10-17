@@ -177,12 +177,22 @@ pub fn color_from_desc(d: &Descriptor) -> Option<Color> {
             Color::rgb(g("Rd  ")? / 255.0, g("Grn ")? / 255.0, g("Bl  ")? / 255.0)
         }
     })
+    .map(|c| with_pc_alpha(c, d))
+}
+
+/// PSD colour descriptors have no alpha. PhotoCraft writes `pcAl` (0..1) so shape fill
+/// opacity round-trips (#6180). Photoshop ignores the key.
+fn with_pc_alpha(mut c: Color, d: &Descriptor) -> Color {
+    if let Some(a) = num(d.get("pcAl")) {
+        c.alpha = (a as f32).clamp(0.0, 1.0);
+    }
+    c
 }
 
 /// [`Color`] → descriptor in its own model.
 pub fn color_to_desc(c: &Color) -> Descriptor {
     let d = |v: f32| Value::Double(f64::from(v));
-    match c.mode {
+    let desc = match c.mode {
         ColorMode::Cmyk => Descriptor::new("CMYC")
             .with("Cyn ", d(c.c[0] * 100.0))
             .with("Mgnt", d(c.c[1] * 100.0))
@@ -196,7 +206,8 @@ pub fn color_to_desc(c: &Color) -> Descriptor {
             let rgb = c.to_rgb();
             Descriptor::new("RGBC").with("Rd  ", d(rgb[0] * 255.0)).with("Grn ", d(rgb[1] * 255.0)).with("Bl  ", d(rgb[2] * 255.0))
         }
-    }
+    };
+    if c.alpha.is_finite() && (c.alpha - 1.0).abs() > 1e-6 { desc.with("pcAl", d(c.alpha.clamp(0.0, 1.0))) } else { desc }
 }
 
 pub(crate) fn get_desc<'a>(d: &'a Descriptor, key: &str) -> Option<&'a Descriptor> {
@@ -820,6 +831,17 @@ mod tests {
         }
         // Missing components are rejected, not defaulted.
         assert!(super::color_from_desc(&Descriptor::new("LbCl").with("Lmnc", Value::Double(50.0))).is_none());
+    }
+
+    #[test]
+    fn color_descriptor_keeps_photocraft_alpha() {
+        use photocraft_color::Color;
+        let c = Color::rgba(0.2, 0.4, 0.6, 0.25);
+        let back = super::color_from_desc(&super::color_to_desc(&c)).unwrap();
+        assert!((back.alpha - 0.25).abs() < 1e-5);
+        assert!((back.to_rgb()[0] - 0.2).abs() < 1e-3);
+        let opaque = super::color_from_desc(&super::color_to_desc(&Color::rgb(1.0, 0.0, 0.0))).unwrap();
+        assert!((opaque.alpha - 1.0).abs() < 1e-6);
     }
 
     #[test]
