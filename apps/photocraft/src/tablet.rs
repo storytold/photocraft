@@ -46,7 +46,9 @@ pub fn display_session() -> DisplaySession {
     let pen = || std::fs::read_to_string("/proc/bus/input/devices").is_ok_and(|d| has_pen(&d));
     let x11_libs = || crate::linux_libs::available(DisplaySession::X11);
     if pen_needs_xwayland(session, var, pen, x11_libs) {
-        eprintln!("photocraft: pen found; opening the window through Xwayland, where the pen works (PHOTOCRAFT_NATIVE_WAYLAND=1 keeps Wayland)");
+        eprintln!(
+            "photocraft: pen found; opening the window through Xwayland for tablet pressure (PHOTOCRAFT_NATIVE_WAYLAND=1 keeps native Wayland, where the pen has no input yet; see docs/development.md)"
+        );
         return DisplaySession::X11;
     }
     session
@@ -102,8 +104,9 @@ pub fn spawn_x11(feed: &StylusFeed, display: Option<DisplayKind>) {
         log::info!("tablet pressure: not available on this display server ({display:?})");
         return;
     }
-    if let Err(e) = photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
-        log::warn!("{e}");
+    match photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
+        Ok(_) => log::info!("tablet: XInput2 background reader started"),
+        Err(e) => log::warn!("{e}"),
     }
 }
 
@@ -220,7 +223,7 @@ mod tests {
     fn xinput_tablet_pressure_drives_stroke_width_and_opacity() {
         let mut st = xi::State::default();
         st.set_devices([xi::Device::new(9, "Wacom Intuos Pen stylus", [(2, "Abs Pressure".to_string(), 0.0, 65535.0)])]);
-        let (light_dark, light_w, heavy_dark, heavy_w) = pressure_stroke(|p| match st.handle(9, [(2, f64::from(p) * 65535.0)]) {
+        let (light_dark, light_w, heavy_dark, heavy_w) = pressure_stroke(|p| match st.handle(9, [(2, f64::from(p) * 65535.0)], false) {
             Update::Set(s) => s,
             Update::Keep => None,
         });

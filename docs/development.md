@@ -116,6 +116,23 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root. Headless CLI modes require the `--automation-write-root` flag |
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
 | `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached (by default the window then opens through Xwayland, because Wayland gives the app no pen input; #639). A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
+
+### Pen tablets (Linux)
+
+winit does not deliver pen pressure on Linux. PhotoCraft reads it beside winit:
+
+- **X11 and Xwayland:** a background XInput2 reader in `photocraft-tablet` (`RUST_LOG=photocraft_tablet=debug` is not needed; look for `tablet:` lines at `info` in the log file). On a Wayland session with a pen attached, the app opens through **Xwayland** by default so this reader can run. Set `PHOTOCRAFT_NATIVE_WAYLAND=1` only if you accept no pen input in the window.
+- **Pure X11 session:** the same reader applies; no Xwayland switch.
+
+If the pen moves the system cursor but does not click or paint:
+
+1. Start from a terminal and check stderr for `opening the window through Xwayland`.
+2. Try **Preferences › Performance › Linux display server = X11** (next launch), or `WAYLAND_DISPLAY= photocraft` / the Xwayland command shown in the Wayland drag-and-drop notice.
+3. On **GNOME 50 / Mutter 50**, some stacks drop pen *clicks* before they reach any X11 client ([#2622](https://github.com/storytold/photocraft/issues/2622)); update the compositor/Xwayland packages or use an Xorg session. Pressure cannot work in the app until pointer clicks reach the window.
+4. Confirm **Preferences › Tools › Use Tablet Pressure** is on.
+5. Attach `logs/photocraft.log` to a bug report; include `xinput list` against `DISPLAY=:0` if you use Xwayland.
+
+Native Wayland `zwp_tablet_v2` support is tracked in [#79](https://github.com/storytold/photocraft/issues/79).
 | `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback |
 | `WGPU_DX12_COMPILER=fxc` | DX12 shader compiler (`fxc`, `dxc`, `auto`); `dxc` and `auto` look `dxcompiler.dll` up through the DLL search path |
 | `PHOTOCRAFT_GPU_TILE=2048` | Force GPU canvas tiling (tests tile seams) |

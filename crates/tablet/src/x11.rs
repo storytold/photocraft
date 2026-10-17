@@ -10,8 +10,8 @@
 //! current, and maps them with [`crate::xi`].
 //!
 //! Raw events don't say which window the pen is over. That's fine for pressure: the UI only uses
-//! the sample while its own canvas receives pointer events, and any other pointer moving resets
-//! it to "mouse".
+//! the sample while its own canvas receives pointer events. Valuators are read from the event's
+//! `sourceid` (the slave device), not `deviceid` (the master pointer).
 
 use std::thread::JoinHandle;
 
@@ -46,7 +46,9 @@ pub fn spawn(display: Option<&str>, callback: impl Fn(Option<Sample>) + Send + '
         .check()
         .map_err(|e| Error::Platform(format!("XISelectEvents: {e}")))?;
     let mut state = State::default();
-    state.set_devices(query_devices(&conn));
+    let devices = query_devices(&conn);
+    state.set_devices(devices.clone());
+    log_tablet_devices(&devices);
     std::thread::Builder::new()
         .name("photocraft-tablet-x11".into())
         .spawn(move || run(&conn, &mut state, &callback))
@@ -58,9 +60,13 @@ fn run(conn: &RustConnection, state: &mut State, callback: &dyn Fn(Option<Sample
     // x11rb's parser and by the bounds in `xi`.
     while let Ok(event) = conn.wait_for_event() {
         let update = match event {
-            Event::XinputRawMotion(e) | Event::XinputRawButtonPress(e) | Event::XinputRawButtonRelease(e) => {
+            Event::XinputRawMotion(e) => {
                 let values: Vec<f64> = e.axisvalues.iter().map(|v| fp3232(v.integral, v.frac)).collect();
-                state.handle(e.deviceid, valuators(&e.valuator_mask, &values))
+                state.handle(e.sourceid, valuators(&e.valuator_mask, &values), false)
+            }
+            Event::XinputRawButtonPress(e) | Event::XinputRawButtonRelease(e) => {
+                let values: Vec<f64> = e.axisvalues.iter().map(|v| fp3232(v.integral, v.frac)).collect();
+                state.handle(e.sourceid, valuators(&e.valuator_mask, &values), true)
             }
             Event::XinputHierarchy(_) | Event::XinputDeviceChanged(_) => {
                 state.set_devices(query_devices(conn));
@@ -101,4 +107,13 @@ fn atom_name(conn: &RustConnection, atom: u32) -> Option<String> {
     }
     let reply = conn.get_atom_name(atom).ok()?.reply().ok()?;
     Some(String::from_utf8_lossy(&reply.name).into_owned())
+}
+
+fn log_tablet_devices(devices: &[Device]) {
+    let pens: Vec<_> = devices.iter().filter(|d| d.is_tablet()).map(|d| format!("{} (id {})", d.name, d.id)).collect();
+    if pens.is_empty() {
+        log::info!("tablet: XInput2 reader started; no pen devices with an Abs Pressure valuator yet");
+        return;
+    }
+    log::info!("tablet: XInput2 reader started; pen devices: {}", pens.join(", "));
 }

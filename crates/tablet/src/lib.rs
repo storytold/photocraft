@@ -8,7 +8,7 @@
 //!   `macos.rs` is the only module in the workspace that allows `unsafe` (craftrules
 //!   never-crash: an isolated, tested helper crate).
 //! - **Linux X11** ([`x11::spawn`]): a second, pure-Rust X connection (x11rb) selects XInput2
-//!   raw events on the root window and maps the tablet device's valuators ("Abs Pressure",
+//!   raw events on the root window and maps each event's `sourceid` slave device valuators ("Abs Pressure",
 //!   "Abs Tilt X/Y", "Abs Rotary Z") to samples. Raw events reach every client that asks, also
 //!   while winit holds the pointer grab of a drag. No `unsafe`.
 //! - **Wayland**: not covered. The `zwp_tablet_v2` protocol has to be bound on winit's own
