@@ -37,8 +37,8 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
     r.document.file_encoding = file_encoding_as(format, bytes);
-    if format == Some(Format::Tga) && img.layout() == ChannelLayout::Rgba {
-        tga_alpha_to_channel(&mut r.document)?;
+    if matches!(format, Some(Format::Tga | Format::Dds)) && img.layout() == ChannelLayout::Rgba {
+        alpha_to_channel(&mut r.document)?;
     }
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
     // stated otherwise, and an OpenEXR `Y` is linear luminance): tag them linear sRGB or linear
@@ -110,11 +110,13 @@ pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     }
 }
 
-/// Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1" channel holding the
-/// fourth byte, even when the header declares no alpha bits, and keeps the stored colours (#2225;
-/// measured on Photoshop 27.11). Layer transparency would hide those colours and lose the channel
-/// on the next save, where only an alpha channel becomes the Targa's alpha.
-fn tga_alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
+/// Photoshop opens a Targa with an alpha channel as an opaque Background plus an "Alpha 1" channel
+/// holding the fourth byte, even when the header declares no alpha bits, and keeps the stored
+/// colours (#2225; measured on Photoshop 27.11): layer transparency would hide those colours and
+/// lose the channel on the next save, where only an alpha channel becomes the Targa's alpha. DDS
+/// textures open the same way (#5696): the alpha becomes the channel, not layer transparency, so
+/// an all-zero-alpha AO map still shows its colours.
+fn alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
     let canvas = doc.bounds();
     let depth = doc.depth;
     let Some(layer) = doc.layers.first_mut() else { return Ok(()) };
@@ -144,7 +146,7 @@ fn tga_alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
     Ok(())
 }
 
-/// Undoes [`tga_alpha_to_channel`] for a document a Targa just opened as: the "Alpha 1" channel
+/// Undoes [`alpha_to_channel`] for a document a Targa just opened as: the "Alpha 1" channel
 /// becomes the layer's transparency again. For image sequences, which treat a frame's alpha as
 /// transparency, as video footage does (Photoshop's Interpret Footage). Anything else is left
 /// alone.
