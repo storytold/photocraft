@@ -731,7 +731,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                    let id = format!("flt-{cmd}-{}", p.key);
+                    // Warp Text's styles show their icons, grouped as in Photoshop (#3656).
+                    if cmd == "type.warpText" && p.key == "style" {
+                        crate::widgets::dropdown_decorated(ui, &id, &mut cur, &opts, 170.0, &crate::warp_icons::decor_ids());
+                    } else {
+                        crate::widgets::dropdown(ui, &id, &mut cur, &opts, 170.0);
+                    }
                     f.insert(p.key.clone(), json!(cur));
                 });
             }

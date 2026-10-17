@@ -1387,14 +1387,29 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, op
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, false);
+    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, false, None);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false, true);
+    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false, true, None);
     (!chosen.is_empty(), hovered)
+}
+
+/// What a [`dropdown_decorated`] list draws besides its labels, like Photoshop's Warp style menu:
+/// an icon before each label, and a separator above each option that starts a group.
+pub struct Decor<'a, T> {
+    /// Paints `T`'s icon into a square the height of a row, in the given colour. Options without
+    /// one paint nothing and keep the space, so the labels stay aligned.
+    pub icon: &'a dyn Fn(&egui::Painter, Rect, &T, Color32),
+    pub starts_group: &'a dyn Fn(&T) -> bool,
+}
+
+/// [`dropdown`] whose open list shows an icon before each option and separators between groups.
+pub fn dropdown_decorated<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32, decor: &Decor<'_, T>) -> bool {
+    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, true, Some(decor));
+    !chosen.is_empty()
 }
 
 /// [`dropdown_hovered`] whose value also steps with the wheel over its button or open list: down
@@ -1404,7 +1419,7 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &m
 /// in order (one per notch; the last is `current`) and the option under the pointer in the open
 /// list, none while the pointer rests where the wheel last stepped.
 pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, current, options, width, true, true)
+    dropdown_with(ui, id, current, options, width, true, true, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1416,6 +1431,7 @@ fn dropdown_with<T: PartialEq + Clone>(
     width: f32,
     wheel: bool,
     translate: bool,
+    decor: Option<&Decor<'_, T>>,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -1433,7 +1449,10 @@ fn dropdown_with<T: PartialEq + Clone>(
     let texts: Vec<String> = options.iter().map(|(_, l)| shown(l)).collect();
     let response =
         egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+            // An icon takes a square the height of a row, and the usual gap before its label.
+            let icon = ui.text_style_height(&egui::TextStyle::Button);
+            let icon_space = if decor.is_some() { icon + ui.spacing().icon_spacing } else { 0.0 };
+            fit_widest_option(ui, texts.iter().map(|l| l.as_str()), icon_space);
             // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
             let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
             let shown = options.iter().position(|(v, _)| v == current);
@@ -1454,8 +1473,22 @@ fn dropdown_with<T: PartialEq + Clone>(
             // The row nearest the pointer, by its distance to each row.
             let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
             let mut nearest: Option<(f32, &T)> = None;
-            for ((v, _), text) in options.iter().zip(texts.iter()) {
-                let item = ui.selectable_label(v == current, text.as_str());
+            for (k, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
+                let item = match decor {
+                    Some(d) => {
+                        if k > 0 && (d.starts_group)(v) {
+                            ui.separator();
+                        }
+                        let slot = ui.make_persistent_id(id).with(("icon", k));
+                        let row = egui::Button::selectable(v == current, (egui::Atom::custom(slot, Vec2::splat(icon)), text.as_str())).atom_ui(ui);
+                        if let Some(r) = row.rect(slot) {
+                            let color = ui.style().interact_selectable(&row.response, v == current).text_color();
+                            (d.icon)(ui.painter(), r, v, color);
+                        }
+                        row.response
+                    }
+                    None => ui.selectable_label(v == current, text.as_str()),
+                };
                 if reveal && v == current {
                     item.scroll_to_me(None);
                 }
@@ -1502,10 +1535,10 @@ fn dropdown_with<T: PartialEq + Clone>(
 /// takes a plain row's frame stroke off its padding but draws a hovered row with the stroke, so a
 /// row grows by two stroke widths under the pointer, and the list never shrinks back: scrolling
 /// the widest option under the pointer widened the list (#2607).
-fn fit_widest_option<'a>(ui: &mut Ui, labels: impl Iterator<Item = &'a str>) {
+fn fit_widest_option<'a>(ui: &mut Ui, labels: impl Iterator<Item = &'a str>, icon_space: f32) {
     let extend = Some(egui::TextWrapMode::Extend);
     let widest = labels.map(|l| egui::WidgetText::from(l).into_galley(ui, extend, f32::INFINITY, egui::FontSelection::Default).size().x).fold(0.0, f32::max);
-    ui.set_min_width(widest + 2.0 * ui.spacing().button_padding.x);
+    ui.set_min_width(widest + icon_space + 2.0 * ui.spacing().button_padding.x);
 }
 
 /// Whether the pointer still rests where the wheel last stepped dropdown `id` (`wheeled`: it did
@@ -1630,7 +1663,7 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let response =
         egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)), 0.0);
             let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
             let shown = options.iter().position(|(v, _, _)| v == current);
             if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {

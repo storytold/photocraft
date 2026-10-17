@@ -2883,7 +2883,7 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     lbl(ui, tl!("Warp:"));
     let mut style = w.style;
     let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().filter(|s| !(on_type && *s == WarpStyle::Custom)).map(|s| (s, s.label())).collect();
-    if crate::widgets::dropdown(ui, "warp-style", &mut style, &opts, 120.0)
+    if crate::widgets::dropdown_decorated(ui, "warp-style", &mut style, &opts, 120.0, &crate::warp_icons::decor())
         && let Some(t) = app.ui.transform.as_mut()
     {
         let b = t.rect;
