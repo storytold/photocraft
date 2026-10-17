@@ -270,6 +270,8 @@ pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p
     if !smart {
         return Ok(false);
     }
+    // A pixel or full lock refuses the smart filter, as for `filter.*` on a smart object.
+    crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     // The recorded params are the command's own, minus the engine's private `__kind` key.
     let mut params = p.clone();
     if let Value::Object(m) = &mut params {

@@ -479,6 +479,26 @@ fn adjustment_smart_filters_take_a_selection_as_their_mask() {
     assert_eq!(at(&now, 40, 16), at(&original, 40, 16), "outside the mask the composite is unchanged");
 }
 
+/// #5655: as for `filter.*` smart filters, a pixel or full lock refuses an adjustment smart
+/// filter, leaving the layer and the history as they were.
+#[test]
+fn locked_smart_objects_refuse_adjustment_smart_filters() {
+    let adjustments =
+        [("image.adjustments.invert", json!({})), ("image.adjustments.shadowsHighlights", json!({"shadowAmount": 100, "blackClip": 0, "whiteClip": 0}))];
+    for lock in [json!({"all": true}), json!({"pixels": true})] {
+        for (cmd, p) in &adjustments {
+            let mut s = smart_session();
+            s.execute("layer.lockLayers", lock.clone()).unwrap();
+            let (steps, flat) = (s.active().unwrap().history.past_len(), flatten(&s));
+            let r = s.execute(cmd, p.clone());
+            assert!(r.is_err(), "{cmd} added a smart filter to a smart object locked with {lock}: {r:?}");
+            assert!(smart_filters_of(&s).is_empty(), "{cmd} {lock}: nothing recorded");
+            assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd} {lock}: no history step");
+            assert_eq!(flatten(&s), flat, "{cmd} {lock}: pixels untouched");
+        }
+    }
+}
+
 /// A wrong-typed value errors before anything is recorded (never a panic), and the adjustments
 /// that can't re-render from a source (Replace Color, Match Color) stay off a smart object.
 #[test]
