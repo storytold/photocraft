@@ -307,6 +307,12 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"action": action.name, "steps": action.steps.len()}))
 }
 
+/// A step Photoshop plays as a silent no-op although its menu item is greyed: Deselect with an
+/// open document and nothing selected (actions often start with it to clear any selection, #6744).
+fn noop_step(s: &Session, id: &str) -> bool {
+    id == "select.deselect" && s.active().is_some_and(|d| d.doc.selection.is_none())
+}
+
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
     let mut ran = 0u64;
     let mut failed = None;
@@ -316,6 +322,10 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         {
             failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
+        }
+        if noop_step(s, id) {
+            ran += 1;
+            continue;
         }
         match s.execute(id, params.clone()) {
             Ok(value) => {
@@ -690,6 +700,23 @@ mod tests {
 
     fn pixel(s: &Session, layer: usize, x: i32, y: i32) -> Vec<f32> {
         s.active().unwrap().doc.layers[layer].surface().unwrap().pixel(x, y)
+    }
+
+    #[test]
+    fn deselect_with_nothing_selected_is_a_noop_in_playback() {
+        // #6744: imported actions often start with Deselect; with no selection Photoshop plays on.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let before = s.active().unwrap().history.past_len();
+        let deselect = crate::commands::find("select.deselect").unwrap();
+        assert_eq!((deselect.run)(&mut s, &json!({})).unwrap(), Value::Null);
+        assert_eq!(s.active().unwrap().history.past_len(), before, "no history step");
+
+        let steps = vec![("select.deselect".to_string(), json!({})), ("layer.new.layer".to_string(), json!({"name": "A"}))];
+        s.actions.list.push(Action::new("Clear", steps));
+        let played = s.execute("actions.play", json!({"action": 0})).unwrap();
+        assert_eq!(played["ran"], 2, "{played}");
+        assert_eq!(s.active().unwrap().doc.layers.last().unwrap().name, "A");
     }
 
     #[test]

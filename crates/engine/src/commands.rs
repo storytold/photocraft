@@ -578,6 +578,10 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), "{}", has_selection, |s, _| {
+            // Nothing selected: nothing to do and no history step, as in Photoshop (#6744).
+            if s.active().is_none_or(|d| d.doc.selection.is_none()) {
+                return Ok(Value::Null);
+            }
             s.edit("Deselect", |doc, _| {
                 doc.selection = None;
                 Ok(())
