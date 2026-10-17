@@ -474,6 +474,13 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let name = s.actions.list.remove(idx).name;
     s.actions.touch();
+    // Its function key goes with it, or the next action given the same name would inherit it.
+    let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
+    if s.prefs().shortcuts.contains_key(&key) {
+        s.edit_prefs(|prefs| {
+            prefs.shortcuts.remove(&key);
+        });
+    }
     Ok(json!({"deleted": name}))
 }
 
@@ -767,6 +774,22 @@ mod tests {
             assert!(s.execute("actions.rename", bad.clone()).is_err(), "{bad}");
         }
         assert_eq!(s.actions.list[0].name, "Sepia");
+    }
+
+    #[test]
+    fn delete_action_drops_its_function_key_but_deleting_a_step_keeps_it() {
+        let mut s = Session::new();
+        let key = format!("{PLAY_SHORTCUT_PREFIX}Action 1");
+        s.actions.list.push(Action::new("Action 1", vec![("layer.new.layer".into(), json!({})), ("layer.new.layer".into(), json!({}))]));
+        s.edit_prefs(|p| p.shortcuts.insert(key.clone(), "F2".into()));
+        s.execute("actions.delete", json!({"action": 0, "step": 0})).unwrap();
+        assert_eq!(s.prefs().shortcuts.get(&key).map(String::as_str), Some("F2"), "deleting a step keeps the key");
+        assert_eq!(s.execute("actions.delete", json!({"action": 0})).unwrap()["deleted"], "Action 1");
+        assert!(!s.prefs().shortcuts.contains_key(&key), "the deleted action's function key is gone");
+        s.execute("actions.record", json!({})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(s.actions.list[0].name, "Action 1");
+        assert!(!s.prefs().shortcuts.contains_key(&key), "a new action with the same name starts unbound");
     }
 
     fn record_red(s: &mut Session, depth: u32) {
