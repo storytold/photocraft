@@ -13,7 +13,9 @@ pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
     if app.camera_raw.is_some() || crate::crop_ui::blocks(app, id) {
         return false;
     }
-    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+    (app.ui.dialogs.is_empty() && app.discard.is_none())
+        || crate::shortcuts::NAV_COMMANDS.contains(&id)
+        || matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "select.all")
 }
 
 /// Top-level menus in Photoshop order.
@@ -1574,6 +1576,22 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_dialog_allows_clipboard_and_navigation_commands() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(modal_allows(&app, "edit.copy"));
+        assert!(modal_allows(&app, "image.canvasSize"));
+        app.ui.open_dialog(crate::state::DialogKind::NewDocument, Default::default());
+        assert!(!modal_allows(&app, "image.canvasSize"));
+        assert!(!modal_allows(&app, "layer.new"));
+        assert!(modal_allows(&app, "view.zoomIn"));
+        assert!(modal_allows(&app, "view.fitOnScreen"));
+        assert!(modal_allows(&app, "edit.copy"));
+        assert!(modal_allows(&app, "edit.cut"));
+        assert!(modal_allows(&app, "edit.paste"));
+        assert!(modal_allows(&app, "select.all"));
+    }
 
     #[test]
     fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {

@@ -160,7 +160,7 @@ impl egui::plugin::Plugin for TextFieldMenu {
             let surrender = ctx.options(|o| o.input_options.surrender_focus_on);
             ctx.options_mut(|o| o.input_options.surrender_focus_on = SurrenderFocusOn::Never);
             state.open = Some(Open { field, pos, has_selection, surrender });
-            ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, menu_id()));
+            ctx.move_to_top(egui::LayerId::new(egui::Order::Tooltip, menu_id()));
             ctx.request_repaint();
         }
         state.last = focused.and_then(|id| egui::TextEdit::load_state(&ctx, id)?.cursor.char_range().map(|r| (id, r)));
@@ -192,11 +192,11 @@ fn secondary_press_in(ctx: &Context, field: Id, last: Option<(Id, CCursorRange)>
     Some((pos, range.is_some_and(|r| !r.is_empty())))
 }
 
-/// Is `action` available? Cut, Copy and Delete need a selection.
+/// Is `action` available? Cut and Delete need a selection; Copy copies the selection or the whole field.
 fn enabled(open: &Open, action: Action) -> bool {
     match action {
-        Action::Cut | Action::Copy | Action::Delete => open.has_selection,
-        Action::Undo | Action::Paste | Action::SelectAll => true,
+        Action::Cut | Action::Delete => open.has_selection,
+        Action::Copy | Action::Undo | Action::Paste | Action::SelectAll => true,
     }
 }
 
@@ -209,7 +209,7 @@ pub fn show(ctx: &Context) {
         // The field keeps its focus through this pass's click; the rule comes back next pass.
         state.close();
         state.store(ctx);
-        apply(ctx, open.field, action);
+        apply(ctx, open.field, action, open.has_selection);
     }
 }
 
@@ -220,7 +220,7 @@ fn draw(ctx: &Context, open: &Open) -> Option<Action> {
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(180.0, 170.0), |r| r.size());
     let pos = egui::pos2(open.pos.x.min(screen.right() - size.x).max(screen.left()), open.pos.y.min(screen.bottom() - size.y).max(screen.top()));
     let mut chosen = None;
-    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    egui::Area::new(id).order(egui::Order::Tooltip).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             let t = crate::theme::Tokens::get(ui.ctx());
             let v = &mut ui.style_mut().visuals;
@@ -253,9 +253,16 @@ fn draw(ctx: &Context, open: &Open) -> Option<Action> {
 
 /// Do `action` in `field`: give it its focus back and the input that does the same from the
 /// keyboard, which it handles later in this pass.
-fn apply(ctx: &Context, field: Id, action: Action) {
+fn apply(ctx: &Context, field: Id, action: Action, has_selection: bool) {
     ctx.memory_mut(|m| m.request_focus(field));
     let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    if action == Action::Copy && !has_selection {
+        ctx.input_mut(|i| {
+            i.events.push(key(Key::A, Modifiers::COMMAND));
+            i.events.push(Event::Copy);
+        });
+        return;
+    }
     let event = match action {
         Action::Undo => key(Key::Z, Modifiers::COMMAND),
         Action::Cut => Event::Cut,
@@ -376,5 +383,15 @@ mod tests {
         assert_eq!(choose(&mut h, "Cut").as_deref(), Some("Alpha"), "Cut copies the selected text");
         assert_eq!(text(&h), "", "and removes it from the field");
         assert!(h.ctx.memory(|m| m.has_focus(field)), "the rename is still being typed");
+    }
+
+    #[test]
+    fn text_field_menu_copy_without_prior_selection_copies_whole_text() {
+        let (mut h, field) = renaming();
+        let at = h.ctx.read_response(field).unwrap().rect.center();
+        button(&mut h, at, PointerButton::Primary);
+        right_click(&mut h, field);
+        assert_eq!(choose(&mut h, "Copy").as_deref(), Some("Alpha"), "Copy copies the full field text even when unselected");
+        assert_eq!(text(&h), "Alpha", "text remains intact");
     }
 }
