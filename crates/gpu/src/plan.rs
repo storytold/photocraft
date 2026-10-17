@@ -393,6 +393,9 @@ pub const F_ADD_DIFF: u32 = 16384;
 /// and A ("Underlying Layer"). The ranges are packed in `p0..p3` (`blend_if_params`); `p4.x` marks
 /// a one-channel document.
 pub const F_BLEND_IF: u32 = 524288;
+/// Effect paint: a Normal inside or center stroke replaces the layer beneath it by its coverage
+/// (`effects.rs`): `A × (1 − coverage) + paint × opacity × coverage`, in any colour mode.
+pub const F_REPLACE: u32 = 1048576;
 /// Blend / Atop / FxMerge of a type layer: coverage mixed at `psblend::TEXT_GAMMA`.
 pub const F_TEXT_GAMMA: u32 = 8192;
 
@@ -1207,7 +1210,7 @@ impl<'a> Planner<'a> {
                         &paint,
                         st.common.blend,
                         st.common.opacity,
-                        F_GATE,
+                        if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
                         clip,
                         photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
                     );

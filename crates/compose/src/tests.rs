@@ -3214,3 +3214,23 @@ fn concurrent_effect_identity_misses_compute_once() {
     });
     assert_eq!(keys.built.load(std::sync::atomic::Ordering::Relaxed), 1, "concurrent cache misses must compute one memoized identity");
 }
+
+#[test]
+fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
+    // Photoshop (26.11, 50 % green stroke, 4 px): an opaque pixel under an Inside or Center stroke
+    // becomes (0, 255, 0) at alpha 128 rather than a 50/50 mix at alpha 255 (#6513).
+    for (pos, x) in [(StrokePosition::Inside, 11), (StrokePosition::Center, 11), (StrokePosition::Center, 8)] {
+        let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        d.layers.clear();
+        let mut l = solid_layer("sq", Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+        l.effects.items = vec![Effect::Stroke(StrokeFx {
+            common: FxCommon::new(photocraft_color::BlendMode::Normal, 0.5),
+            size: 4.0,
+            position: pos,
+            paint: FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)),
+        })];
+        d.layers.push(l);
+        assert!(close4(px(&d, x, 20), [0.0, 1.0, 0.0, 0.5]), "{pos:?} x{x}: {:?}", px(&d, x, 20));
+        assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "{pos:?}: interior untouched");
+    }
+}
