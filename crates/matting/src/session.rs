@@ -172,8 +172,59 @@ fn session_for(path: &Path, variant: ModelVariant, device: DevicePref) -> Result
 /// directory; failure is remembered so we never retry-load every call.
 fn env() -> Result<ort::environment::Environment> {
     static ENV: std::sync::OnceLock<Option<ort::environment::Environment>> = std::sync::OnceLock::new();
-    let slot = ENV.get_or_init(|| ort::init().build().ok());
+    // The plugin registration handle must outlive every session: dropping it
+    // unloads the EP factory and its devices vanish from Environment::devices.
+    static OV_LIB: std::sync::OnceLock<Option<ort::ep::ExecutionProviderLibrary>> = std::sync::OnceLock::new();
+    let slot = ENV.get_or_init(|| {
+        let env = ort::init().build().ok();
+        let handle = env.as_ref().and_then(|e| {
+            let mut candidates = Vec::new();
+            if let Ok(d) = std::env::var("PHOTOCRAFT_OV_PLUGIN_DIR") {
+                for ep in ort_plugin_names() {
+                    candidates.push(std::path::PathBuf::from(&d).join(ort_plugin_name(ep)));
+                }
+            }
+            let mut push = |dir: &std::path::Path, v: &mut Vec<std::path::PathBuf>| {
+                for ep in ort_plugin_names() {
+                    v.push(dir.join(ort_plugin_name(ep)));
+                }
+                v.push(dir.join("models").join("matting").join(ort_plugin_name("openvino_plugin")));
+            };
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    push(dir, &mut candidates);
+                }
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                push(&cwd, &mut candidates);
+            }
+            candidates.into_iter().find(|p| p.exists()).and_then(|lib| match e.register_ep_library("openvino", &lib) {
+                Ok(h) => Some(h),
+                Err(err) => {
+                    log::warn!("[matting] OpenVINO EP library at {} failed to register: {err}", lib.display());
+                    None
+                }
+            })
+        });
+        OV_LIB.set(handle).ok();
+        env
+    });
     slot.clone().ok_or(MattingError::OrtLibraryMissing)
+}
+
+fn ort_plugin_names() -> [&'static str; 2] {
+    // wheel-built official package name first, legacy fork name second
+    ["openvino_plugin", "openvino"]
+}
+
+fn ort_plugin_name(ep: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        format!("onnxruntime_providers_{ep}.dll").into()
+    } else if cfg!(target_os = "macos") {
+        format!("libonnxruntime_providers_{ep}.dylib").into()
+    } else {
+        format!("libonnxruntime_providers_{ep}.so").into()
+    }
 }
 
 fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Result<(ort::session::Session, String, Option<GpuInfo>)> {
@@ -193,38 +244,67 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
             // to DirectML, so machines without the plugins behave exactly as
             // before.
             if g.vendor_id == 0x8086 {
-                // (For field diagnostics, launch with OPENVINO_LOG_LEVEL=LOG_INFO;
-                // the OV runtime reads it from the process environment itself.)
-                // FP32 matters: the OV GPU plugin's default fp16 oneDNN kernels
-                // crash executing BiRefNet on Arc (primitive-exec error); FP32
-                // runs correctly at ~7x the CPU speed on an A770. The legacy
-                // `precision` option only accepts accuracy/speed here, so the
-                // hint goes through load_config, which maps straight onto the
-                // GPU plugin's INFERENCE_PRECISION_HINT property. Compile blobs
-                // are cached beside the model so the slow GPU kernel build
-                // happens once per machine, not once per launch.
-                use ort::ep::ArbitrarilyConfigurableExecutionProvider as _;
-                let mut ov_ep = ort::ep::OpenVINO::default()
-                    .with_device_type("GPU")
-                    .with_arbitrary_config("load_config", r#"{"GPU": {"INFERENCE_PRECISION_HINT": "f32"}}"#);
+                // V2 device selection: the plugin EP ignores every device-ish
+                // provider option ("pass the enumerated EP device to
+                // AppendExecutionProvider_V2"), so enumerate the registered
+                // OpenVINO devices and bind the GPU one explicitly. load_config
+                // is EP-prefixed here. FP32 matters: the GPU plugin's default
+                // fp16 oneDNN kernels crash executing BiRefNet on Arc
+                // (primitive-exec error); FP32 runs correctly at ~7x CPU
+                // speed on an A770. Compile blobs are cached beside the model
+                // so the slow GPU kernel build happens once per machine.
+                let mut opts: Vec<(String, String)> = vec![(
+                    "OpenVINOExecutionProvider.load_config".to_owned(),
+                    r#"{"GPU": {"INFERENCE_PRECISION_HINT": "f32"}}"#.to_owned(),
+                )];
+                let mut cache_ok = false;
                 if let Some(dir) = path.parent() {
                     let cache = dir.join("ov-cache");
                     if std::fs::create_dir_all(&cache).is_ok() {
-                        ov_ep = ov_ep.with_cache_dir(cache.display().to_string());
+                        opts.push((
+                            "OpenVINOExecutionProvider.cache_dir".to_owned(),
+                            cache.display().to_string(),
+                        ));
+                        cache_ok = true;
                     }
                 }
-                let ov = ort::session::Session::builder(&env()?)
-                    .map_err(|e| MattingError::Session(e.to_string()))?
-                    .with_execution_providers([ov_ep.build()])
-                    .map_err(|e| MattingError::Session(e.to_string()))?
-                    .commit_from_file(path)
-                    .map_err(|e| MattingError::Session(e.to_string()));
-                match ov {
+                let attempt = |opts: &[(String, String)]| -> Result<ort::session::Session> {
+                    let env = env()?;
+                    let epg = env
+                        .devices()
+                        .filter(|d| d.ep().unwrap_or("") == "OpenVINOExecutionProvider" && d.hardware_device().ty() == ort::memory::DeviceType::GPU)
+                        .collect::<Vec<_>>();
+                    if epg.is_empty() {
+                        return Err(MattingError::Session("no OpenVINO GPU device registered".into()));
+                    }
+                    let mut b = ort::session::Session::builder(&env).map_err(|e| MattingError::Session(e.to_string()))?;
+                    b.with_devices(epg, Some(opts))
+                        .map_err(|e| MattingError::Session(e.to_string()))?
+                        .commit_from_file(path)
+                        .map_err(|e| MattingError::Session(e.to_string()))
+                };
+                match attempt(&opts) {
                     Ok(s) => {
-                        log::debug!("[matting] OpenVINO(AUTO) session on {}", g.describe());
+                        log::debug!("[matting] OpenVINO GPU session (fp32) on {}", g.describe());
                         return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
                     }
-                    Err(e) => log::debug!("[matting] OpenVINO unavailable ({e}); trying DirectML"),
+                    Err(e1) => {
+                        // Retry without cache_dir in case a stale blob poisons
+                        // the keyed compile.
+                        let e1s = e1.to_string();
+                        let mut r = Err(e1);
+                        if cache_ok {
+                            opts.truncate(1);
+                            r = attempt(&opts).map_err(|e2| MattingError::Session(format!("{e1s}; uncached retry: {e2}")));
+                        }
+                        match r {
+                            Ok(s) => {
+                                log::debug!("[matting] OpenVINO GPU session (fp32, uncached) on {}", g.describe());
+                                return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
+                            }
+                            Err(e) => log::debug!("[matting] OpenVINO GPU unavailable ({e}); trying DirectML"),
+                        }
+                    }
                 }
             }
             log::debug!("[matting] DirectML candidate: {}", g.describe());
