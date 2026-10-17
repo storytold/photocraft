@@ -3389,3 +3389,19 @@ curves	Smooth	매끄럽게
 	Replace	대치
 	{name} was changed by another app after it was opened or saved here.	{name}이(가) 여기서 열거나 저장한 뒤 다른 앱에서 변경되었습니다.
 	Replace it with this document, or cancel and use File › Save As to keep both.	이 문서로 대치하거나, 취소하고 파일 › 다른 이름으로 저장을 사용해 둘 다 보관하세요.
+
+# Counted status and panel messages
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	색상 견본 {n}개를 {file}(으)로 내보냈습니다
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file}에서 색상 견본 {n}개를 가져왔습니다
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group}에서 브러시 {n}개를 가져왔습니다
+@plural	Played {n} step|Played {n} steps	단계 {n}개를 재생했습니다
+@plural	{n} step|{n} steps	단계 {n}개
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	웹용으로 저장됨: 파일 {n}개
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	디스크에서 변경된 연결된 스마트 오브젝트 {n}개를 업데이트했습니다
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	이 레이어 구성 요소에 기록된 레이어 {n}개가 삭제되었습니다. 레이어 구성 요소를 업데이트하거나 경고를 지우세요.
+@plural	{n} plane|{n} planes	평면 {n}개
+@plural	{n} preset|{n} presets	사전 설정 {n}개
+@plural	{n} sample point removed|{n} sample points removed	샘플 지점 {n}개를 제거했습니다
+@plural	{n} slice|{n} slices	분할 영역 {n}개
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (브러시 사전 설정 경고 {n}개 더 있음)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}: 경고 {n}개
