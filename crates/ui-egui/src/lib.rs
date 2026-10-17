@@ -1992,20 +1992,18 @@ impl eframe::App for PhotocraftApp {
         crate::widgets::set_field_resolution(&ctx, dpi, ppi);
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         screen_picker::show(&ctx);
-        if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
+        if screen_picker::busy(&ctx) {
+            // While the capture service is still returning a snapshot there is no picker
+            // viewport yet. Keep a visible Cancel action even during this phase (#4737).
             egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {
                 ui.spinner();
-                ui.label(tl!("Pick a screen pixel or press Esc to cancel"));
+                ui.label(if screen_picker::showing(&ctx) { tl!("Pick a screen pixel or press Esc to cancel") } else { tl!("Preparing screen capture…") });
                 if ui.button(tl!("Cancel")).clicked() {
                     screen_picker::cancel(&ctx);
                 }
             });
             self.automation_input = false;
             return;
-        }
-        if screen_picker::busy(&ctx) {
-            ui.disable();
-            ui.set_opacity(1.0);
         }
         // The OS title bar (and the taskbar / Alt-Tab entry) follows the active file; with the
         // system title bar this is where the document name lives, as the in-app title is hidden.

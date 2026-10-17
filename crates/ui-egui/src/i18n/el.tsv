@@ -3556,6 +3556,7 @@ fontWeight	Thin	Πολύ λεπτά
 # Screen color picker (#1232)
 	Pick screen color	Επιλογή χρώματος οθόνης
 	Pick a screen pixel or press Esc to cancel	Επιλέξτε ένα εικονοστοιχείο της οθόνης ή πατήστε Esc για ακύρωση
+	Preparing screen capture…	Προετοιμασία λήψης στιγμιότυπου οθόνης…
 	Sample a pixel anywhere on the screen	Δειγματοληψία ενός pixel οπουδήποτε στην οθόνη
 	Click to pick · Esc to cancel	Κλικ για επιλογή · Esc για ακύρωση
 	Scroll to zoom	Κύλιση για μεγέθυνση

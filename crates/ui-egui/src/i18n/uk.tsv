@@ -2619,6 +2619,7 @@ cameraRaw	Roughness	Шорсткість
 	Sample a pixel anywhere on the screen	Взяти зразок пікселя будь-де на екрані
 	Click to pick · Esc to cancel	Клацніть для вибору · Esc для скасування
 	Pick a screen pixel or press Esc to cancel	Виберіть піксель екрана або натисніть Esc для скасування
+	Preparing screen capture…	Підготовка знімка екрана…
 	Scroll to zoom	Прокрутіть для масштабування
 	Drag to pan · Scroll to zoom · Double-click to fit	Перетягніть для панорамування · Прокрутіть для масштабування · Двічі клацніть, щоб умістити
 	Show/Hide All Panels	Показати/приховати всі панелі

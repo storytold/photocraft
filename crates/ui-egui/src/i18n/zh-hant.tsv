@@ -2361,6 +2361,7 @@ cameraRaw	Blending	混合
 	Sample a pixel anywhere on the screen	在螢幕任意位置取樣像素
 	Click to pick · Esc to cancel	按一下選取 · Esc 取消
 	Pick a screen pixel or press Esc to cancel	選取螢幕像素或按 Esc 取消
+	Preparing screen capture…	正在準備螢幕截圖…
 	Scroll to zoom	捲動以縮放
 	Drag to pan · Scroll to zoom · Double-click to fit	拖曳以平移 · 捲動以縮放 · 按兩下以符合視窗
 	Show/Hide All Panels	顯示/隱藏所有面板
