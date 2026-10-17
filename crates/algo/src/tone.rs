@@ -73,14 +73,43 @@ pub fn replace_color_masked(px: &mut [[f32; 4]], mask: &[f32], hue: f32, saturat
             continue;
         }
         let c = [q[0], q[1], q[2]];
-        let [hh, ss, ll] = rgb_to_hsl(c);
-        let s = if saturation >= 0.0 { ss + (1.0 - ss) * saturation / 100.0 } else { ss * (1.0 + saturation / 100.0) };
-        let l = if lightness >= 0.0 { ll + (1.0 - ll) * lightness / 100.0 } else { ll * (1.0 + lightness / 100.0) };
-        let o = hsl_to_rgb([(hh + hue / 360.0).rem_euclid(1.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0)]);
+        let o = hsl_shift(c, hue, saturation, lightness);
         for i in 0..3 {
             q[i] = (c[i] + (o[i] - c[i]) * k).clamp(0.0, 1.0);
         }
     }
+}
+
+/// One pixel through Replace Color's shift at full coverage: the dialog's Result swatch colour.
+pub fn replace_color_result(color: [f32; 3], hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    hsl_shift(color, hue, saturation, lightness)
+}
+
+/// The hue (±180°), saturation and lightness (±100) shift that turns `from` into `to`, as the
+/// inverse of [`replace_color_result`]: picking a Result colour sets the sliders so the sampled
+/// colour becomes that colour (clamped to the slider ranges where it cannot).
+pub fn replace_color_sliders(from: [f32; 3], to: [f32; 3]) -> (f32, f32, f32) {
+    let [h0, s0, l0] = rgb_to_hsl(from);
+    let [h1, s1, l1] = rgb_to_hsl(to);
+    let hue = ((h1 - h0) * 360.0 + 180.0).rem_euclid(360.0) - 180.0;
+    let axis = |v0: f32, v1: f32| {
+        if v1 >= v0 {
+            if v0 < 1.0 { (v1 - v0) / (1.0 - v0) * 100.0 } else { 0.0 }
+        } else if v0 > 0.0 {
+            (v1 / v0 - 1.0) * 100.0
+        } else {
+            0.0
+        }
+    };
+    (hue, axis(s0, s1).clamp(-100.0, 100.0), axis(l0, l1).clamp(-100.0, 100.0))
+}
+
+/// `color` through the shift at full coverage (Replace Color's per-pixel math).
+fn hsl_shift(color: [f32; 3], hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let [hh, ss, ll] = rgb_to_hsl(color);
+    let s = if saturation >= 0.0 { ss + (1.0 - ss) * saturation / 100.0 } else { ss * (1.0 + saturation / 100.0) };
+    let l = if lightness >= 0.0 { ll + (1.0 - ll) * lightness / 100.0 } else { ll * (1.0 + lightness / 100.0) };
+    hsl_to_rgb([(hh + hue / 360.0).rem_euclid(1.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0)])
 }
 
 /// Lab mean and standard deviation of the opaque pixels, `[L, a, b]` each.
@@ -293,6 +322,26 @@ mod tests {
         assert_eq!(m[1], 0.0);
         assert!(px[0][1] > 0.9 && px[0][0] < 0.1, "{:?}", px[0]);
         assert_eq!(px[1], [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// #6278: picking a Result colour sets sliders that turn the sampled colour into it.
+    #[test]
+    fn replace_color_sliders_invert_the_shift() {
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 0.01);
+        for (from, to) in [
+            ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            ([0.2, 0.6, 0.9], [0.9, 0.3, 0.1]),
+            ([0.5, 0.5, 0.5], [0.8, 0.2, 0.2]),
+            ([0.0, 0.0, 0.0], [0.4, 0.4, 0.4]),
+            ([1.0, 1.0, 1.0], [0.6, 0.6, 0.6]),
+            ([0.9, 0.1, 0.1], [0.9, 0.1, 0.1]),
+        ] {
+            let (h, s, l) = replace_color_sliders(from, to);
+            assert!((-180.0..=180.0).contains(&h) && (-100.0..=100.0).contains(&s) && (-100.0..=100.0).contains(&l), "{h} {s} {l}");
+            assert!(close(replace_color_result(from, h, s, l), to), "{from:?} → {to:?} gave {:?}", replace_color_result(from, h, s, l));
+        }
+        // The Result of no shift is the colour itself.
+        assert!(close(replace_color_result([0.3, 0.7, 0.2], 0.0, 0.0, 0.0), [0.3, 0.7, 0.2]));
     }
 
     #[test]

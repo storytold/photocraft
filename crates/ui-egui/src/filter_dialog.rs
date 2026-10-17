@@ -608,6 +608,47 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
 const COLOR_EYEDROPPER: &str = "__colorEyedropper";
+/// #6278: the Color Picker's target for the Result swatch: OK writes the picked `"#rrggbb"`
+/// here and the next dialog pass turns it into the Hue/Saturation/Lightness sliders.
+const RESULT_FIELD: &str = "__result";
+
+/// Turn a Result colour picked in the Color Picker into the shift that produces it: the sliders
+/// that turn the sampled "From" colour into the picked colour ([`REPLACE_COLOR`], #6278).
+fn apply_result_pick(f: &mut Map<String, Value>) {
+    let Some(Value::String(hex)) = f.remove(RESULT_FIELD) else { return };
+    let to = crate::color_picker_ui::parse_hex(&hex);
+    let from = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
+    let (Some(to), Some(from)) = (to, from) else { return };
+    let (h, s, l) = photocraft_algo::tone::replace_color_sliders(from, to);
+    // One decimal, as the slider rows write their own values back.
+    f.insert("hue".into(), json!((h * 10.0).round() / 10.0));
+    f.insert("saturation".into(), json!((s * 10.0).round() / 10.0));
+    f.insert("lightness".into(), json!((l * 10.0).round() / 10.0));
+}
+
+/// Photoshop's Replace Color Result swatch (#6278): the "From" colour after the current
+/// Hue/Saturation/Lightness shift; clicking it opens the Color Picker, and a picked colour sets
+/// the three sliders so the sampled colour becomes that colour.
+fn replace_color_result_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
+    let Some(from) = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex) else { return };
+    let num = |k: &str| f.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    let result = photocraft_algo::tone::replace_color_result(from, num("hue"), num("saturation"), num("lightness"));
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let bytes = result.map(q);
+    let name = tl!("Result").to_string();
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(&name).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
+            ui.label(egui::RichText::new(crate::color_picker_ui::hex(result)).color(t.text_dim).monospace());
+        });
+    });
+    if clicked {
+        f.insert(RESULT_FIELD.into(), json!(crate::color_picker_ui::hex(result)));
+        crate::color_picker_ui::request_field(f, RESULT_FIELD, &crate::color_picker_ui::title_for(&name));
+    }
+}
 
 fn color_eyedropper_owns(f: &Map<String, Value>) -> bool {
     f.get("__filter").and_then(Value::as_bool) == Some(true)
@@ -641,6 +682,10 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
+    // A Result colour picked since the last pass becomes the sliders before they are drawn (#6278).
+    if cmd == REPLACE_COLOR {
+        apply_result_pick(f);
+    }
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
     let spec = match f.get("__spec").and_then(Value::as_str) {
         Some(s) => s.to_string(),
@@ -831,6 +876,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert(p.key, json!(v.round() as i64));
             }
         }
+    }
+    // Replace Color's Result swatch, below the sliders as in Photoshop (#6278).
+    if cmd == REPLACE_COLOR {
+        replace_color_result_row(ui, f, &t);
     }
     // Read-only context the dialog opener supplies (e.g. the monitor profile in use).
     if let Some(note) = f.get("__note").and_then(Value::as_str) {
@@ -2414,5 +2463,31 @@ mod tests {
         let px = |x: i32| doc.layers[0].surface().unwrap().read_region(photocraft_geom::Rect::new(x, 5, x + 1, 6));
         assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
         assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
+    }
+
+    /// #6278: the Result swatch opens the Color Picker, and a picked Result sets the
+    /// Hue/Saturation/Lightness sliders so the sampled colour becomes that colour.
+    #[test]
+    fn replace_color_result_swatch_sets_the_sliders() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), REPLACE_COLOR).unwrap();
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Result").click();
+        h.run_steps(2);
+        assert!(crate::color_picker_ui::owns(&h.state().ui.dialogs.last().unwrap().fields), "clicking Result opens the Color Picker");
+        // What the picker's OK writes into the filter dialog: green from a red sample.
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(RESULT_FIELD.into(), json!("#00ff00"));
+        h.run_steps(2);
+        let f = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+        assert_eq!((f["hue"].clone(), f["saturation"].clone(), f["lightness"].clone()), (json!(120.0), json!(0.0), json!(0.0)));
+        assert!(!f.contains_key(RESULT_FIELD), "the pick is consumed");
     }
 }
