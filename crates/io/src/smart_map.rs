@@ -144,10 +144,15 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 17] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
+    // Surface Blur, Smart Blur and Radial Blur: keys, value types and enums measured in Photoshop.
+    Known { class: "surfaceBlur", filter_id: 1135, name: "Surface Blur...", command: "filter.blur.surfaceBlur" },
+    Known { class: "SmrB", filter_id: code(b"SmrB"), name: "Smart Blur...", command: "filter.blur.smartBlur" },
+    // Radial Blur at its defaults stores no `Fltr` (`hasoptions` false); that entry is kept verbatim.
+    Known { class: "RdlB", filter_id: code(b"RdlB"), name: "Radial Blur...", command: "filter.blur.radialBlur" },
     Known { class: "UnsM", filter_id: code(b"UnsM"), name: "Unsharp Mask...", command: "filter.sharpen.unsharpMask" },
     Known { class: "AdNs", filter_id: code(b"AdNs"), name: "Add Noise...", command: "filter.noise.addNoise" },
     Known { class: "Mdn ", filter_id: code(b"Mdn "), name: "Median...", command: "filter.noise.median" },
@@ -180,6 +185,45 @@ fn int(d: &Descriptor, key: &str) -> Option<i32> {
         _ => None,
     }
 }
+
+/// `v` when it lies in `lo..=hi` (the filter dialog's range); out-of-range settings are not
+/// opened as editable filters, so a re-save keeps Photoshop's value instead of a clamped one.
+fn in_range(v: f64, lo: f64, hi: f64) -> Option<f64> {
+    (lo..=hi).contains(&v).then_some(v)
+}
+
+/// Integer `key` of `f` when it lies in `lo..=hi`.
+fn int_in(f: &Descriptor, key: &str, lo: i32, hi: i32) -> Option<i32> {
+    int(f, key).filter(|v| (lo..=hi).contains(v))
+}
+
+/// True when `f` holds only the given keys. A filter with a setting we don't know about (Radial
+/// Blur's off-centre centre, for one) is kept verbatim rather than losing that setting.
+fn only_keys(f: &Descriptor, keys: &[&str]) -> bool {
+    f.items.iter().all(|(k, _)| keys.iter().any(|x| k.is(x)))
+}
+
+/// Our name for enum `key`'s value in `f`, from `(PSD value, our name)` pairs.
+fn enum_name(f: &Descriptor, key: &str, table: &[(&[u8; 4], &'static str)]) -> Option<&'static str> {
+    let v = enum_of(f, key)?;
+    table.iter().find(|(c, _)| v == &c[..]).map(|(_, n)| *n)
+}
+
+/// Enum `type_id` holding the PSD value of our name `p[key]` (`default` when absent).
+fn enum_param(p: &J, key: &str, default: &str, type_id: &str, table: &[(&[u8; 4], &'static str)]) -> Result<Value, String> {
+    let name = match p.get(key) {
+        None | Some(J::Null) => default,
+        Some(v) => v.as_str().ok_or_else(|| format!("setting `{key}` is not text"))?,
+    };
+    let code = table.iter().find(|(_, n)| *n == name).map(|(c, _)| **c).ok_or_else(|| format!("{key} `{name}` has no PSD equivalent"))?;
+    Ok(Value::Enumerated { type_id: Id::new(type_id), value: Id::Code(code) })
+}
+
+/// Smart Blur `SmBQ` / `SmBM` and Radial Blur `BlrM` / `BlrQ` values (measured in Photoshop).
+const SMART_BLUR_QUALITY: [(&[u8; 4], &str); 3] = [(b"SBQL", "low"), (b"SBQM", "medium"), (b"SBQH", "high")];
+const SMART_BLUR_MODE: [(&[u8; 4], &str); 3] = [(b"SBMN", "normal"), (b"SBME", "edgeOnly"), (b"SBMO", "overlayEdge")];
+const RADIAL_METHOD: [(&[u8; 4], &str); 2] = [(b"Spn ", "spin"), (b"Zm  ", "zoom")];
+const RADIAL_QUALITY: [(&[u8; 4], &str); 3] = [(b"Drft", "draft"), (b"Gd  ", "good"), (b"Bst ", "best")];
 
 fn channel_key(d: &Descriptor) -> Option<&'static str> {
     let Some(Value::Reference(items)) = d.get("Chnl") else { return None };
@@ -280,6 +324,21 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
             };
             json!({"amount": px(f, "Nose")?, "distribution": dist, "monochromatic": mono, "seed": int(f, "FlRs").unwrap_or(0)})
         }
+        ("surfaceBlur", Some(f)) if only_keys(f, &["Rds ", "Thsh"]) => json!({
+            "radius": in_range(px(f, "Rds ")?, 1.0, 100.0)?,
+            "threshold": int_in(f, "Thsh", 2, 255)?,
+        }),
+        ("SmrB", Some(f)) if only_keys(f, &["Rds ", "Thsh", "SmBQ", "SmBM"]) => json!({
+            "radius": in_range(px(f, "Rds ")?, 0.1, 100.0)?,
+            "threshold": in_range(px(f, "Thsh")?, 0.1, 100.0)?,
+            "quality": enum_name(f, "SmBQ", &SMART_BLUR_QUALITY)?,
+            "mode": enum_name(f, "SmBM", &SMART_BLUR_MODE)?,
+        }),
+        ("RdlB", Some(f)) if only_keys(f, &["Amnt", "BlrM", "BlrQ"]) => json!({
+            "amount": int_in(f, "Amnt", 1, 100)?,
+            "method": enum_name(f, "BlrM", &RADIAL_METHOD)?,
+            "quality": enum_name(f, "BlrQ", &RADIAL_QUALITY)?,
+        }),
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
         ("Lvls", Some(f)) => levels_params(f)?,
@@ -592,6 +651,21 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
                 .with("Nose", unit(b"#Prc", pf(p, "amount", 12.5)))
                 .with("Mnch", Value::Boolean(p.get("monochromatic").and_then(J::as_bool).unwrap_or(false)))
                 .with("FlRs", pi(p, "seed", 0.0))
+        }
+        "surfaceBlur" => d.with("Rds ", unit(b"#Pxl", pf(p, "radius", 5.0))).with("Thsh", pi(p, "threshold", 15.0)),
+        "SmrB" => d
+            .with("Rds ", Value::Double(pf(p, "radius", 3.0)))
+            .with("Thsh", Value::Double(pf(p, "threshold", 25.0)))
+            .with("SmBQ", enum_param(p, "quality", "high", "SmBQ", &SMART_BLUR_QUALITY)?)
+            .with("SmBM", enum_param(p, "mode", "normal", "SmBM", &SMART_BLUR_MODE)?),
+        "RdlB" => {
+            // Photoshop wrote no centre key for a centred blur; an off-centre one is unmeasured.
+            if ["centerX", "centerY"].iter().any(|k| (pf(p, k, 0.5) - 0.5).abs() > 1e-9) {
+                return Err("an off-centre Radial Blur centre is not written to PSD".into());
+            }
+            d.with("Amnt", pi(p, "amount", 10.0))
+                .with("BlrM", enum_param(p, "method", "spin", "BlrM", &RADIAL_METHOD)?)
+                .with("BlrQ", enum_param(p, "quality", "good", "BlrQ", &RADIAL_QUALITY)?)
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
@@ -1055,6 +1129,13 @@ mod tests {
             sf("filter.blur.gaussianBlur", json!({"radius": 4.0})),
             sf("filter.blur.boxBlur", json!({"radius": 5.0})),
             sf("filter.blur.motionBlur", json!({"angle": -20, "distance": 10.0})),
+            sf("filter.blur.surfaceBlur", json!({"radius": 12.0, "threshold": 40})),
+            sf("filter.blur.smartBlur", json!({"radius": 5.0, "threshold": 25.0, "quality": "high", "mode": "normal"})),
+            sf("filter.blur.smartBlur", json!({"radius": 3.0, "threshold": 30.0, "quality": "medium", "mode": "overlayEdge"})),
+            sf("filter.blur.smartBlur", json!({"radius": 0.5, "threshold": 0.1, "quality": "low", "mode": "edgeOnly"})),
+            sf("filter.blur.radialBlur", json!({"amount": 10, "method": "spin", "quality": "draft"})),
+            sf("filter.blur.radialBlur", json!({"amount": 20, "method": "zoom", "quality": "good"})),
+            sf("filter.blur.radialBlur", json!({"amount": 100, "method": "spin", "quality": "best"})),
             sf("filter.sharpen.unsharpMask", json!({"amount": 150.0, "radius": 2.0, "threshold": 0})),
             sf("filter.noise.addNoise", json!({"amount": 12.0, "distribution": "uniform", "monochromatic": false, "seed": 1234})),
             sf("filter.noise.median", json!({"radius": 3.0})),
@@ -1101,6 +1182,156 @@ mod tests {
         // A known filter with a setting we don't model is kept verbatim too.
         let odd = Descriptor::new("filterFX").with("Fltr", Value::Descriptor(Descriptor::new("GsnB"))).with("filterID", Value::Integer(code(b"GsnB")));
         assert_eq!(filter_from_item(&odd).command, UNSUPPORTED_FILTER);
+    }
+
+    /// A `filterFXList` item with filter `fltr` and `filterID`, as Photoshop saves it.
+    fn ps_item(name: &str, fltr: Descriptor, filter_id: i32) -> Descriptor {
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(0.0))
+            .with("BckC", rgbc(255.0))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(filter_id))
+    }
+
+    fn surface_blur(rds: f64, thsh: i32) -> Descriptor {
+        Descriptor::new("surfaceBlur").with("Rds ", unit(b"#Pxl", rds)).with("Thsh", Value::Integer(thsh))
+    }
+
+    fn smart_blur(rds: f64, thsh: f64, q: &str, m: &str) -> Descriptor {
+        Descriptor::new("SmrB").with("Rds ", Value::Double(rds)).with("Thsh", Value::Double(thsh)).with("SmBQ", enumv("SmBQ", q)).with("SmBM", enumv("SmBM", m))
+    }
+
+    fn radial_blur(amnt: i32, m: &str, q: &str) -> Descriptor {
+        Descriptor::new("RdlB").with("Amnt", Value::Integer(amnt)).with("BlrM", enumv("BlrM", m)).with("BlrQ", enumv("BlrQ", q))
+    }
+
+    /// The `Fltr` shapes measured in Photoshop (each filter applied to a smart object through
+    /// Action Manager, saved, and `filterFX` read back) open as our filters and are written back
+    /// with the same keys, value types, units, enums and filter ids.
+    #[test]
+    fn blur_family_matches_photoshop_shapes() {
+        let smart = code(b"SmrB");
+        let radial = code(b"RdlB");
+        assert_eq!((smart, radial), (1_399_681_602, 1_382_313_026));
+        let cases = [
+            (surface_blur(5.0, 15), 1135, "filter.blur.surfaceBlur", json!({"radius": 5.0, "threshold": 15})),
+            (surface_blur(12.0, 40), 1135, "filter.blur.surfaceBlur", json!({"radius": 12.0, "threshold": 40})),
+            (
+                smart_blur(5.0, 25.0, "SBQH", "SBMN"),
+                smart,
+                "filter.blur.smartBlur",
+                json!({"radius": 5.0, "threshold": 25.0, "quality": "high", "mode": "normal"}),
+            ),
+            (
+                smart_blur(3.0, 30.0, "SBQL", "SBME"),
+                smart,
+                "filter.blur.smartBlur",
+                json!({"radius": 3.0, "threshold": 30.0, "quality": "low", "mode": "edgeOnly"}),
+            ),
+            (
+                smart_blur(3.0, 30.0, "SBQM", "SBMO"),
+                smart,
+                "filter.blur.smartBlur",
+                json!({"radius": 3.0, "threshold": 30.0, "quality": "medium", "mode": "overlayEdge"}),
+            ),
+            (radial_blur(10, "Spn ", "Drft"), radial, "filter.blur.radialBlur", json!({"amount": 10, "method": "spin", "quality": "draft"})),
+            (radial_blur(20, "Spn ", "Bst "), radial, "filter.blur.radialBlur", json!({"amount": 20, "method": "spin", "quality": "best"})),
+            (radial_blur(20, "Zm  ", "Gd  "), radial, "filter.blur.radialBlur", json!({"amount": 20, "method": "zoom", "quality": "good"})),
+        ];
+        for (fltr, id, command, params) in cases {
+            let item = ps_item("x", fltr.clone(), id);
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!((f.command.as_str(), &f.params), (command, &params), "{fltr:?}");
+            let out = item_for_filter(&f).unwrap();
+            assert_eq!(out.get("filterID"), Some(&Value::Integer(id)));
+            assert_eq!(out.get("hasoptions"), Some(&Value::Boolean(true)));
+            // Byte-identical filter descriptor: class id, four-char keys, types, units and enums.
+            let Some(Value::Descriptor(w)) = out.get("Fltr") else { panic!("no Fltr for {command}") };
+            assert_eq!(w.to_bytes(), fltr.to_bytes(), "{command}");
+        }
+        // Surface Blur's class is a string id; Smart Blur's and Radial Blur's are four-char codes.
+        assert_eq!(surface_blur(1.0, 2).class_id, Id::Str(b"surfaceBlur".to_vec()));
+        assert_eq!(radial_blur(1, "Spn ", "Gd  ").class_id, Id::Code(*b"RdlB"));
+        // Unset options are written with the dialog defaults.
+        let fltr = |c: &str, p: J| item_for_filter(&sf(c, p)).unwrap().get("Fltr").cloned();
+        assert_eq!(fltr("filter.blur.surfaceBlur", json!({})), Some(Value::Descriptor(surface_blur(5.0, 15))));
+        assert_eq!(fltr("filter.blur.smartBlur", json!({})), Some(Value::Descriptor(smart_blur(3.0, 25.0, "SBQH", "SBMN"))));
+        assert_eq!(fltr("filter.blur.radialBlur", json!({"centerX": 0.5, "centerY": 0.5})), Some(Value::Descriptor(radial_blur(10, "Spn ", "Gd  "))));
+    }
+
+    /// Malformed or unmodelled blur descriptors stay verbatim (and are written back unchanged);
+    /// settings PSD can't hold are reported, never a panic.
+    #[test]
+    fn blur_family_malformed_is_kept_verbatim() {
+        let smart = code(b"SmrB");
+        let radial = code(b"RdlB");
+        let text = |s: &str| Value::Text(UnicodeString::new_nul(s));
+        let bad = [
+            // Missing keys.
+            (Descriptor::new("surfaceBlur").with("Rds ", unit(b"#Pxl", 5.0)), 1135),
+            (Descriptor::new("SmrB").with("Rds ", Value::Double(3.0)).with("Thsh", Value::Double(25.0)), smart),
+            (Descriptor::new("RdlB").with("Amnt", Value::Integer(10)).with("BlrM", enumv("BlrM", "Spn ")), radial),
+            // Wrong types.
+            (Descriptor::new("surfaceBlur").with("Rds ", unit(b"#Pxl", 5.0)).with("Thsh", Value::Double(15.0)), 1135),
+            (
+                Descriptor::new("SmrB")
+                    .with("Rds ", text("3"))
+                    .with("Thsh", Value::Double(25.0))
+                    .with("SmBQ", enumv("SmBQ", "SBQH"))
+                    .with("SmBM", enumv("SmBM", "SBMN")),
+                smart,
+            ),
+            (Descriptor::new("RdlB").with("Amnt", text("10")).with("BlrM", enumv("BlrM", "Spn ")).with("BlrQ", enumv("BlrQ", "Gd  ")), radial),
+            (Descriptor::new("RdlB").with("Amnt", Value::Integer(10)).with("BlrM", Value::Integer(1)).with("BlrQ", enumv("BlrQ", "Gd  ")), radial),
+            // Out of range, NaN and infinity.
+            (surface_blur(0.5, 15), 1135),
+            (surface_blur(5.0, 300), 1135),
+            (surface_blur(f64::NAN, 15), 1135),
+            (smart_blur(f64::INFINITY, 25.0, "SBQH", "SBMN"), smart),
+            (smart_blur(3.0, 0.0, "SBQH", "SBMN"), smart),
+            (radial_blur(0, "Spn ", "Gd  "), radial),
+            (radial_blur(101, "Zm  ", "Gd  "), radial),
+            // Unknown enum values.
+            (smart_blur(3.0, 25.0, "SBQX", "SBMN"), smart),
+            (smart_blur(3.0, 25.0, "Hgh ", "SBMN"), smart),
+            (radial_blur(10, "Twrl", "Gd  "), radial),
+            (radial_blur(10, "Spn ", "Hgh "), radial),
+            // A key we don't model (an off-centre Radial Blur would carry one).
+            (radial_blur(10, "Zm  ", "Gd  ").with("Cntr", Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", Value::Double(10.0)))), radial),
+            (surface_blur(5.0, 15).with("Edg ", Value::Integer(1)), 1135),
+        ];
+        for (fltr, id) in bad {
+            let item = ps_item("x", fltr.clone(), id);
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{fltr:?}");
+            // Compared as bytes: a NaN setting is not equal to itself.
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes(), "{fltr:?}");
+        }
+        // Radial Blur at its defaults has no `Fltr` (measured): its values are not stored, so the
+        // entry stays verbatim instead of guessing them.
+        let no_opts = Descriptor::new("filterFX").with("hasoptions", Value::Boolean(false)).with("filterID", Value::Integer(radial));
+        assert_eq!(filter_from_item(&no_opts).command, UNSUPPORTED_FILTER);
+        // Settings with no PSD equivalent are errors when writing.
+        for (command, p) in [
+            ("filter.blur.smartBlur", json!({"quality": "ultra"})),
+            ("filter.blur.smartBlur", json!({"mode": 3})),
+            ("filter.blur.radialBlur", json!({"method": "twirl"})),
+            ("filter.blur.radialBlur", json!({"quality": ["best"]})),
+            ("filter.blur.radialBlur", json!({"centerX": 0.25})),
+            ("filter.blur.radialBlur", json!({"centerY": 1.0})),
+        ] {
+            assert!(item_for_filter(&sf(command, p.clone())).is_err(), "{command} {p}");
+        }
+        // Hostile numbers write without panicking.
+        for p in [json!({"radius": f64::MAX, "threshold": -1e300, "amount": 1e300}), json!({"radius": "x", "threshold": null}), json!(null), json!([1, 2])] {
+            for command in ["filter.blur.surfaceBlur", "filter.blur.smartBlur", "filter.blur.radialBlur"] {
+                let _ = item_for_filter(&sf(command, p.clone()));
+            }
+        }
     }
 
     /// A Filter Gallery item as Photopea writes it (Chrome, Detail 12, Smoothness 4).
