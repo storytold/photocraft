@@ -637,6 +637,49 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -
     true
 }
 
+/// The Color Picker of Replace Color's Result swatch writes here (#6278).
+const RESULT_PICKED: &str = "__resultPicked";
+/// The Result the picker opened on: a picked colour that differs from it sets the sliders.
+const RESULT_FROM: &str = "__resultFrom";
+
+/// Replace Color's Result swatch (#6278), as in Photoshop: the sampled colour after the Hue,
+/// Saturation and Lightness shift. Picking a Result in its Color Picker sets the three sliders so
+/// the sampled colour becomes it.
+fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    use photocraft_algo::tone;
+    let t = Tokens::get(ui.ctx());
+    let from = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([0.0; 3]);
+    let picked = f.get(RESULT_PICKED).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
+    if let Some(to) = picked
+        && f.get(RESULT_PICKED) != f.get(RESULT_FROM)
+    {
+        let (hue, saturation, lightness) = tone::replace_color_shift(from, to);
+        for (key, v) in [("hue", hue), ("saturation", saturation), ("lightness", lightness)] {
+            f.insert(key.into(), json!(v.round()));
+        }
+        f.remove(RESULT_PICKED);
+        f.remove(RESULT_FROM);
+    }
+    let num = |key: &str| f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    let rgb = tone::replace_color_result(from, num("hue"), num("saturation"), num("lightness"));
+    let bytes = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let name = tl!("Result");
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(name).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), name).clicked();
+            ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
+        });
+    });
+    if clicked {
+        let hex = json!(crate::color_picker_ui::hex(rgb));
+        f.insert(RESULT_PICKED.into(), hex.clone());
+        f.insert(RESULT_FROM.into(), hex);
+        crate::color_picker_ui::request_field(f, RESULT_PICKED, &crate::color_picker_ui::title_for(name));
+    }
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -831,6 +874,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert(p.key, json!(v.round() as i64));
             }
         }
+    }
+    if cmd == REPLACE_COLOR {
+        replace_color_result(ui, f);
     }
     // Read-only context the dialog opener supplies (e.g. the monitor profile in use).
     if let Some(note) = f.get("__note").and_then(Value::as_str) {
@@ -2381,6 +2427,45 @@ mod tests {
         h.get_by_label("Pick Color From Image").click();
         h.run_steps(2);
         assert!(!color_eyedropper_armed(h.state()));
+    }
+
+    /// #6278: the Result swatch shows the sampled colour after the shift, and a colour picked for
+    /// it sets Hue, Saturation and Lightness so the sampled colour becomes it.
+    #[test]
+    fn replace_color_result_swatch_sets_the_sliders() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.run("tools.setColors", json!({"foreground": "#cc3333"})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), REPLACE_COLOR).unwrap();
+        h.run_steps(3);
+        // No shift yet: the Result is the sampled colour.
+        assert_eq!(h.get_all_by_label("#cc3333").count(), 2, "the sampled colour and the Result both read #cc3333");
+        h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Result").click();
+        h.run_steps(3);
+        let picker = h.state().ui.dialogs.last().unwrap();
+        assert_ne!(picker.id, id, "the Color Picker opened over the dialog");
+        assert_eq!(picker.fields["color"], json!("#cc3333"), "on the current Result");
+        let picker = picker.id;
+        h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#3355cc"));
+        crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+        h.state_mut().ui.dialogs.retain(|d| d.id != picker);
+        h.run_steps(3);
+        let f = h.state_mut().ui.dialog_mut(id).unwrap().fields.clone();
+        let n = |k: &str| f[k].as_f64().unwrap() as f32;
+        let got = photocraft_algo::tone::replace_color_result([0.8, 0.2, 0.2], n("hue"), n("saturation"), n("lightness"));
+        let want = crate::color_picker_ui::parse_hex("#3355cc").unwrap();
+        assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.02), "the sliders turn the sampled colour into the pick: {got:?}");
+        assert!(n("hue") != 0.0, "the hue moved");
+        // Moving a slider afterwards is not mistaken for another pick.
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("lightness".into(), json!(10.0));
+        h.run_steps(2);
+        assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["lightness"], json!(10.0));
     }
 
     /// #4457: Localized Color Clusters and its Range, as in Photoshop's dialog; the sampled point
