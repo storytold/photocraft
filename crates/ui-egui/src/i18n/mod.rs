@@ -891,6 +891,21 @@ mod tests {
         assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 1, 2, 2, 1]);
     }
 
+    /// Counted status messages read in Polish with all three forms instead of falling back to
+    /// English (they were missing from the catalog).
+    #[test]
+    fn polish_counted_messages_use_all_three_forms() {
+        let pl = Lang::from_code("pl").expect("pl registered");
+        let steps = |n| trn(pl, n, "Played {n} step", "Played {n} steps");
+        assert_eq!(
+            [steps(1), steps(3), steps(5), steps(12), steps(22)],
+            ["Odtworzono 1 krok", "Odtworzono 3 kroki", "Odtworzono 5 kroków", "Odtworzono 12 kroków", "Odtworzono 22 kroki"]
+        );
+        let brushes = trn(pl, 2, "Imported {n} brush from {group}", "Imported {n} brushes from {group}");
+        assert_eq!(fmt(&brushes, &[("group", "Akwarele")]), "Zaimportowano 2 pędzle z Akwarele");
+        assert_eq!(trn(pl, 5, "{n} slice", "{n} slices"), "5 plasterków");
+    }
+
     #[test]
     fn czech_plural_rule() {
         let forms: Vec<usize> = [0, 1, 2, 3, 4, 5, 11, 12, 21, 22, 100, u64::MAX].into_iter().map(plural_cs).collect();
