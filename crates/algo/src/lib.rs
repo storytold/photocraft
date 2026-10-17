@@ -744,8 +744,8 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::AddNoise { amount, distribution, monochromatic, seed } => noise::add(src, out, ctx, *amount, *distribution, *monochromatic, *seed),
         FilterParams::Median { radius } => noise::median(src, out, *radius, None),
         FilterParams::DustAndScratches { radius, threshold } => noise::median(src, out, *radius, Some(*threshold)),
-        FilterParams::Minimum { radius, preserve } => other::min_max_preserve(src, out, *radius, false, *preserve),
-        FilterParams::Maximum { radius, preserve } => other::min_max_preserve(src, out, *radius, true, *preserve),
+        FilterParams::Minimum { radius, preserve } => min_max_ink(src, out, ctx, *radius, false, *preserve),
+        FilterParams::Maximum { radius, preserve } => min_max_ink(src, out, ctx, *radius, true, *preserve),
         FilterParams::Offset { horizontal, vertical, undefined } => other::offset(src, out, ctx, *horizontal, *vertical, *undefined),
         FilterParams::Mosaic { cell_size } => stylize::mosaic(src, out, ctx, *cell_size),
         FilterParams::Emboss { angle, height, amount } => stylize::emboss(src, out, ctx, *angle, *height, *amount),
@@ -907,6 +907,23 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::NtscColors => video::ntsc(src, out, ctx),
         FilterParams::FilterGallery { effects } => artistic_fx::run(effects, src, out, ctx),
     }
+}
+
+/// Minimum / Maximum in the document's polarity. CMYK samples are ink, so there Maximum spreads
+/// paper white and Minimum spreads ink (as Photoshop does): the colour channels run inverted,
+/// alpha keeps its usual polarity.
+fn min_max_ink(src: &Image, out: Rect, ctx: &Ctx, radius: f32, max: bool, preserve: Preserve) -> Vec<f32> {
+    if !fxutil::subtractive(ctx) {
+        return other::min_max_preserve(src, out, radius, max, preserve);
+    }
+    let n = src.ch.max(1);
+    let cc = if ctx.alpha { n - 1 } else { n };
+    let flip = |data: &mut [f32]| data.chunks_exact_mut(n).for_each(|px| px.iter_mut().take(cc).for_each(|v| *v = 1.0 - *v));
+    let mut inv = src.clone();
+    flip(&mut inv.data);
+    let mut res = other::min_max_preserve(&inv, out, radius, max, preserve);
+    flip(&mut res);
+    res
 }
 
 /// Output tile size used by [`apply`].
