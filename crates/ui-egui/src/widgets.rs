@@ -1585,14 +1585,82 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     // The popup frame's margin and stroke, and a small gap to the window's edges.
     let frame = ui.spacing().menu_margin.sum().y + 2.0 + 2.0 * MENU_EDGE;
     let room = (crate::work_area::visible_rect(ui.ctx()).height() - frame).max(MENU_MIN_HEIGHT);
+    // An overflowing menu gets Photoshop's scroll arrows above and below its rows (#2091): the
+    // thin floating scroll bar alone gave no hint that more items were hidden. Whether it
+    // overflows is known only after layout, so it is remembered from the last frame.
+    let id = ui.id().with("menu_scroll");
+    let overflow = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let offset = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+    let arrows = if overflow { 2.0 * MENU_ARROW_HEIGHT } else { 0.0 };
+    let room = (room - arrows).max(MENU_MIN_HEIGHT);
+    // The arrows sit flush against the rows, so no item spacing is added around them that `room`
+    // doesn't count; the rows keep the menu's own spacing.
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut step = 0.0;
+    if overflow {
+        step += menu_scroll_arrow(ui, true, offset > 0.5);
+    }
     // A popup's Ui is only as tall as the popup was last frame (400 pt on the first), so ask for
     // the whole room: the area still shrinks to its rows when they need less.
-    egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, add_contents).inner
+    let mut area = egui::ScrollArea::vertical().id_salt(id).max_height(room).min_scrolled_height(room);
+    let pending = ui.data(|d| d.get_temp::<f32>(id.with("step"))).unwrap_or(0.0);
+    if pending != 0.0 {
+        area = area.vertical_scroll_offset((offset + pending).max(0.0));
+    }
+    let out = area.show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = spacing;
+        add_contents(ui)
+    });
+    let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+    let offset = out.state.offset.y.clamp(0.0, max);
+    if overflow {
+        step += menu_scroll_arrow(ui, false, offset < max - 0.5);
+    }
+    ui.spacing_mut().item_spacing.y = spacing;
+    ui.data_mut(|d| {
+        d.insert_temp(id, max > 0.5);
+        d.insert_temp(id.with("offset"), offset);
+        d.insert_temp(id.with("step"), step);
+    });
+    out.inner
+}
+
+/// One scroll arrow of an overflowing menu: hovering scrolls that way (as in Photoshop's and the
+/// system menus), clicking jumps a page. Returns the scroll step for the next frame.
+fn menu_scroll_arrow(ui: &mut Ui, up: bool, enabled: bool) -> f32 {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(MENU_ARROW_HEIGHT), MENU_ARROW_HEIGHT), Sense::click());
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_dim.gamma_multiply(0.5) };
+    let (c, h) = (rect.center(), 3.5);
+    let pts = if up {
+        vec![pos2(c.x - h * 1.4, c.y + h * 0.6), pos2(c.x + h * 1.4, c.y + h * 0.6), pos2(c.x, c.y - h * 0.8)]
+    } else {
+        vec![pos2(c.x - h * 1.4, c.y - h * 0.6), pos2(c.x + h * 1.4, c.y - h * 0.6), pos2(c.x, c.y + h * 0.8)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    if !enabled {
+        return 0.0;
+    }
+    let sign = if up { -1.0 } else { 1.0 };
+    if resp.clicked() {
+        sign * MENU_ARROW_PAGE
+    } else if resp.hovered() {
+        ui.ctx().request_repaint();
+        sign * MENU_ARROW_SPEED * ui.input(|i| i.stable_dt).clamp(0.0, 0.1)
+    } else {
+        0.0
+    }
 }
 
 /// Gap kept between a context menu and the window's edges, and the shortest it gets.
 const MENU_EDGE: f32 = 4.0;
 const MENU_MIN_HEIGHT: f32 = 120.0;
+/// Height of an overflowing menu's scroll arrows, how fast hovering one scrolls (points per
+/// second) and how far a click on one jumps.
+const MENU_ARROW_HEIGHT: f32 = 14.0;
+const MENU_ARROW_SPEED: f32 = 400.0;
+const MENU_ARROW_PAGE: f32 = 200.0;
 
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its left edge stays where it first showed (at the swatch, or further
@@ -1922,6 +1990,41 @@ mod tests {
             h.run_steps(1);
         }
         assert_eq!(h.state().0, "abc", "typing reaches the bound string");
+    }
+
+    /// #2091: a menu taller than the window shows scroll arrows; hovering the lower one scrolls
+    /// it, and a short menu gets none.
+    #[test]
+    fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
+        // (rows, overflowing, scroll offset, bottom of the menu)
+        type S = (usize, bool, f32, f32);
+        let run = |rows: usize| {
+            let mut h = Harness::builder().with_size(egui::vec2(220.0, 300.0)).build_ui_state(
+                |ui, s: &mut S| {
+                    let id = ui.id().with("menu_scroll");
+                    super::menu_scroll(ui, |ui| {
+                        for i in 0..s.0 {
+                            ui.label(format!("Item {i}"));
+                        }
+                    });
+                    s.1 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                    s.2 = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+                    s.3 = ui.min_rect().bottom();
+                },
+                (rows, false, 0.0, 0.0),
+            );
+            h.run_steps(3);
+            h
+        };
+        let short = run(3);
+        assert!(!short.state().1, "a short menu has no arrows");
+        let mut long = run(80);
+        assert!(long.state().1, "a long menu overflows");
+        assert_eq!(long.state().2, 0.0);
+        let below = egui::pos2(100.0, long.state().3 - super::MENU_ARROW_HEIGHT / 2.0);
+        long.event(egui::Event::PointerMoved(below));
+        long.run_steps(10);
+        assert!(long.state().2 > 0.0, "hovering the lower arrow scrolls down");
     }
 
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
