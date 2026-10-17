@@ -532,3 +532,66 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     assert_eq!(app.ui.view.screen_mode, "standard");
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
+
+/// #6017: a click into another tile activated that document and moved it to the first tile, so
+/// the two side-by-side documents swapped places. Each document keeps its tile; with more
+/// documents than tiles, the shown run slides just enough to include the active one.
+#[test]
+fn arranged_documents_keep_their_tiles() {
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
+    let (mut app, _) = app_with(3);
+    app.ui.view.arrange = "tileAllVertically".into();
+    for active in 0..3 {
+        app.session.set_active(active);
+        let shown = crate::canvas::arranged_cells(&app, rect).unwrap();
+        let order: Vec<usize> = shown.iter().map(|(d, _)| *d).collect();
+        assert_eq!(order, vec![0, 1, 2], "active {active}");
+        assert!(shown.windows(2).all(|w| w[0].1.left() < w[1].1.left()), "document 0 on the left");
+    }
+    app.ui.view.arrange = "twoUpVertical".into();
+    // As `documents` draws them: the shown run is kept from frame to frame.
+    let docs = |app: &mut PhotocraftApp, active: usize| {
+        app.session.set_active(active);
+        let shown: Vec<usize> = crate::canvas::arranged_cells(app, rect).unwrap().iter().map(|(d, _)| *d).collect();
+        app.arrange_start = shown[0];
+        shown
+    };
+    assert_eq!(docs(&mut app, 0), vec![0, 1]);
+    assert_eq!(docs(&mut app, 1), vec![0, 1], "the second tile's document stays on the right");
+    assert_eq!(docs(&mut app, 2), vec![1, 2], "the third document slides in next to the second");
+    assert_eq!(docs(&mut app, 1), vec![1, 2], "a click into the visible document 1 leaves the tiles as they are");
+    assert_eq!(docs(&mut app, 0), vec![0, 1], "a hidden document slides in from the left");
+    assert_eq!(docs(&mut app, 1), vec![0, 1]);
+}
+
+/// #6017: rulers showed in the active tile only; the other tile had none and no room for them.
+#[test]
+fn every_arranged_tile_has_rulers() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "tileAllVertically".into();
+    app.ui.extras.rulers = true;
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let right = h.state().last_canvas_rect.center().x;
+    // Ruler labels are 9 pt text: some lie in each half of the document area.
+    let mut labels = [0, 0];
+    for s in &h.output().shapes {
+        if let egui::Shape::Text(t) = &s.shape
+            && t.galley.job.sections.first().is_some_and(|sec| sec.format.font_id.size == 9.0)
+            && t.galley.text().chars().all(|c| c.is_ascii_digit())
+        {
+            labels[usize::from(t.pos.x > right)] += 1;
+        }
+    }
+    assert!(labels[0] > 0 && labels[1] > 0, "ruler labels per tile: {labels:?}");
+}
