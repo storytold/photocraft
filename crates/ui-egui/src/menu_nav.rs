@@ -336,7 +336,10 @@ impl Nav {
         let Some(top) = self.top.filter(|_| !tops.is_empty()) else { return };
         let level = self.level.min(self.rows.len().saturating_sub(1));
         self.level = level;
-        let press = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        // A text field in the menu (Help › Search) keeps the keys that edit it: ← / → move its
+        // cursor and Space types a space.
+        let typing = ctx.text_edit_focused();
+        let press = |k: Key| !(typing && matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::Space)) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         let current = self.highlighted(level).and_then(|i| self.rows.get(level)?.get(i)).cloned();
         let switch = |by: usize| {
             let n = tops.len();

@@ -265,6 +265,44 @@ fn left_and_right_switch_menus_and_shortcuts_wait_while_one_is_open() {
     assert!(!is_open(&h.ctx), "shortcuts work again");
 }
 
+/// In Help › Search, ← / → move the field's cursor instead of switching to Window / File, and
+/// Space types a space instead of running the lit row.
+#[test]
+fn help_search_keeps_the_arrows_and_space_that_edit_it() {
+    let mut h = harness((1280.0, 720.0, 1.0));
+    open(&mut h, "Help");
+    let field = egui::Id::new("help-menu-search").with("field");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "the search field has the keyboard");
+    let text = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("help-menu-search"))).unwrap_or_default();
+    let typing = |h: &mut Harness<'static, PhotocraftApp>, s: &str| {
+        h.event(egui::Event::Text(s.to_string()));
+        h.run_steps(3);
+    };
+    typing(&mut h, "levls");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "← keeps Help open");
+    key(&mut h, egui::Key::ArrowLeft);
+    typing(&mut h, "e");
+    assert_eq!(text(&h), "levels", "← moved the cursor");
+    // The cursor sits at `leve|ls`: two → take it to the end.
+    key(&mut h, egui::Key::ArrowRight);
+    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "→ keeps Help open");
+    key(&mut h, egui::Key::ArrowRight);
+    // The pointer resting on a result lights it; a space typed then is text, not a click.
+    // "levels" finds both Image › Adjustments › Levels… and the Levels adjustment layer.
+    let levels = h.get_all_by_label_contains("› Levels").next().expect("a Levels result").rect().center();
+    h.hover_at(levels);
+    h.run_steps(3);
+    assert!(Nav::current(&h.ctx).highlighted(0).is_some(), "a result is lit");
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text(" ".into()));
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("About PhotoCraft").is_some(), "Space keeps Help open");
+    assert!(h.state().ui.dialogs.is_empty(), "Space ran no command: {:?}", h.state().ui.dialogs);
+    assert_eq!(text(&h), "levels ");
+}
+
 /// A level's visible height (its view) and the full height of its rows: equal means no scrolling.
 fn fits(h: &Harness<'static, PhotocraftApp>, level: usize) -> (f32, f32) {
     let nav = Nav::current(&h.ctx);
