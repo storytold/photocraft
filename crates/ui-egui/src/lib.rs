@@ -19,6 +19,7 @@ pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
 pub mod adjust_ui;
+mod align_bar;
 mod alt_grab;
 pub mod analysis_ui;
 pub mod anchor_tools;

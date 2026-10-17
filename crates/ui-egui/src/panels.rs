@@ -1353,34 +1353,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::vline(ui, 22.0);
                         widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
                         widgets::vline(ui, 22.0);
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        for (icon, tip, cmd) in [
-                            ("panels-top-left", tl!("Align left edges"), "layer.align.leftEdges"),
-                            ("app-window", tl!("Align horizontal centers"), "layer.align.horizontalCenters"),
-                            ("panel-right", tl!("Align right edges"), "layer.align.rightEdges"),
-                        ] {
-                            let on = app.session.is_enabled(cmd);
-                            if ui.add_enabled_ui(on, |ui| icons::button(ui, icon, 24.0, false, tip)).inner.clicked() {
-                                let _ = app.run(cmd, json!({}));
-                            }
-                        }
-                        ui.add_space(6.0);
-                        let more = icons::button(ui, "ellipsis", 24.0, false, tl!("Align and distribute"));
-                        egui::Popup::menu(&more).show(|ui| {
-                            ui.set_min_width(200.0);
-                            let mut section = |ui: &mut egui::Ui, title: &str, prefix: &str| {
-                                ui.label(egui::RichText::new(tl!(&title)).small().color(t.text_dim));
-                                for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with(prefix)) {
-                                    if ui.add_enabled(app.session.is_enabled(c.id), egui::Button::new(tl!(c.label))).clicked() {
-                                        let _ = app.run(c.id, json!({}));
-                                        ui.close();
-                                    }
-                                }
-                            };
-                            section(ui, tl!("Align"), "layer.align.");
-                            ui.separator();
-                            section(ui, tl!("Distribute"), "layer.distribute.");
-                        });
+                        crate::align_bar::options(app, ui);
                     }
                     Tool::RectMarquee | Tool::EllipseMarquee => hint(
                         ui,
