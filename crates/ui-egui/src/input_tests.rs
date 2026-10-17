@@ -194,6 +194,56 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     assert!(h.state().ui.dialogs.is_empty());
 }
 
+/// ⌘Space (Ctrl+Space off the Mac) and ⌥Space are the temporary Zoom under an open dialog too, as
+/// in Photoshop: a drag on the free canvas is a scrubby zoom about the press point, not a pan, and
+/// a click steps the zoom (#6460).
+#[test]
+fn temporary_zoom_works_under_a_dialog() {
+    let mut h = harness();
+    h.state_mut().ui.extras.rulers = false;
+    open_dialog(&mut h);
+    let p = free_canvas(&h);
+    h.hover_at(p);
+    h.run_steps(1);
+    let (z0, doc0) = (zoom(&h), doc_at(&h, p));
+    let held = |h: &mut Harness<'static, PhotocraftApp>, pressed: bool, m: Modifiers| {
+        h.event(egui::Event::ModifiersChanged(m));
+        h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: m });
+        h.run_steps(1);
+    };
+    let button = |h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, pressed: bool, m: Modifiers| {
+        h.event_modifiers(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m }, m);
+        h.run_steps(1);
+    };
+    held(&mut h, true, Modifiers::COMMAND);
+    button(&mut h, p, true, Modifiers::COMMAND);
+    for i in 1..=6 {
+        h.hover_at(p + vec2(10.0 * i as f32, 0.0));
+        h.run_steps(1);
+    }
+    button(&mut h, p + vec2(60.0, 0.0), false, Modifiers::COMMAND);
+    held(&mut h, false, Modifiers::COMMAND);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let z1 = zoom(&h);
+    let size = h.state().ui.views[0].doc_size;
+    assert!((z1 - crate::zoom_tool::scrub_zoom(z0, 60.0, size)).abs() < 1e-4, "⌘Space-drag zooms in: {z0} -> {z1}");
+    let doc1 = doc_at(&h, p);
+    assert!((doc1[0] - doc0[0]).abs() < 0.5 && (doc1[1] - doc0[1]).abs() < 0.5, "the pressed point stays put: {doc0:?} -> {doc1:?}");
+
+    // ⌥Space-click steps out.
+    h.hover_at(p);
+    h.run_steps(1);
+    held(&mut h, true, Modifiers::ALT);
+    button(&mut h, p, true, Modifiers::ALT);
+    button(&mut h, p, false, Modifiers::ALT);
+    held(&mut h, false, Modifiers::ALT);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(zoom(&h), crate::zoom_levels::step(z1, -1, size));
+    assert_eq!(h.state().ui.dialogs.len(), 1);
+}
+
 fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.run_steps(1);

@@ -43,6 +43,24 @@ pub fn pan_delta(ctx: &egui::Context, canvas: egui::Rect, hand: bool) -> Option<
     (panning && canvas.contains(origin) && !rects.iter().any(|r| r.contains(origin))).then_some(delta)
 }
 
+/// The primary button's drag and click on the free canvas under an open dialog, as the canvas
+/// response would report them if it weren't inert: for the held Zoom (⌘Space / ⌥Space, #6460).
+/// A drag counts from egui's drag threshold, like `drag_started`.
+pub fn free_buttons(ctx: &egui::Context, canvas: egui::Rect) -> crate::paint_mouse::Buttons {
+    let id = egui::Id::new("pc-dialog-free-drag");
+    let was = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let rects = rects(ctx);
+    let open_popup = egui::Popup::is_any_open(ctx);
+    let free = |p: egui::Pos2| !open_popup && canvas.contains(p) && !rects.iter().any(|r| r.contains(p));
+    let (down, dragging, clicked) = ctx.input(|i| {
+        let p = &i.pointer;
+        let dragging = p.primary_down() && p.is_decidedly_dragging() && (was || p.press_origin().is_some_and(free));
+        (p.primary_down(), dragging, p.primary_clicked() && p.interact_pos().is_some_and(free))
+    });
+    ctx.data_mut(|d| d.insert_temp(id, dragging));
+    crate::paint_mouse::Buttons { started: dragging && !was, dragged: dragging, stopped: was && !down, clicked }
+}
+
 /// A click or drag with the primary button started on the free canvas under an open dialog, Space
 /// not held: where the pointer is this frame. The press itself counts even when it is released in
 /// the same frame (a quick click, `ui.click`); the drag only while it stays on the free canvas.

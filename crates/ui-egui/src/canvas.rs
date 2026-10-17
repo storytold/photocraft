@@ -3373,7 +3373,23 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let shadow_drag =
             !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
         let hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag;
-        if let Some(d) = crate::dialogs::pan_delta(&ctx, rect, hand) {
+        // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
+        let held_zoom = !middle && matches!(temporary, Some(crate::hold_keys::Temporary::ZoomIn | crate::hold_keys::Temporary::ZoomOut));
+        if held_zoom {
+            let alt = ctx.input(|i| i.modifiers.alt);
+            if free_hover {
+                ctx.set_cursor_icon(crate::tool_cursor::zoom(&ctx, zoom_out(alt)));
+            }
+            let b = crate::dialogs::free_buttons(&ctx, rect);
+            let pointer = ctx.input(|i| i.pointer.latest_pos());
+            crate::zoom_tool::drag(app, &ctx, &mut view, &xf, &b, pointer);
+            if b.clicked
+                && let Some(p) = pointer
+            {
+                let nz = crate::zoom_levels::step(view.zoom, if zoom_out(alt) { -1 } else { 1 }, view.doc_size);
+                zoom_about(&mut view, &xf, p, nz, app.session.prefs().tools.zoom_clicked_point_to_center, ppp);
+            }
+        } else if let Some(d) = crate::dialogs::pan_delta(&ctx, rect, hand) {
             let d = xf.unmap_vec(d) / (view.zoom / ppp);
             view.center[0] -= d.x;
             view.center[1] -= d.y;
