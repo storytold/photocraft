@@ -28,7 +28,7 @@ permissions:
 jobs:
   freebsd:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b  # main
     with:
       craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
       cargo-build-extra-args: "--features heif"

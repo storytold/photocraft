@@ -47,7 +47,7 @@ jobs:
       legs: ${{ steps.pick.outputs.legs }}
       web: ${{ steps.pick.outputs.web }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - id: pick
@@ -99,7 +99,7 @@ jobs:
       # line-tables-only, so a backtrace with lines is one OS away).
       CARGO_PROFILE_DEV_DEBUG: ${{ startsWith(matrix.os, 'windows') && '0' || 'line-tables-only' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Unused toolchains in the image (Android SDK, .NET, GHC, CodeQL) are deleted in the
       # background: the space is free before the craft-fonts build needs it, and nothing waits.
@@ -113,7 +113,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
             libgl1-mesa-dev libgtk-3-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
         with:
           components: clippy, rustfmt
 
@@ -122,7 +122,7 @@ jobs:
       # A failing test still saves: the cache holds compiled dependencies, not test results.
       # The Windows legs share one key (same dependencies); the integration leg saves it,
       # because it also runs Clippy and so leaves Clippy's dependency metadata in it.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' && (matrix.part == 'all' || matrix.part == 'integration') }}
           cache-on-failure: true
@@ -133,7 +133,7 @@ jobs:
       # Test executables can't be cached, so a PR still links its tests.
       - name: Install sccache (Windows)
         if: runner.os == 'Windows'
-        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
         with:
           version: v0.18.0
 
@@ -168,7 +168,7 @@ jobs:
 
       # nextest runs the test binaries in parallel (cargo test runs them one at a time), with the
       # GPU tests capped by the `gpu` group in .config/nextest.toml (#2204).
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
         with:
           tool: cargo-nextest@0.9.146
 
@@ -240,7 +240,7 @@ jobs:
       matrix:
         variant: [without heif, with craft-fonts]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Linux system dependencies (egui/winit/rfd)
         run: |
@@ -251,14 +251,14 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
             libgl1-mesa-dev libgtk-3-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           shared-key: test
           save-if: false
 
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
         with:
           tool: cargo-nextest@0.9.146
 
@@ -274,7 +274,7 @@ jobs:
       # Filter execution to the three crates that read the optional font input (#6127).
       - name: Check out craft-fonts
         if: matrix.variant == 'with craft-fonts'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: abb83316d96aa59c1cf64784289e378fe9fa5695
@@ -305,15 +305,15 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           key: corpus
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Restore test corpora
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: corpus/
           key: corpus-${{ hashFiles('xtask/src/corpus_pins.rs', 'xtask/*.sha256') }}
@@ -327,11 +327,11 @@ jobs:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           key: wasm32
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -350,11 +350,11 @@ jobs:
       # Match release.yml so PR results reflect what would actually ship.
       TRUNK_VERSION: 0.21.14
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           key: ci-web
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -397,30 +397,30 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - { crate: psd, name: parse }
-          - { crate: psd, name: descriptor }
-          - { crate: psd, name: image_source_data }
-          - { crate: psd, name: grd }
-          - { crate: psd, name: ase }
-          - { crate: psd, name: aco }
-          - { crate: psd, name: patterns }
-          - { crate: psd, name: filter_effects }
-          - { crate: psd, name: metadata }
-          - { crate: psd, name: tagged }
-          - { crate: psd, name: resources }
-          - { crate: codecs, name: decode_any }
-          - { crate: codecs, name: decode_png }
-          - { crate: codecs, name: decode_jpeg }
-          - { crate: codecs, name: decode_tiff }
-          - { crate: codecs, name: decode_exr }
-          - { crate: codecs, name: decode_heif }
-          - { crate: affinity, name: preview }
-          - { crate: affinity, name: import_preview, args: "--features io" }
-          - { crate: format, name: load }
+          - {crate: psd, name: parse}
+          - {crate: psd, name: descriptor}
+          - {crate: psd, name: image_source_data}
+          - {crate: psd, name: grd}
+          - {crate: psd, name: ase}
+          - {crate: psd, name: aco}
+          - {crate: psd, name: patterns}
+          - {crate: psd, name: filter_effects}
+          - {crate: psd, name: metadata}
+          - {crate: psd, name: tagged}
+          - {crate: psd, name: resources}
+          - {crate: codecs, name: decode_any}
+          - {crate: codecs, name: decode_png}
+          - {crate: codecs, name: decode_jpeg}
+          - {crate: codecs, name: decode_tiff}
+          - {crate: codecs, name: decode_exr}
+          - {crate: codecs, name: decode_heif}
+          - {crate: affinity, name: preview}
+          - {crate: affinity, name: import_preview, args: "--features io"}
+          - {crate: format, name: load}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04  # nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           workspaces: crates/${{ matrix.target.crate }}/fuzz
       - name: Install cargo-fuzz
@@ -430,7 +430,7 @@ jobs:
         run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time=${{ inputs.fuzz_seconds }}
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
           path: crates/${{ matrix.target.crate }}/fuzz/artifacts

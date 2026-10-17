@@ -20,7 +20,7 @@ concurrency:
 jobs:
   release:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@43f4e83c68764f9d880f8a6c10328bc550465f2b  # main
     with:
       app-name: photocraft
       app-title: PhotoCraft
