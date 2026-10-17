@@ -1,0 +1,35 @@
+@startuml
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+skinparam dpi 110
+title PhotoCraft - Runtime view (processes and calls)
+Person(user, "User", "pen, mouse, keyboard")
+Person(agent, "AI agent / script", "drives PhotoCraft programmatically")
+System_Boundary(sys, "PhotoCraft (System code)") {
+  Container(desk, "Desktop app", "Rust, eframe + wgpu", "egui shell; Session + command registry in-process; rayon pool")
+  Container(ctl, "Control server", "TCP JSON, in desktop app", "--control: dispatch commands, ui.screenshot")
+  Container(cli, "photocraft-cli", "Rust", "convert / info / run / batch / commands")
+  Container(mcp, "MCP server", "automation crate", "photocraft-cli mcp")
+  Container(web, "Browser build", "WASM + WebGPU", "same engine and UI in a browser tab")
+  Container(plug, "Plug-ins", "sandboxed WASM", "filters via plug-in ABI")
+}
+System_Ext(gpu, "GPU", "wgpu: Vulkan / Metal / DX12 / WebGPU")
+System_Ext(tab, "Pen tablet", "AppKit / XInput2")
+ContainerDb(fs, "File system", "PSD/PSB, .pcraft, TIFF, PNG, JPEG, EXR, RAW, HEIF, Affinity, ORA, KRA")
+System_Ext(assets, "Fonts + ICC profiles", "craft-fonts, system fonts, profiles")
+Rel(user, desk, "edits images")
+Rel(user, web, "edits images")
+Rel(tab, desk, "pressure, tilt")
+Rel(agent, ctl, "JSON commands", "TCP")
+Rel(agent, mcp, "MCP tools", "stdio")
+Rel(agent, cli, "batch jobs", "process")
+Rel(ctl, desk, "dispatch")
+Rel(desk, gpu, "composite, display LUT")
+Rel(web, gpu, "WebGPU")
+Rel(desk, plug, "runs")
+Rel(desk, fs, "open / atomic save")
+Rel(cli, fs, "read / write")
+Rel(mcp, fs, "read / write")
+Rel(desk, assets, "loads")
+SHOW_LEGEND()
+@enduml

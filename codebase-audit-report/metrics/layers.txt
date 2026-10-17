@@ -1,0 +1,55 @@
+   Compiling serde_core v1.0.229
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling zmij v1.0.23
+   Compiling winnow v1.0.4
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling syn v3.0.6
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling memchr v2.8.3
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling itoa v1.0.18
+   Compiling toml v1.1.6+spec-1.1.0
+   Compiling serde_derive v1.0.229
+   Compiling xtask v0.8.2 (/home/user/photocraft-study/xtask)
+    Finished `dev` profile [optimized] target(s) in 21.50s
+     Running `target/agent-audit/debug/xtask layers`
+Dependency layering (plan/architecture.md §3)
+
+crate                        layer          workspace deps
+photocraft                   exempt         automation, codecs, color, compose, doc, engine, format, geom, io, raster, tablet, ui-egui, cms
+photocraft-affinity          L0 standalone  
+photocraft-algo              L2             color, geom, raster
+photocraft-automation        L6             codecs, compose, doc, engine, format, geom, io
+photocraft-cli               exempt         automation, codecs, engine, format, io
+photocraft-cms               L0             
+photocraft-codecs            L0 standalone  heif
+photocraft-color             L0             cms
+photocraft-compose           L3             color, doc, geom, raster, vector, paint (dev)
+photocraft-doc               L1             color, geom, raster
+photocraft-engine            L5             algo, cms, codecs, color, compose, doc, format, geom, io, ops, paint, plugins, psd, raster, text, vector, affinity (dev), raw (dev)
+photocraft-format            L3             codecs, color, doc, geom, raster
+photocraft-geom              L0             
+photocraft-gpu               L3             color, compose, doc, geom, raster, vector (dev)
+photocraft-heif              L0 standalone  
+photocraft-io                L4             affinity, algo, cms, codecs, color, compose, doc, format, geom, paint, psd, raster, raw, text, vector, affinity (dev), psd (dev), raw (dev)
+photocraft-ops               L2             doc
+photocraft-paint             L2             color, geom, raster
+photocraft-plugins           L4             color, geom, raster
+photocraft-psd               L0 standalone  psd (dev)
+photocraft-raster            L0             color, geom
+photocraft-raw               L0 standalone  raw (dev)
+photocraft-tablet            L0 standalone  
+photocraft-testkit           testkit        color, geom, raster
+photocraft-text              L2             color, doc, geom, psd, raster
+photocraft-ui-egui           L6             algo, cms, codecs, color, compose, doc, engine, format, geom, gpu, io, paint, plugins, raster, text, vector, psd (dev), raw (dev), testkit (dev)
+photocraft-vector            L2             color, doc, geom, raster
+photocraft-web               exempt         codecs, doc, engine, io, ui-egui, paint (dev), psd (dev)
+xtask                        exempt         
+
+OK: 29 crates, no layering violations.
+exit=0

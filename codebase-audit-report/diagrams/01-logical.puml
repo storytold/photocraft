@@ -1,0 +1,69 @@
+@startuml
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+skinparam dpi 110
+skinparam wrapWidth 220
+title PhotoCraft - Logical view (crates by layer)
+AddElementTag("core", $bgColor="#1E8449", $fontColor="#FFFFFF", $legendText="domain core (L1-L2)")
+AddElementTag("app", $bgColor="#2471A3", $fontColor="#FFFFFF", $legendText="application (L5)")
+AddElementTag("infra", $bgColor="#7D3C98", $fontColor="#FFFFFF", $legendText="rendering / file infrastructure (L0, L3-L4)")
+AddElementTag("ui", $bgColor="#B9770E", $fontColor="#FFFFFF", $legendText="delivery (L6, apps)")
+AddElementTag("devops", $bgColor="#D5D8DC", $legendText="DevOps/Test asset")
+
+System_Boundary(sys, "SYSTEM code - 257,637 LOC") {
+  Boundary(apps, "Apps") {
+    Component(desk, "photocraft", "eframe/wgpu app", "desktop app + TCP control server", $tags="ui")
+    Component(cli, "photocraft-cli", "CLI", "convert/info/run/batch/mcp", $tags="ui")
+    Component(web, "photocraft-web", "WASM", "browser build", $tags="ui")
+  }
+  Boundary(l6, "L6 delivery") {
+    Component(ui, "ui-egui", "egui", "menus, panels, tools, canvas", $tags="ui")
+    Component(auto, "automation", "MCP", "agent server", $tags="ui")
+  }
+  Boundary(l5, "L5 application") {
+    Component(eng, "engine", "Session + registry", "every action is a command", $tags="app")
+  }
+  Boundary(l4, "L4 I/O + plug-ins") {
+    Component(io, "io", "", "document <-> PSD/flat/raw/Affinity", $tags="infra")
+    Component(plug, "plugins", "", "sandboxed WASM plug-ins", $tags="infra")
+  }
+  Boundary(l3, "L3 rendering + native format") {
+    Component(comp, "compose", "CPU", "compositor (oracle)", $tags="infra")
+    Component(gpu, "gpu", "wgpu", "GPU compositor", $tags="infra")
+    Component(fmt, "format", "", ".pcraft atomic saves", $tags="infra")
+  }
+  Boundary(l2, "L2 domain services") {
+    Component(algo, "algo", "", "imaging algorithms", $tags="core")
+    Component(paint, "paint", "", "brush engine", $tags="core")
+    Component(text, "text", "", "type engine", $tags="core")
+    Component(vec, "vector", "", "paths / shapes", $tags="core")
+    Component(ops, "ops", "", "history", $tags="core")
+  }
+  Boundary(l1, "L1 document model") {
+    Component(doc, "doc", "", "layers, masks, effects: pure data", $tags="core")
+  }
+  Boundary(l0, "L0 foundation + standalone formats") {
+    Component(found, "geom / color / raster / cms", "", "geometry, pixels, ICC", $tags="infra")
+    Component(fmts, "psd / codecs / raw / heif / affinity", "", "file formats", $tags="infra")
+    Component(tab, "tablet", "unsafe (AppKit)", "pen input", $tags="infra")
+  }
+}
+System_Boundary(dev, "DEVOPS/TEST code - 205,552 LOC") {
+  Component(tests, "tests (all crates)", "cargo test", "8,472 tests, 238 suites", $tags="devops")
+  Component(xt, "xtask + CI + packaging", "", "layers, parity, perf, scorecard, release", $tags="devops")
+}
+Rel_D(desk, ui, "hosts")
+Rel_D(cli, eng, "dispatches")
+Rel_D(web, ui, "hosts")
+Rel_D(ui, eng, "dispatches commands")
+Rel_D(auto, eng, "dispatches commands")
+Rel_D(eng, io, "uses")
+Rel_D(eng, comp, "uses")
+Rel_D(io, fmt, "uses")
+Rel_D(comp, algo, "uses")
+Rel_D(algo, doc, "uses")
+Rel_D(doc, found, "uses")
+Rel_D(io, fmts, "uses")
+Rel(tests, eng, "verifies")
+SHOW_LEGEND()
+@enduml

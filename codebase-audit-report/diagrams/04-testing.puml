@@ -1,0 +1,49 @@
+@startuml
+!include <C4/C4_Component>
+LAYOUT_LEFT_RIGHT()
+skinparam dpi 110
+title PhotoCraft - Test suites by layer (counts from the test runner list mode; default features)
+AddElementTag("acc", $bgColor="#C0392B", $fontColor="#FFFFFF", $legendText="acceptance / full-system")
+AddElementTag("int", $bgColor="#F39C12", $legendText="integration")
+AddElementTag("unit", $bgColor="#27AE60", $fontColor="#FFFFFF", $legendText="unit")
+AddElementTag("sys", $bgColor="#2471A3", $fontColor="#FFFFFF", $legendText="System code under test")
+System_Boundary(dev, "DEVOPS/TEST - 8,472 tests in 238 suites (205,552 LOC)") {
+  Boundary(acc, "Acceptance: 177 tests (2.1%), 30 suites") {
+    Component(a1, "ui-egui shell renders", "98", "", $tags="acc")
+    Component(a2, "automation MCP / control", "43", "", $tags="acc")
+    Component(a3, "photocraft-cli binary", "30", "", $tags="acc")
+    Component(a4, "photocraft app binary", "6", "", $tags="acc")
+  }
+  Boundary(int, "Integration: 745 tests (8.8%), 97 suites") {
+    Component(i1, "io round trips", "374", "", $tags="int")
+    Component(i2, "format, psd, engine", "199", "", $tags="int")
+    Component(i3, "gpu parity", "65", "", $tags="int")
+    Component(i4, "codecs, cms, others", "107", "", $tags="int")
+  }
+  Boundary(unit, "Unit: 7,550 tests (89.1%), 111 suites") {
+    Component(u1, "ui-egui", "2,708", "", $tags="unit")
+    Component(u2, "engine", "1,736", "", $tags="unit")
+    Component(u3, "codecs, algo, psd", "1,609", "", $tags="unit")
+    Component(u4, "all other crates", "1,497", "", $tags="unit")
+  }
+}
+System_Boundary(sys, "SYSTEM - 257,637 LOC") {
+  Component(s1, "apps + ui-egui + automation", "L6-L7", "", $tags="sys")
+  Component(s2, "engine", "L5", "", $tags="sys")
+  Component(s3, "io, format, compose, gpu", "L3-L4", "", $tags="sys")
+  Component(s4, "L0-L2 crates", "", "", $tags="sys")
+}
+Rel(a1, s1, "")
+Rel(a2, s1, "")
+Rel(a3, s1, "")
+Rel(a4, s1, "")
+Rel(i1, s3, "")
+Rel(i2, s2, "")
+Rel(i3, s3, "")
+Rel(i4, s4, "")
+Rel(u1, s1, "")
+Rel(u2, s2, "")
+Rel(u3, s4, "")
+Rel(u4, s4, "")
+SHOW_LEGEND()
+@enduml
