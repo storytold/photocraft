@@ -374,7 +374,8 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
             any = true;
             let b = o * n;
             for c in 0..a {
-                outp[b + c] = (acc[c] / al).clamp(0.0, 1.0) as f32;
+                // The unclamped alpha, so a bicubic overshoot past 1 doesn't lighten the colour (#6203).
+                outp[b + c] = (acc[c] / acc[a]).clamp(0.0, 1.0) as f32;
             }
             outp[b + a] = al as f32;
         }
@@ -493,6 +494,28 @@ mod tests {
                     let (a, o) = (src.read_region(r), out.read_region(r));
                     let worst = a.iter().zip(&o).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
                     assert!(worst <= 1.0 / 255.0, "{s:?} {interp:?}: {worst}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotated_soft_edged_sprite_keeps_its_colour() {
+        // #6203, as in Free Transform: the bicubic alpha overshoots past 1 next to the half
+        // transparent edge, and must not lighten the colour.
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        src.fill_rect(Rect::new(10, 10, 30, 30), &[0.8, 0.6, 0.4, 0.5]);
+        src.fill_rect(Rect::new(11, 11, 29, 29), &[0.8, 0.6, 0.4, 1.0]);
+        let k = std::f64::consts::FRAC_1_SQRT_2;
+        let rotate = |x: f64, y: f64| (20.0 + (x - 20.0) * k - (y - 20.0) * k, 20.0 + (x - 20.0) * k + (y - 20.0) * k);
+        let out = warp_mesh_surface(&src, src.content_bounds(), &rotate, Interp::Bicubic);
+        let b = out.content_bounds();
+        for y in b.y0..b.y1 {
+            for x in b.x0..b.x1 {
+                let p = out.pixel(x, y);
+                if p[3] > 0.0 {
+                    let off = (0..3).map(|i| (p[i] - [0.8, 0.6, 0.4][i]).abs()).fold(0.0f32, f32::max);
+                    assert!(off <= 1.0 / 255.0, "({x}, {y}): {p:?}");
                 }
             }
         }
