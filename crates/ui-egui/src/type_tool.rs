@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
-use crate::state::TextEdit;
+use crate::state::{BoxResize, TextEdit};
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
 
@@ -212,18 +212,23 @@ pub(crate) fn box_handle_at(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64
         .map(|i| i as u8)
 }
 
-/// Drag handle `i` to the document point: the dragged edges follow it, the others stay put.
-fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, i: u8, x: f64, y: f64) {
-    let id = LayerId(ed.layer);
-    let Some((bx, by, w, h)) = box_shape(app, id) else { return };
-    let Some((_, aff, _)) = layout(app, id) else { return };
-    let (px, py) = to_text(&aff, x, y);
-    let (l, r, t, b) = handle_sides(i);
+/// Drag the handle of `r` (the box and transform snapshotted at the press) to the document
+/// point: the dragged edges follow it, the others stay put. With ⌥ the opposite edges mirror
+/// the drag about the centre the box started with, so the block grows symmetrically instead of
+/// from one side — pressing or releasing ⌥ mid-drag switches that on and off as if it had been
+/// held from the start.
+fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, r: BoxResize, x: f64, y: f64, alt: bool) {
+    let (px, py) = to_text(&r.aff, x, y);
+    let (l, rw, t, b) = handle_sides(r.handle);
+    let (bx, by, w, h) = (r.shape[0], r.shape[1], r.shape[2], r.shape[3]);
     let (mut x0, mut y0, mut x1, mut y1) = (bx, by, bx + w, by + h);
+    // The centre the ⌥ mirror turns about: the box as it stood at the press (every move
+    // recomputes from that snapshot, so the centre holds for the whole drag).
+    let (cx, cy) = (bx + w / 2.0, by + h / 2.0);
     if l {
         x0 = px.min(x1 - MIN_BOX);
     }
-    if r {
+    if rw {
         x1 = px.max(x0 + MIN_BOX);
     }
     if t {
@@ -232,8 +237,28 @@ fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, i: u8, x: f64, y: f64) {
     if b {
         y1 = py.max(y0 + MIN_BOX);
     }
+    if alt {
+        // The mirror keeps the centre fixed: the dragged edge clamps at MIN_BOX/2 from it, and
+        // the opposite edge follows, so the block never inverts below the minimum.
+        if l {
+            x0 = px.min(cx - MIN_BOX / 2.0);
+            x1 = 2.0 * cx - x0;
+        }
+        if rw {
+            x1 = px.max(cx + MIN_BOX / 2.0);
+            x0 = 2.0 * cx - x1;
+        }
+        if t {
+            y0 = py.min(cy - MIN_BOX / 2.0);
+            y1 = 2.0 * cy - y0;
+        }
+        if b {
+            y1 = py.max(cy + MIN_BOX / 2.0);
+            y0 = 2.0 * cy - y1;
+        }
+    }
     // type.edit places the box's top-left at the given document point.
-    let o = aff.apply(Point::new(f64::from(x0), f64::from(y0)));
+    let o = r.aff.apply(Point::new(f64::from(x0), f64::from(y0)));
     let _ = app.run("type.edit", json!({"layer": ed.layer, "box": [o.x, o.y, x1 - x0, y1 - y0], "coalesce": ed.session}));
 }
 
@@ -242,8 +267,11 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     if let Some(ed) = app.ui.text_edit.clone() {
         let id = LayerId(ed.layer);
         if let Some(i) = box_handle_at(app, id, x, y) {
-            if let Some(e) = app.ui.text_edit.as_mut() {
-                e.resize = Some(i);
+            // Snapshot the box and transform now: every move recomputes from them, so ⌥ held
+            // or released mid-drag mirrors about the centre the drag started with.
+            let snap = box_shape(app, id).zip(layout(app, id)).map(|((bx, by, w, h), (_, aff, _))| BoxResize { handle: i, shape: [bx, by, w, h], aff });
+            if let (Some(snap), Some(e)) = (snap, app.ui.text_edit.as_mut()) {
+                e.resize = Some(snap);
             }
             return true;
         }
@@ -282,10 +310,10 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     false
 }
 
-pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64) {
+pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
-    if let Some(i) = ed.resize {
-        resize_box(app, &ed, i, x, y);
+    if let Some(r) = ed.resize {
+        resize_box(app, &ed, r, x, y, mods.alt);
         return;
     }
     if ed.dragging {
@@ -2647,9 +2675,9 @@ mod tests {
         let steps = app.session.active().unwrap().history.entries().len();
         // Top-left corner: the box keeps its bottom-right corner.
         assert!(pointer_down(&mut app, 10.0, 10.0, egui::Modifiers::NONE));
-        assert_eq!(app.ui.text_edit.as_ref().unwrap().resize, Some(0));
-        pointer_move(&mut app, 20.0, 25.0);
-        pointer_move(&mut app, 30.0, 30.0);
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().resize.map(|r| r.handle), Some(0));
+        pointer_move(&mut app, 20.0, 25.0, egui::Modifiers::NONE);
+        pointer_move(&mut app, 30.0, 30.0, egui::Modifiers::NONE);
         pointer_up(&mut app, [10.0, 10.0], [30.0, 30.0]);
         assert_eq!(box_shape(&app, id), Some((0.0, 0.0, 80.0, 30.0)));
         let aff = layout(&mut app, id).unwrap().1;
@@ -2659,9 +2687,17 @@ mod tests {
         assert!(app.ui.text_edit.is_some());
         // Right edge: only the width changes, and never below the minimum.
         assert!(pointer_down(&mut app, 110.0, 45.0, egui::Modifiers::NONE));
-        pointer_move(&mut app, 0.0, 99.0);
+        pointer_move(&mut app, 0.0, 99.0, egui::Modifiers::NONE);
         pointer_up(&mut app, [110.0, 45.0], [0.0, 99.0]);
         assert_eq!(box_shape(&app, id), Some((0.0, 0.0, MIN_BOX, 30.0)));
+        // ⌥ mirrors the drag about the centre: the left edge follows the right one out.
+        assert!(pointer_down(&mut app, 34.0, 45.0, egui::Modifiers::ALT));
+        pointer_move(&mut app, 70.0, 45.0, egui::Modifiers::ALT);
+        pointer_up(&mut app, [34.0, 45.0], [70.0, 45.0]);
+        assert_eq!(box_shape(&app, id), Some((0.0, 0.0, MIN_BOX + 72.0, 30.0)));
+        let aff = layout(&mut app, id).unwrap().1;
+        // Text space −36..40 (centre 2) through the translation: the doc centre stays at 32.
+        assert_eq!((aff.m[4], aff.m[5]), (-6.0, 30.0));
     }
 
     #[test]

@@ -967,6 +967,17 @@ pub enum MadeLayer {
     Place,
 }
 
+/// A paragraph-box handle drag: the handle, and the box (text-space) and layer transform as
+/// they were at the press. Every move recomputes from this snapshot, so ⌥ pressed or released
+/// mid-drag mirrors about the centre the box started with — as if it had been held from the
+/// start.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxResize {
+    pub handle: u8,
+    pub shape: [f32; 4],
+    pub aff: photocraft_geom::Affine,
+}
+
 /// In-progress inline type editing (Type tool). Offsets are character indices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextEdit {
@@ -984,7 +995,7 @@ pub struct TextEdit {
     pub dragging: bool,
     /// Paragraph-box handle being dragged (0-3 corners from top-left clockwise, 4-7 top/right/bottom/left edges).
     #[serde(skip)]
-    pub resize: Option<u8>,
+    pub resize: Option<BoxResize>,
     /// IME composition in progress: (start, length) in characters. The preedit text lives in the
     /// layer so it lays out like typed text; each IME update replaces it.
     #[serde(skip)]

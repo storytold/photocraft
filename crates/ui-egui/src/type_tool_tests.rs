@@ -2066,3 +2066,85 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
     assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
     assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
 }
+
+/// The paragraph box's document rect: its text-space origin through the layer transform, then
+/// width and height. Only what the symmetric-resize tests need (identity linear part).
+fn box_doc_rect(app: &PhotocraftApp, id: LayerId) -> [f64; 4] {
+    let t = text(app, id);
+    let (x, y, w, h) = match t.shape {
+        photocraft_doc::text::TextShape::Box { x, y, width, height } => (f64::from(x), f64::from(y), f64::from(width), f64::from(height)),
+        ref s => panic!("not a box: {s:?}"),
+    };
+    let p = t.transform.apply(Point::new(x, y));
+    [p.x, p.y, w, h]
+}
+
+/// ⌥ on an edge drag of a paragraph box mirrors the opposite edge about the box's centre, so
+/// the block grows symmetrically; without ⌥ the opposite edge stays put.
+#[test]
+fn alt_dragging_a_box_edge_mirrors_the_opposite_edge() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    // The box is at (300, 300), 240×180: its bottom-edge handle is the midpoint (420, 480).
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 530.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 530.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 230.0], "plain drag: the top edge stays");
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 530.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 580.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 580.0 }, Modifiers::ALT);
+    // The centre (300 + 115 = 415) held: the bottom followed the pointer (580), the top
+    // mirrored up to 250.
+    assert_eq!(box_doc_rect(&app, id), [300.0, 250.0, 240.0, 330.0]);
+}
+
+/// ⌥ pressed or released mid-drag applies as if it had been held from the start: the mirror
+/// turns about the centre the box had at the press, not about wherever the box drifted.
+#[test]
+fn alt_pressed_mid_drag_mirrors_about_the_press_centre() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    // Bottom edge (420, 480) dragged down 80 px without ⌥: only the bottom moves.
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 520.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 560.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 260.0]);
+    // ⌥ pressed mid-drag: the bottom follows the pointer, the top jumps to the mirror about
+    // the press centre (390): 2*390 − 600 = 180 — not about the drifted one (430).
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 600.0, pressure: 1.0 }, Modifiers::ALT);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 180.0, 240.0, 420.0]);
+    // ⌥ released again mid-drag: the top snaps back to where a plain drag leaves it.
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 600.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 300.0]);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 600.0 }, Modifiers::NONE);
+}
+
+/// ⌥ mirrors a side-edge drag the same way, and a corner drag grows both axes about the
+/// centre; clamped, the ⌥ box stops at MIN_BOX about its centre instead of collapsing.
+#[test]
+fn alt_mirrors_side_and_corner_drags_and_clamps_at_the_minimum() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let drag = |app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers| {
+        tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
+        tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
+        tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    };
+    // Right-edge handle: (540, 390) for the box at (300, 300), 240×180.
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    drag(&mut app, [540.0, 390.0], [590.0, 390.0], Modifiers::ALT);
+    // cx = 420 held: the right edge followed to 590, the left mirrored from 300 to 250.
+    assert_eq!(box_doc_rect(&app, id), [250.0, 300.0, 340.0, 180.0]);
+    // Clamped: dragging the right edge past the centre leaves the minimum box about it.
+    drag(&mut app, [590.0, 390.0], [400.0, 390.0], Modifiers::ALT);
+    let r = box_doc_rect(&app, id);
+    assert_eq!(r[2], 4.0, "MIN_BOX wide");
+    assert!(((r[0] + r[2] / 2.0) - 420.0).abs() < 1e-9, "still centred on 420");
+    // Corner handle (bottom-right of the fresh box): ⌥ grows both axes about the centre.
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    drag(&mut app, [540.0, 480.0], [590.0, 530.0], Modifiers::ALT);
+    assert_eq!(box_doc_rect(&app, id), [250.0, 250.0, 340.0, 280.0]);
+}

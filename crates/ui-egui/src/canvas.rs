@@ -5093,7 +5093,7 @@ pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option
 fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui::Modifiers) {
     let tool = app.active_tool();
     if tool.is_type() && app.drag.is_none() {
-        crate::type_tool::pointer_move(app, x, y);
+        crate::type_tool::pointer_move(app, x, y, mods);
     }
     if tool == Tool::Pen && mods.alt {
         crate::vector_ui::pen_break_handle(app);
