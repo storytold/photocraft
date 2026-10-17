@@ -518,8 +518,17 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
                     continue;
                 }
             }
-            let mut o = if restore && blend == BlendMode::Normal { lerp(d, c, k) } else { photocraft_color::blend::composite(blend, d, c, k) };
-            if keep_alpha || !fmt.alpha {
+            let keep = keep_alpha || !fmt.alpha;
+            let mut o = if restore && blend == BlendMode::Normal {
+                lerp(d, c, k)
+            } else if keep {
+                // Alpha kept: source atop, so a half-transparent pixel takes the new colour by the
+                // source alpha alone (#5783).
+                photocraft_color::blend::composite_atop(blend, d, c, k)
+            } else {
+                photocraft_color::blend::composite(blend, d, c, k)
+            };
+            if keep {
                 o[3] = d[3];
             }
             let m = from_rgba_into(fmt, o, &mut enc);
@@ -614,6 +623,21 @@ mod tests {
             let v = surf.rgba(x, 3)[0];
             v.is_finite() && !(0.01..=0.99).contains(&v)
         }));
+    }
+
+    #[test]
+    fn preserve_transparency_blends_source_atop_on_semi_transparent_pixels() {
+        // White at 50%, then black at 50% keeping alpha: Photoshop gives (127,127,127,128), the
+        // colour moved halfway, at every depth and in non-Normal modes too (#5783).
+        for depth in [8, 16, 32] {
+            for mode in ["normal", "multiply"] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
+                s.execute(CMD, json!({"contents": "white", "opacity": 50})).unwrap();
+                s.execute(CMD, json!({"contents": "black", "opacity": 50, "mode": mode, "preserveTransparency": true})).unwrap();
+                assert!(close(px(&s, 3, 3), [0.5, 0.5, 0.5, 0.5]), "{depth} {mode} {:?}", px(&s, 3, 3));
+            }
+        }
     }
 
     #[test]

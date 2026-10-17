@@ -1043,10 +1043,11 @@ impl StrokeRenderer {
                     } else {
                         let d = to_rgba(&fmt, px);
                         let sr = to_rgba(&fmt, &src[..n]);
-                        let mut o = photocraft_color::blend::composite(b.mode, d, sr, k);
-                        if lock_transparency {
-                            o[3] = d[3];
-                        }
+                        let o = if lock_transparency {
+                            photocraft_color::blend::composite_atop(b.mode, d, sr, k)
+                        } else {
+                            photocraft_color::blend::composite(b.mode, d, sr, k)
+                        };
                         let mut enc = [0.0f32; 8];
                         from_rgba_into(&fmt, o, &mut enc);
                         px.copy_from_slice(&enc[..n]);
