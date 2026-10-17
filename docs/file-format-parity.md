@@ -46,7 +46,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | Cineon / DPX | R (DPX), R/W (CIN) | DPX: luma, RGB, RGBA at 8/10/12/16 bits, both byte orders (#1049); Cineon: 10-bit gray/RGB, read-only | DPX: 8/10/12/16 bits (`dpxBits`, `--dpx-bits`); Cineon no | Writes DPX, which Photoshop only reads; header fields (creator, project, copyright, transfer, frame rate, time code…) round-trip; Cineon read-only, no RLE |
 | DICOM | R/W | no | no | |
 | PCX | R/W | no | no | |
-| Pixar | R/W | no | no | |
+| Pixar | R/W | yes | no | Read-only: 8-bit grey/RGB/RGBA tiles |
 | Amiga IFF | R/W | no | no | |
 | Wireless Bitmap | R/W | no | no | |
 | MPO / JPS (stereo) | R/W | no | no | |
