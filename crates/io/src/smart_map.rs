@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 25] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -160,7 +160,23 @@ const KNOWN: [Known; 14] = [
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
     Known { class: "adaptCorrect", filter_id: 781, name: "Shado&ws/Highlights...", command: "image.adjustments.shadowsHighlights" },
+    // Filters without options (measured in Photoshop): `hasoptions` false, no `Fltr`, only the
+    // four-char `filterID`. The class is that code; see `NO_OPTIONS`.
+    Known { class: "Blr ", filter_id: code(b"Blr "), name: "Blur", command: "filter.blur.blur" },
+    Known { class: "BlrM", filter_id: code(b"BlrM"), name: "Blur More", command: "filter.blur.blurMore" },
+    Known { class: "Avrg", filter_id: code(b"Avrg"), name: "Average", command: "filter.blur.average" },
+    Known { class: "Dspc", filter_id: code(b"Dspc"), name: "Despeckle", command: "filter.noise.despeckle" },
+    Known { class: "FndE", filter_id: code(b"FndE"), name: "Find Edges", command: "filter.stylize.findEdges" },
+    Known { class: "Fct ", filter_id: code(b"Fct "), name: "Facet", command: "filter.pixelate.facet" },
+    Known { class: "Frgm", filter_id: code(b"Frgm"), name: "Fragment", command: "filter.pixelate.fragment" },
+    Known { class: "Shrp", filter_id: code(b"Shrp"), name: "Sharpen", command: "filter.sharpen.sharpen" },
+    Known { class: "ShrM", filter_id: code(b"ShrM"), name: "Sharpen More", command: "filter.sharpen.sharpenMore" },
+    Known { class: "ShrE", filter_id: code(b"ShrE"), name: "Sharpen Edges", command: "filter.sharpen.sharpenEdges" },
+    Known { class: "Slrz", filter_id: code(b"Slrz"), name: "Solarize", command: "filter.stylize.solarize" },
 ];
+
+/// Classes of the filters that have no options: Photoshop stores them without a `Fltr`.
+const NO_OPTIONS: [&str; 11] = ["Blr ", "BlrM", "Avrg", "Dspc", "FndE", "Fct ", "Frgm", "Shrp", "ShrM", "ShrE", "Slrz"];
 
 fn known_by_command(command: &str) -> Option<&'static Known> {
     KNOWN.iter().find(|k| k.command == command)
@@ -264,6 +280,7 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
         ("adaptCorrect", None) => json!({}),
+        (c, None) if NO_OPTIONS.contains(&c) => json!({}),
         (_, None) => return None,
         ("GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm ", Some(f)) => json!({"radius": px(f, "Rds ")?}),
         ("MtnB", Some(f)) => json!({"angle": int(f, "Angl")?, "distance": px(f, "Dstn")?}),
@@ -603,6 +620,9 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
             }
             return Ok(None);
         }
+        // No settings to write; any parameter keys an old record carries have no effect on the
+        // filter either, so nothing is lost.
+        c if NO_OPTIONS.contains(&c) => return Ok(None),
         _ => return Err("not a recognized filter".into()),
     }))
 }
@@ -1077,6 +1097,96 @@ mod tests {
             let bytes = d.to_bytes();
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
+        }
+    }
+
+    /// The filters without options, their measured `filterID`s (as Photoshop wrote them).
+    const MEASURED_NO_OPTIONS: [(&str, i32); 11] = [
+        ("filter.blur.blur", 1114403360),
+        ("filter.blur.blurMore", 1114403405),
+        ("filter.blur.average", 1098281575),
+        ("filter.noise.despeckle", 1148416099),
+        ("filter.stylize.findEdges", 1181639749),
+        ("filter.pixelate.facet", 1180922912),
+        ("filter.pixelate.fragment", 1181902701),
+        ("filter.sharpen.sharpen", 1399353968),
+        ("filter.sharpen.sharpenMore", 1399353933),
+        ("filter.sharpen.sharpenEdges", 1399353925),
+        ("filter.stylize.solarize", 1399616122),
+    ];
+
+    /// A filter without options as Photoshop saves it: `hasoptions` false, no `Fltr`, a localized
+    /// name and the current colours.
+    fn photoshop_no_options_item(name: &str, filter_id: Value) -> Descriptor {
+        let rgb = |r: f64, g: f64, b: f64| {
+            Value::Descriptor(Descriptor::new("RGBC").with("Rd  ", Value::Double(r)).with("Grn ", Value::Double(g)).with("Bl  ", Value::Double(b)))
+        };
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 60.0)).with("Md  ", enumv("BlnM", "Mltp"))))
+            .with("enab", Value::Boolean(false))
+            .with("hasoptions", Value::Boolean(false))
+            .with("FrgC", rgb(167.0, 157.0, 147.0))
+            .with("BckC", rgb(255.0, 255.0, 255.0))
+            .with("filterID", filter_id)
+    }
+
+    #[test]
+    fn filters_without_options_round_trip_in_the_measured_shape() {
+        let keys = ["Nm  ", "blendOptions", "enab", "hasoptions", "FrgC", "BckC", "filterID"];
+        for (command, id) in MEASURED_NO_OPTIONS {
+            let mut f = sf(command, json!({}));
+            f.blend = BlendMode::Overlay;
+            f.opacity = 0.75;
+            f.visible = false;
+            let d = item_for_filter(&f).unwrap();
+            let got: Vec<String> = d.items.iter().map(|(k, _)| String::from_utf8_lossy(k.as_bytes()).into_owned()).collect();
+            assert_eq!(got, keys, "{command}");
+            assert_eq!(d.get("hasoptions"), Some(&Value::Boolean(false)), "{command}");
+            assert_eq!(d.get("filterID"), Some(&Value::Integer(id)), "{command}");
+            let back = filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap());
+            assert_eq!(back, f, "{command}");
+            // Keys an old record may carry have no effect on these filters: still written.
+            let extra = item_for_filter(&sf(command, json!({"radius": 3.0, "layer": "L"}))).unwrap();
+            assert_eq!(extra.get("filterID"), Some(&Value::Integer(id)), "{command}");
+            for p in [json!(null), json!("x"), json!([1, 2])] {
+                assert!(item_for_filter(&sf(command, p)).is_ok(), "{command}");
+            }
+        }
+    }
+
+    #[test]
+    fn photoshop_filters_without_options_open_editable() {
+        for (command, id) in MEASURED_NO_OPTIONS {
+            let item = photoshop_no_options_item("Weichzeichnen", Value::Integer(id));
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!(f.command, command);
+            assert_eq!(f.params, json!({}));
+            assert_eq!((f.visible, f.blend), (false, BlendMode::Multiply));
+            assert!((f.opacity - 0.6).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn malformed_filters_without_options_are_kept_verbatim() {
+        let blur = code(b"Blr ");
+        let cases = [
+            // An id no filter has, a missing id, ids of the wrong type.
+            photoshop_no_options_item("X", Value::Integer(code(b"Zzzz"))),
+            Descriptor::new("filterFX").with("hasoptions", Value::Boolean(false)),
+            photoshop_no_options_item("X", Value::Double(f64::from(blur))),
+            photoshop_no_options_item("X", Value::Double(f64::NAN)),
+            photoshop_no_options_item("X", Value::Text(UnicodeString::new_nul("Blr "))),
+            photoshop_no_options_item("X", Value::Integer(-1)),
+            // Settings we don't know of on a filter that has none.
+            photoshop_no_options_item("X", Value::Integer(blur)).with("Fltr", Value::Descriptor(Descriptor::new("Blr ").with("Amnt", Value::Integer(5)))),
+        ];
+        for item in cases {
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{item:?}");
+            // Written back (a bare item gains blending and visibility) and still not editable.
+            let back = filter_from_item(&item_for_filter(&f).unwrap());
+            assert_eq!((back.command.as_str(), &back.params["filterID"]), (UNSUPPORTED_FILTER, &f.params["filterID"]));
         }
     }
 
