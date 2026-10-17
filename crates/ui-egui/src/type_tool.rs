@@ -1910,20 +1910,14 @@ fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Option<serde_jso
         }
         let presets = ["Metrics", "Optical", "0", "-100", "-75", "-50", "-25", "-10", "-5", "5", "10", "25", "50", "75", "100", "200"];
         let (press, close) = crate::press_menu::PressCombo::before(ui, "props-kern-presets");
-        let combo = egui::ComboBox::from_id_salt("props-kern-presets")
-            .selected_text("")
-            .width(16.0)
-            .height(420.0)
-            .icon(crate::widgets::chevron_icon)
-            .close_behavior(close)
-            .show_ui(ui, |ui| {
-                for p in presets {
-                    let item = ui.selectable_label(p == shown, p);
-                    if press.chosen(ui, &item) {
-                        out = parse_kerning(p);
-                    }
+        let combo = crate::widgets::combo_list(ui, "props-kern-presets", "", 16.0, close, |ui| {
+            for p in presets {
+                let item = ui.selectable_label(p == shown, p);
+                if press.chosen(ui, &item) {
+                    out = parse_kerning(p);
                 }
-            });
+            }
+        });
         press.after(&combo.response);
     });
     out

@@ -165,16 +165,17 @@ fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
     let mut h = harness(pixel_layer);
     let at = dropdown(&h).center();
     click(&mut h, at);
-    // Unscrolled, the list shows its first entry at the top and is at most 420 pt tall.
-    let (top, darken) = (entry(&h, "Normal").top(), entry(&h, "Darken").center());
+    // The open list, unscrolled, shows its first entry at the top.
+    let list = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id))).unwrap();
+    let darken = entry(&h, "Darken").center();
     for _ in 0..22 {
         wheel(&mut h, darken, -1.0);
     }
     h.run_steps(30);
     assert_eq!(blend(&h), BlendMode::Divide);
-    let in_view = |r: Rect| r.top() >= top - 0.5 && r.bottom() <= top + 420.0 + 0.5;
+    let in_view = |r: Rect| list.contains_rect(r);
     let chosen = entry(&h, "Divide");
-    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+    assert!(in_view(chosen), "{chosen:?} in view in {list:?}");
     // The wheel over the button scrolls the open list along too.
     for _ in 0..21 {
         wheel(&mut h, at, 1.0);
@@ -182,7 +183,7 @@ fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
     h.run_steps(30);
     assert_eq!(blend(&h), BlendMode::Dissolve);
     let chosen = entry(&h, "Dissolve");
-    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+    assert!(in_view(chosen), "{chosen:?} in view in {list:?}");
 }
 
 /// The mode the canvas previews on the active layer, if any (#970).

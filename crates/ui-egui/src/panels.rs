@@ -1251,7 +1251,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         opt_label(ui, tl!("Mode"));
                         let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
                         // The wheel over it steps the mode, as over the Layers panel's (#2061).
-                        widgets::dropdown_wheel_hovered(ui, "gradient-blend-mode", &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0);
+                        widgets::dropdown_wheel_grouped(
+                            ui,
+                            "gradient-blend-mode",
+                            &mut app.ui.tool_options.gradient_blend_mode,
+                            &opts,
+                            96.0,
+                            |m| starts_blend_group(*m),
+                        );
                         opt_label(ui, tl!("Opacity"));
                         let r = widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
                         // Live while scrubbed, one undo step per scrub (#5012).
@@ -2186,6 +2193,13 @@ fn blend_options(groups: bool, current: BlendMode) -> Vec<(BlendMode, &'static s
     std::iter::once(BlendMode::PassThrough).filter(|_| groups).chain(BlendMode::LAYER_MODES).chain(own).map(|m| (m, m.label())).collect()
 }
 
+/// Whether blend mode `m` starts one of the groups Photoshop's blend mode lists draw a line above:
+/// Normal, Dissolve (and Pass Through, Clear) | darken | lighten | contrast | difference | colour
+/// (#5532). The first mode of a list never gets a line.
+pub(crate) fn starts_blend_group(m: BlendMode) -> bool {
+    matches!(m, BlendMode::Darken | BlendMode::Lighten | BlendMode::Overlay | BlendMode::Difference | BlendMode::Hue)
+}
+
 /// Scroll the Layers panel while holding a layer drag over its top/bottom edge or past them.
 ///
 /// Returns the *content* displacement in points for this frame, so positive moves the
@@ -2266,7 +2280,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
-                let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(all_groups, l.blend), blend_width);
+                let (chosen, hovered) =
+                    widgets::dropdown_wheel_grouped(ui, "blend", &mut m, &blend_options(all_groups, l.blend), blend_width, |m| starts_blend_group(*m));
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
                     let mut p = targets.clone();
@@ -3875,7 +3890,7 @@ fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::B
     let at = opts.iter().position(|o| o.0 == Some(BlendMode::Dissolve)).map_or(opts.len(), |i| i + 1);
     opts.insert(at, (None, "Clear"));
     let mut mode = if *clear || held { None } else { Some(b.mode) };
-    if !widgets::dropdown_wheel_hovered(ui, id, &mut mode, &opts, 96.0).0.is_empty() {
+    if !widgets::dropdown_wheel_grouped(ui, id, &mut mode, &opts, 96.0, |m| m.is_some_and(starts_blend_group)).0.is_empty() {
         *clear = mode.is_none();
         if let Some(m) = mode {
             b.mode = m;
