@@ -412,12 +412,16 @@ fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId) {
 
 /// After the transform: the step that made the layer and the transform become one history step,
 /// the transform's for a copy and Place Embedded for a placed file.
-fn fold_made(app: &mut PhotocraftApp, document: DocId, made: MadeLayer) {
+fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId, made: MadeLayer) {
     // A background commit lands in its own document, which need not be the active one by then.
     let Some(index) = app.session.documents().iter().position(|st| st.doc.id == document) else { return };
     let active = app.session.active_index();
     app.session.set_active(index);
-    if let Some(st) = app.session.active_mut() {
+    // Only when the step before the transform made the layer: a step taken while the box was
+    // open (New Layer, which also ends the box, #5667) stays its own, as does the made layer's.
+    if let Some(st) = app.session.active_mut()
+        && st.history.past_len().checked_sub(2).and_then(|i| st.history.state(i)).is_some_and(|before| before.layer(layer).is_none())
+    {
         st.history.purge_last();
         if made == MadeLayer::Place {
             st.history.set_current_label(photocraft_engine::file_cmds::PLACE_EMBEDDED);
@@ -1082,7 +1086,7 @@ pub fn commit(app: &mut PhotocraftApp) {
 fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made: Option<MadeLayer>, landed: bool) {
     let (Some(made), Some(document)) = (made, document) else { return };
     if landed {
-        fold_made(app, document, made);
+        fold_made(app, document, layer, made);
     } else {
         take_back_made(app, document, layer);
     }
@@ -1100,10 +1104,14 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
         return;
     }
     let (Some(t), Some(mut pv)) = (app.ui.transform.take(), app.transform_preview.take()) else { return };
-    // A refused commit (a result over the pixel budget, #3773) keeps the box open, as inline.
+    // A refused commit (a result over the pixel budget, #3773) keeps the box open, as inline,
+    // unless picking another tool or layer started it: then the box ends, as Esc would.
     if let JobOutcome::Failed(msg) = &e.outcome {
         pv.committing = None;
         keep_open(app, t, Some(pv), msg.clone());
+        if switched_away(app) {
+            cancel(app);
+        }
         return;
     }
     finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, matches!(e.outcome, JobOutcome::Done(_)));
@@ -1132,7 +1140,6 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
 
     let layer = LayerId(t.layer);
     let made = t.made;
-    let selection = t.selection;
     let preview_doc_id = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     let switched_document = preview_doc_id.is_some_and(|id| id != st.doc.id);
 
@@ -1146,15 +1153,23 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
         app.transform_preview = None;
     } else if switched_document || st.doc.layer(layer).is_none() {
         cancel(app);
-    } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool)
-        || (!selection && st.active_layer.is_some_and(|active| active.0 != layer.0))
-    {
+    } else if switched_away(app) {
         commit(app);
         // Picking another tool or layer can't leave a refused transform open: it ends, as Esc would.
-        if app.ui.transform.is_some() {
+        // A commit still running in the background isn't refused: cancelling it would throw the
+        // transform away (and a dropped file with it, #5665). It ends the session when it lands,
+        // or ends it as Esc would if it is refused then (`on_job_event`).
+        if app.ui.transform.is_some() && committing(app).is_none() {
             cancel(app);
         }
     }
+}
+
+/// Another tool picked, or (outside Transform Selection) another layer selected, since the box
+/// opened: the session ends ([`end_if_left`], #1400).
+fn switched_away(app: &PhotocraftApp) -> bool {
+    let (Some(t), Some(st)) = (&app.ui.transform, app.session.active()) else { return false };
+    app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool) || (!t.selection && st.active_layer.is_some_and(|active| active.0 != t.layer))
 }
 
 /// Edits made while the box is open show in the preview at once, not only after the commit
@@ -3494,6 +3509,131 @@ mod tests {
         assert!(parent.is_some_and(|st| st.doc.layer(placed_layer).is_some()), "the placed Smart Object must remain in the parent document");
         assert!(app.ui.transform.is_none(), "the transform session should end");
         assert!(app.transform_preview.is_none(), "the transform preview should end");
+    }
+
+    /// Polls the app's background jobs until they have all landed.
+    fn land_jobs(app: &mut PhotocraftApp) {
+        let ctx = egui::Context::default();
+        for _ in 0..2000 {
+            crate::jobs_ui::tick(app, &ctx);
+            if !app.session.has_jobs() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the background jobs never landed");
+    }
+
+    /// A smart object placed the way a dropped file is (the last step made it), in Free Transform
+    /// and moved 8 px right, with commits running in the background as in the desktop app:
+    /// (app, the placed layer, its frame before the move, history steps before the place).
+    fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+        app.sync_views();
+        let st = app.session.active().unwrap();
+        let placed = st.active_layer.unwrap();
+        let frame = photocraft_engine::transform_cmds::transform_frame(&st.doc, st.doc.layer(placed).unwrap());
+        begin_placed(&mut app, &egui::Context::default()).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+        app.background_jobs = true;
+        (app, placed, frame, steps)
+    }
+
+    fn frame_of(app: &PhotocraftApp, layer: LayerId) -> Option<photocraft_geom::Rect> {
+        let st = app.session.active()?;
+        Some(photocraft_engine::transform_cmds::transform_frame(&st.doc, st.doc.layer(layer)?))
+    }
+
+    /// #5665: picking another tool or selecting another layer while a dropped file is in Free
+    /// Transform applies the transform when the commit runs in the background too. Ending the
+    /// box used to cancel that commit, which took the dropped file back (or left a transformed
+    /// layer where it was).
+    #[test]
+    fn another_tool_or_layer_applies_a_transform_committed_in_the_background() {
+        for by_layer in [false, true] {
+            let (mut app, placed, frame, steps) = moved_place();
+            if by_layer {
+                let below = app.session.active().unwrap().doc.layers.iter().map(|l| l.id).find(|id| *id != placed).unwrap();
+                app.run("layer.select", json!({"layer": below.0})).unwrap();
+            } else {
+                app.ui.tool = if app.ui.tool == Tool::Brush { Tool::Move } else { Tool::Brush };
+            }
+            end_if_left(&mut app);
+            assert!(committing(&app).is_some(), "the commit runs in the background");
+            land_jobs(&mut app);
+            assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box ended");
+            assert_eq!(frame_of(&app, placed), Some(frame.translate(8, 0)), "the dropped file stays, moved (by layer: {by_layer})");
+            let st = app.session.active().unwrap();
+            assert_eq!(st.history.past_len(), steps + 1, "the place and its move are one step");
+            assert_eq!(st.history.undo_label(), Some(photocraft_engine::file_cmds::PLACE_EMBEDDED));
+        }
+    }
+
+    /// #5667: New Layer while a dropped file is in Free Transform applies the transform as it
+    /// shows (in the background too), and the place, the new layer and the transform each stay
+    /// their own step: the new layer isn't folded into the place.
+    #[test]
+    fn new_layer_applies_the_open_transform() {
+        let (mut app, placed, frame, steps) = moved_place();
+        let layers = app.session.active().unwrap().doc.layers.len();
+        app.run("layer.new.layer", json!({})).unwrap();
+        end_if_left(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box ended");
+        assert_eq!(frame_of(&app, placed), Some(frame.translate(8, 0)), "applied as it showed, not the original");
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), layers + 1);
+        assert_eq!(st.history.past_len(), steps + 3, "place, New Layer, Free Transform");
+        assert_eq!(st.history.undo_label(), Some("Free Transform"));
+        app.session.undo();
+        assert_eq!(frame_of(&app, placed), Some(frame), "one undo takes back the move only");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the new layer stays");
+    }
+
+    /// #5665, the report's second case through the UI with background jobs on, as in the desktop
+    /// app: Free Transform on a layer, move it, then click another layer's row in the Layers panel.
+    #[test]
+    fn clicking_another_layer_row_applies_the_transform() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let before = frame_of(h.state(), layer).unwrap();
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        let t = h.state_mut().ui.transform.as_mut().expect("in Free Transform");
+        t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+        h.state_mut().background_jobs = true;
+        h.run_steps(2);
+        let row = h
+            .query_all_by_label("Background")
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+            .expect("the Background row")
+            .rect()
+            .center();
+        h.hover_at(row);
+        h.run_steps(1);
+        h.drag_at(row);
+        h.run_steps(1);
+        h.drop_at(row);
+        for _ in 0..400 {
+            h.run_steps(1);
+            if h.state().ui.transform.is_none() && !h.state().session.has_jobs() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_ne!(h.state().session.active().unwrap().active_layer, Some(layer), "the click selected the Background");
+        assert!(h.state().ui.transform.is_none(), "the box ended");
+        assert_eq!(frame_of(h.state(), layer), Some(before.translate(8, 0)), "the move was applied");
     }
 
     /// Large documents need scales past 10000% and positions past 30000 px (#1267).
