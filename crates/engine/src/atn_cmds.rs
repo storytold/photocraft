@@ -915,7 +915,18 @@ const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"
 const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AbsC", "absolute")];
 const PROFILES: &[(&str, &str)] =
     &[("sRGB IEC61966-2.1", "srgb"), ("Display P3", "display-p3"), ("Adobe RGB (1998)", "adobe-rgb-compat"), ("ProPhoto RGB", "prophoto-compat")];
-const SMART_BLUR_QUALITY: &[(&str, &str)] = &[("Hgh ", "high"), ("Mdm ", "medium"), ("Low ", "low")];
+const SMART_BLUR_QUALITY: &[(&str, &str)] = &[
+    ("SBQH", "high"),
+    ("SBQM", "medium"),
+    ("SBQL", "low"),
+    // Legacy codes PhotoCraft wrote before #6312. Photoshop ignores them (the filter falls back
+    // to its default quality), but actions recorded earlier still carry them, so reading keeps
+    // accepting them; writing uses only the Photoshop codes above (first match wins in
+    // `lookup_back`).
+    ("Hgh ", "high"),
+    ("Mdm ", "medium"),
+    ("Low ", "low"),
+];
 const SMART_BLUR_MODE: &[(&str, &str)] = &[("SBMN", "normal"), ("SBME", "edgeOnly"), ("SBMO", "overlayEdge")];
 const RADIAL_METHOD: &[(&str, &str)] = &[("Spn ", "spin"), ("Zm  ", "zoom")];
 const RADIAL_QUALITY: &[(&str, &str)] = &[("Drft", "draft"), ("Gd  ", "good"), ("Bst ", "best")];

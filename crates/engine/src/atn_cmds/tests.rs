@@ -956,3 +956,57 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
 }
+
+/// A Smart Blur step as Photoshop records it, with the quality enum spelled `code`.
+fn smart_blur_item(code: &str) -> AtnItem {
+    let d = desc("null").with("Rds ", D::Double(6.0)).with("Thsh", D::Double(60.0)).with("SmBQ", enm("SmBQ", code)).with("SmBM", enm("SmBM", "SBMN"));
+    item("SmrB", "Smart Blur", Some(d))
+}
+
+/// Smart Blur's quality is written as Photoshop's `SmBQ` codes (`SBQH`/`SBQM`/`SBQL`), which the
+/// smart filter saves and `executeAction` honours. The old `Hgh `/`Mdm `/`Low ` codes are still
+/// read so actions recorded before #6312 keep loading; an unknown code stays a Photoshop step.
+#[test]
+fn smart_blur_quality_writes_photoshop_codes_and_reads_both() {
+    // Export: each quality writes its Photoshop code in the `SmBQ` enum.
+    for (q, code) in [("high", "SBQH"), ("medium", "SBQM"), ("low", "SBQL")] {
+        let item = export_item("filter.blur.smartBlur", &json!({ "radius": 6, "threshold": 60, "quality": q, "mode": "normal" }), "S").unwrap();
+        let d = item.descriptor.as_ref().unwrap();
+        assert_eq!(get_enum(d, "SmBQ").as_deref(), Some(code), "{q} exports as {code}");
+    }
+    // Import: every Photoshop code reads back to the right quality.
+    for (code, q) in [("SBQH", "high"), ("SBQM", "medium"), ("SBQL", "low")] {
+        let file = AtnFile {
+            name: UnicodeString::new_nul("Q"),
+            expanded: false,
+            actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![smart_blur_item(code)], ..Default::default() }],
+            warnings: vec![],
+        };
+        let imp = import(&atn::write(&file).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, "filter.blur.smartBlur", "{code}");
+        assert_eq!(imp.actions[0].steps[0].1["quality"], q, "{code} reads as {q}");
+    }
+    // Import: the legacy codes PhotoCraft wrote before the fix still read.
+    for (code, q) in [("Hgh ", "high"), ("Mdm ", "medium"), ("Low ", "low")] {
+        let file = AtnFile {
+            name: UnicodeString::new_nul("Q"),
+            expanded: false,
+            actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![smart_blur_item(code)], ..Default::default() }],
+            warnings: vec![],
+        };
+        let imp = import(&atn::write(&file).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, "filter.blur.smartBlur", "{code:?}");
+        assert_eq!(imp.actions[0].steps[0].1["quality"], q, "legacy {code:?} reads as {q}");
+    }
+    // Import: an unknown quality code is the existing unknown-value handling — a kept Photoshop
+    // step, listed as unsupported, with no panic.
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Q"),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![smart_blur_item("Xxxx")], ..Default::default() }],
+        warnings: vec![],
+    };
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP, "an unknown code is kept verbatim");
+    assert_eq!(imp.unsupported.len(), 1);
+}
