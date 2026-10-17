@@ -354,7 +354,10 @@ impl PsdFile {
     /// `true` if the merged image carries a transparency channel: its first extra channel, when
     /// the layer count was stored negative or a "Saving Merged Transparency" global block (`Mtrn`,
     /// `Mt16`, `Mt32`) is present. Photoshop marks 32-bit documents with `Mt32` and a positive
-    /// layer count (psd-tools transparentbg.psd).
+    /// layer count (psd-tools transparentbg.psd). Photoshop also names the merged transparency
+    /// "Transparency" and lists it first among the alpha channel names, and some of its 16-bit
+    /// PSBs carry no other mark (#4654): when the layers sit in a global `Lr16`/`Lr32` block, that
+    /// name with one name per extra channel marks it too.
     pub fn merged_has_alpha(&self) -> bool {
         let Some(color) = self.header.color_mode.color_channels() else {
             return false;
@@ -364,9 +367,38 @@ impl PsdFile {
         }
         let marked = self.global_blocks.iter().any(|b| matches!(&b.key, b"Mtrn" | b"Mt16" | b"Mt32"));
         match &self.layer_info {
-            Some(li) => li.merged_alpha || marked,
+            Some(li) => {
+                let in_block = matches!(self.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. });
+                li.merged_alpha || marked || (in_block && self.names_merged_transparency(self.header.channels - color))
+            }
             None => true,
         }
+    }
+
+    /// `true` when the alpha channel names (resource 1045, else 1006) hold exactly `extra` names
+    /// and the first is "Transparency", Photoshop's name for the merged transparency.
+    fn names_merged_transparency(&self, extra: u16) -> bool {
+        const NAME: &str = "Transparency";
+        let mut names = Vec::new();
+        if let Some(r) = self.resource(1045) {
+            let mut at = 0usize;
+            while let Some(len) = r.data.get(at..at.saturating_add(4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) {
+                at = at.saturating_add(4);
+                let end = (len as usize).checked_mul(2).and_then(|n| at.checked_add(n));
+                let Some(units) = end.and_then(|end| r.data.get(at..end)) else { break };
+                let units: Vec<u16> = units.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+                names.push(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string());
+                at = at.saturating_add(units.len() * 2);
+            }
+        } else if let Some(r) = self.resource(1006) {
+            let mut at = 0usize;
+            while let Some(&len) = r.data.get(at) {
+                let Some(name) = r.data.get(at + 1..at + 1 + usize::from(len)) else { break };
+                names.push(String::from_utf8_lossy(name).into_owned());
+                at += 1 + usize::from(len);
+            }
+        }
+        names.len() == usize::from(extra) && names.first().is_some_and(|n| n == NAME)
     }
 
     /// Checks structural invariants that the writer relies on.

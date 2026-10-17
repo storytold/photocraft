@@ -226,11 +226,11 @@ fn mt32_marks_the_merged_transparency() {
     let plane = |v: [f32; 2]| v.into_iter().flat_map(f32::to_be_bytes).collect::<Vec<u8>>();
     file.image_data.data = [plane([0.0, 1.0]), plane([0.0, 1.0]), plane([0.0, 1.0]), plane([1.0, 0.0])].concat();
     let name: Vec<u8> = [0u8, 0, 0, 13].into_iter().chain("Transparency\0".encode_utf16().flat_map(u16::to_be_bytes)).collect();
-    file.resources.retain(|r| r.id != 1045);
-    file.resources.push(photocraft_psd::ImageResource::new(1045, name));
+    file.resources.retain(|r| !matches!(r.id, 1006 | 1045));
     assert!(!file.merged_has_alpha(), "a positive layer count alone");
     file.global_blocks.push(photocraft_psd::TaggedBlock::new(*b"Mt32", Vec::new()));
     assert!(file.merged_has_alpha());
+    file.resources.push(photocraft_psd::ImageResource::new(1045, name));
     let merged = merged_composite(&file).unwrap();
     assert_eq!(merged.iter().map(|p| p[3]).collect::<Vec<_>>(), vec![1.0, 0.0]);
     let opened = import("transparent.psd", &file.to_bytes().unwrap()).unwrap();
