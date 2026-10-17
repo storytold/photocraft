@@ -782,6 +782,7 @@
 	Set shape fill type	Тип заливки фигуры
 	Set shape stroke type	Тип обводки фигуры
 	Set the text color	Цвет текста
+	Create warped text	Создать деформированный текст
 	Only Web Colors	Только web-цвета
 	Overlay Color	Цвет наложения
 	Overlay Opacity	Непрозрачность наложения

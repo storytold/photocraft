@@ -1809,6 +1809,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if resp.clicked() {
         open_color_picker(app, [c[0], c[1], c[2]]);
     }
+    // Create warped text, after the swatch as in Photoshop (#5911): the Type › Warp Text… dialog.
+    let can_warp = crate::menus::is_enabled(app, "type.warpText");
+    if ui.add_enabled_ui(can_warp, |ui| crate::icons::button(ui, "text-warp", 24.0, false, tl!("Create warped text"))).inner.clicked()
+        && let Err(e) = crate::menus::invoke(app, &ui.ctx().clone(), "type.warpText", json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if app.ui.text_edit.is_some() {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);

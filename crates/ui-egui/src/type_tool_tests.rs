@@ -1360,6 +1360,7 @@ fn the_font_menu_lists_served_families() {
 mod multi_layer_formatting {
     use super::*;
     use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
     use photocraft_doc::text::{AntiAlias, CharStyle, Orientation, TextAlign};
 
     fn selected(app: &mut PhotocraftApp, ids: &[LayerId]) {
@@ -1749,6 +1750,28 @@ mod multi_layer_formatting {
         for (id, expected) in ids.into_iter().zip(originals) {
             assert_eq!(style(h.state(), id, 0), expected);
         }
+    }
+
+    /// #5911: the options bar's Create warped text button opens Warp Text for the selected type
+    /// layers, as Type › Warp Text… does; with no type layer to warp it is greyed.
+    #[test]
+    fn options_bar_warp_button_warps_the_selected_type_layers() {
+        let (app, ids) = fixture();
+        let mut h = controls(app, false);
+        h.get_by_role_and_label(Role::Button, "Create warped text").click();
+        h.run();
+        let dialog = h.state().ui.dialogs.last().unwrap();
+        assert_eq!(dialog.fields.get("__command").and_then(|c| c.as_str()), Some("type.warpText"));
+        let dialog = dialog.id;
+        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("style".into(), json!("arc"));
+        crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+        for id in &ids[..2] {
+            assert!(text(h.state(), *id).warp.is_some(), "a selected layer is warped");
+        }
+        assert!(text(h.state(), ids[2]).warp.is_none(), "an unselected layer is left alone");
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run();
+        assert!(h.get_by_role_and_label(Role::Button, "Create warped text").accesskit_node().is_disabled());
     }
 }
 
