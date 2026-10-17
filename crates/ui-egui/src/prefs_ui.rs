@@ -3496,6 +3496,7 @@ mod tests {
         assert!(!prefs::is_hidden("rawDefaults.openInCameraRaw"));
         assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));
         assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
+        assert!(!prefs::is_hidden("general.animatedZoom"));
         assert!(!prefs::is_hidden("interface.uiScale"));
         assert!(!prefs::is_hidden("interface.uiFontSize"));
         // Hidden values still round-trip through the dialog untouched.
