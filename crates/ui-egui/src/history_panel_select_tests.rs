@@ -58,3 +58,28 @@ fn clicking_a_state_jumps_there_with_one_command() {
     h.run_steps(2);
     assert_eq!(state(&h), (4, 0, rev + 2));
 }
+
+#[test]
+fn new_history_steps_scroll_the_current_state_into_view() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    for n in 0..18 {
+        app.run("layer.new.layer", json!({"name": format!("Layer {n}")})).unwrap();
+    }
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(280.0, 120.0)).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            history(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let row = h.get_all_by_label("New Layer").last().expect("the latest New Layer state").rect();
+    let view = h.ctx.input(|i| i.viewport_rect());
+    assert!(view.contains_rect(row), "the current history row must scroll into view: row {row:?} view {view:?}",);
+}

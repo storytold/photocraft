@@ -3118,6 +3118,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let doc = st.doc.clone();
+    let revision = st.revision;
     let entries = st.history.entries();
     let current = entries.len() - 1;
     let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
@@ -3148,10 +3149,13 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
     let max_h = (ui.available_height() - footer).max(40.0);
+    let follow_id = ui.id().with(("history-follow-rev", doc.id));
+    let follow = ui.ctx().data(|d| d.get_temp::<u64>(follow_id)) != Some(revision);
     egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         // Snapshots head the list and scroll with the states, so many of them never push the
         // footer out of a short dock.
         snap_cmd = snapshot_rows(app, ui, selected_snap);
+        let mut current_rect = None;
         for (i, (e, is_redo)) in all.enumerate() {
             // The current state shows selected unless a snapshot is (Photoshop highlights one row).
             let selected = i == current && selected_snap.is_none();
@@ -3161,6 +3165,9 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &e));
             if resp.drag_started() {
                 ui.ctx().data_mut(|d| d.insert_temp(history_drag_key(), HistoryDrag::State(i)));
+            }
+            if i == current {
+                current_rect = Some(rect);
             }
             if selected {
                 ui.painter().rect_filled(rect, if t.pro { 0.0 } else { t.radius_sm }, if t.pro { t.row_selected } else { t.accent_soft });
@@ -3193,6 +3200,10 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ctx.data_mut(|d| d.remove::<SelectedSnapshot>(selected_snapshot_key(doc.id)));
             }
         }
+        if follow && let Some(rect) = current_rect {
+            ui.scroll_to_rect(rect, Some(egui::Align::BOTTOM));
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(follow_id, revision));
     });
     if let Some(drag) = drag
         && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
