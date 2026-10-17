@@ -302,6 +302,13 @@ fn materialize(s: &mut Surface, r: Rect) {
     s.write_region(r, &v);
 }
 
+/// A colour channel sample as the Channels panel shows it: CMYK stores ink (1 = full ink) but a
+/// CMYK channel reads as its tone (white = no ink), as in Photoshop. Its own inverse, so it also
+/// turns a tone back into ink. Other modes are unchanged.
+pub(crate) fn tone(mode: ColorMode, v: f32) -> f32 {
+    if mode == ColorMode::Cmyk { 1.0 - v } else { v }
+}
+
 fn luminosity(rgba: [f32; 4]) -> f32 {
     0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
 }
@@ -431,7 +438,10 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
             let (px, n) = native_pixels(doc, layer)?;
             let planes: Vec<Vec<f32>> = (0..colors).map(|c| px.chunks_exact(n).map(|p| p[c]).collect()).collect();
             match r {
-                ChanRef::Color(k) => vec![planes.get(k).cloned().ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?],
+                ChanRef::Color(k) => {
+                    let plane = planes.get(k).ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?;
+                    vec![plane.iter().map(|&v| tone(edit_mode(doc), v)).collect()]
+                }
                 _ => planes,
             }
         }
@@ -1560,7 +1570,7 @@ fn split(s: &mut Session, p: &Value) -> Result<Value> {
     let short = |name: &str| name.chars().next().map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_default();
     let mut docs: Vec<Document> = Vec::new();
     for (c, name) in names.iter().enumerate() {
-        let plane: Vec<f32> = px.chunks_exact(n).map(|p| p[c]).collect();
+        let plane: Vec<f32> = px.chunks_exact(n).map(|p| tone(mode, p[c])).collect();
         docs.push(gray_document(&format!("{}_{}", doc.name, short(name)), &doc, &plane));
     }
     for ch in &doc.channels {
@@ -1627,7 +1637,7 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
     let mut data = Vec::with_capacity(npx * fmt.channels());
     for i in 0..npx {
         for pl in &planes[..cc] {
-            data.push(pl[i].clamp(0.0, 1.0));
+            data.push(tone(mode, pl[i]).clamp(0.0, 1.0));
         }
         data.push(1.0);
     }
@@ -1703,7 +1713,8 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // source-over, so applying to an empty layer copies the source in any mode.
             let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
             for (c, b) in px[..colors].iter_mut().enumerate() {
-                let top = src.get(c).unwrap_or(&src[0])[i];
+                // One plane is a tone (a channel, a mask): a CMYK layer takes it as ink.
+                let top = if src.len() > 1 { src.get(c).unwrap_or(&src[0])[i] } else { tone(sf.mode, src[0][i]) };
                 let blended = top + (blending.apply(*b, top) - top) * base_a;
                 *b = if preserve { *b + (blended - *b) * w } else { (w * blended + base_a * (1.0 - w) * *b) / out_a };
             }

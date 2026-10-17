@@ -120,6 +120,38 @@ fn load_transparency_mask_and_composite() {
     assert_eq!(sel_at(&s, 10, 5), 1.0);
 }
 
+/// A white CMYK document (no ink anywhere) whose left half carries some cyan ink.
+fn cmyk_session(depth: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+    rect(&mut s, 0, 0, 20, 20, "replace");
+    s.execute("edit.fill", json!({"color": "#00ffff"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s
+}
+
+#[test]
+fn cmyk_channels_duplicate_and_load_as_tone_not_ink() {
+    // #5787: a CMYK channel is its tone, as the Channels panel draws it: white where there is no ink.
+    // (The merged image goes through RGB, so inked pixels may drift a few levels.)
+    for depth in [8, 16] {
+        let mut s = cmyk_session(depth);
+        let ink = px(&s, 5, 5)[0];
+        assert!(ink > 0.5 && px(&s, 30, 5)[0] == 0.0, "depth {depth}: cyan ink on the left only, {ink}");
+        s.execute("channel.duplicate", json!({"channel": "cyan"})).unwrap();
+        assert_eq!(doc(&s).channels[0].name, "Cyan copy");
+        assert!((chan(&s, 0, 30, 5) - 1.0).abs() < 1e-3, "depth {depth}: no ink duplicates as white");
+        assert!((chan(&s, 0, 5, 5) - (1.0 - ink)).abs() < 0.02, "depth {depth}: ink duplicates dark");
+        s.execute("select.loadSelection", json!({"channel": "cyan"})).unwrap();
+        assert!((sel_at(&s, 30, 5) - 1.0).abs() < 1e-3, "depth {depth}: no ink is selected");
+        assert!((sel_at(&s, 5, 5) - (1.0 - ink)).abs() < 0.02, "depth {depth}");
+        // Calculations read the same tone.
+        let r = s.execute("image.calculations", json!({"source1": {"channel": "cyan"}, "source2": {"channel": "cyan"}, "blending": "normal"})).unwrap();
+        let i = r["channel"].as_u64().unwrap() as usize;
+        assert!((chan(&s, i, 30, 5) - 1.0).abs() < 1e-3, "depth {depth}");
+    }
+}
+
 #[test]
 fn channel_management_and_view_state() {
     let mut s = session();
@@ -593,6 +625,27 @@ fn apply_image_into_alpha_channel() {
 }
 
 #[test]
+fn cmyk_apply_image_of_a_colour_channel_keeps_ink_and_tone_apart() {
+    // #5787: the Cyan channel is read as tone and written back as ink, so applying it onto its own
+    // CMYK layer leaves cyan as it was, and into an alpha channel it lands as tone. (The merged
+    // image goes through RGB, so a few levels of drift are allowed.)
+    for depth in [8, 16] {
+        let mut s = cmyk_session(depth);
+        let before = (px(&s, 5, 5), px(&s, 30, 5));
+        s.execute("image.applyImage", json!({"source": {"channel": "cyan"}, "blending": "normal"})).unwrap();
+        let after = px(&s, 5, 5);
+        assert!((after[0] - before.0[0]).abs() < 0.02, "depth {depth}: cyan unchanged, {after:?} vs {:?}", before.0);
+        assert!(px(&s, 30, 5).iter().zip(&before.1).all(|(a, b)| (a - b).abs() < 1e-3), "depth {depth}: no ink stays no ink");
+        s.undo();
+        s.execute("image.applyImage", json!({"blending": "normal"})).unwrap();
+        assert!(px(&s, 5, 5).iter().zip(&before.0).all(|(a, b)| (a - b).abs() < 0.02), "depth {depth}: CMYK onto itself is a no-op");
+        s.execute("channel.new", json!({"fill": "black"})).unwrap();
+        s.execute("image.applyImage", json!({"source": {"channel": "cyan"}, "blending": "normal"})).unwrap();
+        assert!((chan(&s, 0, 30, 5) - 1.0).abs() < 1e-3, "depth {depth}: tone into an alpha channel");
+    }
+}
+
+#[test]
 fn calculations_results() {
     let mut s = session();
     rect(&mut s, 0, 0, 20, 20, "replace");
@@ -650,6 +703,30 @@ fn split_and_merge_channels() {
     let p = px(&s, 1, 1);
     assert!((p[0] - 1.0).abs() < 0.003 && (p[1] - 128.0 / 255.0).abs() < 0.003 && p[2].abs() < 0.003, "{p:?}");
     assert!(s.execute("channel.merge", json!({"mode": "cmyk"})).is_err());
+}
+
+#[test]
+fn cmyk_split_and_merge_use_tone() {
+    // #5787: Split Channels of a white CMYK image gives white grayscale documents, and merging
+    // them back gives the same CMYK pixels (within the few levels the merged image's trip
+    // through RGB costs).
+    for depth in [8, 16] {
+        let mut s = cmyk_session(depth);
+        let (left, right) = (px(&s, 5, 5), px(&s, 30, 5));
+        s.execute("channel.split", json!({})).unwrap();
+        assert_eq!(s.documents().len(), 4);
+        let v = |s: &Session, i: usize, x: i32| s.documents()[i].doc.layers[0].surface().unwrap().pixel(x, 5)[0];
+        for i in 0..4 {
+            assert!((v(&s, i, 30) - 1.0).abs() < 1e-3, "depth {depth}: channel {i} of white is white");
+        }
+        assert!((v(&s, 0, 5) - (1.0 - left[0])).abs() < 0.02, "depth {depth}: cyan ink splits dark");
+        s.set_active(0);
+        s.execute("channel.merge", json!({"mode": "cmyk", "documents": [0, 1, 2, 3]})).unwrap();
+        assert_eq!(doc(&s).mode, ColorMode::Cmyk);
+        let near = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.02);
+        assert!(near(&px(&s, 5, 5), &left), "depth {depth}: round trip {:?} vs {left:?}", px(&s, 5, 5));
+        assert!(near(&px(&s, 30, 5), &right), "depth {depth}: white stays white {:?}", px(&s, 30, 5));
+    }
 }
 
 #[test]
