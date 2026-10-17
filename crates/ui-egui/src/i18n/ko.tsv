@@ -1306,6 +1306,8 @@
 	Override Pressure	필압 재정의
 	Override Rotation	회전 재정의
 	Override Tilt	기울기 재정의
+	Override Tilt X	X축 기울기 재정의
+	Override Tilt Y	Y축 기울기 재정의
 	PRESET DETAILS	사전 설정 세부 정보
 	PSD	PSD
 	Paint Overlay	오버레이 칠하기

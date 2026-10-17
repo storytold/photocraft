@@ -1330,6 +1330,8 @@
 	Override Pressure	Zastąp nacisk
 	Override Rotation	Zastąp obrót
 	Override Tilt	Zastąp nachylenie
+	Override Tilt X	Zastąp nachylenie X
+	Override Tilt Y	Zastąp nachylenie Y
 	PRESET DETAILS	SZCZEGÓŁY USTAWIENIA WSTĘPNEGO
 	PSD	PSD
 	Paint Overlay	Nakładka malowania

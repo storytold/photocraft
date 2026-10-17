@@ -1036,6 +1036,8 @@
 	No brush presets	Немає наборів пензлів
 	Override Pressure	Перевизначити натиск
 	Override Tilt	Перевизначити нахил
+	Override Tilt X	Перевизначити нахил X
+	Override Tilt Y	Перевизначити нахил Y
 	Override Rotation	Перевизначити обертання
 	Apply the pen's tilt and rotation to the tip shape	Застосувати нахил і обертання пера до форми кінчика
 

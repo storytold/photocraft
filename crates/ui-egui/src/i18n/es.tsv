@@ -1336,6 +1336,8 @@
 	Override Pressure	Anular presión
 	Override Rotation	Anular rotación
 	Override Tilt	Anular inclinación
+	Override Tilt X	Anular inclinación X
+	Override Tilt Y	Anular inclinación Y
 	PRESET DETAILS	DETALLES DEL AJUSTE PREESTABLECIDO
 	PSD	PSD
 	Paint Overlay	Superposición de pintura

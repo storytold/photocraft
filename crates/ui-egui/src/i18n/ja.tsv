@@ -1334,6 +1334,8 @@
 	Override Pressure	筆圧を上書き
 	Override Rotation	回転を上書き
 	Override Tilt	傾きを上書き
+	Override Tilt X	傾き X を上書き
+	Override Tilt Y	傾き Y を上書き
 	PRESET DETAILS	プリセットの詳細
 	PSD	PSD
 	Paint Overlay	ペイントオーバーレイ

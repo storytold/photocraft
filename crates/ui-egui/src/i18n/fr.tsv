@@ -1316,6 +1316,8 @@
 	Override Pressure	Forcer la pression
 	Override Rotation	Forcer la rotation
 	Override Tilt	Forcer l'inclinaison
+	Override Tilt X	Forcer l'inclinaison X
+	Override Tilt Y	Forcer l'inclinaison Y
 	PRESET DETAILS	DÉTAILS DU PRÉRÉGLAGE
 	PSD	PSD
 	Paint Overlay	Superposition de peinture

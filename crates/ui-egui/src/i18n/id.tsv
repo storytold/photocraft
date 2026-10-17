@@ -1310,6 +1310,8 @@
 	Override Pressure	Timpa Tekanan
 	Override Rotation	Timpa Rotasi
 	Override Tilt	Timpa Kemiringan
+	Override Tilt X	Timpa Kemiringan X
+	Override Tilt Y	Timpa Kemiringan Y
 	PRESET DETAILS	DETAIL PRESET
 	PSD	PSD
 	Paint Overlay	Overlay Cat

@@ -654,8 +654,10 @@ impl DualBuilder {
 pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
     let pose = &b.pose;
     if pose.enabled {
-        if pose.override_tilt {
+        if pose.override_tilt_x {
             p.tilt_x = pose.tilt_x;
+        }
+        if pose.override_tilt_y {
             p.tilt_y = pose.tilt_y;
         }
         if pose.override_rotation {

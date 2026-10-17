@@ -1707,10 +1707,10 @@ fn checker_tile(ctx: &egui::Context) -> egui::TextureHandle {
 /// Spectrum-style checkbox (blue when checked).
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
-    let mut resp = ui
+    let (mut resp, label_resp) = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::CLICK);
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let l = ui
                 .add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).selectable(false).sense(Sense::click()))
@@ -1718,13 +1718,16 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             // Pressing the label presses the box (#4476).
             let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
             check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
-            resp.union(l)
+            (resp.union(l.clone()), l)
         })
         .inner;
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
     }
+    // The label is the single named, focusable checkbox; the box is a mouse target.
+    // Override Label's metadata instead of creating a second node with the same name.
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, tl!(label)));
     resp
 }
 
@@ -1816,7 +1819,10 @@ mod tests {
     #[test]
     fn checkbox_label_is_a_button_target_not_selectable_text() {
         use egui::CursorIcon;
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
 
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
             |ui, on: &mut bool| {
@@ -1832,6 +1838,13 @@ mod tests {
         h.get_by_label("Show Transform Controls").click();
         h.run_steps(2);
         assert!(*h.state());
+        let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show Transform Controls");
+        assert_eq!(checkbox.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        checkbox.focus();
+        h.run_steps(1);
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert!(!*h.state(), "the same named checkbox supports Space");
     }
 
     /// #3208: a rounded swatch's checker is one shared, repeating, unblurred two-by-two tile on

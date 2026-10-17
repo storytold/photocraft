@@ -1342,6 +1342,8 @@
 	Override Pressure	覆寫壓力
 	Override Rotation	覆寫旋轉
 	Override Tilt	覆寫傾斜
+	Override Tilt X	覆寫傾斜 X
+	Override Tilt Y	覆寫傾斜 Y
 	PRESET DETAILS	預設集詳細資料
 	PSD	PSD
 	Paint Overlay	繪畫覆蓋

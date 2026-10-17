@@ -1345,6 +1345,8 @@
 	Override Pressure	覆盖压感
 	Override Rotation	覆盖旋转
 	Override Tilt	覆盖倾斜
+	Override Tilt X	覆盖 X 倾斜
+	Override Tilt Y	覆盖 Y 倾斜
 	PRESET DETAILS	预设详细信息
 	PSD	PSD
 	Paint Overlay	绘制叠加层

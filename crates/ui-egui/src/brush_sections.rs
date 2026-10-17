@@ -578,8 +578,10 @@ fn tilt(ui: &mut egui::Ui, label: &str, deg: &mut f32) {
 fn pose(ui: &mut egui::Ui, b: &mut BrushSettings) {
     let p = &mut b.pose;
     tilt(ui, tl!("Tilt X"), &mut p.tilt_x);
+    widgets::checkbox(ui, &mut p.override_tilt_x, tl!("Override Tilt X"));
+    ui.add_space(8.0);
     tilt(ui, tl!("Tilt Y"), &mut p.tilt_y);
-    widgets::checkbox(ui, &mut p.override_tilt, tl!("Override Tilt"));
+    widgets::checkbox(ui, &mut p.override_tilt_y, tl!("Override Tilt Y"));
     ui.add_space(8.0);
     num(ui, tl!("Rotation"), &mut p.rotation, 0.0..=360.0, "°");
     widgets::checkbox(ui, &mut p.override_rotation, tl!("Override Rotation"));
@@ -667,6 +669,40 @@ mod tests {
         );
         h.run_steps(3);
         h
+    }
+
+    #[test]
+    fn pose_axes_controls_are_independent_and_below_each_tilt_in_all_themes() {
+        use egui::accesskit::Toggled;
+        for kind in theme::ThemeKind::ALL {
+            let b: BrushSettings = serde_json::from_value(serde_json::json!({"pose": {
+                "enabled": true, "tiltX": 45.0, "tiltY": -18.0,
+                "overrideTiltX": true, "overrideTiltY": false,
+                "pressure": 0.71, "rotation": 67.0
+            }}))
+            .unwrap();
+            let mut h = section_harness(7, b.clone());
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let x = h.get_by_role_and_label(Role::CheckBox, "Override Tilt X");
+            let y = h.get_by_role_and_label(Role::CheckBox, "Override Tilt Y");
+            assert_eq!(x.accesskit_node().toggled(), Some(Toggled::True));
+            assert_eq!(y.accesskit_node().toggled(), Some(Toggled::False));
+            assert!(h.get_by_label("Tilt X").rect().bottom() < x.rect().top() && x.rect().bottom() < h.get_by_label("Tilt Y").rect().top());
+            assert!(h.get_by_label("Tilt Y").rect().bottom() < y.rect().top() && y.rect().bottom() < h.get_by_label("Rotation").rect().top());
+            assert_eq!(h.state(), &b, "drawing preserves pose degrees and flags");
+            y.focus();
+            h.run_steps(1);
+            h.key_press(egui::Key::Space);
+            h.run_steps(2);
+            let wire = serde_json::to_value(h.state()).unwrap();
+            assert_eq!(wire["pose"]["overrideTiltX"], true);
+            assert_eq!(wire["pose"]["overrideTiltY"], true);
+            let mut expected = serde_json::to_value(b).unwrap();
+            expected["pose"]["overrideTiltY"] = serde_json::json!(true);
+            expected["pose"]["overrideTilt"] = serde_json::json!(true);
+            assert_eq!(wire, expected, "Space changes only Y, plus the derived legacy readback");
+        }
     }
 
     /// #3825: jitter is an amount, not a hue selector; it uses the themed amount track.

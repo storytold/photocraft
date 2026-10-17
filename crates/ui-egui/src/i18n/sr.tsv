@@ -1294,6 +1294,8 @@
 	Override Pressure	Nadjačaj pritisak
 	Override Rotation	Nadjačaj rotaciju
 	Override Tilt	Nadjačaj nagib
+	Override Tilt X	Nadjačaj nagib X
+	Override Tilt Y	Nadjačaj nagib Y
 	PRESET DETAILS	DETALJI ŠABLONA
 	PSD	PSD
 	Paint Overlay	Preklop za slikanje

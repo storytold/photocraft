@@ -1218,6 +1218,8 @@
 	Override Pressure	Nyomás felülbírálása
 	Override Rotation	Elforgatás felülbírálása
 	Override Tilt	Dőlés felülbírálása
+	Override Tilt X	X dőlés felülbírálása
+	Override Tilt Y	Y dőlés felülbírálása
 	Paints from the document's opening state	A dokumentum megnyitáskori állapotából fest
 	Paper	Papír
 	Paragraph	Bekezdés

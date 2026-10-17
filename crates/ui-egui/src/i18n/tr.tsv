@@ -1291,6 +1291,8 @@
 	Override Pressure	Basıncı Geçersiz Kıl
 	Override Rotation	Döndürmeyi Geçersiz Kıl
 	Override Tilt	Eğimi Geçersiz Kıl
+	Override Tilt X	X Eğimini Geçersiz Kıl
+	Override Tilt Y	Y Eğimini Geçersiz Kıl
 	PRESET DETAILS	ÖN AYAR DETAYLARI
 	PSD	PSD
 	Paint Overlay	Boya Kaplaması

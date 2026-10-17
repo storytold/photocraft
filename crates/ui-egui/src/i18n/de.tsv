@@ -1329,6 +1329,8 @@
 	Override Pressure	Druck überschreiben
 	Override Rotation	Rotation überschreiben
 	Override Tilt	Neigung überschreiben
+	Override Tilt X	Neigung X überschreiben
+	Override Tilt Y	Neigung Y überschreiben
 	PRESET DETAILS	VORGABENDETAILS
 	PSD	PSD
 	Paint Overlay	Übermalung

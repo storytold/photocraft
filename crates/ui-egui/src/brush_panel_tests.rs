@@ -104,7 +104,8 @@ fn edit_section(i: usize, b: &mut BrushSettings) {
             p.enabled = true;
             p.tilt_x = 45.0;
             p.tilt_y = -27.0;
-            p.override_tilt = true;
+            p.override_tilt_x = true;
+            p.override_tilt_y = true;
             p.rotation = 120.0;
             p.override_rotation = true;
             p.pressure = 0.4;
@@ -573,6 +574,55 @@ fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
         _ => panic!("not a checkbox-only row"),
     };
     brush.pointer(path).and_then(Value::as_bool).expect("the checkbox has a boolean brush setting")
+}
+
+#[test]
+fn pose_axes_window_routes_each_checkbox_through_a_minimal_command() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness(0, 7);
+    h.state_mut()
+        .session
+        .execute(
+            "tools.setBrush",
+            json!({"pose": {
+                "enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true,
+                "pressure": 0.71, "rotation": 67
+            }}),
+        )
+        .unwrap();
+    h.run_steps(3);
+    let before = h.state().session.tools.brush.clone();
+    let n = h.state().session.journal.len();
+    h.get_by_role_and_label(Role::CheckBox, "Override Tilt X").click();
+    h.run_steps(3);
+    assert_eq!(h.get_by_label("Override Tilt X").accesskit_node().toggled(), Some(Toggled::False));
+    assert_eq!(h.get_by_label("Override Tilt Y").accesskit_node().toggled(), Some(Toggled::True));
+    assert_eq!(h.state().session.journal.len(), n + 1);
+    let (id, params) = last_journal(h.state()).unwrap();
+    assert_eq!(id, "tools.setBrush");
+    assert_eq!(params["brush"], json!({"pose": {"overrideTiltX": false}}));
+    let mut expected = serde_json::to_value(before).unwrap();
+    expected["pose"]["overrideTiltX"] = json!(false);
+    expected["pose"]["overrideTilt"] = json!(false);
+    assert_eq!(serde_json::to_value(&h.state().session.tools.brush).unwrap(), expected);
+    h.get_by_role_and_label(Role::CheckBox, "Override Tilt Y").click();
+    h.run_steps(3);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"pose": {"overrideTiltY": false}}));
+    let before = h.state().session.tools.brush.clone();
+    h.state_mut().session.execute("tools.setBrush", json!({"pose": {"enabled": false}})).unwrap();
+    h.run_steps(3);
+    let n = h.state().session.journal.len();
+    for label in ["Override Tilt X", "Override Tilt Y"] {
+        let node = h.get_by_role_and_label(Role::CheckBox, label);
+        assert!(node.accesskit_node().is_disabled());
+        node.click();
+        h.run_steps(2);
+    }
+    let mut expected = before;
+    expected.pose.enabled = false;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(h.state().session.journal.len(), n, "a disabled pose records no checkbox update");
 }
 
 #[test]

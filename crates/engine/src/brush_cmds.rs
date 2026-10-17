@@ -133,6 +133,18 @@ pub fn merge_brush(base: &BrushSettings, patch: &Value, cmd: &str) -> Result<Bru
     let pattern = (!touches(&["texture", "pattern"])).then(|| std::mem::take(&mut light.texture.pattern));
     let mut v = serde_json::to_value(&light).map_err(|e| bad(cmd, e.to_string()))?;
     merge(&mut v, patch);
+    // A legacy command sets both axes. The base JSON already has the new keys,
+    // so copy the alias into axes the patch didn't set before deserialising it.
+    if let Some(pose_patch) = patch.get("pose").and_then(Value::as_object)
+        && let Some(legacy) = pose_patch.get("overrideTilt")
+        && let Some(pose) = v.get_mut("pose").and_then(Value::as_object_mut)
+    {
+        for axis in ["overrideTiltX", "overrideTiltY"] {
+            if !pose_patch.contains_key(axis) {
+                pose.insert(axis.to_string(), legacy.clone());
+            }
+        }
+    }
     let mut out: BrushSettings = serde_json::from_value(v).map_err(|e| bad(cmd, format!("invalid brush: {e}")))?;
     if let Some(t) = tip {
         out.tip = t;
@@ -1080,7 +1092,13 @@ pub fn brush_patch(old: &BrushSettings, new: &BrushSettings) -> Value {
             _ => (a != b).then(|| b.clone()),
         }
     }
-    diff(&light_json(old, skip), &light_json(new, skip)).unwrap_or_else(|| json!({}))
+    let mut patch = diff(&light_json(old, skip), &light_json(new, skip)).unwrap_or_else(|| json!({}));
+    // This readback is derived from the axis flags. Sending it alongside a
+    // one-axis delta would also overwrite the other axis through the legacy alias.
+    if let Some(pose) = patch.get_mut("pose").and_then(Value::as_object_mut) {
+        pose.remove("overrideTilt");
+    }
+    patch
 }
 
 /// Journal hook ([`Session::execute`]): consecutive `tools.setBrush` calls with the same
@@ -1160,7 +1178,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("brush.presets.setCurrent", "Set Current Brush Preset", r##"{"name":string}"##, always, presets_set_current, true),
         spec!("brush.defineFromSelection", "Define Brush Preset…", r##"{"name":string}"##, has_selection_and_pixels, define_from_selection, true),
         spec!("brush.get", "Get Brush", "{}", always, |s, _| Ok(brush_json(&s.tools.brush)), false),
-        spec!("tools.setBrush", "Set Brush", r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged)}"##, always, set_brush, true),
+        spec!(
+            "tools.setBrush",
+            "Set Brush",
+            r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged; pose.overrideTiltX/Y:bool; pose.overrideTilt:legacy combined alias)}"##,
+            always,
+            set_brush,
+            true
+        ),
     ]
 }
 

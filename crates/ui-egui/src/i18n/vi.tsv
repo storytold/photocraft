@@ -1184,6 +1184,8 @@
 	Tilt X	Độ nghiêng X
 	Tilt Y	Độ nghiêng Y
 	Override Tilt	Ghi đè nghiêng
+	Override Tilt X	Ghi đè độ nghiêng X
+	Override Tilt Y	Ghi đè độ nghiêng Y
 	Override Rotation	Ghi đè xoay
 	Override Pressure	Ghi đè áp lực
 	Pressure	Áp lực

@@ -798,6 +798,8 @@
 	Override Pressure	Παράκαμψη πίεσης
 	Override Rotation	Παράκαμψη περιστροφής
 	Override Tilt	Παράκαμψη κλίσης
+	Override Tilt X	Παράκαμψη κλίσης X
+	Override Tilt Y	Παράκαμψη κλίσης Y
 	PRESET DETAILS	ΛΕΠΤΟΜΕΡΕΙΕΣ ΠΡΟΕΠΙΛΟΓΗΣ
 	Pattern Size	Μέγεθος μοτίβου
 	Perspective Warp is not active	Ο μετασχηματισμός προοπτικής δεν είναι ενεργός
