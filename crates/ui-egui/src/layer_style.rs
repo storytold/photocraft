@@ -23,6 +23,7 @@ use crate::{PhotocraftApp, widgets};
 
 pub(crate) mod color_picker;
 mod contour;
+mod gradient_field;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -37,6 +38,8 @@ enum P {
     /// A contour (thumbnail, preset picker, Contour Editor), with the key of its Anti-aliased
     /// checkbox when the effect has one.
     Contour(Option<&'static str>),
+    /// The Gradient Overlay's colour stops, edited on a ramp ([`gradient_field`], #5177).
+    Gradient,
 }
 
 /// Effect kinds in Photoshop's list order: (command kind, label, params).
@@ -70,7 +73,11 @@ fn kind_of(e: &Effect) -> &'static str {
 }
 
 fn defaults(kind: &str) -> Value {
-    photocraft_engine::layer_style::effect_defaults(kind)
+    let mut p = photocraft_engine::layer_style::effect_defaults(kind);
+    if kind == "gradientOverlay" {
+        gradient_field::from_to_to_stops(&mut p);
+    }
+    p
 }
 
 /// Factory params for a new instance, with the shared light angle filled in.
@@ -147,8 +154,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
         "gradientOverlay" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
-            ("from", "From", P::Color),
-            ("to", "To", P::Color),
+            ("stops", "Gradient", P::Gradient),
             ("reverse", "Reverse", P::Check),
             ("style", "Style", P::Choice(GSTYLE)),
             ("angle", "Angle", P::Angle),
@@ -282,11 +288,10 @@ fn values_of(e: &Effect, light: f32) -> Value {
         Effect::GradientOverlay { common, gradient: g, .. } => {
             set(&mut v, "blend", json!(common.blend.label()));
             set(&mut v, "opacity", json!((common.opacity * 100.0).round()));
-            // The From/To fields model a plain two-stop gradient; anything richer
-            // (more stops, transparency stops) is carried by the snapshot instead.
-            if g.stops.len() == 2 && g.opacity_stops.is_empty() {
-                set(&mut v, "from", json!(hex(&g.stops[0].1)));
-                set(&mut v, "to", json!(hex(&g.stops[1].1)));
+            // Every stop is modelled (#5177), in the command's own grammar.
+            {
+                set(&mut v, gradient_field::KEY, gradient_field::stops_json(&g.stops));
+                set(&mut v, gradient_field::OPACITY_KEY, gradient_field::opacity_json(&g.opacity_stops));
                 set(&mut v, "reverse", json!(g.reverse));
                 set(
                     &mut v,
@@ -301,8 +306,6 @@ fn values_of(e: &Effect, light: f32) -> Value {
                 );
                 set(&mut v, "angle", json!(g.angle));
                 set(&mut v, "scale", json!((g.scale * 100.0).round()));
-            } else {
-                drop_keys(&mut v, &["from", "to", "reverse", "style", "angle", "scale"]);
             }
         }
         Effect::PatternOverlay { common, name, id, scale, angle, link, phase } => {
@@ -1045,6 +1048,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         });
                     }
                     P::Contour(aa) => contour::row(ui, f, &selected, key, label, aa, &mut disp),
+                    P::Gradient => gradient_field::row(app, ui, f, &selected, label, &mut disp),
                     P::Check => {
                         let mut b = disp.get(key).and_then(Value::as_bool).unwrap_or(false);
                         if widgets::checkbox(ui, &mut b, label).changed() {

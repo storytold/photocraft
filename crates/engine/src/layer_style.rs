@@ -64,15 +64,77 @@ fn gradient_stops(p: &Value, from: Color, to: Color) -> Vec<(f32, Color)> {
         None => stops,
     }
 }
+/// The gradient of a stroke or overlay's params. Bad `stops` are ignored here, as bad values of
+/// any other key are; the commands refuse them first ([`check_gradient_params`]).
 fn gradient(p: &Value) -> Gradient {
+    let stops = match stops_param(p, "layer.layerStyle").ok().flatten() {
+        Some(stops) => stops,
+        None => gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
+    };
     Gradient {
-        stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
+        stops,
+        opacity_stops: opacity_stops_param(p, "layer.layerStyle").ok().flatten().unwrap_or_default(),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
         scale: f(p, "scale", 100.0) / 100.0,
         reverse: b(p, "reverse", false),
         ..Gradient::default()
     }
+}
+
+/// `Err` when `stops` or `opacityStops` are present but malformed, so a command refuses them
+/// instead of silently keeping the old gradient.
+pub fn check_gradient_params(p: &Value, cmd: &str) -> Result<()> {
+    stops_param(p, cmd)?;
+    opacity_stops_param(p, cmd)?;
+    Ok(())
+}
+
+/// Most stops a gradient parameter may carry.
+const MAX_STOPS: usize = 256;
+
+/// Explicit colour stops (#5177): `"stops": [[position 0..1, "#rrggbb" | [r, g, b]], …]`, at
+/// least 2 and at most [`MAX_STOPS`], returned sorted by position. `None` without the key.
+fn stops_param(p: &Value, cmd: &str) -> Result<Option<Vec<(f32, Color)>>> {
+    let Some(v) = p.get("stops") else { return Ok(None) };
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let a = v.as_array().ok_or_else(|| bad("\"stops\" must be an array of [position, colour]".into()))?;
+    if a.len() < 2 {
+        return Err(bad("\"stops\" needs at least 2 stops".into()));
+    }
+    if a.len() > MAX_STOPS {
+        return Err(bad(format!("\"stops\": at most {MAX_STOPS} stops")));
+    }
+    let mut stops = Vec::with_capacity(a.len());
+    for (i, s) in a.iter().enumerate() {
+        let t = s.get(0).and_then(Value::as_f64).filter(|t| t.is_finite()).ok_or_else(|| bad(format!("\"stops\"[{i}] must be [position 0..1, colour]")))?;
+        let c = s.get(1).and_then(|c| color_of(&json!({"c": c}), "c")).ok_or_else(|| bad(format!("\"stops\"[{i}]: no colour (\"#rrggbb\" or [r, g, b])")))?;
+        stops.push((t.clamp(0.0, 1.0) as f32, c));
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(Some(stops))
+}
+
+/// Explicit transparency stops: `"opacityStops": [[position 0..1, opacity 0..100], …]`; an empty
+/// array means fully opaque. `None` without the key.
+fn opacity_stops_param(p: &Value, cmd: &str) -> Result<Option<Vec<(f32, f32)>>> {
+    let Some(v) = p.get("opacityStops") else { return Ok(None) };
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let a = v.as_array().ok_or_else(|| bad("\"opacityStops\" must be an array of [position, opacity]".into()))?;
+    if a.len() > MAX_STOPS {
+        return Err(bad(format!("\"opacityStops\": at most {MAX_STOPS} stops")));
+    }
+    if a.len() == 1 {
+        return Err(bad("\"opacityStops\" needs at least 2 stops (or none)".into()));
+    }
+    let mut stops = Vec::with_capacity(a.len());
+    for (i, s) in a.iter().enumerate() {
+        let num = |k: usize| s.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
+        let (t, o) = num(0).zip(num(1)).ok_or_else(|| bad(format!("\"opacityStops\"[{i}] must be [position 0..1, opacity 0..100]")))?;
+        stops.push((t.clamp(0.0, 1.0) as f32, (o / 100.0).clamp(0.0, 1.0) as f32));
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(Some(stops))
 }
 
 /// Factory defaults for each effect kind, in the command's parameter units
@@ -555,11 +617,18 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
     })
 }
 
-/// Edits an existing gradient in place: only the end colours and geometry.
-/// Intermediate stops, opacity stops, alignment and offset survive a round trip.
+/// Edits an existing gradient in place: explicit `stops` / `opacityStops` replace the lists;
+/// otherwise only the end colours and geometry change, and intermediate stops, opacity stops,
+/// alignment and offset survive a round trip.
 fn overlay_gradient(g: &mut Gradient, p: &Value) {
+    if let Some(stops) = stops_param(p, "layer.layerStyle").ok().flatten() {
+        g.stops = stops;
+    }
+    if let Some(os) = opacity_stops_param(p, "layer.layerStyle").ok().flatten() {
+        g.opacity_stops = os;
+    }
     // A method rebuilds the gradient from its end colours (the stops between are the old curve).
-    if p.get("method").and_then(Value::as_str).is_some_and(|m| photocraft_io::GradientMethod::from_name(m).is_some()) {
+    if p.get("stops").is_none() && p.get("method").and_then(Value::as_str).is_some_and(|m| photocraft_io::GradientMethod::from_name(m).is_some()) {
         let ends = (g.stops.first().map(|s| s.1), g.stops.last().map(|s| s.1));
         let from = color_of(p, "from").or(ends.0).unwrap_or(Color::BLACK);
         let to = color_of(p, "to").or(ends.1).unwrap_or(Color::WHITE);
@@ -690,7 +759,7 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                     _ => StrokePosition::Outside,
                 };
             }
-            if p.get("from").is_some() {
+            if p.get("from").is_some() || p.get("stops").is_some() {
                 s.paint = FxPaint::Gradient(gradient(p));
             } else if let Some(c) = color_of(p, "color") {
                 s.paint = FxPaint::Color(c);
@@ -870,6 +939,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::Object(_)) => e.get("params").cloned().unwrap_or_default(),
             Some(_) => return Err(bad(CMD, "`params` must be an object")),
         };
+        check_gradient_params(&params, CMD)?;
         let fx = match e.get("fx") {
             Some(fx_json) => {
                 let mut fx: Effect = serde_json::from_value(fx_json.clone()).map_err(|err| bad(CMD, format!("bad effect snapshot: {err}")))?;
@@ -905,6 +975,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    check_gradient_params(p, &format!("layer.layerStyle.{kind}"))?;
     let fx = effect_from_params(kind, p).ok_or_else(|| EngineError::Other(format!("unknown effect {kind}")))?;
     let (fx, pattern) = crate::pattern_cmds::resolve_effect(s, fx)?;
     let label = format!("Layer Style: {}", fx.label());
@@ -1011,7 +1082,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","stops":[[0..1,"#rrggbb"],…]? (2..256 colour stops, replacing from/to),"opacityStops":[[0..1,0..100],…]? ([] = opaque),"method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation of from/to; omitted: straight stops),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",
@@ -1418,6 +1489,56 @@ mod tests {
         assert!((at(&satin("Gaussian"), 0.5) - 0.36).abs() < 0.04, "{}", at(&satin("Gaussian"), 0.5));
         assert!((at(&lut("Gaussian"), 0.5) - 0.64).abs() < 0.03, "{}", at(&lut("Gaussian"), 0.5));
         assert!((at(&lut("Cove - Deep"), 0.0) - 0.26).abs() < 0.02, "Cove - Deep starts above zero");
+    }
+
+    /// #5177: a Gradient Overlay (and a gradient stroke) takes any number of colour stops and
+    /// transparency stops, replacing From/To; bad lists are refused, not silently dropped.
+    #[test]
+    fn gradient_overlay_takes_explicit_stops() {
+        let mut s = session();
+        let stops = json!([[0.0, "#ff0000"], [0.5, "#00ff00"], [1.0, "#0000ff"]]);
+        s.execute("layer.layerStyle.gradientOverlay", json!({"stops": stops, "opacityStops": [[0, 100], [1, 50]]})).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        assert_eq!(gradient.stops.len(), 3);
+        assert_eq!(gradient.stops[1], (0.5, photocraft_color::Color::rgb(0.0, 1.0, 0.0)));
+        assert_eq!(gradient.opacity_stops, vec![(0.0, 1.0), (1.0, 0.5)]);
+        // Editing the same overlay: new stops replace the list (sorted), unsorted input is sorted,
+        // and a geometry-only edit keeps the three stops.
+        s.execute("layer.layerStyle.gradientOverlay", json!({"stops": [[1.0, "#ffffff"], [0.25, [0.0, 0.0, 0.0]]], "opacityStops": []})).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        assert_eq!(gradient.stops.iter().map(|s| s.0).collect::<Vec<_>>(), vec![0.25, 1.0]);
+        assert!(gradient.opacity_stops.is_empty(), "[] means opaque");
+        s.execute("layer.layerStyle.gradientOverlay", json!({"stops": stops})).unwrap();
+        // The dialog's path: the snapshot plus a geometry edit keeps the three stops.
+        let fx = serde_json::to_value(&effects(&s)[0]).unwrap();
+        s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "gradientOverlay", "fx": fx, "params": {"angle": 45}}]})).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        assert_eq!((gradient.stops.len(), gradient.angle), (3, 45.0));
+        let e = s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "gradientOverlay", "params": {"stops": [[0, "#ff0000"]]}}]})).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{e}");
+        // A gradient stroke takes stops too.
+        s.execute("layer.layerStyle.stroke", json!({"size": 4, "stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]]})).unwrap();
+        assert!(effects(&s).iter().any(|e| matches!(e, Effect::Stroke(st) if matches!(&st.paint, FxPaint::Gradient(g) if g.stops.len() == 3))));
+        // Malformed lists are errors and change nothing.
+        for bad in [
+            json!({"stops": "red"}),
+            json!({"stops": [[0, "#ff0000"]]}),
+            json!({"stops": [[0, "#ff0000"], ["x", "#0000ff"]]}),
+            json!({"stops": [[0, "#ff0000"], [1, 7]]}),
+            json!({"stops": [[0, "#ff0000"], [f64::NAN, "#0000ff"]]}),
+            json!({"stops": vec![json!([0, "#ff0000"]); 257]}),
+            json!({"opacityStops": [[0, 100]]}),
+            json!({"opacityStops": [[0, "x"], [1, 1]]}),
+        ] {
+            let e = s.execute("layer.layerStyle.gradientOverlay", bad.clone()).unwrap_err();
+            assert!(matches!(e, EngineError::BadParams { .. }), "{bad}: {e}");
+        }
+        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        assert_eq!(gradient.stops.len(), 3, "a refused edit keeps the gradient");
+        // Positions outside 0..1 are clamped.
+        s.execute("layer.layerStyle.gradientOverlay", json!({"stops": [[-1, "#000000"], [2, "#ffffff"]]})).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        assert_eq!(gradient.stops.iter().map(|s| s.0).collect::<Vec<_>>(), vec![0.0, 1.0]);
     }
 
     #[test]

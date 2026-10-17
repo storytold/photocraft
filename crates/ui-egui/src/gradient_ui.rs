@@ -508,7 +508,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
-fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
+pub(crate) fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
     // The tessellator snaps the checker's rects to pixels but not the mesh: snap both alike, or a
     // half-pixel offset leaves a row of checker showing under the ramp (#4577).
     let r = r.round_to_pixels(p.pixels_per_point());
