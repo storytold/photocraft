@@ -193,38 +193,105 @@ pub fn upright_exif(exif: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
-/// `xmp` with any `tiff:Orientation` (attribute or element form) set to 1,
-/// borrowed when there is nothing to change.
+/// `xmp` with numeric TIFF Orientation properties (attribute or simple element form)
+/// set to 1. Namespace aliases are resolved; unrelated bytes are kept verbatim.
+/// Malformed packets, DTDs and packets exceeding the XML parsing budgets are
+/// borrowed unchanged rather than risking a partial or ambiguous rewrite. The
+/// conservative markup budget is 256 `<` bytes, including comments and CDATA.
 pub fn upright_xmp(xmp: &str) -> Cow<'_, str> {
-    const KEY: &str = "tiff:Orientation";
-    if !xmp.contains(KEY) {
+    const TIFF_NS: &str = "http://ns.adobe.com/tiff/1.0/";
+    const MAX_XML_NODES: u32 = 256;
+    const MAX_XML_ATTRIBUTES: usize = 4096;
+    const MAX_XML_NAMESPACES: usize = 256;
+    const MAX_XML_TEXT_WORK: usize = 16 * 1024 * 1024;
+    if !xmp.contains("Orientation") {
         return Cow::Borrowed(xmp);
     }
-    let mut out = String::with_capacity(xmp.len());
-    let mut rest = xmp;
-    let mut changed = false;
-    while let Some(i) = rest.find(KEY) {
-        let (head, tail) = rest.split_at(i + KEY.len());
-        out.push_str(head);
-        rest = tail;
-        // `tiff:Orientation="6"`, `tiff:Orientation='6'` or `<tiff:Orientation>6<`.
-        let open = rest.char_indices().take_while(|&(_, c)| c.is_ascii_whitespace() || matches!(c, '=' | '"' | '\'' | '>')).last();
-        let Some((at, c)) = open else { continue };
-        if !matches!(c, '"' | '\'' | '>') {
-            continue;
-        }
-        let start = at + 1;
-        let digits = rest.get(start..).map_or(0, |s| s.bytes().take_while(u8::is_ascii_digit).count());
-        if digits == 0 || rest.get(start..start + digits) == Some("1") {
-            continue;
-        }
-        out.push_str(rest.get(..start).unwrap_or_default());
-        out.push('1');
-        rest = rest.get(start + digits..).unwrap_or_default();
-        changed = true;
+    // Adjacent text/CDATA is repeatedly concatenated into one node by roxmltree
+    // 0.20, so nodes_limit alone does not bound that quadratic copying. Each CDATA
+    // can split text twice; packet bytes times that segment bound conservatively
+    // bounds cumulative copies, and also caps the input length. DTDs stay off, so
+    // general entities cannot introduce more segments or expand the source text.
+    let text_segments = xmp.match_indices("<![CDATA[").count().saturating_mul(2).saturating_add(1);
+    if xmp.len().saturating_mul(text_segments) > MAX_XML_TEXT_WORK {
+        return Cow::Borrowed(xmp);
     }
-    out.push_str(rest);
-    if changed { Cow::Owned(out) } else { Cow::Borrowed(xmp) }
+    // roxmltree reserves nodes/attributes from these marker counts before parsing.
+    // The tokenizer is recursive, so a small total markup budget also bounds its
+    // stack depth, even for unclosed input. Attribute duplicate checks and inherited
+    // namespace lists also need bounds. These marker counts deliberately
+    // overestimate structure inside comments/values; DTDs stay off.
+    if xmp.bytes().filter(|b| *b == b'<').take(MAX_XML_NODES as usize + 1).count() > MAX_XML_NODES as usize
+        || xmp.bytes().filter(|b| *b == b'=').take(MAX_XML_ATTRIBUTES + 1).count() > MAX_XML_ATTRIBUTES
+        || xmp.match_indices("xmlns").take(MAX_XML_NAMESPACES + 1).count() > MAX_XML_NAMESPACES
+    {
+        return Cow::Borrowed(xmp);
+    }
+    let opts = roxmltree::ParsingOptions { nodes_limit: MAX_XML_NODES, ..Default::default() };
+    let Ok(doc) = roxmltree::Document::parse_with_options(xmp, opts) else { return Cow::Borrowed(xmp) };
+    let mut edits = Vec::new();
+    for node in doc.descendants().filter(roxmltree::Node::is_element) {
+        for attr in node.attributes().filter(|a| a.namespace() == Some(TIFF_NS) && a.name() == "Orientation") {
+            // Use the full attribute span: range_value() truncates long names or
+            // unusually large whitespace runs around '=' in roxmltree 0.20.
+            let range = attr.range();
+            let Some(raw) = xmp.get(range.clone()) else { continue };
+            let Some(quote) = raw.find(['\'', '"']) else { continue };
+            let Some(start) = range.start.checked_add(quote + 1) else { continue };
+            let Some(end) = range.end.checked_sub(1) else { continue };
+            if let Some(edit) = xmp_orientation_edit(xmp, start..end, attr.value()) {
+                edits.push(edit);
+            }
+        }
+        if !node.has_tag_name((TIFF_NS, "Orientation")) {
+            continue;
+        }
+        let mut children = node.children();
+        let Some(text) = children.next().filter(roxmltree::Node::is_text) else { continue };
+        if children.next().is_some() {
+            continue;
+        }
+        let mut range = text.range();
+        // Adjacent text / CDATA sections are coalesced, but the parser's range
+        // only covers the first section. Do not rewrite just part of a value.
+        if !xmp.get(range.end..node.range().end).is_some_and(|s| s.starts_with("</")) {
+            continue;
+        }
+        if xmp.get(range.clone()).is_some_and(|s| s.starts_with("<![CDATA[")) {
+            range.start = range.start.saturating_add(9);
+            range.end = range.end.saturating_sub(3);
+        }
+        if let Some(edit) = xmp_orientation_edit(xmp, range, text.text().unwrap_or_default()) {
+            edits.push(edit);
+        }
+    }
+    if edits.is_empty() {
+        return Cow::Borrowed(xmp);
+    }
+    edits.sort_unstable_by_key(|e| e.start);
+    let mut out = String::with_capacity(xmp.len());
+    let mut at = 0;
+    for edit in edits {
+        let Some(before) = xmp.get(at..edit.start) else { return Cow::Borrowed(xmp) };
+        out.push_str(before);
+        out.push('1');
+        at = edit.end;
+    }
+    let Some(tail) = xmp.get(at..) else { return Cow::Borrowed(xmp) };
+    out.push_str(tail);
+    Cow::Owned(out)
+}
+
+/// The numeric part of an XML value, keeping its original surrounding whitespace.
+fn xmp_orientation_edit(xmp: &str, range: std::ops::Range<usize>, decoded: &str) -> Option<std::ops::Range<usize>> {
+    let value = decoded.trim_ascii();
+    if value.is_empty() || value == "1" || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let raw = xmp.get(range.clone())?;
+    let start = range.start.checked_add(raw.len() - raw.trim_ascii_start().len())?;
+    let end = range.start.checked_add(raw.trim_ascii_end().len())?;
+    (start < end).then_some(start..end)
 }
 
 /// Source pixel index for output pixel `(0, y2)` and the step per output column, for

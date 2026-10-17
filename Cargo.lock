@@ -4736,6 +4736,7 @@ dependencies = [
  "png 0.18.1",
  "proptest",
  "rayon",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
  "tiff",

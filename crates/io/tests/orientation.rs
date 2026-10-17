@@ -95,7 +95,9 @@ fn stale_orientation_in_document_metadata_is_never_exported() {
     // A document whose EXIF still says 6 (a PSD from elsewhere, or rotated by hand as in #285).
     let mut d = import("IMG_0001.JPG", &iphone_jpeg()).unwrap().document;
     d.metadata.exif = Some(std::sync::Arc::new(exif(6)));
-    d.metadata.xmp = Some(r#"<rdf:Description tiff:Orientation="6"/>"#.into());
+    d.metadata.xmp = Some(
+        r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/>"#.into(),
+    );
     let none = ExportOptions { xmp: photocraft_io::XmpEmbed::None, ..ExportOptions::default() };
     let jpg = export(&d, "jpg", &none).unwrap().bytes;
     let back = decode(&jpg).unwrap();

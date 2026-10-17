@@ -182,11 +182,12 @@ proptest! {
 
 #[test]
 fn xmp_orientation_is_rewritten() {
-    let attr = r#"<rdf:Description tiff:Orientation="6" tiff:Make="X"/>"#;
-    assert_eq!(upright_xmp(attr), r#"<rdf:Description tiff:Orientation="1" tiff:Make="X"/>"#);
-    let elem = "<tiff:Orientation>8</tiff:Orientation><tiff:Orientation>3</tiff:Orientation>";
-    assert_eq!(upright_xmp(elem), "<tiff:Orientation>1</tiff:Orientation><tiff:Orientation>1</tiff:Orientation>");
-    assert_eq!(upright_xmp("tiff:Orientation='12'"), "tiff:Orientation='1'");
+    let packet = |body: &str| format!(r#"<x xmlns:tiff="http://ns.adobe.com/tiff/1.0/">{body}</x>"#);
+    let attr = packet(r#"<x tiff:Orientation="6" tiff:Make="X"/>"#);
+    assert_eq!(upright_xmp(&attr), packet(r#"<x tiff:Orientation="1" tiff:Make="X"/>"#));
+    let elem = packet("<tiff:Orientation>8</tiff:Orientation><tiff:Orientation>3</tiff:Orientation>");
+    assert_eq!(upright_xmp(&elem), packet("<tiff:Orientation>1</tiff:Orientation><tiff:Orientation>1</tiff:Orientation>"));
+    assert_eq!(upright_xmp(&packet("<x tiff:Orientation='12'/>")), packet("<x tiff:Orientation='1'/>"));
     for same in [r#"tiff:Orientation="1""#, "no orientation", "tiff:Orientation", "tiff:Orientation=\"\"", "tiff:Orientation: 6"] {
         assert!(matches!(upright_xmp(same), std::borrow::Cow::Borrowed(_)), "{same}");
     }
@@ -291,7 +292,7 @@ fn export_writes_orientation_1_and_keeps_pixels() {
     // Even an image whose metadata still claims 6 (e.g. from a PSD) is written as 1.
     let mut stale = opened.clone();
     stale.meta.exif = Some(exif(6, true, false));
-    stale.meta.xmp = Some(r#"<x tiff:Orientation="6"/>"#.into());
+    stale.meta.xmp = Some(r#"<x xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6"/>"#.into());
     for format in [Format::Png, Format::Jpeg, Format::WebP, Format::Tiff] {
         let bytes = encode(&stale, format, &EncodeOptions { jpeg_quality: 100, ..Default::default() }).unwrap();
         let raw = decode_with(&bytes, &DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
