@@ -3207,6 +3207,7 @@ curves	Smooth	Glätten
 	GPU Memory Full	GPU-Speicher voll
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Die Ebenen brauchen {needed} GPU-Speicher und dürfen {budget} belegen, daher zeichnen Änderungen, die das ganze Dokument neu zeichnen, auf der CPU. Klicken, um den GPU-Speicher einzustellen.
 	GPU memory budget: {budget}	GPU-Speicherbudget: {budget}
+	Graphics memory: {size}	Grafikspeicher: {size}
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)

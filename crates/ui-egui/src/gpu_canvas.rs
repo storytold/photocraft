@@ -1036,6 +1036,14 @@ impl GpuInfo {
                 let template = "Driver: {driver}";
                 crate::i18n::fmt(tl!(template), &[("driver", &or(&self.driver, "unknown"))])
             },
+        ];
+        // The card's own memory caps the GPU budgets, so it explains a huge canvas falling back
+        // to the CPU. Only discrete cards report one (integrated GPUs share system memory).
+        if let Some(mb) = self.video_memory_mb {
+            let template = "Graphics memory: {size}";
+            v.push(crate::i18n::fmt(tl!(template), &[("size", &crate::chrome_ui::fmt_bytes(mb.saturating_mul(1 << 20)))]));
+        }
+        v.extend([
             {
                 let template = "GPU backend preference: {backend}";
                 crate::i18n::fmt(tl!(template), &[("backend", &or(&self.preference, "auto"))])
@@ -1059,7 +1067,7 @@ impl GpuInfo {
                 };
                 crate::i18n::fmt(tl!(template), &[("renderer", tl!(renderer))])
             },
-        ];
+        ]);
         if let Some(f) = &self.fallback {
             v.push({
                 let template = "Fallback: {reason}";
@@ -2444,6 +2452,19 @@ mod tests {
             assert_eq!(detect_video_memory(d.VendorId, d.DeviceId), Some(first.DedicatedVideoMemory as u64));
         }
         assert_eq!(detect_video_memory(0xdead, 0xbeef), None, "no such adapter");
+    }
+
+    /// System Info names the card's own memory, after the driver, when the card reports one; an
+    /// integrated GPU or an unknown card shows no such line.
+    #[test]
+    fn system_info_shows_the_cards_memory() {
+        let info = GpuInfo { adapter: "Card".into(), driver: "Driver 1".into(), video_memory_mb: Some(8192), ..Default::default() };
+        let lines = info.lines();
+        assert_eq!(lines.get(2).map(String::as_str), Some("Driver: Driver 1"));
+        assert_eq!(lines.get(3).map(String::as_str), Some("Graphics memory: 8.0G"));
+        let none = GpuInfo { video_memory_mb: None, ..info }.lines();
+        assert!(none.iter().all(|l| !l.starts_with("Graphics memory")), "{none:?}");
+        assert_eq!(none.len() + 1, lines.len());
     }
 
     /// The Linux reader finds the card by its PCI ids in a `/sys/class/drm`-shaped folder and reads

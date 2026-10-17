@@ -3691,6 +3691,7 @@ curves	Smooth	Làm mượt
 	GPU Memory Full	Bộ nhớ GPU đầy
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Các lớp cần {needed} bộ nhớ GPU và chỉ được dùng {budget}, nên những chỉnh sửa vẽ lại toàn bộ tài liệu sẽ làm trên CPU. Nhấp để đặt Bộ nhớ GPU.
 	GPU memory budget: {budget}	Ngân sách bộ nhớ GPU: {budget}
+	Graphics memory: {size}	Bộ nhớ đồ họa: {size}
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)

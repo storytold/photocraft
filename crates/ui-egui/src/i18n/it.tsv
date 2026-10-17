@@ -4326,6 +4326,7 @@ shape	Appearance	Aspetto
 	GPU Memory Full	Memoria GPU piena
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	I livelli richiedono {needed} di memoria GPU e possono occuparne {budget}, quindi le modifiche che ridisegnano tutto il documento lo fanno sulla CPU. Fai clic per impostare Memoria GPU.
 	GPU memory budget: {budget}	Budget di memoria GPU: {budget}
+	Graphics memory: {size}	Memoria grafica: {size}
 	This document's layers: {needed} of {budget} for layers	Livelli di questo documento: {needed} su {budget} per i livelli
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	I livelli di questo documento richiedono {needed} ma possono occupare {budget}: i ridisegni dell'intero documento usano la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)

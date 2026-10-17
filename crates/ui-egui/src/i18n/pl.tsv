@@ -3803,6 +3803,7 @@ curves	Smooth	Wygładź
 	GPU Memory Full	Pamięć GPU pełna
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Warstwy potrzebują {needed} pamięci GPU i mogą zająć {budget}, więc edycje, które odświeżają cały dokument, robią to na CPU. Kliknij, aby ustawić Pamięć GPU.
 	GPU memory budget: {budget}	Budżet pamięci GPU: {budget}
+	Graphics memory: {size}	Pamięć graficzna: {size}
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)

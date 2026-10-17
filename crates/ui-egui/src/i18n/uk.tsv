@@ -3904,6 +3904,7 @@ curves	Smooth	Згладити
 	GPU Memory Full	Пам'ять GPU заповнена
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Шарам потрібно {needed} пам'яті GPU, а займати вони можуть {budget}, тому зміни, що перемальовують увесь документ, виконуються на CPU. Натисніть, щоб задати «Пам'ять GPU».
 	GPU memory budget: {budget}	Бюджет пам'яті GPU: {budget}
+	Graphics memory: {size}	Відеопам'ять: {size}
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)

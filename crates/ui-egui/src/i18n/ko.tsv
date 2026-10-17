@@ -3383,6 +3383,7 @@ curves	Smooth	매끄럽게
 	GPU Memory Full	GPU 메모리 부족
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	레이어에 GPU 메모리 {needed}가 필요하지만 {budget}만 사용할 수 있어 문서 전체를 다시 그리는 편집은 CPU에서 처리됩니다. 클릭하여 GPU 메모리를 설정합니다.
 	GPU memory budget: {budget}	GPU 메모리 예산: {budget}
+	Graphics memory: {size}	그래픽 메모리: {size}
 	This document's layers: {needed} of {budget} for layers	이 문서의 레이어: 레이어용 {budget} 중 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)

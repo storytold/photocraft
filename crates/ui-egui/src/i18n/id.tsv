@@ -3197,6 +3197,7 @@ curves	Smooth	Haluskan
 	GPU Memory Full	Memori GPU Penuh
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Layer membutuhkan {needed} memori GPU dan boleh memakai {budget}, sehingga suntingan yang menggambar ulang seluruh dokumen melakukannya di CPU. Klik untuk mengatur Memori GPU.
 	GPU memory budget: {budget}	Anggaran memori GPU: {budget}
+	Graphics memory: {size}	Memori grafis: {size}
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)

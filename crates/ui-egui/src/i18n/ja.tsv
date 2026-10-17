@@ -3881,6 +3881,7 @@ curves	Smooth	スムーズ
 	GPU Memory Full	GPU メモリ不足
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	レイヤーには {needed} の GPU メモリが必要ですが、使えるのは {budget} のため、ドキュメント全体を再描画する編集は CPU で行われます。クリックして GPU メモリを設定します。
 	GPU memory budget: {budget}	GPU メモリ予算: {budget}
+	Graphics memory: {size}	グラフィックメモリ: {size}
 	This document's layers: {needed} of {budget} for layers	このドキュメントのレイヤー: レイヤー用 {budget} のうち {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	このドキュメントのレイヤーには {needed} が必要ですが、使えるのは {budget} です: ドキュメント全体の再描画は CPU で行われます
 	GPU Memory (MB, 0 = Automatic)	GPU メモリ（MB、0 = 自動）

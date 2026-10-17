@@ -3995,6 +3995,7 @@ layerLabel	No Color	Sem cor
 	GPU Memory Full	Memória da GPU cheia
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	As camadas precisam de {needed} de memória da GPU e podem ocupar {budget}, então as edições que redesenham o documento inteiro fazem isso na CPU. Clique para ajustar Memória da GPU.
 	GPU memory budget: {budget}	Orçamento de memória da GPU: {budget}
+	Graphics memory: {size}	Memória gráfica: {size}
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)

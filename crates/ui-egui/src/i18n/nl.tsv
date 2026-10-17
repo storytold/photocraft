@@ -3965,6 +3965,7 @@ curves	Smooth	Vloeiend maken
 	GPU Memory Full	GPU-geheugen vol
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	De lagen hebben {needed} GPU-geheugen nodig en mogen {budget} gebruiken, dus bewerkingen die het hele document opnieuw tekenen doen dat op de CPU. Klik om GPU-geheugen in te stellen.
 	GPU memory budget: {budget}	GPU-geheugenbudget: {budget}
+	Graphics memory: {size}	Grafisch geheugen: {size}
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)

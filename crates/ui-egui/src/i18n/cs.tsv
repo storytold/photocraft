@@ -3813,6 +3813,7 @@ navigator	Zoom	Zvětšení
 	GPU Memory Full	Paměť GPU je plná
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Vrstvy potřebují {needed} paměti GPU a mohou zabrat {budget}, takže úpravy, které překreslují celý dokument, to dělají na CPU. Kliknutím nastavíte Paměť GPU.
 	GPU memory budget: {budget}	Rozpočet paměti GPU: {budget}
+	Graphics memory: {size}	Paměť GPU: {size}
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)

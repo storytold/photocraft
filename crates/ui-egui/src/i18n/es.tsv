@@ -4167,6 +4167,7 @@ navigator	Zoom	Zoom
 	GPU Memory Full	Memoria de GPU llena
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Las capas necesitan {needed} de memoria de GPU y pueden ocupar {budget}, así que las ediciones que redibujan todo el documento lo hacen en la CPU. Haga clic para ajustar Memoria de GPU.
 	GPU memory budget: {budget}	Presupuesto de memoria de GPU: {budget}
+	Graphics memory: {size}	Memoria gráfica: {size}
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)

@@ -4278,6 +4278,7 @@ shape	Appearance	Izgled
 	GPU Memory Full	GPU memorija je puna
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Slojevima treba {needed} GPU memorije, a smeju da zauzmu {budget}, pa izmene koje ponovo iscrtavaju ceo dokument to rade na CPU-u. Kliknite da podesite GPU memoriju.
 	GPU memory budget: {budget}	Budžet GPU memorije: {budget}
+	Graphics memory: {size}	Grafička memorija: {size}
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)

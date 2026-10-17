@@ -3905,6 +3905,7 @@ curves	Smooth	Εξομάλυνση
 	GPU Memory Full	Η μνήμη GPU είναι πλήρης
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Τα επίπεδα χρειάζονται {needed} μνήμης GPU και μπορούν να καταλάβουν {budget}, οπότε οι αλλαγές που ξανασχεδιάζουν όλο το έγγραφο το κάνουν στη CPU. Κάντε κλικ για να ορίσετε τη Μνήμη GPU.
 	GPU memory budget: {budget}	Όριο μνήμης GPU: {budget}
+	Graphics memory: {size}	Μνήμη γραφικών: {size}
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)

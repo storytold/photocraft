@@ -3210,6 +3210,7 @@ curves	Smooth	Lisser
 	GPU Memory Full	Mémoire GPU pleine
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Les calques ont besoin de {needed} de mémoire GPU et peuvent en occuper {budget} : les modifications qui redessinent tout le document le font sur le CPU. Cliquez pour régler Mémoire GPU.
 	GPU memory budget: {budget}	Budget de mémoire GPU : {budget}
+	Graphics memory: {size}	Mémoire graphique : {size}
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)

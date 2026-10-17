@@ -2806,6 +2806,7 @@ curves	Smooth	平滑
 	GPU Memory Full	GPU 記憶體已滿
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	圖層需要 {needed} GPU 記憶體，但只能佔用 {budget}，因此重繪整份文件的編輯會在 CPU 上進行。按一下以設定 GPU 記憶體。
 	GPU memory budget: {budget}	GPU 記憶體預算：{budget}
+	Graphics memory: {size}	顯示記憶體：{size}
 	This document's layers: {needed} of {budget} for layers	此文件的圖層：圖層可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文件的圖層需要 {needed}，但只能佔用 {budget}：整份文件的重繪使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 記憶體（MB，0 = 自動）

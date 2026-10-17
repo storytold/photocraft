@@ -4124,6 +4124,7 @@ cameraRaw	Yellow	Sárga
 	GPU Memory Full	GPU-memória megtelt
 	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	A rétegeknek {needed} GPU-memória kell, és {budget} foglalhatnak, ezért a teljes dokumentumot újrarajzoló szerkesztések a CPU-n futnak. Kattints a GPU-memória beállításához.
 	GPU memory budget: {budget}	GPU-memóriakeret: {budget}
+	Graphics memory: {size}	Grafikus memória: {size}
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
