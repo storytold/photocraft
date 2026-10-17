@@ -2937,7 +2937,9 @@ fn layer_row(
         if let Some(kind) = masks.hit(p) {
             return Some(crate::mask_thumbs_ui::load_params(l, kind, m));
         }
-        thumb.expand(2.0).contains(p).then(|| json!({"channel": "transparency", "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)}))
+        // The Background has no transparency to load: Photoshop treats the click as a plain one.
+        (!doc.is_background(l.id) && thumb.expand(2.0).contains(p))
+            .then(|| json!({"channel": "transparency", "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)}))
     });
     // ⇧-click a mask thumbnail: disable / enable that mask; ⌥-click a layer mask: view it.
     let mask_toggle = resp.clicked().then(|| (ui.input(|i| i.modifiers), resp.interact_pointer_pos())).and_then(|(m, pos)| {

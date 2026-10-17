@@ -122,3 +122,58 @@ fn alt_click_on_a_layer_thumbnail_fits_the_layer() {
     assert_eq!(v.center, [310.0, 205.0], "centred on the layer's content");
     assert!(v.zoom > before.zoom * 4.0, "zoomed in on 20 × 10 px: {} -> {}", before.zoom, v.zoom);
 }
+
+/// ⌘-click a layer's thumbnail loads its transparency as a selection without changing the
+/// selected layer; on the Background, which has no transparency, it is a plain click, and a hidden
+/// layer still loads (measured on Photoshop 25.4, 2026-10-17).
+#[test]
+fn command_click_on_a_thumbnail_loads_transparency_except_on_the_background() {
+    use egui::{Event, PointerButton, pos2, vec2};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    let background = s.active().unwrap().active_layer.unwrap().0;
+    let shape = s.execute("layer.new.layer", json!({"name": "Shape"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("select.rect", json!({"x": 100, "y": 50, "width": 120, "height": 100})).unwrap();
+    s.execute("edit.fill", json!({"contents": "black"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    let ctx = h.ctx.clone();
+    let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &r);
+    h.run_steps(8);
+    let click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, layer: u64, modifiers: Modifiers| {
+        let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer).unwrap().row;
+        let at = pos2(row.left() + 46.0, row.center().y);
+        h.hover_at(at);
+        h.event(Event::ModifiersChanged(modifiers));
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(1);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+    };
+    let bounds = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let st = h.state().session.active().unwrap();
+        st.doc.selection.as_ref().map(|s| s.content_bounds())
+    };
+    let top = h.state().session.active().unwrap().active_layer.unwrap();
+    click(&mut h, shape, Modifiers::COMMAND);
+    assert_eq!(bounds(&h), Some(photocraft_geom::Rect::new(100, 50, 220, 150)), "the layer's pixels are selected");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(top), "the selected layer stays");
+    click(&mut h, background, Modifiers::COMMAND);
+    assert_eq!(
+        bounds(&h),
+        Some(photocraft_geom::Rect::new(100, 50, 220, 150)),
+        "the Background has no transparency to load: a plain click, which leaves the selection and selects the row"
+    );
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(background)));
+    h.state_mut().run("layer.setProps", json!({"layer": shape, "visible": false})).unwrap();
+    click(&mut h, shape, Modifiers::COMMAND);
+    assert_eq!(bounds(&h), Some(photocraft_geom::Rect::new(100, 50, 220, 150)), "a hidden layer's transparency loads too");
+}
