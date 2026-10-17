@@ -49,13 +49,32 @@ pub(crate) fn file_bytes(p: &Value, cmd: &str, what: &str) -> Result<(Vec<u8>, S
     Ok((bytes, stem))
 }
 
-/// A name not used by any preset in `taken` (case-insensitive): `name`, `name 2`, `name 3`…
-fn unique(name: &str, taken: &[String]) -> String {
-    let free = |n: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(n));
-    if free(name) {
-        return name.to_string();
+/// The preset names in use, for naming new presets.
+struct UniqueNames {
+    /// Every name in use, ASCII-lowercased.
+    taken: std::collections::HashSet<String>,
+    /// The next number to try for each repeated name (lowercased).
+    next: std::collections::HashMap<String, usize>,
+}
+
+impl UniqueNames {
+    fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        UniqueNames { taken: names.into_iter().map(str::to_ascii_lowercase).collect(), next: std::collections::HashMap::new() }
     }
-    (2..).map(|i| format!("{name} {i}")).find(|n| free(n)).unwrap_or_else(|| name.to_string())
+
+    /// A name not in use (case-insensitive): `name`, `name 2`, `name 3`… It is in use from then on.
+    fn unique(&mut self, name: &str) -> String {
+        let key = name.to_ascii_lowercase();
+        if self.taken.insert(key.clone()) {
+            return name.to_string();
+        }
+        // Resume numbering per name, so a file of identical names stays linear.
+        let from = self.next.get(&key).copied().unwrap_or(2);
+        let i = (from..).find(|i| !self.taken.contains(&format!("{key} {i}"))).unwrap_or(from);
+        self.taken.insert(format!("{key} {i}"));
+        self.next.insert(key, i + 1);
+        format!("{name} {i}")
+    }
 }
 
 fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
@@ -93,11 +112,10 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
     if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
         s.tools.presets.retain(|x| x.builtin || x.group != group);
     }
-    let mut taken: Vec<String> = s.tools.presets.iter().map(|x| x.name.clone()).collect();
+    let mut taken = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str()));
     let mut names = Vec::with_capacity(imp.presets.len());
     for mut preset in imp.presets {
-        preset.name = unique(&preset.name, &taken);
-        taken.push(preset.name.clone());
+        preset.name = taken.unique(&preset.name);
         names.push(preset.name.clone());
         s.tools.presets.push(preset);
     }
@@ -180,8 +198,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = crate::file_cmds::import(decode_name, &bytes)?;
     let (v, w, h) = image_paint(&doc, cmd)?;
     let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
-    let taken: Vec<String> = s.tools.presets.iter().map(|x| x.name.clone()).collect();
-    let name = unique(&name, &taken);
+    let name = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str())).unique(&name);
     s.tools.presets.push(photocraft_paint::BrushPreset {
         name: name.clone(),
         brush: brush.clone(),
@@ -526,10 +543,55 @@ mod tests {
         assert_eq!(s.tools.presets.len(), n, "a failed import adds nothing");
     }
 
+    /// A version 1 brush with a computed tip and no name is named after its tip ("9 px Round"). The
+    /// import used to number each repeated name by searching the preset names once for every number
+    /// it tried, so importing 10,000 such brushes took minutes. The test fails when the import takes
+    /// more than 20 seconds.
+    #[test]
+    fn repeated_brush_names_are_numbered_in_linear_time() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = Session::new();
+            s.execute("brush.presets.save", json!({"name": "9 PX ROUND 3"})).unwrap();
+            let round = LegacyBrush {
+                name: String::new(),
+                spacing: 25,
+                anti_alias: true,
+                tip: LegacyTip::Computed { diameter: 9, hardness: 100, angle: 0, roundness: 100 },
+            };
+            let data = photocraft_paint::tile::b64_encode(&write_v12(1, &vec![round; 10_000], false).unwrap());
+            let r = s.execute("brush.presets.importAbr", json!({"data": data})).unwrap();
+            let names: Vec<String> = r["imported"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+            let _ = tx.send(names);
+        });
+        let names = match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            Ok(names) => names,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("importing the brushes did not finish"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the import thread panicked"),
+        };
+        // Numbering starts at 2 and skips the number a preset already uses, in any letter case.
+        assert_eq!(names[..4], ["9 px Round", "9 px Round 2", "9 px Round 4", "9 px Round 5"]);
+        assert_eq!(names.last(), Some(&format!("9 px Round {}", names.len() + 1)));
+        assert_eq!(names.iter().collect::<std::collections::HashSet<_>>().len(), names.len());
+    }
+
+    #[test]
+    fn repeated_brush_names_take_the_first_free_number() {
+        let mut s = Session::new();
+        s.execute("brush.presets.save", json!({"name": "speckle 3"})).unwrap();
+        let tip = AbrSample { id: String::new(), width: 6, height: 4, depth: 8, data: vec![255; 24] };
+        let brush = |name: &str| LegacyBrush { name: name.into(), spacing: 25, anti_alias: true, tip: LegacyTip::Sampled(tip.clone()) };
+        let file = write_v12(2, &["Speckle", "SPECKLE", "speckle", "Speckle 2", "Speckle", "hard round"].map(brush), true).unwrap();
+        let r = s.execute("brush.presets.importAbr", json!({"data": photocraft_paint::tile::b64_encode(&file)})).unwrap();
+        // Names that differ only in letter case count as the same name. The file's "Speckle 2" comes
+        // after "SPECKLE" took that name, and "hard round" clashes with the built-in Hard Round.
+        assert_eq!(r["imported"], json!(["Speckle", "SPECKLE 2", "speckle 4", "Speckle 2 2", "Speckle 5", "hard round 2"]));
+    }
+
     #[test]
     fn unique_names() {
-        let taken = vec!["A".to_string(), "a 2".to_string()];
-        assert_eq!(unique("a", &taken), "a 3");
-        assert_eq!(unique("B", &taken), "B");
+        let mut taken = UniqueNames::new(["A", "a 2"]);
+        assert_eq!(taken.unique("a"), "a 3");
+        assert_eq!(taken.unique("B"), "B");
     }
 }
