@@ -155,6 +155,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::prefs_ui::invoke(app, ctx, id, &params) {
         return r;
     }
+    // Save for Web's dialog would export the committed document, not the open Free Transform (#6737).
+    if id == crate::transform_tool::SAVE_FOR_WEB
+        && let Some(r) = crate::transform_tool::intercept(app, id)
+    {
+        return r;
+    }
     // Save for Web, Print and the other File-menu dialogs added with slices.
     if let Some(r) = crate::file_ui::invoke(app, ctx, id, &params) {
         return r;

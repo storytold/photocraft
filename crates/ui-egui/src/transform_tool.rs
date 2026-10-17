@@ -1229,6 +1229,9 @@ pub(crate) fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     }
 }
 
+/// Save for Web (Legacy): refused under an open box, as it would export without the preview (#6737).
+pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
+
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
@@ -1245,6 +1248,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
+        // Save for Web exports the committed document and would ignore the pending box (#6737).
+        SAVE_FOR_WEB => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
         // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
@@ -1284,7 +1289,7 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp") || box_preset(id).is_some()
+    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB) || box_preset(id).is_some()
 }
 
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
@@ -1295,7 +1300,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => {
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB => {
             Some(Err("Commit or cancel the transform first".into()))
         }
         _ => {
@@ -3901,6 +3906,23 @@ mod tests {
         app.ui.tool = if app.ui.tool == Tool::Brush { Tool::Move } else { Tool::Brush };
         end_if_left(&mut app);
         assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "another tool ends it");
+    }
+
+    /// #6737: Save for Web exports the committed document, so it is off while a box is pending.
+    #[test]
+    fn save_for_web_is_off_under_a_pending_transform() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        assert!(crate::menus::is_enabled(&app, SAVE_FOR_WEB), "enabled with no box");
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        assert!(!crate::menus::is_enabled(&app, SAVE_FOR_WEB), "off under the box");
+        assert!(crate::menus::invoke(&mut app, &ctx, SAVE_FOR_WEB, json!({})).is_err(), "the dialog doesn't open");
+        let path = std::env::temp_dir().join(format!("pc-web6737-{}.png", std::process::id())).to_string_lossy().into_owned();
+        let r = crate::menus::invoke(&mut app, &ctx, SAVE_FOR_WEB, json!({"path": path, "format": "png24"}));
+        assert!(r.is_err() && !std::path::Path::new(&path).exists(), "nor does the export run");
+        assert!(app.ui.transform.is_some(), "the box stays open");
+        cancel(&mut app);
+        assert!(crate::menus::is_enabled(&app, SAVE_FOR_WEB), "back after the box closes");
     }
 
     /// #352: ⌥⌘T transforms a copy. OK leaves the original and a moved copy as one history step;
