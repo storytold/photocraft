@@ -250,13 +250,23 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
 /// Layer › Matting › Defringe: edge pixels (within `width` of transparency) take the colour of
 /// the nearest pixels further inside, grown outward one pixel at a time. Alpha is unchanged.
 pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
-    let outside: Vec<bool> = px.iter().map(|q| q[3] <= 0.01).collect();
-    if !outside.iter().any(|o| *o) {
+    if w == 0 || h == 0 || w.checked_mul(h) != Some(px.len()) || width == 0 {
         return;
     }
-    let dist = photocraft_algo::selection::edt(&outside, w, h);
-    let mut known: Vec<bool> = (0..px.len()).map(|i| !outside[i] && dist[i] > width as f32).collect();
-    let mut todo: Vec<usize> = (0..px.len()).filter(|&i| !outside[i] && !known[i]).collect();
+    let outside: Vec<bool> = px.iter().map(|q| q[3] <= 0.01).collect();
+    // A feathered cutout can have no fully transparent pixel inside the cropped content
+    // bounds. Such an edge was silently skipped. Treat partial alpha as the boundary in
+    // that case, while retaining fully opaque interior pixels as clean colour sources.
+    let seeds: Vec<bool> = if outside.iter().any(|o| *o) { outside.clone() } else { px.iter().map(|q| q[3] < 0.999).collect() };
+    if !seeds.iter().any(|s| *s) {
+        return;
+    }
+    let dist = photocraft_algo::selection::edt(&seeds, w, h);
+    if dist.len() != px.len() {
+        return;
+    }
+    let mut known: Vec<bool> = (0..px.len()).map(|i| px[i][3] > 0.01 && dist[i] > width as f32).collect();
+    let mut todo: Vec<usize> = (0..px.len()).filter(|&i| px[i][3] > 0.01 && !known[i]).collect();
     while !todo.is_empty() {
         let mut next = Vec::new();
         let mut updates = Vec::new();
