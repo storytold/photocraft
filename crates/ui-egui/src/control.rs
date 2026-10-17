@@ -410,18 +410,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            // A control-channel menu click must respect the same modal gate as the native menu.
-            // Camera Raw's documented `ui` requests operate its already-open dialog rather
-            // than click a menu. Only that continuation may pass its own modal gate.
-            // engine.execute is deliberately not subject to the UI's menu-click semantics.
+            // Both command entry points must respect open modal dialogs; Camera Raw's
+            // documented `ui` continuation acts on that dialog rather than the document.
             let camera_raw_continuation = id == "filter.cameraRaw"
                 && app.camera_raw.is_some()
                 && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
                 && app.ui.dialogs.is_empty()
                 && app.discard.is_none()
                 && !crate::crop_ui::blocks(app, id);
-            if req.method == "ui.menu.invoke" && !camera_raw_continuation && !crate::menus::modal_allows(app, id) {
-                return err("menu command is unavailable while a modal dialog is open");
+            if !camera_raw_continuation && !crate::menus::modal_allows(app, id) {
+                return err("command is unavailable while a modal dialog is open");
             }
             if let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(id, &params)
@@ -1948,6 +1946,31 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
         let rotated = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.imageRotation.90cw"}));
         assert_eq!(rotated["ok"], true, "{rotated}");
+        assert!(app.session.active().unwrap().revision > revision);
+    }
+
+    #[test]
+    fn engine_execute_cannot_change_document_behind_adjustment_dialog() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 60, "height": 40, "background": "#3366cc"})).unwrap();
+        let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.adjustments.hueSaturation"}));
+        assert_eq!(opened["ok"], true, "{opened}");
+        let dialog = opened["result"]["dialog"].as_u64().unwrap();
+        let revision = app.session.active().unwrap().revision;
+        let fields = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["dialogs"][0]["fields"].clone();
+
+        for method in ["engine.execute", "ui.menu.invoke"] {
+            let blocked = call(&mut app, &ctx, method, json!({"command": "image.adjustments.invert"}));
+            assert_eq!(blocked["ok"], false, "{method}: {blocked}");
+            assert_eq!(app.session.active().unwrap().revision, revision, "{method} changed the document");
+            let snapshot = call(&mut app, &ctx, "ui.inspect", json!({}));
+            assert_eq!(snapshot["result"]["dialogs"][0]["id"], dialog);
+            assert_eq!(snapshot["result"]["dialogs"][0]["fields"], fields);
+        }
+
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "engine.execute", json!({"command": "image.adjustments.invert"}))["ok"], true);
         assert!(app.session.active().unwrap().revision > revision);
     }
 
