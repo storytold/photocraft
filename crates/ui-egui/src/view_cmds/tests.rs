@@ -183,6 +183,28 @@ fn arrange_layouts_floating_windows_and_matching() {
     assert_eq!(app.ui.windows.len(), 1);
 }
 
+/// Match Zoom clamps the matched zoom to each document's own range: a 10 x 10 document can't go
+/// below the zoom at which its shorter side is 2 px, even when the source view is lower.
+#[test]
+fn match_zoom_clamps_to_each_documents_zoom_range() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    app.run("file.new", json!({"width": 2000, "height": 2000})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    assert_eq!(app.session.active_index(), Some(1));
+    app.ui.views[1].zoom = 0.05;
+    menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
+    assert_eq!(app.ui.views[1].zoom, 0.05);
+    assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::min([10, 10]));
+    // Floating windows too, before their first frame (no `doc_size` yet).
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    app.ui.views[1].zoom = 0.05;
+    menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
+    assert!(app.ui.windows.iter().all(|w| w.view.zoom == if w.document == 0 { crate::zoom_levels::min([10, 10]) } else { 0.05 }));
+}
+
 #[test]
 fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
     let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
