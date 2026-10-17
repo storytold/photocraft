@@ -9,7 +9,7 @@
 
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Artboard, ArtboardBackground, Document, Layer, LayerContent, LayerId, Size};
-use photocraft_geom::Rect;
+use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -504,6 +504,9 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     one.layer_comps.clear();
     one.last_applied_comp = None;
     one.last_document_state = None;
+    // Paths, notes, slices and Count/Ruler marks move with the board. This also shifts
+    // `one.guides`, but they are rebuilt below from the source's, so nothing moves twice.
+    crate::canvas_geom::transform_doc_marks(&mut one, &Affine::translate(f64::from(dx), f64::from(dy)));
     let shift = |v: &[f64], o: i32, len: u32| v.iter().map(|g| g - f64::from(o)).filter(|g| *g > 0.0 && *g < f64::from(len)).collect::<Vec<_>>();
     one.guides.vertical = shift(&doc.guides.vertical, r.x0, r.width());
     one.guides.horizontal = shift(&doc.guides.horizontal, r.y0, r.height());
