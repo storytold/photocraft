@@ -609,6 +609,11 @@ fn wraps(id: &str) -> bool {
             | "image.calculations"
             | "select.saveSelection"
             | "select.loadSelection"
+            | "layer.videoLayers.newVideoLayerFromFile"
+            | "layer.videoLayers.replaceFootage"
+            | "layer.videoLayers.interpretFootage"
+            | "file.import.videoFramesToLayers"
+            | "file.export.renderVideo"
     )
 }
 
@@ -1247,6 +1252,33 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
             Some(app.pick_save(&name, move |app, path| {
                 app.with_document(doc, |app| app.run("layer.smartObjects.convertToLinked", json!({"layer": layer.0, "path": path})))
             }))
+        }
+        "layer.videoLayers.newVideoLayerFromFile" | "file.import.videoFramesToLayers" | "layer.videoLayers.replaceFootage" => {
+            let doc = match app.active_doc_id() {
+                Ok(doc) => doc,
+                Err(e) => return Some(Err(e)),
+            };
+            let cmd = id.to_string();
+            Some(app.pick_file_bytes(move |app, path, _bytes| {
+                app.with_document(doc, |app| {
+                    let r = app.run(&cmd, json!({"path": path}));
+                    if r.is_ok() && app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
+                        app.ui.timeline.open = true;
+                    }
+                    app.sync_views();
+                    r
+                })
+            }))
+        }
+        "layer.videoLayers.interpretFootage" => {
+            let st = app.session.active()?;
+            let id_layer = st.active_layer?;
+            let fps = st.doc.layer(id_layer).and_then(|l| l.video.as_ref()).map_or(30.0, |v| v.fps);
+            dialog(app, json!({"fps": fps}), json!({}))
+        }
+        "file.export.renderVideo" => {
+            let _ = doc?;
+            dialog(app, json!({"dir": dir, "format": "gif"}), json!({"format": ["gif", "png", "jpg", "webp", "bmp", "tiff"]}))
         }
         "file.fileInfo" => {
             let info = app.session.execute("file.fileInfo", json!({})).ok()?;
