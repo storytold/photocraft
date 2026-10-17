@@ -137,6 +137,60 @@ fn layer_tree_max_depth_drops_deeper_children() {
     assert_eq!(names(&f, &f.layer_tree_max_depth(0)), "g0[],top");
 }
 
+fn depth(nodes: &[LayerNode]) -> usize {
+    // Iterative so a deep tree cannot overflow the test's stack.
+    let mut max = 0;
+    let mut todo: Vec<(&LayerNode, usize)> = nodes.iter().map(|n| (n, 1)).collect();
+    while let Some((n, d)) = todo.pop() {
+        max = max.max(d);
+        todo.extend(n.children().iter().map(|c| (c, d + 1)));
+    }
+    max
+}
+
+/// #5758: layers under a divider that is never closed are hoisted to the enclosing level, as
+/// `layer_tree` does, also when the cap is shallower than the unclosed divider.
+#[test]
+fn layer_tree_max_depth_hoists_unclosed_divider_children() {
+    let f = file_with(vec![rec("a", None), rec("</Layer group>", END), rec("b", None), rec("c", None)]);
+    assert_eq!(names(&f, &f.layer_tree()), "a,b,c");
+    assert_eq!(names(&f, &f.layer_tree_max_depth(1)), "a,b,c");
+    assert_eq!(names(&f, &f.layer_tree_max_depth(0)), "a,b,c");
+}
+
+/// #5758: a closed group inside unclosed dividers sits at the depth it ends up at after hoisting,
+/// so the cap keeps its node and drops only its deeper children.
+#[test]
+fn layer_tree_max_depth_keeps_closed_group_inside_unclosed_dividers() {
+    let mut v = vec![rec("</Layer group>", END), rec("</Layer group>", END)];
+    v.extend([rec("</Layer group>", END), rec("</Layer group>", END), rec("x", None), rec("g1", OPEN), rec("g0", OPEN)]);
+    let f = file_with(v);
+    assert_eq!(names(&f, &f.layer_tree()), "g0[g1[x]]");
+    assert_eq!(names(&f, &f.layer_tree_max_depth(1)), "g0[g1[]]");
+    assert_eq!(names(&f, &f.layer_tree_max_depth(0)), "g0[]");
+}
+
+/// #5758: thousands of unclosed dividers around a closed chain stay bounded by the cap and keep
+/// every layer the full tree has.
+#[test]
+fn layer_tree_max_depth_bounds_deep_unclosed_chain() {
+    let mut v = Vec::new();
+    for i in 0..16_000 {
+        v.push(rec("</Layer group>", END));
+        v.push(rec(&format!("l{i}"), None));
+    }
+    v.extend([rec("</Layer group>", END), rec("</Layer group>", END), rec("</Layer group>", END), rec("x", None)]);
+    v.extend([rec("g2", OPEN), rec("g1", OPEN), rec("g0", OPEN)]);
+    let f = file_with(v);
+    let full = f.layer_tree();
+    assert_eq!(full.len(), 16_001);
+    assert_eq!(depth(&full), 4);
+    let capped = f.layer_tree_max_depth(1);
+    assert!(depth(&capped) <= 2);
+    assert_eq!(capped.len(), 16_001);
+    assert_eq!(names(&f, &capped[16_000..]), "g0[g1[]]");
+    assert_eq!(names(&f, &capped[..2]), "l0,l1");
+}
 #[test]
 fn folder_without_divider_is_empty_group() {
     let f = file_with(vec![rec("a", None), rec("G", OPEN), rec("b", None)]);
