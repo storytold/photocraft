@@ -536,3 +536,10 @@ bench = "perf_scenarios"
 row = "hide a layer among many full-canvas layers + refresh"
 budget_ms = 30
 enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P62"
+title = "File > New 10 x 5 m at 200 ppi (3.1 GP) + first reduced canvas refresh"
+issue = 4017
+bench = "perf_scenarios"
+row = "new 3 GP document + first reduced canvas refresh"

@@ -1776,11 +1776,34 @@ fn init_buffer(device: &wgpu::Device, label: &str, contents: &[u8], usage: wgpu:
 
 impl DocTextures {
     /// The texture set for a `size` canvas, or `None` (nothing created) when it doesn't fit
-    /// the canvas budget.
+    /// the canvas budget or the GPU's memory. A set the GPU can't hold (a 3 GP canvas is 16 GB
+    /// of textures, #4017) lowers the budget below it, so that canvas and larger ones are drawn
+    /// on the CPU canvas instead of the out-of-memory error disabling the GPU for the session.
     fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Option<Self> {
-        if canvas_texture_bytes(size, tile, texel_bytes(format)) > res.canvas_budget.load(Ordering::Relaxed) {
+        let bytes = canvas_texture_bytes(size, tile, texel_bytes(format));
+        if bytes > res.canvas_budget.load(Ordering::Relaxed) {
             return None;
         }
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let set = Self::create(device, res, size, tile, format);
+        // Native wgpu reports these synchronously; where they arrive later (WebGPU) none is seen.
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut error = None;
+        for pop in [memory.pop(), validation.pop()] {
+            if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
+                error.get_or_insert(e);
+            }
+        }
+        if let Some(e) = error {
+            log::warn!("{} MB of canvas textures failed ({e}); larger canvases are drawn on the CPU", bytes >> 20);
+            res.canvas_budget.fetch_min(bytes.saturating_sub(1), Ordering::Relaxed);
+            return None;
+        }
+        Some(set)
+    }
+
+    fn create(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Self {
         let mut tiles = Vec::new();
         for ty in (0..size[1]).step_by(tile as usize) {
             for tx in (0..size[0]).step_by(tile as usize) {
@@ -1815,7 +1838,7 @@ impl DocTextures {
                 tiles.push(Tile { rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform });
             }
         }
-        Some(Self { size, format, tiles })
+        Self { size, format, tiles }
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride

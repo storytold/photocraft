@@ -31,6 +31,7 @@ pub mod pattern;
 pub mod proxy;
 pub mod psblend;
 pub mod shape_split;
+mod uniform;
 
 use photocraft_color::blend::BlendMode;
 use photocraft_doc::{Document, Fill, Layer, LayerContent, Pattern};
@@ -406,6 +407,38 @@ pub fn render_reduced_damage(doc: &Document, w: u32, h: u32, damage: Rect) -> Bu
 /// [`render_reduced_rect`] (or, with `damage`, [`render_reduced_damage`]) of area `b` with an
 /// explicit band height (see [`render_bands`]).
 fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<Rect>, band_rows: i32) -> Buffer {
+    render_reduced_with(doc, b, w, h, damage, band_rows, true, &mut ReducedStats::default())
+}
+
+/// What a reduced render composited (tests check that one-colour areas are not composited).
+#[derive(Debug, Default)]
+struct ReducedStats {
+    /// Whether one-colour areas were looked for ([`uniform::UniformAreas`]).
+    uniform: bool,
+    /// Document pixels composited one by one.
+    composited: u64,
+}
+
+/// A tile of a reduced render: one colour (premultiplied), or its composited pixels.
+enum Part {
+    Solid([f32; 4]),
+    Px(Buffer),
+}
+
+/// A column of document tiles in a reduced render (`b`-relative source columns).
+struct TileColumn {
+    /// The columns rendered: the tile's, within the source area.
+    x0: usize,
+    x1: usize,
+    /// The whole tile's columns within `b`, whose values decide whether it is one colour.
+    whole: (i64, i64),
+    /// Runs of (output column, how many of the rendered columns it averages).
+    runs: Vec<(usize, f32)>,
+}
+
+/// [`render_reduced_in_bands`]; `uniform` off composites every pixel (the reference in tests).
+#[allow(clippy::too_many_arguments)]
+fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<Rect>, band_rows: i32, uniform: bool, stats: &mut ReducedStats) -> Buffer {
     let (fw, fh) = (b.width() as usize, b.height() as usize);
     let (w, h) = (w.clamp(1, b.width().max(1)) as usize, h.clamp(1, b.height().max(1)) as usize);
     let full = Rect::from_xywh(0, 0, w as u32, h as u32);
@@ -449,22 +482,14 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
     let (cols, rows) = (map(fw, w), map(fh, h));
     let cols = &cols[sx0..sx1];
     let mut acc = vec![[0.0f32; 4]; ow * oh];
-    let ok: Result<(), ()> = render_bands(doc, src, band_rows, |band| {
-        let (by0, by1) = ((band.rect.y0 - b.y0) as usize, (band.rect.y1 - b.y0) as usize);
+    // Each output row sums its source rows in a band (in order, top to bottom), each row's pixels
+    // left to right: `row(y, out)` adds source row `y` (band-relative) to output row `out`.
+    let sum_band = |acc: &mut [[f32; 4]], by0: usize, by1: usize, row: &(dyn Fn(usize, &mut [[f32; 4]]) + Sync)| {
         let (t0, t1) = (rows[by0] as usize, rows[by1 - 1] as usize + 1);
-        let sw = sx1 - sx0;
-        // Each output row sums its source rows in this band (in order, top to bottom).
         let sum_row = |t: usize, out: &mut [[f32; 4]]| {
             let (a, z) = span(t, fh, h);
             for y in a.max(by0)..z.min(by1) {
-                let src = &band.px[(y - by0) * sw..(y - by0 + 1) * sw];
-                for (p, &c) in src.iter().zip(cols) {
-                    let o = &mut out[c as usize - ox0];
-                    for i in 0..3 {
-                        o[i] += p[i] * p[3];
-                    }
-                    o[3] += p[3];
-                }
+                row(y - by0, out);
             }
         };
         let part = &mut acc[(t0 - oy0) * ow..(t1 - oy0) * ow];
@@ -477,9 +502,110 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
         for (i, out) in part.chunks_mut(ow).enumerate() {
             sum_row(t0 + i, out);
         }
-        Ok(())
-    });
-    debug_assert!(ok.is_ok());
+    };
+    let add = |o: &mut [f32; 4], p: &[f32; 4]| {
+        for i in 0..3 {
+            o[i] += p[i] * p[3];
+        }
+        o[3] += p[3];
+    };
+    if let Some(uniform) = uniform.then(|| uniform::UniformAreas::new(doc)).flatten() {
+        stats.uniform = true;
+        // One-colour tiles (a new document's background, the empty parts of a sparse one) are
+        // composited once per colour and summed per run of source columns, not per pixel
+        // (#4017). Tiles lie on the document's tile grid whatever `damage` is, so a damage
+        // render sums exactly what the whole reduction does.
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let cx = Ctx::for_doc(doc, &patterns);
+        let t = RENDER_TILE as usize;
+        // The document tile grid (the surfaces' own), in `b`-relative coordinates: the start of
+        // the tile holding `v` (negative when `b` starts inside a tile).
+        let grid = |v: usize, o: i32| (i64::from(o) + v as i64).div_euclid(t as i64) * t as i64 - i64::from(o);
+        let tile_cols: Vec<TileColumn> = (grid(sx0, b.x0)..sx1 as i64)
+            .step_by(t)
+            .map(|gx| {
+                let (x0, x1) = ((gx.max(0) as usize).max(sx0), ((gx + t as i64) as usize).min(sx1));
+                let mut runs: Vec<(usize, f32)> = Vec::new();
+                for &c in &cols[x0 - sx0..x1 - sx0] {
+                    match runs.last_mut() {
+                        Some((last, n)) if *last == c as usize - ox0 => *n += 1.0,
+                        _ => runs.push((c as usize - ox0, 1.0)),
+                    }
+                }
+                TileColumn { x0, x1, whole: (gx.max(0), (gx + t as i64).min(fw as i64)), runs }
+            })
+            .collect();
+        let band_h = band_rows_for(src.width(), band_rows).max(RENDER_TILE) as usize;
+        let mut y = grid(sy0, b.y0);
+        while y < sy1 as i64 {
+            let y1 = (y + band_h as i64).min(sy1 as i64);
+            let tiles: Vec<(Rect, Rect)> = (y..y1)
+                .step_by(t)
+                .flat_map(|gy| {
+                    tile_cols.iter().map(move |&TileColumn { x0, x1, whole: (gx0, gx1), .. }| {
+                        let at = |x0: i64, y0: i64, x1: i64, y1: i64| Rect::new(b.x0 + x0 as i32, b.y0 + y0 as i32, b.x0 + x1 as i32, b.y0 + y1 as i32);
+                        let (gy0, gy1) = (gy.max(0), (gy + t as i64).min(fh as i64));
+                        (at(gx0, gy0, gx1, gy1), at(x0 as i64, gy0.max(sy0 as i64), x1 as i64, gy1.min(sy1 as i64)))
+                    })
+                })
+                .collect();
+            let one = |(whole, part): &(Rect, Rect)| -> Part {
+                let render = |r: Rect| render_tiled_with(doc, r, RENDER_TILE, &cx);
+                match uniform.color(*whole, |r| render(r).px.first().copied()) {
+                    Some(p) => Part::Solid([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]),
+                    None => Part::Px(render(*part)),
+                }
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let parts: Vec<Part> = {
+                use rayon::prelude::*;
+                tiles.par_iter().map(one).collect()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let parts: Vec<Part> = tiles.iter().map(one).collect();
+            stats.composited += parts.iter().map(|p| if let Part::Px(b) = p { b.px.len() as u64 } else { 0 }).sum::<u64>();
+            let (by0, by1) = (y.max(sy0 as i64) as usize, y1 as usize);
+            let n = tile_cols.len();
+            let band_y = y;
+            sum_band(&mut acc, by0, by1, &|row: usize, out: &mut [[f32; 4]]| {
+                let y = (by0 + row) as i64;
+                let j = (y - band_y) as usize / t;
+                let ty = (y - (band_y + (j * t) as i64).max(sy0 as i64)) as usize;
+                for (TileColumn { x0, x1, runs, .. }, part) in tile_cols.iter().zip(parts.iter().skip(j * n).take(n)) {
+                    match part {
+                        Part::Solid(pa) => {
+                            for &(c, k) in runs {
+                                let o = &mut out[c];
+                                for i in 0..4 {
+                                    o[i] += pa[i] * k;
+                                }
+                            }
+                        }
+                        Part::Px(buf) => {
+                            let tw = x1 - x0;
+                            for (p, &c) in buf.px.iter().skip(ty * tw).take(tw).zip(&cols[x0 - sx0..x1 - sx0]) {
+                                add(&mut out[c as usize - ox0], p);
+                            }
+                        }
+                    }
+                }
+            });
+            y = y1;
+        }
+    } else {
+        let ok: Result<(), ()> = render_bands(doc, src, band_rows, |band| {
+            stats.composited += band.px.len() as u64;
+            let (by0, by1) = ((band.rect.y0 - b.y0) as usize, (band.rect.y1 - b.y0) as usize);
+            let sw = sx1 - sx0;
+            sum_band(&mut acc, by0, by1, &|y: usize, out: &mut [[f32; 4]]| {
+                for (p, &c) in band.px[y * sw..(y + 1) * sw].iter().zip(cols) {
+                    add(&mut out[c as usize - ox0], p);
+                }
+            });
+            Ok(())
+        });
+        debug_assert!(ok.is_ok());
+    }
     for (i, p) in acc.iter_mut().enumerate() {
         let ((x0, x1), (y0, y1)) = (span(ox0 + i % ow, fw, w), span(oy0 + i / ow, fh, h));
         let n = ((y1 - y0) * (x1 - x0)).max(1) as f32;

@@ -3088,6 +3088,108 @@ fn effect_cache_follows_a_group_childs_blend_if() {
     assert!(warm.px == cold.px, "stale group effect maps after a child's Blend If changed");
 }
 
+/// A document whose one-colour areas are found: shared background tiles, a painted patch over
+/// tile edges, a uniform mask tile, an adjustment, a group, a 16-bit layer and a hidden one.
+fn sparse_doc(w: u32, h: u32) -> Document {
+    let mut d = doc_white(w, h);
+    let mut paint = Layer::raster("paint", PixelFormat::RGBA8);
+    let s = paint.surface_mut().unwrap();
+    for y in 200..330 {
+        s.fill_rect(Rect::new(240, y, 520, y + 1), &[(y - 200) as f32 / 130.0, 0.4, 0.7, 0.8]);
+    }
+    s.fill_rect(Rect::new(0, 600, w as i32 / 2, 900), &[0.2, 0.9, 0.1, 0.5]);
+    let mut m = LayerMask::reveal_all();
+    m.surface.fill_rect(Rect::new(0, 512, 256, 768), &[0.25]);
+    m.surface.fill_rect(Rect::new(300, 700, 310, 710), &[0.0]);
+    paint.mask = Some(m);
+    paint.blend = BlendMode::Multiply;
+    let mut deep = solid_layer("deep", Rect::new(100, 100, 700, 400), [0.3, 0.3, 0.9, 0.6]);
+    deep.content = LayerContent::Raster(deep.surface().unwrap().convert(PixelFormat::new(ColorMode::Rgb, SampleType::U16, true)));
+    let mut hidden = solid_layer("hidden", Rect::new(0, 0, 50, 50), [1.0, 0.0, 0.0, 1.0]);
+    hidden.visible = false;
+    d.layers.push(Layer::group("g", vec![paint, deep, hidden]));
+    d.layers.push(Layer::new("levels", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.4, offset: 0.0, gamma: 1.1 })));
+    d
+}
+
+#[test]
+fn one_colour_areas_reduce_like_composited_ones() {
+    // #4017: one-colour tiles are composited once and summed per run of columns: the same
+    // averages as compositing every pixel (to float rounding), and a damage render gives exactly
+    // the whole reduction's pixels, so a reduced canvas updated in parts shows no seams.
+    let d = sparse_doc(2000, 2100);
+    for (b, w, h, band) in [
+        (d.bounds(), 37, 41, 0),
+        (d.bounds(), 250, 2100, 256),
+        (d.bounds(), 1999, 3, 512),
+        (Rect::new(-300, -77, 2200, 2300), 61, 29, 0),
+        (Rect::new(13, 5, 2000, 2100), 1, 1, 256),
+    ] {
+        let reference = render_reduced_with(&d, b, w, h, None, band, false, &mut ReducedStats::default());
+        let mut stats = ReducedStats::default();
+        let all = render_reduced_with(&d, b, w, h, None, band, true, &mut stats);
+        assert!(stats.uniform);
+        assert!(stats.composited < u64::from(b.width()) * u64::from(b.height()) / 2, "{b:?}: {stats:?}");
+        assert_eq!(all.rect, reference.rect);
+        for (p, q) in all.px.iter().zip(&reference.px) {
+            assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() < 1e-4), "{b:?} {w}x{h} band {band}: {p:?} vs {q:?}");
+        }
+        for dmg in [Rect::new(250, 210, 260, 220), Rect::new(0, 0, 2000, 2100), Rect::new(-50, 640, 3000, 641), Rect::new(1500, 1500, 1600, 1900)] {
+            let part = render_reduced_with(&d, b, w, h, Some(dmg), band, true, &mut ReducedStats::default());
+            for y in part.rect.y0..part.rect.y1 {
+                for x in part.rect.x0..part.rect.x1 {
+                    assert_eq!(part.get(x, y), all.get(x, y), "{b:?} {w}x{h} band {band} {dmg:?} at {x},{y}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn layers_that_read_other_pixels_are_composited_pixel_by_pixel() {
+    let base = sparse_doc(300, 300);
+    let edits: [fn(&mut Layer); 4] = [
+        |l| l.blend = BlendMode::Dissolve,
+        |l| l.mask.get_or_insert_with(LayerMask::reveal_all).feather = 3.0,
+        |l| l.effects.items.push(stroke(2.0, StrokePosition::Outside)),
+        |l| l.content = LayerContent::Fill(Fill::Solid(Color::BLACK)),
+    ];
+    for edit in edits {
+        let mut d = base.clone();
+        edit(&mut d.layers[0]);
+        let mut stats = ReducedStats::default();
+        render_reduced_with(&d, d.bounds(), 30, 30, None, 0, true, &mut stats);
+        assert!(!stats.uniform);
+        assert_eq!(stats.composited, 300 * 300);
+    }
+    let mut d = base.clone();
+    d.layers.push(Layer::new("map", LayerContent::Adjustment(Adjustment::GradientMap { stops: vec![], reverse: false, dither: true })));
+    let mut stats = ReducedStats::default();
+    render_reduced_with(&d, d.bounds(), 30, 30, None, 0, true, &mut stats);
+    assert!(!stats.uniform);
+}
+
+#[test]
+fn a_gigapixel_new_document_reduces_without_compositing_its_canvas() {
+    // #4017: the reduced canvas of a 10 x 5 m, 200 ppi document (3.1 GP) composited every pixel
+    // (25 s on 32 threads, all cores busy). Only the partial tiles at its right and bottom edges
+    // hold two values; the rest is one shared white tile.
+    let (w, h) = (78_740u32, 39_370u32);
+    for fill in [Some(Color::WHITE), Some(Color::rgba(0.2, 0.4, 0.6, 1.0)), None] {
+        let mut d = match fill {
+            Some(c) => Document::with_background("big", Size::new(w, h), ColorMode::Rgb, SampleType::U8, c),
+            None => Document::new("big", Size::new(w, h), ColorMode::Rgb, SampleType::U8),
+        };
+        d.layers.push(Layer::raster("Layer 1", PixelFormat::RGBA8));
+        let mut stats = ReducedStats::default();
+        let r = render_reduced_with(&d, d.bounds(), 3937, 1969, None, 0, true, &mut stats);
+        let edge_tiles = u64::from(w.div_ceil(256) + h.div_ceil(256) - 1);
+        assert!(stats.composited <= edge_tiles * 256 * 256, "{fill:?}: {stats:?}");
+        let want = fill.map_or([0.0; 4], |c| [c.c[0], c.c[1], c.c[2], 1.0]);
+        assert!(r.px.iter().all(|p| close4(*p, want)), "{fill:?}");
+    }
+}
+
 #[test]
 fn shape_layer_bounds_includes_vector_bounds_clipped_to_canvas_and_preserves_effects() {
     let canvas = Rect::new(0, 0, 100, 100);
