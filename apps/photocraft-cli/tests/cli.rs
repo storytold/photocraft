@@ -753,3 +753,121 @@ fn batch_plays_a_photoshop_actions_file() {
     assert!(err.contains("Generative Fill"), "{err}");
     assert!(!o.status.success());
 }
+
+/// `photocraft_cli::run` in-process: `(exit code, stdout, stderr)`.
+fn invoke(args: &[&str]) -> (i32, String, String) {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let code = photocraft_cli::run(&args, &mut out, &mut err);
+    (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+}
+
+const SUBCOMMANDS: [&str; 8] = ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"];
+
+/// Pins top-level dispatch: help goes to stdout (exit 0), no arguments is a usage error on stderr.
+#[test]
+fn top_level_help_version_and_no_arguments() {
+    let (code, out, err) = invoke(&[]);
+    assert_eq!((code, out.is_empty(), err.is_empty()), (2, true, false));
+    for help in ["--help", "-h", "help"] {
+        let (code, out, err) = invoke(&[help]);
+        assert_eq!((code, out.is_empty(), err.is_empty()), (0, false, true), "{help}");
+    }
+    for version in ["--version", "version"] {
+        let (code, out, err) = invoke(&[version]);
+        assert_eq!((code, err.as_str()), (0, ""), "{version}");
+        assert!(out.starts_with("photocraft-cli "), "{version}: {out}");
+    }
+    let (code, out, err) = invoke(&["frobnicate"]);
+    assert_eq!((code, out.is_empty()), (2, true));
+    assert!(err.contains("frobnicate"), "{err}");
+}
+
+/// `<sub> --help` / `-h` prints help on stdout and returns without running the subcommand
+/// (`mcp` and `serve` would otherwise block on stdin).
+#[test]
+fn every_subcommand_help_returns_on_stdout() {
+    for sub in SUBCOMMANDS {
+        for help in ["--help", "-h"] {
+            let (code, out, err) = invoke(&[sub, help]);
+            assert_eq!((code, out.is_empty(), err.is_empty()), (0, false, true), "{sub} {help}: {err}");
+            // `commands` would also exit 0 with output if it ran; its list names `file.new`, help doesn't.
+            assert!(!out.contains("file.new"), "{sub} {help} ran instead of printing help: {out}");
+        }
+    }
+}
+
+/// Every subcommand refuses an unknown flag (bare or `=value`) with exit 2, naming it on stderr.
+#[test]
+fn every_subcommand_rejects_an_unknown_flag() {
+    for sub in SUBCOMMANDS {
+        for flag in [&["--fromat"][..], &["--fromat=jpg"][..], &["--fromat", "jpg"][..]] {
+            let args: Vec<&str> = [sub].into_iter().chain(flag.iter().copied()).collect();
+            let (code, out, err) = invoke(&args);
+            assert_eq!((code, out.is_empty()), (2, true), "{args:?}: {err}");
+            assert!(err.contains("--fromat"), "{args:?}: {err}");
+        }
+    }
+}
+
+/// `--flag=value`, a bare flag given a value, a value flag without one, and repeated flags.
+#[test]
+fn flag_value_forms_and_repeats() {
+    let ids = |out: &str| out.lines().filter_map(|l| l.split_whitespace().next()).map(str::to_owned).collect::<Vec<_>>();
+    let (code, eq, err) = invoke(&["commands", "--filter=file.new"]);
+    assert_eq!(code, 0, "{err}");
+    let (_, spaced, _) = invoke(&["commands", "--filter", "file.new"]);
+    assert_eq!(eq, spaced);
+    assert!(ids(&eq).contains(&"file.new".to_string()), "{eq}");
+    // The last of a repeated value flag wins, whichever order they come in.
+    let (code, out, err) = invoke(&["commands", "--filter", "zzz-no-match", "--filter", "file.new"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, eq);
+    let (code, out, err) = invoke(&["commands", "--filter", "file.new", "--filter", "zzz-no-match"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.is_empty(), "{out}");
+    // A bare flag takes no value; a value flag needs one.
+    let (code, out, err) = invoke(&["commands", "--json=1"]);
+    assert_eq!((code, out.is_empty()), (2, true));
+    assert!(err.contains("--json"), "{err}");
+    let (code, out, err) = invoke(&["commands", "--filter"]);
+    assert_eq!((code, out.is_empty()), (2, true));
+    assert!(err.contains("--filter"), "{err}");
+}
+
+/// Each `--params` applies to the `--cmd` before it; a `--cmd` without one gets `{}`; a
+/// `--params` ahead of every `--cmd` fails naming `--params`.
+#[test]
+fn run_pairs_params_with_the_preceding_cmd() {
+    let (code, out, err) = invoke(&[
+        "run",
+        "--new",
+        r#"{"width":8,"height":8}"#,
+        "--cmd",
+        "layer.new.layer",
+        "--params",
+        r#"{"name":"First"}"#,
+        "--cmd",
+        "layer.new.layer",
+        "--cmd",
+        "layer.new.layer",
+        "--params",
+        r#"{"name":"Third"}"#,
+        "--cmd",
+        "document.inspect",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let rows: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(rows.len(), 4, "{out}");
+    let names: Vec<&str> = rows[3]["result"]["layers"].as_array().unwrap().iter().filter_map(|l| l["name"].as_str()).collect();
+    let count = |n: &str| names.iter().filter(|x| **x == n).count();
+    assert_eq!((count("First"), count("Third")), (1, 1), "each --params applies to its own --cmd only: {names:?}");
+    // Three new layers plus the background; the middle one (no --params) has a default name.
+    assert_eq!(names.len(), 4, "{names:?}");
+    // Layers list top first: Third, the unnamed middle one, First, Background. Pairing --params
+    // with --cmd by position (params[i] -> cmd[i]) would name the middle one Third instead.
+    assert_eq!((names[0], names[2]), ("Third", "First"), "{names:?}");
+    let (code, _, err) = invoke(&["run", "--new", "{}", "--params", "{}", "--cmd", "layer.new.layer"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("--params"), "{err}");
+}
