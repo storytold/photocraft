@@ -284,6 +284,43 @@ fn main() -> eframe::Result {
         std::process::exit(code);
     }
 
+    // Complete control setup before display/GPU initialization: a failed grant must exit 2,
+    // including an occupied port (#6428), rather than open a window without a control server.
+    let control = if let Some(port) = control_port {
+        let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("photocraft: control server failed to bind 127.0.0.1:{port}: {error}");
+                std::process::exit(2);
+            }
+        };
+        let (supplied, token_file) = photocraft_automation::security::token_inputs(control_token, control_token_file);
+        let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
+            Ok(token) => token,
+            Err(e) => {
+                eprintln!("photocraft: cannot configure control authentication: {e}");
+                std::process::exit(2);
+            }
+        };
+        if let Some(path) = token_file {
+            eprintln!("photocraft: control token file: {}", path.display());
+        } else if supplied.is_none() {
+            eprintln!("photocraft: control token: {token}");
+        } else {
+            eprintln!("photocraft: using supplied control token");
+        }
+        let workspace = match photocraft_automation::AuthorizedWorkspace::new(automation_read_root.as_deref(), automation_write_root.as_deref()) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                eprintln!("photocraft: cannot configure automation workspace: {error}");
+                std::process::exit(2);
+            }
+        };
+        Some((listener, token, workspace))
+    } else {
+        None
+    };
+
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // and usage errors leave no file behind. Records logged until now are written to it first.
     if let (Some(logger), Some(dir)) = (logger, services::config_dir()) {
@@ -365,33 +402,6 @@ fn main() -> eframe::Result {
         std::process::exit(1);
     }
 
-    let control = if let Some(port) = control_port {
-        let (supplied, token_file) = photocraft_automation::security::token_inputs(control_token, control_token_file);
-        let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
-            Ok(token) => token,
-            Err(e) => {
-                eprintln!("photocraft: cannot configure control authentication: {e}");
-                std::process::exit(2);
-            }
-        };
-        if let Some(path) = token_file {
-            eprintln!("photocraft: control token file: {}", path.display());
-        } else if supplied.is_none() {
-            eprintln!("photocraft: control token: {token}");
-        } else {
-            eprintln!("photocraft: using supplied control token");
-        }
-        let workspace = match photocraft_automation::AuthorizedWorkspace::new(automation_read_root.as_deref(), automation_write_root.as_deref()) {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                eprintln!("photocraft: cannot configure automation workspace: {error}");
-                std::process::exit(2);
-            }
-        };
-        Some((port, token, workspace))
-    } else {
-        None
-    };
     // Finder / Dock / Open With deliver files as Apple events, not arguments; catch the one that
     // launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -582,8 +592,8 @@ fn main() -> eframe::Result {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
             });
-            if let Some((port, token, _)) = control {
-                let rx = control_server::start(port, token, cc.egui_ctx.clone());
+            if let Some((listener, token, _)) = control {
+                let rx = control_server::start(listener, token, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
             #[cfg(target_os = "macos")]
