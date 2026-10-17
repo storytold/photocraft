@@ -16,6 +16,8 @@
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
+//! - **Orphans:** after a successful save, [`sweep_stale_temps`] removes temp files an earlier
+//!   interrupted save of the same file left beside it, once their owner process is gone (#6604).
 //!
 //! On the web there is no file system: writes go through the platform services (downloads), so
 //! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
@@ -202,6 +204,8 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // The new bytes are in place; a failed directory fsync can't be undone and must not report
     // the save as failed, so it is best effort.
     let _ = fs.sync_dir(&dir);
+    // The save succeeded: clear any temp files an earlier interrupted save of this file left (#6604).
+    sweep_stale_temps(&target);
     Ok(())
 }
 
@@ -244,6 +248,73 @@ pub fn temp_name(file: &str) -> String {
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
     let stem: String = file.chars().take(64).collect();
     format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
+}
+
+/// How long a foreign temporary file must have been untouched before a save may remove it where
+/// no PID probe exists (Windows). Far longer than any save takes, so another instance's
+/// in-progress write is never mistaken for an orphan (#6604).
+#[cfg(not(unix))]
+const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Best-effort removal of the temporary files an interrupted save left beside `path` (#6604).
+///
+/// Removes only regular files named exactly like this file's atomic-write temps (see
+/// [`temp_name`]) whose owner process is gone: on Unix the PID in the name is probed with the
+/// null signal; elsewhere (no PID probe without a new dependency) only files untouched for
+/// [`STALE_TEMP_AGE`] go. This process's own temps are never touched (a concurrent save may be
+/// mid-write), nor are symlinks, directories or names that do not match. Errors are ignored:
+/// cleanup must never fail a save.
+pub fn sweep_stale_temps(path: &Path) {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return };
+    let Some(dir) = path.parent() else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    // `temp_name` truncates the file name to 64 chars and prefixes a dot.
+    let stem: String = name.chars().take(64).collect();
+    let prefix = format!(".{stem}.");
+    for e in rd.flatten() {
+        let entry_name = e.file_name();
+        let Some(rest) = entry_name.to_str().and_then(|n| n.strip_prefix(&prefix)).and_then(|n| n.strip_suffix(".pcsave.tmp")) else { continue };
+        // `{pid}-{n}`: anything else (a longer stem sharing this prefix, a hand-made name) stays.
+        let Some((pid, seq)) = rest.split_once('-') else { continue };
+        let Ok(pid) = pid.parse::<u32>() else { continue };
+        if seq.is_empty() || !seq.bytes().all(|b| b.is_ascii_digit()) || !e.file_type().is_ok_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let tmp = e.path();
+        if temp_is_stale(pid, &tmp) {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// Whether a temp file owned by `pid` may be removed while saving beside it.
+fn temp_is_stale(pid: u32, path: &Path) -> bool {
+    if pid == std::process::id() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let _ = path;
+        !pid_is_running(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        std::fs::symlink_metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+            .is_some_and(|age| age >= STALE_TEMP_AGE)
+    }
+}
+
+/// Whether process `pid` exists right now. `kill(pid, 0)` only checks: success or `EPERM` means
+/// the process exists (it may belong to another user), `ESRCH` means it is gone. A PID that is
+/// not a valid `pid_t` is treated as running: keeping a file we cannot judge is the safe call.
+#[cfg(unix)]
+fn pid_is_running(pid: u32) -> bool {
+    let Some(p) = i32::try_from(pid).ok().and_then(rustix::process::Pid::from_raw) else { return true };
+    match rustix::process::test_kill_process(p) {
+        Ok(()) => true,
+        Err(e) => e == rustix::io::Errno::PERM,
+    }
 }
 
 fn context(e: io::Error, msg: String) -> io::Error {
