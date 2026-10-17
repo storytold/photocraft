@@ -637,6 +637,19 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -
     true
 }
 
+/// The dialog field naming params its opener keeps out of the dialog ([`hide`]).
+pub const HIDDEN: &str = "__hidden";
+
+/// Keep `keys` out of the dialog with fields `f`: no row, and the command gets its own defaults
+/// (agents and scripts can still pass them). [`body`] draws every param of the command's spec,
+/// so a key only removed from `f` came back with the dialog's default next frame (#6531).
+pub fn hide(f: &mut Map<String, Value>, keys: &[&str]) {
+    for k in keys {
+        f.remove(*k);
+    }
+    f.insert(HIDDEN.into(), json!(keys));
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -652,7 +665,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
     }
+    let hidden: Vec<String> = f.get(HIDDEN).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
     for p in parse_spec(&spec) {
+        if hidden.contains(&p.key) {
+            continue;
+        }
         match p.kind {
             Kind::Range { min, max, default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;

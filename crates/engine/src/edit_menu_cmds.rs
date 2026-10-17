@@ -450,6 +450,12 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
                 source = auto_sampling_with(w, h, n, &img, &hole, &photocraft_raster::Interrupt::cancel_only(&cancel)).map_err(|_| EngineError::Cancelled)?;
             }
             ctx.check()?;
+            // Patches come only from unselected pixels of the sampling area. With none (a
+            // Rectangular `margin` of 0, a Custom area inside the selection) the fill would be
+            // black (#6532), so refuse instead.
+            if !source.iter().zip(&hole).any(|(s, h)| *s && !*h) {
+                return Err(bad(cmd, "nothing to sample from: the sampling area has no pixels outside the selection"));
+            }
             // The fill changes only the selected pixels: keep the original and the coverage over
             // their bounds for the apply step, and fill the window's pixels themselves.
             let (bx0, by0, bx1, by1) = mask_bounds(w, h, &hole);
