@@ -1057,6 +1057,84 @@ fn distribute(s: &mut Session, kind: &str) -> Result<Value> {
 /// Reorder one or multiple layers to a single destination in one undoable edit.
 ///
 /// Explicit `layers` are ordered according to the source document, not caller ordering.
+/// A transient snapshot for the Layers panel's "Preview on canvas when reordering layers".
+/// Uses the same source ordering and insertion semantics as `move_to`, but never edits history.
+/// Invalid/self-referential hover targets return None (the committed image stays visible).
+pub fn preview_move(doc: &Document, p: &Value, add_copy: bool) -> Option<Document> {
+    let target = LayerId(p.get("target")?.as_u64()?);
+    let position = p.get("position")?.as_str()?;
+    if !matches!(position, "above" | "below" | "into") {
+        return None;
+    }
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let ids = if let Some(ids) = p.get("layers") {
+        ids.as_array()?.iter().map(|v| v.as_u64().map(LayerId)).collect::<Option<Vec<_>>>()?
+    } else {
+        vec![LayerId(p.get("layer")?.as_u64()?)]
+    };
+    if ids.is_empty() || doc.layer(target).is_none() {
+        return None;
+    }
+    let moved_ids = top_level(doc, &ids);
+    if moved_ids.is_empty() || moved_ids.iter().any(|id| doc.layer(*id).is_none()) {
+        return None;
+    }
+    if moved_ids.len() == 1 && moved_ids[0] == target && !copy {
+        return None;
+    }
+    let target_path = doc.path_of(target)?;
+    for id in &moved_ids {
+        let path = doc.path_of(*id)?;
+        if target_path.starts_with(&path) && !(copy && *id == target && position != "into") {
+            return None;
+        }
+    }
+    if position == "into" && !doc.layer(target)?.is_group() {
+        return None;
+    }
+    // The very structural move the drop commits, so the preview shows the same clip groups,
+    // Background handling and group-depth refusals; a drop `move_to` would refuse has no preview.
+    let mut preview = doc.clone();
+    apply_move(&mut preview, &moved_ids, target, position, copy, add_copy).ok()?;
+    Some(preview)
+}
+
+/// The document-only part of `move_to`, shared with [`preview_move`] so the Layers panel's hover
+/// preview cannot drift from what the drop commits. Moves (or, with `copy`, duplicates) the
+/// top-level `moved_ids` to `pos` (`above`, `below` or `into`) `target`, then applies the
+/// group-depth cap, the Background-stays-at-the-bottom rule and the clip-group rules
+/// (`clip_group::settle`). Returns the ids of the new copies (empty for a move). On `Err` `doc` is
+/// half edited: run it inside `Session::edit` or on a scratch copy.
+fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &str, copy: bool, add_copy: bool) -> Result<Vec<LayerId>> {
+    const CMD: &str = "layer.moveTo";
+    let background = crate::background_cmds::background_id(doc);
+    let before = if copy { Default::default() } else { crate::clip_group::Before::read(doc, moved_ids) };
+    let mut moved = Vec::with_capacity(moved_ids.len());
+    for &id in moved_ids {
+        moved.push(if copy { crate::commands::layer_copy(doc, id, add_copy)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
+    }
+    let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
+    // Look up the destination AFTER removing every source: its indices may have shifted.
+    let path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
+    if pos == "into" {
+        let children = doc.layer_at_mut(&path).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target is not a group"))?;
+        children.extend(moved);
+    } else {
+        let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(target))?;
+        let siblings = if parent.is_empty() {
+            &mut doc.layers
+        } else {
+            doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target's parent is not a group"))?
+        };
+        let at = if pos == "below" { idx } else { idx + 1 };
+        siblings.splice(at..at, moved);
+    }
+    check_group_depth(doc, "Reorder Layer")?;
+    crate::background_cmds::keep_background_at_bottom(background, doc)?;
+    crate::clip_group::settle(doc, if copy { &copies } else { moved_ids }, &before, false);
+    Ok(copies)
+}
+
 /// Selected descendants of a moved group remain inside their parent; only top-level
 /// selected nodes are detached, and every reference is validated before editing.
 pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1114,32 +1192,9 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let original_active = st.active_layer;
-    let background = crate::background_cmds::background_id(doc);
+    let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
     let (count, copies) = s.edit(if copy { "Duplicate Layer" } else { "Reorder Layers" }, |doc, active| {
-        let before = if copy { Default::default() } else { crate::clip_group::Before::read(doc, &moved_ids) };
-        let mut moved = Vec::with_capacity(moved_ids.len());
-        for &id in &moved_ids {
-            moved.push(if copy { crate::commands::layer_copy(doc, id)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
-        }
-        let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
-        // Look up the destination AFTER removing every source: its indices may have shifted.
-        let path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
-        if pos == "into" {
-            let children = doc.layer_at_mut(&path).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target is not a group"))?;
-            children.extend(moved);
-        } else {
-            let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(target))?;
-            let siblings = if parent.is_empty() {
-                &mut doc.layers
-            } else {
-                doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target's parent is not a group"))?
-            };
-            let at = if pos == "below" { idx } else { idx + 1 };
-            siblings.splice(at..at, moved);
-        }
-        check_group_depth(doc, "Reorder Layer")?;
-        crate::background_cmds::keep_background_at_bottom(background, doc)?;
-        crate::clip_group::settle(doc, if copy { &copies } else { &moved_ids }, &before, false);
+        let copies = apply_move(doc, &moved_ids, target, pos, copy, add_copy)?;
         *active = if copy {
             copies.last().copied()
         } else if batch.is_some() {
@@ -1388,13 +1443,14 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
     let sel = selected(s);
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let old_active = s.active().and_then(|d| d.active_layer);
+    let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
     let (copies, active) = s.edit(label, |doc, active| {
         let mut copies = Vec::new();
         let mut new_active = None;
         for id in top_level(doc, &sel) {
             // Match the single-layer duplicate path: Background copies become
             // ordinary layers, while normal copies retain their original locks.
-            let dup = crate::commands::layer_copy(doc, id)?;
+            let dup = crate::commands::layer_copy(doc, id, add_copy)?;
             let nid = doc.insert_above(Some(id), dup);
             if !in_place {
                 crate::artboard_cmds::place_copy(doc, nid)?;
@@ -2724,5 +2780,211 @@ mod tests {
         let v = s.execute("document.inspect", json!({})).unwrap();
         assert_eq!(v["selectedLayers"], json!([a.0, b.0]));
         assert_eq!(v["layers"][0]["selected"], true);
+    }
+}
+
+#[cfg(test)]
+mod layers_panel_parity_tests {
+    use super::*;
+
+    fn new_session() -> (Session, Vec<LayerId>) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 24, "height": 16})).unwrap();
+        let ids = (0..3).map(|n| LayerId(s.execute("layer.new.layer", json!({"name": format!("Test {n}")})).unwrap()["layer"].as_u64().unwrap())).collect();
+        (s, ids)
+    }
+
+    fn option(s: &mut Session, key: &str, enabled: bool) {
+        s.prefs.edit(|p| {
+            let val = p.dialogs.entry("ui.layersPanelOptions".into()).or_insert_with(|| json!({}));
+            if let Some(o) = val.as_object_mut() {
+                o.insert(key.to_owned(), json!(enabled));
+            }
+        });
+    }
+
+    #[test]
+    fn preview_matches_real_move_and_never_edits_document_or_history() {
+        let (mut s, ids) = new_session();
+        let params = json!({"layer": ids[0].0, "target": ids[2].0, "position": "above"});
+        let before = s.active().unwrap().doc.clone();
+        let undo_before = s.active().unwrap().history.entries().len();
+        let candidate = preview_move(&before, &params, true).unwrap();
+        assert_eq!(*before, *s.active().unwrap().doc);
+        assert_eq!(s.active().unwrap().history.entries().len(), undo_before);
+        s.execute("layer.moveTo", params).unwrap();
+        assert_eq!(candidate, *s.active().unwrap().doc, "visual preview must match committed layer order");
+    }
+
+    #[test]
+    fn preview_copy_and_no_copy_suffix_option_match_committed_layers() {
+        let (mut s, ids) = new_session();
+        option(&mut s, "addCopyToCopiedLayersAndGroups", false);
+        let params = json!({"layer": ids[0].0, "target": ids[2].0, "position": "below", "copy": true});
+        let before = s.active().unwrap().doc.clone();
+        let candidate = preview_move(&before, &params, false).unwrap();
+        s.execute("layer.moveTo", params).unwrap();
+        let actual = &s.active().unwrap().doc;
+        assert_eq!(candidate.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), actual.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>());
+        assert_eq!(actual.layer_count(), before.layer_count() + 1);
+        assert_eq!(actual.layers.iter().filter(|l| l.name == "Test 0").count(), 2);
+        let d = s.execute("layer.duplicate", json!({"layer": ids[1].0})).unwrap();
+        let duplicate = LayerId(d["layer"].as_u64().unwrap());
+        assert_eq!(s.active().unwrap().doc.layer(duplicate).unwrap().name, "Test 1");
+        option(&mut s, "addCopyToCopiedLayersAndGroups", true);
+        let d = s.execute("layer.duplicate", json!({"layer": ids[1].0})).unwrap();
+        assert!(s.active().unwrap().doc.layer(LayerId(d["layer"].as_u64().unwrap())).unwrap().name.contains("copy"));
+    }
+
+    #[test]
+    fn preview_rejects_invalid_drop_unchanged() {
+        let (mut s, ids) = new_session();
+        let before = s.active().unwrap().doc.clone();
+        for p in [
+            json!({"layer": ids[1].0, "target": ids[1].0, "position": "above"}),
+            json!({"layer": ids[1].0, "target": 999999, "position": "below"}),
+            json!({"layer": ids[1].0, "target": ids[2].0, "position": "into"}),
+            json!({"layer": ids[1].0, "target": ids[2].0, "position": "invalid"}),
+        ] {
+            assert!(preview_move(&before, &p, true).is_none(), "{p}");
+        }
+        assert_eq!(*before, *s.active().unwrap().doc);
+        // Multi-layer preview and commit follow the same stack order regardless of params order.
+        let p = json!({"layers": [ids[2].0, ids[0].0], "target": ids[1].0, "position": "below"});
+        let candidate = preview_move(&before, &p, true).unwrap();
+        s.execute("layer.moveTo", p).unwrap();
+        assert_eq!(candidate, *s.active().unwrap().doc);
+    }
+
+    /// A 16×16 document holding `spec` (bottom to top, `*` = clipped) above its Background. Every
+    /// layer is a translucent, differently placed rectangle, so the stack order and the clip
+    /// groups both show in the composite.
+    fn clip_stack(spec: &str) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        for (n, name) in spec.split_whitespace().enumerate() {
+            let id = LayerId(s.execute("layer.new.layer", json!({"name": name.trim_end_matches('*')})).unwrap()["layer"].as_u64().unwrap());
+            let n = n as i32;
+            let colour = [(n % 3) as f32 * 0.5, ((n + 1) % 3) as f32 * 0.5, ((n + 2) % 3) as f32 * 0.5, 0.6];
+            s.edit("paint", |doc, _| {
+                let layer = doc.layer_mut(id).unwrap();
+                layer.clipped = name.ends_with('*');
+                layer.surface_mut().unwrap().fill_rect(Rect::new(n * 2, 0, n * 2 + 10, 16), &colour);
+                Ok(())
+            })
+            .unwrap();
+        }
+        s
+    }
+
+    /// Every layer of `doc` from the bottom, `*` marking the clipped ones.
+    fn stack_text(doc: &Document) -> String {
+        doc.layers.iter().map(|l| format!("{}{}", l.name, if l.clipped { "*" } else { "" })).collect::<Vec<_>>().join(" ")
+    }
+
+    fn id_of(s: &Session, name: &str) -> u64 {
+        s.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id.0
+    }
+
+    /// The preview of `params` and the committed `layer.moveTo` show the same stack (names, clip
+    /// flags) and the same composite, and both are `want`.
+    fn assert_preview_is_commit(mut s: Session, params: Value, want: &str) {
+        let before = s.active().unwrap().doc.clone();
+        let preview = preview_move(&before, &params, true).expect("the drop has a preview");
+        s.execute("layer.moveTo", params.clone()).unwrap();
+        let committed = &s.active().unwrap().doc;
+        assert_eq!(stack_text(&preview), want, "preview of {params}");
+        assert_eq!(stack_text(committed), want, "commit of {params}");
+        assert_eq!(photocraft_compose::flatten(&preview).px, photocraft_compose::flatten(committed).px, "composite of {params}");
+    }
+
+    #[test]
+    fn preview_follows_clip_groups_like_the_committed_reorder() {
+        // The fixtures of `clip_group::reorder_joins_and_leaves_groups`.
+        for (spec, layers, target, pos, want) in [
+            // A layer dropped into a clip group joins it.
+            ("B C1* C2* U", vec!["U"], "C1", "above", "Background B C1* U* C2*"),
+            ("B C1* C2* U V", vec!["U", "V"], "C1", "above", "Background B C1* U* V* C2*"),
+            // A clipped layer dropped off its group is released.
+            ("B C1* C2* U", vec!["C1"], "U", "above", "Background B C2* U C1"),
+            // A base moved away releases the layers clipped to it.
+            ("B C1* C2* U", vec!["B"], "U", "above", "Background C1 C2 U B"),
+            // A base moved up into its own group joins it, and the layers it left are released.
+            ("B C1* C2*", vec!["B"], "C1", "above", "Background C1 B* C2"),
+            ("X B C1* C2* U", vec!["B", "C1"], "U", "above", "Background X C2 U B C1*"),
+        ] {
+            let s = clip_stack(spec);
+            let ids: Vec<u64> = layers.iter().map(|n| id_of(&s, n)).collect();
+            let t = id_of(&s, target);
+            assert_preview_is_commit(s, json!({"layers": ids, "target": t, "position": pos}), want);
+        }
+        // An option-drag copy joins the clip group it lands in too.
+        let s = clip_stack("B C1* C2* U");
+        let (u, c1) = (id_of(&s, "U"), id_of(&s, "C1"));
+        assert_preview_is_commit(s, json!({"layer": u, "target": c1, "position": "above", "copy": true}), "Background B C1* U copy* C2* U");
+    }
+
+    #[test]
+    fn preview_copies_the_background_like_the_committed_copy() {
+        let mut s = clip_stack("A B*");
+        let (bg, a) = (s.active().unwrap().doc.background().unwrap().id, id_of(&s, "A"));
+        let before = s.active().unwrap().doc.clone();
+        assert_ne!(before.layer(bg).unwrap().locks, Default::default(), "the Background is locked");
+        let p = json!({"layer": bg.0, "target": a, "position": "above", "copy": true});
+        let preview = preview_move(&before, &p, true).unwrap();
+        s.execute("layer.moveTo", p).unwrap();
+        let committed = &s.active().unwrap().doc;
+        // The copy is an ordinary, unlocked layer that joins the clip group it lands in.
+        assert_eq!(stack_text(committed), "Background A Background copy* B*");
+        assert_eq!(stack_text(&preview), stack_text(committed));
+        for doc in [&preview, committed] {
+            assert_eq!(doc.layers.get(2).unwrap().locks, Default::default());
+            assert!(doc.layers.first().unwrap().locks != Default::default());
+        }
+        assert_eq!(photocraft_compose::flatten(&preview).px, photocraft_compose::flatten(committed).px);
+    }
+
+    #[test]
+    fn preview_refuses_what_would_leave_the_background_off_the_bottom() {
+        let mut s = clip_stack("A B");
+        let (bg, a) = (s.active().unwrap().doc.background().unwrap().id, id_of(&s, "A"));
+        let before = s.active().unwrap().doc.clone();
+        for p in [
+            json!({"layer": a, "target": bg.0, "position": "below"}),
+            json!({"layer": bg.0, "target": bg.0, "position": "below", "copy": true}),
+            json!({"layer": a, "target": bg.0, "position": "below", "copy": true}),
+        ] {
+            assert!(preview_move(&before, &p, true).is_none(), "{p}");
+            assert!(s.execute("layer.moveTo", p.clone()).is_err(), "{p}");
+            assert_eq!(*before, *s.active().unwrap().doc, "{p}");
+        }
+    }
+
+    #[test]
+    fn expand_new_effects_applies_to_ui_start_dispatch_too() {
+        let (mut s, ids) = new_session();
+        option(&mut s, "expandNewEffects", false);
+        let target = ids[0];
+        let started = s.start("layer.layerStyle.dropShadow", json!({"layer": target.0})).unwrap();
+        assert!(matches!(started, crate::jobs::Started::Done(_)));
+        assert!(s.active().unwrap().fx_collapsed.contains(&target));
+    }
+
+    #[test]
+    fn expand_new_effects_is_view_state_and_keeps_edit_history_clean() {
+        let (mut s, ids) = new_session();
+        option(&mut s, "expandNewEffects", false);
+        let target = ids[0];
+        let history = s.active().unwrap().history.entries().len();
+        s.execute("layer.layerStyle.dropShadow", json!({"layer": target.0, "size": 2})).unwrap();
+        assert_eq!(s.active().unwrap().history.entries().len(), history + 1);
+        assert!(s.active().unwrap().fx_collapsed.contains(&target));
+        option(&mut s, "expandNewEffects", true);
+        let other = ids[1];
+        s.execute("layer.layerStyle.stroke", json!({"layer": other.0, "size": 2})).unwrap();
+        assert!(!s.active().unwrap().fx_collapsed.contains(&other));
+        // Editing the existing effect must not unexpectedly change its disclosure.
+        s.execute("layer.layerStyle.dropShadow", json!({"layer": target.0, "size": 5})).unwrap();
+        assert!(s.active().unwrap().fx_collapsed.contains(&target));
     }
 }

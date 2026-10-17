@@ -2617,6 +2617,26 @@ cameraData	Lens	鏡頭
 	Snap to Origin	靠齊原點
 	Search settings…	搜尋設定…
 	No matching settings	沒有符合的設定
+	Animation Options	動畫選項
+	Entire Document	整份文件
+	Filter Options	篩選選項
+	Layer Bounds	圖層邊界
+	Layers Panel Options	圖層面板選項
+	Lock Layers	鎖定圖層
+	New Artboard…	新增工作區域…
+	New Group	新增群組
+	New Group…	新增群組…
+	New Layer…	新增圖層…
+	Panel Options…	面板選項…
+	Prevent Auto-Nesting	防止自動巢狀
+	Show Layers	顯示圖層
+	Thumbnail Contents	縮圖內容
+	Thumbnail Size	縮圖大小
+	Expand New Effects	展開新效果
+	Add “copy” to Copied Layers and Groups	為複製的圖層和群組加上「副本」
+	Preview on canvas when reordering layers	重新排列圖層時在畫布上預覽
+	Show layer mask badges	顯示圖層遮色片標記
+
 	Loading fonts…	正在載入字體…
 	Response curve	回應曲線
 	Tool	工具

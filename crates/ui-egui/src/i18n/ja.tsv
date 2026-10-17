@@ -3646,6 +3646,22 @@ cameraData	Lens	レンズ
 	Snap to Origin	原点にスナップ
 	Search settings…	設定を検索…
 	No matching settings	一致する設定はありません
+	Animation Options	アニメーションオプション
+	Entire Document	ドキュメント全体
+	Filter Options	フィルターオプション
+	Layer Bounds	レイヤーの境界
+	Layers Panel Options	レイヤーパネルオプション
+	New Artboard…	新規アートボード…
+	New Group…	新規グループ…
+	Prevent Auto-Nesting	自動的な入れ子を防ぐ
+	Show Layers	レイヤーを表示
+	Thumbnail Contents	サムネールの内容
+	Thumbnail Size	サムネールのサイズ
+	Expand New Effects	新しい効果を展開
+	Add “copy” to Copied Layers and Groups	コピーしたレイヤーとグループの名前に「コピー」を追加
+	Preview on canvas when reordering layers	レイヤーの並べ替え時にカンバスでプレビュー
+	Show layer mask badges	レイヤーマスクのバッジを表示
+
 	Loading fonts…	フォントを読み込み中…
 	Response curve	応答カーブ
 	Simulate Pressure	筆圧をシミュレート

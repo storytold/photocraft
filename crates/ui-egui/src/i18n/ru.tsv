@@ -2975,6 +2975,23 @@ cameraData	Lens	Объектив
 	Rasterize Layer Style	Растрировать стиль слоя
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
+	Animation Options	Параметры анимации
+	Entire Document	Весь документ
+	Filter Options	Параметры фильтра
+	Layer Bounds	Границы слоя
+	Layers Panel Options	Параметры панели «Слои»
+	Lock Layers	Блокировка слоёв
+	New Artboard…	Новая монтажная область…
+	New Group…	Новая группа…
+	Prevent Auto-Nesting	Запретить автоматическое вложение
+	Show Layers	Показать слои
+	Thumbnail Contents	Содержимое миниатюр
+	Thumbnail Size	Размер миниатюр
+	Expand New Effects	Раскрывать новые эффекты
+	Add “copy” to Copied Layers and Groups	Добавлять «копия» к дублированным слоям и группам
+	Preview on canvas when reordering layers	Предпросмотр на холсте при изменении порядка слоёв
+	Show layer mask badges	Показывать значки типов масок слоя
+
 	Loading fonts…	Загрузка шрифтов…
 	Response curve	Кривая отклика
 	Tool	Инструмент

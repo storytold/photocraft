@@ -122,6 +122,7 @@ pub mod layer_row_ui;
 pub mod layer_style;
 mod layer_transfer;
 pub mod layer_tree_ui;
+pub mod layers_panel_ui;
 mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
@@ -596,6 +597,10 @@ pub struct PhotocraftApp {
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
     pub(crate) blend_preview: Option<blend_preview::BlendPreview>,
+    /// Layers panel drag: temporary reordered document displayed until mouse release.
+    pub(crate) reorder_preview: Option<layers_panel_ui::ReorderPreview>,
+    /// Whether the currently dragged layer is over a valid destination this frame.
+    pub(crate) reorder_preview_hit: bool,
     /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
@@ -857,6 +862,8 @@ impl PhotocraftApp {
             move_hover: None,
             object_finder: None,
             blend_preview: None,
+            reorder_preview: None,
+            reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
             magnetic: Default::default(),
@@ -967,6 +974,7 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        layers_panel_ui::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -2041,6 +2049,7 @@ impl eframe::App for PhotocraftApp {
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        layers_panel_ui::show_dialog(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);

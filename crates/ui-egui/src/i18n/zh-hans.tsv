@@ -2647,6 +2647,26 @@ cameraData	Lens	镜头
 	Snap to Origin	贴紧原点
 	Search settings…	搜索设置…
 	No matching settings	没有匹配的设置
+	Animation Options	动画选项
+	Entire Document	整个文档
+	Filter Options	过滤选项
+	Layer Bounds	图层边界
+	Layers Panel Options	图层面板选项
+	Lock Layers	锁定图层
+	New Artboard…	新建画板…
+	New Group	新建组
+	New Group…	新建组…
+	New Layer…	新建图层…
+	Panel Options…	面板选项…
+	Prevent Auto-Nesting	防止自动嵌套
+	Show Layers	显示图层
+	Thumbnail Contents	缩略图内容
+	Thumbnail Size	缩略图大小
+	Expand New Effects	展开新效果
+	Add “copy” to Copied Layers and Groups	为复制的图层和组添加“副本”
+	Preview on canvas when reordering layers	重新排列图层时在画布上预览
+	Show layer mask badges	显示图层蒙版标记
+
 	Loading fonts…	正在加载字体…
 	Response curve	响应曲线
 	Tool	工具

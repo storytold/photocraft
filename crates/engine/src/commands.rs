@@ -370,6 +370,12 @@ fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
     Ok(mask)
 }
 
+/// Options from the Layers Panel flyout live in preferences so headless/keyboard commands
+/// behave exactly like pointer-triggered commands. Old preferences preserve Photoshop defaults.
+pub(crate) fn layer_panel_option(s: &Session, key: &str, fallback: bool) -> bool {
+    s.prefs().dialogs.get("ui.layersPanelOptions").and_then(|v| v.get(key)).and_then(Value::as_bool).unwrap_or(fallback)
+}
+
 /// Mask a fill or adjustment layer being created, as Photoshop does: the path selected in the
 /// Paths panel (`"path"`: `"work"`, a saved path's name or a path object) becomes its vector
 /// mask, which makes a Solid Color fill a shape (#1419); without one, the selection becomes its
@@ -713,9 +719,10 @@ fn build() -> Vec<CommandSpec> {
                     return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
                 }
                 let id = layer_param(s, p)?;
+                let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
                 let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 let nid = s.edit("Duplicate Layer", |doc, active| {
-                    let mut dup = layer_copy(doc, id)?;
+                    let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = &name {
                         dup.name.clone_from(name);
                     }
@@ -1658,12 +1665,14 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
 /// A copy of layer `id` as Layer › Duplicate Layer makes it, not yet in the document: a fresh id,
 /// "… copy" appended to the name, and a copy of the Background layer is an ordinary, unlocked
 /// layer (Photoshop).
-pub(crate) fn layer_copy(doc: &Document, id: LayerId) -> Result<Layer> {
+pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool) -> Result<Layer> {
     let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
     let from_background = doc.is_background(id);
     let mut dup = src.duplicate();
-    dup.name = doc.copy_name(&dup.name);
+    if add_copy {
+        dup.name = doc.copy_name(&dup.name);
+    }
     if from_background {
         dup.locks = Default::default();
     }

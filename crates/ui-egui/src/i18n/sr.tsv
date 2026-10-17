@@ -4261,6 +4261,23 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+
+# Layers panel options
+	Add “copy” to Copied Layers and Groups	Dodaj „kopija” kopiranim slojevima i grupama
+	Animation Options	Opcije animacije
+	Entire Document	Ceo dokument
+	Expand New Effects	Proširi nove efekte
+	Filter Options	Opcije filtera
+	Layer Bounds	Granice sloja
+	Layers Panel Options	Opcije panela Slojevi
+	New Artboard…	Nova radna tabla…
+	New Group…	Nova grupa…
+	Prevent Auto-Nesting	Spreči automatsko ugnežđavanje
+	Preview on canvas when reordering layers	Pregled na platnu pri promeni redosleda slojeva
+	Show Layers	Prikaži slojeve
+	Show layer mask badges	Prikaži oznake maske sloja
+	Thumbnail Contents	Sadržaj sličice
+	Thumbnail Size	Veličina sličice
 	Accept and Go to Conflict	Prihvati i idi na sukob
 	Changes undone.	Izmene su poništene.
 	Choose a new shortcut for this command, or leave it without one.	Izaberite novu prečicu za ovu komandu ili je ostavite bez prečice.
