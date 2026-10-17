@@ -384,3 +384,95 @@ fn unsupported_and_damaged_files_error_instead_of_panicking() {
         assert!(decode_as(Format::Dpx, &bytes).is_err(), "{what}");
     }
 }
+
+// ---------------------------------------------------------------- Cineon (Kodak .cin)
+
+/// A Cineon 4.5 file built field by field: the 1024-byte generic header, a 1024-byte film header,
+/// then `codes` (interleaved, top line first) three 10-bit values to a big-endian word, left
+/// justified, each line on a word boundary.
+fn cineon_bytes(channels: u8, width: u32, height: u32, codes: &[u16]) -> Vec<u8> {
+    let mut b = vec![0u8; 2048];
+    b[0..4].copy_from_slice(&0x802A_5FD7u32.to_be_bytes());
+    b[4..8].copy_from_slice(&2048u32.to_be_bytes());
+    b[193] = channels;
+    b[198] = 10;
+    b[200..204].copy_from_slice(&width.to_be_bytes());
+    b[204..208].copy_from_slice(&height.to_be_bytes());
+    for line in codes.chunks(width as usize * usize::from(channels)) {
+        for chunk in line.chunks(3) {
+            let w = chunk.iter().enumerate().fold(0u32, |w, (i, &c)| w | (u32::from(c) << (22 - 10 * i as u32)));
+            b.extend(w.to_be_bytes());
+        }
+    }
+    b
+}
+
+/// Code values spread over 0..=1023, ends included.
+fn cineon_codes(n: usize) -> Vec<u16> {
+    (0..n).map(|i| if i == 1 { 1023 } else { ((i as u64 * 2654435761) % 1024) as u16 }).collect()
+}
+
+/// Reads back what we wrote: (channels, width, height, code values), from the header's own fields.
+fn cineon_written(b: &[u8]) -> (u8, u32, u32, Vec<u16>) {
+    let off = be32_at(b, 4) as usize;
+    let (nc, w, h) = (b[193], be32_at(b, 200), be32_at(b, 204));
+    let per_line = w as usize * usize::from(nc);
+    let stride = per_line.div_ceil(3) * 4;
+    let mut codes = Vec::new();
+    for y in 0..h as usize {
+        let line = &b[off + y * stride..];
+        codes.extend((0..per_line).map(|i| ((be32_at(line, i / 3 * 4) >> (22 - 10 * (i % 3) as u32)) & 0x3FF) as u16));
+    }
+    (nc, w, h, codes)
+}
+
+#[test]
+fn cineon_frames_saved_as_cineon_keep_their_code_values_and_reopen_identically() {
+    // Widths that leave partly filled words at the end of each line.
+    for (channels, layout) in [(1u8, ChannelLayout::Gray), (3, ChannelLayout::Rgb)] {
+        let codes = cineon_codes(5 * 3 * usize::from(channels));
+        let img = decode(&cineon_bytes(channels, 5, 3, &codes)).unwrap();
+        assert_eq!(img.layout(), layout);
+        let out = encode(&img, Format::Cineon, &EncodeOptions::default()).unwrap_or_else(|e| panic!("{layout:?}: {e}"));
+        assert_eq!(detect(&out), Some(Format::Cineon), "{layout:?}");
+        assert_eq!(cineon_written(&out), (channels, 5, 3, codes), "{layout:?}");
+        assert_eq!(decode(&out).unwrap(), img, "{layout:?}");
+    }
+}
+
+#[test]
+fn cineon_header_follows_the_kodak_layout() {
+    let img = decode(&cineon_bytes(3, 4, 2, &cineon_codes(24))).unwrap();
+    let out = encode(&img, Format::Cineon, &EncodeOptions::default()).unwrap();
+    let f32_at = |at: usize| f32::from_bits(be32_at(&out, at));
+    // Generic and film header lengths, user data, total size, version.
+    assert_eq!((be32_at(&out, 4), be32_at(&out, 8), be32_at(&out, 12), be32_at(&out, 16)), (2048, 1024, 1024, 0));
+    assert_eq!(be32_at(&out, 20) as usize, out.len());
+    assert_eq!(&out[24..29], b"V4.5\0");
+    // Upright, three channels, each the universal metric's red, green, blue at 10 bits.
+    assert_eq!((out[192], out[193]), (0, 3));
+    for (i, colour) in [1u8, 2, 3].into_iter().enumerate() {
+        let c = 196 + 28 * i;
+        assert_eq!(&out[c..c + 3], &[0, colour, 10], "channel {i}");
+        assert_eq!((be32_at(&out, c + 4), be32_at(&out, c + 8)), (4, 2), "channel {i}");
+        // Minimum and maximum data value and quantity, all four 32-bit floats.
+        assert_eq!((f32_at(c + 12), f32_at(c + 16), f32_at(c + 20), f32_at(c + 24)), (0.0, 0.0, 1023.0, 2.048), "channel {i}");
+    }
+    // Pixel interleave, 32-bit words left justified, unsigned, positive, no padding.
+    assert_eq!(&out[680..692], &[0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    // Two lines of twelve samples: four words each.
+    assert_eq!(out.len(), 2048 + 2 * 16);
+}
+
+#[test]
+fn any_image_saves_as_ten_bit_cineon() {
+    // 16-bit samples land on the nearest 10-bit code; colour with alpha drops it, gray stays gray.
+    let wide = Image::from_u16(3, 1, ChannelLayout::Rgba, &[0, 32, 65535, 65535, 30000, 40000, 50000, 0, 1, 2, 3, 4]).unwrap();
+    let out = encode(&wide, Format::Cineon, &EncodeOptions::default()).unwrap();
+    let to_code = |v: u16| (f64::from(v) * 1023.0 / 65535.0).round() as u16;
+    let want: Vec<u16> = [0u16, 32, 65535, 30000, 40000, 50000, 1, 2, 3].into_iter().map(to_code).collect();
+    assert_eq!(cineon_written(&out), (3, 3, 1, want));
+    assert!(fidelity_warnings(&wide, Format::Cineon).contains(&FidelityWarning::AlphaDiscarded));
+    let gray8 = Image::from_u8(2, 1, ChannelLayout::Gray, vec![0, 255]).unwrap();
+    assert_eq!(cineon_written(&encode(&gray8, Format::Cineon, &EncodeOptions::default()).unwrap()), (1, 2, 1, vec![0, 1023]));
+}

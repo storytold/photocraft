@@ -56,6 +56,9 @@ codec_rt!(fits_rgb32, "fits", ColorMode::Rgb, SampleType::F32, false, 0.0);
 codec_rt!(dpx_gray8, "dpx", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(dpx_rgb16, "dpx", ColorMode::Rgb, SampleType::U16, false, 0.0);
 codec_rt!(dpx_rgba16, "dpx", ColorMode::Rgb, SampleType::U16, true, 0.0);
+// Cineon stores 10-bit code values: within half a 10-bit step.
+codec_rt!(cin_gray16, "cin", ColorMode::Grayscale, SampleType::U16, false, 0.5 / 1023.0);
+codec_rt!(cin_rgb16, "cin", ColorMode::Rgb, SampleType::U16, false, 0.5 / 1023.0);
 
 fn indexed_bmp_8() -> Vec<u8> {
     const FILE_HEADER_SIZE: usize = 14;

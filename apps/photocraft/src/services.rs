@@ -68,6 +68,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenEXR", &["exr"]),
     ("FITS", &["fits", "fit"]),
     ("DPX", &["dpx"]),
+    ("Cineon", &["cin"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog

@@ -60,6 +60,7 @@ fn default_build_formats_all_symmetric() {
         Format::Hdr,
         Format::Fits,
         Format::Dpx,
+        Format::Cineon,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -192,8 +193,8 @@ fn detect_magic_cineon() {
     b[0..4].copy_from_slice(&[0x80, 0x2A, 0x5F, 0xD7]);
     assert_eq!(detect(&b), Some(Format::Cineon));
     assert_eq!(from_extension("scan.CIN"), Some(Format::Cineon));
-    assert!(caps(Format::Cineon).read && !caps(Format::Cineon).write, "Cineon is read-only");
-    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Cineon));
+    assert!(caps(Format::Cineon).read && caps(Format::Cineon).write, "Cineon is read and written");
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Cineon));
     // A bare magic is an error, never a panic.
     assert!(decode_as(Format::Cineon, &b).is_err());
 }

@@ -47,7 +47,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
 | FITS | yes | yes | U8, U16, F32 | Gray, RGB | no | no | no | no | no | yes (header cards) | no | built in |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
-| Cineon | yes | **no** | U16 (10-bit code values) | Gray, RGB | no | no | no | no | no | no | n/a | built in |
+| Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
@@ -96,13 +96,18 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   Other descriptors, signed or run-length-encoded data and other bit depths return
   `CodecError::Unsupported` naming the field.
 
-* **Cineon (read-only).** Kodak's 10-bit logarithmic film-scan format (the one DPX grew from),
+* **Cineon.** Kodak's 10-bit logarithmic film-scan format (the one DPX grew from),
   read from the same Kodak header family: the generic 1024-byte header, big-endian, one (Gray)
   or three (RGB) channels, three 10-bit samples packed into each 32-bit word, lines on a word
   boundary. The 10-bit code values open as U16 `round(c × 65535 / 1023)`; the file's black/white
   reference points are a log-conversion choice and are not applied. A depth other than 10 bits or
   a channel count other than 1/3 returns `CodecError::Unsupported`; truncation errors rather than
-  panicking. There is no Cineon writer (`ASYMMETRIC_EXCEPTIONS`); save as DPX, TIFF or EXR.
+  panicking. Writing follows the Cineon 4.5 layout: a 1024-byte generic header (version `V4.5`,
+  one or three channels designated as universal-metric gray or R, G, B, 10 bits, data 0–1023 over
+  densities 0–2.048) and a 1024-byte film header left undefined, then the samples three to a
+  big-endian 32-bit word, left justified (packing 5), lines on a word boundary. Samples are written
+  as `round(v × 1023 / 65535)`, so a frame opened from Cineon keeps its code values; any other
+  image takes the encode plan (alpha dropped, CMYK and Lab to RGB) and is quantized to 10 bits.
 
 * **Camera raw files** (DNG, CR2, NEF, ARW… which are TIFF-structured) are recognised and refused
   with `CodecError::Unsupported`: they are sensor data, not flat images. `photocraft-raw` decodes
