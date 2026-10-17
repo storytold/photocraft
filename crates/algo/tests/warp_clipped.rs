@@ -57,3 +57,30 @@ fn source_center_does_not_add_extreme_coordinates_in_i32() {
     let output = warp_surface_clipped(&source, bounds, &h, Interp::Nearest, Rect::new(0, 0, 8, 8)).unwrap();
     assert_eq!(output.pixel(2, 2), source.pixel(origin + 2, origin + 2));
 }
+
+/// #4864: a Bicubic Distort filters each pixel for its own reduction, so a clip, anywhere on the
+/// quad (its narrow side too, or straddling the horizon), keeps exactly the pixels the full warp has.
+#[test]
+fn perspective_clip_matches_full() {
+    let mut source = Surface::new(PixelFormat::RGBA8);
+    let px: Vec<f32> =
+        (0..300).flat_map(|y| (0..400).flat_map(move |x| [((x * 7 + y * 3) % 23) as f32 / 22.0, ((x / 3) & 1) as f32, ((y / 2) & 1) as f32, 1.0])).collect();
+    source.write_region(Rect::new(0, 0, 400, 300), &px);
+    let r = Rect::new(0, 0, 400, 300);
+    let wedge = Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], [[20.0, 20.0], [352.0, 240.0], [360.0, 260.0], [24.0, 280.0]]).unwrap();
+    let full = warp_surface(&source, r, &wedge, Interp::Bicubic).unwrap();
+    for clip in
+        [Rect::new(300, 200, 370, 270), Rect::new(330, 220, 361, 262), Rect::new(17, 13, 129, 201), Rect::new(0, 0, 400, 300), Rect::new(255, 1, 258, 299)]
+    {
+        let bounded = warp_surface_clipped(&source, r, &wedge, Interp::Bicubic, clip).unwrap();
+        assert_eq!(full.read_region(clip), bounded.read_region(clip), "{clip:?}");
+        assert!(clip.contains_rect(&bounded.content_bounds()));
+    }
+    let past = Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], [[0.0, 0.0], [900.0, 0.0], [180.0, 180.0], [0.0, 900.0]]).unwrap();
+    let big = Rect::new(-1200, -1200, 2100, 2100);
+    let whole = warp_surface_clipped(&source, r, &past, Interp::Bicubic, big).unwrap();
+    for clip in [Rect::new(-50, -40, 230, 260), Rect::new(100, 100, 400, 400), Rect::new(-1200, -1200, 0, 0)] {
+        let bounded = warp_surface_clipped(&source, r, &past, Interp::Bicubic, clip).unwrap();
+        assert_eq!(whole.read_region(clip), bounded.read_region(clip), "{clip:?}");
+    }
+}
