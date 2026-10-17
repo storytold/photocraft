@@ -3203,3 +3203,19 @@ curves	Smooth	Haluskan
 	Replace	Ganti
 	{name} was changed by another app after it was opened or saved here.	{name} diubah oleh aplikasi lain setelah dibuka atau disimpan di sini.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ganti dengan dokumen ini, atau batalkan dan gunakan Berkas › Simpan Sebagai untuk menyimpan keduanya.
+
+# Counted status and panel messages
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} swatch diekspor ke {file}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} swatch diimpor dari {file}
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} kuas diimpor dari {group}
+@plural	Played {n} step|Played {n} steps	{n} langkah diputar
+@plural	{n} step|{n} steps	{n} langkah
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Disimpan untuk Web: {n} file
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} Smart Object tertaut yang berubah di disk telah diperbarui
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} layer yang direkam oleh layer comp ini telah dihapus. Perbarui layer comp, atau hapus peringatannya.
+@plural	{n} plane|{n} planes	{n} bidang
+@plural	{n} preset|{n} presets	{n} preset
+@plural	{n} sample point removed|{n} sample points removed	{n} titik sampel dihapus
+@plural	{n} slice|{n} slices	{n} slice
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} peringatan preset kuas lainnya)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} dengan {n} peringatan
