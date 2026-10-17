@@ -18,6 +18,12 @@ pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, p
 /// `dx² + dy² ≤ radius²`, so corners and straight edges move by the same distance. Each row of
 /// the disc is a horizontal window, taken with the van Herk / Gil-Werman running extreme
 /// (constant work per pixel whatever the window), so the cost is O(radius) per pixel.
+///
+/// Disc rows of the same half-width (the two halves of the disc, and runs of rows near its
+/// middle) need the same horizontal extremes of a source row, so each source row's extreme is
+/// worked out once per half-width and kept while a later disc row still needs it. The rows are
+/// then combined per pixel in the same order as one pass per disc row (top to bottom, the running
+/// result first), so the output is identical, signed zeros and NaNs included.
 pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> Vec<f32> {
     let n = src.ch;
     let r = radius.max(0.0);
@@ -25,27 +31,111 @@ pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> V
     if ri == 0 {
         return src.crop(out);
     }
-    let w = out.width() as usize;
+    let (ow, oh) = (out.width() as usize, out.height() as usize);
     let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
-    let mut res = vec![if max { f32::MIN } else { f32::MAX }; w * out.height() as usize * n];
-    let (mut row, mut ext) = (Vec::new(), Vec::new());
-    for dy in -ri..=ri {
-        // Half-width of the disc on this row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
-        let hw = ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as i32;
-        for y in out.y0..out.y1 {
-            let o = (y - out.y0) as usize * w * n;
-            for c in 0..n {
-                row.clear();
-                row.extend((out.x0 - hw..out.x1 + hw).map(|x| src.get(x, y + dy, c)));
-                running_extreme(&row, (2 * hw + 1) as usize, max, &mut ext);
-                for (x, v) in ext.iter().enumerate() {
-                    let i = o + x * n + c;
-                    res[i] = pick(res[i], *v);
+    let sentinel = if max { f32::MIN } else { f32::MAX };
+    // Half-width of the disc on each row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
+    let hws: Vec<usize> = (-ri..=ri).map(|dy| ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as usize).collect();
+    let (ru, rows) = (ri as usize, oh + 2 * ri as usize);
+    // The last disc row (index into `hws`) that uses each half-width.
+    let mut last = vec![0usize; ru + 1];
+    for (j, &hw) in hws.iter().enumerate() {
+        last[hw] = j;
+    }
+    // The source rows a half-width's extremes are needed for: window rows `j..j + oh` for each of
+    // its disc rows `j`.
+    let mut span = vec![(usize::MAX, 0usize); ru + 1];
+    for (j, &hw) in hws.iter().enumerate() {
+        span[hw] = (span[hw].0.min(j), span[hw].1.max(j + oh));
+    }
+    let pw = ow + 2 * ru;
+    // The window's samples of one channel, `rows × pw` from (out.x0 - r, out.y0 - r); outside the
+    // source they read as 0, as `Image::get` does.
+    let win = Rect::new(out.x0 - ri, out.y0 - ri, out.x1 + ri, out.y1 + ri);
+    let inside = win.intersect(&src.rect);
+    let mut plane = vec![0.0f32; rows * pw];
+    let mut acc = vec![sentinel; ow * oh];
+    let mut cache: Vec<Option<Vec<f32>>> = vec![None; ru + 1];
+    let mut scratch = Extremes::default();
+    let mut res = vec![0.0f32; ow * oh * n];
+    for c in 0..n {
+        plane.fill(0.0);
+        if !inside.is_empty() {
+            for y in inside.y0..inside.y1 {
+                let o = (y - win.y0) as usize * pw + (inside.x0 - win.x0) as usize;
+                let row = src.row(Rect::new(inside.x0, y, inside.x1, y + 1));
+                for (d, px) in plane[o..o + inside.width() as usize].iter_mut().zip(row.chunks_exact(n)) {
+                    *d = px[c];
                 }
             }
         }
+        acc.fill(sentinel);
+        for (j, &hw) in hws.iter().enumerate() {
+            // This half-width's extremes for the source rows it needs (window rows `y0..y1`).
+            let (y0, y1) = span[hw];
+            let ext = cache[hw].get_or_insert_with(|| {
+                let mut e = vec![0.0f32; (y1 - y0) * ow];
+                for (y, dst) in (y0..y1).zip(e.chunks_exact_mut(ow)) {
+                    let line = &plane[y * pw + ru - hw..y * pw + ru + ow + hw];
+                    running_extreme_with(line, 2 * hw + 1, max, &mut scratch);
+                    dst.copy_from_slice(&scratch.out);
+                }
+                e
+            });
+            for (a, e) in acc.chunks_exact_mut(ow).zip(ext[(j - y0) * ow..].chunks_exact(ow)) {
+                for (a, &v) in a.iter_mut().zip(e) {
+                    *a = pick(*a, v);
+                }
+            }
+            if last[hw] == j {
+                cache[hw] = None;
+            }
+        }
+        for (o, &v) in res.iter_mut().skip(c).step_by(n).zip(&acc) {
+            *o = v;
+        }
     }
     res
+}
+
+/// Scratch buffers of [`running_extreme_with`].
+#[derive(Default)]
+struct Extremes {
+    pre: Vec<f32>,
+    suf: Vec<f32>,
+    out: Vec<f32>,
+}
+
+/// [`running_extreme`] into `s.out`, reusing `s`'s buffers (the same values).
+fn running_extreme_with(v: &[f32], k: usize, max: bool, s: &mut Extremes) {
+    let Extremes { pre, suf, out } = s;
+    out.clear();
+    let n = v.len();
+    if k <= 1 {
+        out.extend_from_slice(v);
+        return;
+    }
+    if n < k {
+        return;
+    }
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    pre.clear();
+    pre.extend_from_slice(v);
+    suf.clear();
+    suf.extend_from_slice(v);
+    // Within each block of `k` (no division per element): prefix extremes forwards, suffix
+    // extremes backwards, the same picks in the same order as testing `i % k` per element.
+    for (p, b) in pre.chunks_mut(k).zip(v.chunks(k)) {
+        for i in 1..p.len() {
+            p[i] = pick(p[i - 1], b[i]);
+        }
+    }
+    for (q, b) in suf.chunks_mut(k).zip(v.chunks(k)) {
+        for i in (0..q.len().saturating_sub(1)).rev() {
+            q[i] = pick(q[i + 1], b[i]);
+        }
+    }
+    out.extend((0..=n - k).map(|i| pick(suf[i], pre[i + k - 1])));
 }
 
 /// `out[i]` = extreme of `v[i..i + k]` for every full window (van Herk / Gil-Werman: prefix
@@ -63,14 +153,16 @@ pub(crate) fn running_extreme(v: &[f32], k: usize, max: bool, out: &mut Vec<f32>
     let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
     let mut pre = v.to_vec();
     let mut suf = v.to_vec();
-    for i in 1..n {
-        if i % k != 0 {
-            pre[i] = pick(pre[i - 1], v[i]);
+    // Within each block of `k` (no division per element): prefix extremes forwards, suffix
+    // extremes backwards, the same picks in the same order as testing `i % k` per element.
+    for (p, b) in pre.chunks_mut(k).zip(v.chunks(k)) {
+        for i in 1..p.len() {
+            p[i] = pick(p[i - 1], b[i]);
         }
     }
-    for i in (0..n - 1).rev() {
-        if (i + 1) % k != 0 {
-            suf[i] = pick(suf[i + 1], v[i]);
+    for (q, b) in suf.chunks_mut(k).zip(v.chunks(k)) {
+        for i in (0..q.len().saturating_sub(1)).rev() {
+            q[i] = pick(q[i + 1], b[i]);
         }
     }
     out.extend((0..=n - k).map(|i| pick(suf[i], pre[i + k - 1])));
@@ -182,6 +274,66 @@ mod tests {
             }
         }
         res
+    }
+
+    /// The previous disc implementation (one pass per disc row), the reference for the shared
+    /// half-width extremes of [`min_max_round`].
+    fn min_max_round_reference(src: &Image, out: Rect, radius: f32, max: bool) -> Vec<f32> {
+        let n = src.ch;
+        let r = radius.max(0.0);
+        let ri = r.floor() as i32;
+        if ri == 0 {
+            return src.crop(out);
+        }
+        let w = out.width() as usize;
+        let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+        let mut res = vec![if max { f32::MIN } else { f32::MAX }; w * out.height() as usize * n];
+        let (mut row, mut ext) = (Vec::new(), Vec::new());
+        for dy in -ri..=ri {
+            // Half-width of the disc on this row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
+            let hw = ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as i32;
+            for y in out.y0..out.y1 {
+                let o = (y - out.y0) as usize * w * n;
+                for c in 0..n {
+                    row.clear();
+                    row.extend((out.x0 - hw..out.x1 + hw).map(|x| src.get(x, y + dy, c)));
+                    running_extreme(&row, (2 * hw + 1) as usize, max, &mut ext);
+                    for (x, v) in ext.iter().enumerate() {
+                        let i = o + x * n + c;
+                        res[i] = pick(res[i], *v);
+                    }
+                }
+            }
+        }
+        res
+    }
+
+    /// The disc's shared extremes give exactly the previous result: integer and fractional radii,
+    /// windows past the source, outputs wider than the source, ties, signed zeros, values outside
+    /// 0..1 and NaNs, minimum and maximum.
+    #[test]
+    fn round_min_max_matches_one_pass_per_disc_row() {
+        let src_rect = Rect::new(-12, -9, 37, 30);
+        let mut img = Image::new(src_rect, 3);
+        let mut s = 0x9e37_79b9u32;
+        for (i, v) in img.data.iter_mut().enumerate() {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            *v = match i % 5 {
+                0 => [0.0, -0.0, 1.5, -2.0, f32::NAN][(s % 5) as usize],
+                1 => (s % 4) as f32 / 3.0,
+                _ => (s % 1000) as f32 / 999.0,
+            };
+        }
+        for out in [Rect::new(0, 0, 25, 21), Rect::new(-14, -3, 3, 40), Rect::new(-30, -20, 50, 45)] {
+            for r in [0.5, 1.0, 1.6, 2.0, 3.0, 5.0, 7.3, 12.0, 25.0] {
+                for max in [false, true] {
+                    let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+                    assert_eq!(bits(min_max_round(&img, out, r, max)), bits(min_max_round_reference(&img, out, r, max)), "r {r} max {max} out {out:?}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,143 @@
+{
+ "base": "e46f119e0303e1ba2230e1c0ad5ccc20f4b3ed5d",
+ "machine": "Apple M2 Pro (6P+4E), 16 GB, macOS, rustc 1.99.0, release profile",
+ "order": "three pairs: before/after, after/before, before/after",
+ "image": "6000x4000 RGBA8, soft alpha",
+ "cases": [
+  {
+   "case": "max round 1",
+   "before": [
+    220.4,
+    198.7,
+    196.8
+   ],
+   "after": [
+    158.3,
+    166.8,
+    161.1
+   ],
+   "hash_before": "baa292274e355fb7",
+   "hash_after": "baa292274e355fb7"
+  },
+  {
+   "case": "max round 5",
+   "before": [
+    677.1,
+    684.3,
+    784.3
+   ],
+   "after": [
+    237.8,
+    262.0,
+    239.0
+   ],
+   "hash_before": "ecfdc7af8794928b",
+   "hash_after": "ecfdc7af8794928b"
+  },
+  {
+   "case": "max round 20",
+   "before": [
+    3860.1,
+    3529.1,
+    3951.1
+   ],
+   "after": [
+    1250.8,
+    948.5,
+    920.8
+   ],
+   "hash_before": "2730a75192fec6e0",
+   "hash_after": "2730a75192fec6e0"
+  },
+  {
+   "case": "max round 50",
+   "before": [
+    12665.3,
+    12224.4,
+    13295.4
+   ],
+   "after": [
+    3639.4,
+    4283.1,
+    3833.9
+   ],
+   "hash_before": "8e10f2182dfa4049",
+   "hash_after": "8e10f2182dfa4049"
+  },
+  {
+   "case": "max round 100",
+   "before": [
+    34536.0,
+    34095.4,
+    35122.2
+   ],
+   "after": [
+    12710.4,
+    12098.6,
+    12167.9
+   ],
+   "hash_before": "7cbca15643b4b193",
+   "hash_after": "7cbca15643b4b193"
+  },
+  {
+   "case": "min round 20",
+   "before": [
+    3588.3,
+    3475.6,
+    3623.0
+   ],
+   "after": [
+    916.4,
+    941.7,
+    946.9
+   ],
+   "hash_before": "7ddc40e682cb0fd2",
+   "hash_after": "7ddc40e682cb0fd2"
+  },
+  {
+   "case": "max square 5",
+   "before": [
+    305.1,
+    289.7,
+    293.0
+   ],
+   "after": [
+    263.4,
+    266.3,
+    261.6
+   ],
+   "hash_before": "8f223c585b48ede2",
+   "hash_after": "8f223c585b48ede2"
+  },
+  {
+   "case": "max square 50",
+   "before": [
+    570.3,
+    497.7,
+    563.3
+   ],
+   "after": [
+    425.3,
+    411.7,
+    419.5
+   ],
+   "hash_before": "0d8bdba3b5ce5f17",
+   "hash_after": "0d8bdba3b5ce5f17"
+  },
+  {
+   "case": "min square 50",
+   "before": [
+    498.0,
+    529.2,
+    505.1
+   ],
+   "after": [
+    418.2,
+    421.7,
+    424.0
+   ],
+   "hash_before": "3d8b6dff673e7278",
+   "hash_after": "3d8b6dff673e7278"
+  }
+ ]
+}
