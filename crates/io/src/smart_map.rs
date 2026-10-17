@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 17] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -156,6 +156,9 @@ const KNOWN: [Known; 14] = [
     Known { class: "Mnm ", filter_id: code(b"Mnm "), name: "Minimum...", command: "filter.other.minimum" },
     Known { class: "Msc ", filter_id: code(b"Msc "), name: "Mosaic...", command: "filter.pixelate.mosaic" },
     Known { class: "Embs", filter_id: code(b"Embs"), name: "Emboss...", command: "filter.stylize.emboss" },
+    Known { class: "Wnd ", filter_id: code(b"Wnd "), name: "Wind...", command: "filter.stylize.wind" },
+    Known { class: "Extr", filter_id: code(b"Extr"), name: "Extrude...", command: "filter.stylize.extrude" },
+    Known { class: "Tls ", filter_id: code(b"Tls "), name: "Tiles...", command: "filter.stylize.tiles" },
     Known { class: "Lvls", filter_id: code(b"Lvls"), name: "Levels...", command: "image.adjustments.levels" },
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
@@ -258,9 +261,67 @@ fn curves_params(f: &Descriptor) -> Option<J> {
     Some(J::Object(out))
 }
 
+// Wind, Extrude and Tiles, measured in Photoshop (each code changes the rendered result).
+
+/// Wind's `WndM` (enum `WndM`) ↔ our `method`.
+const WIND_METHODS: [(&str, &str); 3] = [("Wnd ", "wind"), ("Blst", "blast"), ("Stgr", "stagger")];
+/// Wind's `Drct` (enum `Drct`) ↔ our `direction`. Photoshop's `Left` streaks extend to the left
+/// of an edge, which is our wind from the right.
+const WIND_DIRECTIONS: [(&str, &str); 2] = [("Left", "fromRight"), ("Rght", "fromLeft")];
+/// Extrude's `ExtT` (enum `ExtT`) ↔ our `type`.
+const EXTRUDE_TYPES: [(&str, &str); 2] = [("Blks", "blocks"), ("Pyrm", "pyramids")];
+/// Extrude's `ExtR` (enum `ExtR`) ↔ our `depthMode`.
+const EXTRUDE_DEPTHS: [(&str, &str); 2] = [("Rndm", "random"), ("LvlB", "levelBased")];
+/// Tiles' `FlCl` (enum `FlCl`) ↔ our `fill`.
+const TILE_FILLS: [(&str, &str); 4] = [("FlBc", "background"), ("FlFr", "foreground"), ("FlIn", "inverse"), ("FlSm", "unaltered")];
+/// Extrude's size and depth (`ExtS`, `ExtD`) and Tiles' count and offset (`TlNm`, `TlOf`), all
+/// `long`s, in the engine's (and Photoshop's dialog) ranges.
+const EXTRUDE_SIZE: (i32, i32) = (2, 255);
+const EXTRUDE_DEPTH: (i32, i32) = (1, 255);
+const TILE_COUNT: (i32, i32) = (1, 99);
+const TILE_OFFSET: (i32, i32) = (1, 99);
+
+/// The `long` at `key` when it lies in `range` (inclusive).
+fn long_within(d: &Descriptor, key: &str, range: (i32, i32)) -> Option<i32> {
+    int(d, key).filter(|v| (range.0..=range.1).contains(v))
+}
+
+/// The `bool` at `key`.
+fn bool_at(d: &Descriptor, key: &str) -> Option<bool> {
+    match d.get(key)? {
+        Value::Boolean(b) => Some(*b),
+        _ => None,
+    }
+}
+
+/// Our name for the enum at `key`, which must be of type `type_id`, through `table`.
+fn enum_from(d: &Descriptor, key: &str, type_id: &str, table: &[(&str, &'static str)]) -> Option<&'static str> {
+    match d.get(key)? {
+        Value::Enumerated { type_id: t, value } if t.as_bytes() == type_id.as_bytes() => {
+            table.iter().find(|(psd, _)| value.as_bytes() == psd.as_bytes()).map(|(_, ours)| *ours)
+        }
+        _ => None,
+    }
+}
+
+/// Tiles' params; background and foreground fills use the colours the entry carries (`FrgC`,
+/// `BckC`). `None` when a setting or a colour that is there can't be read.
+fn tiles_params(f: &Descriptor, item: &Descriptor) -> Option<J> {
+    let mut out = Map::new();
+    out.insert("count".into(), json!(long_within(f, "TlNm", TILE_COUNT)?));
+    out.insert("maxOffset".into(), json!(long_within(f, "TlOf", TILE_OFFSET)?));
+    out.insert("fill".into(), json!(enum_from(f, "FlCl", "FlCl", &TILE_FILLS)?));
+    for (psd, ours) in [("FrgC", "foreground"), ("BckC", "background")] {
+        if item.get(psd).is_some() {
+            out.insert(ours.into(), get_desc(item, psd).and_then(rgbc_colour)?);
+        }
+    }
+    Some(J::Object(out))
+}
+
 /// Our command and parameters for a known Photoshop filter; `None` when the filter (or one of its
-/// settings) is not modelled.
-fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)> {
+/// settings) is not modelled. `item` is the whole `filterFX` entry (Tiles reads its colours).
+fn known_params(class: &str, f: Option<&Descriptor>, item: &Descriptor) -> Option<(&'static str, J)> {
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
         ("adaptCorrect", None) => json!({}),
@@ -282,6 +343,19 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
         }
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
+        ("Wnd ", Some(f)) => json!({
+            "method": enum_from(f, "WndM", "WndM", &WIND_METHODS)?,
+            "direction": enum_from(f, "Drct", "Drct", &WIND_DIRECTIONS)?,
+        }),
+        ("Extr", Some(f)) => json!({
+            "type": enum_from(f, "ExtT", "ExtT", &EXTRUDE_TYPES)?,
+            "size": long_within(f, "ExtS", EXTRUDE_SIZE)?,
+            "depth": long_within(f, "ExtD", EXTRUDE_DEPTH)?,
+            "depthMode": enum_from(f, "ExtR", "ExtR", &EXTRUDE_DEPTHS)?,
+            "solidFrontFaces": bool_at(f, "ExtF")?,
+            "maskIncompleteBlocks": bool_at(f, "ExtM")?,
+        }),
+        ("Tls ", Some(f)) => tiles_params(f, item)?,
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
         _ => return None,
@@ -470,7 +544,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
         Some(camera_raw::CLASS) => camera_raw::import_params(item).map(|p| (camera_raw::COMMAND, p)),
         Some(displace::CLASS) => displace::import_params(item).map(|p| (displace::COMMAND, p)),
         Some(GALLERY_CLASS) => fltr.and_then(|f| gallery_params(item, f)).map(|p| (GALLERY_COMMAND, p)),
-        c => c.and_then(|c| known_params(c, fltr)),
+        c => c.and_then(|c| known_params(c, fltr, item)),
     };
     let (command, params) = match known {
         Some((c, p)) => (c.to_string(), p),
@@ -574,6 +648,26 @@ fn adjustments(p: &J, curves: bool) -> Result<Value, String> {
     Ok(Value::List(list))
 }
 
+/// Our enum param `key` (`default` when absent) as Photoshop's enum of type `type_id`.
+fn enum_to(p: &J, key: &str, default: &str, type_id: &str, table: &[(&str, &str)]) -> Result<Value, String> {
+    let ours = match p.get(key) {
+        None => default,
+        Some(v) => v.as_str().ok_or_else(|| format!("`{key}` is not a string"))?,
+    };
+    let (psd, _) = table.iter().find(|(_, o)| *o == ours).ok_or_else(|| format!("{key} `{ours}` has no PSD equivalent"))?;
+    Ok(enumv(type_id, psd))
+}
+
+/// Param `key` (`default` when absent or not a finite number) as a `long` clamped to `range`.
+fn long_clamped(p: &J, key: &str, default: f64, range: (i32, i32)) -> Value {
+    Value::Integer(pf(p, key, default).round().clamp(f64::from(range.0), f64::from(range.1)) as i32)
+}
+
+/// Param `key` as a `bool` (false when absent or not a bool, as the engine reads it).
+fn bool_param(p: &J, key: &str) -> Value {
+    Value::Boolean(p.get(key).and_then(J::as_bool).unwrap_or(false))
+}
+
 /// The `Fltr` descriptor of a modelled filter (`None` = written without options).
 fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
     let d = Descriptor::new(k.class);
@@ -595,6 +689,21 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
+        // Photoshop stores no random seed for these: our `seed` is not written.
+        "Wnd " => {
+            d.with("WndM", enum_to(p, "method", "wind", "WndM", &WIND_METHODS)?).with("Drct", enum_to(p, "direction", "fromRight", "Drct", &WIND_DIRECTIONS)?)
+        }
+        "Extr" => d
+            .with("ExtT", enum_to(p, "type", "blocks", "ExtT", &EXTRUDE_TYPES)?)
+            .with("ExtS", long_clamped(p, "size", 30.0, EXTRUDE_SIZE))
+            .with("ExtD", long_clamped(p, "depth", 30.0, EXTRUDE_DEPTH))
+            .with("ExtR", enum_to(p, "depthMode", "random", "ExtR", &EXTRUDE_DEPTHS)?)
+            .with("ExtF", bool_param(p, "solidFrontFaces"))
+            .with("ExtM", bool_param(p, "maskIncompleteBlocks")),
+        "Tls " => d
+            .with("TlNm", long_clamped(p, "count", 10.0, TILE_COUNT))
+            .with("TlOf", long_clamped(p, "maxOffset", 10.0, TILE_OFFSET))
+            .with("FlCl", enum_to(p, "fill", "background", "FlCl", &TILE_FILLS)?),
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
         "adaptCorrect" => {
@@ -633,13 +742,19 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
     }
     let k = known_by_command(&f.command).ok_or("this filter has no PSD equivalent")?;
     let fltr = fltr_for(k, &f.params)?;
+    // Tiles fills with the entry's colours; the others write the defaults.
+    let (foreground, background) = if k.class == "Tls " {
+        (colour_rgbc(f.params.get("foreground"), 0.0)?, colour_rgbc(f.params.get("background"), 255.0)?)
+    } else {
+        (rgbc(0.0), rgbc(255.0))
+    };
     let mut d = Descriptor::new("filterFX")
         .with("Nm  ", Value::Text(UnicodeString::new_nul(k.name)))
         .with("blendOptions", blend_options(f))
         .with("enab", Value::Boolean(f.visible))
         .with("hasoptions", Value::Boolean(fltr.is_some()))
-        .with("FrgC", rgbc(0.0))
-        .with("BckC", rgbc(255.0));
+        .with("FrgC", foreground)
+        .with("BckC", background);
     if let Some(x) = fltr {
         d = d.with("Fltr", Value::Descriptor(x));
     }
@@ -1069,7 +1184,7 @@ mod tests {
             // A pencil-drawn curve: 256 output levels (`Mpng`).
             sf("image.adjustments.curves", json!({"pencil": true, "points": (0..256).rev().collect::<Vec<i32>>()})),
         ];
-        for mut f in filters {
+        for mut f in filters.into_iter().chain(wind_extrude_tiles_settings()) {
             f.blend = BlendMode::Overlay;
             f.opacity = 0.75;
             f.visible = false;
@@ -1077,6 +1192,251 @@ mod tests {
             let bytes = d.to_bytes();
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
+        }
+    }
+
+    /// Every option value of Wind, Extrude and Tiles (and the ends of their ranges).
+    fn wind_extrude_tiles_settings() -> Vec<SmartFilter> {
+        let mut v = Vec::new();
+        for method in ["wind", "blast", "stagger"] {
+            for direction in ["fromRight", "fromLeft"] {
+                v.push(sf("filter.stylize.wind", json!({"method": method, "direction": direction})));
+            }
+        }
+        for t in ["blocks", "pyramids"] {
+            for mode in ["random", "levelBased"] {
+                for (solid, mask) in [(false, false), (true, false), (false, true), (true, true)] {
+                    v.push(sf(
+                        "filter.stylize.extrude",
+                        json!({"type": t, "size": 7, "depth": 9, "depthMode": mode, "solidFrontFaces": solid, "maskIncompleteBlocks": mask}),
+                    ));
+                }
+            }
+        }
+        v.push(sf(
+            "filter.stylize.extrude",
+            json!({"type": "blocks", "size": 2, "depth": 1, "depthMode": "random", "solidFrontFaces": false, "maskIncompleteBlocks": false}),
+        ));
+        v.push(sf(
+            "filter.stylize.extrude",
+            json!({"type": "pyramids", "size": 255, "depth": 255, "depthMode": "levelBased", "solidFrontFaces": true, "maskIncompleteBlocks": true}),
+        ));
+        for fill in ["background", "foreground", "inverse", "unaltered"] {
+            v.push(sf(
+                "filter.stylize.tiles",
+                json!({"count": 6, "maxOffset": 20, "fill": fill, "foreground": [1.0, 0.0, 0.5, 1.0], "background": [0.0, 0.5, 1.0, 1.0]}),
+            ));
+        }
+        for (count, offset) in [(1, 1), (99, 99)] {
+            v.push(sf(
+                "filter.stylize.tiles",
+                json!({"count": count, "maxOffset": offset, "fill": "background", "foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]}),
+            ));
+        }
+        v
+    }
+
+    /// A `filterFX` entry shaped as Photoshop saves Wind, Extrude and Tiles (measured in Photoshop:
+    /// applied through Action Manager to a smart object, saved, `filterFX` read back): the item's
+    /// `FrgC`/`BckC` are the document colours, `Fltr` holds the settings, `filterID` the class code.
+    fn measured_item(fltr: Descriptor, fg: f64, bg: f64) -> Descriptor {
+        let id = code(fltr.class_id.as_bytes().try_into().unwrap());
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Filter...")))
+            .with("blendOptions", blend_options(&sf("", J::Null)))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(fg))
+            .with("BckC", rgbc(bg))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(id))
+    }
+
+    fn wind(method: &str, direction: &str) -> Descriptor {
+        Descriptor::new("Wnd ").with("WndM", enumv("WndM", method)).with("Drct", enumv("Drct", direction))
+    }
+
+    fn extrude(t: &str, size: Value, depth: Value, mode: &str, solid: Value, mask: Value) -> Descriptor {
+        Descriptor::new("Extr")
+            .with("ExtT", enumv("ExtT", t))
+            .with("ExtS", size)
+            .with("ExtD", depth)
+            .with("ExtR", enumv("ExtR", mode))
+            .with("ExtF", solid)
+            .with("ExtM", mask)
+    }
+
+    fn tiles(count: Value, offset: Value, fill: &str) -> Descriptor {
+        Descriptor::new("Tls ").with("TlNm", count).with("TlOf", offset).with("FlCl", enumv("FlCl", fill))
+    }
+
+    #[test]
+    fn wind_extrude_tiles_open_from_photoshop_shapes() {
+        let (long, yes, no) = (Value::Integer, Value::Boolean(true), Value::Boolean(false));
+        let cases = [
+            // The measured files.
+            (wind("Blst", "Left"), "filter.stylize.wind", json!({"method": "blast", "direction": "fromRight"})),
+            (wind("Stgr", "Rght"), "filter.stylize.wind", json!({"method": "stagger", "direction": "fromLeft"})),
+            (wind("Wnd ", "Rght"), "filter.stylize.wind", json!({"method": "wind", "direction": "fromLeft"})),
+            (
+                extrude("Blks", long(7), long(9), "Rndm", yes.clone(), no.clone()),
+                "filter.stylize.extrude",
+                json!({"type": "blocks", "size": 7, "depth": 9, "depthMode": "random", "solidFrontFaces": true, "maskIncompleteBlocks": false}),
+            ),
+            (
+                extrude("Pyrm", long(12), long(20), "LvlB", no, yes),
+                "filter.stylize.extrude",
+                json!({"type": "pyramids", "size": 12, "depth": 20, "depthMode": "levelBased", "solidFrontFaces": false, "maskIncompleteBlocks": true}),
+            ),
+            (
+                tiles(long(6), long(20), "FlFr"),
+                "filter.stylize.tiles",
+                json!({"count": 6, "maxOffset": 20, "fill": "foreground", "foreground": [0.2, 0.2, 0.2, 1.0], "background": [1.0, 1.0, 1.0, 1.0]}),
+            ),
+            (
+                tiles(long(4), long(5), "FlIn"),
+                "filter.stylize.tiles",
+                json!({"count": 4, "maxOffset": 5, "fill": "inverse", "foreground": [0.2, 0.2, 0.2, 1.0], "background": [1.0, 1.0, 1.0, 1.0]}),
+            ),
+            (
+                tiles(long(10), long(10), "FlBc"),
+                "filter.stylize.tiles",
+                json!({"count": 10, "maxOffset": 10, "fill": "background", "foreground": [0.2, 0.2, 0.2, 1.0], "background": [1.0, 1.0, 1.0, 1.0]}),
+            ),
+            (
+                tiles(long(99), long(1), "FlSm"),
+                "filter.stylize.tiles",
+                json!({"count": 99, "maxOffset": 1, "fill": "unaltered", "foreground": [0.2, 0.2, 0.2, 1.0], "background": [1.0, 1.0, 1.0, 1.0]}),
+            ),
+        ];
+        for (fltr, command, params) in cases {
+            let item = measured_item(fltr, 51.0, 255.0);
+            // Through bytes, as read from a file.
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!((f.command.as_str(), &f.params), (command, &params));
+            // Written back in the measured shape: same class, keys and their order, value types
+            // (long, bool, enum with its type), filterID; Tiles also its colours.
+            let back = item_for_filter(&f).unwrap();
+            assert_eq!(get_desc(&back, "Fltr").map(Descriptor::to_bytes), get_desc(&item, "Fltr").map(Descriptor::to_bytes), "{command}");
+            assert_eq!(back.get("filterID"), item.get("filterID"), "{command}");
+            if command == "filter.stylize.tiles" {
+                assert_eq!((back.get("FrgC"), back.get("BckC")), (item.get("FrgC"), item.get("BckC")));
+            }
+        }
+        // The class codes: numeric filterIDs of the four-char classes.
+        for (c, id) in [("filter.stylize.wind", 1466852384), ("filter.stylize.extrude", 1165522034), ("filter.stylize.tiles", 1416393504)] {
+            assert_eq!(item_for_filter(&sf(c, json!({}))).unwrap().get("filterID"), Some(&Value::Integer(id)));
+        }
+        // A filter found by its filterID alone (no `Fltr` class to go by) still needs its settings.
+        let bare = Descriptor::new("filterFX").with("hasoptions", Value::Boolean(false)).with("filterID", Value::Integer(1466852384));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
+        // Only Tiles reads the entry's colours; Wind and Extrude write the defaults.
+        let f = filter_from_item(&measured_item(wind("Wnd ", "Left"), 51.0, 0.0));
+        assert_eq!(f.params, json!({"method": "wind", "direction": "fromRight"}));
+        let back = item_for_filter(&f).unwrap();
+        assert_eq!((back.get("FrgC"), back.get("BckC")), (Some(&rgbc(0.0)), Some(&rgbc(255.0))));
+        // Tiles without colours in its params (or the entry) writes the engine's black and white.
+        let f = filter_from_item(&Descriptor::new("filterFX").with("Fltr", Value::Descriptor(tiles(long(4), long(5), "FlBc"))));
+        assert_eq!(f.params, json!({"count": 4, "maxOffset": 5, "fill": "background"}));
+        let back = item_for_filter(&f).unwrap();
+        assert_eq!((back.get("FrgC"), back.get("BckC")), (Some(&rgbc(0.0)), Some(&rgbc(255.0))));
+    }
+
+    #[test]
+    fn wind_extrude_tiles_write_defaults_and_photoshop_ranges() {
+        let fltr = |c: &str, p: J| match item_for_filter(&sf(c, p)).unwrap().get("Fltr") {
+            Some(Value::Descriptor(d)) => d.clone(),
+            other => panic!("no Fltr: {other:?}"),
+        };
+        let long = Value::Integer;
+        let (yes, no) = (Value::Boolean(true), Value::Boolean(false));
+        // Defaults are the engine's; our random seed has no PSD key and is not written.
+        assert_eq!(fltr("filter.stylize.wind", json!({"seed": 9})), wind("Wnd ", "Left"));
+        assert_eq!(fltr("filter.stylize.extrude", json!({"seed": 9})), extrude("Blks", long(30), long(30), "Rndm", no.clone(), no.clone()));
+        assert_eq!(fltr("filter.stylize.tiles", json!({"seed": 9})), tiles(long(10), long(10), "FlBc"));
+        // Out of range, fractional, non-numeric and non-bool values as the engine reads them.
+        assert_eq!(
+            fltr("filter.stylize.extrude", json!({"size": 1e12, "depth": -5, "solidFrontFaces": "yes", "maskIncompleteBlocks": true})),
+            extrude("Blks", long(255), long(1), "Rndm", no.clone(), yes)
+        );
+        assert_eq!(fltr("filter.stylize.tiles", json!({"count": 0, "maxOffset": 12.6})), tiles(long(1), long(13), "FlBc"));
+        assert_eq!(fltr("filter.stylize.tiles", json!({"count": "many", "maxOffset": 1000})), tiles(long(10), long(99), "FlBc"));
+        assert_eq!(fltr("filter.stylize.extrude", json!({"size": f64::NAN})), extrude("Blks", long(30), long(30), "Rndm", no.clone(), no));
+    }
+
+    #[test]
+    fn malformed_wind_extrude_tiles_are_kept_verbatim() {
+        let long = Value::Integer;
+        let (yes, no) = (Value::Boolean(true), Value::Boolean(false));
+        let cases = [
+            // Missing keys.
+            Descriptor::new("Wnd "),
+            Descriptor::new("Wnd ").with("WndM", enumv("WndM", "Blst")),
+            Descriptor::new("Wnd ").with("Drct", enumv("Drct", "Left")),
+            Descriptor::new("Extr").with("ExtT", enumv("ExtT", "Blks")).with("ExtS", long(7)).with("ExtD", long(9)).with("ExtR", enumv("ExtR", "Rndm")),
+            Descriptor::new("Tls ").with("TlNm", long(6)).with("TlOf", long(20)),
+            Descriptor::new("Tls ").with("TlNm", long(6)).with("FlCl", enumv("FlCl", "FlFr")),
+            // Unknown enum values and enum types (Photoshop falls back to a default for these;
+            // we keep them as they are rather than guess).
+            wind("Wild", "Left"),
+            wind("Blst", "Up  "),
+            Descriptor::new("Wnd ").with("WndM", enumv("Drct", "Blst")).with("Drct", enumv("Drct", "Left")),
+            extrude("Cube", long(7), long(9), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(7), long(9), "Sine", yes.clone(), no.clone()),
+            tiles(long(6), long(20), "FlXx"),
+            Descriptor::new("Tls ").with("TlNm", long(6)).with("TlOf", long(20)).with("FlCl", enumv("BlnM", "FlFr")),
+            // Wrong types (also NaN).
+            Descriptor::new("Wnd ").with("WndM", long(1)).with("Drct", enumv("Drct", "Left")),
+            extrude("Blks", Value::Double(7.0), long(9), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(7), unit(b"#Pxl", 9.0), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(7), long(9), "Rndm", long(1), no.clone()),
+            extrude("Blks", long(7), long(9), "Rndm", yes.clone(), Value::Double(f64::NAN)),
+            tiles(Value::Double(f64::NAN), long(20), "FlFr"),
+            tiles(long(6), Value::Text(UnicodeString::new_nul("20")), "FlFr"),
+            // Out of range.
+            extrude("Blks", long(1), long(9), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(256), long(9), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(7), long(0), "Rndm", yes.clone(), no.clone()),
+            extrude("Blks", long(7), long(i32::MAX), "Rndm", yes, no),
+            tiles(long(0), long(20), "FlFr"),
+            tiles(long(100), long(20), "FlFr"),
+            tiles(long(6), long(0), "FlFr"),
+            tiles(long(6), long(i32::MIN), "FlFr"),
+        ];
+        for fltr in cases {
+            let item = measured_item(fltr, 0.0, 255.0);
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{item:?}");
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes());
+        }
+        // A Tiles entry whose colour is unreadable is kept verbatim too.
+        for (key, bad) in [
+            ("FrgC", Value::Integer(3)),
+            ("BckC", Value::Descriptor(Descriptor::new("RGBC").with("Rd  ", Value::Double(0.0)))),
+            (
+                "BckC",
+                Value::Descriptor(
+                    Descriptor::new("RGBC").with("Rd  ", Value::Double(f64::NAN)).with("Grn ", Value::Double(0.0)).with("Bl  ", Value::Double(0.0)),
+                ),
+            ),
+        ] {
+            let mut item = measured_item(tiles(long(6), long(20), "FlFr"), 0.0, 255.0);
+            set(&mut item, key, bad);
+            assert_eq!(filter_from_item(&item).command, UNSUPPORTED_FILTER);
+        }
+        // Values with no PSD equivalent are reported, not guessed.
+        for (c, p) in [
+            ("filter.stylize.wind", json!({"method": "gale"})),
+            ("filter.stylize.wind", json!({"direction": "fromTop"})),
+            ("filter.stylize.wind", json!({"direction": 1})),
+            ("filter.stylize.extrude", json!({"type": "cubes"})),
+            ("filter.stylize.extrude", json!({"depthMode": null})),
+            ("filter.stylize.tiles", json!({"fill": "transparent"})),
+            ("filter.stylize.tiles", json!({"foreground": "teal"})),
+            ("filter.stylize.tiles", json!({"background": [1.0]})),
+            ("filter.stylize.tiles", json!({"background": [f64::NAN, 0.0, 0.0]})),
+        ] {
+            assert!(item_for_filter(&sf(c, p.clone())).is_err(), "{c} {p}");
         }
     }
 
