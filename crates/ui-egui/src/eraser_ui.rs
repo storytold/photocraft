@@ -27,7 +27,7 @@ pub fn click(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
         "tolerance": o.tolerance,
         "antiAlias": o.anti_alias,
         "contiguous": o.contiguous,
-        "sampleAllLayers": o.sample_all_layers,
+        "sampleAllLayers": o.sample_all.magic_eraser,
         "opacity": o.magic_eraser_opacity,
     });
     let r = app.run("paint.magicEraser", p);
@@ -92,7 +92,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             widgets::value_field(ui, &mut o.tolerance, 0.0..=255.0, "", 58.0);
             widgets::checkbox(ui, &mut o.anti_alias, tl!("Anti-alias"));
             widgets::checkbox(ui, &mut o.contiguous, tl!("Contiguous"));
-            widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            widgets::checkbox(ui, &mut o.sample_all.magic_eraser, tl!("Sample All Layers"));
             widgets::vline(ui, 22.0);
             opt(ui, tl!("Opacity:"));
             widgets::value_field(ui, &mut o.magic_eraser_opacity, 1.0..=100.0, "%", 62.0);

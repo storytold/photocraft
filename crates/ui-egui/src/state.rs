@@ -511,7 +511,9 @@ pub struct ToolOptions {
     pub tolerance: f32,
     pub contiguous: bool,
     pub anti_alias: bool,
-    pub sample_all_layers: bool,
+    /// Sample All Layers, kept per tool as in Photoshop (#5524). Stored under a new key, so the
+    /// single shared `sample_all_layers` of older preferences is ignored on load.
+    pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
@@ -653,8 +655,8 @@ pub struct ToolOptions {
     /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
     #[serde(default)]
     pub crop_shield: crate::crop_shield::CropShield,
-    /// Magic Eraser opacity % (tolerance, anti-alias, contiguous and sample-all are shared with the
-    /// Magic Wand and Paint Bucket).
+    /// Magic Eraser opacity % (tolerance, anti-alias and contiguous are shared with the Magic Wand
+    /// and Paint Bucket).
     pub magic_eraser_opacity: f32,
     /// Background Eraser: sampling (continuous | once | backgroundSwatch), limits (discontiguous |
     /// contiguous | findEdges), tolerance % and Protect Foreground Color.
@@ -761,13 +763,60 @@ fn default_eyedropper_sample() -> String {
     "all".into()
 }
 
+/// Each tool's Sample All Layers (the Paint Bucket calls it All Layers). Photoshop keeps one per
+/// tool, all off by default: turning it on for the Magic Wand must not leave Blur or Smudge
+/// copying the composite onto the active layer (#5524). The Mixer Brush keeps its own with the
+/// brush (`MixerSettings`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleAllLayers {
+    pub magic_wand: bool,
+    pub quick_selection: bool,
+    pub object_selection: bool,
+    pub paint_bucket: bool,
+    pub magic_eraser: bool,
+    pub spot_healing: bool,
+    pub patch: bool,
+    pub content_aware_move: bool,
+    pub remove: bool,
+    pub blur: bool,
+    pub sharpen: bool,
+    pub smudge: bool,
+}
+
+impl SampleAllLayers {
+    /// `tool`'s setting; false for a tool without the option.
+    pub fn get(mut self, tool: Tool) -> bool {
+        self.slot(tool).is_some_and(|v| *v)
+    }
+
+    /// `tool`'s setting, or `None` for a tool without the option.
+    pub fn slot(&mut self, tool: Tool) -> Option<&mut bool> {
+        Some(match tool {
+            Tool::MagicWand => &mut self.magic_wand,
+            Tool::QuickSelection => &mut self.quick_selection,
+            Tool::ObjectSelection => &mut self.object_selection,
+            Tool::PaintBucket => &mut self.paint_bucket,
+            Tool::MagicEraser => &mut self.magic_eraser,
+            Tool::SpotHealing => &mut self.spot_healing,
+            Tool::Patch => &mut self.patch,
+            Tool::ContentAwareMove => &mut self.content_aware_move,
+            Tool::Remove => &mut self.remove,
+            Tool::Blur => &mut self.blur,
+            Tool::Sharpen => &mut self.sharpen,
+            Tool::Smudge => &mut self.smudge,
+            _ => return None,
+        })
+    }
+}
+
 impl Default for ToolOptions {
     fn default() -> Self {
         Self {
             tolerance: 32.0,
             contiguous: true,
             anti_alias: true,
-            sample_all_layers: false,
+            sample_all: SampleAllLayers::default(),
             object_finder: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
@@ -1443,6 +1492,25 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_all_layers_is_per_tool_and_old_prefs_load() {
+        // The single shared flag of older preferences is dropped: every tool starts off (#5524).
+        let o: ToolOptions = serde_json::from_str(r#"{"sample_all_layers": true, "feather": 3.0}"#).unwrap();
+        assert_eq!((o.sample_all, o.feather), (SampleAllLayers::default(), 3.0));
+        let mut o = ToolOptions::default();
+        o.sample_all.magic_wand = true;
+        let back: ToolOptions = serde_json::from_value(serde_json::to_value(&o).unwrap()).unwrap();
+        assert!(back.sample_all.magic_wand && !back.sample_all.get(Tool::Blur));
+        assert!(!back.sample_all.get(Tool::Brush), "a tool without the option reads false");
+        let mut s = SampleAllLayers::default();
+        assert!(s.slot(Tool::Brush).is_none());
+        for t in [Tool::MagicWand, Tool::PaintBucket, Tool::Blur, Tool::Sharpen, Tool::Smudge, Tool::Remove] {
+            *s.slot(t).unwrap() = true;
+            assert!(s.get(t), "{t:?}");
+        }
+        assert!(!s.get(Tool::QuickSelection));
+    }
 
     #[test]
     fn tool_names_parse() {

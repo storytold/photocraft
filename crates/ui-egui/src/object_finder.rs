@@ -78,7 +78,7 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
         return Update::default();
     };
     let Some(st) = app.session.active() else { return Update::default() };
-    let all_layers = app.ui.tool_options.sample_all_layers;
+    let all_layers = app.ui.tool_options.sample_all.object_selection;
     let target = sampled_target(&st.doc, st.active_layer, all_layers);
     let (doc, revision, layer) = (st.doc.id, st.revision, st.active_layer);
     let px = [at[0].floor() as i32, at[1].floor() as i32];

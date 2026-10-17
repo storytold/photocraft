@@ -50,9 +50,9 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
     let o = &app.ui.tool_options;
     Some(match tool {
-        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
+        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
+        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
         Tool::Dodge | Tool::Burn => (
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
@@ -84,7 +84,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
-        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
+        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
             if !o.remove_after_each_stroke {
                 remove_pending_add(app, points);
@@ -134,7 +134,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
-            let (sample_all, enhance) = (o.sample_all_layers, o.enhance_edge);
+            let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
             return true;
@@ -163,7 +163,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 
 /// `paint.remove` params from the options bar (without the strokes).
 fn remove_params(o: &crate::state::ToolOptions) -> Value {
-    json!({"sampleAllLayers": o.sample_all_layers, "newLayer": o.remove_new_layer})
+    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer})
 }
 
 /// Remove after each stroke off: a finished stroke waits with the others, tinted on the canvas,
@@ -291,7 +291,7 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             "contentAware": true,
             "structure": o.patch_structure.round().clamp(1.0, 7.0),
             "color": o.patch_color.round().clamp(0.0, 10.0),
-            "sampleAllLayers": o.sample_all_layers,
+            "sampleAllLayers": o.sample_all.patch,
             "target": crate::canvas::paint_target(app),
         });
         if let Err(e) = app.run("paint.patch", p) {
@@ -337,7 +337,7 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
         "mode": o.cam_mode,
         "structure": o.cam_structure.round().clamp(1.0, 7.0),
         "color": o.cam_color.round().clamp(0.0, 10.0),
-        "sampleAllLayers": o.sample_all_layers,
+        "sampleAllLayers": o.sample_all.content_aware_move,
         "target": crate::canvas::paint_target(app),
     })
 }
@@ -351,7 +351,7 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
-    let sample_all = app.ui.tool_options.sample_all_layers;
+    let sample_all = app.ui.tool_options.sample_all.object_selection;
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
         let mode = match (mods.shift, mods.alt) {
@@ -456,12 +456,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 }
             }
             crate::widgets::vline(ui, 22.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.spot_healing, tl!("Sample All Layers"));
         }
         Tool::Remove => {
             // Photoshop's options bar: Sample All Layers, Create a new layer, Remove after each
             // stroke; with strokes waiting, ✓ applies them and ⊘ drops them.
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer"));
             crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
             if !app.remove_pending.is_empty() {
@@ -490,7 +490,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::value_field(ui, &mut o.patch_structure, 1.0..=7.0, "", 40.0);
                 opt(ui, tl!("Color:"));
                 crate::widgets::value_field(ui, &mut o.patch_color, 0.0..=10.0, "", 40.0);
-                crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+                crate::widgets::checkbox(ui, &mut o.sample_all.patch, tl!("Sample All Layers"));
             } else {
                 for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
                     let mut on = o.patch_mode == k;
@@ -510,7 +510,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
             opt(ui, tl!("Color:"));
             crate::widgets::value_field(ui, &mut o.cam_color, 0.0..=10.0, "", 40.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.content_aware_move, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.cam_transform_on_drop, tl!("Transform On Drop"));
             crate::widgets::vline(ui, 22.0);
             if crate::cam_transform::active(app) {
@@ -562,7 +562,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             pct(ui, tl!("Strength:"), &mut o.strength);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            if let Some(all) = o.sample_all.slot(tool) {
+                crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
+            }
             if tool == Tool::Sharpen {
                 crate::widgets::checkbox(ui, &mut o.protect_detail, tl!("Protect Detail"));
             }
@@ -606,7 +608,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::HistoryBrush => opt(ui, "Paints from the document's opening state"),
         Tool::QuickSelection => {
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
             opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
@@ -617,7 +619,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ObjectSelection => {
             crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
             opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
@@ -804,11 +806,47 @@ mod tests {
                 let mut app = app();
                 stripes(&mut app, 4, "pixels");
                 app.run("layer.new.layer", json!({})).unwrap();
-                app.ui.tool_options.sample_all_layers = all;
+                *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
                 drag(&mut app, tool);
                 let a = active(&app).surface().unwrap().rgba(30, 30)[3];
                 assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
             }
+        }
+    }
+
+    #[test]
+    fn sample_all_layers_is_each_tools_own() {
+        // #5524: Sample All Layers turned on for another tool (the Magic Wand, say) left Blur and
+        // Smudge copying the composite onto an annotation layer, freezing a sharp patch above the
+        // picture. Photoshop keeps the option per tool, so those strokes leave the empty layer empty.
+        for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+            let mut app = app();
+            stripes(&mut app, 4, "pixels");
+            app.run("layer.new.layer", json!({})).unwrap();
+            let mut others = crate::state::SampleAllLayers::default();
+            for t in [
+                Tool::MagicWand,
+                Tool::QuickSelection,
+                Tool::ObjectSelection,
+                Tool::PaintBucket,
+                Tool::MagicEraser,
+                Tool::SpotHealing,
+                Tool::Patch,
+                Tool::ContentAwareMove,
+                Tool::Remove,
+                Tool::Blur,
+                Tool::Sharpen,
+                Tool::Smudge,
+            ] {
+                if let Some(v) = others.slot(t).filter(|_| t != tool) {
+                    *v = true;
+                }
+            }
+            app.ui.tool_options.sample_all = others;
+            assert!(!app.ui.tool_options.sample_all.get(tool));
+            drag(&mut app, tool);
+            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+            assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
         }
     }
 

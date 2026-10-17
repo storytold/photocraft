@@ -52,7 +52,7 @@ fn setup(h: &mut Harness) -> LayerId {
         o.tolerance = 0.0;
         o.anti_alias = false;
         o.contiguous = true;
-        o.sample_all_layers = false;
+        o.sample_all.paint_bucket = false;
         o.bucket_fill_pattern = false;
         o.fill_opacity = 100.0;
         background
@@ -98,7 +98,7 @@ fn all_layers_checkbox_limits_bucket_fill_to_the_visible_color() {
             h.get_by_label("All Layers").click();
             h.run_steps(3);
         }
-        assert_eq!(h.state().ui.tool_options.sample_all_layers, all_layers, "checkbox changed the option");
+        assert_eq!(h.state().ui.tool_options.sample_all.paint_bucket, all_layers, "checkbox changed the option");
 
         let pos = screen(&h, 300.0, 150.0);
         h.event(egui::Event::PointerMoved(pos));

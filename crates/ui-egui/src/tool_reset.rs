@@ -8,9 +8,10 @@
 //! `ui.dialog.cancel` answer it); `{"confirmed": true}` skips it, for agents that already asked.
 //!
 //! What a tool's options are: [`ToolOptions`] is one struct, not one per tool, and a few fields
-//! are shared by the tools that show them (Tolerance, Anti-alias, Contiguous and Sample All Layers
-//! by the Magic Wand, Paint Bucket and Magic Eraser; Feather by the marquees and lassos; Strength
-//! by Blur, Sharpen and Smudge). Resetting one of those tools resets the shared field too.
+//! are shared by the tools that show them (Tolerance, Anti-alias and Contiguous by the Magic Wand,
+//! Paint Bucket and Magic Eraser; Feather by the marquees and lassos; Strength by Blur, Sharpen and
+//! Smudge). Resetting one of those tools resets the shared field too. Sample All Layers is kept per
+//! tool, as in Photoshop, so resetting a tool resets only its own.
 //! [`reset_options`] lists the fields of each tool. The selection tools also go back to New
 //! Selection, and the painting tools (the ones with a brush in the options bar) get the default
 //! brush, keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
@@ -117,6 +118,10 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     macro_rules! reset {
         ($($f:ident),* $(,)?) => {{ $( o.$f = d.$f.clone(); )* }};
     }
+    // Sample All Layers is each tool's own: only `tool`'s goes back.
+    if let Some(all) = o.sample_all.slot(tool) {
+        *all = d.sample_all.get(tool);
+    }
     match tool {
         Tool::Move => reset!(move_auto_select, move_target, move_show_transform),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height),
@@ -124,9 +129,9 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
-        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous, sample_all_layers),
-        Tool::QuickSelection => reset!(sample_all_layers, enhance_edge),
-        Tool::ObjectSelection => reset!(sample_all_layers, enhance_edge, object_finder),
+        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
+        Tool::QuickSelection => reset!(enhance_edge),
+        Tool::ObjectSelection => reset!(enhance_edge, object_finder),
         Tool::Crop => reset!(
             crop_ratio,
             crop_delete,
@@ -147,20 +152,20 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
         Tool::Pencil => reset!(pencil_auto_erase),
         Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
-        Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, sample_all_layers, magic_eraser_opacity),
+        Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
         Tool::Gradient => reset!(gradient_style, gradient_reverse, gradient_dither, gradient_classic, gradient_blend_mode, fill_opacity),
-        Tool::PaintBucket => reset!(bucket_fill_pattern, fill_opacity, tolerance, anti_alias, contiguous, sample_all_layers),
+        Tool::PaintBucket => reset!(bucket_fill_pattern, fill_opacity, tolerance, anti_alias, contiguous),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => reset!(type_font, type_style, type_size, type_aa, type_align),
         Tool::Zoom => reset!(zoom_scrubby),
-        Tool::SpotHealing => reset!(spot_type, sample_all_layers),
+        Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
-        Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color, sample_all_layers),
-        Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, sample_all_layers),
+        Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
+        Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
         Tool::CloneStamp => reset!(clone_aligned, clone_sample),
         Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle),
-        Tool::Blur | Tool::Sharpen => reset!(strength, sample_all_layers, protect_detail),
-        Tool::Smudge => reset!(strength, sample_all_layers, finger_painting),
+        Tool::Blur | Tool::Sharpen => reset!(strength, protect_detail),
+        Tool::Smudge => reset!(strength, finger_painting),
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, vibrance),
         Tool::Pen => reset!(vector_mode, pen_auto_add_delete),
@@ -225,5 +230,20 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert_eq!(app.ui.tool_options, ToolOptions::default());
         assert!(app.ui.dialogs.is_empty());
+    }
+
+    /// Sample All Layers is per tool (#5524): resetting Blur turns off only Blur's.
+    #[test]
+    fn reset_tool_resets_only_its_own_sample_all_layers() {
+        let mut o = ToolOptions::default();
+        o.sample_all.blur = true;
+        o.sample_all.magic_wand = true;
+        reset_options(&mut o, Tool::Blur);
+        assert!(!o.sample_all.blur);
+        assert!(o.sample_all.magic_wand, "the Magic Wand's Sample All Layers is not Blur's");
+        reset_options(&mut o, Tool::Remove);
+        assert!(o.sample_all.magic_wand);
+        reset_options(&mut o, Tool::MagicWand);
+        assert_eq!(o.sample_all, Default::default());
     }
 }
