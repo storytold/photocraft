@@ -3809,3 +3809,19 @@ curves	Smooth	Wygładź
 	Replace	Zastąp
 	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zastąp go tym dokumentem albo anuluj i użyj Plik › Zapisz jako, aby zachować oba.
+
+# Counted status and panel messages (plural forms: 1 | 2–4 except 12–14 | the rest)
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Wyeksportowano {n} próbkę koloru do {file}|Wyeksportowano {n} próbki kolorów do {file}|Wyeksportowano {n} próbek kolorów do {file}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Zaimportowano {n} próbkę koloru z {file}|Zaimportowano {n} próbki kolorów z {file}|Zaimportowano {n} próbek kolorów z {file}
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Zaimportowano {n} pędzel z {group}|Zaimportowano {n} pędzle z {group}|Zaimportowano {n} pędzli z {group}
+@plural	Played {n} step|Played {n} steps	Odtworzono {n} krok|Odtworzono {n} kroki|Odtworzono {n} kroków
+@plural	{n} step|{n} steps	{n} krok|{n} kroki|{n} kroków
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Zapisano dla Internetu: {n} plik|Zapisano dla Internetu: {n} pliki|Zapisano dla Internetu: {n} plików
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Zaktualizowano {n} połączony obiekt inteligentny zmieniony na dysku|Zaktualizowano {n} połączone obiekty inteligentne zmienione na dysku|Zaktualizowano {n} połączonych obiektów inteligentnych zmienionych na dysku
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Usunięto {n} warstwę zapisaną w tej kompozycji. Zaktualizuj kompozycję lub usuń ostrzeżenie.|Usunięto {n} warstwy zapisane w tej kompozycji. Zaktualizuj kompozycję lub usuń ostrzeżenie.|Usunięto {n} warstw zapisanych w tej kompozycji. Zaktualizuj kompozycję lub usuń ostrzeżenie.
+@plural	{n} plane|{n} planes	{n} płaszczyzna|{n} płaszczyzny|{n} płaszczyzn
+@plural	{n} preset|{n} presets	{n} ustawienie wstępne|{n} ustawienia wstępne|{n} ustawień wstępnych
+@plural	{n} sample point removed|{n} sample points removed	Usunięto {n} punkt próbkowania|Usunięto {n} punkty próbkowania|Usunięto {n} punktów próbkowania
+@plural	{n} slice|{n} slices	{n} plasterek|{n} plasterki|{n} plasterków
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} kolejne ostrzeżenie dotyczące ustawień wstępnych pędzli)|{warning} (+{n} kolejne ostrzeżenia dotyczące ustawień wstępnych pędzli)|{warning} (+{n} kolejnych ostrzeżeń dotyczących ustawień wstępnych pędzli)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}: {n} ostrzeżenie|{what}: {n} ostrzeżenia|{what}: {n} ostrzeżeń
