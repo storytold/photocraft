@@ -641,6 +641,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.filter_preview = None;
                 return Err("dialog has no command".into());
             };
+            if crate::filter_dialog::needs_displace_map(&cmd, &crate::filter_dialog::params_of(&d.fields)) {
+                app.filter_preview = None;
+                return crate::filter_dialog::ask_displace_map(app, cmd, d.fields.clone());
+            }
             let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
             let result = app.run(&cmd, params.clone());
             // A filter that runs as a background job keeps its preview on screen until the job

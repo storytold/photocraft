@@ -860,6 +860,42 @@ pub fn params_of(f: &Map<String, Value>) -> Value {
     Value::Object(f.iter().filter(|(k, v)| !k.starts_with("__") && !unset(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
+/// Filter › Distort › Displace confirmed with no map: no open document picked and no path typed
+/// (#5806). Photoshop asks for the displacement map file after OK; so does PhotoCraft.
+pub(crate) fn needs_displace_map(command: &str, params: &Value) -> bool {
+    command == "filter.distort.displace"
+        && params.get("mapPath").and_then(Value::as_str).is_none_or(|p| p.trim().is_empty())
+        && params.get("mapDocument").and_then(Value::as_i64).is_none_or(|i| i < 0)
+}
+
+/// Asks for the displacement map, then runs Displace with the dialog's values and that file, as
+/// OK in a dialog that had one would (smart filters included). Cancel applies nothing. In the
+/// browser the picker gives contents, not a path the filter can read: the map has to be opened
+/// as a document and picked as Map Document there.
+pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields: Map<String, Value>) -> Result<Value, String> {
+    use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
+    let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
+        let path = match answer {
+            FileDialogAnswer::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
+            FileDialogAnswer::Unavailable(e) => return Err(e),
+            FileDialogAnswer::Contents(..) | FileDialogAnswer::ContentsMany(_) => {
+                return Err("open the displacement map as a document, then choose it as the Map Document".into());
+            }
+            FileDialogAnswer::SaveTo(_) | FileDialogAnswer::FolderTo(_) => return Err("unexpected answer from the file dialog".into()),
+        };
+        let mut fields = fields;
+        fields.insert("mapPath".into(), json!(path));
+        let (cmd, params) = crate::smart_ui::confirm_command(&fields, command, params_of(&fields));
+        let result = app.run(&cmd, params);
+        if result.is_ok() {
+            remember(app, &cmd, &fields);
+            crate::actions::resume(app, &fields);
+        }
+        result
+    })
+}
+
 /// Compute a preview document: run `command` with `params` on the proxy (scaled) copy of `doc`.
 pub fn preview_document(doc: &Document, active: Option<photocraft_doc::LayerId>, command: &str, params: &Value, k: u32) -> Option<Document> {
     preview_document_with(doc, active, command, params, k, None)
@@ -1144,6 +1180,46 @@ mod tests {
         assert_eq!(f["radius"], json!(1.0));
         assert!(f.contains_key("__filter"));
         assert!(app.ui.dialogs.iter().any(|d| d.id == id));
+    }
+
+    /// #5806: OK in Displace with no map asks for the map file, as Photoshop does, and displaces
+    /// with the chosen file; Cancel in the picker applies nothing; a map already given runs at once.
+    #[test]
+    fn displace_asks_for_its_map_after_ok() {
+        let dir = std::env::temp_dir().join(format!("photocraft-displace-map-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let map = dir.join("map.png");
+        let mut m = photocraft_engine::Session::new();
+        m.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        std::fs::write(&map, photocraft_io::export(&m.active().unwrap().doc, "map.png", &Default::default()).unwrap().bytes).unwrap();
+        let answers = vec![Some(crate::file_dialog::FileDialogAnswer::Paths(vec![map.to_string_lossy().into_owned()])), None];
+        let (show, asked) = crate::file_dialog::fake(answers);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+        app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        let ctx = egui::Context::default();
+        let id = open(&mut app, "filter.distort.displace").unwrap();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert!(app.file_dialog_open(), "OK leaves the map picker pending");
+        // The frame shows the picker (the service is asked then) and acts on its answer.
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(asked.borrow().len(), 1, "OK asks for the map");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "Displace ran with the chosen map");
+        // Cancelled: nothing is applied.
+        let id = open(&mut app, "filter.distort.displace").unwrap();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(asked.borrow().len(), 2);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        // A map given in the dialog runs without asking.
+        assert!(!needs_displace_map("filter.distort.displace", &json!({"mapPath": "/maps/x.psd"})));
+        assert!(!needs_displace_map("filter.distort.displace", &json!({"mapDocument": 0})));
+        assert!(needs_displace_map("filter.distort.displace", &json!({"mapDocument": -1, "mapPath": " "})));
+        assert!(!needs_displace_map("filter.blur.gaussianBlur", &json!({})));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
