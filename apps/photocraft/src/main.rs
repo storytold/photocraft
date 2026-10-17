@@ -238,7 +238,13 @@ fn main() -> eframe::Result {
                 automation_write_root = args.next().map(std::path::PathBuf::from);
             }
             Some("--safe-gpu") => {
-                launch_options.push("--safe-gpu");
+                #[cfg(not(target_os = "macos"))]
+                let per_process = single_instance::safe_gpu_is_launch_option(std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").as_deref());
+                #[cfg(target_os = "macos")]
+                let per_process = true;
+                if per_process {
+                    launch_options.push("--safe-gpu");
+                }
                 safe_gpu = true;
             }
             Some(flag @ ("--present-mode" | "--frame-latency" | "--stroke-trace")) => {
