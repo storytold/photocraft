@@ -544,6 +544,9 @@ fn main() -> eframe::Result {
             info.canvas = "cpu".into();
             if let Some(rs) = cc.wgpu_render_state.clone() {
                 app.perf.gpu_info.set_adapter(&rs.adapter.get_info());
+                // Every egui texture uploads through this adapter, whichever canvas draws:
+                // Iris Xe on DX12 shows stale memory in all-zero texels (texel_guard.rs).
+                photocraft_ui_egui::texel_guard::install(&cc.egui_ctx, &rs.adapter.get_info());
                 let software_window = rs.adapter.get_info().device_type == eframe::wgpu::DeviceType::Cpu;
                 if software_window && mode != photocraft_engine::prefs::RenderingMode::Cpu {
                     app.perf.gpu_info.fallback = Some("No compatible hardware graphics adapter; using software graphics.".into());

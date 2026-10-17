@@ -206,6 +206,7 @@ pub mod swatches_ui;
 pub mod symmetry_ui;
 mod tab_strip;
 pub mod targa_options_ui;
+pub mod texel_guard;
 pub mod text_field_menu;
 pub mod theme;
 pub mod tiff_options_ui;
