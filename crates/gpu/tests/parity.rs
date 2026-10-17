@@ -2571,6 +2571,38 @@ fn pages_are_evicted_under_the_budget() {
     check(&mut g, &d, "after eviction");
 }
 
+/// #6563: a page texture that doesn't fit the budget is admitted by first dropping the least
+/// recently used pages of other cells (never the current cell's). With a zero budget every page
+/// created in a cell evicts the previous cell's pages, and the refresh still stays on the GPU
+/// (budget pressure alone never ends it on the CPU) and matches the CPU compositor.
+#[test]
+fn layer_pages_are_admitted_under_a_zero_budget_and_stay_on_the_gpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(600, 500);
+    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 590, 480), 61, 0.0));
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 620, 510), 62, 0.2);
+    top.blend = BlendMode::Multiply;
+    d.layers.push(top);
+    // Exercise page residency itself: lower-stack checkpoints could skip binding the pages.
+    g.paged.set_composite_cache_budget(0);
+    check(&mut g, &d, "warm");
+    let all = g.paged.resident_bytes();
+    g.paged.set_resident_budget(0);
+    for round in 0..2 {
+        let cpu = photocraft_compose::flatten(&d);
+        let (out, s) = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds())
+            .unwrap_or_else(|e| panic!("round {round}: a zero budget must not end the refresh on the CPU: {e}"));
+        let worst = worst_diff(&cpu.px, &out);
+        assert!(worst.0 <= TOL, "round {round}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+        assert!(s.cells > 1 && s.evicted > 0, "round {round}: {s:?}");
+        // Evicted pages were created again (uploaded), and only the last cell's are left.
+        assert!(s.tiles_uploaded > 0, "round {round}: {s:?}");
+        assert!(g.paged.resident_bytes() < all, "round {round}: {} of {all}", g.paged.resident_bytes());
+        d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(40 + round * 250, 60, 90 + round * 250, 120), &[0.2, 0.8, 0.3, 1.0]);
+    }
+    check(&mut g, &d, "after zero-budget renders");
+}
+
 #[test]
 fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());

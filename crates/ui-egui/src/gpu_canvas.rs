@@ -1261,8 +1261,9 @@ impl LayerFit {
 /// Floor of the compositor's memory budget: enough for a viewport's pages of a dozen layers.
 pub const MIN_GPU_BUDGET: u64 = 512 << 20;
 
-/// Why a full refresh whose layer pages don't fit [`memory_budget`] goes to the CPU compositor.
-pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+/// Why a full refresh whose layer pages don't fit [`memory_budget`] (or GPU memory) goes to the
+/// CPU compositor.
+pub const OVER_BUDGET: &str = photocraft_gpu::OVER_BUDGET;
 
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps.
 ///

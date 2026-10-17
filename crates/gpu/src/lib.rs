@@ -461,6 +461,8 @@ pub struct Compositor {
     staged: u64,
     /// Copies and render passes recorded since the last submit.
     recorded: u32,
+    /// Why a layer page texture couldn't be created this refresh (it then ends on the CPU).
+    layer_alloc: Option<String>,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
     /// [`Unsupported`] and use the CPU compositor).
@@ -567,6 +569,25 @@ fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
         *w = (*w).max(*r);
     }
     want
+}
+
+/// Why a refresh whose layer pages don't fit GPU memory is drawn on the CPU.
+pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+
+/// Which of `pages` (LRU clock, key, bytes) to drop, least recently used first, so `incoming`
+/// more bytes fit `budget` on top of the `total` held now. Callers leave out pages that must stay.
+fn lru_victims<K>(mut pages: Vec<(u64, K, u64)>, total: u64, incoming: u64, budget: u64) -> Vec<K> {
+    pages.sort_unstable_by_key(|p| p.0);
+    let mut total = total;
+    let mut out = Vec::new();
+    for (_, k, bytes) in pages {
+        if total.saturating_add(incoming) <= budget {
+            break;
+        }
+        total = total.saturating_sub(bytes);
+        out.push(k);
+    }
+    out
 }
 
 /// Runs `f` inside GPU error scopes and returns the first error raised.
@@ -700,6 +721,7 @@ impl Compositor {
             stamp: 0,
             staged: 0,
             recorded: 0,
+            layer_alloc: None,
             acc_format,
             effect_maps: map_error.is_none(),
             cmyk: 0,
@@ -1067,6 +1089,7 @@ impl Compositor {
         self.stamp += 1;
         self.staged = 0;
         self.recorded = 0;
+        self.layer_alloc = None;
 
         // Only render owns submission. A caller may discard encode's command buffer, so it
         // cannot establish (or consume) a checkpoint whose GPU copy might never execute.
@@ -1119,6 +1142,11 @@ impl Compositor {
             // The device was lost in a submit inside the cell: issue no more work.
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
+            }
+            // A page didn't fit even after evicting: this refresh goes to the CPU, the next one
+            // tries the GPU again (#6563).
+            if let Some(e) = self.layer_alloc.take() {
+                return Err(Unsupported(e));
             }
             let (evicted, bytes) = self.evict();
             stats.evicted += evicted;
@@ -1175,22 +1203,7 @@ impl Compositor {
     /// whole-region effect maps drawn this frame. Returns how many textures were dropped and
     /// their bytes.
     fn evict(&mut self) -> (usize, u64) {
-        let (mut n, mut freed) = (0, 0u64);
-        let mut total = self.resident_bytes();
-        if total > self.resident_budget {
-            let mut lru: Vec<(u64, ResKey, u64)> =
-                self.residents.iter().filter(|(_, r)| r.stamp != self.stamp).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
-            lru.sort_unstable_by_key(|c| c.0);
-            for (_, k, bytes) in lru {
-                if total <= self.resident_budget {
-                    break;
-                }
-                self.residents.remove(&k);
-                total = total.saturating_sub(bytes);
-                n += 1;
-                freed += bytes;
-            }
-        }
+        let (mut n, mut freed) = self.evict_residents(self.resident_budget, 0, None);
         let mut total = self.fx_cache_bytes();
         let fx_budget = usize::try_from(self.fx_budget).unwrap_or(usize::MAX);
         if total > fx_budget {
@@ -1214,6 +1227,62 @@ impl Compositor {
             }
         }
         (n, freed)
+    }
+
+    /// Drop least recently used resident pages until `incoming` more bytes fit in `budget`.
+    /// Never drops what the current cell uses, nor `keep`. Returns how many pages were dropped
+    /// and their bytes.
+    fn evict_residents(&mut self, budget: u64, incoming: u64, keep: Option<ResKey>) -> (usize, u64) {
+        let stamp = self.stamp;
+        let pages: Vec<(u64, ResKey, u64)> =
+            self.residents.iter().filter(|(k, r)| r.stamp != stamp && Some(**k) != keep).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
+        let (mut n, mut freed) = (0, 0u64);
+        for k in lru_victims(pages, self.resident_bytes(), incoming, budget) {
+            if let Some(r) = self.residents.remove(&k) {
+                n += 1;
+                freed += r.bytes();
+            }
+        }
+        (n, freed)
+    }
+
+    /// Create the page texture for `key`, `bytes` large. Least recently used pages make room in
+    /// the budget first; when the device is still out of memory, every page the current cell
+    /// doesn't use is dropped and creation is tried once more (#6563). `None` (with
+    /// `layer_alloc` set) when it still fails: the refresh ends and the CPU draws it.
+    fn create_layer_texture(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::TextureDescriptor<'_>,
+        key: ResKey,
+        bytes: u64,
+        stats: &mut Stats,
+    ) -> Option<wgpu::Texture> {
+        let replaced = self.residents.get(&key).map_or(0, Resident::bytes);
+        stats.evicted += self.evict_residents(self.resident_budget, bytes.saturating_sub(replaced), Some(key)).0;
+        // WebGPU reports errors asynchronously: its failures reach the health callbacks.
+        if cfg!(target_arch = "wasm32") {
+            return Some(device.create_texture(desc));
+        }
+        for retry in [false, true] {
+            let (texture, error) = first_error(device, || device.create_texture(desc));
+            match error {
+                None => return Some(texture),
+                Some(wgpu::Error::OutOfMemory { .. }) if !retry => {
+                    stats.evicted += self.evict_residents(0, 0, Some(key)).0;
+                }
+                Some(wgpu::Error::OutOfMemory { .. }) => {
+                    self.layer_alloc = Some(OVER_BUDGET.into());
+                    return None;
+                }
+                Some(e) => {
+                    self.layer_alloc = Some(format!("GPU layer texture failed: {e}"));
+                    return None;
+                }
+            }
+        }
+        self.layer_alloc = Some(OVER_BUDGET.into());
+        None
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
@@ -1314,6 +1383,10 @@ impl Compositor {
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
+        if self.layer_alloc.is_some() {
+            return;
+        }
 
         // Chunk pool.
         while self.pool.len() < plan.slots as usize {
@@ -1503,7 +1576,8 @@ impl Compositor {
         region: Rect,
         stats: &mut Stats,
     ) -> Option<(ResKey, [i32; 4])> {
-        if region.is_empty() {
+        // An earlier page of this cell didn't fit: the refresh ends after the cell anyway.
+        if region.is_empty() || self.layer_alloc.is_some() {
             return None;
         }
         let format = surface.format();
@@ -1516,7 +1590,7 @@ impl Compositor {
             .get(&key)
             .is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk || r.default_bits != default_bits);
         if stale {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
+            let desc = wgpu::TextureDescriptor {
                 label: Some("pc_compose_layer"),
                 size: wgpu::Extent3d { width: region.width(), height: region.height(), depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -1525,7 +1599,9 @@ impl Compositor {
                 format: kind.format(),
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
-            });
+            };
+            let bytes = region.width() as u64 * region.height() as u64 * kind.bytes_per_pixel() as u64;
+            let texture = self.create_layer_texture(device, &desc, key, bytes, stats)?;
             let view = texture.create_view(&Default::default());
             let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
             let mut r = Resident {
@@ -2439,6 +2515,21 @@ pub fn render_to_vec_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_pages_are_admitted_by_evicting_least_recently_used_first() {
+        let pages = || vec![(5, 'c', 40), (1, 'a', 30), (3, 'b', 20)];
+        // Fits already: nothing dropped.
+        assert!(lru_victims(pages(), 90, 10, 100).is_empty());
+        // 90 held + 40 incoming over 100: the oldest page goes first, then the next.
+        assert_eq!(lru_victims(pages(), 90, 40, 100), vec!['a']);
+        assert_eq!(lru_victims(pages(), 90, 60, 100), vec!['a', 'b']);
+        // Out of memory: a zero budget drops every candidate, and an impossible request stops
+        // when none are left instead of looping or overflowing.
+        assert_eq!(lru_victims(pages(), 90, 0, 0), vec!['a', 'b', 'c']);
+        assert_eq!(lru_victims(pages(), u64::MAX, u64::MAX, 1), vec!['a', 'b', 'c']);
+        assert!(lru_victims(Vec::<(u64, char, u64)>::new(), 90, 40, 100).is_empty());
+    }
 
     #[test]
     fn uniform_buffer_sizes_are_checked_before_allocation() {
