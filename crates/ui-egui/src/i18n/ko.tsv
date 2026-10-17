@@ -1245,6 +1245,9 @@
 	Menus	메뉴
 	Mesh Size	메시 크기
 	Metadata	메타데이터
+	User Data	사용자 데이터
+	Document User Data	문서 사용자 데이터
+	Persistent Layer ID	영구 레이어 ID
 	Metrics	메트릭
 	Midpoint	중간점
 	Midtones	중간 영역

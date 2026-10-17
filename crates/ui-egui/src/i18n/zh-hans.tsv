@@ -1280,6 +1280,9 @@
 	Menus	菜单
 	Mesh Size	网格大小
 	Metadata	元数据
+	User Data	用户数据
+	Document User Data	文档用户数据
+	Persistent Layer ID	持久图层 ID
 	Metrics	度量
 	Midpoint	中点
 	Midtones	中间调

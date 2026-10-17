@@ -14,6 +14,11 @@ fn selected_session(doc: Document, ids: &[LayerId]) -> Session {
     s
 }
 
+/// The document as the session holds it: opening gives each layer its persistent id.
+fn admitted(s: &Session) -> Document {
+    (*s.active().unwrap().doc).clone()
+}
+
 fn contents(s: &Session) -> Document {
     let SmartSource::Embedded { file_name, bytes } = active_smart(s).source else { panic!() };
     decode_source(&file_name, &bytes).unwrap()
@@ -49,9 +54,9 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             let mut selection = Surface::new(PixelFormat::GRAY8);
             selection.fill_rect(Rect::new(0, 0, 12, 12), &[0.5]);
             doc.selection = Some(selection);
-            let original = doc.clone();
             // Selection order must not change stacking order.
             let mut s = selected_session(doc, &[ids[2], ids[1], ids[0]]);
+            let original = admitted(&s);
             let before = flat(&s);
             let mut grouped = selected_session(original.clone(), &ids);
             grouped.execute("layer.groupLayers", json!({})).unwrap();
@@ -117,12 +122,13 @@ fn mixed_parent_selection_keeps_unselected_siblings_and_uses_the_top_selected_pa
     let keep_a = pixel(&doc, "Keep lower", Rect::new(0, 8, 8, 16), [0.0, 1.0, 0.0, 1.0]);
     let keep_b = pixel(&doc, "Keep upper", Rect::new(8, 8, 16, 16), [1.0, 1.0, 0.0, 1.0]);
     let (a_id, b_id, keep_a_id, keep_b_id) = (a.id, b.id, keep_a.id, keep_b.id);
-    let lower = Layer::group("Lower parent", vec![a, keep_a.clone()]);
-    let upper = Layer::group("Upper parent", vec![b, keep_b.clone()]);
+    let lower = Layer::group("Lower parent", vec![a, keep_a]);
+    let upper = Layer::group("Upper parent", vec![b, keep_b]);
     let (lower_id, upper_id) = (lower.id, upper.id);
     doc.layers = vec![lower, upper];
-    let original = doc.clone();
     let mut s = selected_session(doc, &[b_id, a_id]);
+    let original = admitted(&s);
+    let (keep_a, keep_b) = (original.layer(keep_a_id).unwrap().clone(), original.layer(keep_b_id).unwrap().clone());
     let before = flat(&s);
     let so = LayerId(convert(&mut s));
     let doc = &s.active().unwrap().doc;
@@ -144,8 +150,9 @@ fn explicit_layer_converts_only_that_layer_despite_multi_selection() {
     let a = pixel(&doc, "A", Rect::new(0, 0, 8, 8), [1.0, 0.0, 0.0, 1.0]);
     let b = pixel(&doc, "B", Rect::new(8, 0, 16, 8), [0.0, 0.0, 1.0, 1.0]);
     let (a_id, b_id) = (a.id, b.id);
-    doc.layers = vec![a, b.clone()];
+    doc.layers = vec![a, b];
     let mut s = selected_session(doc, &[a_id, b_id]);
+    let b = admitted(&s).layer(b_id).unwrap().clone();
     s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": a_id.0})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), 2);
     assert_eq!(s.active().unwrap().doc.layer(b_id).unwrap(), &b);
@@ -211,8 +218,8 @@ fn an_all_hidden_selection_is_rejected_without_changing_document_selection_or_hi
     b.visible = false;
     let ids = [a.id, b.id];
     doc.layers = vec![a, b];
-    let original = doc.clone();
     let mut s = selected_session(doc, &ids);
+    let original = admitted(&s);
     let err = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err();
     assert!(err.to_string().contains("empty"), "{err}");
     assert_eq!(*s.active().unwrap().doc, original);

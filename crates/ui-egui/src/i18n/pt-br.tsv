@@ -1250,6 +1250,9 @@
 	Menus	Menus
 	Mesh Size	Tamanho da malha
 	Metadata	Metadados
+	User Data	Dados do usuário
+	Document User Data	Dados do usuário do documento
+	Persistent Layer ID	ID de camada persistente
 	Metrics	Métrico
 	Midpoint	Ponto médio
 	Midtones	Meios-tons

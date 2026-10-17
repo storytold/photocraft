@@ -1269,6 +1269,9 @@
 	Menus	Menu
 	Mesh Size	Rozmiar siatki
 	Metadata	Metadane
+	User Data	Dane użytkownika
+	Document User Data	Dane użytkownika dokumentu
+	Persistent Layer ID	Stały identyfikator warstwy
 	Metrics	Metryczne
 	Midpoint	Punkt środkowy
 	Midtones	Półcienie

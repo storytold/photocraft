@@ -1255,6 +1255,9 @@
 	Menus	Menus
 	Mesh Size	Taille du maillage
 	Metadata	Métadonnées
+	User Data	Données utilisateur
+	Document User Data	Données utilisateur du document
+	Persistent Layer ID	ID de calque persistant
 	Metrics	Métriques
 	Midpoint	Point médian
 	Midtones	Tons moyens

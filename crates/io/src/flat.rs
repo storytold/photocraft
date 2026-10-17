@@ -542,6 +542,14 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
         // Free-form descriptions can contain the same sensitive text as an XMP packet.
         img.meta.text.clear();
     }
+    // A tool's user data describes the layered document: only files that keep the layers carry
+    // it. It can also outgrow the room a flat format has for XMP (a JPEG segment), which would
+    // cost the whole packet, copyright included.
+    if let Some(xmp) = img.meta.xmp.as_deref()
+        && let std::borrow::Cow::Owned(stripped) = crate::user_data::strip(xmp)
+    {
+        img.meta.xmp = Some(stripped);
+    }
     if img.layout().has_alpha() && !format.caps().alpha {
         // Flattened over white, as saving a transparent document without transparency does.
         img = matte_over_white(&img)?;

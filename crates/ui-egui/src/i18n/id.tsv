@@ -1249,6 +1249,9 @@
 	Menus	Menu
 	Mesh Size	Ukuran Mesh
 	Metadata	Metadata
+	User Data	Data Pengguna
+	Document User Data	Data Pengguna Dokumen
+	Persistent Layer ID	ID Layer Persisten
 	Metrics	Metrik
 	Midpoint	Titik Tengah
 	Midtones	Midtone

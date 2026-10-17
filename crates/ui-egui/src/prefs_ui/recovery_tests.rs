@@ -87,6 +87,8 @@ fn recovery_is_deferred_until_after_app_construction() {
 fn recovery_keeps_frames_and_editing_live_and_adopts_the_admitted_document() {
     let mut doc = document("Recovered");
     doc.layers[0].surface_mut().unwrap().write_pixel(1, 2, &[1.0, 0.0, 0.0, 1.0]);
+    // A saved layer's persistent id comes back with it.
+    doc.layers[0].psd_id = Some(7);
     let original = doc.clone();
     let (pending, started, release, finished) = gated(doc);
     let (services, log) = services(vec![pending]);

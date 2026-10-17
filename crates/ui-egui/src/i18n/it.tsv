@@ -1270,6 +1270,9 @@
 	Menus	Menu
 	Mesh Size	Dimensione mesh
 	Metadata	Metadati
+	User Data	Dati utente
+	Document User Data	Dati utente del documento
+	Persistent Layer ID	ID livello persistente
 	Metrics	Metriche
 	Midpoint	Punto medio
 	Midtones	Mezzi toni

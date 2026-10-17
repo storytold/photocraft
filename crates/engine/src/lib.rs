@@ -64,6 +64,7 @@ pub mod installed_profiles;
 pub mod jobs;
 pub mod kys;
 pub mod layer_copy_cmds;
+mod layer_ids;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
@@ -88,6 +89,7 @@ pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;
+pub mod pipeline_cmds;
 mod pixels;
 pub mod plugin_cmds;
 pub mod prefs;
@@ -238,6 +240,9 @@ pub struct DocState {
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
+    /// The persistent layer ids given out this session (outside history, so an undo never
+    /// makes one free again).
+    layer_ids: layer_ids::LayerIds,
 }
 
 impl DocState {
@@ -255,7 +260,9 @@ impl DocState {
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
     }
 
-    pub fn new(doc: Document, path: Option<String>) -> Self {
+    pub fn new(mut doc: Document, path: Option<String>) -> Self {
+        let mut layer_ids = layer_ids::LayerIds::default();
+        layer_ids.assign(&mut doc, layer_ids::Arrival::File);
         let active_layer = doc.top_layer();
         let mut history = History::default();
         history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
@@ -281,6 +288,7 @@ impl DocState {
             color_samplers: Vec::new(),
             snapshots: Vec::new(),
             next_snapshot: 1,
+            layer_ids,
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
@@ -784,6 +792,17 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        self.edit_as(label, layer_ids::Arrival::Edit, f)
+    }
+
+    /// [`Session::edit`], saying how the edited document's layers arrived: `File` when it is the
+    /// document's own file again (Revert), whose persistent layer ids are adopted.
+    pub(crate) fn edit_as<R>(
+        &mut self,
+        label: &str,
+        arrival: layer_ids::Arrival,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);
@@ -800,6 +819,8 @@ impl Session {
         if let (Some(k), Some(id)) = (restrict, active) {
             channel_cmds::restrict_to_color(&before, &mut doc, id, k);
         }
+        // A layer created by this edit gets its persistent id in the same history step.
+        st.layer_ids.assign(&mut doc, arrival);
         st.doc = Arc::new(doc);
         st.active_layer = active;
         fix_selection(st);

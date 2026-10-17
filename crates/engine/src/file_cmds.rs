@@ -428,7 +428,8 @@ fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
     let fresh = import(&file_name(&path), &bytes)?;
-    s.edit("Revert", |doc, active| {
+    // The file's own layers again: their persistent ids are adopted, not renumbered.
+    s.edit_as("Revert", crate::layer_ids::Arrival::File, |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
         // Keep the identity (colour state, views and caches are keyed by it) and the tab name.

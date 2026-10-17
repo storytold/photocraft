@@ -1472,6 +1472,9 @@ cameraRaw	Shadows	Vùng tối
 	Medium gray	Xám vừa
 	Memory usage mb	Mức dùng bộ nhớ (MB)
 	Metadata	Siêu dữ liệu
+	User Data	Dữ liệu người dùng
+	Document User Data	Dữ liệu người dùng của tài liệu
+	Persistent Layer ID	ID lớp cố định
 	Metal	Metal
 	Millimeters	Milimet
 	Nearest neighbor	Lân cận gần nhất
