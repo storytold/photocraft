@@ -69,6 +69,23 @@ fn entropy(v: &[f32], scratch: &mut EntropyScratch) -> f32 {
     h / n.log2()
 }
 
+/// `x` to the power `k` by repeated squaring. Every step is one IEEE 754 multiplication, so the
+/// result has the same bits on every target. On Windows (MSVC), `f32::powi` with an exponent the
+/// compiler cannot see as a constant calls the C runtime's `powf`, which rounds differently.
+fn ipow(x: f32, k: u32) -> f32 {
+    let (mut base, mut k, mut acc) = (x, k, 1.0f32);
+    loop {
+        if k & 1 != 0 {
+            acc *= base;
+        }
+        k >>= 1;
+        if k == 0 {
+            return acc;
+        }
+        base *= base;
+    }
+}
+
 fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
     let n = v.len() as f32;
     if v.is_empty() {
@@ -97,7 +114,7 @@ fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
         _ => {}
     }
     let mean = v.iter().sum::<f32>() / n;
-    let m = |k: i32| v.iter().map(|x| (x - mean).powi(k)).sum::<f32>() / n;
+    let m = |k: u32| v.iter().map(|x| ipow(x - mean, k)).sum::<f32>() / n;
     match s {
         Stat::Mean => mean,
         Stat::Variance => m(2),
@@ -105,7 +122,7 @@ fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
         Stat::Skewness => {
             let sd = m(2).sqrt();
             // Map −2..2 to 0..1 (0.5 = symmetric).
-            if sd < 1e-6 { 0.5 } else { (m(3) / sd.powi(3) / 4.0 + 0.5).clamp(0.0, 1.0) }
+            if sd < 1e-6 { 0.5 } else { (m(3) / ipow(sd, 3) / 4.0 + 0.5).clamp(0.0, 1.0) }
         }
         Stat::Kurtosis => {
             let var = m(2);
@@ -456,5 +473,17 @@ mod tests {
     #[test]
     fn no_layers_gives_an_empty_result() {
         assert!(combine(&[], Stat::Median).is_empty());
+    }
+
+    /// [`ipow`] multiplies in the order `x·x²` for the cube and `x²·x²` for the fourth power.
+    #[test]
+    fn ipow_squares_and_multiplies() {
+        for x in [0.58f32, -0.12, -2.6, 2.4, -0.6, 1.0e-3, 0.0] {
+            assert_eq!(ipow(x, 0).to_bits(), 1.0f32.to_bits());
+            assert_eq!(ipow(x, 1).to_bits(), x.to_bits());
+            assert_eq!(ipow(x, 2).to_bits(), (x * x).to_bits());
+            assert_eq!(ipow(x, 3).to_bits(), (x * (x * x)).to_bits());
+            assert_eq!(ipow(x, 4).to_bits(), ((x * x) * (x * x)).to_bits());
+        }
     }
 }
