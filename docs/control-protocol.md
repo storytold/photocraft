@@ -277,6 +277,12 @@ toolbox colour as `backgroundColor: [r,g,b]` (0..1), so reusing it does not foll
 changes. Up to 256 presets are kept. Invalid saved entries are skipped independently; other
 presets and preferences still load. Automatic Recent configurations are separate follow-up work.
 
+## Shape tools
+
+Paint JSON retains solid alpha/model colours; gradient `opacityStops`, `midpoints`, `offset`,
+`dither`, `align`; pattern `id`, `angle`, `link`, `phase` alongside legacy stops/name/scale.
+Shape create/edit resolves document or preset pattern tiles and embeds them in the same undo step.
+
 ## Snapping
 
 With View › Snap on, tool gestures snap to the View › Snap To targets (guides and grid while they
