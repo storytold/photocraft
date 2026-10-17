@@ -492,6 +492,74 @@ mod tests {
         assert!(app.wide_angle.is_none());
     }
 
+    /// A 160 × 100 grey layer to open the dialog on.
+    fn grey_layer() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 160, "height": 100})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        app
+    }
+
+    /// Open the dialog with one free constraint across the middle of the layer.
+    fn open_with_a_constraint(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        menu(app, ctx, "filter.adaptiveWideAngle", &json!({"ui": {"add": {"a": [20, 50], "b": [140, 50]}}})).unwrap().unwrap();
+    }
+
+    /// `orient` sets a constraint's orientation, as the right-click menu does; a bad index is
+    /// an error that changes nothing.
+    #[test]
+    fn orient_sets_a_constraint_orientation() {
+        let mut app = grey_layer();
+        let ctx = egui::Context::default();
+        open_with_a_constraint(&mut app, &ctx);
+        let r = menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"orient": {"index": 0, "orientation": "vertical"}}})).unwrap().unwrap();
+        assert_eq!(r["params"]["constraints"][0]["orientation"], "vertical");
+        for bad in [json!({"index": 1, "orientation": "horizontal"}), json!({"orientation": "horizontal"}), json!({"index": -1})] {
+            assert!(menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"orient": bad}})).unwrap().is_err(), "{bad}");
+        }
+        assert_eq!(app.wide_angle.as_ref().unwrap().params.constraints[0].orientation, Orientation::Vertical);
+    }
+
+    /// Right-clicking a constraint opens Photoshop's constraint menu: an orientation (the
+    /// current one checked) or Delete. A right-click away from every constraint deletes nothing
+    /// and opens no menu (it used to delete the nearest constraint outright).
+    #[test]
+    fn right_click_on_a_constraint_opens_its_menu() {
+        use egui_kittest::kittest::Queryable;
+        let size = vec2(1000.0, 600.0);
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), grey_layer());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let ctx = h.ctx.clone();
+        open_with_a_constraint(h.state_mut(), &ctx);
+        h.run_steps(2);
+        // The image view (see `show`): the window less the title, footer and panel, inset 16 pt.
+        let view = ERect::from_min_max(pos2(16.0, 30.0 + 16.0), pos2(size.x - PANEL_W - 16.0, size.y - 48.0 - 16.0));
+        let right_click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: Pos2| {
+            let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+            h.input_mut().events.extend([egui::Event::PointerMoved(p), button(true)]);
+            h.run_steps(1);
+            h.input_mut().events.push(button(false));
+            h.run_steps(2);
+        };
+        let constraints = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().wide_angle.as_ref().unwrap().params.constraints.clone();
+        // The constraint runs through the document's centre, which the view centres.
+        right_click(&mut h, view.center());
+        h.get_by_label("Horizontal").click();
+        h.run_steps(2);
+        assert_eq!(constraints(&h).len(), 1, "choosing an orientation keeps the constraint");
+        assert_eq!(constraints(&h)[0].orientation, Orientation::Horizontal);
+        // Away from it: no menu, nothing deleted.
+        right_click(&mut h, view.left_top() + vec2(4.0, 4.0));
+        assert!(h.query_by_label("Horizontal").is_none(), "no menu away from a constraint");
+        assert_eq!(constraints(&h).len(), 1);
+        // Delete from the menu (the panel's list has its own Delete button too).
+        right_click(&mut h, view.center());
+        h.get_all_by_label("Delete").last().expect("the menu's Delete").click();
+        h.run_steps(2);
+        assert!(constraints(&h).is_empty());
+    }
+
     #[test]
     fn command_z_steps_the_dialog_not_the_document() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
