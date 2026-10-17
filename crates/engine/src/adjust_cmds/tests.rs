@@ -490,8 +490,32 @@ fn a_bad_adjustment_param_on_a_smart_object_is_an_error() {
     assert_eq!(smart_filters_of(&s).len(), filters, "nothing recorded");
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
     assert_eq!(flatten(&s), flat, "pixels untouched");
-    assert!(!s.is_enabled("image.adjustments.replaceColor"), "only adjustments that re-render become smart filters");
-    assert!(!s.is_enabled("image.adjustments.matchColor"), "only adjustments that re-render become smart filters");
+    assert!(s.is_enabled("image.adjustments.replaceColor"), "Replace Color re-runs from its recorded colour");
+    assert!(!s.is_enabled("image.adjustments.matchColor"), "Match Color needs another document and stays off a smart object");
+}
+
+/// #3606: Desaturate, Equalize and Replace Color record a smart filter instead of refusing
+/// the smart object. The filter renders the same pixels as the destructive command.
+#[test]
+fn desaturate_equalize_and_replace_color_record_smart_filters() {
+    let cases = [
+        ("image.adjustments.desaturate", json!({}), "image.adjustments.desaturate"),
+        ("image.adjustments.equalize", json!({}), "image.adjustments.equalize"),
+        ("image.adjustments.replaceColor", json!({"color": "#6688cc", "fuzziness": 180, "hue": 40}), "image.adjustments.replaceColor"),
+    ];
+    for (cmd, params, recorded) in cases {
+        let mut smart = smart_session();
+        let mut plain = session(8, "rgb");
+        plain.execute("layer.new.layer", json!({})).unwrap();
+        paint(&mut plain, |x, y| [0.1 + x as f32 / 60.0, 0.2 + y as f32 / 50.0, 0.6 - x as f32 / 120.0, 1.0]);
+        assert!(smart.is_enabled(cmd), "{cmd}");
+        plain.execute(cmd, params.clone()).unwrap();
+        smart.execute(cmd, params).unwrap();
+        let sf = smart_filters_of(&smart);
+        assert_eq!(sf.len(), 1, "{cmd}");
+        assert_eq!(sf[0].command, recorded);
+        assert!(max_diff(&flatten(&smart), &flatten(&plain)) < 1.0 / 255.0, "{cmd} smart filter matches the destructive result");
+    }
 }
 
 /// #780: a targeted mask enables Invert (and filters) on layers without pixels, such as an

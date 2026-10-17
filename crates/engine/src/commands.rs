@@ -1099,20 +1099,31 @@ fn build() -> Vec<CommandSpec> {
         cmd!("image.imageRotation.90ccw", "90° Counter Clockwise", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
-        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, _| {
-            destructive_adjust(
-                s,
-                "Desaturate",
-                Adjustment::HueSaturation {
-                    hue: 0.0,
-                    saturation: -100.0,
-                    lightness: 0.0,
-                    colorize: false,
-                    ranges: photocraft_doc::adjust::HueRange::defaults(),
-                },
-                &Value::Null,
-            )
-        }),
+        cmd!(
+            "image.adjustments.desaturate",
+            "Desaturate",
+            ["Image", "Adjustments"],
+            Some("Cmd+Shift+U"),
+            "{}",
+            crate::adjust_cmds::has_pixels_or_smart,
+            |s, p| {
+                if crate::adjust_cmds::adjust_as_smart_filter(s, "desaturate", "Desaturate", p)? {
+                    return Ok(Value::Null);
+                }
+                destructive_adjust(
+                    s,
+                    "Desaturate",
+                    Adjustment::HueSaturation {
+                        hue: 0.0,
+                        saturation: -100.0,
+                        lightness: 0.0,
+                        colorize: false,
+                        ranges: photocraft_doc::adjust::HueRange::defaults(),
+                    },
+                    &Value::Null,
+                )
+            }
+        ),
         // Paint
         cmd!(
             "paint.stroke",
