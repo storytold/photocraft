@@ -3395,9 +3395,11 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.panels.properties || Tokens::get(ctx).pro {
         return;
     }
-    if app.session.active().is_none() {
-        return;
-    }
+    let Some(st) = app.session.active() else { return };
+    let doc_id = st.doc.id;
+    let active_layer = st.active_layer;
+    // Non-Pro themes keep their floating card, but it should expose the same
+    // document, pixel, shape, text, fill, and mask properties as the dock (#2773).
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     let width = 320.0;
@@ -3416,6 +3418,10 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let shown = egui::Area::new(card_id).order(egui::Order::Middle).fixed_pos(pos + offset).show(ctx, |ui| {
         frame.show(ui, |ui| {
             ui.set_width(width - 28.0);
+            // The Area's previous frame height can otherwise clip longer controls after
+            // switching from a short target (e.g. a solid fill to a text layer).
+            let max_height = (canvas.height() - 80.0).clamp(160.0, 720.0);
+            ui.set_max_height(max_height);
             let title = ui.horizontal(|ui| {
                 ui.label(RichText::new(tl!("Properties")).font(theme::semibold(13.5)).color(t.text));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3433,7 +3439,9 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(6.0);
             widgets::hairline(ui);
             ui.add_space(8.0);
-            properties_body(app, ui);
+            egui::ScrollArea::vertical().id_salt(("properties-card-scroll", doc_id, active_layer)).max_height(max_height - 38.0).show(ui, |ui| {
+                properties_body(app, ui);
+            });
         });
     });
     if drag != egui::Vec2::ZERO && canvas.is_positive() {
@@ -5504,6 +5512,38 @@ mod toolbar_hidden_tests {
 mod properties_card_tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Non-Pro themes must not hide ordinary pixel layer Properties or ignore its toggle (#2773).
+    #[test]
+    fn studio_and_adwaita_properties_show_pixel_layers_and_respect_visibility() {
+        for theme in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::AdwaitaDark, crate::theme::ThemeKind::Adwaita] {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
+            s.execute("layer.new.layer", json!({"name":"Pixels"})).unwrap();
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.ui.panels.properties = true;
+            let mut h = Harness::builder().with_size(vec2(900.0, 680.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        app.last_canvas_rect = ui.max_rect();
+                        properties_window(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, theme);
+            h.run_steps(3);
+            assert!(h.query_all_by_role(egui::accesskit::Role::SpinButton).next().is_some(), "{theme:?}: pixel properties absent");
+
+            h.state_mut().ui.panels.properties = false;
+            h.run_steps(2);
+            assert!(h.query_all_by_role(egui::accesskit::Role::SpinButton).next().is_none(), "{theme:?}: hidden card still accepts inputs");
+
+            h.state_mut().ui.panels.properties = true;
+            h.run_steps(2);
+            assert!(h.query_all_by_role(egui::accesskit::Role::SpinButton).next().is_some(), "{theme:?}: card did not reopen");
+        }
+    }
 
     /// Arithmetic left uncommitted in one fill layer's card never lands on the layer selected next.
     #[test]
