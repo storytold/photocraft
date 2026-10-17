@@ -99,6 +99,12 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
+## Bundled test fixtures (not shipped)
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/heif/tests/fixtures/intra-422-10.hevc` | Synthetic 128×128 10-bit HEVC 4:2:2 test vector (FFmpeg testsrc2, x265 intra encoding) | heic-rs contributors | [heic-rs PR #10](https://github.com/tbraun96/heic-rs/pull/10), immutable source and oracle details in [README](crates/heif/tests/fixtures/README.md) | MIT OR Apache-2.0; licences beside the fixture |
+
 ## Test data (not committed, not shipped)
 
 `corpus/` is gitignored and no test fixtures are committed to the repository.
