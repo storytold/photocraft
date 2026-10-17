@@ -757,6 +757,43 @@ mod tests {
     }
 
     #[test]
+    fn indexed_place_and_data_set_methods_keep_the_active_document() {
+        let base = std::env::temp_dir().join(format!("pc-doc-index-active-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let img = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![42; 4 * 4 * 3]).unwrap();
+        std::fs::write(root.join("logo.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        std::fs::write(root.join("sets.csv"), "Data Set,show\none,true\ntwo,false\n").unwrap();
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "first"})).unwrap();
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "second"})).unwrap();
+        let layer = h.handle("doc.inspect", json!({})).unwrap()["layers"][0]["id"].as_u64().expect("the layer id");
+        h.handle("engine.execute", json!({"command": "image.variables.define", "params": {"defs": [{"name": "show", "layer": layer, "type": "visibility"}]}}))
+            .unwrap();
+        h.handle("doc.select", json!({"index": 0})).unwrap();
+
+        let steps = [
+            ("doc.place", json!({"path": "logo.png", "index": 1}), true),
+            ("doc.importDataSets", json!({"path": "sets.csv", "index": 1}), true),
+            ("doc.exportLayers", json!({"dir": "layers", "index": 1}), true),
+            ("doc.exportDataSets", json!({"dir": "sets", "index": 1}), true),
+            // A failing call restores the active document too.
+            ("doc.importDataSets", json!({"path": "missing.csv", "index": 1}), false),
+        ];
+        for (method, params, succeeds) in steps {
+            let result = h.handle(method, params.clone());
+            assert_eq!(result.is_ok(), succeeds, "{method} {params}: {result:?}");
+            assert_eq!(h.session.active_index(), Some(0), "{method} {params} must not select document 1");
+        }
+        assert_eq!(h.session.documents()[0].doc.layer_count(), 1, "nothing was placed into the active document");
+        assert_eq!(h.session.documents()[1].doc.layer_count(), 2, "the placed layer is in document 1");
+        assert_eq!(std::fs::read_dir(root.join("sets")).unwrap().count(), 2, "document 1's data sets were exported");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn trusted_local_render_keeps_full_size_behavior() {
         let mut h = Headless::trusted_local();
         h.handle("doc.new", json!({"width": 2049, "height": 1})).unwrap();

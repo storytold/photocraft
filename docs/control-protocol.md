@@ -382,6 +382,11 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `batch` | `{steps: [{command, params?, wait?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` (a step with `wait: false` starts a long command as a background job, like `engine.execute`) |
 | `methods` | the list above |
 
+An `index` targets that one call: `doc.place`, `doc.exportLayers`, `doc.exportDataSets`,
+`doc.importDataSets`, `doc.save`, `doc.inspect` and `doc.render` act on the document at `index`
+without making it the active one, so the next call without `index` still runs on the document
+that was active before (`doc.select` is the method that changes it).
+
 ```sh
 printf '%s\n' \
   '{"id":1,"method":"doc.open","params":{"path":"in.jpg"}}' \
