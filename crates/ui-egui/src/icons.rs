@@ -87,7 +87,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Move => "move",
         Tool::Artboard => "artboard",
         Tool::RectMarquee => "square-dashed",
-        Tool::EllipseMarquee => "circle-dashed",
+        Tool::EllipseMarquee => "ellipse-dashed",
         Tool::SingleRowMarquee => "marquee-row",
         Tool::SingleColumnMarquee => "marquee-column",
         Tool::Brush => "brush",
@@ -272,10 +272,39 @@ mod tests {
             assert!(union > 0, "icons must have ink at {size}px");
             let overlap = shared as f32 / union as f32;
             assert!(overlap < 0.5, "the two glyphs must read as distinct: {overlap:.2} of their ink overlaps at {size}px");
-            // The dashed selection arc must actually rasterize: more ink than the bare brush.
-            let brush = ink(tool_icon(Tool::Brush), size);
-            assert!(quick.iter().filter(|a| **a).count() > brush.iter().filter(|a| **a).count(), "the dashed arc is missing at {size}px");
+            // The dashed selection "C" must actually rasterize down the left edge, where the brush has no ink.
+            let s = size as usize;
+            assert!(quick.iter().enumerate().any(|(i, a)| *a && i % s < s / 5), "the dashed selection edge is missing at {size}px");
         }
+    }
+
+    /// Ink bounding box `(width, height)` of a rasterized mask.
+    fn ink_extent(mask: &[bool], size: u32) -> (usize, usize) {
+        let s = size as usize;
+        let (xs, ys): (Vec<usize>, Vec<usize>) = mask.iter().enumerate().filter(|(_, a)| **a).map(|(i, _)| (i % s, i / s)).unzip();
+        let span = |v: &[usize]| v.iter().max().zip(v.iter().min()).map_or(0, |(hi, lo)| hi - lo + 1);
+        (span(&xs), span(&ys))
+    }
+
+    #[test]
+    fn ellipse_marquee_icon_is_a_wide_ellipse() {
+        // #6875: Photoshop's Elliptical Marquee glyph is a horizontal ellipse, not a circle.
+        assert_ne!(tool_icon(Tool::EllipseMarquee), "circle-dashed");
+        for size in [14_u32, 28] {
+            let (w, h) = ink_extent(&ink(tool_icon(Tool::EllipseMarquee), size), size);
+            assert!(w as f32 >= h as f32 * 1.15, "ellipse marquee ink is {w}x{h} at {size}px: not wider than tall");
+        }
+    }
+
+    #[test]
+    fn quick_selection_icon_is_a_tall_selection_with_a_brush() {
+        // #6875: Photoshop's Quick Selection glyph is a dashed, upright rounded "C" with a brush.
+        let size = 28_u32;
+        let s = size as usize;
+        let quick = ink(tool_icon(Tool::QuickSelection), size);
+        // The left edge of the selection runs most of the icon's height.
+        let left_rows = (0..s).filter(|y| (0..s / 5).any(|x| quick.get(y * s + x).copied().unwrap_or(false))).count();
+        assert!(left_rows * 5 > s * 2, "left selection edge covers only {left_rows} of {s} rows");
     }
 
     #[test]
