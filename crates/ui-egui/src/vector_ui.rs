@@ -1696,6 +1696,32 @@ pub fn paths_footer(ctx: &egui::Context) -> Option<Rect> {
     ctx.data(|d| d.get_temp(footer_id()))
 }
 
+/// Photoshop's default name for a saved path: the first free "Path N", counting from the number of
+/// saved paths.
+fn free_path_name(doc: &Document) -> String {
+    let mut n = doc.paths.len().saturating_add(1);
+    while doc.paths.iter().any(|p| p.name == format!("Path {n}")) {
+        n = n.saturating_add(1);
+        if n == usize::MAX {
+            break;
+        }
+    }
+    format!("Path {n}")
+}
+
+/// A Paths panel name being typed in place: the row's key ("work" or the saved path's name) and
+/// the text so far. It lives in egui's temp data, like the Channels panel's rename field.
+#[derive(Clone)]
+struct PathRename {
+    key: String,
+    text: String,
+    focused: bool,
+}
+
+fn rename_id(doc: &Document) -> egui::Id {
+    egui::Id::new(("path-rename", doc.id.0))
+}
+
 /// Commands offered by a Paths row's context menu. The row's path is passed explicitly so a
 /// right-click acts on that row even when another path is selected in the panel.
 fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str, &'static str, Value)> {
@@ -1710,14 +1736,7 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
         ("Stroke Path…", "path.stroke", json!({"name": key})),
     ];
     if entry.kind == PathRow::Work {
-        let mut n = doc.paths.len().saturating_add(1);
-        while doc.paths.iter().any(|p| p.name == format!("Path {n}")) {
-            n = n.saturating_add(1);
-            if n == usize::MAX {
-                break;
-            }
-        }
-        actions.push(("Save Path", "path.rename", json!({"name": "work", "to": format!("Path {n}")})));
+        actions.push(("Save Path", "path.rename", json!({"name": "work", "to": free_path_name(doc)})));
     } else {
         let mut n = 1usize;
         while doc.paths.iter().any(|p| p.name == format!("{} copy {n}", entry.name)) {
@@ -1728,6 +1747,10 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
         }
         let copy_name = format!("{} copy {n}", entry.name);
         actions.push(("Duplicate Path", "path.set", json!({"name": copy_name, "path": photocraft_engine::vector_cmds::path_json(&entry.path)})));
+    }
+    if entry.kind == PathRow::Saved {
+        // No `to`: the panel asks for the new name in place.
+        actions.push(("Rename Path…", "path.rename", json!({"name": key})));
     }
     if entry.kind != PathRow::Layer {
         actions.push(("Delete Path", "path.delete", json!({"name": key})));
@@ -1748,6 +1771,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
     let mut stroke_dialog: Option<String> = None;
+    let rename_id = rename_id(&doc);
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = crate::widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
@@ -1783,8 +1807,38 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     0.0,
                     egui::TextFormat { font_id: egui::FontId::proportional(12.0), color: t.text, italics, ..Default::default() },
                 );
-                let g = ui.painter().layout_job(job);
-                ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
+                let renaming = ui.ctx().data(|d| d.get_temp::<PathRename>(rename_id)).filter(|e| e.key == key);
+                if let Some(mut edit) = renaming {
+                    let field = Rect::from_min_max(pos2(r.left() + 43.0, r.center().y - 11.0), pos2(r.right() - 8.0, r.center().y + 11.0));
+                    let id = rename_id.with("field");
+                    let te = ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0)));
+                    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                    if !edit.focused {
+                        te.request_focus();
+                        // Like Photoshop, the whole name starts selected so typing replaces it.
+                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+                            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(edit.text.chars().count()));
+                            state.cursor.set_char_range(Some(all));
+                            state.store(ui.ctx(), id);
+                        }
+                        edit.focused = true;
+                        ui.ctx().data_mut(|d| d.insert_temp(rename_id, edit));
+                    } else if esc {
+                        ui.ctx().data_mut(|d| d.remove::<PathRename>(rename_id));
+                    } else if enter || te.lost_focus() || !te.has_focus() {
+                        ui.ctx().data_mut(|d| d.remove::<PathRename>(rename_id));
+                        let to = edit.text.trim();
+                        // The Work Path is saved even under its proposed name; an unchanged saved name is left alone.
+                        if !to.is_empty() && (*kind == PathRow::Work || to != name) {
+                            action = Some(("path.rename", json!({"name": key, "to": to})));
+                        }
+                    } else {
+                        ui.ctx().data_mut(|d| d.insert_temp(rename_id, edit));
+                    }
+                } else {
+                    let g = ui.painter().layout_job(job);
+                    ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
+                }
                 // Ctrl/Cmd-click loads only the thumbnail's path, without changing the panel target.
                 let modifiers = ui.input(|i| i.modifiers);
                 let load = resp.clicked() && modifiers.command && resp.interact_pointer_pos().is_some_and(|p| thumbnail.contains(p));
@@ -1797,10 +1851,18 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.clicked() {
                     app.ui.selected_path = Some(key.clone());
                 }
-                // Double-clicking the Work Path saves it (Photoshop's "Save Path").
-                if !load && resp.double_clicked() && *kind == PathRow::Work {
-                    let n = doc.paths.len() + 1;
-                    action = Some(("path.rename", json!({"name": "work", "to": format!("Path {n}")})));
+                // As in Photoshop, double-clicking a saved path's name renames it, and double-clicking
+                // the Work Path asks for the name to save it under (#6238).
+                let proposed = match kind {
+                    PathRow::Work => Some(free_path_name(&doc)),
+                    PathRow::Saved => Some(name.clone()),
+                    PathRow::Layer => None,
+                };
+                if !load
+                    && resp.double_clicked()
+                    && let Some(text) = proposed
+                {
+                    ui.ctx().data_mut(|d| d.insert_temp(rename_id, PathRename { key: key.clone(), text, focused: false }));
                 }
                 resp.context_menu(|ui| {
                     crate::widgets::menu_scroll(ui, |ui| {
@@ -1813,6 +1875,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 if cmd == "path.stroke" {
                                     // Stroke Path… asks for the tool first, as in Photoshop (#2978).
                                     stroke_dialog = Some(params.get("name").and_then(Value::as_str).unwrap_or("work").to_string());
+                                } else if cmd == "path.rename" && params.get("to").is_none() {
+                                    let edit = PathRename { key: key.clone(), text: name.clone(), focused: false };
+                                    ui.ctx().data_mut(|d| d.insert_temp(rename_id, edit));
                                 } else {
                                     action = Some((cmd, params));
                                 }
@@ -1875,11 +1940,20 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(name) = stroke_dialog {
         crate::canvas_tool_menu::stroke_path_dialog(app, &name);
     }
-    if let Some((cmd, p)) = action
-        && let Err(e) = app.run(cmd, p)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    if let Some((cmd, p)) = action {
+        let renamed = if cmd == "path.rename" { p.get("to").and_then(Value::as_str).map(str::to_string) } else { None };
+        match app.run(cmd, p) {
+            // The renamed (or just saved) path stays the panel's target.
+            Ok(_) => {
+                if renamed.is_some() {
+                    app.ui.selected_path = renamed;
+                }
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
     }
 }
 
@@ -2021,6 +2095,61 @@ mod tests {
         let layer = PathEntry { kind: PathRow::Layer, ..work };
         let entries = path_context_actions(&layer, doc);
         assert!(!entries.iter().any(|(_, id, _)| *id == "path.delete"));
+    }
+
+    /// #6238: double-clicking a saved path's name renames it in place, and double-clicking the
+    /// Work Path saves it under the name typed (it used to save it as "Path N" straight away).
+    #[test]
+    fn double_clicking_a_path_name_renames_it_in_place() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = app();
+        let path = json!({"subpaths": [{"closed": true, "knots": [
+            {"anchor": [10, 10], "in": [10, 10], "out": [10, 10]},
+            {"anchor": [80, 10], "in": [80, 10], "out": [80, 10]},
+            {"anchor": [80, 80], "in": [80, 80], "out": [80, 80]}
+        ]}]});
+        app.run("path.set", json!({"name": "First", "path": path})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": path})).unwrap();
+        // 60 fps steps, so two clicks a frame apart count as a double-click.
+        let mut h = Harness::builder().with_size(vec2(320.0, 260.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| paths_panel(app, ui), app);
+        h.run_steps(3);
+        let rename = |h: &mut Harness<'_, PhotocraftApp>, row: &str, text: &str| {
+            let name = h.get_by_label(row).rect().left_center() + vec2(60.0, 0.0);
+            h.event(egui::Event::PointerMoved(name));
+            h.run_steps(30);
+            for pressed in [true, false, true, false] {
+                h.event(egui::Event::PointerButton { pos: name, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.step();
+            }
+            h.run_steps(3);
+            h.event(egui::Event::Text(text.into()));
+            h.run_steps(1);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+        };
+        let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.paths.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        rename(&mut h, "First", "Outline");
+        assert_eq!(names(&h), ["Outline"]);
+        assert!(h.state().session.active().unwrap().doc.work_path.is_some(), "renaming a saved path leaves the work path alone");
+        rename(&mut h, "Work Path", "Circle");
+        assert_eq!(names(&h), ["Outline", "Circle"]);
+        assert!(h.state().session.active().unwrap().doc.work_path.is_none());
+        assert_eq!(h.state().ui.selected_path.as_deref(), Some("Circle"));
+    }
+
+    /// #6238: a saved path's context menu offers Rename Path…, as the Layers panel's does.
+    #[test]
+    fn saved_path_context_menu_offers_rename() {
+        let mut app = app();
+        app.run("path.set", json!({"name": "First", "path": {"subpaths": []}})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": []}})).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        let rename = |kind| {
+            let entry = path_rows(doc, None).into_iter().find(|r| r.kind == kind).unwrap();
+            path_context_actions(&entry, doc).into_iter().find(|(label, _, _)| *label == "Rename Path…").map(|(_, id, p)| (id, p))
+        };
+        assert_eq!(rename(PathRow::Saved), Some(("path.rename", json!({"name": "First"}))));
+        assert_eq!(rename(PathRow::Work), None, "the work path is saved, not renamed");
     }
 
     /// How many shapes the path overlay paints for `app` this frame.
