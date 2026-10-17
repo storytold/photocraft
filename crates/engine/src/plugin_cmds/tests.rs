@@ -156,6 +156,56 @@ fn params_are_validated_and_passed() {
 }
 
 #[test]
+fn locked_layers_refuse_plugin_filters() {
+    // Like built-in filters: locked pixels (or Lock All) refuse the run with no undo step.
+    let id = "test.cmds.locks";
+    Session::new().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", GREY))})).unwrap();
+    for lock_all in [false, true] {
+        let mut s = doc(16);
+        let layer = s.active().unwrap().active_layer.unwrap();
+        s.edit("lock", |doc, _| {
+            let l = doc.layer_mut(layer).unwrap();
+            if lock_all {
+                l.locks.all = true;
+            } else {
+                l.locks.pixels = true;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let before = pixels(&s);
+        let r = s.execute("plugin.run", json!({"id": id}));
+        assert!(r.as_ref().is_err_and(|e| e.to_string().contains("is locked")), "lock_all {lock_all}: {r:?}");
+        assert_eq!(pixels(&s), before, "lock_all {lock_all}");
+        s.execute("edit.undo", json!({})).unwrap();
+        let l = s.active().unwrap().doc.layer(layer).unwrap();
+        assert!(!l.locks.pixels && !l.locks.all, "the refused run left no undo step");
+        // Unlocked, the plug-in runs.
+        s.execute("plugin.run", json!({"id": id})).unwrap();
+        assert_ne!(pixels(&s), before);
+    }
+    // Lock Transparency: the run changes colour but keeps every pixel's alpha (GREY sets alpha too).
+    let mut s = doc(16);
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(layer).unwrap().locks.transparency = true;
+        Ok(())
+    })
+    .unwrap();
+    let before = pixels(&s);
+    s.execute("plugin.run", json!({"id": id})).unwrap();
+    let after = pixels(&s);
+    assert_ne!(after, before);
+    for (a, b) in after.as_chunks::<4>().0.iter().zip(before.as_chunks::<4>().0) {
+        assert_eq!(a[3], b[3], "alpha kept");
+        if b[3] > 0.0 {
+            assert!((a[0] - 0.5).abs() < 1e-3, "colour changed: {a:?}");
+        }
+    }
+    Session::new().execute("plugin.remove", json!({"id": id})).unwrap();
+}
+
+#[test]
 fn hostile_plugins_fail_without_touching_the_document() {
     for (id, body) in [
         ("test.cmds.trap", "unreachable"),

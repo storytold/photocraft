@@ -313,7 +313,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
 }
 
 /// Lock transparency: put the layer's alpha back after a filter, in the tiles it changed.
-fn keep_alpha(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface) {
+pub(crate) fn keep_alpha(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface) {
     if old.format() != new.format() || !new.format().alpha {
         return;
     }
