@@ -4739,10 +4739,13 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
 }
 
 /// The layers Move › Show Transform Controls frames: every selected layer but the Background.
-/// A corner radius drag hides the box, as in Photoshop.
+/// A corner radius drag hides the box, as in Photoshop. So does View › Extras (⌘H, #6699): the
+/// controls are an Extra, hidden and inert until Extras comes back, while Show Transform Controls
+/// keeps its setting.
 fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_doc::Layer> {
     if app.ui.tool != Tool::Move
         || !app.ui.tool_options.move_show_transform
+        || !app.ui.view.extras
         || app.ui.transform.is_some()
         || app.drag.is_some()
         || app.ui.corner_radius.is_some()
@@ -8318,6 +8321,48 @@ mod transform_controls_tests {
         assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
         let t = app.ui.transform.as_ref().expect("control press starts Free Transform");
         assert_eq!(t.rect, [20.0, 30.0, 100.0, 70.0]);
+    }
+
+    #[test]
+    fn hiding_extras_hides_the_move_transform_controls() {
+        // #6699: as in Photoshop, View › Extras (⌘H) hides the Move tool's transform box and
+        // handles; again brings them back. Show Transform Controls and the layer stay as they were.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let ctx = egui::Context::default();
+        let shown = transform_controls_rect(&app, &xf).expect("the box shows with Extras on");
+        let layer = app.session.active().unwrap().doc.layers.clone();
+        let painted = |app: &mut PhotocraftApp| {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.ctx().layer_painter(egui::LayerId::background());
+                draw_transform_controls(app, &painter, &xf);
+            });
+            let egui::FullOutput { mut textures_delta, shapes, .. } = out;
+            textures_delta.clear();
+            shapes.len()
+        };
+        // The shape's outline, the box and its eight handles.
+        assert!(painted(&mut app) > 8, "the box and handles are drawn");
+
+        crate::menus::invoke(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(!app.ui.view.extras);
+        assert!(transform_controls_rect(&app, &xf).is_none(), "no box with Extras hidden");
+        assert_eq!(painted(&mut app), 0, "nothing is drawn");
+        // Hidden handles don't act: a press on a corner doesn't start Free Transform.
+        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, shown.right_bottom()));
+        assert!(app.ui.transform.is_none());
+        assert!(app.ui.tool_options.move_show_transform, "Show Transform Controls is unchanged");
+        assert_eq!(app.session.active().unwrap().doc.layers, layer, "the layer is unchanged");
+
+        crate::menus::invoke(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(app.ui.view.extras);
+        assert_eq!(transform_controls_rect(&app, &xf), Some(shown), "⌘H again restores the box");
     }
 
     #[test]
