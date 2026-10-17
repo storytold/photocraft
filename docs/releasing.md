@@ -136,7 +136,7 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   not panic.
 - Release builds use the GUI subsystem, so Start Menu launches don't open a console window.
   The CLI stays console subsystem 3 so its output reaches the terminal.
-- `photocraft.wxs` (WiX v5) is a per-machine install into Program Files with an advertised
+- `photocraft.wxs` (WiX v5) is a per-machine install into `Program Files\ArtCraft\PhotoCraft` with an advertised
   Start Menu shortcut. PhotoCraft becomes the default app for `.pcraft` and is listed under
   "Open with" for PSD/PSB and image files. It also registers App Paths (Win+R `photocraft`).
   The MSI version is the numeric `X.Y.Z`, because MSI has no pre-release field. Same-version

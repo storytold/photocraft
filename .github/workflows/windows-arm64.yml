@@ -28,4 +28,4 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: photocraft
-      app-dir: PhotoCraft
+      app-dir: ArtCraft\PhotoCraft

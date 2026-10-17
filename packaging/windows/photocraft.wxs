@@ -8,7 +8,7 @@
       -d BinDir=... -d IconPath=... -d BannerBmp=... -d DialogBmp=... -o out.msi
 
   Per-machine install with a setup wizard that names the version: Welcome, install folder
-  (Program Files\PhotoCraft by default, remembered for upgrades), Ready, a progress page, and a
+  (Program Files\ArtCraft\PhotoCraft by default, remembered for upgrades), Ready, a progress page, and a
   Finish page with a ticked "Launch PhotoCraft" box. Installs a Start Menu shortcut, makes
   PhotoCraft the owner of `.pcraft`, and offers it under "Open with" for PSD/PSB and the image
   formats it reads (without taking over the user's default app for them), plus photocraft-cli.
@@ -40,7 +40,9 @@
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="PhotoCraft" />
+      <Directory Id="ArtCraftFolder" Name="ArtCraft">
+        <Directory Id="INSTALLFOLDER" Name="PhotoCraft" />
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
 
