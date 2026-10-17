@@ -1951,7 +1951,8 @@ impl eframe::App for PhotocraftApp {
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
         // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
         if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
-            wheel_nav::fold_legacy_pinch(ctx, raw_input);
+            let two_axis = self.session.prefs().enhanced_controls.two_axis_scroll_zooms;
+            wheel_nav::fold_legacy_pinch(ctx, raw_input, two_axis);
         }
         raw_input.events.extend(self.take_synthetic_step());
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).

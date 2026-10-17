@@ -2719,6 +2719,7 @@ shape	Appearance	Diện mạo
 	System	Hệ thống
 	Text engine	Bộ xử lý văn bản
 	Touch gestures	Cử chỉ chạm
+	Two axis scroll zooms	Thu phóng bằng cuộn hai ngón
 	Type units	Đơn vị chữ
 	Use esc to commit	Dùng esc để chốt
 	Use gpu	Dùng gpu
