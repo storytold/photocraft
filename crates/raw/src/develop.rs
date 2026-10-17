@@ -535,7 +535,8 @@ pub(crate) fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
     }
     let i = curve.partition_point(|p| p[0] <= v).clamp(1, curve.len() - 1);
     let ([x0, y0], [x1, y1]) = (curve[i - 1], curve[i]);
-    let f = (v.log2() - x0.log2()) / (x1.log2() - x0.log2());
+    // Logarithmic between knots; linear from a knot at black, where log₂ has no value.
+    let f = if x0 > 0.0 { (v.log2() - x0.log2()) / (x1.log2() - x0.log2()) } else { (v - x0) / (x1 - x0) };
     y0 + (y1 - y0) * f
 }
 

@@ -1140,7 +1140,8 @@ mod tests {
                         while end < bytes.len() && !(bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\')) {
                             end += 1;
                         }
-                        let lit = rest.get(..end).unwrap_or("").replace("\\\"", "\"");
+                        // Escapes as the catalog reads them (`\n` is a line break there too).
+                        let lit = rest.get(..end).unwrap_or("").replace("\\\"", "\"").replace("\\n", "\n");
                         if rest.get(end + 1..end + 2) == Some(")") {
                             literals.insert(lit);
                         }
@@ -1285,25 +1286,38 @@ mod tests {
         }
     }
 
-    /// Camera Raw includes dynamic colour-band labels and contextual labels that the generic
-    /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
+    /// Camera Raw includes dynamic labels (panel titles, slider rows, colour bands, presets) and
+    /// contextual labels that the generic tl! scanner cannot see. Its panel, tool and style
+    /// modules pass every capitalised literal to the user, so all of them are collected there
+    /// (shortcut texts and key letters aside); the dialog and scope add their tl! strings. Cover
+    /// the partial catalogs too, without claiming whole-app coverage.
     #[test]
     fn camera_raw_labels_are_translated_in_every_available_language() {
-        let sources = [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")];
+        let code = |source: &'static str| source.split("#[cfg(test)]").next().unwrap_or(source);
         let mut labels = std::collections::BTreeSet::new();
-        for source in sources {
-            let code = source.split("#[cfg(test)]").next().unwrap();
-            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "=> \""] {
-                for tail in code.split(marker).skip(1) {
-                    labels.insert(tail.split('"').next().unwrap());
+        for source in [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")] {
+            for marker in ["tl!(\"", "=> \""] {
+                for tail in code(source).split(marker).skip(1) {
+                    labels.insert(tail.split('"').next().unwrap_or("").to_owned());
                 }
             }
         }
-        let bands = sources[0].split("const BANDS:").nth(1).unwrap().split(" = ").nth(1).unwrap().split(';').next().unwrap();
-        for band in bands.split('"').skip(1).step_by(2) {
-            labels.insert(band);
+        for source in [include_str!("../camera_raw_panels.rs"), include_str!("../camera_raw_tools_ui.rs"), include_str!("../camera_raw_style.rs")] {
+            let code: String = code(source).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            for (i, literal) in code.split('"').enumerate() {
+                let user_text = i % 2 == 1
+                    && literal.starts_with(|c: char| c.is_ascii_uppercase())
+                    && literal.chars().count() > 1
+                    && !literal.starts_with("Ctrl+")
+                    && !literal.contains('\\');
+                if user_text {
+                    labels.insert(literal.to_owned());
+                }
+            }
         }
-        assert!(labels.len() >= 66, "missing Camera Raw source labels: {labels:?}");
+        labels.remove("");
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        assert!(labels.len() >= 150, "missing Camera Raw source labels: {labels:?}");
         for lang in Lang::all().filter(|l| *l != Lang::EN) {
             let catalog = lang.catalog();
             let missing: Vec<_> = labels.iter().filter(|s| catalog.contextual("cameraRaw", s).or_else(|| catalog.plain(s)).is_none()).collect();
@@ -1313,7 +1327,7 @@ mod tests {
         }
         let ru = Lang::from_code("ru").unwrap();
         assert_eq!(tr_ctx(ru, "cameraRaw", "Vibrance"), "Красочность");
-        assert_eq!(tr_ctx(ru, "cameraRaw", "Aqua"), "Голубые");
+        assert_eq!(tr_ctx(ru, "cameraRaw", "Aquas"), "Голубые");
         let text = fmt(tr(ru, "Camera Raw Filter ({layer})"), &[("layer", "{Background} 影像")]);
         assert_eq!(text, "Фильтр Camera Raw ({Background} 影像)", "user layer names are not translated");
     }

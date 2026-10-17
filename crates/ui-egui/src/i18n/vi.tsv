@@ -3590,6 +3590,166 @@ curves	Smooth	Làm mượt
 	Stroke Path…	Đi nét đường dẫn…
 	Apply mask to layer before removing?	Áp dụng mặt nạ vào lớp trước khi xóa?
 	Delete the vector mask?	Xóa mặt nạ vectơ?
+
+# Camera Raw 16.1.1 layout (camera_raw_style.rs, camera_raw_panels.rs, camera_raw_tools_ui.rs)
+	After	Sau
+	Auto tone and color (Ctrl+U)	Tự chỉnh tông và màu (Ctrl+U)
+	Before	Trước
+	Before/After Left/Right	Trước/Sau Trái/Phải
+	Before/After Left/Right Split	Trước/Sau Trái/Phải tách đôi
+	Before/After Top/Bottom	Trước/Sau Trên/Dưới
+	Before/After Top/Bottom Split	Trước/Sau Trên/Dưới tách đôi
+	Browse profiles	Duyệt hồ sơ
+	Camera Raw Preferences	Tùy chọn Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw theo chủ đề của PhotoCraft (Cửa sổ › Chủ đề)
+	Convert and save image: not available in the Camera Raw Filter	Chuyển đổi và lưu ảnh: không có trong bộ lọc Camera Raw
+	Convert to black and white (V)	Chuyển sang đen trắng (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Sao chép cài đặt Sau sang Trước (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Sao chép cài đặt Trước sang Sau (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Hồ sơ sáng tạo chưa có trong PhotoCraft.
+	Cycle between Before/After views (Q)	Chuyển vòng các chế độ xem Trước/Sau (Q)
+	Demosaic	Giải khảm
+	Color Noise Reduction	Giảm nhiễu màu
+	AHD (adaptive homogeneity)	AHD (đồng nhất thích ứng)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Fit ({percent})	Vừa khung ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Để xem trước chính xác hơn, hãy phóng ảnh xem trước lên 100% hoặc lớn hơn khi chỉnh các điều khiển trong bảng này.
+	For best results, apply lens corrections first.	Để có kết quả tốt nhất, hãy hiệu chỉnh ống kính trước.
+	HDR editing needs an HDR display	Chỉnh sửa HDR cần màn hình HDR
+	Hand Tool (H)	Công cụ Bàn tay (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Mặt nạ cần điều chỉnh cục bộ và mô hình phân vùng; Camera Raw của PhotoCraft chưa có chúng.
+	More image settings	Thêm cài đặt ảnh
+	Multiple: Edit panels will stay open until you close them.	Nhiều: các bảng chỉnh sửa vẫn mở cho đến khi bạn đóng chúng.
+	Not available yet	Chưa có
+	Open preferences dialog (Ctrl+K)	Mở hộp thoại tùy chọn (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft xử lý ảnh xem trước Camera Raw trên CPU; kết quả dùng quy trình độ phân giải đầy đủ.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft không giữ bộ đệm Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Thiết lập sẵn riêng của PhotoCraft. Chưa thể lưu và nhập thiết lập sẵn.
+	Select zoom level	Chọn mức thu phóng
+	Single: opening an edit panel closes the others.	Một: mở một bảng chỉnh sửa sẽ đóng các bảng khác.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Hoán đổi cài đặt Trước và Sau (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Công cụ điều chỉnh mục tiêu: kéo trong ảnh để chỉnh màu dưới con trỏ
+	This tool is not available in PhotoCraft yet.	Công cụ này chưa có trong PhotoCraft.
+	Toggle Full Screen mode (F)	Bật/tắt chế độ toàn màn hình (F)
+	Toggle between current settings and defaults (P)	Chuyển giữa cài đặt hiện tại và mặc định (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Bật/tắt lưới phủ (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Bật/tắt điểm lấy mẫu (S)
+	Toggle visibility of {panel} settings	Bật/tắt hiển thị cài đặt {panel}
+	Use the Point Color Dropper\nto add samples.	Dùng ống hút Màu điểm\nđể thêm mẫu.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Dùng ống hút để lấy mẫu những vùng viền tím và xanh lá cần chỉnh.
+	White Balance tool (I): click a neutral area	Công cụ Cân bằng trắng (I): bấm vào một vùng trung tính
+	Zoom Tool (Z)	Công cụ Thu phóng (Z)
+cameraRaw	Adjust	Điều chỉnh
+cameraRaw	Apply Favorite Preset	Áp dụng thiết lập sẵn yêu thích
+cameraRaw	Apply Previous Settings	Áp dụng cài đặt trước đó
+cameraRaw	Aquas	Xanh ngọc
+cameraRaw	Artistic	Nghệ thuật
+cameraRaw	As Shot	Như khi chụp
+cameraRaw	Aspect	Tỷ lệ khung
+cameraRaw	Auto: apply balanced perspective corrections	Tự động: chỉnh phối cảnh cân đối
+cameraRaw	B&W	Đen trắng
+cameraRaw	B&W High Contrast	Đen trắng tương phản cao
+cameraRaw	B&W Mix	Trộn đen trắng
+cameraRaw	B&W Neutral	Đen trắng trung tính
+cameraRaw	B&W Soft	Đen trắng dịu
+cameraRaw	Back	Quay lại
+cameraRaw	Blue Channel	Kênh xanh dương
+cameraRaw	Blue Primary	Màu gốc xanh dương
+cameraRaw	Blues	Xanh dương
+cameraRaw	Browse...	Duyệt...
+cameraRaw	Calibration	Hiệu chuẩn
+cameraRaw	Camera Raw Cache	Bộ đệm Camera Raw
+cameraRaw	Clarity Pop	Tăng độ rõ
+cameraRaw	Clone	Nhân bản
+cameraRaw	Color Theme:	Chủ đề màu:
+cameraRaw	Cool	Mát
+cameraRaw	Copy Edit Settings	Sao chép cài đặt chỉnh sửa
+cameraRaw	Copy Selected Edit Settings...	Sao chép cài đặt chỉnh sửa đã chọn...
+cameraRaw	Create New Mask	Tạo mặt nạ mới
+cameraRaw	Create Preset...	Tạo thiết lập sẵn...
+cameraRaw	Creative	Sáng tạo
+cameraRaw	Default image click zooms to:	Bấm vào ảnh sẽ thu phóng tới:
+cameraRaw	Defringe	Khử viền sai màu
+cameraRaw	Disable Upright	Tắt dựng thẳng
+cameraRaw	Distortion	Độ méo
+cameraRaw	Edit (E)	Chỉnh sửa (E)
+cameraRaw	Edit panel behavior:	Cách mở bảng chỉnh sửa:
+cameraRaw	Faded	Phai màu
+cameraRaw	Favorites	Yêu thích
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Đầy đủ: chỉnh ngang bằng, phối cảnh ngang và dọc
+cameraRaw	Geometry	Hình học
+cameraRaw	Green Amount	Lượng xanh lá
+cameraRaw	Green Channel	Kênh xanh lá
+cameraRaw	Green Hue	Sắc màu xanh lá
+cameraRaw	Green Primary	Màu gốc xanh lá
+cameraRaw	Greens	Xanh lá
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Theo đường dẫn: vẽ hai đường dẫn trở lên để tùy chỉnh phối cảnh
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Cắt sương
+cameraRaw	Level: apply only level correction	Ngang bằng: chỉ chỉnh ngang bằng
+cameraRaw	Linear Gradient	Chuyển sắc tuyến tính
+cameraRaw	Load Settings...	Tải cài đặt...
+cameraRaw	Magentas	Đỏ tía
+cameraRaw	Manual Transformations	Biến đổi thủ công
+cameraRaw	Masking (M)	Mặt nạ (M)
+cameraRaw	Medium Contrast	Tương phản vừa
+cameraRaw	Mixer	Bộ trộn
+cameraRaw	Multiple	Nhiều
+cameraRaw	Muted	Dịu màu
+cameraRaw	Objects	Đối tượng
+cameraRaw	Offset X	Dịch X
+cameraRaw	Offset Y	Dịch Y
+cameraRaw	Optics	Quang học
+cameraRaw	Oranges	Cam
+cameraRaw	Parametric Curve	Đường cong tham số
+cameraRaw	Paste Edit Settings	Dán cài đặt chỉnh sửa
+cameraRaw	Pet Eye	Mắt thú cưng
+cameraRaw	Point Color	Màu điểm
+cameraRaw	Point Curve	Đường cong điểm
+cameraRaw	Presets (Shift+P)	Thiết lập sẵn (Shift+P)
+cameraRaw	Process	Quy trình xử lý
+cameraRaw	Profile	Hồ sơ
+cameraRaw	Purple Amount	Lượng tím
+cameraRaw	Purple Hue	Sắc màu tím
+cameraRaw	Purples	Tím
+cameraRaw	Radial Gradient	Chuyển sắc xuyên tâm
+cameraRaw	Red Channel	Kênh đỏ
+cameraRaw	Red Eye (Shift+E)	Mắt đỏ (Shift+E)
+cameraRaw	Red Primary	Màu gốc đỏ
+cameraRaw	Reds	Đỏ
+cameraRaw	Refine Saturation	Tinh chỉnh độ bão hòa
+cameraRaw	Refresh	Làm mới
+cameraRaw	Remove (B)	Xóa bỏ (B)
+cameraRaw	Reset to Open	Đặt lại như khi mở
+cameraRaw	Sample fringe	Lấy mẫu viền
+cameraRaw	Save Settings...	Lưu cài đặt...
+cameraRaw	Show rich tooltips	Hiện chú giải chi tiết
+cameraRaw	Single	Một
+cameraRaw	Smoothness	Độ mượt
+cameraRaw	Split Tone	Tách tông
+cameraRaw	Strong Contrast	Tương phản mạnh
+cameraRaw	Type	Loại
+cameraRaw	Upright	Dựng thẳng
+cameraRaw	Use Lightroom style zoom and pan	Thu phóng và kéo kiểu Lightroom
+cameraRaw	Use compact layout	Dùng bố cục gọn
+cameraRaw	Use legacy Target Adjustment Tool	Dùng công cụ điều chỉnh mục tiêu cũ
+cameraRaw	Use legacy undo shortcuts	Dùng phím tắt hoàn tác cũ
+cameraRaw	Version 1	Phiên bản 1
+cameraRaw	Version 2	Phiên bản 2
+cameraRaw	Version 3	Phiên bản 3
+cameraRaw	Version 4	Phiên bản 4
+cameraRaw	Version 5	Phiên bản 5
+cameraRaw	Version 6 (Current)	Phiên bản 6 (hiện tại)
+cameraRaw	Vertical: apply level and vertical perspective correction	Dọc: chỉnh ngang bằng và phối cảnh dọc
+cameraRaw	Vignette	Làm tối góc
+cameraRaw	Vintage	Cổ điển
+cameraRaw	Visualize Spots	Hiển thị đốm
+cameraRaw	Vivid	Rực rỡ
+cameraRaw	Warm	Ấm
+cameraRaw	White balance	Cân bằng trắng
+cameraRaw	Yellows	Vàng
+cameraRaw	Zoom and Pan	Thu phóng và kéo
 	Add Shortcut	Thêm phím tắt
 	Response curve	Đường cong phản hồi
 	Object Finder	Trình tìm đối tượng

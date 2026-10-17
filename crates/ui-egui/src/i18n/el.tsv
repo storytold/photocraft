@@ -3808,6 +3808,149 @@ curves	Smooth	Εξομάλυνση
 	Light Red	Ανοιχτό κόκκινο
 	Medium Blue	Μεσαίο μπλε
 	Light Gray	Ανοιχτό γκρι
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Ρύθμιση
+cameraRaw	Apply Favorite Preset	Εφαρμογή αγαπημένης προεπιλογής
+cameraRaw	Apply Previous Settings	Εφαρμογή προηγούμενων ρυθμίσεων
+cameraRaw	Aquas	Κυανές αποχρώσεις
+cameraRaw	As Shot	Όπως λήφθηκε
+cameraRaw	Aspect	Αναλογία
+cameraRaw	Auto: apply balanced perspective corrections	Αυτόματα: ισορροπημένες διορθώσεις προοπτικής
+cameraRaw	B&W	Α/Μ
+cameraRaw	B&W High Contrast	Α/Μ υψηλή αντίθεση
+cameraRaw	B&W Mix	Μείξη Α/Μ
+cameraRaw	B&W Neutral	Α/Μ ουδέτερο
+cameraRaw	B&W Soft	Α/Μ απαλό
+cameraRaw	Blue Channel	Μπλε κανάλι
+cameraRaw	Blue Primary	Βασικό μπλε
+cameraRaw	Browse...	Περιήγηση...
+cameraRaw	Calibration	Βαθμονόμηση
+cameraRaw	Camera Raw Cache	Κρυφή μνήμη Camera Raw
+cameraRaw	Clarity Pop	Έντονη διαύγεια
+cameraRaw	Color Theme:	Χρωματικό θέμα:
+cameraRaw	Copy Edit Settings	Αντιγραφή ρυθμίσεων επεξεργασίας
+cameraRaw	Copy Selected Edit Settings...	Αντιγραφή επιλεγμένων ρυθμίσεων...
+cameraRaw	Create New Mask	Δημιουργία νέας μάσκας
+cameraRaw	Create Preset...	Δημιουργία προεπιλογής...
+cameraRaw	Creative	Δημιουργικό
+cameraRaw	Default image click zooms to:	Κλικ στην εικόνα μεγεθύνει σε:
+cameraRaw	Disable Upright	Απενεργοποίηση ευθυγράμμισης
+cameraRaw	Edit (E)	Επεξεργασία (E)
+cameraRaw	Edit panel behavior:	Συμπεριφορά πλαισίων επεξεργασίας:
+cameraRaw	Faded	Ξεθωριασμένο
+cameraRaw	Favorites	Αγαπημένα
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Πλήρες: διόρθωση οριζοντίωσης, οριζόντιας και κατακόρυφης προοπτικής
+cameraRaw	Geometry	Γεωμετρία
+cameraRaw	Green Amount	Ποσότητα πράσινου
+cameraRaw	Green Channel	Πράσινο κανάλι
+cameraRaw	Green Hue	Απόχρωση πράσινου
+cameraRaw	Green Primary	Βασικό πράσινο
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Με οδηγούς: σχεδιάστε δύο ή περισσότερους οδηγούς για να προσαρμόσετε τη διόρθωση προοπτικής
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Λιγότερη αχλύς
+cameraRaw	Level: apply only level correction	Οριζοντίωση: μόνο διόρθωση οριζοντίωσης
+cameraRaw	Load Settings...	Φόρτωση ρυθμίσεων...
+cameraRaw	Manual Transformations	Χειροκίνητοι μετασχηματισμοί
+cameraRaw	Masking (M)	Εφαρμογή μάσκας (M)
+cameraRaw	Medium Contrast	Μέση αντίθεση
+cameraRaw	Mixer	Μείκτης
+cameraRaw	Multiple	Πολλαπλά
+cameraRaw	Muted	Υποτονικό
+cameraRaw	Objects	Αντικείμενα
+cameraRaw	Offset X	Μετατόπιση X
+cameraRaw	Offset Y	Μετατόπιση Y
+cameraRaw	Optics	Οπτικά
+cameraRaw	Oranges	Πορτοκαλί αποχρώσεις
+cameraRaw	Parametric Curve	Παραμετρική καμπύλη
+cameraRaw	Paste Edit Settings	Επικόλληση ρυθμίσεων επεξεργασίας
+cameraRaw	Pet Eye	Μάτια ζώων
+cameraRaw	Point Color	Χρώμα σημείου
+cameraRaw	Presets (Shift+P)	Προεπιλογές (Shift+P)
+cameraRaw	Process	Διαδικασία
+cameraRaw	Purple Amount	Ποσότητα μοβ
+cameraRaw	Purple Hue	Απόχρωση μοβ
+cameraRaw	Purples	Μοβ αποχρώσεις
+cameraRaw	Red Channel	Κόκκινο κανάλι
+cameraRaw	Red Eye (Shift+E)	Κόκκινα μάτια (Shift+E)
+cameraRaw	Red Primary	Βασικό κόκκινο
+cameraRaw	Refine Saturation	Βελτίωση κορεσμού
+cameraRaw	Refresh	Ανανέωση
+cameraRaw	Remove (B)	Αφαίρεση (B)
+cameraRaw	Reset to Open	Επαναφορά ρυθμίσεων ανοίγματος
+cameraRaw	Sample fringe	Δειγματοληψία περιγράμματος
+cameraRaw	Save Settings...	Αποθήκευση ρυθμίσεων...
+cameraRaw	Show rich tooltips	Εμφάνιση αναλυτικών επεξηγήσεων
+cameraRaw	Single	Ένα
+cameraRaw	Split Tone	Διχρωμία
+cameraRaw	Strong Contrast	Ισχυρή αντίθεση
+cameraRaw	Upright	Ευθυγράμμιση
+cameraRaw	Use Lightroom style zoom and pan	Μεγέθυνση και μετακίνηση όπως στο Lightroom
+cameraRaw	Use compact layout	Χρήση συμπαγούς διάταξης
+cameraRaw	Use legacy Target Adjustment Tool	Χρήση παλαιού εργαλείου στοχευμένης προσαρμογής
+cameraRaw	Use legacy undo shortcuts	Χρήση παλαιών συντομεύσεων αναίρεσης
+cameraRaw	Version 1	Έκδοση 1
+cameraRaw	Version 2	Έκδοση 2
+cameraRaw	Version 3	Έκδοση 3
+cameraRaw	Version 4	Έκδοση 4
+cameraRaw	Version 5	Έκδοση 5
+cameraRaw	Version 6 (Current)	Έκδοση 6 (τρέχουσα)
+cameraRaw	Vertical: apply level and vertical perspective correction	Κατακόρυφα: διόρθωση οριζοντίωσης και κατακόρυφης προοπτικής
+cameraRaw	Vignette	Βινιέτα
+cameraRaw	Vintage	Ρετρό
+cameraRaw	Visualize Spots	Απεικόνιση κηλίδων
+cameraRaw	Vivid	Ζωντανό
+cameraRaw	White balance	Ισορροπία λευκού
+cameraRaw	Zoom and Pan	Μεγέθυνση και μετακίνηση
+	Auto tone and color (Ctrl+U)	Αυτόματος τόνος και χρώμα (Ctrl+U)
+	Before/After Left/Right	Πριν/Μετά αριστερά/δεξιά
+	Before/After Left/Right Split	Πριν/Μετά αριστερά/δεξιά, διαιρεμένη
+	Before/After Top/Bottom	Πριν/Μετά πάνω/κάτω
+	Before/After Top/Bottom Split	Πριν/Μετά πάνω/κάτω, διαιρεμένη
+	Browse profiles	Περιήγηση προφίλ
+	Camera Raw Preferences	Προτιμήσεις Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Το Camera Raw ακολουθεί το θέμα του PhotoCraft (Παράθυρο › Θέμα)
+	Convert and save image: not available in the Camera Raw Filter	Μετατροπή και αποθήκευση εικόνας: δεν είναι διαθέσιμη στο φίλτρο Camera Raw
+	Convert to black and white (V)	Μετατροπή σε ασπρόμαυρο (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Αντιγραφή ρυθμίσεων «Μετά» στο «Πριν» (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Αντιγραφή ρυθμίσεων «Πριν» στο «Μετά» (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Τα δημιουργικά προφίλ δεν είναι ακόμη διαθέσιμα στο PhotoCraft.
+	Cycle between Before/After views (Q)	Εναλλαγή προβολών Πριν/Μετά (Q)
+	Fit ({percent})	Προσαρμογή ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Για πιο ακριβή προεπισκόπηση, μεγεθύνετε την προεπισκόπηση στο 100% ή περισσότερο όταν ρυθμίζετε τα στοιχεία ελέγχου αυτού του πλαισίου.
+	For best results, apply lens corrections first.	Για καλύτερα αποτελέσματα, εφαρμόστε πρώτα τις διορθώσεις φακού.
+	HDR editing needs an HDR display	Η επεξεργασία HDR απαιτεί οθόνη HDR
+	Hand Tool (H)	Χέρι (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Οι μάσκες χρειάζονται τοπικές ρυθμίσεις και μοντέλα τμηματοποίησης· το PhotoCraft δεν τα διαθέτει ακόμη στο Camera Raw.
+	More image settings	Περισσότερες ρυθμίσεις εικόνας
+	Multiple: Edit panels will stay open until you close them.	Πολλαπλά: τα πλαίσια επεξεργασίας μένουν ανοιχτά μέχρι να τα κλείσετε.
+	Not available yet	Δεν είναι ακόμη διαθέσιμο
+	Open preferences dialog (Ctrl+K)	Άνοιγμα παραθύρου προτιμήσεων (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	Το PhotoCraft επεξεργάζεται τις προεπισκοπήσεις Camera Raw στη CPU· το αποτέλεσμα χρησιμοποιεί την επεξεργασία πλήρους ανάλυσης.
+	PhotoCraft keeps no Camera Raw cache.	Το PhotoCraft δεν διατηρεί κρυφή μνήμη Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Προεπιλογές του ίδιου του PhotoCraft. Η αποθήκευση και η εισαγωγή προεπιλογών δεν είναι ακόμη διαθέσιμες.
+	Select zoom level	Επιλογή επιπέδου μεγέθυνσης
+	Single: opening an edit panel closes the others.	Ένα: το άνοιγμα ενός πλαισίου επεξεργασίας κλείνει τα υπόλοιπα.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Αντιμετάθεση ρυθμίσεων Πριν και Μετά (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Εργαλείο στοχευμένης προσαρμογής: σύρετε στην εικόνα για να ρυθμίσετε το χρώμα κάτω από τον δείκτη
+	This tool is not available in PhotoCraft yet.	Αυτό το εργαλείο δεν είναι ακόμη διαθέσιμο στο PhotoCraft.
+	Toggle Full Screen mode (F)	Εναλλαγή λειτουργίας πλήρους οθόνης (F)
+	Toggle between current settings and defaults (P)	Εναλλαγή μεταξύ τρεχουσών και προεπιλεγμένων ρυθμίσεων (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Εναλλαγή επικάλυψης πλέγματος (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Εναλλαγή επικάλυψης δειγμάτων (S)
+	Toggle visibility of {panel} settings	Εναλλαγή ορατότητας ρυθμίσεων: {panel}
+	Use the Point Color Dropper\nto add samples.	Χρησιμοποιήστε το σταγονόμετρο χρώματος σημείου\nγια να προσθέσετε δείγματα.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Χρησιμοποιήστε το σταγονόμετρο για να πάρετε δείγμα από μοβ και πράσινες περιοχές χρωματικού περιγράμματος που χρειάζονται διόρθωση.
+	White Balance tool (I): click a neutral area	Εργαλείο ισορροπίας λευκού (I): κάντε κλικ σε μια ουδέτερη περιοχή
+	Zoom Tool (Z)	Μεγέθυνση (Z)
+cameraRaw	Type	Τύπος
+	Demosaic	Αποψηφιδοποίηση
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Πώς συμπληρώνεται το ψηφιδωτό του χρωματικού φίλτρου της κάμερας. Εφαρμόζεται όταν ανοίγει το αρχείο· η προεπισκόπηση δείχνει τη μέθοδο με την οποία άνοιξε.
+	AHD (adaptive homogeneity)	AHD (προσαρμοστική ομοιογένεια)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: οι πιο καθαρές ακμές και τα λιγότερα χρωματικά περιθώρια, η πιο αργή.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Παρεμβολή με διόρθωση κλίσης: ευκρινής και γρήγορη, με λίγα χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
+	The fastest and the softest, with colour fringing on fine detail.	Η πιο γρήγορη και η πιο μαλακή, με χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
 	Object Finder	Εύρεση αντικειμένων
 	No object found there — drag a rectangle around it	Δεν βρέθηκε αντικείμενο εκεί — σύρετε ένα ορθογώνιο γύρω του
 	Remove after each stroke	Αφαίρεση μετά από κάθε πινελιά

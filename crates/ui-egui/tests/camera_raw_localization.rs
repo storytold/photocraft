@@ -27,15 +27,14 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.run_steps(4);
         let tr = |s| i18n::tr_ctx(lang, "cameraRaw", s);
         let before = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
-        for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
+        for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail", "Optics", "Geometry", "Calibration"] {
             assert!(h.query_by_role_and_label(Role::Button, tr(section)).is_some(), "{}: {section}", lang.code());
         }
         assert!(h.query_by_label(tr("Blacks")).is_some());
+        // Light and Color open first, as in Camera Raw.
         h.get_by_role_and_label(Role::Button, tr("Light")).click();
         h.run_steps(12);
-        h.get_by_role_and_label(Role::Button, tr("Color")).click();
-        h.run_steps(12);
-        for label in ["White Balance: As Shot", "Temperature", "Tint", "Vibrance", "Saturation"] {
+        for label in ["White balance", "Temperature", "Tint", "Vibrance", "Saturation"] {
             assert!(h.query_by_label(tr(label)).is_some(), "{}: {label}", lang.code());
         }
         h.get_by_role_and_label(Role::Button, tr("Color")).click();
@@ -45,16 +44,19 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         for tab in ["Hue", "Saturation", "Luminance"] {
             assert!(h.get_by_label(tr(tab)).rect().right() <= 1426.0, "{}: mixer tabs overflow the panel", lang.code());
         }
-        for band in ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"] {
+        for band in ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"] {
             assert!(h.query_by_label(tr(band)).is_some(), "{}: {band}", lang.code());
         }
         h.get_by_role_and_label(Role::Button, tr("Color Mixer")).click();
         h.run_steps(12);
         for (section, labels) in [
-            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignetting", "Grain", "Roughness"]),
+            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignette", "Grain"]),
             ("Curve", vec!["Highlights", "Lights", "Darks", "Shadows"]),
-            ("Color Grading", vec!["Midtones", "Global", "Hue", "Saturation", "Luminance", "Blending", "Balance"]),
-            ("Detail", vec!["Sharpening", "Masking", "Noise Reduction", "Luminance Detail", "Color Detail"]),
+            ("Color Grading", vec!["Midtones", "Shadows", "Highlights", "Global", "Luminance", "Blending", "Balance"]),
+            ("Detail", vec!["Sharpening", "Noise Reduction", "Color Noise Reduction"]),
+            ("Optics", vec!["Distortion", "Vignette", "Defringe"]),
+            ("Geometry", vec!["Upright", "Manual Transformations"]),
+            ("Calibration", vec!["Process", "Red Primary", "Green Primary", "Blue Primary"]),
         ] {
             h.get_by_role_and_label(Role::Button, tr(section)).click();
             h.run_steps(12);
@@ -98,7 +100,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         // Changing labels must keep the same collapse IDs and open mixer, without an image edit.
         h.state_mut().session.prefs.edit(|p| p.interface.language = "en".into());
         h.run_steps(3);
-        assert!(h.query_by_label("Aqua").is_some(), "{} → en: preserve the open section", lang.code());
+        assert!(h.query_by_label("Aquas").is_some(), "{} → en: preserve the open section", lang.code());
         assert!(h.query_by_label("Exposure").is_none(), "{} → en: Light stays collapsed", lang.code());
         let after = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
         assert_eq!(after["params"], before["params"]);

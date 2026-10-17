@@ -3100,6 +3100,161 @@ curves	Smooth	Haluskan
 	Light Red	Merah Terang
 	Medium Blue	Biru Sedang
 	Light Gray	Abu-abu Muda
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Sesuaikan
+cameraRaw	Apply Favorite Preset	Terapkan Preset Favorit
+cameraRaw	Apply Previous Settings	Terapkan Pengaturan Sebelumnya
+cameraRaw	Aquas	Aqua
+cameraRaw	Artistic	Artistik
+cameraRaw	As Shot	Sesuai Pemotretan
+cameraRaw	Aspect	Aspek
+cameraRaw	Auto: apply balanced perspective corrections	Otomatis: terapkan koreksi perspektif yang seimbang
+cameraRaw	B&W	B&W
+cameraRaw	B&W High Contrast	B&W Kontras Tinggi
+cameraRaw	B&W Mix	Campuran B&W
+cameraRaw	B&W Neutral	B&W Netral
+cameraRaw	B&W Soft	B&W Lembut
+cameraRaw	Back	Kembali
+cameraRaw	Blue Channel	Channel Biru
+cameraRaw	Blue Primary	Primer Biru
+cameraRaw	Browse...	Telusuri...
+cameraRaw	Calibration	Kalibrasi
+cameraRaw	Camera Raw Cache	Cache Camera Raw
+cameraRaw	Clarity Pop	Clarity Kuat
+cameraRaw	Clone	Clone
+cameraRaw	Color Theme:	Tema Warna:
+cameraRaw	Cool	Sejuk
+cameraRaw	Copy Edit Settings	Salin Pengaturan Edit
+cameraRaw	Copy Selected Edit Settings...	Salin Pengaturan Edit Terpilih...
+cameraRaw	Create New Mask	Buat Mask Baru
+cameraRaw	Create Preset...	Buat Preset...
+cameraRaw	Creative	Kreatif
+cameraRaw	Default image click zooms to:	Klik pada gambar memperbesar ke:
+cameraRaw	Defringe	Defringe
+cameraRaw	Disable Upright	Nonaktifkan Upright
+cameraRaw	Distortion	Distorsi
+cameraRaw	Edit (E)	Edit (E)
+cameraRaw	Edit panel behavior:	Perilaku panel Edit:
+cameraRaw	Faded	Pudar
+cameraRaw	Favorites	Favorit
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Penuh: terapkan koreksi kemiringan serta perspektif horizontal dan vertikal
+cameraRaw	Geometry	Geometri
+cameraRaw	Green Amount	Jumlah Hijau
+cameraRaw	Green Channel	Channel Hijau
+cameraRaw	Green Hue	Hue Hijau
+cameraRaw	Green Primary	Primer Hijau
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Terpandu: gambar dua panduan atau lebih untuk menyesuaikan koreksi perspektif
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Kurangi Kabut
+cameraRaw	Level: apply only level correction	Level: terapkan hanya koreksi kemiringan
+cameraRaw	Load Settings...	Muat Pengaturan...
+cameraRaw	Manual Transformations	Transformasi Manual
+cameraRaw	Masking (M)	Masking (M)
+cameraRaw	Medium Contrast	Kontras Sedang
+cameraRaw	Mixer	Pencampur
+cameraRaw	Multiple	Banyak
+cameraRaw	Muted	Kalem
+cameraRaw	Objects	Objek
+cameraRaw	Offset X	Offset X
+cameraRaw	Offset Y	Offset Y
+cameraRaw	Optics	Optik
+cameraRaw	Oranges	Oranye
+cameraRaw	Parametric Curve	Kurva Parametrik
+cameraRaw	Paste Edit Settings	Tempel Pengaturan Edit
+cameraRaw	Pet Eye	Mata Hewan
+cameraRaw	Point Color	Warna Titik
+cameraRaw	Point Curve	Kurva Titik
+cameraRaw	Presets (Shift+P)	Preset (Shift+P)
+cameraRaw	Process	Proses
+cameraRaw	Profile	Profil
+cameraRaw	Purple Amount	Jumlah Ungu
+cameraRaw	Purple Hue	Hue Ungu
+cameraRaw	Purples	Ungu
+cameraRaw	Red Channel	Channel Merah
+cameraRaw	Red Eye (Shift+E)	Red Eye (Shift+E)
+cameraRaw	Red Primary	Primer Merah
+cameraRaw	Refine Saturation	Perhalus Saturasi
+cameraRaw	Refresh	Segarkan
+cameraRaw	Remove (B)	Hapus (B)
+cameraRaw	Reset to Open	Atur Ulang ke Saat Dibuka
+cameraRaw	Sample fringe	Ambil sampel fringe
+cameraRaw	Save Settings...	Simpan Pengaturan...
+cameraRaw	Show rich tooltips	Tampilkan tooltip lengkap
+cameraRaw	Single	Tunggal
+cameraRaw	Smoothness	Kehalusan
+cameraRaw	Split Tone	Split Tone
+cameraRaw	Strong Contrast	Kontras Kuat
+cameraRaw	Upright	Upright
+cameraRaw	Use Lightroom style zoom and pan	Gunakan zoom dan geser gaya Lightroom
+cameraRaw	Use compact layout	Gunakan tata letak ringkas
+cameraRaw	Use legacy Target Adjustment Tool	Gunakan Alat Penyesuaian Target versi lama
+cameraRaw	Use legacy undo shortcuts	Gunakan pintasan urungkan versi lama
+cameraRaw	Version 1	Versi 1
+cameraRaw	Version 2	Versi 2
+cameraRaw	Version 3	Versi 3
+cameraRaw	Version 4	Versi 4
+cameraRaw	Version 5	Versi 5
+cameraRaw	Version 6 (Current)	Versi 6 (Saat Ini)
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertikal: terapkan koreksi kemiringan dan perspektif vertikal
+cameraRaw	Vignette	Vignette
+cameraRaw	Vintage	Vintage
+cameraRaw	Visualize Spots	Visualisasikan Noda
+cameraRaw	Vivid	Cerah
+cameraRaw	Warm	Hangat
+cameraRaw	White balance	White Balance
+cameraRaw	Zoom and Pan	Zoom dan Geser
+	After	Sesudah
+	Auto tone and color (Ctrl+U)	Nada dan warna otomatis (Ctrl+U)
+	Before	Sebelum
+	Before/After Left/Right	Sebelum/Sesudah Kiri/Kanan
+	Before/After Left/Right Split	Sebelum/Sesudah Kiri/Kanan Terbagi
+	Before/After Top/Bottom	Sebelum/Sesudah Atas/Bawah
+	Before/After Top/Bottom Split	Sebelum/Sesudah Atas/Bawah Terbagi
+	Browse profiles	Telusuri profil
+	Camera Raw Preferences	Preferensi Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw mengikuti tema PhotoCraft (Jendela › Tema)
+	Convert and save image: not available in the Camera Raw Filter	Konversi dan simpan gambar: tidak tersedia di Filter Camera Raw
+	Convert to black and white (V)	Konversi ke hitam putih (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Salin pengaturan Sesudah ke Sebelum (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Salin pengaturan Sebelum ke Sesudah (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Profil kreatif belum tersedia di PhotoCraft.
+	Cycle between Before/After views (Q)	Beralih antartampilan Sebelum/Sesudah (Q)
+	Fit ({percent})	Pas ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Untuk pratinjau yang lebih akurat, perbesar pratinjau ke 100% atau lebih saat menyesuaikan kontrol di panel ini.
+	For best results, apply lens corrections first.	Untuk hasil terbaik, terapkan koreksi lensa terlebih dahulu.
+	HDR editing needs an HDR display	Pengeditan HDR memerlukan layar HDR
+	Hand Tool (H)	Alat Hand (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Mask memerlukan penyesuaian lokal dan model segmentasi; PhotoCraft belum memilikinya di Camera Raw.
+	More image settings	Pengaturan gambar lainnya
+	Multiple: Edit panels will stay open until you close them.	Banyak: panel Edit tetap terbuka sampai Anda menutupnya.
+	Not available yet	Belum tersedia
+	Open preferences dialog (Ctrl+K)	Buka dialog preferensi (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft memproses pratinjau Camera Raw di CPU; hasilnya memakai pipeline resolusi penuh.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft tidak menyimpan cache Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Preset bawaan PhotoCraft. Menyimpan dan mengimpor preset belum tersedia.
+	Select zoom level	Pilih tingkat zoom
+	Single: opening an edit panel closes the others.	Tunggal: membuka satu panel edit akan menutup panel lainnya.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Tukar pengaturan Sebelum dan Sesudah (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Alat Penyesuaian Target: seret di gambar untuk menyesuaikan warna di bawah penunjuk
+	This tool is not available in PhotoCraft yet.	Alat ini belum tersedia di PhotoCraft.
+	Toggle Full Screen mode (F)	Alihkan Mode Layar Penuh (F)
+	Toggle between current settings and defaults (P)	Alihkan antara pengaturan saat ini dan default (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Alihkan overlay grid (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Alihkan overlay sampel (S)
+	Toggle visibility of {panel} settings	Alihkan visibilitas pengaturan {panel}
+	Use the Point Color Dropper\nto add samples.	Gunakan Eyedropper Warna Titik\nuntuk menambahkan sampel.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Gunakan eyedropper untuk mengambil sampel area fringe ungu dan hijau yang perlu dikoreksi.
+	White Balance tool (I): click a neutral area	Alat White Balance (I): klik area netral
+	Zoom Tool (Z)	Alat Zoom (Z)
+cameraRaw	Type	Jenis
+	Demosaic	Demosaik
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
+	AHD (adaptive homogeneity)	AHD (homogenitas adaptif)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: tepi paling bersih dan pinggiran warna paling sedikit, paling lambat.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolasi terkoreksi gradien: tajam dan cepat, dengan sedikit pinggiran warna pada detail halus.
+	The fastest and the softest, with colour fringing on fine detail.	Paling cepat dan paling lembut, dengan pinggiran warna pada detail halus.
 	Object Finder	Pencari Objek
 	No object found there — drag a rectangle around it	Tidak ada objek ditemukan di sana — seret persegi panjang di sekelilingnya
 	Remove after each stroke	Hapus setelah setiap goresan

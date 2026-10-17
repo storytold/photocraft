@@ -1431,8 +1431,8 @@ mod tests {
         let dng = spec.build();
         for finish in ["commit", "cancel"] {
             let services = crate::Services {
-                import: Some(Box::new(|name, bytes, depth| {
-                    photocraft_io::import_with_svg_group_depth(name, bytes, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                import: Some(Box::new(|name, bytes, opts| {
+                    photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
                 })),
                 ..Default::default()
             };
@@ -2456,7 +2456,7 @@ mod tests {
         let written: Rc<RefCell<Vec<String>>> = Rc::default();
         let w = written.clone();
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
+            import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
                 Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
@@ -2520,7 +2520,7 @@ mod tests {
                     Err(format!("corrupt bundle: {path}"))
                 }
             })),
-            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
+            import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
                 Ok((Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), Vec::new()))
             })),
             automation_read: Some(Box::new(|path: &str| {

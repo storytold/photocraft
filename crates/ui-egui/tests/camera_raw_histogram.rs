@@ -99,18 +99,19 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         // The dialog translates through the `cameraRaw` context; match it in any system language.
         let tr = |s| photocraft_ui_egui::i18n::tr_ctx(lang, "cameraRaw", s);
         let mut y = 0.0;
-        for label in [light, tr("Color"), tr("Effects"), tr("Curve"), tr("Color Mixer"), tr("Color Grading"), tr("Detail")] {
+        // Camera Raw 16.1.1's panels, in its order.
+        let panels = ["Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail", "Optics", "Geometry", "Calibration"];
+        for label in std::iter::once(light).chain(panels.iter().map(|p| tr(p))) {
             let next = h.get_by_role_and_label(Role::Button, label).rect().top();
             assert!(next > y, "section order: {label}");
             y = next;
         }
+        // Light and Color open first, as in Camera Raw.
         assert!(h.query_by_label(tr("Basic")).is_none());
-        assert!(h.query_by_label(tr("Temperature")).is_none());
-        assert!(h.query_by_label(tr("Texture")).is_none());
         assert!(h.query_by_label(tr("Exposure")).is_some());
+        assert!(h.query_by_label(tr("Temperature")).is_some());
+        assert!(h.query_by_label(tr("Texture")).is_none());
         h.get_by_role_and_label(Role::Button, light).click();
-        h.run_steps(12);
-        h.get_by_role_and_label(Role::Button, tr("Color")).click();
         h.run_steps(12);
         // The dock also has Saturation; query only the Camera Raw settings panel.
         let settings = std::iter::successors(Some(h.get_by_role_and_label(Role::Button, tr("Color"))), |node| node.parent())
@@ -124,7 +125,7 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         h.run_steps(12);
         h.get_by_role_and_label(Role::Button, tr("Effects")).click();
         h.run_steps(12);
-        for label in ["Texture", "Clarity", "Dehaze", "Vignetting", "Grain"] {
+        for label in ["Texture", "Clarity", "Dehaze", "Vignette", "Grain"] {
             assert!(h.query_by_label(tr(label)).is_some(), "effects control: {label}");
         }
         let after = control::inspect(h.state(), &h.ctx);

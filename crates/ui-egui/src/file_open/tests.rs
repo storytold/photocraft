@@ -18,7 +18,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8], _depth: usize| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
             if bytes == b"bad" {
                 return Err("not an image".into());
             }
@@ -906,7 +906,7 @@ fn opening_type_in_a_missing_font_warns() {
     let (with_missing, installed) = (doc_with_type(Some(MISSING)), doc_with_type(None));
     let already = warning.clone();
     let services = Services {
-        import: Some(Box::new(move |name: &str, _bytes: &[u8], _depth: usize| {
+        import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
             Ok(match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),

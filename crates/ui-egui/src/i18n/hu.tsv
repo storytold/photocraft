@@ -4017,6 +4017,144 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
+# Camera Raw 16.1.1 dialog (Camera Raw stack)
+	AHD (adaptive homogeneity)	AHD (adaptív homogenitás)
+	Auto tone and color (Ctrl+U)	Automatikus tónus és szín (Ctrl+U)
+	Before/After Left/Right	Előtte/Utána bal/jobb
+	Before/After Left/Right Split	Előtte/Utána bal/jobb osztott
+	Before/After Top/Bottom	Előtte/Utána fent/lent
+	Before/After Top/Bottom Split	Előtte/Utána fent/lent osztott
+	Browse profiles	Profilok tallózása
+	Camera Raw Preferences	Camera Raw beállításai
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	A Camera Raw a PhotoCraft témáját követi (Ablak › Téma)
+	Convert and save image: not available in the Camera Raw Filter	Kép konvertálása és mentése: a Camera Raw szűrőben nem érhető el
+	Convert to black and white (V)	Átalakítás fekete-fehérré (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Az Utána beállítások átmásolása az Előtte állapotba (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Az Előtte beállítások átmásolása az Utána állapotba (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	A kreatív profilok a PhotoCraftban még nem érhetők el.
+	Cycle between Before/After views (Q)	Váltás az Előtte/Utána nézetek között (Q)
+	Demosaic	Demozaikolás
+	Fit ({percent})	Illesztés ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	A pontosabb előnézethez nagyítsa az előnézetet 100%-ra vagy nagyobbra, amikor a panel vezérlőit állítja.
+	For best results, apply lens corrections first.	A legjobb eredményért először alkalmazza az objektívkorrekciókat.
+	HDR editing needs an HDR display	A HDR-szerkesztéshez HDR-kijelző szükséges
+	Hand Tool (H)	Kéz (H)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	A maszkokhoz helyi korrekciók és szegmentálási modellek kellenek; ezek a PhotoCraft Camera Raw-jában még nincsenek meg.
+	More image settings	További képbeállítások
+	Multiple: Edit panels will stay open until you close them.	Több: a szerkesztőpanelek nyitva maradnak, amíg be nem zárja őket.
+	Not available yet	Még nem érhető el
+	Open preferences dialog (Ctrl+K)	A beállítások párbeszédpanel megnyitása (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	A PhotoCraft a Camera Raw előnézeteit a processzoron hívja elő; az eredmény a teljes felbontású feldolgozási láncon készül.
+	PhotoCraft keeps no Camera Raw cache.	A PhotoCraft nem tart fenn Camera Raw gyorsítótárat.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	A PhotoCraft saját előbeállításai. Az előbeállítások mentése és importálása még nem érhető el.
+	Select zoom level	Nagyítási szint kiválasztása
+	Single: opening an edit panel closes the others.	Egy: egy szerkesztőpanel megnyitása bezárja a többit.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Az Előtte és Utána beállítások felcserélése (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Célzott korrekciós eszköz: húzzon a képen a mutató alatti szín módosításához
+	This tool is not available in PhotoCraft yet.	Ez az eszköz a PhotoCraftban még nem érhető el.
+	Toggle Full Screen mode (F)	Teljes képernyős mód be/ki (F)
+	Toggle between current settings and defaults (P)	Váltás a jelenlegi beállítások és az alapértékek között (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Rácsátfedés be/ki (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Mintavevő-átfedés be/ki (S)
+	Toggle visibility of {panel} settings	{panel}: a beállítások megjelenítése be/ki
+	Use the Point Color Dropper\nto add samples.	Minták hozzáadásához használja\na Pontszín pipettát.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	A pipettával vegyen mintát a javítandó lila és zöld színszegélyekből.
+	White Balance tool (I): click a neutral area	Fehéregyensúly eszköz (I): kattintson egy semleges területre
+	Zoom Tool (Z)	Nagyító (Z)
+cameraRaw	Adjust	Módosítás
+cameraRaw	Apply Favorite Preset	Kedvenc előbeállítás alkalmazása
+cameraRaw	Apply Previous Settings	Előző beállítások alkalmazása
+cameraRaw	Aquas	Türkizek
+cameraRaw	As Shot	Felvétel szerint
+cameraRaw	Aspect	Képarány
+cameraRaw	Auto: apply balanced perspective corrections	Automatikus: kiegyensúlyozott perspektívakorrekciók alkalmazása
+cameraRaw	B&W	FF
+cameraRaw	B&W High Contrast	FF nagy kontraszt
+cameraRaw	B&W Mix	FF keverés
+cameraRaw	B&W Neutral	FF semleges
+cameraRaw	B&W Soft	FF lágy
+cameraRaw	Blue Channel	Kék csatorna
+cameraRaw	Blue Primary	Kék alapszín
+cameraRaw	Browse...	Tallózás...
+cameraRaw	Calibration	Kalibrálás
+cameraRaw	Camera Raw Cache	Camera Raw gyorsítótár
+cameraRaw	Clarity Pop	Kiemelt tisztaság
+cameraRaw	Color Theme:	Színtéma:
+cameraRaw	Copy Edit Settings	Szerkesztési beállítások másolása
+cameraRaw	Copy Selected Edit Settings...	Kijelölt szerkesztési beállítások másolása...
+cameraRaw	Create New Mask	Új maszk létrehozása
+cameraRaw	Create Preset...	Előbeállítás létrehozása...
+cameraRaw	Creative	Kreatív
+cameraRaw	Default image click zooms to:	Kattintás a képre alapértelmezés szerint nagyít:
+cameraRaw	Disable Upright	Upright kikapcsolása
+cameraRaw	Edit (E)	Szerkesztés (E)
+cameraRaw	Edit panel behavior:	Szerkesztőpanelek viselkedése:
+cameraRaw	Faded	Fakó
+cameraRaw	Favorites	Kedvencek
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Teljes: vízszintezés, valamint vízszintes és függőleges perspektívakorrekció alkalmazása
+cameraRaw	Geometry	Geometria
+cameraRaw	Green Amount	Zöld mértéke
+cameraRaw	Green Channel	Zöld csatorna
+cameraRaw	Green Hue	Zöld színárnyalat
+cameraRaw	Green Primary	Zöld alapszín
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Vezetett: rajzoljon két vagy több segédvonalat a perspektívakorrekciók testreszabásához
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Páracsökkentés
+cameraRaw	Level: apply only level correction	Vízszintezés: csak a vízszintezés alkalmazása
+cameraRaw	Load Settings...	Beállítások betöltése...
+cameraRaw	Manual Transformations	Kézi átalakítások
+cameraRaw	Masking (M)	Maszkolás (M)
+cameraRaw	Medium Contrast	Közepes kontraszt
+cameraRaw	Mixer	Keverő
+cameraRaw	Multiple	Több
+cameraRaw	Muted	Tompa
+cameraRaw	Objects	Objektumok
+cameraRaw	Offset X	X eltolás
+cameraRaw	Offset Y	Y eltolás
+cameraRaw	Optics	Optika
+cameraRaw	Oranges	Narancsok
+cameraRaw	Parametric Curve	Parametrikus görbe
+cameraRaw	Paste Edit Settings	Szerkesztési beállítások beillesztése
+cameraRaw	Pet Eye	Állatszem
+cameraRaw	Point Color	Pontszín
+cameraRaw	Presets (Shift+P)	Előbeállítások (Shift+P)
+cameraRaw	Process	Feldolgozás
+cameraRaw	Purple Amount	Lila mértéke
+cameraRaw	Purple Hue	Lila színárnyalat
+cameraRaw	Purples	Lilák
+cameraRaw	Red Channel	Vörös csatorna
+cameraRaw	Red Eye (Shift+E)	Vörös szem (Shift+E)
+cameraRaw	Red Primary	Vörös alapszín
+cameraRaw	Refine Saturation	Telítettség finomítása
+cameraRaw	Refresh	Frissítés
+cameraRaw	Remove (B)	Eltávolítás (B)
+cameraRaw	Reset to Open	Visszaállítás a megnyitáskori állapotra
+cameraRaw	Sample fringe	Szegély mintavétele
+cameraRaw	Save Settings...	Beállítások mentése...
+cameraRaw	Show rich tooltips	Részletes elemleírások megjelenítése
+cameraRaw	Single	Egy
+cameraRaw	Split Tone	Osztott tónus
+cameraRaw	Strong Contrast	Erős kontraszt
+cameraRaw	Upright	Upright
+cameraRaw	Use Lightroom style zoom and pan	Lightroom-stílusú nagyítás és pásztázás
+cameraRaw	Use compact layout	Kompakt elrendezés
+cameraRaw	Use legacy Target Adjustment Tool	Régi célzott korrekciós eszköz
+cameraRaw	Use legacy undo shortcuts	Régi visszavonási billentyűparancsok
+cameraRaw	Version 1	1. verzió
+cameraRaw	Version 2	2. verzió
+cameraRaw	Version 3	3. verzió
+cameraRaw	Version 4	4. verzió
+cameraRaw	Version 5	5. verzió
+cameraRaw	Version 6 (Current)	6. verzió (jelenlegi)
+cameraRaw	Vertical: apply level and vertical perspective correction	Függőleges: vízszintezés és függőleges perspektívakorrekció alkalmazása
+cameraRaw	Vignette	Vignetta
+cameraRaw	Vintage	Régies
+cameraRaw	Visualize Spots	Foltok megjelenítése
+cameraRaw	Vivid	Élénk
+cameraRaw	White balance	Fehéregyensúly
+cameraRaw	Zoom and Pan	Nagyítás és pásztázás
 	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
 	Response curve	Válaszgörbe
 	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn

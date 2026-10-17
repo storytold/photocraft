@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use photocraft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType};
+pub use photocraft_raw::Demosaic;
 use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, Reference, Sensor, WhiteBalance};
 pub use photocraft_raw::{Tone, retone};
 
@@ -44,7 +45,7 @@ fn upright_preview(raw: &[u8], jpeg: &[u8]) -> Result<Image, IoError> {
 
 /// Camera Raw's Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture and Dehaze,
 /// applied while developing the sensor data (the open-time Camera Raw dialog) instead of to the
-/// developed RGB pixels.
+/// developed RGB pixels, and the demosaic method.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RawTuning {
     /// −100…100, as `photocraft_algo::camera_raw::CameraRaw::temperature`.
@@ -53,6 +54,7 @@ pub struct RawTuning {
     pub tint: f32,
     /// EV, as `CameraRaw::exposure`.
     pub exposure: f32,
+    pub demosaic: Demosaic,
     /// −100…100, as `CameraRaw::shadows`: in linear light before the tone curve, as Camera Raw
     /// does for raw files ([`photocraft_raw::Tone`]).
     pub shadows: f32,
@@ -90,7 +92,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     // The colour rendering the default open used (a look fitted to the camera's JPEG for files
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = default_look(bytes, &sensor);
-    let mut opts = DevelopOptions { limits: limits(), exposure, tone, camera_look, ..Default::default() };
+    let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
     let wb_applied = match sensor.camera_wb {
         Some(m) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
@@ -110,7 +112,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         .filter(|(_, v)| *v != 0.0)
         .map(|(k, v)| format!(", {k} {v:+.0}"))
         .collect::<String>();
-    let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb})", tuning.exposure);
+    let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb}, {} demosaic)", tuning.exposure, tuning.demosaic.id());
     Ok((developed_document(name, format, dev, &summary)?, wb_applied))
 }
 
@@ -180,7 +182,12 @@ fn developed_document(name: &str, format: &str, dev: photocraft_raw::Developed, 
 
 /// Develops a raw file with the default settings.
 pub fn import_raw(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_raw_with(name, bytes, &DevelopOptions { limits: limits(), ..Default::default() })
+    import_raw_demosaic(name, bytes, Demosaic::default())
+}
+
+/// Develops a raw file with the default settings and the `demosaic` method.
+pub fn import_raw_demosaic(name: &str, bytes: &[u8], demosaic: Demosaic) -> Result<ImportResult, IoError> {
+    import_raw_with(name, bytes, &DevelopOptions { limits: limits(), demosaic, ..Default::default() })
 }
 
 /// Smallest preview long edge preferred for the colour fit (a smaller preview decodes faster;

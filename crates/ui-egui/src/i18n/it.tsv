@@ -2784,6 +2784,165 @@ curves	Smooth	Leviga
 	Light Red	Rosso chiaro
 	Medium Blue	Blu medio
 	Light Gray	Grigio chiaro
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Regola
+cameraRaw	Apply Favorite Preset	Applica predefinito preferito
+cameraRaw	Apply Previous Settings	Applica impostazioni precedenti
+cameraRaw	Aquas	Acqua
+cameraRaw	Artistic	Artistico
+cameraRaw	As Shot	Come scattato
+cameraRaw	Aspect	Proporzioni
+cameraRaw	Auto: apply balanced perspective corrections	Automatico: applica correzioni prospettiche bilanciate
+cameraRaw	B&W	B/N
+cameraRaw	B&W High Contrast	B/N contrasto elevato
+cameraRaw	B&W Mix	Miscela B/N
+cameraRaw	B&W Neutral	B/N neutro
+cameraRaw	B&W Soft	B/N morbido
+cameraRaw	Back	Indietro
+cameraRaw	Blue Channel	Canale blu
+cameraRaw	Blue Primary	Primario blu
+cameraRaw	Browse...	Sfoglia...
+cameraRaw	Calibration	Calibrazione
+cameraRaw	Camera Raw Cache	Cache Camera Raw
+cameraRaw	Clarity Pop	Chiarezza incisiva
+cameraRaw	Clone	Clona
+cameraRaw	Color Noise Reduction	Riduzione disturbo colore
+cameraRaw	Color Theme:	Tema colore:
+cameraRaw	Cool	Freddo
+cameraRaw	Copy Edit Settings	Copia impostazioni di modifica
+cameraRaw	Copy Selected Edit Settings...	Copia impostazioni di modifica selezionate...
+cameraRaw	Create New Mask	Crea nuova maschera
+cameraRaw	Create Preset...	Crea predefinito...
+cameraRaw	Creative	Creativo
+cameraRaw	Default image click zooms to:	Zoom predefinito al clic sull'immagine:
+cameraRaw	Defringe	Elimina frange
+cameraRaw	Disable Upright	Disattiva raddrizzamento
+cameraRaw	Distortion	Distorsione
+cameraRaw	Edit (E)	Modifica (E)
+cameraRaw	Edit panel behavior:	Comportamento pannelli Modifica:
+cameraRaw	Faded	Sbiadito
+cameraRaw	Favorites	Preferiti
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Completo: applica livellamento e correzioni prospettiche orizzontali e verticali
+cameraRaw	Geometry	Geometria
+cameraRaw	Green Amount	Quantità verde
+cameraRaw	Green Channel	Canale verde
+cameraRaw	Green Hue	Tonalità verde
+cameraRaw	Green Primary	Primario verde
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Guidato: disegna due o più guide per personalizzare le correzioni prospettiche
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Meno foschia
+cameraRaw	Heal	Correggi
+cameraRaw	Healing	Correzione
+cameraRaw	Level: apply only level correction	Livella: applica solo il livellamento
+cameraRaw	Load Settings...	Carica impostazioni...
+cameraRaw	Manual Transformations	Trasformazioni manuali
+cameraRaw	Masking (M)	Mascheratura (M)
+cameraRaw	Medium Contrast	Contrasto medio
+cameraRaw	Mixer	Miscelatore
+cameraRaw	Multiple	Multiplo
+cameraRaw	Muted	Tenue
+cameraRaw	Objects	Oggetti
+cameraRaw	Offset X	Spostamento X
+cameraRaw	Offset Y	Spostamento Y
+cameraRaw	Optics	Ottica
+cameraRaw	Oranges	Arancioni
+cameraRaw	Parametric Curve	Curva parametrica
+cameraRaw	Paste Edit Settings	Incolla impostazioni di modifica
+cameraRaw	Pet Eye	Occhi animali
+cameraRaw	Point Color	Colore punto
+cameraRaw	Point Curve	Curva a punti
+cameraRaw	Presets (Shift+P)	Predefiniti (Shift+P)
+cameraRaw	Process	Processo
+cameraRaw	Profile	Profilo
+cameraRaw	Purple Amount	Quantità viola
+cameraRaw	Purple Hue	Tonalità viola
+cameraRaw	Purples	Viola
+cameraRaw	Red Channel	Canale rosso
+cameraRaw	Red Eye (Shift+E)	Occhi rossi (Shift+E)
+cameraRaw	Red Primary	Primario rosso
+cameraRaw	Refine Saturation	Affina saturazione
+cameraRaw	Refresh	Aggiorna
+cameraRaw	Remove (B)	Rimuovi (B)
+cameraRaw	Reset to Open	Ripristina all'apertura
+cameraRaw	Sample fringe	Campiona frange
+cameraRaw	Save Settings...	Salva impostazioni...
+cameraRaw	Show rich tooltips	Mostra descrizioni comandi estese
+cameraRaw	Single	Singolo
+cameraRaw	Smoothness	Uniformità
+cameraRaw	Split Tone	Viraggio diviso
+cameraRaw	Strong Contrast	Contrasto forte
+cameraRaw	Upright	Raddrizzamento
+cameraRaw	Use Lightroom style zoom and pan	Usa zoom e panoramica stile Lightroom
+cameraRaw	Use compact layout	Usa layout compatto
+cameraRaw	Use legacy Target Adjustment Tool	Usa strumento di regolazione mirata precedente
+cameraRaw	Use legacy undo shortcuts	Usa scorciatoie di annullamento precedenti
+cameraRaw	Version 1	Versione 1
+cameraRaw	Version 2	Versione 2
+cameraRaw	Version 3	Versione 3
+cameraRaw	Version 4	Versione 4
+cameraRaw	Version 5	Versione 5
+cameraRaw	Version 6 (Current)	Versione 6 (attuale)
+cameraRaw	Vertical: apply level and vertical perspective correction	Verticale: applica livellamento e correzione prospettica verticale
+cameraRaw	Vignette	Vignettatura
+cameraRaw	Vintage	Vintage
+cameraRaw	Visualize Spots	Visualizza macchie
+cameraRaw	Vivid	Vivace
+cameraRaw	Warm	Caldo
+cameraRaw	White balance	Bilanciamento bianco
+cameraRaw	Zoom and Pan	Zoom e panoramica
+	After	Dopo
+	Auto tone and color (Ctrl+U)	Tono e colore automatici (Ctrl+U)
+	Before	Prima
+	Before/After Left/Right	Prima/Dopo sinistra/destra
+	Before/After Left/Right Split	Prima/Dopo sinistra/destra diviso
+	Before/After Top/Bottom	Prima/Dopo sopra/sotto
+	Before/After Top/Bottom Split	Prima/Dopo sopra/sotto diviso
+	Browse profiles	Sfoglia profili
+	Camera Raw Preferences	Preferenze Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw segue il tema di PhotoCraft (Finestra › Tema)
+	Convert and save image: not available in the Camera Raw Filter	Converti e salva immagine: non disponibile nel filtro Camera Raw
+	Convert to black and white (V)	Converti in bianco e nero (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Copia impostazioni Dopo in Prima (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Copia impostazioni Prima in Dopo (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	I profili creativi non sono ancora disponibili in PhotoCraft.
+	Cycle between Before/After views (Q)	Alterna viste Prima/Dopo (Q)
+	Fit ({percent})	Adatta ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Per un'anteprima più precisa, porta lo zoom al 100% o oltre quando regoli i controlli di questo pannello.
+	For best results, apply lens corrections first.	Per risultati migliori, applica prima le correzioni lente.
+	HDR editing needs an HDR display	La modifica HDR richiede un display HDR
+	Hand Tool (H)	Strumento Mano (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Le maschere richiedono regolazioni locali e modelli di segmentazione; PhotoCraft non li ha ancora in Camera Raw.
+	More image settings	Altre impostazioni immagine
+	Multiple: Edit panels will stay open until you close them.	Multiplo: i pannelli Modifica restano aperti finché non li chiudi.
+	Not available yet	Non ancora disponibile
+	Open preferences dialog (Ctrl+K)	Apri finestra preferenze (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft sviluppa le anteprime Camera Raw sulla CPU; il risultato usa la pipeline a piena risoluzione.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft non conserva una cache Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Predefiniti propri di PhotoCraft. Salvataggio e importazione dei predefiniti non sono ancora disponibili.
+	Select zoom level	Seleziona livello di zoom
+	Single: opening an edit panel closes the others.	Singolo: aprire un pannello di modifica chiude gli altri.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Scambia impostazioni Prima e Dopo (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Strumento di regolazione mirata: trascina nell'immagine per regolare il colore sotto il puntatore
+	This tool is not available in PhotoCraft yet.	Questo strumento non è ancora disponibile in PhotoCraft.
+	Toggle Full Screen mode (F)	Alterna modalità schermo intero (F)
+	Toggle between current settings and defaults (P)	Alterna tra impostazioni correnti e predefinite (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Alterna sovrapposizione griglia (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Alterna sovrapposizione campionatori (S)
+	Toggle visibility of {panel} settings	Alterna visibilità impostazioni {panel}
+	Use the Point Color Dropper\nto add samples.	Usa il contagocce Colore punto\nper aggiungere campioni.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Usa il contagocce per campionare le aree di frange viola e verdi da correggere.
+	White Balance tool (I): click a neutral area	Strumento Bilanciamento bianco (I): fai clic su un'area neutra
+	Zoom Tool (Z)	Strumento Zoom (Z)
+cameraRaw	Type	Tipo
+cameraRaw	Sharpening	Nitidezza
+	Demosaic	Demosaicizzazione
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Come viene completato il mosaico del filtro colore della fotocamera. Si applica all'apertura del file; l'anteprima mostra il metodo con cui è stato aperto.
+	AHD (adaptive homogeneity)	AHD (omogeneità adattiva)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: i bordi più puliti e le minori frange di colore, il più lento.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolazione con correzione del gradiente: nitida e veloce, con qualche frangia di colore nei dettagli fini.
+	The fastest and the softest, with colour fringing on fine detail.	Il più veloce e il più morbido, con frange di colore nei dettagli fini.
 
 # Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
 # other catalogs already translate
@@ -3294,8 +3453,6 @@ layerLabel	No Color	Nessun colore
 	Hide Grid	Nascondi griglia
 	Fit to Window	Adatta alla finestra
 	Live Preview	Anteprima in tempo reale
-	Before	Prima
-	After	Dopo
 	Compare	Confronta
 	File Size	Dimensione file
 	Filename	Nome file
@@ -4074,6 +4231,35 @@ navigator	Zoom	Zoom
 	{index} of {total}	{index} di {total}
 	{shortcut} assigned.	{shortcut} assegnata.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} è già usata da {commands} e verrà rimossa quando fai clic su OK.
+# Edit › Camera Raw Filter: the new filter.cameraRaw parameters in the generic filter dialog
+	As Shot	Come scattata
+	Calibration Blue Hue	Calibrazione tonalità blu
+	Calibration Blue Sat	Calibrazione saturazione blu
+	Calibration Green Hue	Calibrazione tonalità verde
+	Calibration Green Sat	Calibrazione saturazione verde
+	Calibration Red Hue	Calibrazione tonalità rosso
+	Calibration Red Sat	Calibrazione saturazione rosso
+	Calibration Shadows Tint	Calibrazione tinta ombre
+	Curve Refine Saturation	Curva: affina saturazione
+	Defringe Green Amount	Elimina frange: quantità verde
+	Defringe Purple Amount	Elimina frange: quantità viola
+	Full	Completa
+	Guided	Guidata
+	Lens Distortion	Distorsione obiettivo
+	Lens Vignette	Vignettatura obiettivo
+	Lens Vignette Midpoint	Punto medio vignettatura obiettivo
+	Noise Color Smoothness	Disturbo: uniformità colore
+	Noise Luminance Contrast	Disturbo: contrasto luminanza
+	Process Version	Versione processo
+	Transform Aspect	Trasforma: proporzioni
+	Transform Horizontal	Trasforma: orizzontale
+	Transform Offset X	Trasforma: spostamento X
+	Transform Offset Y	Trasforma: spostamento Y
+	Transform Rotate	Trasforma: ruota
+	Transform Scale	Trasforma: scala
+	Transform Vertical	Trasforma: verticale
+	Upright	Raddrizzamento
+	White Balance	Bilanciamento bianco
 	Object Finder	Ricerca oggetti
 	No object found there — drag a rectangle around it	Nessun oggetto trovato lì: trascina un rettangolo intorno
 	Remove after each stroke	Rimuovi dopo ogni tratto

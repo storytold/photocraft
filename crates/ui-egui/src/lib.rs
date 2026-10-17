@@ -41,8 +41,11 @@ pub mod brushes_tab;
 pub(crate) mod cam_preview;
 mod cam_transform;
 mod camera_raw_detail_ui;
+mod camera_raw_panels;
 mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;
+mod camera_raw_style;
+mod camera_raw_tools_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
@@ -252,7 +255,7 @@ pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<String>), String>>;
+pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<(Document, Vec<String>), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
@@ -1333,8 +1336,8 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
-        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
+        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let (doc, warnings) = import(name, bytes, &opts)?;
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
         // until its prompt is answered, and later files wait behind it (`open_prompt`).
         // Missing fonts are read from the document itself: it may not be open yet (#4559).
@@ -1383,8 +1386,8 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
-        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
+        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let (doc, warnings) = import(name, bytes, &opts)?;
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {

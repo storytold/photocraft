@@ -3870,6 +3870,149 @@ curves	Smooth	Vloeiend maken
 	Light Red	Lichtrood
 	Medium Blue	Middelblauw
 	Light Gray	Lichtgrijs
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Aanpassen
+cameraRaw	Apply Favorite Preset	Favoriete voorinstelling toepassen
+cameraRaw	Apply Previous Settings	Vorige instellingen toepassen
+cameraRaw	Aquas	Aquatinten
+cameraRaw	As Shot	Zoals opgenomen
+cameraRaw	Aspect	Beeldverhouding
+cameraRaw	Auto: apply balanced perspective corrections	Automatisch: evenwichtige perspectiefcorrecties toepassen
+cameraRaw	B&W	Z&W
+cameraRaw	B&W High Contrast	Z&W hoog contrast
+cameraRaw	B&W Mix	Z&W-mix
+cameraRaw	B&W Neutral	Z&W neutraal
+cameraRaw	B&W Soft	Z&W zacht
+cameraRaw	Blue Channel	Blauwkanaal
+cameraRaw	Blue Primary	Primair blauw
+cameraRaw	Browse...	Bladeren...
+cameraRaw	Calibration	Kalibratie
+cameraRaw	Camera Raw Cache	Camera Raw-cache
+cameraRaw	Clarity Pop	Extra duidelijkheid
+cameraRaw	Color Theme:	Kleurthema:
+cameraRaw	Copy Edit Settings	Bewerkingsinstellingen kopiëren
+cameraRaw	Copy Selected Edit Settings...	Geselecteerde bewerkingsinstellingen kopiëren...
+cameraRaw	Create New Mask	Nieuw masker maken
+cameraRaw	Create Preset...	Voorinstelling maken...
+cameraRaw	Creative	Creatief
+cameraRaw	Default image click zooms to:	Klik in afbeelding zoomt standaard naar:
+cameraRaw	Disable Upright	Upright uitschakelen
+cameraRaw	Edit (E)	Bewerken (E)
+cameraRaw	Edit panel behavior:	Gedrag bewerkingspanelen:
+cameraRaw	Faded	Vervaagd
+cameraRaw	Favorites	Favorieten
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Volledig: waterpas plus horizontale en verticale perspectiefcorrecties toepassen
+cameraRaw	Geometry	Geometrie
+cameraRaw	Green Amount	Hoeveelheid groen
+cameraRaw	Green Channel	Groenkanaal
+cameraRaw	Green Hue	Kleurtoon groen
+cameraRaw	Green Primary	Primair groen
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Begeleid: teken twee of meer hulplijnen om de perspectiefcorrecties aan te passen
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Nevelvrij
+cameraRaw	Level: apply only level correction	Waterpas: alleen waterpascorrectie toepassen
+cameraRaw	Load Settings...	Instellingen laden...
+cameraRaw	Manual Transformations	Handmatige transformaties
+cameraRaw	Masking (M)	Maskering (M)
+cameraRaw	Medium Contrast	Gemiddeld contrast
+cameraRaw	Mixer	Mixer
+cameraRaw	Multiple	Meerdere
+cameraRaw	Muted	Gedempt
+cameraRaw	Objects	Objecten
+cameraRaw	Offset X	Verschuiving X
+cameraRaw	Offset Y	Verschuiving Y
+cameraRaw	Optics	Optiek
+cameraRaw	Oranges	Oranjetinten
+cameraRaw	Parametric Curve	Parametrische curve
+cameraRaw	Paste Edit Settings	Bewerkingsinstellingen plakken
+cameraRaw	Pet Eye	Dierenogen
+cameraRaw	Point Color	Puntkleur
+cameraRaw	Presets (Shift+P)	Voorinstellingen (Shift+P)
+cameraRaw	Process	Proces
+cameraRaw	Purple Amount	Hoeveelheid paars
+cameraRaw	Purple Hue	Kleurtoon paars
+cameraRaw	Purples	Paarstinten
+cameraRaw	Red Channel	Roodkanaal
+cameraRaw	Red Eye (Shift+E)	Rode ogen (Shift+E)
+cameraRaw	Red Primary	Primair rood
+cameraRaw	Refine Saturation	Verzadiging verfijnen
+cameraRaw	Refresh	Vernieuwen
+cameraRaw	Remove (B)	Verwijderen (B)
+cameraRaw	Reset to Open	Terugzetten naar geopende staat
+cameraRaw	Sample fringe	Randkleur opnemen
+cameraRaw	Save Settings...	Instellingen opslaan...
+cameraRaw	Show rich tooltips	Uitgebreide knopinfo tonen
+cameraRaw	Single	Enkel
+cameraRaw	Split Tone	Gesplitste toon
+cameraRaw	Strong Contrast	Sterk contrast
+cameraRaw	Upright	Upright
+cameraRaw	Use Lightroom style zoom and pan	Zoomen en pannen zoals in Lightroom
+cameraRaw	Use compact layout	Compacte indeling gebruiken
+cameraRaw	Use legacy Target Adjustment Tool	Verouderd gereedschap voor gerichte aanpassing gebruiken
+cameraRaw	Use legacy undo shortcuts	Verouderde sneltoetsen voor ongedaan maken gebruiken
+cameraRaw	Version 1	Versie 1
+cameraRaw	Version 2	Versie 2
+cameraRaw	Version 3	Versie 3
+cameraRaw	Version 4	Versie 4
+cameraRaw	Version 5	Versie 5
+cameraRaw	Version 6 (Current)	Versie 6 (huidig)
+cameraRaw	Vertical: apply level and vertical perspective correction	Verticaal: waterpas en verticale perspectiefcorrectie toepassen
+cameraRaw	Vignette	Vignet
+cameraRaw	Vintage	Vintage
+cameraRaw	Visualize Spots	Vlekken visualiseren
+cameraRaw	Vivid	Levendig
+cameraRaw	White balance	Witbalans
+cameraRaw	Zoom and Pan	Zoomen en pannen
+	Auto tone and color (Ctrl+U)	Automatische toon en kleur (Ctrl+U)
+	Before/After Left/Right	Voor/na links/rechts
+	Before/After Left/Right Split	Voor/na links/rechts gesplitst
+	Before/After Top/Bottom	Voor/na boven/onder
+	Before/After Top/Bottom Split	Voor/na boven/onder gesplitst
+	Browse profiles	Profielen bladeren
+	Camera Raw Preferences	Camera Raw-voorkeuren
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw volgt het thema van PhotoCraft (Venster › Thema)
+	Convert and save image: not available in the Camera Raw Filter	Afbeelding omzetten en opslaan: niet beschikbaar in het Camera Raw-filter
+	Convert to black and white (V)	Omzetten naar zwart-wit (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Na-instellingen naar Voor kopiëren (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Voor-instellingen naar Na kopiëren (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Creatieve profielen zijn nog niet beschikbaar in PhotoCraft.
+	Cycle between Before/After views (Q)	Door voor/na-weergaven bladeren (Q)
+	Fit ({percent})	Passend ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Zoom voor een nauwkeurigere voorvertoning in tot 100% of meer wanneer u de regelaars in dit paneel aanpast.
+	For best results, apply lens corrections first.	Pas voor het beste resultaat eerst lenscorrecties toe.
+	HDR editing needs an HDR display	HDR-bewerking vereist een HDR-scherm
+	Hand Tool (H)	Handgereedschap (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Maskers vereisen lokale aanpassingen en segmentatiemodellen; PhotoCraft heeft die nog niet in Camera Raw.
+	More image settings	Meer afbeeldingsinstellingen
+	Multiple: Edit panels will stay open until you close them.	Meerdere: bewerkingspanelen blijven open tot u ze sluit.
+	Not available yet	Nog niet beschikbaar
+	Open preferences dialog (Ctrl+K)	Voorkeuren openen (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft ontwikkelt Camera Raw-voorvertoningen op de CPU; het resultaat gebruikt de pijplijn op volledige resolutie.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft houdt geen Camera Raw-cache bij.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Eigen voorinstellingen van PhotoCraft. Voorinstellingen opslaan en importeren is nog niet beschikbaar.
+	Select zoom level	Zoomniveau kiezen
+	Single: opening an edit panel closes the others.	Enkel: een bewerkingspaneel openen sluit de andere.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Voor- en na-instellingen omwisselen (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Gereedschap voor gerichte aanpassing: sleep in de afbeelding om de kleur onder de aanwijzer aan te passen
+	This tool is not available in PhotoCraft yet.	Dit gereedschap is nog niet beschikbaar in PhotoCraft.
+	Toggle Full Screen mode (F)	Volledig scherm aan/uit (F)
+	Toggle between current settings and defaults (P)	Wisselen tussen huidige instellingen en standaardwaarden (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Rasteroverlay tonen/verbergen (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Kleurmonsteroverlay tonen/verbergen (S)
+	Toggle visibility of {panel} settings	Zichtbaarheid van instellingen voor {panel} wisselen
+	Use the Point Color Dropper\nto add samples.	Gebruik de puntkleurpipet\nom monsters toe te voegen.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Neem met de pipet paarse en groene randkleuren op die gecorrigeerd moeten worden.
+	White Balance tool (I): click a neutral area	Witbalansgereedschap (I): klik op een neutraal gebied
+	Zoom Tool (Z)	Zoomgereedschap (Z)
+cameraRaw	Type	Type
+	Demosaic	Demosaicing
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hoe het kleurfiltermozaïek van de camera wordt ingevuld. Wordt toegepast bij het openen van het bestand; de voorvertoning toont de methode waarmee het is geopend.
+	AHD (adaptive homogeneity)	AHD (adaptieve homogeniteit)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: de schoonste randen en de minste kleurranden, het traagst.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradiëntgecorrigeerde interpolatie: scherp en snel, met wat kleurranden in fijne details.
+	The fastest and the softest, with colour fringing on fine detail.	Het snelst en het zachtst, met kleurranden in fijne details.
 	Object Finder	Objectzoeker
 	No object found there — drag a rectangle around it	Daar is geen object gevonden — sleep er een rechthoek omheen
 	Remove after each stroke	Verwijderen na elke streek

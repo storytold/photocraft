@@ -140,13 +140,11 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
         m.remove("layer");
     }
     let mut cr: CameraRaw = serde_json::from_value(q).map_err(|e| bad(cmd, format!("bad params: {e}")))?;
-    // The noise stages turn these straight into a guided-filter radius and a
-    // blur sigma, so an out-of-range value means unbounded work. Clamp to the
-    // documented 0..100 (part of #707).
-    cr.noise_luminance = cr.noise_luminance.clamp(0.0, 100.0);
-    cr.noise_luminance_detail = cr.noise_luminance_detail.clamp(0.0, 100.0);
-    cr.noise_color = cr.noise_color.clamp(0.0, 100.0);
-    cr.noise_color_detail = cr.noise_color_detail.clamp(0.0, 100.0);
+    // The noise stages turn their amounts straight into a guided-filter radius and a blur
+    // sigma (an out-of-range value meant unbounded work, #707); the Optics, Geometry and
+    // Calibration stages turn theirs into radii, warps and hue windows. Clamp them all to their
+    // documented ranges (non-finite values become the defaults, inverted hue ranges are sorted).
+    cr.clamp_ranges();
     Ok(cr)
 }
 
@@ -463,7 +461,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Camera Raw Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","monochrome":bool=false,"grayMixer":[8 × -100..100],"whiteBalance":"asShot|auto|custom","curveRefineSaturation":0..100=100,"noiseLuminanceContrast":0..100=0,"noiseColorSmoothness":0..100=50,"lensDistortion":-100..100=0,"lensVignette":-100..100=0,"lensVignetteMidpoint":0..100=50,"defringePurpleAmount":0..20=0,"defringePurpleHue":[30,70],"defringeGreenAmount":0..20=0,"defringeGreenHue":[40,60],"upright":"off|auto|level|vertical|full|guided","transformVertical":-100..100=0,"transformHorizontal":-100..100=0,"transformRotate":-10..10=0,"transformAspect":-100..100=0,"transformScale":50..150=100,"transformOffsetX":-100..100=0,"transformOffsetY":-100..100=0,"processVersion":u32=6,"calibrationShadowsTint":-100..100=0,"calibrationRedHue":-100..100=0,"calibrationRedSat":-100..100=0,"calibrationGreenHue":-100..100=0,"calibrationGreenSat":-100..100=0,"calibrationBlueHue":-100..100=0,"calibrationBlueSat":-100..100=0,"seed":u32=0}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -602,6 +600,45 @@ mod tests {
         s.execute(RAW, json!({"saturation": -100})).unwrap();
         let p = active_px(&s, 60, 40);
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn camera_raw_clamps_and_renders_the_optics_geometry_and_calibration_controls() {
+        let p = raw_params(
+            RAW,
+            &json!({
+                "lensDistortion": 1e30, "transformScale": -1e30, "transformRotate": 45, "transformOffsetY": 1e39,
+                "defringePurpleHue": [90, 10], "defringeGreenAmount": 1e9, "grayMixer": [1e30, -1e30, 0, 0, 0, 0, 0, 0],
+                "calibrationRedHue": -1e30, "curveRefineSaturation": -5, "noiseColorSmoothness": 1e9, "lensVignetteMidpoint": -3
+            }),
+        )
+        .unwrap();
+        assert_eq!((p.lens_distortion, p.transform_scale, p.transform_rotate, p.transform_offset_y), (100.0, 50.0, 10.0, 0.0));
+        assert_eq!((p.defringe_purple_hue, p.defringe_green_amount, p.gray_mixer[0], p.gray_mixer[1]), ([10.0, 90.0], 20.0, 100.0, -100.0));
+        assert_eq!((p.calibration_red_hue, p.curve_refine_saturation, p.noise_color_smoothness, p.lens_vignette_midpoint), (-100.0, 0.0, 100.0, 0.0));
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let r = s
+                .execute(
+                    RAW,
+                    json!({"monochrome": true, "grayMixer": [-40, 0, 0, 0, 0, 30, 0, 0], "transformRotate": 4, "transformVertical": -20, "lensDistortion": 15,
+                           "lensVignette": 40, "defringePurpleAmount": 8, "calibrationBlueSat": 40, "calibrationShadowsTint": 20, "upright": "auto"}),
+                )
+                .unwrap();
+            assert_eq!(r["identity"], false);
+            for (x, y) in [(0, 0), (60, 40), (119, 79), (5, 70)] {
+                let q = active_px(&s, x, y);
+                assert!(q[..3].iter().all(|v| v.is_finite()) && q[0] == q[1] && q[1] == q[2] && q[3] == 1.0, "depth {depth} ({x},{y}): {q:?}");
+            }
+        }
+        // Placeholders alone are an identity; unknown modes are refused.
+        let mut s = session(8);
+        let before = active_px(&s, 60, 40);
+        let r = s.execute(RAW, json!({"upright": "full", "whiteBalance": "custom", "processVersion": 5})).unwrap();
+        assert_eq!(r["identity"], true);
+        assert_eq!(active_px(&s, 60, 40), before);
+        assert!(s.execute(RAW, json!({"upright": "sideways"})).is_err());
+        assert!(s.execute(RAW, json!({"whiteBalance": "tungsten"})).is_err());
     }
 
     #[test]

@@ -3829,6 +3829,145 @@ cameraData	Lens	Lens
 @plural	{n} step|{n} steps	{n} adım
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} fırça ön ayarı uyarısı daha)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} uyarı ile
+
+# Camera Raw 16.1.1 dialog (Camera Raw stack): written from the plain meaning of each label
+	Auto tone and color (Ctrl+U)	Otomatik ton ve renk (Ctrl+U)
+	Before/After Left/Right	Önce/Sonra Sol/Sağ
+	Before/After Left/Right Split	Önce/Sonra Sol/Sağ Bölünmüş
+	Before/After Top/Bottom	Önce/Sonra Üst/Alt
+	Before/After Top/Bottom Split	Önce/Sonra Üst/Alt Bölünmüş
+	Browse profiles	Profillere göz at
+	Camera Raw Preferences	Camera Raw Tercihleri
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw, PhotoCraft'ın temasını izler (Pencere › Tema)
+	Convert and save image: not available in the Camera Raw Filter	Görüntüyü dönüştür ve kaydet: Camera Raw Filtresi'nde kullanılamaz
+	Convert to black and white (V)	Siyah beyaza dönüştür (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Sonra ayarlarını Önce'ye kopyala (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Önce ayarlarını Sonra'ya kopyala (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Yaratıcı profiller PhotoCraft'ta henüz kullanılamıyor.
+	Cycle between Before/After views (Q)	Önce/Sonra görünümleri arasında geçiş yap (Q)
+	Demosaic	Demozaikleme
+	Fit ({percent})	Sığdır ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Daha doğru bir önizleme için bu paneldeki denetimleri ayarlarken önizlemeyi %100 veya daha büyük boyuta yakınlaştırın.
+	For best results, apply lens corrections first.	En iyi sonuç için önce mercek düzeltmelerini uygulayın.
+	HDR editing needs an HDR display	HDR düzenleme için bir HDR ekran gerekir
+	Hand Tool (H)	El Aracı (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Maskeler yerel ayarlamalar ve bölütleme modelleri gerektirir; PhotoCraft'ın Camera Raw'ında bunlar henüz yok.
+	More image settings	Diğer görüntü ayarları
+	Multiple: Edit panels will stay open until you close them.	Çoklu: Düzenleme panelleri siz kapatana kadar açık kalır.
+	Not available yet	Henüz kullanılamıyor
+	Open preferences dialog (Ctrl+K)	Tercihler iletişim kutusunu aç (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft, Camera Raw önizlemelerini işlemcide geliştirir; sonuç tam çözünürlüklü işlem hattını kullanır.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft Camera Raw önbelleği tutmaz.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	PhotoCraft'ın kendi ön ayarları. Ön ayarları kaydetme ve içe aktarma henüz kullanılamıyor.
+	Select zoom level	Yakınlaştırma düzeyini seç
+	Single: opening an edit panel closes the others.	Tekli: bir düzenleme paneli açmak diğerlerini kapatır.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Önce ve Sonra ayarlarının yerini değiştir (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Hedefli Ayarlama Aracı: işaretçinin altındaki rengi ayarlamak için görüntüde sürükleyin
+	This tool is not available in PhotoCraft yet.	Bu araç PhotoCraft'ta henüz kullanılamıyor.
+	Toggle Full Screen mode (F)	Tam Ekran modunu aç/kapat (F)
+	Toggle between current settings and defaults (P)	Geçerli ayarlar ile varsayılanlar arasında geçiş yap (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Izgara kaplamasını aç/kapat (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Örnekleyici kaplamasını aç/kapat (S)
+	Toggle visibility of {panel} settings	{panel} ayarlarının görünürlüğünü aç/kapat
+	Use the Point Color Dropper\nto add samples.	Örnek eklemek için Nokta Rengi\nDamlalığını kullanın.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Düzeltilmesi gereken mor ve yeşil saçaklanma alanlarını örneklemek için damlalığı kullanın.
+	White Balance tool (I): click a neutral area	Beyaz Dengesi aracı (I): nötr bir alana tıklayın
+	Zoom Tool (Z)	Yakınlaştırma Aracı (Z)
+cameraRaw	Adjust	Ayarla
+cameraRaw	Apply Favorite Preset	Favori Ön Ayarı Uygula
+cameraRaw	Apply Previous Settings	Önceki Ayarları Uygula
+cameraRaw	Aquas	Camgöbekleri
+cameraRaw	As Shot	Çekildiği Gibi
+cameraRaw	Aspect	En-Boy
+cameraRaw	Auto: apply balanced perspective corrections	Otomatik: dengeli perspektif düzeltmeleri uygula
+cameraRaw	B&W	S/B
+cameraRaw	B&W High Contrast	S/B Yüksek Kontrast
+cameraRaw	B&W Mix	S/B Karışımı
+cameraRaw	B&W Neutral	S/B Nötr
+cameraRaw	B&W Soft	S/B Yumuşak
+cameraRaw	Blue Channel	Mavi Kanal
+cameraRaw	Blue Primary	Mavi Ana Renk
+cameraRaw	Browse...	Göz at...
+cameraRaw	Calibration	Kalibrasyon
+cameraRaw	Camera Raw Cache	Camera Raw Önbelleği
+cameraRaw	Clarity Pop	Netlik Vurgusu
+cameraRaw	Color Theme:	Renk Teması:
+cameraRaw	Copy Edit Settings	Düzenleme Ayarlarını Kopyala
+cameraRaw	Copy Selected Edit Settings...	Seçili Düzenleme Ayarlarını Kopyala...
+cameraRaw	Create New Mask	Yeni Maske Oluştur
+cameraRaw	Create Preset...	Ön Ayar Oluştur...
+cameraRaw	Creative	Yaratıcı
+cameraRaw	Default image click zooms to:	Görüntüye tıklayınca varsayılan yakınlaştırma:
+cameraRaw	Disable Upright	Upright'ı Devre Dışı Bırak
+cameraRaw	Edit (E)	Düzenle (E)
+cameraRaw	Edit panel behavior:	Düzenleme paneli davranışı:
+cameraRaw	Faded	Soluk
+cameraRaw	Favorites	Favoriler
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Tam: düzleme, yatay ve dikey perspektif düzeltmelerini uygula
+cameraRaw	Geometry	Geometri
+cameraRaw	Green Amount	Yeşil Miktarı
+cameraRaw	Green Channel	Yeşil Kanal
+cameraRaw	Green Hue	Yeşil Ton
+cameraRaw	Green Primary	Yeşil Ana Renk
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Kılavuzlu: perspektif düzeltmelerini özelleştirmek için iki veya daha fazla kılavuz çizin
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Pus Azaltma
+cameraRaw	Level: apply only level correction	Düzleme: yalnızca düzleme düzeltmesi uygula
+cameraRaw	Load Settings...	Ayarları Yükle...
+cameraRaw	Manual Transformations	Elle Dönüştürmeler
+cameraRaw	Masking (M)	Maskeleme (M)
+cameraRaw	Medium Contrast	Orta Kontrast
+cameraRaw	Mixer	Karıştırıcı
+cameraRaw	Multiple	Çoklu
+cameraRaw	Muted	Sönük
+cameraRaw	Objects	Nesneler
+cameraRaw	Offset X	Ofset X
+cameraRaw	Offset Y	Ofset Y
+cameraRaw	Optics	Optik
+cameraRaw	Oranges	Turuncular
+cameraRaw	Parametric Curve	Parametrik Eğri
+cameraRaw	Paste Edit Settings	Düzenleme Ayarlarını Yapıştır
+cameraRaw	Pet Eye	Evcil Hayvan Gözü
+cameraRaw	Point Color	Nokta Rengi
+cameraRaw	Presets (Shift+P)	Ön Ayarlar (Shift+P)
+cameraRaw	Process	İşlem
+cameraRaw	Purple Amount	Mor Miktarı
+cameraRaw	Purple Hue	Mor Ton
+cameraRaw	Purples	Morlar
+cameraRaw	Red Channel	Kırmızı Kanal
+cameraRaw	Red Eye (Shift+E)	Kırmızı Göz (Shift+E)
+cameraRaw	Red Primary	Kırmızı Ana Renk
+cameraRaw	Refine Saturation	Doygunluğu İyileştir
+cameraRaw	Refresh	Yenile
+cameraRaw	Remove (B)	Kaldır (B)
+cameraRaw	Reset to Open	Açılış Ayarlarına Sıfırla
+cameraRaw	Sample fringe	Saçaklanmayı örnekle
+cameraRaw	Save Settings...	Ayarları Kaydet...
+cameraRaw	Show rich tooltips	Zengin araç ipuçlarını göster
+cameraRaw	Single	Tekli
+cameraRaw	Split Tone	Bölünmüş Ton
+cameraRaw	Strong Contrast	Güçlü Kontrast
+cameraRaw	Upright	Upright
+cameraRaw	Use Lightroom style zoom and pan	Lightroom tarzı yakınlaştırma ve kaydırma kullan
+cameraRaw	Use compact layout	Kompakt düzen kullan
+cameraRaw	Use legacy Target Adjustment Tool	Eski Hedefli Ayarlama Aracını kullan
+cameraRaw	Use legacy undo shortcuts	Eski geri alma kısayollarını kullan
+cameraRaw	Version 1	Sürüm 1
+cameraRaw	Version 2	Sürüm 2
+cameraRaw	Version 3	Sürüm 3
+cameraRaw	Version 4	Sürüm 4
+cameraRaw	Version 5	Sürüm 5
+cameraRaw	Version 6 (Current)	Sürüm 6 (Geçerli)
+cameraRaw	Vertical: apply level and vertical perspective correction	Dikey: düzleme ve dikey perspektif düzeltmesi uygula
+cameraRaw	Vignette	Vinyet
+cameraRaw	Vintage	Vintaj
+cameraRaw	Visualize Spots	Lekeleri Göster
+cameraRaw	Vivid	Canlı
+cameraRaw	White balance	Beyaz dengesi
+cameraRaw	Zoom and Pan	Yakınlaştırma ve Kaydırma
+	AHD (adaptive homogeneity)	AHD (uyarlamalı homojenlik)
+	Malvar–He–Cutler	Malvar–He–Cutler
 	Response curve	Yanıt eğrisi
 	Show home recent files	Ana ekranda son dosyaları göster
 	Clear Brush Controls	Fırça Denetimlerini Temizle

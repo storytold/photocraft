@@ -95,6 +95,23 @@ fn main() {
             false,
         );
     });
+    time("camera raw: optics + geometry (defringe, vignette, warp)", &only, || {
+        let mut a = px.clone();
+        let p = CameraRaw {
+            defringe_purple_amount: 8.0,
+            lens_vignette: 30.0,
+            lens_distortion: 20.0,
+            transform_vertical: -15.0,
+            transform_rotate: 2.0,
+            ..Default::default()
+        };
+        develop(&mut a, w, h, &p, false);
+    });
+    time("camera raw: calibration + monochrome", &only, || {
+        let mut a = px.clone();
+        let p = CameraRaw { calibration_red_hue: 20.0, calibration_shadows_tint: 10.0, monochrome: true, gray_mixer: [20.0; 8], ..Default::default() };
+        develop(&mut a, w, h, &p, false);
+    });
     time("lens correction (distortion, CA, vignette, persp)", &only, || {
         lens::correct(
             &s,

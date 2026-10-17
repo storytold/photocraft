@@ -108,6 +108,12 @@ choice!(FontPreview { Off = "off", Small = "small", Medium = "medium", Large = "
 choice!(RawColorSpace { Srgb = "srgb", AdobeRgb = "adobeRgb", ProPhoto = "proPhoto", DisplayP3 = "displayP3" } default AdobeRgb);
 choice!(RawDepth { Eight = "8", Sixteen = "16" } default Sixteen);
 choice!(RawSharpen { None = "none", Screen = "screen", Glossy = "glossy", Matte = "matte" } default None);
+choice!(
+    /// How a raw file's colour filter array is filled in when it is developed: AHD
+    /// (Hirakawa–Parks) keeps edges cleanest, Malvar–He–Cutler is sharp and fast, bilinear is the
+    /// fastest and softest. Photoshop's Camera Raw has no such choice.
+    RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
+);
 
 impl Unit {
     /// Document pixels → this unit. `dpi` is the document resolution, `extent` the 100% length
@@ -858,6 +864,19 @@ pub struct RawDefaults {
     /// Photoshop does; off develops it with the defaults straight away. Automation opens never
     /// show the dialog.
     pub open_in_camera_raw: bool,
+    /// The demosaic method raws are developed with; the open-time Camera Raw dialog starts from it.
+    pub demosaic: RawDemosaic,
+}
+
+impl RawDemosaic {
+    /// The developer's method.
+    pub fn method(self) -> photocraft_io::raw::Demosaic {
+        match self {
+            RawDemosaic::Ahd => photocraft_io::raw::Demosaic::Ahd,
+            RawDemosaic::Mhc => photocraft_io::raw::Demosaic::Mhc,
+            RawDemosaic::Bilinear => photocraft_io::raw::Demosaic::Bilinear,
+        }
+    }
 }
 
 impl Default for RawDefaults {
@@ -870,6 +889,7 @@ impl Default for RawDefaults {
             open_as_smart_object: false,
             apply_auto_tone: false,
             open_in_camera_raw: true,
+            demosaic: RawDemosaic::Ahd,
         }
     }
 }
@@ -1095,6 +1115,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "rawDefaults.colorSpace" => RawColorSpace::NAMES,
         "rawDefaults.bitDepth" => RawDepth::NAMES,
         "rawDefaults.sharpenFor" => RawSharpen::NAMES,
+        "rawDefaults.demosaic" => RawDemosaic::NAMES,
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,

@@ -3721,6 +3721,152 @@ curves	Smooth	スムーズ
 	Light Red	ライトレッド
 	Medium Blue	ミディアムブルー
 	Light Gray	ライトグレー
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	調整
+cameraRaw	Apply Favorite Preset	お気に入りのプリセットを適用
+cameraRaw	Apply Previous Settings	前回の設定を適用
+cameraRaw	Aquas	アクア系
+cameraRaw	As Shot	撮影時の設定
+cameraRaw	Aspect	縦横比
+cameraRaw	Auto: apply balanced perspective corrections	自動: バランスの取れた遠近補正を適用
+cameraRaw	B&W	白黒
+cameraRaw	B&W High Contrast	白黒(高コントラスト)
+cameraRaw	B&W Mix	白黒ミックス
+cameraRaw	B&W Neutral	白黒(ニュートラル)
+cameraRaw	B&W Soft	白黒(ソフト)
+cameraRaw	Back	戻る
+cameraRaw	Blue Channel	ブルーチャンネル
+cameraRaw	Blue Primary	ブルー原色
+cameraRaw	Browse...	参照...
+cameraRaw	Calibration	キャリブレーション
+cameraRaw	Camera Raw Cache	Camera Raw キャッシュ
+cameraRaw	Clarity Pop	明瞭度強調
+cameraRaw	Color Theme:	カラーテーマ:
+cameraRaw	Copy Edit Settings	編集設定をコピー
+cameraRaw	Copy Selected Edit Settings...	選択した編集設定をコピー...
+cameraRaw	Create New Mask	新規マスクを作成
+cameraRaw	Create Preset...	プリセットを作成...
+cameraRaw	Creative	クリエイティブ
+cameraRaw	Default image click zooms to:	画像クリック時のズーム:
+cameraRaw	Disable Upright	アップライトを無効化
+cameraRaw	Edit (E)	編集(E)
+cameraRaw	Edit panel behavior:	編集パネルの動作:
+cameraRaw	Faded	色あせ
+cameraRaw	Favorites	お気に入り
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	フル: 傾き補正と水平・垂直方向の遠近補正を適用
+cameraRaw	Geometry	ジオメトリ
+cameraRaw	Green Amount	グリーンの量
+cameraRaw	Green Channel	グリーンチャンネル
+cameraRaw	Green Hue	グリーンの色相
+cameraRaw	Green Primary	グリーン原色
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	ガイド付き: 2 本以上のガイドを描いて遠近補正を調整
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	かすみカット
+cameraRaw	Level: apply only level correction	水平: 傾き補正のみを適用
+cameraRaw	Load Settings...	設定を読み込み...
+cameraRaw	Manual Transformations	手動変形
+cameraRaw	Masking (M)	マスク処理(M)
+cameraRaw	Medium Contrast	中コントラスト
+cameraRaw	Mixer	ミキサー
+cameraRaw	Multiple	複数
+cameraRaw	Muted	控えめ
+cameraRaw	Objects	オブジェクト
+cameraRaw	Offset X	X オフセット
+cameraRaw	Offset Y	Y オフセット
+cameraRaw	Optics	光学
+cameraRaw	Oranges	オレンジ系
+cameraRaw	Parametric Curve	パラメトリックカーブ
+cameraRaw	Paste Edit Settings	編集設定を貼り付け
+cameraRaw	Pet Eye	ペットの目
+cameraRaw	Point Color	ポイントカラー
+cameraRaw	Presets (Shift+P)	プリセット(Shift+P)
+cameraRaw	Process	プロセス
+cameraRaw	Purple Amount	パープルの量
+cameraRaw	Purple Hue	パープルの色相
+cameraRaw	Purples	パープル系
+cameraRaw	Red Channel	レッドチャンネル
+cameraRaw	Red Eye (Shift+E)	赤目(Shift+E)
+cameraRaw	Red Primary	レッド原色
+cameraRaw	Refine Saturation	彩度の補正
+cameraRaw	Refresh	更新
+cameraRaw	Remove (B)	削除(B)
+cameraRaw	Reset to Open	開いたときの状態に戻す
+cameraRaw	Sample fringe	フリンジをサンプル
+cameraRaw	Save Settings...	設定を保存...
+cameraRaw	Show rich tooltips	詳細なツールチップを表示
+cameraRaw	Single	単一
+cameraRaw	Split Tone	スプリットトーン
+cameraRaw	Strong Contrast	強コントラスト
+cameraRaw	Upright	アップライト
+cameraRaw	Use Lightroom style zoom and pan	Lightroom 方式のズームとパンを使用
+cameraRaw	Use compact layout	コンパクトなレイアウトを使用
+cameraRaw	Use legacy Target Adjustment Tool	従来のターゲット調整ツールを使用
+cameraRaw	Use legacy undo shortcuts	従来の取り消しショートカットを使用
+cameraRaw	Version 1	バージョン 1
+cameraRaw	Version 2	バージョン 2
+cameraRaw	Version 3	バージョン 3
+cameraRaw	Version 4	バージョン 4
+cameraRaw	Version 5	バージョン 5
+cameraRaw	Version 6 (Current)	バージョン 6(現行)
+cameraRaw	Vertical: apply level and vertical perspective correction	垂直: 傾き補正と垂直方向の遠近補正を適用
+cameraRaw	Vignette	周辺光量
+cameraRaw	Vintage	ビンテージ
+cameraRaw	Visualize Spots	スポットを視覚化
+cameraRaw	Vivid	ビビッド
+cameraRaw	White balance	ホワイトバランス
+cameraRaw	Zoom and Pan	ズームとパン
+	After	補正後
+	Auto tone and color (Ctrl+U)	自動トーンとカラー(Ctrl+U)
+	Before	補正前
+	Before/After Left/Right	補正前/補正後 左右
+	Before/After Left/Right Split	補正前/補正後 左右分割
+	Before/After Top/Bottom	補正前/補正後 上下
+	Before/After Top/Bottom Split	補正前/補正後 上下分割
+	Browse profiles	プロファイルを参照
+	Camera Raw Preferences	Camera Raw 環境設定
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw は PhotoCraft のテーマに従います(ウィンドウ › テーマ)
+	Convert and save image: not available in the Camera Raw Filter	画像を変換して保存: Camera Raw フィルターでは使用できません
+	Convert to black and white (V)	白黒に変換(V)
+	Copy After settings to Before (Ctrl+Alt+P)	補正後の設定を補正前にコピー(Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	補正前の設定を補正後にコピー(Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	クリエイティブプロファイルは PhotoCraft ではまだ使用できません。
+	Cycle between Before/After views (Q)	補正前/補正後の表示を順に切り替え(Q)
+	Fit ({percent})	全体表示 ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	より正確なプレビューを得るには、このパネルのコントロールを調整するときにプレビューを 100% 以上にズームしてください。
+	For best results, apply lens corrections first.	最良の結果を得るには、先にレンズ補正を適用してください。
+	HDR editing needs an HDR display	HDR 編集には HDR ディスプレイが必要です
+	Hand Tool (H)	手のひらツール(H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	マスクには部分補正とセグメンテーションモデルが必要ですが、PhotoCraft の Camera Raw にはまだありません。
+	More image settings	その他の画像設定
+	Multiple: Edit panels will stay open until you close them.	複数: 編集パネルは閉じるまで開いたままになります。
+	Not available yet	まだ使用できません
+	Open preferences dialog (Ctrl+K)	環境設定ダイアログを開く(Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft は Camera Raw のプレビューを CPU で現像します。結果にはフル解像度のパイプラインが使われます。
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft は Camera Raw キャッシュを保持しません。
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	PhotoCraft 独自のプリセットです。プリセットの保存と読み込みはまだ使用できません。
+	Select zoom level	ズームレベルを選択
+	Single: opening an edit panel closes the others.	単一: 編集パネルを開くと他のパネルは閉じます。
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	補正前と補正後の設定を入れ替え(Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	ターゲット調整ツール: 画像内をドラッグしてポインター下の色を調整
+	This tool is not available in PhotoCraft yet.	このツールは PhotoCraft ではまだ使用できません。
+	Toggle Full Screen mode (F)	フルスクリーンモードを切り替え(F)
+	Toggle between current settings and defaults (P)	現在の設定と既定値を切り替え(P)
+	Toggle grid overlay (Ctrl+Shift+G)	グリッドオーバーレイを切り替え(Ctrl+Shift+G)
+	Toggle sampler overlay (S)	サンプラーオーバーレイを切り替え(S)
+	Toggle visibility of {panel} settings	{panel} の設定の表示/非表示を切り替え
+	Use the Point Color Dropper\nto add samples.	ポイントカラーのスポイトで\nサンプルを追加します。
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	スポイトで、補正が必要なパープルとグリーンのフリンジ部分をサンプルします。
+	White Balance tool (I): click a neutral area	ホワイトバランスツール(I): ニュートラルな部分をクリック
+	Zoom Tool (Z)	ズームツール(Z)
+cameraRaw	Type	種類
+	Demosaic	デモザイク
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
+	AHD (adaptive homogeneity)	AHD（適応的均質性）
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：エッジが最もきれいで色にじみが最も少ないが、最も遅い。
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	勾配補正補間：シャープで高速だが、細部に多少の色にじみが出る。
+	The fastest and the softest, with colour fringing on fine detail.	最も高速で最も柔らかく、細部に色にじみが出る。
 	Object Finder	オブジェクトファインダー
 	No object found there — drag a rectangle around it	そこにオブジェクトが見つかりません — 周囲に矩形をドラッグしてください
 	Remove after each stroke	ストロークごとに削除

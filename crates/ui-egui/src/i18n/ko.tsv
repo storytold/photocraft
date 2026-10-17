@@ -3285,6 +3285,184 @@ curves	Smooth	매끄럽게
 	Light Red	연한 빨강
 	Medium Blue	중간 파랑
 	Light Gray	연한 회색
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	조정
+cameraRaw	Apply Favorite Preset	즐겨찾는 사전 설정 적용
+cameraRaw	Apply Previous Settings	이전 설정 적용
+cameraRaw	Aquas	청록 계열
+cameraRaw	As Shot	촬영 시 설정
+cameraRaw	Aspect	종횡비
+cameraRaw	Auto: apply balanced perspective corrections	자동: 균형 잡힌 원근 보정 적용
+cameraRaw	B&W	흑백
+cameraRaw	B&W High Contrast	흑백 고대비
+cameraRaw	B&W Mix	흑백 혼합
+cameraRaw	B&W Neutral	흑백 중립
+cameraRaw	B&W Soft	흑백 부드럽게
+cameraRaw	Back	뒤로
+cameraRaw	Blue Channel	파랑 채널
+cameraRaw	Blue Primary	파랑 원색
+cameraRaw	Browse...	찾아보기...
+cameraRaw	Calibration	캘리브레이션
+cameraRaw	Camera Raw Cache	Camera Raw 캐시
+cameraRaw	Clarity Pop	명료도 강조
+cameraRaw	Color Noise Reduction	색상 노이즈 감소
+cameraRaw	Color Theme:	색상 테마:
+cameraRaw	Copy Edit Settings	편집 설정 복사
+cameraRaw	Copy Selected Edit Settings...	선택한 편집 설정 복사...
+cameraRaw	Create New Mask	새 마스크 만들기
+cameraRaw	Create Preset...	사전 설정 만들기...
+cameraRaw	Creative	크리에이티브
+cameraRaw	Default image click zooms to:	이미지 클릭 시 확대 배율:
+cameraRaw	Disable Upright	바로 세우기 끄기
+cameraRaw	Edit (E)	편집 (E)
+cameraRaw	Edit panel behavior:	편집 패널 동작:
+cameraRaw	Faded	바랜 색감
+cameraRaw	Favorites	즐겨찾기
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	전체: 수평 맞춤과 가로·세로 원근 보정 적용
+cameraRaw	Geometry	기하
+cameraRaw	Green Amount	초록 양
+cameraRaw	Green Channel	초록 채널
+cameraRaw	Green Hue	초록 색조
+cameraRaw	Green Primary	초록 원색
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	안내선: 안내선을 두 개 이상 그려 원근 보정을 직접 조정
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	안개 걷기
+cameraRaw	Heal	복구
+cameraRaw	Healing	복구
+cameraRaw	Level: apply only level correction	수평: 수평 맞춤만 적용
+cameraRaw	Load Settings...	설정 불러오기...
+cameraRaw	Manual Transformations	수동 변형
+cameraRaw	Masking (M)	마스킹 (M)
+cameraRaw	Medium Contrast	중간 대비
+cameraRaw	Mixer	혼합
+cameraRaw	Multiple	여러 개
+cameraRaw	Muted	차분한 색감
+cameraRaw	Objects	오브젝트
+cameraRaw	Offset X	X 오프셋
+cameraRaw	Offset Y	Y 오프셋
+cameraRaw	Optics	광학
+cameraRaw	Oranges	주황 계열
+cameraRaw	Parametric Curve	매개변수 곡선
+cameraRaw	Paste Edit Settings	편집 설정 붙여넣기
+cameraRaw	Pet Eye	반려동물 눈
+cameraRaw	Point Color	포인트 색상
+cameraRaw	Presets (Shift+P)	사전 설정 (Shift+P)
+cameraRaw	Process	처리 방식
+cameraRaw	Purple Amount	보라 양
+cameraRaw	Purple Hue	보라 색조
+cameraRaw	Purples	보라 계열
+cameraRaw	Red Channel	빨강 채널
+cameraRaw	Red Eye (Shift+E)	적목 현상 (Shift+E)
+cameraRaw	Red Primary	빨강 원색
+cameraRaw	Refine Saturation	채도 다듬기
+cameraRaw	Refresh	새로 고침
+cameraRaw	Remove (B)	제거 (B)
+cameraRaw	Reset to Open	열 때 상태로 재설정
+cameraRaw	Sample fringe	가장자리 색상 샘플링
+cameraRaw	Save Settings...	설정 저장...
+cameraRaw	Show rich tooltips	자세한 도구 설명 표시
+cameraRaw	Single	단일
+cameraRaw	Split Tone	분할 톤
+cameraRaw	Strong Contrast	강한 대비
+cameraRaw	Upright	바로 세우기
+cameraRaw	Use Lightroom style zoom and pan	Lightroom 방식 확대/축소 및 이동 사용
+cameraRaw	Use compact layout	간결한 레이아웃 사용
+cameraRaw	Use legacy Target Adjustment Tool	기존 대상 조정 도구 사용
+cameraRaw	Use legacy undo shortcuts	기존 실행 취소 단축키 사용
+cameraRaw	Version 1	버전 1
+cameraRaw	Version 2	버전 2
+cameraRaw	Version 3	버전 3
+cameraRaw	Version 4	버전 4
+cameraRaw	Version 5	버전 5
+cameraRaw	Version 6 (Current)	버전 6 (현재)
+cameraRaw	Vertical: apply level and vertical perspective correction	세로: 수평 맞춤과 세로 원근 보정 적용
+cameraRaw	Vignette	비네팅
+cameraRaw	Vintage	빈티지
+cameraRaw	Visualize Spots	얼룩 시각화
+cameraRaw	Vivid	선명한 색감
+cameraRaw	White balance	화이트 밸런스
+cameraRaw	Zoom and Pan	확대/축소 및 이동
+	After	이후
+	Auto tone and color (Ctrl+U)	자동 톤 및 색상 (Ctrl+U)
+	Before	이전
+	Before/After Left/Right	이전/이후 좌우
+	Before/After Left/Right Split	이전/이후 좌우 분할
+	Before/After Top/Bottom	이전/이후 상하
+	Before/After Top/Bottom Split	이전/이후 상하 분할
+	Browse profiles	프로파일 찾아보기
+	Camera Raw Preferences	Camera Raw 환경 설정
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw는 PhotoCraft의 테마를 따릅니다 (창 › 테마)
+	Convert and save image: not available in the Camera Raw Filter	이미지 변환 및 저장: Camera Raw 필터에서는 사용할 수 없습니다
+	Convert to black and white (V)	흑백으로 변환 (V)
+	Copy After settings to Before (Ctrl+Alt+P)	이후 설정을 이전으로 복사 (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	이전 설정을 이후로 복사 (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	PhotoCraft에서는 아직 크리에이티브 프로파일을 사용할 수 없습니다.
+	Cycle between Before/After views (Q)	이전/이후 보기 순환 (Q)
+	Fit ({percent})	맞추기 ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	더 정확한 미리보기를 위해 이 패널의 컨트롤을 조정할 때는 미리보기를 100% 이상으로 확대하세요.
+	For best results, apply lens corrections first.	최상의 결과를 얻으려면 렌즈 보정을 먼저 적용하세요.
+	HDR editing needs an HDR display	HDR 편집에는 HDR 디스플레이가 필요합니다
+	Hand Tool (H)	손 도구 (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	마스크에는 부분 조정과 영역 분할 모델이 필요하지만 PhotoCraft의 Camera Raw에는 아직 없습니다.
+	More image settings	추가 이미지 설정
+	Multiple: Edit panels will stay open until you close them.	여러 개: 편집 패널은 직접 닫을 때까지 열려 있습니다.
+	Not available yet	아직 사용할 수 없음
+	Open preferences dialog (Ctrl+K)	환경 설정 대화 상자 열기 (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft는 Camera Raw 미리보기를 CPU에서 현상하며, 결과에는 전체 해상도 파이프라인이 사용됩니다.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft는 Camera Raw 캐시를 보관하지 않습니다.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	PhotoCraft 자체 사전 설정입니다. 사전 설정 저장 및 가져오기는 아직 사용할 수 없습니다.
+	Select zoom level	확대/축소 수준 선택
+	Single: opening an edit panel closes the others.	단일: 편집 패널을 열면 다른 패널이 닫힙니다.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	이전 및 이후 설정 교환 (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	대상 조정 도구: 이미지에서 드래그하여 포인터 아래의 색상 조정
+	This tool is not available in PhotoCraft yet.	이 도구는 PhotoCraft에서 아직 사용할 수 없습니다.
+	Toggle Full Screen mode (F)	전체 화면 모드 전환 (F)
+	Toggle between current settings and defaults (P)	현재 설정과 기본값 간 전환 (P)
+	Toggle grid overlay (Ctrl+Shift+G)	격자 오버레이 전환 (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	샘플러 오버레이 전환 (S)
+	Toggle visibility of {panel} settings	{panel} 설정 표시 여부 전환
+	Use the Point Color Dropper\nto add samples.	포인트 색상 스포이드를 사용하여\n샘플을 추가하세요.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	스포이드로 보정이 필요한 보라색 및 초록색 가장자리 색상 영역을 샘플링하세요.
+	White Balance tool (I): click a neutral area	화이트 밸런스 도구 (I): 중립 영역을 클릭
+	Zoom Tool (Z)	돋보기 도구 (Z)
+cameraRaw	Type	유형
+# Camera Raw filter parameters (generic filter dialog labels)
+	As Shot	촬영 시 설정
+	Calibration Blue Hue	캘리브레이션 파랑 색조
+	Calibration Blue Sat	캘리브레이션 파랑 채도
+	Calibration Green Hue	캘리브레이션 초록 색조
+	Calibration Green Sat	캘리브레이션 초록 채도
+	Calibration Red Hue	캘리브레이션 빨강 색조
+	Calibration Red Sat	캘리브레이션 빨강 채도
+	Calibration Shadows Tint	캘리브레이션 어두운 영역 색조 보정
+	Curve Refine Saturation	곡선 채도 다듬기
+	Defringe Green Amount	가장자리 색상 제거 초록 양
+	Defringe Purple Amount	가장자리 색상 제거 보라 양
+	Full	전체
+	Guided	안내선
+	Lens Distortion	렌즈 왜곡
+	Lens Vignette	렌즈 비네팅
+	Lens Vignette Midpoint	렌즈 비네팅 중간점
+	Noise Color Smoothness	색상 노이즈 매끄러움
+	Noise Luminance Contrast	광도 노이즈 대비
+	Process Version	처리 방식 버전
+	Transform Aspect	변형 종횡비
+	Transform Horizontal	변형 가로
+	Transform Offset X	변형 X 오프셋
+	Transform Offset Y	변형 Y 오프셋
+	Transform Rotate	변형 회전
+	Transform Scale	변형 크기 조절
+	Transform Vertical	변형 세로
+	Upright	바로 세우기
+	White Balance	화이트 밸런스
+	Demosaic	디모자이크
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	카메라 컬러 필터 모자이크를 채우는 방법입니다. 파일을 열 때 적용되며, 미리 보기는 파일을 연 방식으로 표시됩니다.
+	AHD (adaptive homogeneity)	AHD (적응형 균질성)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: 가장 깨끗한 가장자리와 가장 적은 색 번짐, 가장 느림.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	기울기 보정 보간: 선명하고 빠르지만 미세한 디테일에 약간의 색 번짐이 있음.
+	The fastest and the softest, with colour fringing on fine detail.	가장 빠르고 가장 부드러우며, 미세한 디테일에 색 번짐이 있음.
 	Object Finder	개체 찾기
 	No object found there — drag a rectangle around it	그곳에서 개체를 찾지 못했습니다 — 주위에 사각형을 드래그하세요
 	Remove after each stroke	획마다 제거

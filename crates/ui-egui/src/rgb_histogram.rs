@@ -5,7 +5,7 @@ use photocraft_algo::histogram::{BINS, RgbHistogram};
 
 /// A five-bin binomial display kernel softens quantization combs. It cannot bridge
 /// a wide empty range. Clipping bins are pinned and excluded from filtering adjacent bins.
-fn curves(h: &RgbHistogram) -> [[f32; BINS]; 3] {
+fn curves(h: &RgbHistogram, spikes: Spikes) -> [[f32; BINS]; 3] {
     let mut curves = [[0.0; BINS]; 3];
     for (out, bins) in curves.iter_mut().zip(&h.channels) {
         for (i, value) in out.iter_mut().enumerate() {
@@ -22,7 +22,18 @@ fn curves(h: &RgbHistogram) -> [[f32; BINS]; 3] {
     // preserve them at the edges, capped at the top. A flat black/white image uses its edge peak.
     let interior = curves.iter().flat_map(|c| c.iter().skip(1).take(BINS - 2)).copied().fold(0.0f32, f32::max);
     let peak = if interior > 0.0 { interior } else { curves.iter().flatten().copied().fold(0.0f32, f32::max) };
-    let scale = if peak > 0.0 { peak * 1.1 } else { 1.0 };
+    let mut scale = if peak > 0.0 { peak * 1.1 } else { 1.0 };
+    if spikes == Spikes::Clip {
+        // Camera Raw scales linearly with the 95th-percentile column at two thirds of the height
+        // and lets taller spikes run off the top (measured on Photoshop 25.4's Camera Raw 16.1.1:
+        // 49 px per 10 000 pixels in a 106 px plot, 95th percentile 14 546, full 21 600).
+        let mut columns: Vec<f32> = (1..BINS - 1).map(|i| curves.iter().map(|c| c[i]).fold(0.0f32, f32::max)).collect();
+        columns.sort_unstable_by(f32::total_cmp);
+        let p95 = columns.get(columns.len() * 95 / 100).copied().unwrap_or(0.0);
+        if p95 > 0.0 {
+            scale = scale.min(p95 * 1.5);
+        }
+    }
     for value in curves.iter_mut().flatten() {
         *value = (*value / scale).min(1.0);
     }
@@ -101,11 +112,24 @@ fn fill(rect: Rect, curves: &[[f32; BINS]; 3], t: &Tokens) -> Mesh {
     mesh
 }
 
+/// How a histogram treats columns far above the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spikes {
+    /// Fit the tallest interior column (edge columns excluded).
+    Fit,
+    /// Camera Raw's: scale by the typical columns, spikes run off the top.
+    Clip,
+}
+
 pub(crate) fn paint(painter: &egui::Painter, rect: Rect, h: &RgbHistogram, t: &Tokens) {
+    paint_with(painter, rect, h, t, Spikes::Fit);
+}
+
+pub(crate) fn paint_with(painter: &egui::Painter, rect: Rect, h: &RgbHistogram, t: &Tokens, spikes: Spikes) {
     if !rect.is_finite() || !rect.is_positive() || !rect.size().is_finite() {
         return;
     }
-    let curves = curves(h);
+    let curves = curves(h, spikes);
     painter.add(fill(rect, &curves, t));
     for (channel, values) in curves.iter().enumerate() {
         if !values.iter().any(|&v| v > 0.0) {
@@ -139,7 +163,7 @@ pub(crate) fn paint_sample(painter: &egui::Painter, rect: Rect, rgb: [f32; 3], t
 
 #[cfg(test)]
 fn mesh(rect: Rect, h: &RgbHistogram, t: &Tokens) -> Mesh {
-    fill(rect, &curves(h), t)
+    fill(rect, &curves(h, Spikes::Fit), t)
 }
 
 #[cfg(test)]
@@ -159,6 +183,28 @@ mod tests {
             let sides = [cross(b - a, point - a), cross(c - b, point - b), cross(a - c, point - c)];
             (sides.iter().all(|&s| s >= -0.00001) || sides.iter().all(|&s| s <= 0.00001)).then_some(mesh.vertices[triangle[0] as usize].color)
         })
+    }
+
+    #[test]
+    fn camera_raw_scale_lets_a_shadow_spike_run_off_the_top() {
+        // A dark-sky photo: a tall spike in the first columns over a hill in the midtones.
+        let mut h = RgbHistogram::default();
+        for c in &mut h.channels {
+            for (i, v) in c.iter_mut().enumerate() {
+                let x = i as f32 / 255.0;
+                *v = (14_000.0 * (-((x - 0.5) / 0.18).powi(2)).exp()) as u64 + 3_000;
+            }
+            c[1] = 88_000;
+            c[2] = 42_000;
+        }
+        let fit = curves(&h, Spikes::Fit);
+        let clip = curves(&h, Spikes::Clip);
+        assert!(fit[1][128] < 0.25, "fitting the spike flattens the hill: {}", fit[1][128]);
+        assert!((0.5..0.75).contains(&clip[1][128]), "Camera Raw keeps the hill at about two thirds: {}", clip[1][128]);
+        assert_eq!(clip[1][1], 1.0, "the spike is clipped at the top");
+        // Without spikes both scales agree.
+        let flat = RgbHistogram { channels: [[3; BINS], [2; BINS], [1; BINS]], ..Default::default() };
+        assert_eq!(curves(&flat, Spikes::Fit), curves(&flat, Spikes::Clip));
     }
 
     #[test]
@@ -217,15 +263,15 @@ mod tests {
         let mut h = RgbHistogram { channels: [[10; BINS]; 3], ..Default::default() };
         h.channels[0][0] = 1_000_000;
         h.channels[1][255] = 1_000_000;
-        let p = curves(&h);
+        let p = curves(&h, Spikes::Fit);
         assert_eq!(p[0][0], 1.0);
         assert_eq!(p[1][255], 1.0);
         assert!((p[0][1] - 1.0 / 1.1).abs() < 0.0001);
         assert!((p[1][254] - 1.0 / 1.1).abs() < 0.0001);
         let mut h = RgbHistogram::default();
         h.channels[0][255] = 100;
-        assert!(curves(&h)[0][255] > 0.9);
-        assert_eq!(curves(&h)[0][254], 0.0);
+        assert!(curves(&h, Spikes::Fit)[0][255] > 0.9);
+        assert_eq!(curves(&h, Spikes::Fit)[0][254], 0.0);
     }
 
     #[test]
@@ -247,7 +293,7 @@ mod tests {
                 channel[i] = 100;
             }
         }
-        let p = curves(&h);
+        let p = curves(&h, Spikes::Fit);
         let low = p[0][40..210].iter().copied().fold(f32::INFINITY, f32::min);
         let high = p[0][40..210].iter().copied().fold(0.0f32, f32::max);
         assert!(high - low < 0.2, "quantization comb still dominates the contour: {}", high - low);

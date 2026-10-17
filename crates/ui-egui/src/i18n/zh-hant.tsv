@@ -2706,6 +2706,164 @@ curves	Smooth	平滑
 	Light Red	淺紅色
 	Medium Blue	中藍色
 	Light Gray	淺灰色
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	調整
+cameraRaw	Apply Favorite Preset	套用最愛的預設集
+cameraRaw	Apply Previous Settings	套用上一次的設定
+cameraRaw	Aquas	水藍色
+cameraRaw	Artistic	藝術
+cameraRaw	As Shot	原始拍攝
+cameraRaw	Aspect	長寬比
+cameraRaw	Auto: apply balanced perspective corrections	自動：套用平衡的透視校正
+cameraRaw	B&W	黑白
+cameraRaw	B&W High Contrast	黑白高對比
+cameraRaw	B&W Mix	黑白混合
+cameraRaw	B&W Neutral	黑白中性
+cameraRaw	B&W Soft	黑白柔和
+cameraRaw	Back	返回
+cameraRaw	Blue Channel	藍色色版
+cameraRaw	Blue Primary	藍原色
+cameraRaw	Browse...	瀏覽...
+cameraRaw	Calibration	校準
+cameraRaw	Camera Raw Cache	Camera Raw 快取
+cameraRaw	Clarity Pop	清晰增強
+cameraRaw	Clone	仿製
+cameraRaw	Color Noise Reduction	減少色彩雜訊
+cameraRaw	Color Theme:	色彩主題：
+cameraRaw	Cool	冷色調
+cameraRaw	Copy Edit Settings	複製編輯設定
+cameraRaw	Copy Selected Edit Settings...	複製選取的編輯設定...
+cameraRaw	Create New Mask	建立新遮色片
+cameraRaw	Create Preset...	建立預設集...
+cameraRaw	Creative	創意
+cameraRaw	Default image click zooms to:	按一下影像預設縮放至：
+cameraRaw	Defringe	去除邊緣綴邊
+cameraRaw	Disable Upright	停用透視校正
+cameraRaw	Distortion	扭曲
+cameraRaw	Edit (E)	編輯 (E)
+cameraRaw	Edit panel behavior:	編輯面板行為：
+cameraRaw	Faded	褪色
+cameraRaw	Favorites	最愛
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	完整：套用水平校正以及水平和垂直透視校正
+cameraRaw	Geometry	幾何
+cameraRaw	Green Amount	綠色強度
+cameraRaw	Green Channel	綠色色版
+cameraRaw	Green Hue	綠色色相
+cameraRaw	Green Primary	綠原色
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	引導：繪製兩條或更多參考線以自訂透視校正
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	減霧
+cameraRaw	Heal	修復
+cameraRaw	Healing	修復
+cameraRaw	Level: apply only level correction	水平：僅套用水平校正
+cameraRaw	Load Settings...	載入設定...
+cameraRaw	Manual Transformations	手動變形
+cameraRaw	Masking (M)	遮色片 (M)
+cameraRaw	Medium Contrast	中對比
+cameraRaw	Mixer	混合器
+cameraRaw	Multiple	多個
+cameraRaw	Muted	淡雅
+cameraRaw	Objects	物件
+cameraRaw	Offset X	X 位移
+cameraRaw	Offset Y	Y 位移
+cameraRaw	Optics	光學
+cameraRaw	Oranges	橙色
+cameraRaw	Parametric Curve	參數曲線
+cameraRaw	Paste Edit Settings	貼上編輯設定
+cameraRaw	Pet Eye	寵物眼
+cameraRaw	Point Color	點色彩
+cameraRaw	Point Curve	點曲線
+cameraRaw	Presets (Shift+P)	預設集 (Shift+P)
+cameraRaw	Process	處理版本
+cameraRaw	Profile	描述檔
+cameraRaw	Purple Amount	紫色強度
+cameraRaw	Purple Hue	紫色色相
+cameraRaw	Purples	紫色
+cameraRaw	Red Channel	紅色色版
+cameraRaw	Red Eye (Shift+E)	紅眼 (Shift+E)
+cameraRaw	Red Primary	紅原色
+cameraRaw	Refine Saturation	精修飽和度
+cameraRaw	Refresh	重新整理
+cameraRaw	Remove (B)	移除 (B)
+cameraRaw	Reset to Open	重設為開啟時狀態
+cameraRaw	Sample fringe	取樣綴邊
+cameraRaw	Save Settings...	儲存設定...
+cameraRaw	Show rich tooltips	顯示詳細工具提示
+cameraRaw	Single	單一
+cameraRaw	Smoothness	平滑度
+cameraRaw	Split Tone	分割色調
+cameraRaw	Strong Contrast	強對比
+cameraRaw	Upright	透視校正
+cameraRaw	Use Lightroom style zoom and pan	使用 Lightroom 風格的縮放和平移
+cameraRaw	Use compact layout	使用精簡版面配置
+cameraRaw	Use legacy Target Adjustment Tool	使用舊版目標調整工具
+cameraRaw	Use legacy undo shortcuts	使用舊版復原快速鍵
+cameraRaw	Version 1	版本 1
+cameraRaw	Version 2	版本 2
+cameraRaw	Version 3	版本 3
+cameraRaw	Version 4	版本 4
+cameraRaw	Version 5	版本 5
+cameraRaw	Version 6 (Current)	版本 6 (目前)
+cameraRaw	Vertical: apply level and vertical perspective correction	垂直：套用水平校正和垂直透視校正
+cameraRaw	Vignette	暈影
+cameraRaw	Vintage	復古
+cameraRaw	Visualize Spots	視覺化污點
+cameraRaw	Vivid	鮮豔
+cameraRaw	Warm	暖色調
+cameraRaw	White balance	白平衡
+cameraRaw	Zoom and Pan	縮放和平移
+	After	調整後
+	Auto tone and color (Ctrl+U)	自動色調和顏色 (Ctrl+U)
+	Before	調整前
+	Before/After Left/Right	調整前/後 左/右
+	Before/After Left/Right Split	調整前/後 左/右分割
+	Before/After Top/Bottom	調整前/後 上/下
+	Before/After Top/Bottom Split	調整前/後 上/下分割
+	Browse profiles	瀏覽描述檔
+	Camera Raw Preferences	Camera Raw 偏好設定
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw 跟隨 PhotoCraft 的主題 (視窗 › 主題)
+	Convert and save image: not available in the Camera Raw Filter	轉換並儲存影像：Camera Raw 濾鏡中無法使用
+	Convert to black and white (V)	轉換為黑白 (V)
+	Copy After settings to Before (Ctrl+Alt+P)	將調整後的設定複製到調整前 (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	將調整前的設定複製到調整後 (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	PhotoCraft 尚未提供創意描述檔。
+	Cycle between Before/After views (Q)	循環切換調整前/後檢視 (Q)
+	Fit ({percent})	符合 ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	為了獲得更準確的預覽，調整此面板中的控制項時，請將預覽縮放至 100% 或更大。
+	For best results, apply lens corrections first.	為獲得最佳效果，請先套用鏡頭校正。
+	HDR editing needs an HDR display	HDR 編輯需要 HDR 顯示器
+	Hand Tool (H)	手形工具 (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	遮色片需要局部調整和分割模型；PhotoCraft 的 Camera Raw 尚未提供這些功能。
+	More image settings	更多影像設定
+	Multiple: Edit panels will stay open until you close them.	多個：編輯面板會保持開啟，直到您將其關閉。
+	Not available yet	尚無法使用
+	Open preferences dialog (Ctrl+K)	開啟偏好設定對話框 (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft 在 CPU 上處理 Camera Raw 預覽；最終結果使用完整解析度的處理流程。
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft 不保留 Camera Raw 快取。
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	PhotoCraft 內建的預設集。尚無法儲存和匯入預設集。
+	Select zoom level	選擇縮放層級
+	Single: opening an edit panel closes the others.	單一：開啟一個編輯面板時會關閉其他面板。
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	交換調整前和調整後的設定 (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	目標調整工具：在影像中拖曳以調整指標下方的顏色
+	This tool is not available in PhotoCraft yet.	PhotoCraft 尚未提供此工具。
+	Toggle Full Screen mode (F)	切換全螢幕模式 (F)
+	Toggle between current settings and defaults (P)	在目前設定和預設值之間切換 (P)
+	Toggle grid overlay (Ctrl+Shift+G)	切換格點覆蓋 (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	切換取樣器覆蓋 (S)
+	Toggle visibility of {panel} settings	切換 {panel} 設定的可見度
+	Use the Point Color Dropper\nto add samples.	使用點色彩滴管\n加入取樣。
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	使用滴管對需要校正的紫色和綠色綴邊區域取樣。
+	White Balance tool (I): click a neutral area	白平衡工具 (I)：按一下中性區域
+	Zoom Tool (Z)	縮放工具 (Z)
+cameraRaw	Type	類型
+	Demosaic	去馬賽克
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填補相機彩色濾鏡陣列的馬賽克。在開啟檔案時套用；預覽顯示開啟時所用的方法。
+	AHD (adaptive homogeneity)	AHD（自適應同質性）
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：邊緣最乾淨、色邊最少，速度最慢。
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	梯度校正插值：銳利且快速，細節處有些許色邊。
+	The fastest and the softest, with colour fringing on fine detail.	最快也最柔和，細節處有色邊。
 	Object Finder	物件尋找器
 	No object found there — drag a rectangle around it	那裡找不到物件 — 請在其周圍拖曳矩形
 	Remove after each stroke	每次描邊後移除

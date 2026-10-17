@@ -3537,7 +3537,6 @@ curves	Smooth	Vyhladit
 	Create Vector Mask	Vytvořit vektorovou masku
 	Make Selection…	Vytvořit výběr…
 	Fill Path…	Vyplnit cestu…
-	Stroke Path…	Obtáhnout cestu…
 	Clipping Path…	Ořezová cesta…
 	Free Transform Path	Volná transformace cesty
 	Unite Shapes at Overlap	Sjednotit tvary v překryvu
@@ -3718,6 +3717,162 @@ navigator	Zoom	Zvětšení
 	Light Blue	Světle modrá
 	Light Red	Světle červená
 	Medium Blue	Středně modrá
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Upravit
+cameraRaw	Apply Favorite Preset	Použít oblíbené přednastavení
+cameraRaw	Apply Previous Settings	Použít předchozí nastavení
+cameraRaw	Aquas	Tyrkysové
+cameraRaw	Artistic	Umělecké
+cameraRaw	As Shot	Jako při snímání
+cameraRaw	Aspect	Poměr stran
+cameraRaw	Auto: apply balanced perspective corrections	Automaticky: použít vyvážené korekce perspektivy
+cameraRaw	B&W	ČB
+cameraRaw	B&W High Contrast	ČB vysoký kontrast
+cameraRaw	B&W Mix	Míchání ČB
+cameraRaw	B&W Neutral	ČB neutrální
+cameraRaw	B&W Soft	ČB jemné
+cameraRaw	Back	Zpět
+cameraRaw	Blue Channel	Modrý kanál
+cameraRaw	Blue Primary	Modrá primární
+cameraRaw	Browse...	Procházet...
+cameraRaw	Calibration	Kalibrace
+cameraRaw	Camera Raw Cache	Mezipaměť Camera Raw
+cameraRaw	Clarity Pop	Výrazná zřetelnost
+cameraRaw	Clone	Klonovat
+cameraRaw	Color Noise Reduction	Redukce barevného šumu
+cameraRaw	Color Theme:	Barevný motiv:
+cameraRaw	Cool	Studené
+cameraRaw	Copy Edit Settings	Kopírovat nastavení úprav
+cameraRaw	Copy Selected Edit Settings...	Kopírovat vybraná nastavení úprav...
+cameraRaw	Create New Mask	Vytvořit novou masku
+cameraRaw	Create Preset...	Vytvořit přednastavení...
+cameraRaw	Creative	Kreativní
+cameraRaw	Default image click zooms to:	Kliknutí do obrazu přiblíží na:
+cameraRaw	Defringe	Odstranit třásně
+cameraRaw	Disable Upright	Vypnout vyrovnání
+cameraRaw	Distortion	Zkreslení
+cameraRaw	Edit (E)	Úpravy (E)
+cameraRaw	Edit panel behavior:	Chování panelů úprav:
+cameraRaw	Faded	Vybledlé
+cameraRaw	Favorites	Oblíbené
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Úplné: použít vyrovnání horizontu a korekci vodorovné i svislé perspektivy
+cameraRaw	Geometry	Geometrie
+cameraRaw	Green Amount	Míra zelené
+cameraRaw	Green Channel	Zelený kanál
+cameraRaw	Green Hue	Odstín zelené
+cameraRaw	Green Primary	Zelená primární
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	S vodítky: nakreslete dvě nebo více vodítek a upravte korekce perspektivy
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Méně oparu
+cameraRaw	Heal	Retušovat
+cameraRaw	Healing	Retušování
+cameraRaw	Level: apply only level correction	Horizont: použít pouze vyrovnání horizontu
+cameraRaw	Load Settings...	Načíst nastavení...
+cameraRaw	Manual Transformations	Ruční transformace
+cameraRaw	Masking (M)	Maskování (M)
+cameraRaw	Medium Contrast	Střední kontrast
+cameraRaw	Mixer	Mixér
+cameraRaw	Multiple	Více
+cameraRaw	Muted	Tlumené
+cameraRaw	Objects	Objekty
+cameraRaw	Offset X	Posun X
+cameraRaw	Offset Y	Posun Y
+cameraRaw	Optics	Optika
+cameraRaw	Oranges	Oranžové
+cameraRaw	Parametric Curve	Parametrická křivka
+cameraRaw	Paste Edit Settings	Vložit nastavení úprav
+cameraRaw	Pet Eye	Oči zvířat
+cameraRaw	Point Color	Bodová barva
+cameraRaw	Point Curve	Bodová křivka
+cameraRaw	Presets (Shift+P)	Přednastavení (Shift+P)
+cameraRaw	Process	Proces
+cameraRaw	Profile	Profil
+cameraRaw	Purple Amount	Míra fialové
+cameraRaw	Purple Hue	Odstín fialové
+cameraRaw	Purples	Fialové
+cameraRaw	Red Channel	Červený kanál
+cameraRaw	Red Eye (Shift+E)	Červené oči (Shift+E)
+cameraRaw	Red Primary	Červená primární
+cameraRaw	Refine Saturation	Doladit sytost
+cameraRaw	Refresh	Obnovit
+cameraRaw	Remove (B)	Odstranit (B)
+cameraRaw	Reset to Open	Obnovit stav při otevření
+cameraRaw	Sample fringe	Vzorkovat třásně
+cameraRaw	Save Settings...	Uložit nastavení...
+cameraRaw	Show rich tooltips	Zobrazit rozšířené popisky
+cameraRaw	Single	Jeden
+cameraRaw	Smoothness	Hladkost
+cameraRaw	Split Tone	Dělené tónování
+cameraRaw	Strong Contrast	Silný kontrast
+cameraRaw	Upright	Vyrovnání
+cameraRaw	Use Lightroom style zoom and pan	Přibližovat a posouvat jako v aplikaci Lightroom
+cameraRaw	Use compact layout	Použít kompaktní rozvržení
+cameraRaw	Use legacy Target Adjustment Tool	Použít starší nástroj cílené úpravy
+cameraRaw	Use legacy undo shortcuts	Použít starší zkratky pro Zpět
+cameraRaw	Version 1	Verze 1
+cameraRaw	Version 2	Verze 2
+cameraRaw	Version 3	Verze 3
+cameraRaw	Version 4	Verze 4
+cameraRaw	Version 5	Verze 5
+cameraRaw	Version 6 (Current)	Verze 6 (aktuální)
+cameraRaw	Vertical: apply level and vertical perspective correction	Svisle: použít vyrovnání horizontu a korekci svislé perspektivy
+cameraRaw	Vignette	Vinětace
+cameraRaw	Vintage	Retro
+cameraRaw	Visualize Spots	Zobrazit skvrny
+cameraRaw	Vivid	Živé
+cameraRaw	Warm	Teplé
+cameraRaw	White balance	Vyvážení bílé
+cameraRaw	Zoom and Pan	Přibližování a posun
+	Auto tone and color (Ctrl+U)	Automatický tón a barva (Ctrl+U)
+	Before/After Left/Right	Před/po: vlevo/vpravo
+	Before/After Left/Right Split	Před/po: vlevo/vpravo, rozdělené
+	Before/After Top/Bottom	Před/po: nahoře/dole
+	Before/After Top/Bottom Split	Před/po: nahoře/dole, rozdělené
+	Browse profiles	Procházet profily
+	Camera Raw Preferences	Předvolby Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw se řídí motivem aplikace PhotoCraft (Okno › Motiv)
+	Convert and save image: not available in the Camera Raw Filter	Převést a uložit obraz: ve filtru Camera Raw není k dispozici
+	Convert to black and white (V)	Převést na černobílou (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Kopírovat nastavení „po“ do „před“ (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Kopírovat nastavení „před“ do „po“ (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Kreativní profily zatím v aplikaci PhotoCraft nejsou k dispozici.
+	Cycle between Before/After views (Q)	Přepínat zobrazení před/po (Q)
+	Fit ({percent})	Přizpůsobit ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Pro přesnější náhled přibližte při úpravách ovládacích prvků tohoto panelu náhled na 100 % nebo více.
+	For best results, apply lens corrections first.	Nejlepších výsledků dosáhnete, když nejprve použijete korekce objektivu.
+	HDR editing needs an HDR display	Úpravy HDR vyžadují displej HDR
+	Hand Tool (H)	Nástroj ruka (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Masky vyžadují lokální úpravy a segmentační modely; PhotoCraft je v Camera Raw zatím nemá.
+	More image settings	Další nastavení obrazu
+	Multiple: Edit panels will stay open until you close them.	Více: panely úprav zůstanou otevřené, dokud je nezavřete.
+	Not available yet	Zatím není k dispozici
+	Open preferences dialog (Ctrl+K)	Otevřít dialog předvoleb (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft vyvolává náhledy Camera Raw na CPU; výsledek se počítá v plném rozlišení.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft neudržuje žádnou mezipaměť Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Vlastní přednastavení aplikace PhotoCraft. Ukládání a import přednastavení zatím nejsou k dispozici.
+	Select zoom level	Vybrat úroveň přiblížení
+	Single: opening an edit panel closes the others.	Jeden: otevření panelu úprav zavře ostatní.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Prohodit nastavení „před“ a „po“ (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Nástroj cílené úpravy: tažením v obraze upravíte barvu pod ukazatelem
+	This tool is not available in PhotoCraft yet.	Tento nástroj zatím v aplikaci PhotoCraft není k dispozici.
+	Toggle Full Screen mode (F)	Přepnout režim celé obrazovky (F)
+	Toggle between current settings and defaults (P)	Přepnout mezi aktuálním a výchozím nastavením (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Přepnout překryv mřížky (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Přepnout překryv vzorkovačů (S)
+	Toggle visibility of {panel} settings	Přepnout viditelnost nastavení: {panel}
+	Use the Point Color Dropper\nto add samples.	Vzorky přidáte kapátkem\nbodové barvy.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Kapátkem navzorkujte fialové a zelené třásně, které je třeba opravit.
+	White Balance tool (I): click a neutral area	Nástroj vyvážení bílé (I): klikněte na neutrální oblast
+	Zoom Tool (Z)	Nástroj lupa (Z)
+cameraRaw	Type	Typ
+	Demosaic	Demozaikování
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
+	AHD (adaptive homogeneity)	AHD (adaptivní homogenita)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: nejčistší hrany a nejméně barevných lemů, nejpomalejší.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolace s korekcí gradientu: ostrá a rychlá, s mírnými barevnými lemy v jemných detailech.
+	The fastest and the softest, with colour fringing on fine detail.	Nejrychlejší a nejměkčí, s barevnými lemy v jemných detailech.
 	Object Finder	Hledání objektů
 	No object found there — drag a rectangle around it	Nebyl tam nalezen žádný objekt — přetáhněte kolem něj obdélník
 	Remove after each stroke	Odstranit po každém tahu

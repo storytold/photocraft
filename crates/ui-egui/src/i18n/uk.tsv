@@ -3809,6 +3809,152 @@ curves	Smooth	Згладити
 	Light Red	Світло-червоний
 	Medium Blue	Середньо-синій
 	Light Gray	Світло-сірий
+# Camera Raw 16 layout (2026-10-11)
+cameraRaw	Adjust	Корекція
+cameraRaw	Apply Favorite Preset	Застосувати улюблений набір
+cameraRaw	Apply Previous Settings	Застосувати попередні налаштування
+cameraRaw	Aquas	Аквамаринові тони
+cameraRaw	As Shot	Як знято
+cameraRaw	Aspect	Пропорції
+cameraRaw	Auto: apply balanced perspective corrections	Авто: збалансована корекція перспективи
+cameraRaw	B&W	Ч/Б
+cameraRaw	B&W High Contrast	Ч/Б, висока контрастність
+cameraRaw	B&W Mix	Змішування Ч/Б
+cameraRaw	B&W Neutral	Ч/Б, нейтральний
+cameraRaw	B&W Soft	Ч/Б, м'який
+cameraRaw	Back	Назад
+cameraRaw	Blue Channel	Синій канал
+cameraRaw	Blue Primary	Основний синій
+cameraRaw	Browse...	Огляд...
+cameraRaw	Calibration	Калібрування
+cameraRaw	Camera Raw Cache	Кеш Camera Raw
+cameraRaw	Clarity Pop	Акцент на чіткості
+cameraRaw	Color Theme:	Колірна тема:
+cameraRaw	Copy Edit Settings	Копіювати параметри обробки
+cameraRaw	Copy Selected Edit Settings...	Копіювати вибрані параметри...
+cameraRaw	Create New Mask	Створити маску
+cameraRaw	Create Preset...	Створити набір...
+cameraRaw	Creative	Творчі
+cameraRaw	Default image click zooms to:	Клацання по зображенню масштабує до:
+cameraRaw	Disable Upright	Вимкнути випрямлення
+cameraRaw	Edit (E)	Редагування (E)
+cameraRaw	Edit panel behavior:	Поведінка панелей редагування:
+cameraRaw	Faded	Вицвілий
+cameraRaw	Favorites	Обране
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Повне: горизонт, горизонтальна й вертикальна перспектива
+cameraRaw	Geometry	Геометрія
+cameraRaw	Green Amount	Сила зеленого
+cameraRaw	Green Channel	Зелений канал
+cameraRaw	Green Hue	Тон зеленого
+cameraRaw	Green Primary	Основний зелений
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	За напрямними: намалюйте дві або більше напрямних, щоб задати корекцію перспективи
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Прибрати серпанок
+cameraRaw	Level: apply only level correction	Горизонт: лише вирівнювання горизонту
+cameraRaw	Load Settings...	Завантажити налаштування...
+cameraRaw	Manual Transformations	Ручна трансформація
+cameraRaw	Masking (M)	Маскування (M)
+cameraRaw	Medium Contrast	Середня контрастність
+cameraRaw	Mixer	Змішувач
+cameraRaw	Multiple	Кілька
+cameraRaw	Muted	Приглушений
+cameraRaw	Objects	Об'єкти
+cameraRaw	Offset X	Зсув по X
+cameraRaw	Offset Y	Зсув по Y
+cameraRaw	Optics	Оптика
+cameraRaw	Oranges	Оранжеві тони
+cameraRaw	Parametric Curve	Параметрична крива
+cameraRaw	Paste Edit Settings	Вставити параметри обробки
+cameraRaw	Pet Eye	Очі тварин
+cameraRaw	Point Color	Точковий колір
+cameraRaw	Presets (Shift+P)	Набори (Shift+P)
+cameraRaw	Process	Обробка
+cameraRaw	Purple Amount	Сила фіолетового
+cameraRaw	Purple Hue	Тон фіолетового
+cameraRaw	Purples	Фіолетові тони
+cameraRaw	Red Channel	Червоний канал
+cameraRaw	Red Eye (Shift+E)	Червоні очі (Shift+E)
+cameraRaw	Red Primary	Основний червоний
+cameraRaw	Refine Saturation	Уточнення насиченості
+cameraRaw	Refresh	Оновити
+cameraRaw	Remove (B)	Вилучення (B)
+cameraRaw	Reset to Open	Скинути до стану під час відкриття
+cameraRaw	Sample fringe	Зразок облямівки
+cameraRaw	Save Settings...	Зберегти налаштування...
+cameraRaw	Show rich tooltips	Показувати докладні підказки
+cameraRaw	Single	Одна
+cameraRaw	Split Tone	Роздільне тонування
+cameraRaw	Strong Contrast	Сильна контрастність
+cameraRaw	Upright	Випрямлення
+cameraRaw	Use Lightroom style zoom and pan	Масштаб і прокрутка як у Lightroom
+cameraRaw	Use compact layout	Компактне компонування
+cameraRaw	Use legacy Target Adjustment Tool	Застарілий інструмент цільової корекції
+cameraRaw	Use legacy undo shortcuts	Застарілі клавіші скасування
+cameraRaw	Version 1	Версія 1
+cameraRaw	Version 2	Версія 2
+cameraRaw	Version 3	Версія 3
+cameraRaw	Version 4	Версія 4
+cameraRaw	Version 5	Версія 5
+cameraRaw	Version 6 (Current)	Версія 6 (поточна)
+cameraRaw	Vertical: apply level and vertical perspective correction	Вертикаль: горизонт і вертикальна перспектива
+cameraRaw	Vignette	Віньєтування
+cameraRaw	Vintage	Вінтажні
+cameraRaw	Visualize Spots	Показати плями
+cameraRaw	Vivid	Яскравий
+cameraRaw	White balance	Баланс білого
+cameraRaw	Zoom and Pan	Масштаб і прокрутка
+	After	Після
+	Auto tone and color (Ctrl+U)	Автоматичний тон і колір (Ctrl+U)
+	Before	До
+	Before/After Left/Right	До/після: ліворуч/праворуч
+	Before/After Left/Right Split	До/після: поділ ліворуч/праворуч
+	Before/After Top/Bottom	До/після: згори/знизу
+	Before/After Top/Bottom Split	До/після: поділ згори/знизу
+	Browse profiles	Огляд профілів
+	Camera Raw Preferences	Налаштування Camera Raw
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw використовує тему PhotoCraft (Вікно › Тема)
+	Convert and save image: not available in the Camera Raw Filter	Перетворення й збереження зображення недоступні у фільтрі Camera Raw
+	Convert to black and white (V)	Перетворити на чорно-біле (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Скопіювати налаштування «Після» в «До» (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Скопіювати налаштування «До» в «Після» (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Творчі профілі поки недоступні в PhotoCraft.
+	Cycle between Before/After views (Q)	Перемикати види «До/після» (Q)
+	Fit ({percent})	Умістити ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Для точнішого перегляду під час налаштування параметрів цієї панелі збільште масштаб до 100% або більше.
+	For best results, apply lens corrections first.	Для кращого результату спершу застосуйте корекцію об'єктива.
+	HDR editing needs an HDR display	Для редагування HDR потрібен HDR-дисплей
+	Hand Tool (H)	Інструмент «Рука» (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Для масок потрібні локальні корекції та моделі сегментації; у Camera Raw PhotoCraft їх поки немає.
+	More image settings	Інші налаштування зображення
+	Multiple: Edit panels will stay open until you close them.	Кілька: панелі редагування залишаються відкритими, доки ви їх не закриєте.
+	Not available yet	Поки недоступно
+	Open preferences dialog (Ctrl+K)	Відкрити вікно налаштувань (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft обробляє перегляд Camera Raw на CPU; результат будується конвеєром повної роздільності.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft не веде кеш Camera Raw.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Власні набори PhotoCraft. Збереження та імпорт наборів поки недоступні.
+	Select zoom level	Вибрати масштаб
+	Single: opening an edit panel closes the others.	Одна: відкриття панелі редагування закриває інші.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Поміняти місцями налаштування «До» і «Після» (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Інструмент цільової корекції: перетягуйте по зображенню, щоб змінити колір під вказівником
+	This tool is not available in PhotoCraft yet.	Цей інструмент поки недоступний у PhotoCraft.
+	Toggle Full Screen mode (F)	Перемкнути повноекранний режим (F)
+	Toggle between current settings and defaults (P)	Перемикання між поточними й типовими налаштуваннями (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Перемкнути сітку (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Перемкнути зразки кольору (S)
+	Toggle visibility of {panel} settings	Перемкнути видимість налаштувань «{panel}»
+	Use the Point Color Dropper\nto add samples.	Щоб додати зразки,\nскористайтеся піпеткою точкового кольору.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Піпеткою візьміть зразки фіолетової та зеленої облямівки, яку треба виправити.
+	White Balance tool (I): click a neutral area	Баланс білого (I): клацніть нейтральну ділянку
+	Zoom Tool (Z)	Інструмент «Масштаб» (Z)
+cameraRaw	Type	Тип
+	Demosaic	Демозаїк
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
+	AHD (adaptive homogeneity)	AHD (адаптивна однорідність)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Хіракава–Паркс: найчистіші краї й найменше кольорової облямівки, найповільніший.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Інтерполяція з корекцією градієнта: різка й швидка, з невеликою кольоровою облямівкою на дрібних деталях.
+	The fastest and the softest, with colour fringing on fine detail.	Найшвидший і найм'якший, з кольоровою облямівкою на дрібних деталях.
 	Object Finder	Пошук об’єктів
 	No object found there — drag a rectangle around it	Там не знайдено об’єкта — обведіть його прямокутником
 	Remove after each stroke	Видаляти після кожного штриха

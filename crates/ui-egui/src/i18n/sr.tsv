@@ -4225,6 +4225,145 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+# Filter › Camera Raw Filter: the Camera Raw 16.1.1 dialog
+	Auto tone and color (Ctrl+U)	Automatski ton i boja (Ctrl+U)
+	Before/After Left/Right	Pre/posle levo/desno
+	Before/After Left/Right Split	Pre/posle levo/desno, podeljeno
+	Before/After Top/Bottom	Pre/posle gore/dole
+	Before/After Top/Bottom Split	Pre/posle gore/dole, podeljeno
+	Browse profiles	Pregledaj profile
+	Camera Raw Preferences	Camera Raw podešavanja
+	Camera Raw follows PhotoCraft's theme (Window › Theme)	Camera Raw prati temu programa PhotoCraft (Prozor › Tema)
+	Convert and save image: not available in the Camera Raw Filter	Konvertuj i sačuvaj sliku: nije dostupno u Camera Raw filteru
+	Convert to black and white (V)	Pretvori u crno-belo (V)
+	Copy After settings to Before (Ctrl+Alt+P)	Kopiraj podešavanja „posle“ u „pre“ (Ctrl+Alt+P)
+	Copy Before settings to After (Alt+Shift+P)	Kopiraj podešavanja „pre“ u „posle“ (Alt+Shift+P)
+	Creative profiles are not available in PhotoCraft yet.	Kreativni profili još nisu dostupni u programu PhotoCraft.
+	Cycle between Before/After views (Q)	Smenjuj prikaze pre/posle (Q)
+	Demosaic	Demozaikovanje
+	Fit ({percent})	Uklopi ({percent})
+	For a more accurate preview, zoom the preview size to 100% or larger when adjusting the controls in this panel.	Za tačniji pregled uvećajte pregled na 100% ili više dok podešavate kontrole na ovom panelu.
+	For best results, apply lens corrections first.	Za najbolje rezultate prvo primenite korekcije objektiva.
+	HDR editing needs an HDR display	Za HDR uređivanje potreban je HDR ekran
+	Hand Tool (H)	Alatka ruka (H)
+	Masks need local adjustments and segmentation models; PhotoCraft does not have them in Camera Raw yet.	Maske zahtevaju lokalna podešavanja i modele segmentacije; PhotoCraft ih u Camera Raw još nema.
+	More image settings	Još podešavanja slike
+	Multiple: Edit panels will stay open until you close them.	Više: paneli za uređivanje ostaju otvoreni dok ih ne zatvorite.
+	Not available yet	Još nije dostupno
+	Open preferences dialog (Ctrl+K)	Otvori dijalog podešavanja (Ctrl+K)
+	PhotoCraft develops Camera Raw previews on the CPU; the result uses the full-resolution pipeline.	PhotoCraft razvija Camera Raw preglede na procesoru; rezultat koristi obradu u punoj rezoluciji.
+	PhotoCraft keeps no Camera Raw cache.	PhotoCraft ne čuva Camera Raw keš.
+	PhotoCraft's own presets. Saving and importing presets is not available yet.	Sopstveni šabloni programa PhotoCraft. Čuvanje i uvoz šablona još nisu dostupni.
+	Select zoom level	Izaberi nivo uvećanja
+	Single: opening an edit panel closes the others.	Jedan: otvaranje panela za uređivanje zatvara ostale.
+	Swap Before and After settings (Ctrl+Alt+Shift+P)	Zameni podešavanja „pre“ i „posle“ (Ctrl+Alt+Shift+P)
+	Targeted Adjustment Tool: drag in the image to adjust the colour under the pointer	Alatka za ciljano podešavanje: prevucite po slici da podesite boju ispod pokazivača
+	This tool is not available in PhotoCraft yet.	Ova alatka još nije dostupna u programu PhotoCraft.
+	Toggle Full Screen mode (F)	Uključi/isključi režim celog ekrana (F)
+	Toggle between current settings and defaults (P)	Prebaci između trenutnih i podrazumevanih podešavanja (P)
+	Toggle grid overlay (Ctrl+Shift+G)	Prikaži/sakrij mrežu (Ctrl+Shift+G)
+	Toggle sampler overlay (S)	Prikaži/sakrij tačke uzorkovanja (S)
+	Toggle visibility of {panel} settings	Uključi/isključi vidljivost podešavanja: {panel}
+	Use the Point Color Dropper\nto add samples.	Koristite pipetu Point Color\nda dodate uzorke.
+	Use the eyedropper to sample purple and green areas of fringing that need correction.	Pipetom uzorkujte ljubičaste i zelene oblasti obojenih ivica koje treba ispraviti.
+	White Balance tool (I): click a neutral area	Alatka za balans belog (I): kliknite na neutralnu oblast
+	Zoom Tool (Z)	Alatka lupa (Z)
+# Camera Raw 16.1.1 dialog: panel, menu and preference labels
+cameraRaw	Adjust	Podešavanje
+cameraRaw	Apply Favorite Preset	Primeni omiljeni šablon
+cameraRaw	Apply Previous Settings	Primeni prethodna podešavanja
+cameraRaw	Aquas	Akva tonovi
+cameraRaw	As Shot	Kao pri snimanju
+cameraRaw	Aspect	Odnos stranica
+cameraRaw	Auto: apply balanced perspective corrections	Automatski: primeni uravnotežene korekcije perspektive
+cameraRaw	B&W	C/B
+cameraRaw	B&W High Contrast	C/B visok kontrast
+cameraRaw	B&W Mix	C/B mešanje
+cameraRaw	B&W Neutral	C/B neutralno
+cameraRaw	B&W Soft	C/B meko
+cameraRaw	Blue Channel	Plavi kanal
+cameraRaw	Blue Primary	Plava primarna
+cameraRaw	Browse...	Pregledaj...
+cameraRaw	Calibration	Kalibracija
+cameraRaw	Camera Raw Cache	Camera Raw keš
+cameraRaw	Clarity Pop	Naglašena jasnoća
+cameraRaw	Color Theme:	Tema boja:
+cameraRaw	Copy Edit Settings	Kopiraj podešavanja izmena
+cameraRaw	Copy Selected Edit Settings...	Kopiraj izabrana podešavanja izmena...
+cameraRaw	Create New Mask	Napravi novu masku
+cameraRaw	Create Preset...	Napravi šablon...
+cameraRaw	Creative	Kreativno
+cameraRaw	Default image click zooms to:	Klik na sliku podrazumevano uvećava na:
+cameraRaw	Disable Upright	Isključi uspravljanje
+cameraRaw	Edit (E)	Uređivanje (E)
+cameraRaw	Edit panel behavior:	Ponašanje panela za uređivanje:
+cameraRaw	Faded	Izbledelo
+cameraRaw	Favorites	Omiljeni
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Puno: primeni korekcije nivoa, horizontalne i vertikalne perspektive
+cameraRaw	Geometry	Geometrija
+cameraRaw	Green Amount	Količina zelene
+cameraRaw	Green Channel	Zeleni kanal
+cameraRaw	Green Hue	Nijansa zelene
+cameraRaw	Green Primary	Zelena primarna
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Vođeno: nacrtajte dve ili više vodilja da prilagodite korekcije perspektive
+cameraRaw	HDR	HDR
+cameraRaw	HSL	HSL
+cameraRaw	Haze Cut	Manje izmaglice
+cameraRaw	Level: apply only level correction	Nivo: primeni samo korekciju nivoa
+cameraRaw	Load Settings...	Učitaj podešavanja...
+cameraRaw	Manual Transformations	Ručne transformacije
+cameraRaw	Masking (M)	Maskiranje (M)
+cameraRaw	Medium Contrast	Srednji kontrast
+cameraRaw	Mixer	Mešač
+cameraRaw	Multiple	Više
+cameraRaw	Muted	Prigušeno
+cameraRaw	Objects	Objekti
+cameraRaw	Offset X	Pomak X
+cameraRaw	Offset Y	Pomak Y
+cameraRaw	Optics	Optika
+cameraRaw	Oranges	Narandžaste
+cameraRaw	Parametric Curve	Parametarska kriva
+cameraRaw	Paste Edit Settings	Nalepi podešavanja izmena
+cameraRaw	Pet Eye	Oči ljubimaca
+cameraRaw	Point Color	Tačkasta boja
+cameraRaw	Presets (Shift+P)	Šabloni (Shift+P)
+cameraRaw	Process	Proces
+cameraRaw	Purple Amount	Količina ljubičaste
+cameraRaw	Purple Hue	Nijansa ljubičaste
+cameraRaw	Purples	Ljubičaste
+cameraRaw	Red Channel	Crveni kanal
+cameraRaw	Red Eye (Shift+E)	Crvene oči (Shift+E)
+cameraRaw	Red Primary	Crvena primarna
+cameraRaw	Refine Saturation	Precizno zasićenje
+cameraRaw	Refresh	Osveži
+cameraRaw	Remove (B)	Uklanjanje (B)
+cameraRaw	Reset to Open	Vrati na stanje pri otvaranju
+cameraRaw	Sample fringe	Uzorkuj obojenu ivicu
+cameraRaw	Save Settings...	Sačuvaj podešavanja...
+cameraRaw	Show rich tooltips	Prikaži detaljne opise alatki
+cameraRaw	Single	Jedan
+cameraRaw	Split Tone	Podeljeni ton
+cameraRaw	Strong Contrast	Jak kontrast
+cameraRaw	Upright	Uspravljanje
+cameraRaw	Use Lightroom style zoom and pan	Koristi uvećanje i pomeranje kao u Lightroomu
+cameraRaw	Use compact layout	Koristi kompaktan raspored
+cameraRaw	Use legacy Target Adjustment Tool	Koristi staru alatku za ciljano podešavanje
+cameraRaw	Use legacy undo shortcuts	Koristi stare prečice za opoziv
+cameraRaw	Version 1	Verzija 1
+cameraRaw	Version 2	Verzija 2
+cameraRaw	Version 3	Verzija 3
+cameraRaw	Version 4	Verzija 4
+cameraRaw	Version 5	Verzija 5
+cameraRaw	Version 6 (Current)	Verzija 6 (trenutna)
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertikalno: primeni korekciju nivoa i vertikalne perspektive
+cameraRaw	Vignette	Vinjeta
+cameraRaw	Vintage	Starinsko
+cameraRaw	Visualize Spots	Prikaži mrlje
+cameraRaw	Vivid	Živo
+cameraRaw	White balance	Balans belog
+cameraRaw	Zoom and Pan	Uvećanje i pomeranje
+	AHD (adaptive homogeneity)	AHD (adaptivna homogenost)
+	Malvar–He–Cutler	Malvar–He–Cutler
 	Response curve	Kriva odziva
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Koristi ugrađeni profil ({profile})

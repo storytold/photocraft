@@ -44,6 +44,54 @@ pub struct CameraRawScopeState {
     pub floating_rect: Option<[f32; 4]>,
 }
 
+/// Camera Raw's panel layout, kept between openings as Camera Raw keeps it: the tool on the right
+/// strip, which panels and groups are open, and the modes inside panels. View state only.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CameraRawLayoutState {
+    /// `edit | remove | masking | redEye | presets`.
+    pub tool: String,
+    /// Open Edit panels (`light`, `color`, `effects`, `curve`, `mixer`, `grading`, `detail`,
+    /// `optics`, `geometry`, `calibration`).
+    pub open: Vec<String>,
+    /// Open sub-groups (`vignette`, `grain`, `sharpening`, …).
+    pub groups: Vec<String>,
+    /// Curve: `parametric | point | red | green | blue`.
+    pub curve: String,
+    /// Color Mixer: `mixer | pointColor`.
+    pub mixer: String,
+    /// Color Mixer › Adjust: `hsl | color`.
+    pub mixer_adjust: String,
+    /// HSL tab: `hue | saturation | luminance | all`.
+    pub mixer_tab: String,
+    /// Adjust › Color: the band being edited (0 = red … 7 = magenta).
+    pub mixer_color: usize,
+    /// Color Grading › Adjust: `threeWay | shadows | midtones | highlights | global`.
+    pub grading: String,
+    /// The grid overlay on the preview.
+    pub grid: bool,
+    /// Preferences › Edit panel behavior: Single (opening a panel closes the others).
+    pub single_panel: bool,
+}
+
+impl Default for CameraRawLayoutState {
+    fn default() -> Self {
+        Self {
+            tool: "edit".into(),
+            open: vec!["light".into(), "color".into()],
+            groups: Vec::new(),
+            curve: "parametric".into(),
+            mixer: "mixer".into(),
+            mixer_adjust: "hsl".into(),
+            mixer_tab: "hue".into(),
+            mixer_color: 0,
+            grading: "threeWay".into(),
+            grid: false,
+            single_panel: false,
+        }
+    }
+}
+
 /// Camera Raw navigation, separate from filter settings. Reset for each opened image.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1303,6 +1351,8 @@ pub struct UiState {
     pub camera_raw_scope: CameraRawScopeState,
     #[serde(default)]
     pub camera_raw_preview: CameraRawPreviewState,
+    #[serde(default)]
+    pub camera_raw_layout: CameraRawLayoutState,
 }
 
 impl Default for UiState {
@@ -1394,6 +1444,7 @@ impl Default for UiState {
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
+            camera_raw_layout: Default::default(),
         }
     }
 }
