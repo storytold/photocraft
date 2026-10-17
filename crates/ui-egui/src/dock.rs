@@ -120,9 +120,12 @@ impl Group {
     }
 
     /// Tabs that lay out their own scrolling list and footer, or size themselves to the group
-    /// (the Navigator's preview grows with it, as in Photoshop: #2726).
+    /// (the Navigator's preview grows with it, as in Photoshop: #2726). Channels and Paths are
+    /// Layers' siblings and do the same: wrapped in the dock's scroll area as well, the two nested
+    /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
+    /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
+        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
