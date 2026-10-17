@@ -185,6 +185,8 @@ mod control_port_tests {
 }
 
 fn main() -> eframe::Result {
+    // The git commit of a dev build's checkout, for `--version` and About (build.rs, #5247).
+    photocraft_engine::build_info::set_checkout(option_env!("PHOTOCRAFT_CHECKOUT_SHA"));
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();

@@ -1,14 +1,20 @@
-//! Windows only: embed the app icon and version info (VERSIONINFO) into `photocraft-cli.exe`.
+//! Records the checkout's git commit for `--version` (`git_checkout.rs`, every target), and on
+//! Windows only embeds the app icon and version info (VERSIONINFO) into `photocraft-cli.exe`.
 //!
-//! On every other target this does nothing, even when `PHOTOCRAFT_REQUIRE_WINRES` is set. A
+//! On every other target the Windows part does nothing, even when `PHOTOCRAFT_REQUIRE_WINRES` is set. A
 //! missing resource compiler is a warning, so a cross-compile from macOS or Linux still links,
 //! unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the release packaging script) turns it into a
 //! build error.
+
+#[path = "../photocraft/git_checkout.rs"]
+mod git_checkout;
 
 fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft.ico");
     println!("cargo:rerun-if-env-changed=PHOTOCRAFT_REQUIRE_WINRES");
+    println!("cargo:rerun-if-changed=../photocraft/git_checkout.rs");
+    git_checkout::emit();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return Ok(());
     }

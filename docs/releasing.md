@@ -60,7 +60,8 @@ in the dialog.
 Every binary reports its version, the commit and the build date: `photocraft --version`,
 `photocraft-cli --version`, and *Help › About PhotoCraft*. CI sets `PHOTOCRAFT_BUILD_SHA` and
 `PHOTOCRAFT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
-`cargo build` doesn't set them and reports `0.2.0 (dev build)`.
+`cargo build` doesn't set them and reports `0.2.0 (dev build)`; from a git checkout the desktop and CLI
+build scripts add the commit, `0.2.0 (dev build, 3f2a9c1d0)` (a source tarball stays `(dev build)`).
 
 Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
 at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds with `CRAFT_FONTS_DIR` and
