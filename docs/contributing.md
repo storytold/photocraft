@@ -9,6 +9,7 @@
 - **Tests:** required for every change. Format code needs round-trip and malformed-input tests. Pixel code is tested at 8, 16 and 32-bit. If you touch psd, io, codecs, compose, gpu, text or format, also run the real-file corpus tests: `cargo xtask test-corpus` (fetches the pinned corpora, including our Photoshop oracles from https://github.com/storytold/photocraft-corpus, then runs the `corpus`-feature tests; CI always runs them). Never commit corpus files; see `docs/development.md` › Test corpora.
 - **Style:** `cargo fmt`, and `cargo clippy -- -D warnings`. Match surrounding code. Comments explain *why*.
 - **UI:** use `theme::Tokens` and `widgets::*`. Verify visually (offscreen `snapshot` example or the control channel) before submitting, and attach before/after screenshots to PRs.
+- **Claim before you start:** after checking that nobody claimed the issue in the last 72 hours and no open PR covers it, open a draft PR (`Fixes #N`) and comment `I'm working on this.` before writing code. Push progress to the draft as you go; if you stop, delete your comment, close the draft and delete its branch. Details: *Claiming an issue* in `AGENTS.md`.
 - **Commits:** small, focused, with a clear subject line.
 
 ## Adding a command
