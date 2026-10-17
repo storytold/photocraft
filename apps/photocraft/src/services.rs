@@ -474,6 +474,11 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_export = automation.clone().map(|workspace| {
+        Box::new(move |path: &str, bytes: &[u8], overwrite: bool, open: &[&str]| {
+            workspace.write_export(path, bytes, overwrite, open).map_err(|error| error.to_string())
+        }) as photocraft_ui_egui::AutomationExportFn
+    });
     let automation_open_pcraft = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
@@ -513,6 +518,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         automation_read,
         automation_write,
+        automation_export,
         automation_open_pcraft,
         automation_save,
         automation_command,

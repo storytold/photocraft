@@ -59,6 +59,7 @@ pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
+mod control_scoped;
 pub mod corner_radius;
 pub mod credits;
 pub mod crop_mode;
@@ -377,6 +378,10 @@ pub(crate) enum SaveKind {
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Write one exported file through the authorized write root (`app.exportLayer`): `(path, bytes,
+/// overwrite, open)`. Without `overwrite` the file must be new; `open` lists the files of the
+/// open documents, which an export never writes over.
+pub type AutomationExportFn = Box<dyn FnMut(&str, &[u8], bool, &[&str]) -> Result<(), String>>;
 /// Load a directory-form `.pcraft` through the authorized read root, returning its display
 /// name (the file name) and the loaded document. `Ok(None)` marks a regular file: the
 /// caller falls back to the bytes path for the zip form.
@@ -467,6 +472,7 @@ pub struct Services {
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
+    pub automation_export: Option<AutomationExportFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for

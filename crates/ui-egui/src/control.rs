@@ -254,7 +254,7 @@ const POINTER_MODIFIERS: [&str; 5] = ["shift", "alt", "command", "ctrl", "space"
 /// A synthetic input method's params (or one nested object, named `what`): an object whose keys
 /// are all in `fields`, returned with its null fields dropped so they mean "omitted". A typo must
 /// not reply ok after acting on a default (#2449), as `ui.set` already promises (#412).
-fn input_object(v: &Value, what: Option<&str>, fields: &[&str]) -> std::result::Result<Value, String> {
+pub(crate) fn input_object(v: &Value, what: Option<&str>, fields: &[&str]) -> std::result::Result<Value, String> {
     let object = match (v, what) {
         (Value::Null, None) => return Ok(json!({})),
         (Value::Object(o), _) => o,
@@ -1277,6 +1277,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             Err(e) => err(e),
         },
+        // The capability-scoped forms of `file.placeEmbedded`, `layer.smartObjects.replaceContents`
+        // and `layer.exportAs`, which take ambient paths and are refused here: the file goes
+        // through the automation roots and the command's own body does the rest.
+        "app.place" => wrap(crate::control_scoped::place(app, p)),
+        "app.replaceContents" => wrap(crate::control_scoped::replace_contents(app, p)),
+        "app.exportLayer" => wrap(crate::control_scoped::export_layer(app, p)),
         "app.quit" => {
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

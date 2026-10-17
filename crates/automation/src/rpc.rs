@@ -10,6 +10,9 @@
 //! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
+//!   `doc.replaceContents {path, layer?, index?}` and `doc.exportLayer {path, layer?, scale?,
+//!   trim?, overwrite?, index?}` (the same for `layer.smartObjects.replaceContents` and
+//!   `layer.exportAs`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
 //!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
@@ -43,6 +46,8 @@ pub const METHODS: &[&str] = &[
     "session.list",
     "doc.open",
     "doc.place",
+    "doc.replaceContents",
+    "doc.exportLayer",
     "doc.new",
     "doc.save",
     "doc.exportLayers",
@@ -71,6 +76,15 @@ fn index_of(p: &Value) -> Result<Option<usize>, AutomationError> {
 
 fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
     p.get(k).and_then(Value::as_str)
+}
+
+/// Refuse a field `method` doesn't name, as the control channel's methods do: a typo must not
+/// reply ok after acting on a default.
+fn only(p: &Value, fields: &[&str]) -> Result<(), AutomationError> {
+    match p.as_object().and_then(|o| o.keys().find(|k| !fields.contains(&k.as_str()))) {
+        Some(key) => Err(bad(format!("unknown field `{key}` (fields: {})", fields.join(", ")))),
+        None => Ok(()),
+    }
 }
 
 impl Headless {
@@ -107,6 +121,28 @@ impl Headless {
                 opts.remove("path");
                 opts.remove("index");
                 self.place(index_of(&p)?, path, &Value::Object(opts))
+            }
+            "doc.replaceContents" => {
+                only(&p, &["path", "layer", "index"])?;
+                let path = str_of(&p, "path").ok_or_else(|| bad("doc.replaceContents needs `path`"))?;
+                let layer = match p.get("layer") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_u64().ok_or_else(|| bad("`layer` must be a layer id"))?),
+                };
+                self.replace_contents(index_of(&p)?, path, layer)
+            }
+            "doc.exportLayer" => {
+                only(&p, &["path", "layer", "scale", "trim", "overwrite", "index"])?;
+                let path = str_of(&p, "path").ok_or_else(|| bad("doc.exportLayer needs `path`"))?;
+                let overwrite = match p.get("overwrite") {
+                    None | Some(Value::Null) => false,
+                    Some(v) => v.as_bool().ok_or_else(|| bad("`overwrite` must be true or false"))?,
+                };
+                let mut opts = p.as_object().cloned().unwrap_or_default();
+                for key in ["path", "index", "overwrite"] {
+                    opts.remove(key);
+                }
+                self.export_layer(index_of(&p)?, path, overwrite, &Value::Object(opts))
             }
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
@@ -675,6 +711,119 @@ mod tests {
         t.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
         let trusted = t.handle("doc.place", json!({"path": root.join("logo.png").to_string_lossy()})).unwrap();
         assert!(trusted["layer"].as_u64().is_some(), "{trusted}");
+        // Release directory capabilities before cleanup on Windows.
+        drop(t);
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// The read and write roots scope Replace Contents and a single layer's export the way they
+    /// scope `doc.place`; the ambient commands stay refused. An export makes a new file unless
+    /// asked to overwrite, and never writes over an open document's file.
+    #[test]
+    fn doc_replace_contents_and_export_layer_stay_inside_the_roots() {
+        let base = std::env::temp_dir().join(format!("pc-doc-replace-export-{}", std::process::id()));
+        let root = base.join("workspace");
+        let outside = base.join("outside");
+        let _ = std::fs::remove_dir_all(&base);
+        for dir in [&root, &outside, &root.join("out")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let png = |w: u32, h: u32, value: u8| {
+            let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, vec![value; (w * h * 3) as usize]).unwrap();
+            photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()
+        };
+        std::fs::write(root.join("hero_v001.png"), png(8, 6, 40)).unwrap();
+        std::fs::write(root.join("hero_v002.png"), png(16, 12, 200)).unwrap();
+        std::fs::write(outside.join("hero_v003.png"), png(4, 4, 90)).unwrap();
+        let escaped = outside.join("hero_v003.png").to_string_lossy().into_owned();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 40, "height": 30, "background": "transparent"})).unwrap();
+        let layer = h.handle("doc.place", json!({"path": "hero_v001.png"})).unwrap()["layer"].as_u64().unwrap();
+        let source = |h: &mut Headless| {
+            let inspected = h.handle("doc.inspect", json!({})).unwrap();
+            let layers = inspected["layers"].as_array().unwrap().clone();
+            let placed = layers.iter().find(|l| l["id"].as_u64() == Some(layer)).unwrap();
+            (layers.len(), placed["smartSource"]["fileName"].as_str().unwrap().to_string())
+        };
+        let count = source(&mut h).0;
+
+        let replaced = h.handle("doc.replaceContents", json!({"path": "hero_v002.png", "layer": layer})).unwrap();
+        assert_eq!(replaced["layer"].as_u64(), Some(layer), "{replaced}");
+        assert_eq!(source(&mut h), (count, "hero_v002.png".to_string()), "the same layer with the new file");
+        for (params, reason) in [
+            (json!({"path": "../outside/hero_v003.png", "layer": layer}), "parent traversal"),
+            (json!({"path": escaped, "layer": layer}), "must be inside the automation root"),
+            (json!({"path": "missing.png", "layer": layer}), "automation read"),
+            (json!({"path": "hero_v001.png", "layer": 999_999}), "no layer with id"),
+            (json!({"path": "hero_v001.png", "layer": "top"}), "`layer` must be a layer id"),
+            (json!({"path": "hero_v001.png", "layer": layer, "scale": 50}), "unknown field `scale`"),
+            (json!({"layer": layer}), "needs `path`"),
+        ] {
+            let refused = h.handle("doc.replaceContents", params.clone()).unwrap_err().to_string();
+            assert!(refused.contains(reason), "{params}: {refused}");
+        }
+        assert_eq!(source(&mut h).1, "hero_v002.png", "a refused replace changes nothing");
+
+        // Trimmed to the layer's pixels, or on the document's canvas with `trim: false`.
+        let exported = h.handle("doc.exportLayer", json!({"path": "out/hero.png", "layer": layer})).unwrap();
+        assert_eq!((exported["width"].as_u64(), exported["height"].as_u64()), (Some(16), Some(12)), "{exported}");
+        h.handle("doc.exportLayer", json!({"path": "out/hero_canvas.png", "layer": layer, "trim": false})).unwrap();
+        let canvas = std::fs::read(root.join("out/hero_canvas.png")).unwrap();
+        assert_eq!(photocraft_codecs::decode(&canvas).unwrap().dimensions(), (40, 30));
+        assert_eq!(std::fs::read(root.join("out/hero.png")).unwrap().len() as u64, exported["bytes"].as_u64().unwrap());
+        // A second export to the same file needs `overwrite: true`.
+        let again = h.handle("doc.exportLayer", json!({"path": "out/hero_canvas.png", "layer": layer})).unwrap_err().to_string();
+        assert!(again.contains("already exists") && again.contains("overwrite: true"), "{again}");
+        assert_eq!(std::fs::read(root.join("out/hero_canvas.png")).unwrap(), canvas, "untouched");
+        h.handle("doc.exportLayer", json!({"path": "out/hero_canvas.png", "layer": layer, "overwrite": true})).unwrap();
+        assert_eq!(photocraft_codecs::decode(&std::fs::read(root.join("out/hero_canvas.png")).unwrap()).unwrap().dimensions(), (16, 12));
+        let outside_target = outside.join("leak.png");
+        for (params, reason) in [
+            (json!({"path": outside_target.to_string_lossy(), "layer": layer}), "must be inside the automation root"),
+            (json!({"path": "../outside/leak.png", "layer": layer}), "parent traversal"),
+            (json!({"path": "out/a.png", "layer": 999_999}), "no such layer"),
+            (json!({"path": "out/a.png", "layer": layer, "trim": "no"}), "`trim` must be true or false"),
+            (json!({"path": "out/a.png", "layer": layer, "scale": 5000}), "`scale` must be a percentage from 1 to 1000"),
+            (json!({"path": "out/a.png", "layer": layer, "overwrite": "yes"}), "`overwrite` must be true or false"),
+            (json!({"path": "out/a.png", "layer": layer, "format": "png"}), "unknown field `format`"),
+            (json!({"layer": layer}), "needs `path`"),
+        ] {
+            let refused = h.handle("doc.exportLayer", params.clone()).unwrap_err().to_string();
+            assert!(refused.contains(reason), "{params}: {refused}");
+        }
+        assert!(!outside_target.exists() && !root.join("out/a.png").exists(), "a refused export writes nothing");
+
+        // The workfile is never written over, even with `overwrite: true`.
+        h.handle("doc.save", json!({"path": "work.psd"})).unwrap();
+        let workfile = std::fs::read(root.join("work.psd")).unwrap();
+        let refused = h.handle("doc.exportLayer", json!({"path": "work.psd", "layer": layer, "overwrite": true})).unwrap_err().to_string();
+        assert!(refused.contains("open document"), "{refused}");
+        assert_eq!(std::fs::read(root.join("work.psd")).unwrap(), workfile);
+
+        // The ambient commands keep their refusal for the very same files.
+        for (command, params) in [
+            ("layer.smartObjects.replaceContents", json!({"path": "hero_v001.png", "layer": layer})),
+            ("layer.exportAs", json!({"path": "out/b.png", "layer": layer})),
+        ] {
+            let ambient = h.handle("engine.execute", json!({"command": command, "params": params})).unwrap_err().to_string();
+            assert!(ambient.contains("ambient filesystem paths"), "{command}: {ambient}");
+        }
+        // Without roots both fail closed.
+        let mut bare = Headless::new();
+        bare.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+        assert!(bare.handle("doc.exportLayer", json!({"path": "a.png"})).unwrap_err().to_string().contains("write authority is absent"));
+        assert!(bare.handle("doc.replaceContents", json!({"path": "a.png"})).is_err());
+        // Trusted local keeps the ambient commands, with the same rule about existing files.
+        let mut t = Headless::trusted_local();
+        t.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let placed = t.handle("doc.place", json!({"path": root.join("hero_v001.png").to_string_lossy()})).unwrap()["layer"].as_u64().unwrap();
+        t.handle("doc.replaceContents", json!({"path": root.join("hero_v002.png").to_string_lossy(), "layer": placed})).unwrap();
+        let trusted_out = root.join("out/trusted.png").to_string_lossy().into_owned();
+        t.handle("doc.exportLayer", json!({"path": trusted_out, "layer": placed})).unwrap();
+        assert!(t.handle("doc.exportLayer", json!({"path": trusted_out, "layer": placed})).unwrap_err().to_string().contains("already exists"));
+        t.handle("doc.exportLayer", json!({"path": trusted_out, "layer": placed, "overwrite": true})).unwrap();
         // Release directory capabilities before cleanup on Windows.
         drop(t);
         drop(h);

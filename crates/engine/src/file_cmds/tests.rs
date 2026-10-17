@@ -283,6 +283,71 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// An absurd `scale` or `center` is an error before anything is allocated, not a multi-terabyte
+/// resize: these reach the command from automation clients.
+#[test]
+fn place_refuses_absurd_sizes_and_positions() {
+    let dir = tmp("place-absurd");
+    let path = png(&dir, "small.png", 10, 10, "#0000ff");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut s = session(100, 100, 8);
+    for p in [
+        json!({"scale": 1e9}),
+        json!({"scale": 1e300}),
+        json!({"scale": 3_000_100.0}),
+        json!({"center": [1e300, 0]}),
+        json!({"center": [0, -1e12]}),
+        json!({"scale": 1e9, "center": [1e300, 1e300]}),
+    ] {
+        let e = place_bytes(&mut s, "small.png", bytes.clone(), None, &p).unwrap_err().to_string();
+        assert!(e.contains("a place makes at most") || e.contains("`center` is outside"), "{p}: {e}");
+        let mut with_path = p.clone();
+        with_path["path"] = json!(path);
+        assert!(s.execute("file.placeEmbedded", with_path).is_err(), "{p}");
+    }
+    assert_eq!(doc(&s).layers.len(), 1, "nothing was placed");
+    // Ordinary enlargements and off-canvas centres still place.
+    let r = place_bytes(&mut s, "small.png", bytes, None, &json!({"scale": 800, "center": [-20, 150]})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 800.0).abs() < 1e-9, "{r}");
+}
+
+/// A place may enlarge a file up to the pixel budget (2²⁰ px in tests, 2²⁸ in the app); a file
+/// already larger than that still places at its own size or smaller, and nothing past both is
+/// allocated.
+#[test]
+fn place_enlargement_is_bounded_but_a_large_file_still_places() {
+    let dir = tmp("place-budget");
+    let small = std::fs::read(png(&dir, "small.png", 100, 100, "#00ff00")).unwrap();
+    // 1100 x 1000: past the test budget by itself.
+    let large = std::fs::read(png(&dir, "large.png", 1100, 1000, "#ff00ff")).unwrap();
+    let mut s = session(2000, 2000, 8);
+    // 100 px at 1100% is 1100 x 1100 px, past the budget.
+    let e = place_bytes(&mut s, "small.png", small.clone(), None, &json!({"scale": 1100})).unwrap_err().to_string();
+    assert!(e.contains("1100 × 1100 px") && e.contains("a place makes at most"), "{e}");
+    assert_eq!(doc(&s).layers.len(), 1, "nothing was placed");
+    place_bytes(&mut s, "small.png", small, None, &json!({"scale": 1000})).unwrap();
+    for scale in [100.0, 50.0] {
+        place_bytes(&mut s, "large.png", large.clone(), None, &json!({"scale": scale})).unwrap();
+    }
+    assert!(place_bytes(&mut s, "large.png", large, None, &json!({"scale": 101})).is_err(), "past the file's own size");
+    assert_eq!(doc(&s).layers.len(), 4);
+}
+
+/// Without the memory for the resized pixels a place is an error and the document is unchanged:
+/// the reservation fails before the resize allocates anything.
+#[test]
+fn place_without_memory_for_the_resize_changes_nothing() {
+    let dir = tmp("place-oom");
+    let bytes = std::fs::read(png(&dir, "small.png", 10, 10, "#0000ff")).unwrap();
+    let mut s = session(100, 100, 8);
+    let (revision, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    crate::allocation::fail_next_for_test();
+    let e = place_bytes(&mut s, "small.png", bytes, None, &json!({"scale": 200})).unwrap_err().to_string();
+    assert!(e.starts_with("not enough memory for placing a file") && e.ends_with("the document was not changed"), "{e}");
+    let st = s.active().unwrap();
+    assert_eq!((doc(&s).layers.len(), st.revision, st.history.past_len()), (1, revision, steps));
+}
+
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
 /// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
 #[test]

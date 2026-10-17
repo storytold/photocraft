@@ -107,6 +107,60 @@ impl AuthorizedWorkspace {
     }
 }
 
+impl AuthorizedWorkspace {
+    /// Write one exported file below the write root. Without `overwrite` the file must be new:
+    /// an existing file (or link) at `path` is refused, as `doc.exportLayers` refuses one. With
+    /// it an existing file is replaced crash-safely, as [`Self::write`] replaces one, except a
+    /// file one of `open` names: the files of the documents open in the session, which an export
+    /// never writes over (a relative one may be beneath either root, as automation opens and
+    /// saves record them, or the working directory).
+    pub fn write_export(&self, path: &str, bytes: &[u8], overwrite: bool, open: &[&str]) -> Result<(), AutomationError> {
+        let relative = request_path(path, self.write.as_ref())?;
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        if overwrite {
+            if self.is_open_document(&root.path.join(&relative), open) {
+                return Err(AutomationError::BadRequest(format!("`{path}` is the file of an open document; an export never writes over it")));
+            }
+            return self.write(path, bytes);
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = root.dir.open_with(&relative, &options).map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => AutomationError::BadRequest(format!("`{path}` already exists; pass `overwrite: true` to replace it")),
+            _ => file_error("create export", path, e),
+        })?;
+        let written = file.write_all(bytes).and_then(|()| photocraft_format::atomic::sync_file(&file.into_std()));
+        if let Err(e) = written {
+            // The file is ours (just created): don't leave a partial export behind.
+            let _ = root.dir.remove_file(&relative);
+            return Err(file_error("write export", path, e));
+        }
+        Ok(())
+    }
+
+    /// Whether `target` (an existing file beneath the write root) is the file of one of `open`.
+    fn is_open_document(&self, target: &Path, open: &[&str]) -> bool {
+        let same = |doc: &Path| same_file::is_same_file(target, doc).unwrap_or(false);
+        open.iter().map(Path::new).any(|doc| {
+            same(doc) || (doc.is_relative() && [self.read.as_ref(), self.write.as_ref()].into_iter().flatten().any(|root| same(&root.path.join(doc))))
+        })
+    }
+}
+
+/// [`AuthorizedWorkspace::write_export`]'s refusals for a caller trusted with ambient paths
+/// (headless trusted local), checked before the command writes `path` itself: an existing file
+/// without `overwrite`, and an open document's file in any case.
+pub(crate) fn check_local_export(path: &Path, overwrite: bool, open: &[&str]) -> Result<(), AutomationError> {
+    let shown = path.display();
+    if open.iter().any(|doc| same_file::is_same_file(path, doc).unwrap_or(false)) {
+        return Err(AutomationError::BadRequest(format!("`{shown}` is the file of an open document; an export never writes over it")));
+    }
+    if !overwrite && std::fs::symlink_metadata(path).is_ok() {
+        return Err(AutomationError::BadRequest(format!("`{shown}` already exists; pass `overwrite: true` to replace it")));
+    }
+    Ok(())
+}
+
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
     // Do not reserve from a potentially stale or attacker-controlled metadata length. Read in
     // chunks, and reject growth beyond the length observed on the opened file before appending.
@@ -459,6 +513,46 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
         (inside, outside, workspace)
+    }
+
+    /// A single exported file is new unless the caller asks to overwrite, and an overwrite never
+    /// replaces the file of an open document, however its path is spelled.
+    #[test]
+    fn write_export_creates_new_files_and_spares_open_documents() {
+        let (inside, outside, workspace) = roots("write-export");
+        std::fs::create_dir(inside.join("out")).unwrap();
+        workspace.write_export("out/a.png", b"first", false, &[]).unwrap();
+        assert_eq!(std::fs::read(inside.join("out/a.png")).unwrap(), b"first");
+        let refused = workspace.write_export("out/a.png", b"second", false, &[]).unwrap_err().to_string();
+        assert!(refused.contains("already exists") && refused.contains("overwrite: true"), "{refused}");
+        assert_eq!(std::fs::read(inside.join("out/a.png")).unwrap(), b"first", "not replaced");
+        workspace.write_export("out/a.png", b"second", true, &[]).unwrap();
+        assert_eq!(std::fs::read(inside.join("out/a.png")).unwrap(), b"second");
+
+        // The workfile, named relative to the root (automation opens), absolutely (the user's
+        // own opens) or through a link, is never written over.
+        std::fs::write(inside.join("work.psd"), b"workfile").unwrap();
+        let absolute = inside.join("work.psd").to_string_lossy().into_owned();
+        for open in ["work.psd", absolute.as_str()] {
+            let refused = workspace.write_export("work.psd", b"layer", true, &[open]).unwrap_err().to_string();
+            assert!(refused.contains("open document"), "{open}: {refused}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(inside.join("work.psd"), inside.join("out/link.psd")).unwrap();
+            assert!(workspace.write_export("out/link.psd", b"layer", true, &["work.psd"]).is_err());
+            assert!(workspace.write_export("out/link.psd", b"layer", false, &[]).is_err(), "a link is not a new file");
+        }
+        assert_eq!(std::fs::read(inside.join("work.psd")).unwrap(), b"workfile");
+        // Other documents' files don't protect it.
+        workspace.write_export("out/a.png", b"third", true, &["work.psd", "out/missing.psd"]).unwrap();
+
+        // The root's rules apply as for any write.
+        for path in ["../outside/a.png", "/etc/a.png", "out\\a.png"] {
+            assert!(workspace.write_export(path, b"x", false, &[]).is_err(), "{path}");
+        }
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        assert!(AuthorizedWorkspace::default().write_export("out/b.png", b"x", false, &[]).unwrap_err().to_string().contains("write authority is absent"));
     }
 
     #[test]

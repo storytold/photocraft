@@ -667,6 +667,13 @@ impl Session {
         if !journal || independent_of_document(id) {
             return None;
         }
+        self.edit_conflict()
+    }
+
+    /// Why the active document can't be edited now because a background job is running on it
+    /// (None = it can). The dispatcher checks this for every command; callers that run a
+    /// command's body themselves, with bytes they already hold, check it first.
+    pub fn edit_conflict(&self) -> Option<String> {
         let job = self.active_job()?;
         Some(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", job.label))
     }

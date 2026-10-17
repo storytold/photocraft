@@ -35,6 +35,12 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - A save without a `path` (MCP `doc_save`, `serve` `doc.save`, the control channel's `app.save`)
   writes back only to the document's own PSD, PSB or `.pcraft` file in its own format; any other
   save needs an explicit `path`, so automation never flattens or converts over the file it opened.
+- Placing a file, replacing a Smart Object's contents and exporting one layer go through the
+  same capabilities (`app.place`, `app.replaceContents` and `app.exportLayer` on the control
+  channel; `doc.place`, `doc.replaceContents` and `doc.exportLayer` on `serve`). The path-taking
+  commands they stand in for stay refused, and a placed size is bounded before it is allocated.
+  A layer export creates a new file unless the caller passes `overwrite: true`, and never writes
+  over the file of an open document.
 - Automation paths must be relative beneath the applicable root. Absolute paths, parent
   traversal, alternate separators, Windows device names, malformed components, and link escapes
   are rejected before file effects.

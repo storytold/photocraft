@@ -80,6 +80,8 @@ async fn lists_expected_tools() {
         "doc_open",
         "doc_new",
         "doc_place",
+        "doc_replace_contents",
+        "doc_export_layer",
         "doc_export_layers",
         "doc_export_data_sets",
         "doc_import_data_sets",
@@ -370,6 +372,79 @@ async fn bridge_doc_save_without_path_forwards_app_save_for_write_back() {
     assert_eq!(saved, json!({"saved": {"path": "out.psd"}}));
     client.cancel().await.unwrap();
     app.abort();
+}
+
+/// A bridged `doc_place` reaches the app's `app.place`, which reads beneath the app's read root:
+/// `file.placeEmbedded` takes an ambient path and the app refuses it over control. The app
+/// places into its active document, so `index` is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_place_forwards_app_place() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let placed = json_of(&call(&client, "doc_place", json!({"path": "pub/hero.png", "scale": 50, "center": [10, 12]})).await);
+    assert_eq!(placed, json!({"placed": {"path": "pub/hero.png", "scale": 50.0, "center": [10.0, 12.0]}}));
+    let r = call(&client, "doc_place", json!({"path": "pub/hero.png", "index": 1})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(text(&r).contains("headless"), "{}", text(&r));
+    client.cancel().await.unwrap();
+    let seen = app.await.unwrap();
+    assert!(seen.iter().all(|req| req["method"] != "engine.execute"), "the ambient command is never sent: {seen:?}");
+}
+
+/// The bridged Replace Contents and single-layer export reach the app's scoped methods with only
+/// the fields given; `index` is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_replace_contents_and_export_layer_forward_the_scoped_methods() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let replaced = json_of(&call(&client, "doc_replace_contents", json!({"path": "pub/hero_v002.png", "layer": 7})).await);
+    assert_eq!(replaced, json!({"replaced": {"path": "pub/hero_v002.png", "layer": 7}}));
+    let exported = json_of(&call(&client, "doc_export_layer", json!({"path": "out/hero.png", "layer": 7, "trim": false, "overwrite": true})).await);
+    assert_eq!(exported, json!({"exported": {"path": "out/hero.png", "layer": 7, "trim": false, "overwrite": true}}));
+    let exported = json_of(&call(&client, "doc_export_layer", json!({"path": "out/hero.png"})).await);
+    assert_eq!(exported, json!({"exported": {"path": "out/hero.png"}}), "no defaults are sent");
+    for tool in ["doc_replace_contents", "doc_export_layer"] {
+        let r = call(&client, tool, json!({"path": "a.png", "index": 1})).await;
+        assert!(r.is_error == Some(true) && text(&r).contains("headless"), "{tool}: {}", text(&r));
+        let mut p = CallToolRequestParams::new(tool.to_owned());
+        p = p.with_arguments(json!({"path": "a.png", "linked": true}).as_object().cloned().unwrap());
+        let refused = client.call_tool(p).await.unwrap_err().to_string();
+        assert!(refused.contains("unknown argument `linked`"), "{tool}: {refused}");
+    }
+    client.cancel().await.unwrap();
+    let seen = app.await.unwrap();
+    assert!(seen.iter().all(|req| req["method"] != "engine.execute"), "the ambient commands are never sent: {seen:?}");
+}
+
+/// Headless Replace Contents and single-layer export through MCP stay beneath the roots; an
+/// export makes a new file unless `overwrite` is true.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_replace_contents_and_export_layer_use_the_roots() {
+    let base = tmp("replace-export");
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("out")).unwrap();
+    let png = |w: u32, h: u32| {
+        let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, vec![120; (w * h * 3) as usize]).unwrap();
+        photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()
+    };
+    std::fs::write(root.join("v001.png"), png(8, 6)).unwrap();
+    std::fs::write(root.join("v002.png"), png(16, 12)).unwrap();
+    let client = connect(headless_in(&root)).await;
+    json_of(&call(&client, "doc_new", json!({"width": 40, "height": 30, "background": "transparent"})).await);
+    let layer = json_of(&call(&client, "doc_place", json!({"path": "v001.png"})).await)["layer"].clone();
+    let replaced = json_of(&call(&client, "doc_replace_contents", json!({"path": "v002.png", "layer": layer})).await);
+    assert_eq!(replaced["layer"], layer);
+    let exported = json_of(&call(&client, "doc_export_layer", json!({"path": "out/v.png", "layer": layer, "trim": false})).await);
+    assert_eq!((exported["width"].as_u64(), exported["height"].as_u64()), (Some(40), Some(30)), "{exported}");
+    let again = call(&client, "doc_export_layer", json!({"path": "out/v.png", "layer": layer})).await;
+    assert!(again.is_error == Some(true) && text(&again).contains("already exists"), "{}", text(&again));
+    let replaced = json_of(&call(&client, "doc_export_layer", json!({"path": "out/v.png", "layer": layer, "overwrite": true})).await);
+    assert_eq!(replaced["width"].as_u64(), Some(16), "{replaced}");
+    let escaped = call(&client, "doc_export_layer", json!({"path": base.join("leak.png").to_string_lossy(), "layer": layer})).await;
+    assert_eq!(escaped.is_error, Some(true), "{}", text(&escaped));
+    assert!(!base.join("leak.png").exists());
+    client.cancel().await.unwrap();
+    cleanup(&base);
 }
 
 /// `tgaBits` reaches the app's `app.save` through the bridge; a value other than 24 or 32 is
@@ -823,6 +898,9 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
                     json!({"id": id, "ok": true, "result": {"ran": req["params"]["command"], "params": req["params"]["params"], "wait": req["params"]["wait"]}})
                 }
                 "app.save" => json!({"id": id, "ok": true, "result": {"saved": req["params"]}}),
+                "app.place" => json!({"id": id, "ok": true, "result": {"placed": req["params"]}}),
+                "app.replaceContents" => json!({"id": id, "ok": true, "result": {"replaced": req["params"]}}),
+                "app.exportLayer" => json!({"id": id, "ok": true, "result": {"exported": req["params"]}}),
                 "engine.commands" => {
                     json!({"id": id, "ok": true, "result": [{"id": "file.new", "label": "New…", "enabled": true}]})
                 }

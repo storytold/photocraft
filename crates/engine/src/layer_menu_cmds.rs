@@ -828,6 +828,19 @@ fn content_options(s: &mut Session, _: &Value) -> Result<Value> {
 /// The layer rendered alone (visible, its blend mode ignored) and trimmed to its pixels, as a
 /// one-layer document — what Export As does for a layer.
 pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
+    render_alone(doc, id, true)
+}
+
+/// [`layer_document`] without the trim: the layer rendered alone on the document's own canvas, so
+/// the file lines up with the document and with every other layer exported from it. Like the
+/// trimmed form it is a fresh one-layer document holding only the rendered pixels and the
+/// document's size, mode, depth, resolution and profile, never its channels, paths, metadata or
+/// other layers.
+pub fn layer_on_canvas(doc: &Document, id: LayerId) -> Result<Document> {
+    render_alone(doc, id, false)
+}
+
+fn render_alone(doc: &Document, id: LayerId, trim: bool) -> Result<Document> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let mut alone = l.clone();
     alone.visible = true;
@@ -849,6 +862,9 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     if b.is_empty() {
         return Err(other("the layer is empty"));
     }
+    if !trim {
+        b = area;
+    }
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
     out.resolution_dpi = doc.resolution_dpi;
@@ -867,15 +883,32 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
 }
 
 fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result<Value> {
+    let (bytes, reply) = export_layer_bytes(s, p, cmd, png_only)?;
+    let path = reply.get("path").and_then(Value::as_str).unwrap_or_default();
+    write_file(path, &bytes)?;
+    Ok(reply)
+}
+
+/// The body of `layer.exportAs` (and, with `png_only`, `layer.quickExportAsPng`) up to the write:
+/// the encoded file and the command's reply. `path` only names the format and is echoed in the
+/// reply; nothing is read or written here, so automation can hand the bytes to its write root.
+pub fn export_layer_bytes(s: &Session, p: &Value, cmd: &str, png_only: bool) -> Result<(Vec<u8>, Value)> {
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let mut ldoc = layer_document(&d.doc, id)?;
     let path = p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "missing `path` (UIs ask for one)"))?;
     let lower = path.to_ascii_lowercase();
     if png_only && !lower.ends_with(".png") {
         return Err(bad(cmd, "Quick Export as PNG writes .png files"));
     }
-    let scale = num(p, "scale", 100.0).clamp(1.0, 1000.0);
+    let trim = match p.get("trim") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`trim` must be true or false"))?,
+    };
+    let scale = match p.get("scale") {
+        None | Some(Value::Null) => 100.0,
+        Some(v) => v.as_f64().filter(|k| (1.0..=1000.0).contains(k)).ok_or_else(|| bad(cmd, "`scale` must be a percentage from 1 to 1000"))? as f32,
+    };
+    let mut ldoc = if trim { layer_document(&d.doc, id)? } else { layer_on_canvas(&d.doc, id)? };
     if (scale - 100.0).abs() > 1e-3 {
         let mut tmp = Session::new();
         tmp.add_document(ldoc, None);
@@ -884,8 +917,8 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
     let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;
-    write_file(path, &out.bytes)?;
-    Ok(json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings}))
+    let reply = json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings});
+    Ok((out.bytes, reply))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -994,7 +1027,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.exportAs",
             "Export As…",
             ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100} (format from the path's extension)"##,
+            r##"{"layer":id?,"path":text,"scale":1..1000=100,"trim":bool=true} (format from the path's extension; trim false keeps the document's canvas instead of cropping to the layer's pixels)"##,
             has_layer,
             |s, p| export_layer(s, p, "layer.exportAs", false)
         ),

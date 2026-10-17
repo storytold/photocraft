@@ -4693,6 +4693,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "rmcp",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",

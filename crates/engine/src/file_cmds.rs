@@ -511,6 +511,17 @@ fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
 /// History label of an embedded place.
 pub const PLACE_EMBEDDED: &str = "Place Embedded";
 
+/// Most pixels a place may make by enlarging a file: 2²⁸ (1 GiB at 8 bits RGBA, 4 GiB at 32).
+/// A file already larger can still be placed at its own size or smaller, since those pixels
+/// already exist; a place larger than both is refused before the resized pixels are allocated.
+pub const MAX_PLACED_PIXELS: u64 = 1 << 28;
+
+/// Tests use a far lower budget, so proving a refusal never comes near allocating the real one.
+#[cfg(not(test))]
+const PLACE_BUDGET: u64 = MAX_PLACED_PIXELS;
+#[cfg(test)]
+const PLACE_BUDGET: u64 = 1 << 20;
+
 /// Place a file's bytes as a smart object layer, centred, and (with Preferences ▸ General ▸
 /// Resize Image During Place, on by default) scaled down to fit when larger than the canvas.
 /// `linked` makes it a linked smart object that refers to that path instead of embedding the bytes.
@@ -541,9 +552,27 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
         _ => (cw / 2.0, ch / 2.0),
     };
+    // Input-derived sizes are hostile (`scale` and `center` reach this from automation): refuse
+    // an absurd placed size or position before the resized pixels are allocated.
+    let side = f64::from(crate::document_preset_cmds::MAX_DIMENSION);
+    let budget = PLACE_BUDGET.max(u64::from(src.size.width).saturating_mul(u64::from(src.size.height))) as f64;
+    let (pw, ph) = ((w * scale).ceil(), (h * scale).ceil());
+    if !(pw <= side && ph <= side && pw * ph <= budget) {
+        return Err(EngineError::Other(format!(
+            "{name}: at {:.0}% it would be {pw:.0} × {ph:.0} px; a place makes at most {side:.0} px a side and {budget:.0} px",
+            scale * 100.0
+        )));
+    }
+    if !(center.0.abs() <= side && center.1.abs() <= side) {
+        return Err(EngineError::Other(format!("{name}: `center` is outside the largest canvas ({side:.0} px)")));
+    }
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     let mut px = flattened(&src, fmt);
     if (scale - 1.0).abs() > 1e-9 {
+        // The resize allocates its result tile by tile and can't fail: reserve that much first,
+        // so a machine without the memory gets an error instead of an abort.
+        let len = (pw * ph) as usize;
+        drop(crate::allocation::capacity::<u8>(len.saturating_mul(fmt.bytes_per_pixel()), "placing a file")?);
         px = resize_surface(&px, scale, scale, Resample::Bicubic);
     }
     let px = translate_surface(&px, dx as i32, dy as i32);

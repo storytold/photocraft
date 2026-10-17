@@ -468,6 +468,7 @@ psd/src/
 - **`automation`:** an MCP server built on `rmcp`. Its tool names use underscores (the dotted
   names such as `doc.open` belong to the JSON control protocol, `docs/control-protocol.md`). It exposes:
   - `session_list`, `doc_open`, `doc_new`, `doc_place` (place from the read root as a Smart Object),
+    `doc_replace_contents` (a Smart Object's contents from the read root), `doc_export_layer` (one layer beneath the write root),
     `doc_export_layers`, `doc_export_data_sets` (write beneath the write root), `doc_import_data_sets` (a CSV from the read root),
     `doc_save`, `doc_export`, `doc_inspect` (layer tree as JSON), `doc_render_preview` (PNG), `doc_select`, `doc_close`.
   - `command_list`, `command_run` and `command_batch`, generated from the registry; `jobs_list` and `jobs_cancel` for background jobs.

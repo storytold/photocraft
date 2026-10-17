@@ -73,6 +73,42 @@ pub struct PlaceParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ReplaceContentsParams {
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
+    pub path: String,
+    /// Id of the Smart Object layer (default: the active layer).
+    #[serde(default)]
+    pub layer: Option<u64>,
+    /// Document index from `session_list` (default: the active document; headless only).
+    #[serde(default)]
+    pub index: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportLayerParams {
+    /// File beneath the configured automation write root: relative (forward slashes) or absolute.
+    /// Its extension names the format.
+    pub path: String,
+    /// Id of the layer or group (default: the active layer).
+    #[serde(default)]
+    pub layer: Option<u64>,
+    /// Scale as a percentage, 1 to 1000 (default 100).
+    #[serde(default)]
+    pub scale: Option<f64>,
+    /// Crop to the layer's pixels (default true); false keeps the document's canvas.
+    #[serde(default)]
+    pub trim: Option<bool>,
+    /// Replace a file already at `path` (default false: that is an error).
+    #[serde(default)]
+    pub overwrite: Option<bool>,
+    /// Document index from `session_list` (default: the active document; headless only).
+    #[serde(default)]
+    pub index: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportLayersParams {
     /// Directory beneath the configured automation write root: relative (forward slashes) or absolute.
     pub dir: String,
@@ -617,7 +653,8 @@ impl PhotocraftMcp {
             opts.insert("center".into(), json!(v));
         }
         let opts = Value::Object(opts);
-        // Bridge mode runs the app on this machine, which reads the path itself like any command.
+        // The app refuses the ambient `file.placeEmbedded` over control, as headless does; its
+        // `app.place` reads beneath the app's own read root and places into the active document.
         let mut bridge_params = opts.clone();
         if let Some(o) = bridge_params.as_object_mut() {
             o.insert("path".into(), Value::String(p.path.clone()));
@@ -626,7 +663,68 @@ impl PhotocraftMcp {
         if let Some(r) = self.headless_op(move |h| h.place(index, &path, &opts)).await {
             return to_result(r);
         }
-        self.run_command("file.placeEmbedded".into(), bridge_params, true).await
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; the app places into its active document"));
+        }
+        to_result(b.call("app.place", bridge_params).await)
+    }
+
+    #[tool(
+        description = "Replace the contents of a Smart Object layer (default: the active layer) with a file read beneath the read root (Layer › Smart Objects › Replace Contents). The layer keeps its id, transform, filters and masks, and every instance sharing the contents updates."
+    )]
+    async fn doc_replace_contents(&self, Parameters(p): Parameters<ReplaceContentsParams>) -> Result<CallToolResult, McpError> {
+        let mut bridge_params = serde_json::Map::new();
+        bridge_params.insert("path".into(), json!(p.path));
+        if let Some(v) = p.layer {
+            bridge_params.insert("layer".into(), json!(v));
+        }
+        let (path, layer, index) = (p.path, p.layer, p.index);
+        if let Some(r) = self.headless_op(move |h| h.replace_contents(index, &path, layer)).await {
+            return to_result(r);
+        }
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; the app works on its active document"));
+        }
+        to_result(b.call("app.replaceContents", Value::Object(bridge_params)).await)
+    }
+
+    #[tool(
+        description = "Export one layer or group (default: the active layer), rendered alone, to a file beneath the write root in the format its extension names (Layer › Export As). `trim: false` keeps the document's canvas so exports line up. A file already at `path` is an error unless `overwrite` is true, and an open document's file is never written over."
+    )]
+    async fn doc_export_layer(&self, Parameters(p): Parameters<ExportLayerParams>) -> Result<CallToolResult, McpError> {
+        let mut opts = serde_json::Map::new();
+        if let Some(v) = p.layer {
+            opts.insert("layer".into(), json!(v));
+        }
+        if let Some(v) = p.scale {
+            opts.insert("scale".into(), json!(v));
+        }
+        if let Some(v) = p.trim {
+            opts.insert("trim".into(), json!(v));
+        }
+        let mut bridge_params = opts.clone();
+        bridge_params.insert("path".into(), json!(p.path));
+        if let Some(v) = p.overwrite {
+            bridge_params.insert("overwrite".into(), json!(v));
+        }
+        let opts = Value::Object(opts);
+        let (path, overwrite, index) = (p.path, p.overwrite.unwrap_or(false), p.index);
+        if let Some(r) = self.headless_op(move |h| h.export_layer(index, &path, overwrite, &opts)).await {
+            return to_result(r);
+        }
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; the app works on its active document"));
+        }
+        to_result(b.call("app.exportLayer", Value::Object(bridge_params)).await)
     }
 
     #[tool(
