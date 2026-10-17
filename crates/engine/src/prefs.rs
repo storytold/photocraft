@@ -680,7 +680,10 @@ impl TransparencyAndGamut {
 pub struct UnitsAndRulers {
     pub rulers: Unit,
     pub type_units: TypeUnit,
+    /// Column Size › Width in points: Image Size and Canvas Size's Columns width unit
+    /// (`n` columns are `n × column_width + (n − 1) × gutter`).
     pub column_width: f64,
+    /// Column Size › Gutter in points, the space between columns.
     pub gutter: f64,
     pub print_resolution: f64,
     pub screen_resolution: f64,
@@ -1032,8 +1035,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "performance.effectCacheMb",
     "performance.legacyCompositing",
     "scratchDisks.disks",
-    "unitsAndRulers.columnWidth",
-    "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "plugIns.generatorEnabled",

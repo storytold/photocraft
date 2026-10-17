@@ -13,6 +13,43 @@ use crate::theme::Tokens;
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
+/// Width-only unit: columns of Preferences › Units & Rulers › Column Size, as in Photoshop's
+/// Image Size and Canvas Size (height has no Columns).
+const COLUMNS: (&str, &str) = ("col", "Columns");
+
+/// Decimal places a Columns field shows.
+const COLUMN_DECIMALS: u32 = 3;
+
+/// Column Size in points, read from the dialog: (width, gutter). Photoshop's 180 pt / 12 pt when
+/// missing or degenerate: a width that isn't a positive finite number, or a gutter that isn't a
+/// finite number of at least zero (0 then), so the conversion never divides by zero.
+fn column_size(f: &Map<String, Value>) -> (f64, f64) {
+    let w = f.get("__colWidth").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(180.0);
+    let g = f.get("__colGutter").and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(12.0, |g| g.max(0.0));
+    (w, g)
+}
+
+/// Pixels → columns: `n` columns span `n × width + (n − 1) × gutter` points, so a width of
+/// `pt` points is `(pt + gutter) / (width + gutter)` columns. With `relative` (Canvas Size's
+/// deltas) the count applies to the magnitude and zero stays zero.
+fn px_to_columns(px: f64, res: f64, ppi: f64, (w, g): (f64, f64), relative: bool) -> f64 {
+    let pt = px / res.max(1.0) * ppi;
+    if relative {
+        if pt == 0.0 {
+            return 0.0;
+        }
+        return pt.signum() * (pt.abs() + g) / (w + g);
+    }
+    (pt + g) / (w + g)
+}
+
+/// Columns → pixels, the inverse of [`px_to_columns`].
+fn columns_to_px(n: f64, res: f64, ppi: f64, (w, g): (f64, f64), relative: bool) -> f64 {
+    let span = |n: f64| n * (w + g) - g;
+    let pt = if relative { if n == 0.0 { 0.0 } else { n.signum() * span(n.abs()).max(0.0) } } else { span(n) };
+    pt / ppi * res.max(1.0)
+}
+
 /// Dialog unit for the Units & Rulers preference.
 fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
     use photocraft_engine::prefs::Unit;
@@ -72,6 +109,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let unit = pref_unit(app.session.prefs().units_and_rulers.rulers);
     let resample = pref_resample(app.session.prefs().general.image_interpolation);
     let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    let column_width = app.session.prefs().units_and_rulers.column_width;
+    let column_gutter = app.session.prefs().units_and_rulers.gutter;
     let d = &app.session.active()?.doc;
     let (w, h, res) = (d.size.width as f64, d.size.height as f64, d.resolution_dpi as f64);
     let label = photocraft_engine::commands::find(command).map(|c| c.label).unwrap_or("Image Size…");
@@ -84,6 +123,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     f.insert("__origRes".into(), json!(res));
     f.insert("__unit".into(), json!(unit));
     f.insert("__ptPerIn".into(), json!(pt_per_in));
+    f.insert("__colWidth".into(), json!(column_width));
+    f.insert("__colGutter".into(), json!(column_gutter));
     f.insert("__bytesPerPixel".into(), json!(d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel())));
     f.insert("width".into(), json!(w));
     f.insert("height".into(), json!(h));
@@ -169,11 +210,24 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
 
 /// Width / height field in the current unit, writing back pixels. Returns true when edited.
 fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str) -> bool {
-    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
+    let unit = field_unit(f, key);
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
+    if unit == COLUMNS.0 {
+        let cols = column_size(f);
+        let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
+        let mut v = px_to_columns(px, res, ppi, cols, relative) as f32;
+        let lim = px_to_columns(300000.0, res, ppi, cols, false).max(30000.0) as f32;
+        // No typed-unit conversion: Columns aren't a unit the field parser knows.
+        let changed = crate::widgets::value_field_prec(ui, &mut v, -lim..=lim, "", 90.0, COLUMN_DECIMALS).changed();
+        if changed {
+            f.insert(key.into(), json!(columns_to_px(v as f64, res, ppi, cols, relative)));
+        }
+        let _ = id;
+        return changed;
+    }
     let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
@@ -192,12 +246,41 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     changed
 }
 
-fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str) {
-    let mut unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
-    let opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, &mut unit, &opts, 110.0) {
-        f.insert("__unit".into(), json!(unit));
+/// The unit `key`'s field shows: the dialog's shared `__unit`, except a Width set to Columns
+/// (`__unitW`), which height can't follow.
+fn field_unit(f: &Map<String, Value>, key: &str) -> String {
+    let shared = f.get("__unit").and_then(Value::as_str).unwrap_or("px");
+    if key == "width" && f.get("__unitW").and_then(Value::as_str) == Some(COLUMNS.0) {
+        return COLUMNS.0.to_string();
     }
+    if shared == COLUMNS.0 { "px".to_string() } else { shared.to_string() }
+}
+
+/// Unit menu beside the Width (`key` "width", which also offers Columns) or Height field.
+fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str) {
+    let mut unit = field_unit(f, key);
+    let mut opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+    if key == "width" {
+        opts.push((COLUMNS.0.to_string(), COLUMNS.1));
+    }
+    if crate::widgets::dropdown(ui, id, &mut unit, &opts, 110.0) {
+        set_unit(f, key, &unit);
+    }
+}
+
+/// Picks `unit` from `key`'s menu: Columns applies to Width alone; any other unit applies to both
+/// fields, and on Width it leaves Columns.
+fn set_unit(f: &mut Map<String, Value>, key: &str, unit: &str) {
+    if unit == COLUMNS.0 {
+        if key == "width" {
+            f.insert("__unitW".into(), json!(COLUMNS.0));
+        }
+        return;
+    }
+    if key == "width" {
+        f.remove("__unitW");
+    }
+    f.insert("__unit".into(), json!(unit));
 }
 
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -220,18 +303,20 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut constrain = !resampling || f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
     // With Resample off, a size in pixels or percent can't change (Photoshop disables those
     // fields); a physical size (inches, cm…) changes the resolution instead.
-    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
-    let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
+    // Width in Columns is a physical size, so it stays editable while Height (in pixels) isn't.
+    let editable = |f: &Map<String, Value>, key: &str| resampling || !matches!(field_unit(f, key).as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
+        let editable = editable(f, "width");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
-        unit_dropdown(ui, f, "is-unit-w");
+        unit_dropdown(ui, f, "width", "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
+        let editable = editable(f, "height");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
-        unit_dropdown(ui, f, "is-unit-h");
+        unit_dropdown(ui, f, "height", "is-unit-h");
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
@@ -348,12 +433,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
-        unit_dropdown(ui, f, "cs-unit-w");
+        unit_dropdown(ui, f, "width", "cs-unit-w");
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
-        unit_dropdown(ui, f, "cs-unit-h");
+        unit_dropdown(ui, f, "height", "cs-unit-h");
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
@@ -479,6 +564,107 @@ mod tests {
         }
         f.insert("__ptPerIn".into(), json!(72.27));
         assert_eq!(pt_per_in(&f), 72.27);
+    }
+
+    /// #6214: `n` columns are `n × width + (n − 1) × gutter` points. Photoshop's default Column
+    /// Size (180 pt, 12 pt gutter) at 300 ppi: 1 column is 2.5 in (750 px), 2 are 372 pt
+    /// (1550 px), 3 are 564 pt (2350 px).
+    #[test]
+    fn columns_convert_both_ways() {
+        let cols = (180.0, 12.0);
+        for (n, px) in [(1.0, 750.0), (2.0, 1550.0), (3.0, 2350.0), (0.5, 350.0)] {
+            assert!((columns_to_px(n, 300.0, 72.0, cols, false) - px).abs() < 1e-9, "{n} columns");
+            assert!((px_to_columns(px, 300.0, 72.0, cols, false) - n).abs() < 1e-9, "{px} px");
+        }
+        // Traditional points (72.27 pt/in) and other resolutions round-trip too.
+        for (ppi, res, cols) in [(72.27, 72.0, (100.0, 0.0)), (72.0, 150.0, (240.0, 18.0)), (72.0, 1.0, (1.0, 10_000.0))] {
+            for n in [1.0, 2.0, 4.0, 12.0, 0.25] {
+                // A relative delta under one column can be shorter than the gutter: it's zero.
+                for relative in [false, true].into_iter().filter(|r| !*r || n >= 1.0) {
+                    let px = columns_to_px(n, res, ppi, cols, relative);
+                    assert!((px_to_columns(px, res, ppi, cols, relative) - n).abs() < 1e-9, "{n} at {res} ppi, {cols:?}, relative {relative}");
+                }
+            }
+        }
+        // Canvas Size's relative deltas: zero stays zero, and shrinking mirrors growing.
+        assert_eq!(columns_to_px(0.0, 300.0, 72.0, cols, true), 0.0);
+        assert_eq!(px_to_columns(0.0, 300.0, 72.0, cols, true), 0.0);
+        assert_eq!(columns_to_px(-2.0, 300.0, 72.0, cols, true), -1550.0);
+    }
+
+    /// #6214: a zero, negative, NaN or missing Column Size falls back instead of dividing by zero.
+    #[test]
+    fn degenerate_column_size_does_not_panic() {
+        let mut f = Map::new();
+        assert_eq!(column_size(&f), (180.0, 12.0));
+        for (w, g, want) in [
+            (json!(0.0), json!(0.0), (180.0, 0.0)),
+            (json!(-5.0), json!(-3.0), (180.0, 0.0)),
+            (json!(f64::NAN), json!(f64::INFINITY), (180.0, 12.0)),
+            (json!("x"), json!(null), (180.0, 12.0)),
+            (json!(90.0), json!(6.0), (90.0, 6.0)),
+        ] {
+            f.insert("__colWidth".into(), w);
+            f.insert("__colGutter".into(), g);
+            let cols = column_size(&f);
+            assert_eq!(cols, want);
+            for px in [0.0, 1.0, 750.0, -10.0, 1e12] {
+                assert!(px_to_columns(px, 300.0, 72.0, cols, false).is_finite());
+                assert!(px_to_columns(px, 0.0, 72.0, cols, true).is_finite());
+            }
+        }
+    }
+
+    /// #6214: the dialogs read Column Size from the preferences; Columns is a Width-only unit and
+    /// picking another unit on Width leaves it.
+    #[test]
+    fn columns_unit_is_width_only_and_follows_the_preference() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.session.execute("prefs.set", json!({"path": "unitsAndRulers.columnWidth", "value": 0})).unwrap();
+        app.session.execute("prefs.set", json!({"path": "unitsAndRulers.gutter", "value": 6})).unwrap();
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let id = open(&mut app, command).unwrap();
+            let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+            assert_eq!((f.get("__colWidth"), f.get("__colGutter")), (Some(&json!(0.0)), Some(&json!(6.0))), "{command}");
+            assert_eq!(column_size(f), (180.0, 6.0), "{command}: a zero width falls back");
+            f.insert("__unit".into(), json!("in"));
+            set_unit(f, "width", "col");
+            assert_eq!((field_unit(f, "width"), field_unit(f, "height")), ("col".to_string(), "in".to_string()), "{command}");
+            set_unit(f, "height", "col");
+            assert_eq!(field_unit(f, "height"), "in", "{command}: Height has no Columns");
+            set_unit(f, "height", "mm");
+            assert_eq!((field_unit(f, "width"), field_unit(f, "height")), ("col".to_string(), "mm".to_string()), "{command}");
+            set_unit(f, "width", "pt");
+            assert_eq!((field_unit(f, "width"), field_unit(f, "height")), ("pt".to_string(), "pt".to_string()), "{command}");
+            // A stray shared `col` (automation) shows Height in pixels rather than as columns.
+            f.insert("__unit".into(), json!("col"));
+            assert_eq!(field_unit(f, "height"), "px", "{command}");
+            app.ui.close_dialog(id);
+        }
+    }
+
+    /// #6214: 2 columns typed into Image Size's Width at 300 ppi resize to 1550 px wide (the
+    /// default 180 pt columns with 12 pt gutters), Height following the proportions; Canvas Size
+    /// takes the same width.
+    #[test]
+    fn typed_columns_resize_the_document() {
+        use egui_kittest::Harness;
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 1000, "height": 500, "resolution": 300})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let id = open(h.state_mut(), command).unwrap();
+            set_unit(&mut h.state_mut().ui.dialog_mut(id).unwrap().fields, "width", "col");
+            h.run_steps(3);
+            type_width(&mut h, "2");
+            let f = fields(&h);
+            assert!((num(&f, "width") - 1550.0).abs() < 1e-6, "{command}: {f:?}");
+            crate::dialogs::confirm(h.state_mut(), id).unwrap();
+            let want = if command == "image.imageSize" { photocraft_doc::Size::new(1550, 775) } else { photocraft_doc::Size::new(1550, 500) };
+            assert_eq!(h.state().session.active().unwrap().doc.size, want, "{command}");
+        }
     }
 
     #[test]
