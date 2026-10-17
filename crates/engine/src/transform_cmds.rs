@@ -381,12 +381,11 @@ fn apply_transform(
                 apply_transform(None, locks, c, h, affine, interp, ctl)?;
             }
         }
-        LayerContent::Text(t) => {
-            let Some(a) = affine else {
-                return Err(EngineError::Other("Distort and Perspective need rasterized type (Type › Rasterize Type Layer)".into()));
-            };
-            t.transform = a.mul(&t.transform);
-        }
+        LayerContent::Text(t) => match affine {
+            Some(a) => t.transform = a.mul(&t.transform),
+            // Distort / Perspective stay on the live type ("Better Than PS", type_distort.rs).
+            None => crate::type_distort::push_projective(t, h)?,
+        },
         LayerContent::Shape(sh) => match affine {
             Some(a) => crate::vector_cmds::transform_shape(sh, &a),
             // Distort and Perspective map the path and keep the shape (#3009).
@@ -938,8 +937,10 @@ mod tests {
         let st = s.active().unwrap();
         let LayerContent::Text(t) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!() };
         assert!((t.transform.m[0] - 2.0).abs() < 1e-9);
-        // Perspective on type is refused, like Photoshop.
-        assert!(s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).is_err());
+        // Perspective stays on the live type (Photoshop would rasterize it; type_distort.rs).
+        s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).unwrap();
+        let st = s.active().unwrap();
+        assert!(matches!(&st.doc.layer(LayerId(id)).unwrap().content, LayerContent::Text(t) if t.distortions.len() == 1));
     }
 
     #[test]

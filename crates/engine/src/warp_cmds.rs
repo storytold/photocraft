@@ -294,29 +294,15 @@ fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
     Ok((id, rect))
 }
 
-/// The Warp Text settings a transform warp gives a type layer: a preset style (or none) keeps the
-/// type editable, as Photoshop's Edit › Transform › Warp on type does (#3004).
-fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWarp>> {
-    let clamp = |v: f64| if v.is_finite() { v.clamp(-100.0, 100.0) as f32 } else { 0.0 };
-    match w.style {
-        WarpStyle::None => Ok(None),
-        WarpStyle::Custom if w.is_identity() => Ok(None),
-        WarpStyle::Custom => Err(bad(cmd, "type can only take a warp style (arc, flag, …); a custom mesh needs rasterized type")),
-        s => Ok(Some(photocraft_doc::text::TextWarp {
-            style: s.psd_name().into(),
-            value: clamp(w.bend),
-            horizontal_distortion: clamp(w.h_distort),
-            vertical_distortion: clamp(w.v_distort),
-            horizontal: !w.vertical,
-        })),
-    }
-}
-
-/// Warp on a type layer sets its Warp Text style: one history step, and the type stays editable.
-fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<Value> {
-    let tw = type_warp(cmd, w)?;
-    let unchanged = s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if t.warp == tw));
-    if unchanged {
+/// Warp on a type layer keeps it editable: a style (or none) is its Warp Text, as in Photoshop
+/// (#3004); a custom mesh is kept on the type as a free warp ("Better Than PS",
+/// [`crate::type_distort`]). One history step.
+fn warp_type_layer(s: &mut Session, id: LayerId, w: &Warp) -> Result<Value> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let Some(LayerContent::Text(t)) = st.doc.layer(id).map(|l| &l.content) else { return Err(EngineError::Other("not a type layer".into())) };
+    let mut next = t.clone();
+    next.cache = None;
+    if !crate::type_distort::set_warp(&mut next, w)? {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
     s.edit("Warp", |doc, _| {
@@ -328,18 +314,19 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         let LayerContent::Text(t) = &mut l.content else { return Err(EngineError::Other("not a type layer".into())) };
-        t.warp = tw.clone();
+        t.warp = next.warp;
+        t.distortions = next.distortions;
         crate::type_cmds::refresh(&snapshot, t);
         Ok(())
     })?;
-    Ok(json!({"layer": id.0, "changed": true, "warp": tw}))
+    Ok(json!({"layer": id.0, "changed": true}))
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;
     if matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Text(_))) {
-        return warp_type_layer(s, cmd, id, &w);
+        return warp_type_layer(s, id, &w);
     }
     let is_smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if w.is_identity() && !is_smart {
@@ -546,7 +533,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer the type stays editable: with no free transform yet a style (or none) is its Warp Text and a custom mesh replaces it; else the warp replaces its last free warp (none removes it) or goes on top of a Distort"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![
@@ -651,8 +638,7 @@ mod tests {
         st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
     }
 
-    /// Warp on type sets its Warp Text (#3004): the layer stays type, one step; a custom mesh is
-    /// refused rather than rasterizing.
+    /// Warp on type sets its Warp Text (#3004): the layer stays type, one step.
     #[test]
     fn warp_style_on_type_is_warp_text() {
         let mut s = Session::new();
@@ -664,8 +650,76 @@ mod tests {
         let LayerContent::Text(t) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("type") };
         assert_eq!(t.warp.as_ref().map(|w| (w.style.as_str(), w.value)), Some(("warpArc", 30.0)));
         assert_eq!(st.history.past_len(), n + 1);
-        let mesh = BezierMesh::identity([0.0, 0.0, 10.0, 10.0], 1, 1).map_points(|p| [p[0] * 2.0, p[1]]);
-        assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, [0.0, 0.0, 10.0, 10.0])})).is_err());
+    }
+
+    fn text_of(s: &Session) -> photocraft_doc::TextLayer {
+        let st = s.active().unwrap();
+        match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            LayerContent::Text(t) => t.clone(),
+            other => panic!("not type: {}", other.kind_name()),
+        }
+    }
+
+    /// Equal up to float noise (numbers can pass through JSON on the way).
+    fn same(a: &[photocraft_doc::text::TypeDistortion], b: &[photocraft_doc::text::TypeDistortion]) -> bool {
+        let flat = |d: &[photocraft_doc::text::TypeDistortion]| -> Vec<f64> {
+            let mut v = Vec::new();
+            fn walk(x: &serde_json::Value, v: &mut Vec<f64>) {
+                match x {
+                    Value::Number(n) => v.push(n.as_f64().unwrap()),
+                    Value::Array(a) => a.iter().for_each(|x| walk(x, v)),
+                    Value::Object(o) => o.values().for_each(|x| walk(x, v)),
+                    _ => {}
+                }
+            }
+            walk(&serde_json::to_value(d).unwrap(), &mut v);
+            v
+        };
+        let (x, y) = (flat(a), flat(b));
+        a.len() == b.len() && x.len() == y.len() && x.iter().zip(&y).all(|(p, q)| (p - q).abs() < 1e-6)
+    }
+
+    /// "Better Than PS": a free mesh warp and a Distort stay on the live type (one step each),
+    /// survive a .pcraft round trip, and editing the text re-renders under them.
+    #[test]
+    fn free_warp_and_distort_keep_type_editable() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 300, "height": 160})).unwrap();
+        s.execute("type.create", json!({"x": 20, "y": 90, "text": "Warp", "size": 48})).unwrap();
+        let plain = text_of(&s).cache.unwrap().content_bounds();
+        let r = [f64::from(plain.x0), f64::from(plain.y0), f64::from(plain.x1), f64::from(plain.y1)];
+        // Drag the bottom-right corner 30 px down.
+        let mut mesh = BezierMesh::identity(r, 1, 1);
+        if let Some(p) = mesh.points.last_mut() {
+            p[1] += 30.0;
+        }
+        let n = s.active().unwrap().history.past_len();
+        s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, r)})).unwrap();
+        let t = text_of(&s);
+        assert_eq!(t.distortions.len(), 1);
+        let warped = t.cache.as_ref().unwrap().content_bounds();
+        assert!(warped.y1 > plain.y1 + 15, "{warped:?} vs {plain:?}");
+        assert_eq!(s.active().unwrap().history.past_len(), n + 1);
+        // Distort: the top-right corner pulled up.
+        s.execute("edit.transform", json!({"rect": r, "quad": [[r[0], r[1]], [r[2], r[1] - 20.0], [r[2], r[3]], [r[0], r[3]]]})).unwrap();
+        let t = text_of(&s);
+        assert_eq!(t.distortions.len(), 2);
+        assert_eq!(s.active().unwrap().history.past_len(), n + 2);
+        // Editing the text keeps both, and the longer text re-renders under them.
+        s.execute("type.edit", json!({"text": "Warped"})).unwrap();
+        let edited = text_of(&s);
+        assert_eq!(edited.text, "Warped");
+        assert!(same(&edited.distortions, &t.distortions));
+        assert!(edited.cache.as_ref().unwrap().content_bounds().x1 > t.cache.as_ref().unwrap().content_bounds().x1);
+        // .pcraft round trip.
+        let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+        let back = photocraft_format::load_from_bytes(&bytes).unwrap();
+        let LayerContent::Text(bt) = &back.layers.iter().find(|l| matches!(l.content, LayerContent::Text(_))).unwrap().content else { panic!("type") };
+        assert!(same(&bt.distortions, &edited.distortions));
+        // Bad meshes are errors, not panics.
+        let mut bad = BezierMesh::identity(r, 1, 1);
+        bad.points.truncate(3);
+        assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(bad, r)})).is_err());
     }
 
     #[test]

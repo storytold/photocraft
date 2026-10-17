@@ -64,6 +64,7 @@ pub mod svg;
 mod text_import;
 pub mod text_styles_map;
 pub mod tiff_layers;
+mod type_smart;
 pub mod vector_map;
 
 pub use photocraft_codecs::DpxBits;

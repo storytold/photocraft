@@ -409,6 +409,10 @@ pub struct TextLayer {
     pub antialias: text::AntiAlias,
     /// Warp Text settings (applied to the glyph outlines when rendering).
     pub warp: Option<text::TextWarp>,
+    /// Free Warp, Distort and Perspective kept on the live type, in order, after `warp`
+    /// ([`text::TypeDistortion`]). Photoshop can't store these on type; PSD export writes such a
+    /// layer as a Smart Object holding the type.
+    pub distortions: Vec<text::TypeDistortion>,
 }
 
 impl Default for TextLayer {
@@ -427,6 +431,7 @@ impl Default for TextLayer {
             orientation: text::Orientation::Horizontal,
             antialias: text::AntiAlias::Smooth,
             warp: None,
+            distortions: Vec::new(),
         }
     }
 }

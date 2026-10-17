@@ -283,6 +283,9 @@ pub enum ContentM {
         antialias: text::AntiAlias,
         #[serde(default)]
         warp: Option<text::TextWarp>,
+        /// Free Warp / Distort / Perspective on the live type ("Better Than PS").
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        distortions: Vec<text::TypeDistortion>,
     },
     Shape {
         fill: Option<Fill>,

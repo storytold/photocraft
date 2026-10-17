@@ -2028,6 +2028,14 @@ fn type_on_a_path_follows_the_curve() {
     let mut dot = straight.clone();
     dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, flip: false };
     assert_eq!(ink(&mut eng, &dot), flat);
+
+    // A free Distort on path text still bends the glyphs the path placed (here: half height).
+    use photocraft_doc::text::{TypeDistortion, TypeDistortionKind};
+    let mut squashed = down.clone();
+    let h = [1.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0];
+    squashed.distortions = vec![TypeDistortion { frame: photocraft_geom::Affine::IDENTITY, kind: TypeDistortionKind::Projective(h) }];
+    let s = ink(&mut eng, &squashed);
+    assert!(s.height() < r.height() * 2 / 3, "the distortion applies on the path: {s:?} vs {r:?}");
 }
 
 #[test]

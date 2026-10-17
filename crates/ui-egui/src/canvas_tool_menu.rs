@@ -1179,13 +1179,14 @@ mod tests {
                 Some("Flip Vertical"),
             ]
         );
-        // Over a box on editable type, Distort and Perspective are greyed (#2630).
+        // Over a box on editable type, Distort and Perspective stay available: they keep the type
+        // live (#3321).
         let mut app = app();
         app.run("type.create", json!({"x": 2, "y": 20, "text": "Hi", "size": 16})).unwrap();
         crate::transform_tool::begin(&mut app, &Context::default()).unwrap();
         assert!(open_transform(&mut app, &Context::default(), [10.0, 10.0]));
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
-        for (id, on) in [("edit.transform.skew", true), ("edit.transform.distort", false), ("edit.transform.perspective", false)] {
+        for (id, on) in [("edit.transform.skew", true), ("edit.transform.distort", true), ("edit.transform.perspective", true)] {
             assert_eq!(entry_enabled(&app, &menu, id), on, "{id}");
         }
     }

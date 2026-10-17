@@ -885,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn skew_control_corner_on_editable_type_slides_the_whole_edge() {
+    fn skew_control_corner_on_editable_type_slides_one_corner_like_pixels() {
         let ctrl = egui::Modifiers { command: true, ctrl: true, ..egui::Modifiers::NONE };
         for legacy in [false, true] {
             let mut app = app_with_box();
@@ -897,13 +897,13 @@ mod tests {
             let doc = app.session.active().unwrap().doc.clone();
             let past = app.session.active().unwrap().history.past_len();
             move_corner(&mut app, 1, [2.0, 1.0], end, egui::Modifiers::NONE, ctrl);
+            // Type is distorted freely (#3342), so Skew moves the lone corner along its edge.
             let mut expected = before;
-            expected[0][0] += 18.0;
             expected[1][0] += 18.0;
-            assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "type remains affine, legacy {legacy}");
+            assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "legacy {legacy}");
             assert!(app.prefs_rt.snap.as_ref().unwrap().disabled && app.prefs_rt.snap_lines.is_empty());
             crate::canvas::tool_event(&mut app, ToolEvent::Up { x: end[0] + 2.0, y: end[1] + 1.0 }, ctrl);
-            assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "release preserves the type's edge");
+            assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "release preserves the corner");
             crate::transform_tool::cancel(&mut app);
             assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
             assert_eq!(app.session.active().unwrap().history.past_len(), past);
@@ -932,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn editable_type_refusal_keeps_control_snap_override() {
+    fn editable_type_distort_snaps_its_corner_like_pixels() {
         let mut app = app_with_box();
         app.run("type.create", json!({"x": 40, "y": 60, "text": "Hello"})).unwrap();
         crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
@@ -941,10 +941,11 @@ mod tests {
         app.run("view.newGuide", json!({"orientation": "horizontal", "position": corner[1] - 10.0})).unwrap();
         let ctrl = egui::Modifiers { command: true, ctrl: true, ..egui::Modifiers::NONE };
         move_corner(&mut app, 1, [0.0, 0.0], [corner[0] + 18.0, corner[1] - 8.0], ctrl, ctrl);
-        assert!(app.prefs_rt.snap.as_ref().unwrap().disabled);
-        assert!(app.prefs_rt.snap_lines.is_empty());
+        // Type is distorted freely (#3342), so the ⌘-dragged corner snaps as on pixels.
+        assert!(!app.prefs_rt.snap.as_ref().unwrap().disabled);
         let q = app.ui.transform.as_ref().unwrap().quad;
-        assert_eq!(q[0][1], q[1][1], "editable type still scales, rather than distorting");
+        assert_eq!(q[1], [corner[0] + 20.0, corner[1] - 10.0], "the corner lands on the guides");
+        assert_ne!(q[0][1], q[1][1], "editable type distorts, rather than scaling");
     }
 
     #[test]

@@ -694,7 +694,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// The open transform moves an editable type layer as a whole (not a lone mask, channel, path or
-/// the selection). Its Warp is Warp Text: only the styles, and the type stays editable (#3004).
+/// the selection). Warping it keeps the type editable (#3004, `type_distort.rs`).
 pub fn warps_type(app: &PhotocraftApp) -> bool {
     let Some(t) = &app.ui.transform else { return false };
     if t.selection || t.target.is_some() || t.path.is_some() {
@@ -703,10 +703,14 @@ pub fn warps_type(app: &PhotocraftApp) -> bool {
     app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
 }
 
-/// Warp on editable type, as in Photoshop: no rasterizing, no mesh to drag, just the warp styles
-/// of the options bar (Warp Text's). A box scaled or rotated first is applied first (that keeps
-/// type editable). The preview shows the type without its current Warp Text, under that style.
+/// Warp on editable type: no rasterizing. As in Photoshop the options bar's warp styles are the
+/// type's Warp Text; beyond Photoshop the mesh can be dragged and split too, and the result stays
+/// on the live type as a free warp (`type_distort::set_warp`). It starts from what it will
+/// replace (the Warp Text style, or the type's last free warp) over the type without it, so the
+/// preview doesn't bend twice. A box scaled or rotated first is applied first (that keeps type
+/// editable).
 fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    use photocraft_engine::type_distort::{WarpTarget, warp_target, without_warp_target};
     if app.ui.transform.as_ref().is_some_and(|t| t.quad != corners(t.rect)) {
         commit(app);
         if app.ui.transform.is_some() {
@@ -721,33 +725,43 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (id, session) = (LayerId(t.layer), t.session);
     let doc = st.doc.clone();
     let Some(LayerContent::Text(text)) = doc.layer(id).map(|l| &l.content) else { return };
-    let current = text.warp.clone();
+    let target = warp_target(text);
     let mut plain = (*doc).clone();
     if let Some(LayerContent::Text(tt)) = plain.layer_mut(id).map(|l| &mut l.content)
-        && current.is_some()
+        && target != WarpTarget::Append
     {
-        tt.warp = None;
+        *tt = without_warp_target(text);
         photocraft_engine::type_cmds::refresh(&doc, tt);
     }
     let Some(b) = plain.layer(id).map(|l| photocraft_engine::transform_cmds::transform_bounds(&plain, l)).filter(|b| !b.is_empty()) else { return };
-    let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
-    if current.is_some()
-        && let Some(pv) = app.transform_preview.as_mut()
-    {
+    let (rect, warp) = match target {
+        WarpTarget::Style => {
+            let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+            let current = text.warp.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s)));
+            let warp = current.map_or(Warp::none(rect), |(w, style)| Warp {
+                style,
+                bend: f64::from(w.value),
+                h_distort: f64::from(w.horizontal_distortion),
+                v_distort: f64::from(w.vertical_distortion),
+                vertical: !w.horizontal,
+                ..Warp::none(rect)
+            });
+            (rect, warp)
+        }
+        WarpTarget::Last(w) => (w.bounds, w),
+        WarpTarget::Append => {
+            let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+            (rect, Warp::custom(BezierMesh::identity(rect, 1, 1), rect))
+        }
+    };
+    let changed = plain.layer(id).map(|l| &l.content) != doc.layer(id).map(|l| &l.content) || t.rect != rect;
+    if changed && let Some(pv) = app.transform_preview.as_mut() {
         let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
+        let r = photocraft_geom::Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
         // Read as the session's texels were: without the style when the box draws it itself.
-        let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
+        let (image, uv) = preview_image(&plain, id, None, r, max_side, pv.styled.is_some());
         pv.texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     }
-    let warp =
-        current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(Warp::none(rect), |(w, style)| Warp {
-            style,
-            bend: f64::from(w.value),
-            h_distort: f64::from(w.horizontal_distortion),
-            v_distort: f64::from(w.vertical_distortion),
-            vertical: !w.horizontal,
-            ..Warp::none(rect)
-        });
     if let Some(t) = app.ui.transform.as_mut() {
         t.rect = rect;
         t.quad = corners(rect);
@@ -1247,18 +1261,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
-        // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
-        "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) => Some(false),
         _ => None,
     }
-}
-
-/// Does the box move an editable type layer (not its selection outline, a lone mask or a path)?
-fn moves_type(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    !t.selection
-        && t.target.is_none()
-        && t.path.is_none()
-        && app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
 }
 
 /// Edit › Transform's Rotate and Flip presets while a box is open: what they do to the box, as
@@ -1421,7 +1425,6 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 commit(app);
                 return true;
             }
-            let type_layer = moves_type(app, &t);
             let adjusted = g.map(|g| drag_mods(app, &t, g.hit, mods));
             if let (Some(g), Some((mode, mods)), Some(s)) = (g, adjusted, app.ui.transform.as_mut())
                 && mode_allows(t.mode, g.hit)
@@ -1433,7 +1436,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     mods.command = false;
                     apply_drag(s, g, [x, y], mods);
                 } else {
-                    apply_mode_drag(s, g, [x, y], mode, type_layer, mods);
+                    // Type is distorted freely too, so Skew moves a lone corner as on pixels.
+                    apply_mode_drag(s, g, [x, y], mode, false, mods);
                 }
                 round_to_pixel_grid(app);
             }
@@ -1478,9 +1482,9 @@ fn upright(q: &[[f64; 2]; 4]) -> bool {
 }
 
 /// The same effective modifiers drive the geometry and decide whether Ctrl is a distortion
-/// gesture rather than the ordinary snap override. Keep type and Content-Aware Scale refusals.
+/// gesture rather than the ordinary snap override. Editable type distorts like pixels (#3342).
 fn drag_mods(app: &PhotocraftApp, t: &TransformSession, hit: Hit, mods: egui::Modifiers) -> (TransformMode, egui::Modifiers) {
-    let (mode, mods) = if distort_refused(app, t) { scale_not_distort(t.mode, hit, mods) } else { (t.mode, mods) };
+    let mode = t.mode;
     let legacy = app.session.prefs().general.use_legacy_free_transform;
     (mode, legacy_mods(legacy, hit, unlinked_mods(app.ui.transform_unlinked, legacy, hit, mods)))
 }
@@ -1495,27 +1499,6 @@ pub(crate) fn corner_distorts(app: &PhotocraftApp, index: usize, mods: egui::Mod
     let (mode, mods) = drag_mods(app, t, Hit::Corner(index), mods);
     let mods = mode_mods(mode, Hit::Corner(index), mods);
     mods.command && !(mods.alt && mods.shift)
-}
-
-/// Editable type can be scaled, rotated and skewed but not distorted (#2630): the rule that greys
-/// Distort and Perspective in `enable_rules::disabled`, for the box's own layer. A box on a path,
-/// on the selection outline or on a lone mask or channel moves no type.
-fn distort_refused(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    t.path.is_none()
-        && !t.selection
-        && t.target.is_none()
-        && app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
-}
-
-/// Where Distort and Perspective are refused ([`distort_refused`]), ⌘-drag and ⌘⌥⇧-drag of a
-/// corner scale like a plain corner drag (with ⌥ and ⇧ keeping their meaning), so the box never
-/// takes a shape the commit would refuse (#3010).
-fn scale_not_distort(mode: TransformMode, hit: Hit, mut mods: egui::Modifiers) -> (TransformMode, egui::Modifiers) {
-    if matches!(hit, Hit::Corner(_)) {
-        mods.command = false;
-    }
-    let mode = if matches!(mode, TransformMode::Distort | TransformMode::Perspective) { TransformMode::Free } else { mode };
-    (mode, mods)
 }
 
 /// Preferences › General › Use Legacy Free Transform, Photoshop's scaling before CC 2019: corner
@@ -1937,10 +1920,6 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
 /// Preset warps turn into a custom mesh when the press grabs something. An armed split tool, or
 /// Ctrl / Option held, places a split where the pointer is released instead.
 fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
-    // Type takes only the warp styles: nothing on the canvas to drag or split (#3004).
-    if warps_type(app) {
-        return;
-    }
     if split_gesture(app, ev, mods) {
         return;
     }
@@ -1975,9 +1954,6 @@ fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Mo
 /// Runs a warp-edit command against the mesh in the open Warp session and writes the mesh back.
 pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Result<(), String> {
     let Some(w) = app.ui.transform.as_ref().and_then(|t| t.warp.clone()) else { return Err("not warping".into()) };
-    if warps_type(app) {
-        return Err("Warp on type takes only the warp styles".into());
-    }
     let mut p = if params.is_object() { params.clone() } else { json!({}) };
     if p.get("warp").is_none() {
         p["warp"] = serde_json::to_value(&w).map_err(|e| e.to_string())?;
@@ -2063,9 +2039,6 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], quick_split: boo
     let t = app.ui.transform.as_ref()?;
     let tol = handle_tolerance(app);
     if let Some(w) = &t.warp {
-        if warps_type(app) {
-            return Some(CursorIcon::Default);
-        }
         let armed = app.transform_preview.as_ref().and_then(|pv| pv.split_tool);
         if armed.is_some() || quick_split {
             // One search for the grid position under the pointer, for both the kind and the arrow.
@@ -2179,7 +2152,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
         let at = pv.split_pointer.or(over_canvas);
         let alt = painter.ctx().input(|i| i.modifiers.alt || i.modifiers.command);
-        let guide = at.filter(|_| !warps_type(app)).and_then(|p| {
+        let guide = at.and_then(|p| {
             let tool = pv.split_tool.or_else(|| {
                 (alt || pv.split_quick).then(|| {
                     let m = w.to_mesh(1, 1);
@@ -2875,14 +2848,14 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
-    // Type takes only the styles (#3004): Split and Grid are greyed, and there is no Custom.
+    // A type layer's style with no free warp yet is its Warp Text: None takes it off.
     let on_type = warps_type(app);
     // Split, Grid, then the warp style with its bend fields.
-    ui.add_enabled_ui(!on_type, |ui| warp_mesh_fields(app, ui, w));
+    warp_mesh_fields(app, ui, w);
     crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
     let mut style = w.style;
-    let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().filter(|s| !(on_type && *s == WarpStyle::Custom)).map(|s| (s, s.label())).collect();
+    let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().map(|s| (s, s.label())).collect();
     if crate::widgets::dropdown(ui, "warp-style", &mut style, &opts, 120.0)
         && let Some(t) = app.ui.transform.as_mut()
     {
@@ -5294,50 +5267,53 @@ mod tests {
         assert!(crate::vector_ui::free_transform_path(&app).is_none());
     }
 
-    /// Edit › Transform › Warp on editable type (#3004), as in Photoshop: no rasterize prompt, no
-    /// mesh to drag, only the warp styles; the commit is the type's own Warp Text, one step, and
-    /// the layer stays type.
+    /// Edit › Transform › Warp on editable type: no prompt (#3004). The style is its Warp Text as
+    /// in Photoshop; beyond Photoshop a free mesh drag also commits on the live type, one step,
+    /// and the layer stays type.
     #[test]
-    fn warp_on_type_takes_a_style_and_keeps_the_type_editable() {
+    fn warp_on_type_takes_a_style_or_a_free_drag_and_keeps_the_type_editable() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
         app.sync_views();
-        app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello"})).unwrap();
+        app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello", "size": 30})).unwrap();
         let ctx = egui::Context::default();
         let past = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+        let text = |app: &PhotocraftApp| {
+            let st = app.session.active().unwrap();
+            match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+                LayerContent::Text(t) => t.clone(),
+                _ => panic!("still type"),
+            }
+        };
         let before = past(&app);
         crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
         assert!(app.ui.dialogs.is_empty(), "no prompt");
         let w0 = app.ui.transform.as_ref().and_then(|t| t.warp.clone()).expect("Warp mode");
         assert_eq!(w0.style, WarpStyle::None);
-        // A drag on the grid changes nothing: type takes only the styles.
-        let c = [(w0.bounds[0] + w0.bounds[2]) / 2.0, (w0.bounds[1] + w0.bounds[3]) / 2.0];
-        warp_pointer(&mut app, ToolEvent::Down { x: w0.bounds[2], y: w0.bounds[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Up { x: w0.bounds[2] + 20.0, y: w0.bounds[3] + 15.0 }, 4.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Down { x: c[0], y: c[1], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Up { x: c[0], y: c[1] + 20.0 }, 4.0, egui::Modifiers::NONE);
-        assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&w0));
-        assert!(split(&mut app, "edit.transform.splitWarpCrosswise", None).is_err());
-        // Pick Flag in the options bar, then Enter.
+        // Pick Flag in the options bar, then Enter: the Warp Text.
         if let Some(w) = app.ui.transform.as_mut().and_then(|t| t.warp.as_mut()) {
             *w = Warp { style: WarpStyle::Flag, bend: 40.0, ..Warp::none(w.bounds) };
         }
         commit(&mut app);
         assert!(!app.ui.status_error, "{}", app.ui.status);
-        let st = app.session.active().unwrap();
-        let LayerContent::Text(t) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still type") };
-        let tw = t.warp.as_ref().expect("Warp Text set");
-        assert_eq!((tw.style.as_str(), tw.value, tw.horizontal), ("warpFlag", 40.0, true));
+        let tw = text(&app).warp.expect("Warp Text set");
+        assert_eq!((tw.style.as_str(), tw.value), ("warpFlag", 40.0));
         assert_eq!(past(&app), before + 1, "one history step");
-        // Warp again shows Flag; None takes it off in one more step.
+        // Warp again: a drag on the bottom-right corner, then Enter, keeps the type live.
         begin_warp(&mut app, &ctx).unwrap();
-        assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Flag);
-        if let Some(t) = app.ui.transform.as_mut() {
-            t.warp = Some(Warp::none(t.rect));
-        }
+        let w1 = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
+        assert_eq!(w1.style, WarpStyle::Flag);
+        let b = w1.bounds;
+        warp_pointer(&mut app, ToolEvent::Down { x: b[2], y: b[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: b[2] + 20.0, y: b[3] + 25.0 }, 4.0, egui::Modifiers::NONE);
+        assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Custom);
+        let h0 = text(&app).cache.unwrap().content_bounds();
         commit(&mut app);
-        let st = app.session.active().unwrap();
-        assert!(matches!(&st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
-        assert_eq!(past(&app), before + 2);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let t = text(&app);
+        assert_eq!(t.distortions.len(), 1, "a free warp on the live type");
+        assert!(t.warp.is_none(), "it replaces the Warp Text it started from");
+        assert!(t.cache.unwrap().content_bounds().y1 > h0.y1 + 10);
+        assert_eq!(past(&app), before + 2, "one more step");
     }
 }

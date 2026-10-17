@@ -6,9 +6,10 @@
 //! formulas), the identity at `bend = 0` and continuous in `bend`. The mapping is evaluated per
 //! point; the renderer subdivides long segments so straight edges bend.
 
-use photocraft_doc::text::{TextShape, TextWarp};
+use photocraft_doc::text::{TextShape, TextWarp, TypeDistortion, TypeDistortionKind};
 use photocraft_doc::vector::Subpath;
 use photocraft_geom::warp::{StyleWarp, WarpStyle};
+use photocraft_geom::{Affine, Point};
 
 /// Warp styles in Photoshop's menu order: (PSD `warpStyle` value, short id used by commands).
 pub const STYLES: [(&str, &str); 15] = [
@@ -60,9 +61,13 @@ pub enum Placement {
 
 /// A warp prepared for one layout: the shared style math of
 /// [`photocraft_geom::warp::StyleWarp`] (also used by Edit › Transform › Warp) over the text box,
-/// or a path the type runs along.
+/// or a path the type runs along; then the layer's free transforms ([`TypeDistortion`]: custom
+/// mesh, Distort, Perspective).
 #[derive(Clone, Debug)]
-pub struct Warp(Kind);
+pub struct Warp {
+    base: Option<Kind>,
+    ops: Vec<Op>,
+}
 
 #[derive(Clone, Debug)]
 enum Kind {
@@ -70,42 +75,90 @@ enum Kind {
     Path(PathFrame),
 }
 
+/// One free transform, ready to map text-space points.
+#[derive(Clone, Debug)]
+struct Op {
+    frame: Affine,
+    back: Affine,
+    kind: TypeDistortionKind,
+    /// Text-space segment length that stays smooth under the op.
+    segment: f64,
+}
+
+impl Op {
+    fn new(d: &TypeDistortion) -> Option<Op> {
+        if !d.is_valid() {
+            return None;
+        }
+        let back = d.frame.inverse()?;
+        // About 2 document pixels at the frame's scale.
+        let scale = d.frame.determinant().abs().sqrt().max(1e-6);
+        Some(Op { frame: d.frame, back, kind: d.kind.clone(), segment: (2.0 / scale).clamp(0.05, 64.0) })
+    }
+
+    fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let p = self.frame.apply(Point::new(x, y));
+        let (qx, qy) = self.kind.apply(p.x, p.y);
+        let q = self.back.apply(Point::new(qx, qy));
+        (q.x, q.y)
+    }
+}
+
 impl Warp {
     /// Prepares `w` for text whose bounds are `[x0, y0, x1, y1]` (text space). `None` for
     /// `warpNone`, unknown styles, an all-zero warp or empty bounds.
     pub fn new(w: &TextWarp, bounds: [f32; 4]) -> Option<Warp> {
-        let style = WarpStyle::parse(&w.style).filter(|s| s.is_preset() && s.psd_name() == w.style)?;
-        StyleWarp::new(style, f64::from(w.value), f64::from(w.horizontal_distortion), f64::from(w.vertical_distortion), !w.horizontal, bounds.map(f64::from))
-            .map(|s| Warp(Kind::Style(Box::new(s))))
+        Some(Warp { base: Some(Kind::Style(Box::new(style_warp(w, bounds)?))), ops: Vec::new() })
     }
 
     /// The deformation of type on a path (`None` for any other shape, or a path without length).
     pub fn on_path(shape: &TextShape) -> Option<Warp> {
         let TextShape::Path { path, start, flip } = shape else { return None };
-        PathFrame::new(path, *start, *flip).map(|f| Warp(Kind::Path(f)))
+        PathFrame::new(path, *start, *flip).map(|f| Warp { base: Some(Kind::Path(f)), ops: Vec::new() })
+    }
+
+    /// `base` (a Warp Text style or a type path, if any) followed by the free transforms
+    /// `distortions` (invalid ones are skipped). `None` when nothing bends the outlines.
+    pub fn with_distortions(base: Option<Warp>, distortions: &[TypeDistortion]) -> Option<Warp> {
+        let base = base.and_then(|w| w.base);
+        let ops: Vec<Op> = distortions.iter().take(photocraft_doc::text::MAX_TYPE_DISTORTIONS).filter_map(Op::new).collect();
+        (base.is_some() || !ops.is_empty()).then_some(Warp { base, ops })
+    }
+
+    /// Only the free transforms, for glyphs a type path has already placed rigidly
+    /// ([`Placement::Frame`]). `None` when there are none.
+    pub fn after_frame(&self) -> Option<Warp> {
+        (!self.ops.is_empty()).then(|| Warp { base: None, ops: self.ops.clone() })
     }
 
     /// Longest segment (text-space px) worth sending through [`Warp::apply`] unsplit.
     pub fn max_segment(&self) -> f64 {
-        match &self.0 {
-            Kind::Style(s) => s.max_segment(),
-            Kind::Path(_) => 2.0,
-        }
+        let s = match &self.base {
+            Some(Kind::Style(s)) => s.max_segment(),
+            Some(Kind::Path(_)) => 2.0,
+            None => f64::MAX,
+        };
+        self.ops.iter().fold(s, |m, o| m.min(o.segment)).clamp(0.05, 1e6)
     }
 
     /// Maps a text-space point.
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
-        match &self.0 {
-            Kind::Style(s) => s.apply(x, y),
-            Kind::Path(p) => p.apply(x, y),
+        let (mut x, mut y) = match &self.base {
+            Some(Kind::Style(s)) => s.apply(x, y),
+            Some(Kind::Path(p)) => p.apply(x, y),
+            None => (x, y),
+        };
+        for o in &self.ops {
+            (x, y) = o.apply(x, y);
         }
+        (x, y)
     }
 
     /// How to place a glyph whose horizontal centre is at text-space `cx`.
     pub fn place_glyph(&self, cx: f64) -> Placement {
-        match &self.0 {
-            Kind::Style(_) => Placement::Bend,
-            Kind::Path(p) => p.frame(cx).map_or(Placement::Hidden, Placement::Frame),
+        match &self.base {
+            Some(Kind::Path(p)) => p.frame(cx).map_or(Placement::Hidden, Placement::Frame),
+            _ => Placement::Bend,
         }
     }
 }
@@ -188,6 +241,11 @@ impl PathFrame {
         let (p, t) = self.at(s);
         Some([t.0, t.1, -t.1, t.0, p.0 - t.0 * cx, p.1 - t.1 * cx])
     }
+}
+
+fn style_warp(w: &TextWarp, bounds: [f32; 4]) -> Option<StyleWarp> {
+    let style = WarpStyle::parse(&w.style).filter(|s| s.is_preset() && s.psd_name() == w.style)?;
+    StyleWarp::new(style, f64::from(w.value), f64::from(w.horizontal_distortion), f64::from(w.vertical_distortion), !w.horizontal, bounds.map(f64::from))
 }
 
 #[cfg(test)]

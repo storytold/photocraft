@@ -133,6 +133,24 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             orientation: text::Orientation::Vertical,
             antialias: text::AntiAlias::Crisp,
             warp: Some(TextWarp { style: "warpArc".into(), value: 25.0, ..Default::default() }),
+            distortions: vec![
+                text::TypeDistortion {
+                    frame: Affine::translate(10.5, 20.25),
+                    // Values exact in binary, so the comparison after a round trip is exact too.
+                    kind: text::TypeDistortionKind::Warp(photocraft_geom::warp::Warp::custom(
+                        photocraft_geom::warp::BezierMesh {
+                            us: vec![0.0, 1.0],
+                            vs: vec![0.0, 1.0],
+                            points: (0..16).map(|i| [f64::from(i % 4) * 16.0 + f64::from(i / 4) * 2.0, f64::from(i / 4) * 8.0]).collect(),
+                        },
+                        [0.0, 0.0, 48.0, 24.0],
+                    )),
+                },
+                text::TypeDistortion {
+                    frame: Affine::translate(10.5, 20.25),
+                    kind: text::TypeDistortionKind::Projective([1.0, 0.125, 2.0, 0.0, 1.0, 3.0, 0.0009765625, 0.0, 1.0]),
+                },
+            ],
         }),
     );
     let mut shape = Layer::new(

@@ -1,6 +1,6 @@
 //! Free Transform on type layers (#2630): the Edit menu offers it, a selection doesn't narrow it
-//! (type can't be partly transformed, so the whole layer moves), and Distort / Perspective are
-//! greyed as in Photoshop until the type is rasterized.
+//! (type can't be partly transformed, so the whole layer moves). Distort / Perspective, greyed in
+//! Photoshop until the type is rasterized, work on the live type here ("Better Than PS").
 
 use serde_json::json;
 
@@ -28,17 +28,21 @@ fn select_left_half(app: &mut PhotocraftApp) {
 }
 
 #[test]
-fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
+fn type_layers_offer_free_transform_distort_and_perspective() {
     let mut app = app();
     for selection in [false, true] {
         if selection {
             select_left_half(&mut app);
         }
-        for id in ["edit.freeTransform", "edit.transform.scale", "edit.transform.rotate", "edit.transform.skew"] {
+        for id in [
+            "edit.freeTransform",
+            "edit.transform.scale",
+            "edit.transform.rotate",
+            "edit.transform.skew",
+            "edit.transform.distort",
+            "edit.transform.perspective",
+        ] {
             assert!(crate::menus::is_enabled(&app, id), "{id} (selection: {selection})");
-        }
-        for id in ["edit.transform.distort", "edit.transform.perspective"] {
-            assert!(!crate::menus::is_enabled(&app, id), "{id} is greyed for editable type (selection: {selection})");
         }
     }
     // The same rows in the marquee's canvas context menu.
@@ -56,11 +60,8 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         spelling: None,
     };
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.freeTransform"));
-    assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.distort"));
-    assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.perspective"));
-    // Rasterized, the type is pixels and can be distorted.
-    app.run("layer.rasterize.type", json!({})).unwrap();
-    assert!(crate::menus::is_enabled(&app, "edit.transform.distort") && crate::menus::is_enabled(&app, "edit.transform.perspective"));
+    assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.distort"));
+    assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.perspective"));
 }
 
 #[test]
@@ -90,11 +91,11 @@ fn free_transform_with_a_selection_frames_and_moves_the_whole_type_layer() {
     assert!(matches!(st.doc.layer(id).unwrap().content, photocraft_doc::LayerContent::Text(_)), "still editable type");
 }
 
-/// ⌘-drag (distort) and ⌘⌥⇧-drag (perspective) of a corner on editable type scale like a plain
-/// corner drag (#3010): the box stays a parallelogram and the commit keeps the type live, instead
-/// of a distorted box the engine then refuses.
+/// ⌘-drag (distort) and ⌘⌥⇧-drag (perspective) of a corner on editable type distort the box (#3342,
+/// "Better Than PS"; it replaces the #3010 behaviour that scaled instead because Distort was
+/// refused): the box leaves the parallelogram and the commit keeps the type live.
 #[test]
-fn distort_and_perspective_corner_drags_scale_editable_type() {
+fn distort_and_perspective_corner_drags_distort_editable_type() {
     use crate::canvas::ToolEvent;
     let ctx = egui::Context::default();
     let cmd = egui::Modifiers::COMMAND;
@@ -107,11 +108,11 @@ fn distort_and_perspective_corner_drags_scale_editable_type() {
         crate::transform_tool::pointer(&mut app, ToolEvent::Move { x: x + 15.0, y: y - 10.0, pressure: 1.0 }, mods);
         crate::transform_tool::pointer(&mut app, ToolEvent::Up { x: x + 15.0, y: y - 10.0 }, mods);
         let q = app.ui.transform.as_ref().unwrap().quad;
-        assert_ne!(q, q0, "the drag scaled the box ({mods:?})");
+        assert_ne!(q, q0, "the drag moved the box ({mods:?})");
         let skew = (0..2).map(|k| (q[0][k] + q[2][k] - q[1][k] - q[3][k]).abs()).fold(0.0, f64::max);
-        assert!(skew < 1e-6, "the box stays a parallelogram ({mods:?}): {q:?}");
+        assert!(skew > 1.0, "the box is distorted, not a parallelogram ({mods:?}): {q:?}");
         crate::transform_tool::commit(&mut app);
-        assert_eq!(app.ui.status, "", "{mods:?}");
+        assert!(!app.ui.status_error, "{mods:?}: {}", app.ui.status);
         let st = app.session.active().unwrap();
         assert!(matches!(st.doc.layer(st.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Text(_)), "still editable type");
     }

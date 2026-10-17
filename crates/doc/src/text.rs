@@ -260,6 +260,144 @@ pub struct TextWarp {
     pub horizontal: bool,
 }
 
+/// Most free transforms one type layer keeps (each one costs a pass over the outlines).
+pub const MAX_TYPE_DISTORTIONS: usize = 16;
+
+/// A free transform of live type that Photoshop can't keep editable ("Better Than PS"): a custom
+/// warp mesh (Edit › Transform › Warp) or a projective map (Distort, Perspective), applied to the
+/// glyph outlines after Warp Text, so the text stays editable and re-renders under it.
+///
+/// It is defined in the document space of the moment it was made: `frame` is the layer's
+/// `transform` then (text space → that space). The outlines go through `frame`, the distortion
+/// and `frame`'s inverse, then the current `transform`, so moving, scaling or rotating the type
+/// afterwards carries the distortion along.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeDistortion {
+    pub frame: photocraft_geom::Affine,
+    pub kind: TypeDistortionKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TypeDistortionKind {
+    /// A custom warp over its box (`bounds`), in the frame's space.
+    Warp(photocraft_geom::warp::Warp),
+    /// Distort / Perspective: a row-major 3×3 projective map in the frame's space.
+    Projective([f64; 9]),
+}
+
+impl TypeDistortionKind {
+    /// Maps a point of the distortion's own space. A custom warp continues outside its box (type
+    /// edited after the warp can grow past it): a point outside follows the nearest edge point,
+    /// shifted by its distance from the box. A point past a perspective's horizon stays put.
+    pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let (qx, qy) = match self {
+            TypeDistortionKind::Warp(w) => {
+                let b = w.bounds;
+                let (cx, cy) = (x.clamp(b[0], b[2].max(b[0])), y.clamp(b[1], b[3].max(b[1])));
+                let (mx, my) = w.map(cx, cy);
+                (mx + (x - cx), my + (y - cy))
+            }
+            TypeDistortionKind::Projective(h) => {
+                let d = h[6] * x + h[7] * y + h[8];
+                if d.abs() <= 1e-9 {
+                    return (x, y);
+                }
+                ((h[0] * x + h[1] * y + h[2]) / d, (h[3] * x + h[4] * y + h[5]) / d)
+            }
+        };
+        if qx.is_finite() && qy.is_finite() { (qx, qy) } else { (x, y) }
+    }
+}
+
+/// `a · b` for row-major 3×3 matrices (apply `b` first).
+pub fn mat3_mul(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut r = [0.0; 9];
+    for i in 0..3 {
+        for j in 0..3 {
+            r[i * 3 + j] = (0..3).map(|k| a[i * 3 + k] * b[k * 3 + j]).sum();
+        }
+    }
+    r
+}
+
+fn affine3(a: &photocraft_geom::Affine) -> [f64; 9] {
+    let [a0, b0, c0, d0, e0, f0] = a.m;
+    [a0, c0, e0, b0, d0, f0, 0.0, 0.0, 1.0]
+}
+
+impl TypeDistortion {
+    /// `transform · frame⁻¹`: the distortion's space → the document space of a layer whose
+    /// transform is now `transform`.
+    pub fn to_document(&self, transform: &photocraft_geom::Affine) -> Option<photocraft_geom::Affine> {
+        Some(transform.mul(&self.frame.inverse()?))
+    }
+
+    /// Maps a document point the way this distortion moves the type today (layer transform
+    /// `transform`): exactly what the renderer does to the outlines.
+    pub fn map_in_document(&self, transform: &photocraft_geom::Affine, x: f64, y: f64) -> (f64, f64) {
+        let Some(m) = self.to_document(transform) else { return (x, y) };
+        let Some(mi) = m.inverse() else { return (x, y) };
+        let q = mi.apply(photocraft_geom::Point::new(x, y));
+        let (qx, qy) = self.kind.apply(q.x, q.y);
+        let r = m.apply(photocraft_geom::Point::new(qx, qy));
+        (r.x, r.y)
+    }
+
+    /// This distortion in today's document space (layer transform `transform`), for editing it
+    /// and for PSD export. Exact for a projective map and a custom mesh (Bezier patches are
+    /// affine-invariant) and for a preset under a move and scale; a preset under a rotation or
+    /// skew becomes its fitted mesh.
+    pub fn in_document(&self, transform: &photocraft_geom::Affine) -> Option<TypeDistortionKind> {
+        let m = self.to_document(transform)?;
+        match &self.kind {
+            TypeDistortionKind::Projective(h) => {
+                let mi = m.inverse()?;
+                Some(TypeDistortionKind::Projective(mat3_mul(&affine3(&m), &mat3_mul(h, &affine3(&mi)))))
+            }
+            TypeDistortionKind::Warp(w) => {
+                use photocraft_geom::warp::{Warp, WarpStyle};
+                let ap = |p: [f64; 2]| {
+                    let q = m.apply(photocraft_geom::Point::new(p[0], p[1]));
+                    [q.x, q.y]
+                };
+                let b = w.bounds;
+                let c = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(ap);
+                let bb = c.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+                let axis = m.m[1] == 0.0 && m.m[2] == 0.0 && m.m[0] > 0.0 && m.m[3] > 0.0;
+                Some(TypeDistortionKind::Warp(if w.style == WarpStyle::None {
+                    Warp::none(bb)
+                } else if w.style.is_preset() && axis {
+                    Warp { bounds: bb, mesh: None, ..w.clone() }
+                } else if w.style.is_preset() {
+                    Warp::custom(w.to_mesh(4, 4).map_points(ap), bb)
+                } else {
+                    Warp::custom(w.to_mesh(1, 1).map_points(ap), bb)
+                }))
+            }
+        }
+    }
+
+    /// Finite, invertible and well-formed (data from files and commands is checked with this).
+    pub fn is_valid(&self) -> bool {
+        let frame_ok = self.frame.m.iter().all(|v| v.is_finite()) && self.frame.inverse().is_some();
+        frame_ok
+            && match &self.kind {
+                TypeDistortionKind::Warp(w) => {
+                    w.bounds.iter().all(|v| v.is_finite())
+                        && w.bounds[2] > w.bounds[0]
+                        && w.bounds[3] > w.bounds[1]
+                        && w.mesh.as_ref().is_none_or(|m| m.is_valid() && m.points.len() <= 193 * 193)
+                }
+                TypeDistortionKind::Projective(h) => {
+                    let det = h[0] * (h[4] * h[8] - h[5] * h[7]) - h[1] * (h[3] * h[8] - h[5] * h[6]) + h[2] * (h[3] * h[7] - h[4] * h[6]);
+                    h.iter().all(|v| v.is_finite()) && det.abs() > 1e-12
+                }
+            }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
