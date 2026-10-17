@@ -1,7 +1,8 @@
 //! Stamping (#217): merge layers into a layer while keeping the originals.
 //!
 //! - **Stamp Visible** (⌘⌥⇧E, or ⌥ + Layer › Merge Visible): every visible layer composited into a
-//!   new layer above the active one.
+//!   new layer above the active one, or into the active layer when it is an empty pixel layer (as
+//!   in Photoshop, so a recorded New Layer + Stamp Visible leaves one layer, #6785).
 //! - **Stamp Down** (⌘⌥E, or ⌥ + Layer › Merge Down): a copy of the active layer merged into the
 //!   pixel layer below it; with several layers selected, a copy of them merged into a new layer
 //!   above the top one.
@@ -65,6 +66,13 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
         if !doc.walk().iter().any(|(path, _, l)| !l.is_group() && (1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))) {
             return Err(EngineError::Other("there are no visible layers to stamp".into()));
         }
+        // Like Photoshop, an empty pixel layer that is active (Layer > New > Layer, then Stamp
+        // Visible, as recorded actions do) takes the stamp itself instead of getting a second layer.
+        if let Some(empty) = (*active).filter(|id| is_empty_pixel_layer(doc, *id)) {
+            let surf = photocraft_compose::flatten_to_surface(doc, with_alpha(doc), None);
+            *crate::pixels_mut(doc.layer_mut(empty).ok_or(EngineError::NoLayer(empty))?)? = surf;
+            return Ok(empty);
+        }
         let layer = stamp_layer(doc, doc.next_layer_name("Layer"))?;
         let id = doc.insert_above(*active, layer);
         *active = Some(id);
@@ -72,6 +80,18 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     select_only(s, id);
     Ok(json!({ "layer": id.0 }))
+}
+
+/// A plain, unlocked pixel layer with no pixels, mask or clipping: safe to stamp into.
+fn is_empty_pixel_layer(doc: &Document, id: LayerId) -> bool {
+    let Some(l) = doc.layer(id) else { return false };
+    let locks = doc.effective_locks(id);
+    matches!(&l.content, LayerContent::Raster(s) if s.content_bounds().is_empty())
+        && l.visible
+        && l.mask.is_none()
+        && l.vector_mask.is_none()
+        && !l.clipped
+        && !(locks.all || locks.pixels || locks.transparency)
 }
 
 fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
@@ -148,7 +168,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Stamp Visible",
             menu: &[],
             shortcut: Some("Cmd+Alt+Shift+E"),
-            params: r##"{} → {layer} (every visible layer merged into a new layer above the active one; the originals stay)"##,
+            params: r##"{} → {layer} (visible layers merged into a new layer above the active one, or into the active one if it is an empty pixel layer)"##,
             enabled: has_doc,
             journal: true,
             run: stamp_visible,
@@ -233,6 +253,25 @@ mod tests {
             s.undo();
             assert_eq!(ids(&s), before);
         }
+    }
+
+    /// Recorded actions do New Layer, then Stamp Visible: the stamp lands in the new empty layer.
+    #[test]
+    fn stamp_visible_fills_an_empty_active_layer_instead_of_adding_one() {
+        let (mut s, bg, hidden, blue) = session(8);
+        s.execute("layer.new.layer", json!({"name": "Empty"})).unwrap();
+        let empty = s.active().unwrap().active_layer.unwrap();
+        let r = s.execute("layer.stampVisible", json!({})).unwrap();
+        assert_eq!(r["layer"].as_u64(), Some(empty.0));
+        assert_eq!(ids(&s), [bg, hidden, blue, empty], "no extra layer");
+        let st = s.active().unwrap();
+        assert_eq!((st.active_layer, st.selected_layers.clone()), (Some(empty), vec![empty]));
+        assert!(close(rgba(&s, empty, 30, 30), [0.0, 0.0, 1.0, 1.0]));
+        assert!(close(rgba(&s, empty, 2, 2), [1.0, 0.0, 0.0, 1.0]));
+        // A second stamp: the layer now has pixels, so this one adds a layer.
+        let r2 = s.execute("layer.stampVisible", json!({})).unwrap();
+        assert_ne!(r2["layer"].as_u64(), Some(empty.0));
+        assert_eq!(ids(&s).len(), 5);
     }
 
     #[test]
