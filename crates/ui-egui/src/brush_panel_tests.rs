@@ -562,6 +562,78 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[test]
+fn fade_field_edits_use_the_brush_command_and_inactive_fields_keep_the_saved_steps() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    fn first_control(b: &mut BrushSettings, section: usize) -> &mut paint::Dynamic {
+        match section {
+            1 => &mut b.shape_dynamics.size,
+            2 => &mut b.scattering.scatter,
+            3 => &mut b.texture.depth_jitter,
+            5 => &mut b.color_dynamics.fg_bg,
+            6 => &mut b.transfer.opacity,
+            _ => panic!("not a dynamic section"),
+        }
+    }
+
+    for (section, patch) in [
+        (1, json!({"shapeDynamics": {"size": {"fadeSteps": 124}}})),
+        (2, json!({"scattering": {"scatter": {"fadeSteps": 124}}})),
+        (3, json!({"texture": {"depthJitter": {"fadeSteps": 124}}})),
+        (5, json!({"colorDynamics": {"fgBg": {"fadeSteps": 124}}})),
+        (6, json!({"transfer": {"opacity": {"fadeSteps": 124}}})),
+    ] {
+        let mut h = harness(0, section);
+        let b = &mut h.state_mut().session.tools.brush;
+        *section_flag(b, section).unwrap() = true;
+        b.texture.each_tip = true;
+        let dynamic = first_control(b, section);
+        dynamic.control = Control::Fade;
+        dynamic.fade_steps = 123;
+        h.run_steps(2);
+        if section == 3 {
+            // Texture's control is below its pattern/scale/depth controls: scroll it into view.
+            let before = h.state().session.tools.brush.clone();
+            h.hover_at(h.get_by_label("Scale").rect().center());
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -1000.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(20);
+            assert_eq!(h.state().session.tools.brush, before, "scrolling only moves the view");
+        }
+        let journal = h.state().session.journal.len();
+        let field = h.query_all_by_label("Fade steps").find(|node| node.accesskit_node().numeric_value() == Some(123.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        assert_eq!(first_control(&mut h.state_mut().session.tools.brush, section).fade_steps, 124, "section {section}");
+        assert_eq!(h.state().session.journal.len(), journal + 1);
+        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"], patch, "section {section}: one field patch through the existing command");
+
+        first_control(&mut h.state_mut().session.tools.brush, section).control = Control::Off;
+        h.run_steps(2);
+        let before = h.state().session.tools.brush.clone();
+        let field = h.query_all_by_label("Fade steps").next().unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("999".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush, before);
+        assert_eq!(h.state().session.journal.len(), journal + 1);
+        first_control(&mut h.state_mut().session.tools.brush, section).control = Control::Fade;
+        h.run_steps(2);
+        assert!(h.query_all_by_label("Fade steps").any(|node| node.accesskit_node().numeric_value() == Some(124.0) && !node.accesskit_node().is_disabled()));
+    }
+}
+
 fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
     let brush = serde_json::to_value(&app.session.tools.brush).unwrap();
     let path = match section {
@@ -1502,4 +1574,58 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
     h.run();
     assert!(*h.state(), "the release checks it");
     assert_eq!(fill(&h), Some(widgets::check_box_fill(true, false, &t)));
+}
+
+/// The main integration must retain the response editor and the inactive Fade field together.
+#[test]
+fn fade_fields_and_response_curves_coexist_without_losing_either_setting() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for theme in crate::theme::ThemeKind::ALL {
+        let mut h = harness(0, 1);
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.state_mut()
+            .run(
+                "tools.setBrush",
+                json!({"shapeDynamics": {
+                    "enabled": true, "size": {"control": "penPressure", "fadeSteps": 123}
+                }}),
+            )
+            .unwrap();
+        h.run_steps(3);
+        let field = h.query_all_by_label("Fade steps").next().unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        // Text and numeric editors have different inner padding; the adjacent controller
+        // measures the shared row's placement independently of those editor bounds.
+        let controller = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().rect();
+        let journal = h.state().session.journal.len();
+        h.get_by_label("Response curve").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.journal.len(), journal, "opening the editor is view state");
+        h.get_by_label("Soft").click();
+        h.run_steps(3);
+        let curve = vec![[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]];
+        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"]["shapeDynamics"]["size"]["curve"], json!(curve));
+
+        for control in ["off", "fade", "penPressure"] {
+            h.state_mut().run("tools.setBrush", json!({"shapeDynamics": {"size": {"control": control}}})).unwrap();
+            h.run_steps(3);
+            let field = h.query_all_by_label("Fade steps").next().unwrap();
+            let current = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().rect();
+            assert!(
+                (current.left() - controller.left()).abs() < 0.5 && (current.right() - controller.right()).abs() < 0.5,
+                "{theme:?}/{control}: the Control row remains aligned"
+            );
+            assert_eq!(field.accesskit_node().is_disabled(), control != "fade");
+            if control == "fade" {
+                assert_eq!(field.accesskit_node().numeric_value(), Some(123.0));
+            }
+            let size = &h.state().session.tools.brush.shape_dynamics.size;
+            assert_eq!(size.fade_steps, 123);
+            assert_eq!(size.curve.points(), curve);
+            assert_eq!(h.query_all_by_label("Response curve").count(), usize::from(control != "off"));
+        }
+    }
 }

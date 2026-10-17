@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (stable Control rows with inactive Fade fields; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -27,6 +27,7 @@ tablets against Photoshop side by side.
 | Hue Jitter uses a standard percentage-amount track instead of a hue spectrum | done | #3825 (Hue Jitter appearance only); rendered track checked in all 14 themes; numeric and pointer edits retain percentage units and engine command routing. |
 | Transfer (opacity/flow/wetness/mix jitter and controls) | done | |
 | Shape Dynamics and Transfer minimum fields disabled when their Control is Off, retaining their values | done | #3825 (minimum-field interaction only); `brush_sections.rs` UI regressions cover all six fields, reactivation and disabled input |
+| Dynamic Control rows: right-aligned; Fade field stays blank and disabled for other controls, retaining its saved steps | done | #3825 (Control-row layout subset); UI regressions cover all themes/controllers, reactivation, disabled input and command routing in all five dynamic sections |
 | Brush Pose (tilt, rotation, pressure overrides) | done | |
 | Noise, Wet Edges, Build-up, Protect Texture | done | |
 | Smoothing: amount, Pulled String, Stroke Catch-up, Catch-up on End, Adjust for Zoom | done | `brush.rs:428-438` |
@@ -122,5 +123,6 @@ tablets against Photoshop side by side.
 | 2026-10-12 | minor | Five Brush Settings switch rows toggle without selecting a properties pane; Smoothing has a default-on switch and retains its settings while disabled (#4283). No brush-feel estimate changed. |
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
+| 2026-10-13 | minor | Stable Control rows keep the Fade field blank and disabled for other controllers, retaining the count (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |

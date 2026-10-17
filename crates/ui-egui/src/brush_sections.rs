@@ -78,25 +78,34 @@ pub(crate) fn curve_open_id(id: &str) -> egui::Id {
     egui::Id::new(("brush-curve-open", id))
 }
 
-/// `Control: [Off ▾] [25] [~]`: the controller pop-up, Fade's step count and the button that
-/// shows this dynamic's own response curve (lit while the curve isn't linear). `angle` offers the
-/// direction controls (Photoshop only has them for Angle Jitter).
+/// Right-aligned controller and Fade count, with this dynamic's response-curve toggle.
+/// Non-Fade controls keep an empty, disabled count field without changing its saved
+/// value. `angle` offers the direction controls.
 fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
     let open_id = curve_open_id(id);
     let mut open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(false);
     ui.horizontal(|ui| {
-        dim(ui, tl!("Control:"));
-        let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
-        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
-        if d.control == Control::Fade {
-            let mut steps = d.fade_steps as f32;
-            if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).on_hover_text(tl!("Fade steps")).changed() {
-                d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = if d.control == Control::Fade {
+                let mut steps = d.fade_steps as f32;
+                let response = widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 74.0);
+                if response.changed() {
+                    d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
+                }
+                response
+            } else {
+                let mut empty = String::new();
+                ui.add_enabled_ui(false, |ui| widgets::text_field(ui, ui.id().with((id, "fade-steps")), &mut empty, "", 74.0, true)).inner
+            };
+            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(tl!("Fade steps")));
+            response.on_hover_text(tl!("Fade steps"));
+            let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
+            widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
+            dim(ui, tl!("Control:"));
+            if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
+                open = !open;
             }
-        }
-        if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
-            open = !open;
-        }
+        });
     });
     if open && takes_curve(d.control, angle) {
         let mut points = d.curve.points();
@@ -778,6 +787,91 @@ mod tests {
         h.state_mut().shape_dynamics.size.control = Control::Off;
         h.run_steps(2);
         assert_eq!(h.state().shape_dynamics.size.minimum, minimum, "Off keeps the saved minimum");
+    }
+
+    struct ControlState {
+        dynamic: Dynamic,
+        enabled: bool,
+    }
+
+    fn control_harness(kind: theme::ThemeKind) -> Harness<'static, ControlState> {
+        let mut ready = false;
+        let mut h = Harness::builder().with_size(vec2(340.0, 96.0)).build_ui_state(
+            move |ui, state: &mut ControlState| {
+                if !ready {
+                    crate::PhotocraftApp::setup_context(ui.ctx(), kind);
+                    ready = true;
+                    return;
+                }
+                ui.add_enabled_ui(state.enabled, |ui| control_row(ui, "test-control", &mut state.dynamic, true));
+            },
+            ControlState { dynamic: Dynamic { fade_steps: 123, ..Default::default() }, enabled: true },
+        );
+        h.run_steps(3);
+        h
+    }
+
+    #[test]
+    fn fade_field_stays_blank_and_disabled_outside_fade_without_moving_the_controller() {
+        for kind in theme::ThemeKind::ALL {
+            let mut h = control_harness(kind);
+            assert_eq!(h.query_all_by_role(Role::TextInput).count(), 1, "{kind:?}: Off keeps a blank field");
+            let controller = h.get_by_role(Role::ComboBox).rect();
+            for (control, _) in CONTROLS {
+                h.state_mut().dynamic.control = control;
+                h.run_steps(2);
+                assert_eq!(h.get_by_role(Role::ComboBox).rect(), controller, "{kind:?}, {control:?}: the row does not jump");
+                let field = h.get_by_label("Fade steps");
+                let node = field.accesskit_node();
+                assert_eq!(node.is_disabled(), control != Control::Fade);
+                if control == Control::Fade {
+                    assert_eq!(node.numeric_value(), Some(123.0));
+                } else {
+                    assert_eq!(node.value().as_deref().unwrap_or(""), "");
+                    assert_eq!(node.numeric_value(), None);
+                }
+                assert_eq!(h.state().dynamic.fade_steps, 123, "rendering does not rewrite the saved count");
+            }
+            h.state_mut().dynamic.control = Control::Fade;
+            h.state_mut().enabled = false;
+            h.run_steps(2);
+            assert!(h.get_by_label("Fade steps").accesskit_node().is_disabled(), "the section's disabled state still applies");
+        }
+    }
+
+    #[test]
+    fn fade_steps_ignore_disabled_input_and_return_when_fade_is_selected_again() {
+        let mut h = control_harness(theme::ThemeKind::ProMedium);
+        let before = h.state().dynamic;
+        h.get_by_label("Fade steps").click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("99".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().dynamic, before);
+
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        h.get_by_label("Fade").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dynamic.control, Control::Fade);
+        assert_eq!(h.get_by_label("Fade steps").accesskit_node().numeric_value(), Some(123.0));
+        h.get_by_label("Fade steps").click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        assert_eq!(h.state().dynamic.fade_steps, 124);
+
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        h.get_by_label("Off").click();
+        h.run_steps(2);
+        assert!(h.get_by_label("Fade steps").accesskit_node().is_disabled());
+        assert_eq!(h.state().dynamic.fade_steps, 124);
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        h.get_by_label("Fade").click();
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("Fade steps").accesskit_node().numeric_value(), Some(124.0));
     }
 
     #[test]
