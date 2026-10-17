@@ -915,3 +915,34 @@ fn a_stranded_backup_is_named_in_the_error() {
     assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_old_default_cache_tile_size_moves_to_the_new_one_once() {
+    let tile = |s: &Session| s.prefs().performance.cache_tile_size;
+    let file = |version: Option<u64>, size: u64| {
+        let mut v = json!({"performance": {"cacheTileSize": size}});
+        if let Some(n) = version {
+            v["version"] = json!(n);
+        }
+        v.to_string()
+    };
+    assert_eq!(Preferences::default().performance.cache_tile_size, CACHE_TILE_SIZE);
+    // Version 1 (and unversioned) files saved the old default with everything else.
+    for version in [Some(1), None] {
+        let mut s = Session::new();
+        s.load_prefs_json(&file(version, 8192)).unwrap();
+        assert_eq!(tile(&s), CACHE_TILE_SIZE, "{version:?}");
+        // Another size was chosen: kept.
+        s.load_prefs_json(&file(version, 4096)).unwrap();
+        assert_eq!(tile(&s), 4096, "{version:?}");
+    }
+    // 8192 chosen since: kept, and so through a save and load.
+    let mut s = Session::new();
+    s.load_prefs_json(&file(Some(2), 8192)).unwrap();
+    assert_eq!(tile(&s), 8192);
+    let saved = s.prefs_to_json();
+    assert!(saved.contains("\"version\": 2"), "{saved}");
+    let mut again = Session::new();
+    again.load_prefs_json(&saved).unwrap();
+    assert_eq!(tile(&again), 8192);
+}

@@ -507,6 +507,13 @@ impl Default for Export {
     }
 }
 
+/// Default side of the GPU canvas texture tiles (Preferences › Performance › cache tile size).
+pub const CACHE_TILE_SIZE: u32 = 2048;
+
+/// Version of the saved preferences file. 2: the cache tile size default moved from 8192 to
+/// [`CACHE_TILE_SIZE`].
+const PREFS_VERSION: u32 = 2;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
@@ -517,7 +524,8 @@ pub struct Performance {
     pub history_states: u32,
     /// Display cache levels (mip levels kept for zoomed-out views).
     pub cache_levels: u32,
-    /// Side of the GPU canvas texture tiles, in pixels (applies at next launch).
+    /// Side of the GPU canvas texture tiles, in pixels (applies at next launch). Smaller tiles
+    /// spread the GPU's first-touch clearing of a large canvas over more, shorter frames.
     pub cache_tile_size: u32,
     /// Draw the canvas with the GPU (applies at next launch).
     pub use_gpu: bool,
@@ -566,7 +574,7 @@ impl Default for Performance {
             memory_usage_mb: 8192,
             history_states: 50,
             cache_levels: 4,
-            cache_tile_size: 8192,
+            cache_tile_size: CACHE_TILE_SIZE,
             use_gpu: true,
             rendering_mode: None,
             gpu_backend: GpuBackend::Auto,
@@ -1645,7 +1653,7 @@ impl Session {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
-            m.insert("version".into(), json!(1));
+            m.insert("version".into(), json!(PREFS_VERSION));
             m.insert("presets".into(), self.presets.to_json(self));
         }
         v
@@ -1655,6 +1663,14 @@ impl Session {
     /// defaults and unknown keys are ignored, so files from older and newer versions load.
     pub fn load_prefs_json(&mut self, s: &str) -> std::result::Result<(), String> {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
+        // Version 1 saved every preference, so the old 8192 px default of the cache tile size is
+        // in every file: move it to the new default once. A size set since then is kept.
+        if v.get("version").and_then(Value::as_u64).unwrap_or(0) < 2
+            && let Some(perf) = v.get_mut("performance").and_then(Value::as_object_mut)
+            && perf.get("cacheTileSize").and_then(Value::as_u64) == Some(8192)
+        {
+            perf.insert("cacheTileSize".into(), json!(CACHE_TILE_SIZE));
+        }
         // Saved preferences before appearance modes had one concrete theme. Preserve its
         // appearance instead of silently switching established users to Auto.
         if let Some(interface) = v.get_mut("interface").and_then(Value::as_object_mut)

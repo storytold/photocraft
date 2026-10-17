@@ -35,7 +35,8 @@ use eframe::wgpu;
 pub use photocraft_gpu::{DeviceHealth, Fault};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
-pub const DEFAULT_TILE: u32 = 8192;
+/// The preference's default ([`photocraft_engine::prefs::CACHE_TILE_SIZE`]).
+pub const DEFAULT_TILE: u32 = photocraft_engine::prefs::CACHE_TILE_SIZE;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Canvas texture format of high-bit documents (see [`GpuCanvas::format_for`]).
 const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
