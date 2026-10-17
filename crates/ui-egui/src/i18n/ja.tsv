@@ -1015,6 +1015,9 @@
 	Create new pattern from the selection	選択範囲から新規パターンを作成
 	Create new shape from the current path	現在のパスから新規シェイプを作成
 	Create new snapshot	新規スナップショットを作成
+	From:	作成元:
+	Full Document	ドキュメント全体
+	Merged Layers	結合されたレイヤー
 	Create new tool preset	新規ツールプリセットを作成
 	Crop Factor	切り抜き係数
 	Ctrl	Ctrl

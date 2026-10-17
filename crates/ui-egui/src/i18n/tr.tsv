@@ -2681,6 +2681,9 @@ cameraRaw	Color	Renk
 	Color indicates	Renk şunu gösterir:
 	Create Snapshot	Anlık Görüntü Oluştur
 	Delete Snapshot	Anlık Görüntüyü Sil
+	From:	Kaynak:
+	Full Document	Tam Belge
+	Merged Layers	Birleştirilmiş Katmanlar
 	New Snapshot	Yeni Anlık Görüntü
 	Snapshot 1	Anlık Görüntü 1
 	Nonlinear History	Doğrusal Olmayan Geçmiş

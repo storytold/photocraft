@@ -2730,6 +2730,9 @@ fontWeight	Italic	Курсивний
 	Create new document from current state	Створити новий документ із поточного стану
 	Create new fill or adjustment layer	Створити новий шар заливки або корекції
 	Create new snapshot	Створити новий знімок стану
+	From:	З:
+	Full Document	Увесь документ
+	Merged Layers	Об'єднані шари
 	Delete Cropped Pixels	Видаляти обрізані пікселі
 	Delete current state	Видалити поточний стан
 

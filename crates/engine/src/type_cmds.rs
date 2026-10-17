@@ -1195,6 +1195,41 @@ mod tests {
         assert!(s.active().unwrap().doc.layer(id).is_none());
     }
 
+    /// The first History snapshot is the document as opened, taken before a served font arrived:
+    /// the refresh re-renders its type layers too, so returning to it keeps the real font (#6087).
+    #[test]
+    fn refreshing_type_layers_refreshes_the_first_snapshot() {
+        let mut s = session();
+        let id = LayerId(s.execute("type.create", json!({"text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap());
+        let mut stale = (*s.active().unwrap().doc).clone();
+        let Some(Layer { content: LayerContent::Text(t), .. }) = stale.layer_mut(id) else { panic!("not a type layer") };
+        t.cache = None;
+        let snap_cache = |s: &Session| match &s.active().unwrap().snapshots[0].doc.layer(id).unwrap().content {
+            LayerContent::Text(t) => t.cache.is_some(),
+            other => panic!("{}", other.kind_name()),
+        };
+        // Opened with the fallback font: the first snapshot is the open document itself.
+        s.add_document(stale.clone(), None);
+        let doc_id = s.active().unwrap().doc.id;
+        assert!(!snap_cache(&s));
+        assert!(s.refresh_type_layers(&[(doc_id, id)]).is_empty());
+        assert!(text_layer(&s, id.0).cache.is_some());
+        assert!(snap_cache(&s), "the first snapshot is refreshed with the document");
+        let st = s.active().unwrap();
+        assert!(Arc::ptr_eq(&st.snapshots[0].doc, &st.doc), "and still shares it");
+        // Edited since it opened: the snapshot is refreshed on its own, the edit stays.
+        s.add_document(stale, None);
+        let doc_id = s.active().unwrap().doc.id;
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.active().unwrap().doc.layers.len();
+        assert!(s.refresh_type_layers(&[(doc_id, id), (doc_id, LayerId(9999))]).is_empty());
+        assert!(snap_cache(&s));
+        assert!(text_layer(&s, id.0).cache.is_some());
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layers.len(), layers);
+        assert_eq!(st.snapshots[0].doc.layers.len(), layers - 1, "the snapshot keeps the document as opened");
+    }
+
     #[test]
     fn create_renders_and_is_undoable() {
         let mut s = session();

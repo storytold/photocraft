@@ -1023,6 +1023,10 @@
 	Create new pattern from the selection	從選取範圍建立新圖樣
 	Create new shape from the current path	從目前路徑建立新形狀
 	Create new snapshot	建立新快照
+	From:	自：
+	Full Document	完整文件
+	Merged Layers	合併的圖層
+	New Snapshot	新增快照
 	Create new tool preset	建立新工具預設集
 	Crop Factor	裁切係數
 	Ctrl	Ctrl
