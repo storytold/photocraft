@@ -636,6 +636,33 @@ fn fill_layers_and_colors() {
 }
 
 #[test]
+fn gradient_fill_layer_angles_are_finite_and_normalised() {
+    // `angle` 1e39 overflowed f32 to infinity: the render went NaN and .pcraft refused to save.
+    let mut s = session_with_doc();
+    let angle = |s: &Session| {
+        let st = s.active().unwrap();
+        match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Gradient { angle, .. }) => *angle,
+            _ => panic!("not a gradient fill"),
+        }
+    };
+    for cmd in ["layer.newFillLayer.gradient", "gradient.presets.apply"] {
+        let layers = s.active().unwrap().doc.layers.len();
+        for bad in [json!(1e39), json!(-1e300), json!("90")] {
+            assert!(s.execute(cmd, json!({"angle": bad})).is_err(), "{cmd} {bad}");
+        }
+        assert_eq!(s.active().unwrap().doc.layers.len(), layers, "{cmd}: nothing added");
+        // Normalised to (-180, 180] like gradient.fill.set.
+        for (a, want) in [(450.0, 90.0), (-90.0, -90.0), (-180.0, 180.0)] {
+            s.execute(cmd, json!({"angle": a})).unwrap();
+            assert_eq!(angle(&s), want, "{cmd} {a}");
+        }
+        s.execute(cmd, json!({})).unwrap();
+        assert_eq!(angle(&s), 90.0, "{cmd}: default");
+    }
+}
+
+#[test]
 fn default_colors_with_mask_targeted_resets_to_mask_colors() {
     let mut s = Session::new();
     s.tools.foreground = [0.2, 0.4, 0.6, 1.0];

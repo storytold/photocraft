@@ -603,7 +603,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "gradient.presets.apply";
     let g = preset_param(s, p, CMD)?;
     let stops = g.doc_stops(s.tools.foreground, s.tools.background);
-    let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(90.0) as f32;
+    let angle = crate::gradient_fill_cmds::angle_param(CMD, p, 90.0)?;
     let scale = (p.get("scale").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0).clamp(0.1, 1.5);
     let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
     let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);

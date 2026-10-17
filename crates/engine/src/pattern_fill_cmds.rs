@@ -14,7 +14,7 @@ pub const CREATE: &str = "layer.newFillLayer.pattern";
 /// Photoshop's Scale range in the Pattern Fill dialog (percent).
 pub const SCALE_RANGE: (f64, f64) = (1.0, 1000.0);
 /// Largest phase (origin offset) accepted, in pixels.
-const MAX_PHASE: f64 = 1.0e7;
+pub(crate) const MAX_PHASE: f64 = 1.0e7;
 
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: SET.into(), msg: msg.into() }
