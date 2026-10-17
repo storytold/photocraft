@@ -30,8 +30,6 @@ pub const FRONT: &str = "front";
 /// Resolution units of the resolution field.
 pub const PX_PER_IN: &str = "px/in";
 pub const PX_PER_CM: &str = "px/cm";
-/// Points per inch for pt / pica lengths (PostScript, Photoshop's default).
-const POINTS_PER_INCH: f64 = 72.0;
 /// The largest number a length or resolution field keeps (well past any canvas or ppi limit,
 /// which `image.crop` enforces with its own message).
 const MAX_FIELD: f64 = 1e9;
@@ -125,8 +123,9 @@ pub fn resolution_ppi(o: &ToolOptions) -> Option<f64> {
 
 /// W x H x Resolution's target: the size in pixels the crop is resampled to (unrounded) and the
 /// resolution it sets, when the mode is on and both W and H hold lengths. Physical lengths convert
-/// at the typed resolution, or at `doc_dpi` when there is none.
-pub fn target(o: &ToolOptions, doc_dpi: f64) -> Option<(f64, f64, Option<f64>)> {
+/// at the typed resolution, or at `doc_dpi` when there is none; points and picas at `pt_per_in`
+/// (the Point/Pica Size preference).
+pub fn target(o: &ToolOptions, doc_dpi: f64, pt_per_in: f64) -> Option<(f64, f64, Option<f64>)> {
     if o.crop_ratio != WHR {
         return None;
     }
@@ -134,15 +133,15 @@ pub fn target(o: &ToolOptions, doc_dpi: f64) -> Option<(f64, f64, Option<f64>)> 
     let dpi = res.unwrap_or(doc_dpi);
     let px = |text: &str| {
         let (v, u) = parse_length(text, Unit::Pixels)?;
-        let px = u.to_px(v, dpi, 0.0, POINTS_PER_INCH);
+        let px = u.to_px(v, dpi, 0.0, pt_per_in);
         (px.is_finite() && px > 0.0).then_some(px)
     };
     Some((px(&o.crop_width)?, px(&o.crop_height)?, res))
 }
 
 /// The ratio W x H x Resolution holds while the frame is drawn or resized (width / height).
-pub fn ratio(o: &ToolOptions, doc_dpi: f64) -> Option<f64> {
-    let (w, h, _) = target(o, doc_dpi)?;
+pub fn ratio(o: &ToolOptions, doc_dpi: f64, pt_per_in: f64) -> Option<f64> {
+    let (w, h, _) = target(o, doc_dpi, pt_per_in)?;
     Some(w / h).filter(|k| k.is_finite() && *k > 0.0)
 }
 
@@ -194,7 +193,8 @@ pub fn commit_params(app: &PhotocraftApp, p: &mut Value) {
     }
     let doc_dpi = app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi));
     let px = |v: f64| v.round().clamp(1.0, MAX_FIELD) as u64;
-    if let Some((w, h, _)) = target(o, doc_dpi) {
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    if let Some((w, h, _)) = target(o, doc_dpi, pt_per_in) {
         p["targetWidth"] = json!(px(w));
         p["targetHeight"] = json!(px(h));
         p["resample"] = json!(crate::sizing::pref_resample(app.session.prefs().general.image_interpolation));
@@ -402,24 +402,24 @@ mod tests {
     #[test]
     fn target_converts_physical_units_at_the_resolution_or_the_documents() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
-        let (w, h, r) = target(&whr("4 in", "5 in", "300", PX_PER_IN), 72.0).unwrap();
+        let (w, h, r) = target(&whr("4 in", "5 in", "300", PX_PER_IN), 72.0, 72.0).unwrap();
         assert!(close(w, 1200.0) && close(h, 1500.0) && r == Some(300.0));
-        let (w, h, r) = target(&whr("10 cm", "25 mm", "100", PX_PER_CM), 72.0).unwrap();
+        let (w, h, r) = target(&whr("10 cm", "25 mm", "100", PX_PER_CM), 72.0, 72.0).unwrap();
         assert!(close(w, 1000.0) && close(h, 250.0), "{w} {h}");
         assert!(close(r.unwrap(), 254.0), "100 px/cm is 254 ppi");
         // No resolution: inches convert at the document's, and none is set.
-        let (w, h, r) = target(&whr("2 in", "100 px", "", PX_PER_IN), 72.0).unwrap();
+        let (w, h, r) = target(&whr("2 in", "100 px", "", PX_PER_IN), 72.0, 72.0).unwrap();
         assert!(close(w, 144.0) && close(h, 100.0) && r.is_none());
         // W or H missing, or another mode: no target (a free crop).
-        assert_eq!(target(&whr("2 in", "", "300", PX_PER_IN), 72.0), None);
-        assert_eq!(target(&ToolOptions { crop_ratio: "1:1".into(), ..whr("2 in", "3 in", "", PX_PER_IN) }, 72.0), None);
+        assert_eq!(target(&whr("2 in", "", "300", PX_PER_IN), 72.0, 72.0), None);
+        assert_eq!(target(&ToolOptions { crop_ratio: "1:1".into(), ..whr("2 in", "3 in", "", PX_PER_IN) }, 72.0, 72.0), None);
     }
 
     #[test]
     fn the_frame_holds_w_by_h() {
         let mut app = app(SampleType::U8);
         app.ui.tool_options = whr("4 in", "5 in", "300", PX_PER_IN);
-        assert!((ratio(&app.ui.tool_options, 72.0).unwrap() - 0.8).abs() < 1e-9);
+        assert!((ratio(&app.ui.tool_options, 72.0, 72.0).unwrap() - 0.8).abs() < 1e-9);
         let mods = Modifiers::NONE;
         use crate::canvas::{ToolEvent, tool_event};
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, mods);
@@ -523,6 +523,24 @@ mod tests {
         app.ui.crop_rect = Some([0.0, 0.0, 100.0, 50.0]);
         crate::canvas::commit_crop(&mut app);
         assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
+    }
+
+    #[test]
+    fn points_and_picas_follow_the_point_size_preference() {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options = whr("72 pt", "1 in", "300", PX_PER_IN);
+        let target_size = |app: &PhotocraftApp| {
+            let mut p = json!({});
+            commit_params(app, &mut p);
+            (p["targetWidth"].as_u64(), p["targetHeight"].as_u64())
+        };
+        assert_eq!(target_size(&app), (Some(300), Some(300)), "PostScript: 72 pt is an inch");
+        app.session.edit_prefs(|p| p.units_and_rulers.point_size = photocraft_engine::prefs::PointSize::Traditional);
+        assert_eq!(target_size(&app), (Some(299), Some(300)), "Traditional: 72.27 pt per inch");
+        let (w, h, _) = target(&app.ui.tool_options, 72.0, 72.27).unwrap();
+        assert!((w - 300.0 * 72.0 / 72.27).abs() < 1e-9 && (h - 300.0).abs() < 1e-9, "{w} {h}");
+        app.ui.tool_options = whr("6 pc", "1 in", "300", PX_PER_IN);
+        assert_eq!(target_size(&app), (Some(299), Some(300)), "a pica is 12 points");
     }
 
     #[test]

@@ -217,7 +217,8 @@ fn size_ok(r: [f64; 4]) -> bool {
 pub(crate) fn preset_ratio(app: &PhotocraftApp) -> Option<f64> {
     if app.ui.tool_options.crop_ratio == crate::crop_size::WHR {
         let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
-        return crate::crop_size::ratio(&app.ui.tool_options, dpi);
+        let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+        return crate::crop_size::ratio(&app.ui.tool_options, dpi, pt_per_in);
     }
     let size = app.session.active().map_or((1.0, 1.0), |s| (s.doc.size.width as f64, s.doc.size.height as f64));
     crate::chrome_ui::crop_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1).map(|(w, h)| w / h).filter(|k| k.is_finite() && *k > 0.0)
@@ -250,11 +251,12 @@ pub(crate) fn apply_ratio(app: &mut PhotocraftApp) {
 
 fn fit_frame(app: &mut PhotocraftApp) {
     let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
     if let Some(r) = app.ui.crop_rect
         && let Some(ratio) = preset_ratio(app)
         && let Some(fitted) = fitted_ratio(r, ratio)
         // W x H x Resolution can change output size even when the frame already fits.
-        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi).is_some())
+        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi, pt_per_in).is_some())
     {
         keyed(app, fitted);
     }
