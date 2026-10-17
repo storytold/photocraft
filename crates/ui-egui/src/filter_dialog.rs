@@ -586,6 +586,74 @@ fn uses_logarithmic_slider(min: f32, max: f32) -> bool {
 /// Schema dialogs whose `profile` menu lists the installed profiles after the built-ins.
 const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile", "view.proofSetup"];
 
+/// Color Settings menus that take an installed or imported profile of one colour space.
+fn color_settings_space(key: &str) -> Option<photocraft_cms::ColorSpace> {
+    match key {
+        "workingRgb" | "monitorProfile" => Some(photocraft_cms::ColorSpace::Rgb),
+        "workingCmyk" => Some(photocraft_cms::ColorSpace::Cmyk),
+        "workingGray" => Some(photocraft_cms::ColorSpace::Gray),
+        _ => None,
+    }
+}
+
+/// Installed and imported profiles a schema menu offers besides its built-in ids.
+pub(crate) fn installed_profile_options(cmd: &str, key: &str) -> Vec<photocraft_engine::installed_profiles::InstalledProfile> {
+    let space = (cmd == "edit.colorSettings").then(|| color_settings_space(key)).flatten();
+    let listed = (key == "profile" && PROFILE_DIALOGS.contains(&cmd)) || space.is_some();
+    if !listed {
+        return Vec::new();
+    }
+    photocraft_engine::installed_profiles::installed()
+        .into_iter()
+        .filter(|profile| profile.is_destination())
+        .filter(|profile| space.is_none_or(|space| profile.color_space == space))
+        .collect()
+}
+
+/// Color Settings and Proof Setup can copy an `.icc`/`.icm` into the app's Profiles folder.
+pub(crate) fn offers_profile_load(cmd: &str) -> bool {
+    cmd == "edit.colorSettings" || cmd == "view.proofSetup"
+}
+
+/// Select the working space (or the proof profile) the imported file can fill.
+pub(crate) fn apply_imported_profile(fields: &mut Map<String, Value>, cmd: &str, path: &str, space: &str) {
+    let key = if cmd == "view.proofSetup" {
+        "profile"
+    } else {
+        match space {
+            "cmyk" => "workingCmyk",
+            "gray" => "workingGray",
+            _ => "workingRgb",
+        }
+    };
+    fields.insert(key.into(), json!(path));
+}
+
+/// Import `bytes` and, when that dialog is still open, select the profile in the matching menu.
+pub(crate) fn import_picked_profile(app: &mut PhotocraftApp, dialog_id: u64, name: &str, bytes: &[u8]) -> Result<Value, String> {
+    let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut params = Map::new();
+    params.insert("data".into(), json!(photocraft_paint::tile::b64_encode(bytes)));
+    if !stem.is_empty() {
+        params.insert("name".into(), json!(stem));
+    }
+    let imported = app.run("edit.importProfile", Value::Object(params))?;
+    let path = imported.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+    let space = imported.get("colorSpace").and_then(Value::as_str).unwrap_or("").to_string();
+    let description = imported.get("description").and_then(Value::as_str).unwrap_or("").to_string();
+    if let Some(dialog) = app.ui.dialogs.iter_mut().find(|dialog| dialog.id == dialog_id) {
+        let cmd = dialog.fields.get("__command").and_then(Value::as_str).unwrap_or("").to_string();
+        if offers_profile_load(&cmd) {
+            apply_imported_profile(&mut dialog.fields, &cmd, &path, &space);
+        }
+    }
+    if !description.is_empty() {
+        app.ui.status = description;
+        app.ui.status_error = false;
+    }
+    Ok(imported)
+}
+
 /// Commands whose `angle` is a direction in document angles (counter-clockwise from three
 /// o'clock): a light or a blur direction, edited on a dial as in Photoshop's Motion Blur, Emboss
 /// and Global Light (#3152). Rotation amounts (Twirl, Rotate Arbitrary, Crop, Lens Correction,
@@ -712,12 +780,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let labels: Vec<String> = options.iter().map(|o| choice_label(o)).collect();
                     let mut opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                     // Like Photoshop, the profile menus also list every profile installed in
-                    // the system (printer and paper profiles), by description.
-                    let installed = if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) {
-                        photocraft_engine::installed_profiles::installed().into_iter().filter(|i| i.is_destination()).collect()
-                    } else {
-                        Vec::new()
-                    };
+                    // the system or imported into the app's Profiles folder, by description.
+                    let installed = installed_profile_options(&cmd, &p.key);
                     opts.extend(installed.iter().map(|i| (i.path.clone(), i.description.as_str())));
                     // Assign Profile: only what the document's colour mode can take (#4951).
                     if p.key == "profile"
@@ -728,7 +792,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     // A profile given by path that isn't listed (typed by an agent, or spelled with
                     // different case) still shows, by its file name, instead of a blank menu.
                     let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) && !opts.iter().any(|(v, _)| *v == cur) {
+                    let extra = (p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()))
+                        || (cmd == "edit.colorSettings" && color_settings_space(&p.key).is_some());
+                    if extra && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
@@ -2274,6 +2340,38 @@ mod tests {
         assert!(rgb.iter().any(|o| o == "srgb") && !rgb.iter().any(|o| o == "coated-cmyk"), "an RGB document gets RGB profiles");
         let (cmyk, _) = assign_profile_offers(Some("image.mode.cmyk"));
         assert!(cmyk.iter().any(|o| o == "coated-cmyk") && !cmyk.iter().any(|o| o == "srgb"), "a CMYK document gets CMYK profiles");
+    }
+
+    #[test]
+    fn loading_a_profile_selects_it_in_the_matching_menu() {
+        let dir = std::env::temp_dir().join(format!("pc-ui-icc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        photocraft_engine::installed_profiles::set_user_dir(Some(dir.clone()));
+        struct Reset(std::path::PathBuf);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                photocraft_engine::installed_profiles::set_user_dir(None);
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _reset = Reset(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let color = open(&mut app, "edit.colorSettings").unwrap();
+        let cmyk = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+        import_picked_profile(&mut app, color, "press.icc", cmyk.as_ref()).unwrap();
+        let fields = &app.ui.dialogs.iter().find(|d| d.id == color).unwrap().fields;
+        let path = fields["workingCmyk"].as_str().unwrap().to_string();
+        assert!(path.ends_with("press.icc"), "{path}");
+        assert_eq!(fields["workingRgb"], json!("srgb"));
+        assert!(installed_profile_options("edit.colorSettings", "workingCmyk").iter().any(|p| p.path == path));
+        assert!(installed_profile_options("edit.colorSettings", "workingRgb").iter().all(|p| p.path != path));
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let proof = open(&mut app, "view.proofSetup").unwrap();
+        import_picked_profile(&mut app, proof, "press.icc", cmyk.as_ref()).unwrap();
+        assert_eq!(app.ui.dialogs.iter().find(|d| d.id == proof).unwrap().fields["profile"], json!(path));
+        assert!(offers_profile_load("edit.colorSettings") && offers_profile_load("view.proofSetup"));
+        assert!(!offers_profile_load("edit.assignProfile"));
     }
 
     /// #4951: a profile remembered from a document of another colour mode isn't preselected.

@@ -11,7 +11,11 @@
 //! the same ICC bytes. Native Wayland, including Xwayland windows opened from a Wayland session,
 //! reports no display profiles: eframe/winit has no safe way to set the app surface's Wayland
 //! image description, so applying the output ICC in PhotoCraft could double-transform it.
-//! Other platforms report no displays (sRGB, or the profile chosen in Color Settings).
+//! Windows: every display attached to the desktop, with the ICC profile
+//! `WcsGetDefaultColorProfile` reports for that device (the current user, then the system
+//! default). A missing reader, a failed call or a profile that is not a usable RGB display
+//! profile leaves the canvas on sRGB. Other platforms report no displays (sRGB, or the profile
+//! chosen in Color Settings).
 
 use std::sync::mpsc::Receiver;
 
@@ -23,11 +27,11 @@ pub type Detection = Result<Vec<Display>, String>;
 /// Starts reading the displays in the background; `None` when the platform has no reader.
 #[cfg(not(target_os = "linux"))]
 pub fn detect_async() -> Option<Receiver<Detection>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         Some(spawn_reader(detect))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         None
     }
@@ -41,7 +45,7 @@ pub fn detect_async_for_session(session: crate::linux_libs::DisplaySession) -> O
     (session == crate::linux_libs::DisplaySession::X11).then(|| spawn_reader(detect))
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn spawn_reader(detect: fn() -> Detection) -> Receiver<Detection> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -89,10 +93,29 @@ const HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// `timeout`, is an error (and is killed and reaped), so a hung reading can't block later ones.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn run_helper(cmd: &mut std::process::Command, timeout: std::time::Duration) -> Result<String, String> {
+    run_helper_input(cmd, timeout, None)
+}
+
+/// [`run_helper`] that writes `input` to the helper's standard input (Windows PowerShell reads its
+/// script that way; the command line is too short for it).
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+fn run_helper_input(cmd: &mut std::process::Command, timeout: std::time::Duration, input: Option<&[u8]>) -> Result<String, String> {
     use std::io::Read;
     use std::process::Stdio;
-    let mut child =
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run the display profile reader: {e}"))?;
+    let mut child = cmd
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("couldn't run the display profile reader: {e}"))?;
+    if let Some(bytes) = input {
+        let bytes = bytes.to_vec();
+        let mut stdin = child.stdin.take().ok_or_else(|| "the display profile reader has no input".to_string())?;
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&bytes);
+        });
+    }
     // Drain both pipes while waiting: a reply larger than the pipe buffer would otherwise block
     // the helper until the deadline.
     let drain = |p: Option<Box<dyn Read + Send>>| {
@@ -131,6 +154,184 @@ fn run_helper(cmd: &mut std::process::Command, timeout: std::time::Duration) -> 
         return Err(format!("reading the display profiles failed ({status}){}", if first.is_empty() { String::new() } else { format!(": {first}") }));
     }
     Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// One line per attached display, primary first: id, frame (x, y, width, height in pixels,
+/// top-left origin, y down), the profile as base64, the profile file name and the display name.
+/// Windows PowerShell 5.1 compiles this with the C# 5 compiler (`Add-Type`), so the embedded
+/// program stays on that language. `WcsGetDefaultColorProfileSize` reports the name buffer in
+/// bytes; the call then asks `mscms` for the current user's ICC profile (`CPT_ICC`, `CPST_NONE`)
+/// and, if that is unset, the system-wide one.
+#[cfg(any(test, target_os = "windows"))]
+const WINDOWS_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class PcDisplay {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct DISPLAY_DEVICE {
+    public int cb;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+    public int StateFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+  }
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion;
+    public short dmDriverVersion;
+    public short dmSize;
+    public short dmDriverExtra;
+    public int dmFields;
+    public int dmPositionX;
+    public int dmPositionY;
+    public int dmDisplayOrientation;
+    public int dmDisplayFixedOutput;
+    public short dmColor;
+    public short dmDuplex;
+    public short dmYResolution;
+    public short dmTTOption;
+    public short dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel;
+    public int dmPelsWidth;
+    public int dmPelsHeight;
+  }
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool EnumDisplayDevices(string device, uint index, ref DISPLAY_DEVICE dd, uint flags);
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool EnumDisplaySettings(string device, int mode, ref DEVMODE dm);
+
+  [DllImport("mscms.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool WcsGetDefaultColorProfileSize(uint scope, string device, uint cpt, uint cpst, uint id, out uint cb);
+
+  [DllImport("mscms.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool WcsGetDefaultColorProfile(uint scope, string device, uint cpt, uint cpst, uint id, uint cb, IntPtr name);
+
+  public static string Read() {
+    StringBuilder primary = new StringBuilder();
+    StringBuilder rest = new StringBuilder();
+    for (uint i = 0; i < 64; i++) {
+      DISPLAY_DEVICE dd = new DISPLAY_DEVICE();
+      dd.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
+      if (!EnumDisplayDevices(null, i, ref dd, 0)) break;
+      if ((dd.StateFlags & 1) == 0) continue;
+      if ((dd.StateFlags & 8) != 0) continue;
+      int x = 0, y = 0, w = 0, h = 0;
+      DEVMODE dm = new DEVMODE();
+      dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+      if (EnumDisplaySettings(dd.DeviceName, -1, ref dm)) {
+        x = dm.dmPositionX;
+        y = dm.dmPositionY;
+        w = dm.dmPelsWidth;
+        h = dm.dmPelsHeight;
+      }
+      uint id = i + 1;
+      string digits = TrailingDigits(dd.DeviceName);
+      uint parsed;
+      if (digits != null && uint.TryParse(digits, out parsed) && parsed != 0) id = parsed;
+      string icc = "";
+      string profile = "";
+      try {
+        string path = ProfilePath(dd.DeviceName);
+        if (path != null) {
+          string encoded = ReadIcc(path);
+          if (encoded != null) {
+            icc = encoded;
+            profile = Path.GetFileName(path);
+          }
+        }
+      } catch {
+      }
+      string name = dd.DeviceString;
+      if (string.IsNullOrEmpty(name)) name = dd.DeviceName;
+      if (string.IsNullOrEmpty(name)) name = "Display " + id.ToString(CultureInfo.InvariantCulture);
+      string line = string.Format(CultureInfo.InvariantCulture, "{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}", id, x, y, w, h, icc, Clean(profile), Clean(name));
+      if ((dd.StateFlags & 4) != 0 && primary.Length == 0) primary.AppendLine(line);
+      else rest.AppendLine(line);
+    }
+    return primary.ToString() + rest.ToString();
+  }
+
+  static string ProfilePath(string device) {
+    uint[] scopes = new uint[] { 1u, 0u };
+    for (int s = 0; s < scopes.Length; s++) {
+      uint cb;
+      if (!WcsGetDefaultColorProfileSize(scopes[s], device, 0u, 4u, 0u, out cb)) continue;
+      if (cb < 4 || cb > 65536 || (cb % 2) != 0) continue;
+      IntPtr mem = Marshal.AllocHGlobal((int)cb);
+      try {
+        if (!WcsGetDefaultColorProfile(scopes[s], device, 0u, 4u, 0u, cb, mem)) continue;
+        string found = Marshal.PtrToStringUni(mem);
+        if (string.IsNullOrEmpty(found)) continue;
+        if (!Path.IsPathRooted(found)) {
+          string root = Environment.GetEnvironmentVariable("SystemRoot");
+          if (string.IsNullOrEmpty(root)) root = "C:\\Windows";
+          found = Path.Combine(Path.Combine(root, "System32\\spool\\drivers\\color"), found);
+        }
+        if (File.Exists(found)) return found;
+      } finally {
+        Marshal.FreeHGlobal(mem);
+      }
+    }
+    return null;
+  }
+
+  static string ReadIcc(string path) {
+    const long MaxBytes = 32L * 1024L * 1024L;
+    using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+      if (fs.Length < 132 || fs.Length > MaxBytes) return null;
+      byte[] buf = new byte[(int)fs.Length];
+      int got = 0;
+      while (got < buf.Length) {
+        int n = fs.Read(buf, got, buf.Length - got);
+        if (n <= 0) return null;
+        got += n;
+      }
+      if (buf[36] != (byte)'a' || buf[37] != (byte)'c' || buf[38] != (byte)'s' || buf[39] != (byte)'p') return null;
+      return Convert.ToBase64String(buf);
+    }
+  }
+
+  static string TrailingDigits(string s) {
+    if (string.IsNullOrEmpty(s)) return null;
+    int i = s.Length;
+    while (i > 0 && s[i - 1] >= '0' && s[i - 1] <= '9') i--;
+    if (i == s.Length) return null;
+    return s.Substring(i);
+  }
+
+  static string Clean(string s) {
+    if (string.IsNullOrEmpty(s)) return "";
+    return s.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+  }
+}
+'@
+[PcDisplay]::Read()
+"#;
+
+#[cfg(target_os = "windows")]
+fn detect() -> Detection {
+    let mut cmd = std::process::Command::new(powershell());
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"]);
+    parse_reply_top_left(&run_helper_input(&mut cmd, HELPER_TIMEOUT, Some(WINDOWS_SCRIPT.as_bytes()))?)
+}
+
+#[cfg(target_os = "windows")]
+fn powershell() -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
+    let full = root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    if full.is_file() { full } else { std::path::PathBuf::from("powershell.exe") }
 }
 
 #[cfg(target_os = "linux")]
@@ -358,6 +559,17 @@ mod linux {
 /// (the coordinates window positions use). Lines that don't parse are skipped.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn parse_reply(out: &str) -> Detection {
+    parse_displays(out, true)
+}
+
+/// Windows (and any helper that already reports a top-left, y-down frame). Negative coordinates
+/// are a monitor to the left of or above the primary; they are not flipped.
+#[cfg(any(test, target_os = "windows"))]
+fn parse_reply_top_left(out: &str) -> Detection {
+    parse_displays(out, false)
+}
+
+fn parse_displays(out: &str, cocoa_y_up: bool) -> Detection {
     let mut displays = Vec::new();
     let mut primary_height = None;
     for line in out.lines().filter(|l| !l.trim().is_empty()) {
@@ -366,7 +578,7 @@ fn parse_reply(out: &str) -> Detection {
         let num = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite());
         let (Some(id), Some(x), Some(y), Some(w), Some(h)) = (display_id(id), num(x), num(y), num(w), num(h)) else { continue };
         // Cocoa frames are relative to the primary screen's bottom-left corner, y up.
-        let top = *primary_height.get_or_insert(h) - (y + h);
+        let top = if cocoa_y_up { *primary_height.get_or_insert(h) - (y + h) } else { y };
         let name = name.trim();
         let name = if name.is_empty() { format!("Display {id}") } else { name.to_string() };
         let b64 = b64.trim();
@@ -521,6 +733,35 @@ mod tests {
             s.push('=');
         }
         s
+    }
+
+    #[test]
+    fn windows_reader_uses_the_display_profile_api_and_keeps_top_left_frames() {
+        let script = WINDOWS_SCRIPT;
+        for needle in ["WcsGetDefaultColorProfile", "WcsGetDefaultColorProfileSize", "EnumDisplayDevices", "EnumDisplaySettings", "mscms.dll"] {
+            assert!(script.contains(needle), "{needle}");
+        }
+        // Current user (1), then system-wide (0); CPT_ICC is 0 and CPST_NONE is 4.
+        assert!(script.contains("new uint[] { 1u, 0u }"), "{script}");
+        assert!(script.contains("0u, 4u, 0u"), "{script}");
+        let mut icc = vec![0u8; 132];
+        icc[36..40].copy_from_slice(b"acsp");
+        let b64 = base64_encode(&icc);
+        let reply = format!("1\t0\t0\t1920\t1080\t{b64}\tMonitor.icc\tPrimary\n2\t1920\t-200\t1280\t800\t\t\tAbove\n");
+        let d = parse_reply_top_left(&reply).unwrap();
+        assert_eq!(d[0].frame, [0.0, 0.0, 1920.0, 1080.0]);
+        assert_eq!(d[1].frame, [1920.0, -200.0, 1280.0, 800.0]);
+        assert_eq!(d[0].icc.as_ref().map(|bytes| bytes.as_slice()), Some(icc.as_slice()));
+        assert!(d[1].icc.is_none());
+        // The Cocoa reader would have flipped that negative y; this parser must not.
+        assert_ne!(parse_reply(&reply).unwrap()[1].frame[1], -200.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_stdin_is_the_script_the_reader_runs() {
+        let out = run_helper_input(std::process::Command::new("/bin/sh").arg("-s"), std::time::Duration::from_secs(5), Some(b"printf 'icc-script'")).unwrap();
+        assert_eq!(out, "icc-script");
     }
 
     /// On a Mac, every display is read, and the profiles parse as RGB profiles.

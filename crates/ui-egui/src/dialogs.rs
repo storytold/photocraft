@@ -355,17 +355,37 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // OK / Cancel buttons stay inside a small window. The preview window below the
                     // parameters reserves its own space (#3769).
                     let room = (ctx.content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(&fields)).max(120.0);
-                    let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
+                    let dialog_id = d.id;
+                    let mut load_profile = false;
+                    let mut body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
                         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| crate::filter_dialog::body(ui, fields));
+                        // Color Settings and Proof Setup: copy an .icc/.icm into the app's Profiles
+                        // folder and select it in the working-space or proof menu it belongs to.
+                        let command = fields.get("__command").and_then(Value::as_str).unwrap_or("");
+                        if crate::filter_dialog::offers_profile_load(command) {
+                            ui.add_space(6.0);
+                            if crate::widgets::secondary_button(ui, tl!("Load…"), 84.0).clicked() {
+                                load_profile = true;
+                            }
+                        }
                         // The in-dialog preview window sits under the scrolling parameters (#3769),
                         // so it never shifts them.
-                        crate::filter_preview_ui::window(app, d.id, ui, fields);
+                        crate::filter_preview_ui::window(app, dialog_id, ui, fields);
                     };
                     // Select and Mask leaves the keyboard to its view keys (F, X, O, V…).
                     if crate::select_mask_view::owns(&fields) {
                         body(ui, &mut fields);
                     } else {
                         first_field_focused(ui, id, |ui| body(ui, &mut fields));
+                    }
+                    if load_profile
+                        && let Err(e) = app.pick_file_bytes_filtered(&["icc", "icm"], move |app, name, bytes| {
+                            crate::filter_dialog::import_picked_profile(app, dialog_id, &name, &bytes)
+                        })
+                        && e != crate::file_dialog::CANCELLED
+                    {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
                     }
                 }
                 DialogKind::Command if crate::new_guide_ui::owns(&fields) => crate::new_guide_ui::body(ui, &mut fields),

@@ -336,7 +336,7 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
 
 fn profile_command_may_read_ambient(id: &str, params: &Value) -> bool {
     // Installed profiles scan OS and user directories even without a request path.
-    if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.installedProfiles" | "view.proofSetup") {
+    if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.importProfile" | "edit.installedProfiles" | "view.proofSetup") {
         return true;
     }
     matches!(id, "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo")
@@ -696,6 +696,7 @@ mod tests {
             "measurementLog.export",
             "layer.videoLayers.reloadFrame",
             "edit.colorSettings",
+            "edit.importProfile",
         ] {
             assert!(authorize_engine_command(id, &serde_json::json!({})).is_err());
         }

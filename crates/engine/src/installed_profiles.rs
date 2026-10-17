@@ -3,7 +3,10 @@
 //! a user installs (Windows › Install Profile, macOS ColorSync, Linux `~/.local/share/icc`) appear
 //! by their description, and the commands take the file's path.
 //!
-//! `edit.installedProfiles` lists them for agents; the dialogs call [`installed`].
+//! `edit.importProfile` copies a loose `.icc`/`.icm` (a RIP or printer profile, for example) into
+//! the app's `Profiles` folder so it stays available as a working space, a proof profile and, when
+//! it is an output profile, a printer profile. `edit.installedProfiles` lists everything the
+//! dialogs offer; they call [`installed`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -61,7 +64,29 @@ pub fn profile_dirs() -> Vec<PathBuf> {
             v.push(h.join(".color/icc"));
         }
     }
+    if let Some(dir) = user_dir() {
+        v.push(dir);
+    }
     v
+}
+
+/// An explicit folder from [`set_user_dir`], otherwise `PHOTOCRAFT_CONFIG_DIR/Profiles` when that
+/// variable is set. `None` until the app (or a test) chooses one and the variable is unset.
+static USER_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Store imported profiles in `path` (the desktop app passes its settings directory's `Profiles`
+/// folder). `None` forgets that override. The next [`installed`] scan sees the change.
+pub fn set_user_dir(path: Option<PathBuf>) {
+    *USER_DIR.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+    invalidate_cache();
+}
+
+/// The folder [`import_bytes`] writes to.
+pub fn user_dir() -> Option<PathBuf> {
+    if let Some(dir) = USER_DIR.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+        return Some(dir);
+    }
+    std::env::var_os("PHOTOCRAFT_CONFIG_DIR").filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("Profiles"))
 }
 
 /// Every profile under `dirs` that parses, sorted by description; unreadable or malformed files
@@ -115,22 +140,190 @@ fn read_one(path: &Path) -> Option<InstalledProfile> {
 /// within this long.
 const FRESH: std::time::Duration = std::time::Duration::from_secs(10);
 
+type Cache = Mutex<Option<(std::time::Instant, Vec<InstalledProfile>)>>;
+static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+
+fn cache() -> &'static Cache {
+    CACHE.get_or_init(Default::default)
+}
+
+fn invalidate_cache() {
+    *cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
 /// The installed profiles (cached; see [`FRESH`]). Empty on the web.
 pub fn installed() -> Vec<InstalledProfile> {
     if cfg!(target_arch = "wasm32") {
         return Vec::new();
     }
-    type Cache = Mutex<Option<(std::time::Instant, Vec<InstalledProfile>)>>;
-    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((at, list)) = cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    if let Some((at, list)) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
         && at.elapsed() < FRESH
     {
         return list.clone();
     }
     let list = scan(&profile_dirs());
-    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), list.clone()));
+    *cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((std::time::Instant::now(), list.clone()));
     list
+}
+
+/// Copy `bytes` into [`user_dir`] under a single-component `.icc` name and return the listing
+/// entry. The same bytes are not written twice. A file that does not parse, or is not an RGB,
+/// CMYK or Gray input, display, output or colour-space profile, is refused and nothing is written.
+pub fn import_bytes(bytes: &[u8], name: Option<&str>) -> Result<InstalledProfile> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(import_err("importing an ICC profile is not available in the web build"));
+    }
+    if bytes.is_empty() {
+        return Err(import_err("the file is empty"));
+    }
+    if bytes.len() > MAX_BYTES as usize {
+        return Err(import_err(format!("the file is larger than {} MiB", MAX_BYTES >> 20)));
+    }
+    let parsed = Profile::parse(bytes).map_err(|e| import_err(e.to_string()))?;
+    let listed = InstalledProfile { path: String::new(), description: String::new(), class: parsed.class, color_space: parsed.color_space };
+    if !listed.is_destination() {
+        return Err(import_err(format!(
+            "only RGB, CMYK and Gray input, display, output or color-space profiles can be imported (this one is {} {})",
+            class_id(parsed.class),
+            space_id(parsed.color_space)
+        )));
+    }
+    let dir = user_dir().ok_or_else(|| {
+        import_err("no profile folder is configured; PhotoCraft stores imported profiles in the Profiles folder under its settings directory")
+    })?;
+    let stem_src = name.filter(|s| !s.trim().is_empty()).unwrap_or(parsed.description.as_str());
+    let stem = sanitize_stem(stem_src);
+    let path = store_profile(&dir, &stem, bytes)?;
+    invalidate_cache();
+    let description = if parsed.description.trim().is_empty() { stem } else { parsed.description.trim().to_string() };
+    Ok(InstalledProfile { path: path.to_string_lossy().into_owned(), description, class: parsed.class, color_space: parsed.color_space })
+}
+
+fn import_err(msg: impl Into<String>) -> EngineError {
+    EngineError::BadParams { cmd: "edit.importProfile".into(), msg: msg.into() }
+}
+
+/// A single path component: no separators, no `..`, and not a Windows device name.
+fn sanitize_stem(raw: &str) -> String {
+    let base = raw.trim().rsplit(['/', '\\']).next().unwrap_or(raw);
+    let stem = Path::new(base).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let mut out = String::new();
+    for c in stem.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') {
+            out.push(c);
+        } else if !c.is_control() {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches(|c: char| c == '.' || c == ' ' || c == '_');
+    let mut out: String = trimmed.chars().take(80).collect();
+    while out.ends_with(' ') || out.ends_with('.') || out.ends_with('_') {
+        out.pop();
+    }
+    if out.is_empty() || reserved_device_name(&out) { "profile".to_string() } else { out }
+}
+
+fn reserved_device_name(stem: &str) -> bool {
+    matches!(
+        stem.to_ascii_lowercase().as_str(),
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    )
+}
+
+/// `stem.icc`, or `stem 2.icc` when that name already holds different bytes. An identical file is
+/// reused. The name is one component, so the write cannot leave `dir`.
+fn store_profile(dir: &Path, stem: &str, bytes: &[u8]) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).map_err(|e| import_err(format!("{}: {e}", dir.display())))?;
+    for n in 0..100u32 {
+        let name = if n == 0 { format!("{stem}.icc") } else { format!("{stem} {}.icc", n + 1) };
+        let path = dir.join(&name);
+        match std::fs::read(&path) {
+            Ok(existing) if existing == bytes => return Ok(path),
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let tmp = dir.join(format!(".{name}.tmp"));
+                if let Err(e) = std::fs::write(&tmp, bytes) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(import_err(format!("{}: {e}", tmp.display())));
+                }
+                if let Err(e) = std::fs::rename(&tmp, &path) {
+                    let _ = std::fs::remove_file(&tmp);
+                    if path.is_file() {
+                        continue;
+                    }
+                    return Err(import_err(format!("{}: {e}", path.display())));
+                }
+                return Ok(path);
+            }
+            Err(e) => return Err(import_err(format!("{}: {e}", path.display()))),
+        }
+    }
+    Err(import_err(format!("too many profiles named {stem}")))
+}
+
+fn import_cmd(_: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "edit.importProfile".into(), msg };
+    if let Some(n) = p.get("name")
+        && !n.is_null()
+        && !n.is_string()
+    {
+        return Err(bad(format!("`name` must be a string, not {n}")));
+    }
+    let name = p.get("name").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
+    let bytes = profile_bytes(p)?;
+    let imported = import_bytes(&bytes, name.as_deref())?;
+    Ok(json!({
+        "path": imported.path,
+        "description": imported.description,
+        "class": class_id(imported.class),
+        "colorSpace": space_id(imported.color_space),
+    }))
+}
+
+/// Base64 `data`, or the bytes at `path`. `data` wins when both are present. The file's size is
+/// checked before it is read.
+fn profile_bytes(p: &Value) -> Result<Vec<u8>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "edit.importProfile".into(), msg };
+    if let Some(data) = p.get("data").filter(|v| !v.is_null()) {
+        let s = data.as_str().ok_or_else(|| bad(format!("`data` must be a base64 string, not {data}")))?;
+        let max_b64 = MAX_BYTES.saturating_mul(4) / 3 + 4;
+        if s.len() as u64 > max_b64 {
+            return Err(bad(format!("`data` is larger than {} MiB", MAX_BYTES >> 20)));
+        }
+        return photocraft_paint::tile::b64_decode(s).ok_or_else(|| bad("`data` is not valid base64".into()));
+    }
+    let path = p
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| bad("give `path` (an .icc or .icm file) or `data` (base64)".into()))?;
+    let len = std::fs::metadata(path).map_err(|e| bad(format!("{path}: {e}")))?.len();
+    if len > MAX_BYTES {
+        return Err(bad(format!("{path}: file is larger than {} MiB", MAX_BYTES >> 20)));
+    }
+    std::fs::read(path).map_err(|e| bad(format!("{path}: {e}")))
 }
 
 fn class_id(c: ProfileClass) -> &'static str {
@@ -172,18 +365,30 @@ fn list(_: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"profiles": profiles, "dirs": dirs}))
 }
 
-/// `edit.installedProfiles`.
+/// `edit.installedProfiles` and `edit.importProfile`.
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec {
-        id: "edit.installedProfiles",
-        label: "Installed Profiles",
-        menu: &[],
-        shortcut: None,
-        params: r##"{"class":"any|input|display|output|deviceLink|colorSpace|abstract|namedColor"="any","colorSpace":"any|rgb|cmyk|gray"="any"} → {profiles: [{path, description, class, colorSpace}], dirs} (the OS profile folders; pass a path as any command's "profile")"##,
-        enabled: |_| Ok(()),
-        run: list,
-        journal: false,
-    }]
+    vec![
+        CommandSpec {
+            id: "edit.installedProfiles",
+            label: "Installed Profiles",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"class":"any|input|display|output|deviceLink|colorSpace|abstract|namedColor"="any","colorSpace":"any|rgb|cmyk|gray"="any"} → {profiles: [{path, description, class, colorSpace}], dirs} (the OS profile folders and the app's Profiles folder; pass a path as any command's "profile")"##,
+            enabled: |_| Ok(()),
+            run: list,
+            journal: false,
+        },
+        CommandSpec {
+            id: "edit.importProfile",
+            label: "Import Profile",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"path":"<file.icc>","data":"<base64>","name":"<file name>"} → {path, description, class, colorSpace} (`data` wins when both are set). Copies an RGB, CMYK or Gray input, display, output or color-space .icc/.icm into the app's Profiles folder (the settings directory, or PHOTOCRAFT_CONFIG_DIR/Profiles). The working-space, proof and print menus then list it; a bad file is refused and nothing is written."##,
+            enabled: |_| Ok(()),
+            run: import_cmd,
+            journal: false,
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -236,5 +441,98 @@ mod tests {
         for bad in [json!({"class": 3}), json!({"class": "printer"}), json!({"colorSpace": "lab"}), json!({"colorSpace": []})] {
             assert!(s.execute("edit.installedProfiles", bad).is_err());
         }
+    }
+
+    fn dir_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Keep imported-profile tests from pointing the process-wide folder at two places at once.
+    fn with_user_dir(tag: &str, body: impl FnOnce(&Path)) {
+        let _guard = dir_lock();
+        let d = temp_dir(tag);
+        set_user_dir(Some(d.clone()));
+        struct Reset(PathBuf);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                set_user_dir(None);
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _reset = Reset(d.clone());
+        body(&d);
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        photocraft_paint::tile::b64_encode(bytes)
+    }
+
+    #[test]
+    fn import_stores_a_profile_rejects_bad_files_and_can_be_selected() {
+        with_user_dir("import", |dir| {
+            let mut s = Session::new();
+            assert!(s.execute("edit.importProfile", json!({})).is_err());
+            for bad in [
+                json!({"path": 1}),
+                json!({"data": "@@@@"}),
+                json!({"data": ""}),
+                json!({"name": 3}),
+                json!({"path": dir.join("missing.icc")}),
+                json!({"data": b64(b"not a profile")}),
+                json!({"data": b64(b"")}),
+            ] {
+                assert!(s.execute("edit.importProfile", bad).is_err(), "accepted a bad profile");
+            }
+            // A class or colour space the working-space menus cannot use is refused before a write.
+            let mut abstract_rgb = Builtin::Srgb.profile().to_bytes().as_ref().clone();
+            abstract_rgb[12..16].copy_from_slice(b"abst");
+            assert!(import_bytes(&abstract_rgb, Some("abstract")).is_err());
+            assert!(import_bytes(&vec![0u8; MAX_BYTES as usize + 1], Some("huge")).is_err());
+            let big = dir.join("big.icc");
+            std::fs::File::create(&big).unwrap().set_len(MAX_BYTES + 1).unwrap();
+            assert!(s.execute("edit.importProfile", json!({"path": big})).is_err());
+            let names: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            assert!(names.iter().all(|n| n == "vendor" || n == "big.icc" || n.starts_with('.')), "a rejected profile was written: {names:?}");
+
+            let cmyk = Builtin::CoatedCmyk.profile().to_bytes();
+            let imported = s.execute("edit.importProfile", json!({"data": b64(cmyk.as_ref()), "name": "../../Press CMYK"})).unwrap();
+            let path = imported["path"].as_str().unwrap();
+            let stored = Path::new(path);
+            assert_eq!(stored.parent(), Some(dir));
+            assert!(stored.file_name().unwrap().to_string_lossy().ends_with(".icc"));
+            assert!(!path.contains(".."));
+            assert_eq!(imported["colorSpace"], "cmyk");
+            assert_eq!(std::fs::read(stored).unwrap(), cmyk.as_ref().as_slice());
+            // The same bytes are not copied again, and the menus can resolve the stored path.
+            let again = s.execute("edit.importProfile", json!({"data": b64(cmyk.as_ref()), "name": "Press CMYK"})).unwrap();
+            assert_eq!(again["path"], path);
+            assert!(installed().iter().any(|p| p.path == path && p.color_space == ColorSpace::Cmyk));
+            s.execute("edit.colorSettings", json!({"workingCmyk": path, "monitorProfile": "auto"})).unwrap();
+            assert_eq!(s.color.settings.working_cmyk, path);
+            s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            s.execute("view.proofSetup", json!({"profile": path})).unwrap();
+
+            let rgb = Builtin::Srgb.profile().to_bytes();
+            let screen = s.execute("edit.importProfile", json!({"data": b64(rgb.as_ref()), "name": "Press CMYK"})).unwrap();
+            let screen_path = screen["path"].as_str().unwrap();
+            assert_ne!(screen_path, path);
+            assert!(screen_path.ends_with("Press CMYK 2.icc") || Path::new(screen_path).file_name() != stored.file_name());
+            assert!(s.execute("edit.colorSettings", json!({"workingCmyk": screen_path})).is_err());
+            s.execute("edit.colorSettings", json!({"workingRgb": screen_path, "monitorProfile": screen_path})).unwrap();
+            assert_eq!(s.color.settings.working_rgb, screen_path);
+            assert_eq!(s.color.settings.monitor_profile, screen_path);
+        });
+    }
+
+    #[test]
+    fn import_without_a_profile_folder_fails() {
+        let _guard = dir_lock();
+        if std::env::var_os("PHOTOCRAFT_CONFIG_DIR").is_some() {
+            return;
+        }
+        set_user_dir(None);
+        let err = import_bytes(Builtin::Srgb.profile().to_bytes().as_ref(), None).unwrap_err();
+        assert!(err.to_string().contains("Profiles"), "{err}");
     }
 }
