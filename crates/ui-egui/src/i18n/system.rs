@@ -88,6 +88,7 @@ mod tests {
             (vec!["uk-UA", "en-US"], "uk"),
             (vec!["sv-SE", "uk_UA.UTF-8", "ru-RU"], "uk"),
             (vec!["sv-SE", "ko-KR", "fr-FR"], "ko"),
+            (vec!["lo-LA", "en-US"], "lo"),
             (vec!["zh-Hant-HK", "zh-CN"], "zh-hant"),
             (vec!["zh-Hans-CN", "zh-TW"], "zh-hans"),
             (vec!["en-US", "ru-RU"], "en"),

@@ -15,6 +15,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("zh-CN", "zh-hans"),
         ("ja-JP", "ja"),
         ("ko-KR", "ko"),
+        ("lo-LA", "lo"),
         ("ru-RU", "ru"),
         ("uk-UA", "uk"),
         ("fr-CA", "fr"),
@@ -219,7 +220,7 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, P
 
 #[test]
 fn first_launch_renders_the_system_language_without_overwriting_auto() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr")] {
+    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("lo-LA", "lo"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr")] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
                 let h = harness();
@@ -286,7 +287,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "en"] {
+        for code in ["zh-hans", "ja", "ko", "lo", "ru", "uk", "fr", "id", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control_rx = Some(rx);
             let (request, reply) =
