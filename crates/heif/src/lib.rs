@@ -185,8 +185,8 @@ fn metadata(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) 
 /// the composed image's profile.
 ///
 /// heic-rs resolves `nclx` from the primary item in the same way and has the same gap
-/// (tbraun96/heic-rs#6). The sample range cannot be recovered here as well: `DecodeOptions` has no
-/// override for it, so that half has to be fixed upstream.
+/// (tbraun96/heic-rs#6). The sample range comes from the patched decoder (upstream
+/// tbraun96/heic-rs#7, temporary until it releases).
 fn icc_for_item(ctx: &heic_rs::context::Context<'_>, item: u32) -> Option<Vec<u8>> {
     let own = ctx.props(item).ok().and_then(|p| ctx.icc(&p).map(<[u8]>::to_vec));
     if own.is_some() {
