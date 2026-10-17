@@ -143,7 +143,9 @@ enum TexKind {
     Rgba16F,
     /// GRAY8 masks copied verbatim.
     R8Direct,
-    /// Other masks as R32F.
+    /// 16-bit masks as R16F (the precision 16-bit pixels get as RGBA16F).
+    R16F,
+    /// 32-bit masks as R32F.
     R32F,
 }
 
@@ -154,7 +156,8 @@ impl TexKind {
             Role::Content | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
             Role::Content | Role::Stroke => TexKind::Rgba16F,
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
-            Role::Mask => TexKind::R32F,
+            Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
+            Role::Mask => TexKind::R16F,
         }
     }
     fn format(self) -> wgpu::TextureFormat {
@@ -162,6 +165,7 @@ impl TexKind {
             TexKind::Rgba8Direct | TexKind::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
             TexKind::Rgba16F => wgpu::TextureFormat::Rgba16Float,
             TexKind::R8Direct => wgpu::TextureFormat::R8Unorm,
+            TexKind::R16F => wgpu::TextureFormat::R16Float,
             TexKind::R32F => wgpu::TextureFormat::R32Float,
         }
     }
@@ -170,6 +174,7 @@ impl TexKind {
             TexKind::Rgba8Direct | TexKind::Rgba8 => 4,
             TexKind::Rgba16F => 8,
             TexKind::R8Direct => 1,
+            TexKind::R16F => 2,
             TexKind::R32F => 4,
         }
     }
@@ -2203,6 +2208,7 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
                 }
             }
             TexKind::R8Direct => out.push((px[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
+            TexKind::R16F => out.extend(f32_to_f16(px[0]).to_le_bytes()),
             TexKind::R32F => out.extend(px[0].to_le_bytes()),
         }
     }
@@ -2532,6 +2538,28 @@ mod tests {
         assert_eq!(op_words(&p, None, None, None).len() as u64, OP_UNIFORM);
     }
 
+    /// #6534: a 16-bit mask (16-bit documents, feathered or vector combined masks) costs two
+    /// bytes per pixel on the GPU, twice an 8-bit mask, not four; 32-bit masks stay R32Float.
+    #[test]
+    fn sixteen_bit_masks_upload_at_two_bytes_per_pixel() {
+        let gray = |sample| PixelFormat { sample, ..PixelFormat::GRAY8 };
+        assert_eq!(TexKind::for_surface(Role::Mask, PixelFormat::GRAY8).bytes_per_pixel(), 1);
+        let k16 = TexKind::for_surface(Role::Mask, gray(SampleType::U16));
+        assert_eq!(k16.bytes_per_pixel(), 2, "{k16:?}");
+        assert_eq!(k16.format().block_copy_size(None), Some(2), "{k16:?}");
+        let k32 = TexKind::for_surface(Role::Mask, gray(SampleType::F32));
+        assert_eq!(k32.format(), wgpu::TextureFormat::R32Float);
+        // The texels hold the mask values (a half each), the default pixel included.
+        let mut s = Surface::with_default(gray(SampleType::U16), &[1.0]);
+        s.fill_rect(Rect::new(0, 0, 4, 1), &[0.25]);
+        let c = TileCoord::new(0, 0);
+        let bytes = convert_tile(&s, s.tile(c), k16, c);
+        assert_eq!(bytes.len(), (TILE_SIZE * TILE_SIZE) as usize * 2);
+        assert_eq!(bytes.get(..2), Some(f32_to_f16(0.25).to_le_bytes().as_slice()));
+        assert_eq!(bytes.get(8..10), Some(f32_to_f16(1.0).to_le_bytes().as_slice()));
+        assert_eq!(convert_tile(&s, None, k16, c).get(..2), Some(f32_to_f16(1.0).to_le_bytes().as_slice()));
+    }
+
     /// #1774: a solid fill shares one tile across every coordinate; it is converted once, and
     /// every coordinate (shared or not) still gets exactly the bytes `convert_tile` gives it, at
     /// every depth and texture kind.
@@ -2544,7 +2572,8 @@ mod tests {
             (PixelFormat::RGBA16, TexKind::Rgba16F),
             (PixelFormat::RGBA32F, TexKind::Rgba16F),
             (PixelFormat::GRAY8, TexKind::R8Direct),
-            (PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 }, TexKind::R32F),
+            (PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 }, TexKind::R16F),
+            (PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 }, TexKind::R32F),
         ] {
             let mut s = Surface::new(fmt);
             let px = [0.2, 0.4, 0.6, 1.0];
