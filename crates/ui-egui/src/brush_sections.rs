@@ -53,6 +53,23 @@ fn signed_pct(ui: &mut egui::Ui, label: &str, v: &mut f32, min: f32, max: f32) -
     changed
 }
 
+/// The checkbox labels the spacing field; toggling it must retain imported fractional values.
+fn spacing_row(ui: &mut egui::Ui, b: &mut BrushSettings) {
+    let mut percent = (b.spacing * 100.0).round();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        widgets::checkbox(ui, &mut b.spacing_enabled, tl!("Spacing")).on_hover_text(tl!("Off: the speed of the pointer sets the spacing"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            changed = ui.add_enabled_ui(b.spacing_enabled, |ui| widgets::value_field(ui, &mut percent, 1.0..=1000.0, "%", 74.0)).inner.changed();
+        });
+    });
+    changed |= ui.add_enabled_ui(b.spacing_enabled, |ui| widgets::slider(ui, &mut percent, 1.0..=1000.0, None)).inner.changed();
+    if changed {
+        b.spacing = (percent.round() / 100.0).clamp(0.01, 10.0);
+    }
+    ui.add_space(4.0);
+}
+
 fn num(ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> bool {
     let mut x = *v;
     let changed = widgets::slider_row(ui, label, &mut x, range.clone(), suffix, None).changed();
@@ -349,11 +366,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
     ui.add_enabled_ui(matches!(b.tip, TipShape::Round), |ui| {
         pct(ui, tl!("Hardness"), &mut b.hardness, 1.0);
     });
-    // Unchecked, the pointer's speed sets the spacing (Photoshop).
-    widgets::checkbox(ui, &mut b.spacing_enabled, tl!("Spacing")).on_hover_text(tl!("Off: the speed of the pointer sets the spacing"));
-    ui.add_space(2.0);
-    let on = b.spacing_enabled;
-    ui.add_enabled_ui(on, |ui| signed_pct(ui, tl!("Spacing"), &mut b.spacing, 0.01, 10.0));
+    spacing_row(ui, b);
     None
 }
 
@@ -667,6 +680,61 @@ mod tests {
         );
         h.run_steps(3);
         h
+    }
+
+    #[test]
+    fn spacing_row_has_one_label_and_a_shared_header_in_every_theme() {
+        for kind in theme::ThemeKind::ALL {
+            for enabled in [false, true] {
+                let b = BrushSettings { spacing: 0.427, spacing_enabled: enabled, ..Default::default() };
+                let mut h = section_harness(0, b.clone());
+                crate::PhotocraftApp::setup_context(&h.ctx, kind);
+                h.run_steps(3);
+                assert_eq!(h.query_all_by_label("Spacing").count(), 1, "{kind:?}: the checkbox is the single label");
+                let checkbox = h.get_by_label("Spacing").rect();
+                let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+                assert!((checkbox.center().y - field.rect().center().y).abs() < 2.0, "{kind:?}: checkbox and percentage share a row");
+                assert_eq!(field.accesskit_node().is_disabled(), !enabled);
+                assert_eq!(h.state(), &b, "rendering does not round the saved spacing");
+            }
+        }
+    }
+
+    #[test]
+    fn spacing_row_retains_disabled_values_and_percentage_editing_limits() {
+        let mut h = section_harness(0, BrushSettings { spacing: 0.42, spacing_enabled: false, ..Default::default() });
+        let before = h.state().clone();
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(42.0)).unwrap();
+        let from = pos2(field.rect().left() - 100.0, field.rect().bottom() + 9.0);
+        let to = pos2(field.rect().right() - 25.0, from.y);
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("999".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        drag(&mut h, from, to);
+        assert_eq!(h.state(), &before, "Off ignores both field input and a track drag");
+        let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+        checkbox.click();
+        h.run_steps(2);
+        assert!(h.state().spacing_enabled);
+        assert_eq!(h.state().spacing, 0.42, "enabling keeps the saved value");
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(42.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        assert_eq!(h.state().spacing, 0.43, "integer percentage edits become a fraction");
+        drag(&mut h, from, to);
+        assert!(h.state().spacing > 5.0, "the same track is editable when enabled");
+        for (spacing, value, key) in [(0.01, 1.0, egui::Key::ArrowDown), (10.0, 1000.0, egui::Key::ArrowUp)] {
+            h.state_mut().spacing = spacing;
+            h.run_steps(2);
+            let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(value)).unwrap();
+            field.click();
+            h.key_press(key);
+            h.run_steps(2);
+            assert_eq!(h.state().spacing, spacing, "the percentage stays within 1..1000");
+        }
     }
 
     /// #3825: jitter is an amount, not a hue selector; it uses the themed amount track.

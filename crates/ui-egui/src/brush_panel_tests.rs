@@ -562,6 +562,47 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[test]
+fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness(0, 0);
+    h.state_mut().run("tools.setBrush", json!({"brush": {"spacing": 0.427, "spacingEnabled": false}})).unwrap();
+    h.run_steps(2);
+    let journal = h.state().session.journal.len();
+    let spacing = h.state().session.tools.brush.spacing;
+    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    checkbox.click();
+    h.run_steps(2);
+    assert!(h.state().session.tools.brush.spacing_enabled);
+    assert_eq!(h.state().session.tools.brush.spacing, spacing);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": true}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacing": 0.44_f32}));
+    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": false}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(44.0)).unwrap();
+    assert!(field.accesskit_node().is_disabled());
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 3, "disabled input adds no command");
+    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 4);
+}
+
 fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
     let brush = serde_json::to_value(&app.session.tools.brush).unwrap();
     let path = match section {
