@@ -349,6 +349,31 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
     buf
 }
 
+/// [`render_layer`] in `doc`'s context: the layer alone over `rect`, with the document's patterns,
+/// Global Light, colour mode, depth and canvas (fill layers and gradients are laid out on it), as
+/// the canvas composites it. Bakes (Scripts › Flatten All Layer Effects) render through this so
+/// the pixels match what was on screen (#5719). Rects past [`MAX_RENDER_PIXELS`] give an empty
+/// buffer.
+pub fn render_layer_in(doc: &Document, layer: &Layer, rect: Rect) -> Buffer {
+    if rect.is_empty() {
+        return Buffer::transparent(rect);
+    }
+    if u64::from(rect.width()) * u64::from(rect.height()) > MAX_RENDER_PIXELS {
+        return Buffer::transparent(Rect::EMPTY);
+    }
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    // A lone layer: a deep knockout reveals transparency, not the document's Background.
+    let cx = Ctx { doc: None, ..Ctx::for_doc(doc, &patterns) };
+    let lab = doc.mode == photocraft_color::ColorMode::Lab;
+    let hdr = doc.depth == photocraft_color::SampleType::F32;
+    let cmyk = cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        let mut buf = Buffer::transparent(rect);
+        in_blend_space(lab, hdr, || composite_stack_at(std::slice::from_ref(layer), &mut buf, &cx, advanced::Scope::ROOT));
+        buf
+    })
+}
+
 /// Documents above this many pixels get thumbnails from a proxy (see [`proxy`]) when that is
 /// faithful; smaller ones are reduced from the exact composite.
 pub const PROXY_THUMBNAIL_PIXELS: u64 = 16 << 20;

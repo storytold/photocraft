@@ -709,6 +709,74 @@ fn flatten_all_layer_effects_keeps_masks() {
     }
 }
 
+/// Flattens all layer effects on a red square carrying `fx` (in a document prepared by `setup`)
+/// and asserts the composite did not change: the bake uses the document's own context (#5719).
+fn assert_flatten_effects_is_a_no_op(depth: u32, setup: impl FnOnce(&mut Document), fx: photocraft_doc::Effect) {
+    let mut s = session(40, 40, depth);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 14, "y": 14, "width": 12, "height": 12})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("fx", |doc, _| {
+        setup(doc);
+        let l = doc.layer_mut(id).unwrap();
+        l.effects.enabled = true;
+        l.effects.items.push(fx);
+        Ok(())
+    })
+    .unwrap();
+    let before = photocraft_compose::flatten(doc(&s));
+    assert_eq!(s.execute("file.scripts.flattenAllLayerEffects", json!({})).unwrap()["flattened"], 1);
+    let after = photocraft_compose::flatten(doc(&s));
+    for (i, (a, b)) in after.px.iter().zip(&before.px).enumerate() {
+        for k in 0..4 {
+            assert!((a[k] - b[k]).abs() < 0.02, "depth {depth}: pixel ({}, {}) changed: {b:?} -> {a:?}", i % 40, i / 40);
+        }
+    }
+}
+
+/// A Drop Shadow that uses Global Light is baked at the document's angle, not the default 120°.
+#[test]
+fn flatten_all_layer_effects_uses_the_documents_global_light() {
+    for depth in [8, 16, 32] {
+        let shadow = photocraft_doc::Effect::DropShadow(photocraft_doc::effects::Shadow {
+            common: photocraft_doc::effects::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            color: photocraft_color::Color::rgb(0.0, 0.0, 1.0),
+            angle: 120.0,
+            use_global_light: true,
+            distance: 10.0,
+            spread: 0.0,
+            size: 0.0,
+            contour: photocraft_doc::effects::Contour::Linear,
+            anti_alias: false,
+            noise: 0.0,
+            knocks_out: true,
+        });
+        assert_flatten_effects_is_a_no_op(depth, |d| d.global_light.angle = 0.0, shadow);
+    }
+}
+
+/// A Pattern Overlay of a document pattern survives the bake instead of vanishing.
+#[test]
+fn flatten_all_layer_effects_keeps_a_pattern_overlay() {
+    for depth in [8, 16, 32] {
+        let mut tile = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Rgb, photocraft_color::SampleType::U8, true));
+        tile.fill_rect(Rect::new(0, 0, 2, 2), &[0.0, 1.0, 0.0, 1.0]);
+        let pat = photocraft_doc::Pattern::new("green", tile, 2, 2);
+        let overlay = photocraft_doc::Effect::PatternOverlay {
+            common: photocraft_doc::effects::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            name: pat.name.clone(),
+            id: pat.id.clone(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        };
+        assert_flatten_effects_is_a_no_op(depth, |d| d.patterns.push(pat), overlay);
+    }
+}
+
 #[test]
 fn layers_to_files_writes_each_visible_layer() {
     let dir = tmp("layers");
