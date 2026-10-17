@@ -67,7 +67,7 @@ pub(crate) fn modal_drag_overlay(ctx: &egui::Context) {
     }
     egui::Area::new(Id::new("titlebar-modal-drag-overlay")).order(Order::Tooltip).fixed_pos(area.min).movable(false).sense(Sense::hover()).show(ctx, |ui| {
         let response = ui.allocate_rect(area, Sense::click_and_drag());
-        if response.drag_started() {
+        if response.drag_started_by(PointerButton::Primary) {
             ctx.send_viewport_cmd(ViewportCommand::StartDrag);
         }
         if response.double_clicked() {
@@ -608,9 +608,13 @@ mod tests {
         }
 
         fn gesture_with_modal(&mut self, path: &[Pos2], modal: bool) -> Vec<ViewportCommand> {
-            let mut events = vec![vec![Event::PointerMoved(path[0])], vec![button(path[0], true)]];
+            self.gesture_by(path, modal, egui::PointerButton::Primary)
+        }
+
+        fn gesture_by(&mut self, path: &[Pos2], modal: bool, btn: egui::PointerButton) -> Vec<ViewportCommand> {
+            let mut events = vec![vec![Event::PointerMoved(path[0])], vec![button(path[0], true, btn)]];
             events.extend(path[1..].iter().map(|p| vec![Event::PointerMoved(*p)]));
-            events.push(vec![button(*path.last().unwrap_or(&path[0]), false)]);
+            events.push(vec![button(*path.last().unwrap_or(&path[0]), false, btn)]);
             events
                 .into_iter()
                 .flat_map(|e| self.frame_with_modal(e, modal).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default())
@@ -654,8 +658,8 @@ mod tests {
         v
     }
 
-    fn button(p: Pos2, pressed: bool) -> Event {
-        Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+    fn button(p: Pos2, pressed: bool, button: egui::PointerButton) -> Event {
+        Event::PointerButton { pos: p, button, pressed, modifiers: Default::default() }
     }
 
     #[test]
@@ -759,6 +763,23 @@ mod tests {
     }
 
     #[test]
+    fn middle_button_drag_in_the_gap_does_not_start_a_window_drag() {
+        let mut w = Win::new(1440.0);
+        w.frame(vec![]);
+        let empty = pos2(980.0, 16.0);
+        let path = [empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)];
+        let cmds = w.gesture_by(&path, false, egui::PointerButton::Middle);
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
+        // An ordinary left drag afterwards still moves the window.
+        let cmds = w.gesture(&path);
+        assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
+        // Same with a modal open (the overlay over the gap).
+        w.frame_with_modal(vec![], true);
+        let cmds = w.gesture_by(&path, true, egui::PointerButton::Middle);
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
+    }
+
+    #[test]
     fn modal_drag_overlay_does_not_cover_a_dialog_moved_into_the_gap() {
         let mut w = Win::new(1440.0);
         w.frame(vec![]);
@@ -780,7 +801,7 @@ mod tests {
         let p = pos2(3.0, 300.0);
         // Press and drag; the compositor takes over, so no release ever arrives.
         let mut cmds = vec![];
-        for e in [vec![Event::PointerMoved(p)], vec![button(p, true)], vec![Event::PointerMoved(p + vec2(6.0, 0.0))]] {
+        for e in [vec![Event::PointerMoved(p)], vec![button(p, true, egui::PointerButton::Primary)], vec![Event::PointerMoved(p + vec2(6.0, 0.0))]] {
             cmds.extend(w.frame(e).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default());
         }
         assert!(cmds.contains(&ViewportCommand::BeginResize(ResizeDirection::West)), "{cmds:?}");
@@ -803,10 +824,10 @@ mod tests {
         w.frame(vec![]);
         let p = pos2(3.0, 300.0);
         w.frame(vec![Event::PointerMoved(p)]);
-        w.frame(vec![button(p, true)]);
+        w.frame(vec![button(p, true, egui::PointerButton::Primary)]);
         w.frame(vec![Event::PointerMoved(p + vec2(6.0, 0.0))]);
         // The release arrives with the next input.
-        let mut raw = RawInput { events: vec![button(p + vec2(6.0, 0.0), false)], ..Default::default() };
+        let mut raw = RawInput { events: vec![button(p + vec2(6.0, 0.0), false, egui::PointerButton::Primary)], ..Default::default() };
         release_after_os_resize(&w.ctx, &mut raw);
         assert_eq!(raw.events.len(), 1, "{:?}", raw.events);
         // Or it already arrived in an earlier input: egui has the button up, nothing to end.

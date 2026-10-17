@@ -595,7 +595,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let gap = egui::Rect::from_x_y_ranges(gap_l.max(full.left())..=gap_r.min(full.right()).max(gap_l), full.y_range());
             ui.ctx().data_mut(|d| d.insert_temp(crate::titlebar::modal_drag_area_id(), gap));
             let drag = ui.interact(gap, ui.id().with("titledrag"), Sense::click_and_drag());
-            if drag.drag_started() {
+            if drag.drag_started_by(egui::PointerButton::Primary) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if drag.double_clicked() {
