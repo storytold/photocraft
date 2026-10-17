@@ -65,6 +65,27 @@ fn camera_raw_opens_as_16_bit_with_notes() {
     assert!(open_bytes_as(&mut s, "bad.dng", &bad, None, None).is_err());
 }
 
+/// #5799: Batch with Format "Same" over a folder of camera raws saved nothing (every output was
+/// a raw PhotoCraft can't write). Raws are saved as PSD; other inputs keep their format.
+#[test]
+fn batch_same_format_saves_camera_raws_as_psd() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let dir = tmp("batch-same-raw");
+    let (w, h) = (24, 16);
+    std::fs::write(join(&dir, "IMG_0001.dng"), DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build()).unwrap();
+    png(&dir, "b.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let mut s = Session::new();
+    let r = s.execute("file.automate.batch", json!({"steps": [["image.adjustments.invert", {}]], "input": dir, "output": out, "format": "same"})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let mut files: Vec<String> = r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().replace('\\', "/")).collect();
+    files.sort();
+    assert_eq!(files.len(), 2, "{r}");
+    assert!(files[0].ends_with("/IMG_0001.psd") && files[1].ends_with("/b.png"), "{files:?}");
+    let psd = photocraft_io::import("IMG_0001.psd", &std::fs::read(&files[0]).unwrap()).unwrap().document;
+    assert_eq!((psd.size.width, psd.size.height), (w as u32, h as u32));
+}
+
 #[test]
 fn revert_reloads_as_one_undoable_step() {
     let dir = tmp("revert");
