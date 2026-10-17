@@ -3688,7 +3688,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if press_stroke {
                 buttons.clicked = false;
             }
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
+            let at = response.interact_pointer_pos();
+            // #6286: a guide let go over a ruler is removed, whichever ruler it is. Tested here in
+            // screen space, where the rulers are: on the guide's own axis the release can still be
+            // inside the document, which is what `finish_drag` sees.
+            if app.guide_drag.is_some() {
+                let on_ruler = at.is_some_and(|p| crate::rulers::dropped_on_a_ruler(app, full, p));
+                if let Some(g) = app.guide_drag.as_mut() {
+                    g.over_ruler = on_ruler;
+                }
+            }
+            let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p {
                 tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
