@@ -389,6 +389,31 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
 }
 
+/// Preferences › Interface › Animation Effects (#3273): on, a wheel notch glides the canvas to
+/// its new place over the frames that follow; off, it is there on the frame the notch arrives.
+#[test]
+fn animation_effects_off_pans_a_wheel_notch_at_once() {
+    for (choice, at_once) in [("on", false), ("off", true)] {
+        let mut h = app_window();
+        h.state_mut().run("prefs.set", json!({"path": "interface.animationEffects", "value": choice})).unwrap();
+        {
+            let v = &mut h.state_mut().ui.views[0];
+            (v.zoom, v.center, v.fit_pending) = (8.0, [200.0, 150.0], false);
+        }
+        h.run_steps(4);
+        h.hover_at(h.state().last_canvas_rect.center());
+        h.run_steps(2);
+        let c0 = h.state().ui.views[0].center;
+        wheel(&h, -1.0, Modifiers::NONE);
+        h.run_steps(1);
+        let c1 = h.state().ui.views[0].center;
+        h.run_steps(40);
+        let c2 = h.state().ui.views[0].center;
+        assert!((c2[1] - c0[1] - 5.0).abs() < 0.01 && c2[0] == c0[0], "{choice}: one notch is 40 points, 5 px at 800%: {c0:?} -> {c2:?}");
+        assert_eq!(c1 == c2, at_once, "{choice}: {c0:?} -> {c1:?} -> {c2:?}");
+    }
+}
+
 #[test]
 fn alt_scroll_zooms_in_steps_around_the_pointer() {
     let mut h = harness();

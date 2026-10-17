@@ -2027,7 +2027,9 @@
 	Show only crosshair while painting	绘画时仅显示十字线
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
-	Enable animations	启用动画
+	Animation effects	动画效果
+	Use system setting	使用系统设置
+	On	开启
 	Show highlight on rollover	鼠标悬停时显示高亮
 	Show bounding box when dragging layer	拖动图层时显示边界框
 	System title bar	系统标题栏

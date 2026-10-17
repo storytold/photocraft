@@ -1979,7 +1979,9 @@
 	Show only crosshair while painting	칠하는 동안 십자선만 표시
 	Show slice numbers	분할 영역 번호 표시
 	Show tooltips	도구 설명 표시
-	Enable animations	애니메이션 사용
+	Animation effects	애니메이션 효과
+	Use system setting	시스템 설정 사용
+	On	켬
 	Show highlight on rollover	롤오버 시 강조 표시
 	Show transformation values	변형 값 표시
 	Slice color	분할 영역 색상

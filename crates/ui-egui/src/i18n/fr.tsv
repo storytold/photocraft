@@ -1986,7 +1986,9 @@
 	Show only crosshair while painting	N'afficher que le réticule pendant la peinture
 	Show slice numbers	Afficher les numéros de tranche
 	Show tooltips	Afficher les info-bulles
-	Enable animations	Activer les animations
+	Animation effects	Effets d'animation
+	Use system setting	Utiliser le réglage du système
+	On	Activé
 	Show highlight on rollover	Afficher la mise en surbrillance au survol
 	Show transformation values	Afficher les valeurs de transformation
 	Slice color	Couleur des tranches

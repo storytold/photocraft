@@ -2006,7 +2006,9 @@
 	Show only crosshair while painting	Podczas malowania pokaż tylko celownik
 	Show slice numbers	Pokaż numery plasterków
 	Show tooltips	Pokaż podpowiedzi
-	Enable animations	Włącz animacje
+	Animation effects	Efekty animacji
+	Use system setting	Użyj ustawienia systemowego
+	On	Włączone
 	Show highlight on rollover	Pokaż podświetlenie po najechaniu
 	Show bounding box when dragging layer	Pokaż ramkę ograniczającą podczas przeciągania warstwy
 	Show transformation values	Pokaż wartości przekształcenia

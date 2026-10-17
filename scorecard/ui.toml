@@ -73,7 +73,7 @@ id = "UI-217-10"
 target = "Appearance: animation toggle, canvas pattern toggle per theme, start-screen recents"
 status = "partial"
 issue = 217
-note = "interface.enableAnimations (prefs_ui.rs sync_animations, #3273) zeroes egui animation_time and scroll animation in both styles; the Home screen lists recent files (canvas.rs home_recent, #2691); the canvas dot pattern toggle is interface.showCanvasDots (#2264, global rather than per theme); interface.showHomeRecentFiles hides the Home screen recents (#4382)"
+note = "interface.animationEffects (system, on, off; prefs_ui.rs sync_animations, #3273) zeroes egui animation_time and scroll animation in both styles, and wheel_nav::unsmooth takes out egui's wheel glide; system, the default, follows the OS animation setting through Services::system_animations (apps/photocraft/src/animations.rs for Windows, macOS, Linux and the BSDs; prefers-reduced-motion on the web); the Home screen lists recent files (canvas.rs home_recent, #2691); the canvas dot pattern toggle is interface.showCanvasDots (#2264, global rather than per theme); interface.showHomeRecentFiles hides the Home screen recents (#4382)"
 
 [[item]]
 id = "UI-217-11"

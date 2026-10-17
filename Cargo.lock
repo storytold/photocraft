@@ -4646,6 +4646,7 @@ dependencies = [
  "rfd",
  "ron",
  "serde_json",
+ "windows",
  "winit",
  "winresource",
  "winsafe",

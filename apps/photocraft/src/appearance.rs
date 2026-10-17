@@ -5,6 +5,7 @@ const PORTAL_NAMESPACE: &str = "org.freedesktop.appearance";
 #[cfg(target_os = "linux")]
 const PORTAL_KEY: &str = "color-scheme";
 
+/// The settings portal, also asked for the animation setting (`animations.rs`).
 #[cfg(target_os = "linux")]
 pub(crate) fn portal_proxy() -> Option<zbus::blocking::Proxy<'static>> {
     let conn = zbus::blocking::connection::Builder::session().ok()?.method_timeout(std::time::Duration::from_secs(2)).build().ok()?;

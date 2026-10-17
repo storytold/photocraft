@@ -2020,7 +2020,9 @@
 	Show only crosshair while painting	繪圖時僅顯示十字線
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
-	Enable animations	啟用動畫
+	Animation effects	動畫效果
+	Use system setting	使用系統設定
+	On	開
 	Show highlight on rollover	滑鼠懸停時顯示醒目提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
 	System title bar	系統標題列

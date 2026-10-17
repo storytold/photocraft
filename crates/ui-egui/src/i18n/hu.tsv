@@ -2971,6 +2971,8 @@ cameraRaw	Yellow	Sárga
 	Show rulers	Vonalzók megjelenítése
 	Show Rulers	Vonalzók megjelenítése
 	Show tooltips	Eszköztippek megjelenítése
+	Animation effects	Animációs effektusok
+	Use system setting	Rendszerbeállítás használata
 	Software	Szoftver
 	Solarized dark	Solarized sötét
 	Sort	Rendezés
@@ -3206,7 +3208,6 @@ cameraRaw	Yellow	Sárga
 	Ellipse Tool	Ellipszis
 	Elliptical Marquee Tool	Ellipszis-kijelölés
 	Enable	Bekapcsolás
-	Enable animations	Animációk engedélyezése
 	Enable flick panning	Lendítéses pásztázás engedélyezése
 	Enable floating document window docking	Lebegő dokumentumablakok dokkolásának engedélyezése
 	Enable narrow options bar	Keskeny beállítósáv engedélyezése

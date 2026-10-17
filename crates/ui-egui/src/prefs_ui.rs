@@ -52,6 +52,8 @@ pub struct Runtime {
     show_rulers: Option<bool>,
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
+    /// Interface › Animation Effects resolved to off this frame (see `sync_animations`).
+    pub(crate) animations_off: bool,
     pub(crate) selected_tool: Option<crate::state::Tool>,
 }
 
@@ -410,11 +412,24 @@ fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Interface › Enable Animations: off, egui's fades and slides take no time and scroll areas jump
-/// straight to their target (#3273). Re-checked every frame because a theme change rebuilds the
-/// style; both the dark and light styles are set, so a system appearance switch keeps it.
-fn sync_animations(app: &PhotocraftApp, ctx: &egui::Context) {
-    let on = app.session.prefs().interface.enable_animations;
+/// Interface › Animation Effects, resolved: on or off as chosen, or for Use System Setting what
+/// the operating system says (on when it can't tell).
+fn animations_on(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    match app.session.prefs().interface.animation_effects {
+        prefs::AnimationEffects::On => true,
+        prefs::AnimationEffects::Off => false,
+        prefs::AnimationEffects::System => app.services.system_animations.as_ref().and_then(|read| read(ctx)).unwrap_or(true),
+    }
+}
+
+/// Interface › Animation Effects: off, egui's fades and slides take no time and `scroll_to` jumps
+/// straight to its target (#3273); `PhotocraftApp::logic` takes out the wheel's glide
+/// (`wheel_nav::unsmooth`). Checked every frame: a theme change rebuilds the style and the
+/// system's setting can change. Both the dark and light styles are set, so an appearance switch
+/// keeps it.
+fn sync_animations(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let on = animations_on(app, ctx);
+    app.prefs_rt.animations_off = !on;
     let time = if on { egui::Style::default().animation_time } else { 0.0 };
     if ctx.global_style().animation_time != time {
         let scroll = if on { egui::style::ScrollAnimation::default() } else { egui::style::ScrollAnimation::none() };
@@ -1158,6 +1173,15 @@ fn choice_label(v: &str) -> String {
     }
 }
 
+/// The label of choice `v` of the preference at `path`. Most choices read the same wherever
+/// they appear; Animation Effects' `system` says what it does.
+fn pref_choice_label(path: &str, v: &str) -> String {
+    match (path, v) {
+        ("interface.animationEffects", "system") => "Use system setting".into(),
+        _ => choice_label(v),
+    }
+}
+
 /// An editable `#rrggbb` field beside a colour swatch (#668): typing a valid value sets the
 /// colour; while it's being typed a partial value is kept, and it shows the colour otherwise.
 fn hex_field(ui: &mut egui::Ui, key: &str, rgb: &mut [u8; 3]) {
@@ -1630,7 +1654,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             Value::String(s) if prefs::choices(&path).is_some() => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let opts = prefs::choices(&path).unwrap_or(&[]);
-                let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
+                let labels: Vec<String> = opts.iter().map(|o| pref_choice_label(&path, o)).collect();
                 let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
                 let mut cur = s.clone();
                 crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
@@ -2993,7 +3017,8 @@ mod tests {
                         continue; // Rendered as star controls beside the theme choices.
                     }
                     let mut labels = vec![humanize(k)];
-                    labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
+                    let path = format!("{sec}.{k}");
+                    labels.extend(prefs::choices(&path).into_iter().flatten().map(|c| pref_choice_label(&path, c)));
                     missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
                 }
             }
@@ -3446,29 +3471,103 @@ mod tests {
         }
     }
 
+    /// egui's `animation_time` in the dark and the light style.
+    fn animation_times(ctx: &egui::Context) -> [f32; 2] {
+        [egui::Theme::Dark, egui::Theme::Light].map(|t| ctx.style_of(t).animation_time)
+    }
+
     #[test]
-    fn enable_animations_off_stops_fades_and_scroll_glides_and_is_remembered() {
+    fn animation_effects_off_stops_egui_animations_and_is_remembered() {
         let on = egui::Style::default().animation_time;
-        let both = |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| ctx.style_of(t).animation_time);
+        assert!(on > 0.0, "egui animates by default");
         // Saved off: the first frame after a restart applies it to both appearance styles.
-        let (mut app, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": false}}).to_string()));
+        let (mut app, _) = app_with_saved(Some(json!({"interface": {"animationEffects": "off"}}).to_string()));
         let ctx = egui::Context::default();
         tick(&mut app, &ctx);
-        assert_eq!(both(&ctx), [0.0, 0.0]);
+        assert_eq!(animation_times(&ctx), [0.0, 0.0]);
         assert_eq!(ctx.global_style().scroll_animation.duration.max, 0.0);
+        assert!(app.prefs_rt.animations_off);
         // A theme change rebuilds the style; the next frame turns animations off again.
         app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
         tick(&mut app, &ctx);
-        assert_eq!(both(&ctx), [0.0, 0.0]);
-        app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).unwrap();
+        assert_eq!(animation_times(&ctx), [0.0, 0.0]);
+        app.run("prefs.set", json!({"values": {"interface.animationEffects": "on"}})).unwrap();
         tick(&mut app, &ctx);
-        assert_eq!(both(&ctx), [on, on]);
-        assert!(on > 0.0 && ctx.global_style().scroll_animation.duration.max > 0.0);
-        // A hand-edited value of the wrong type doesn't crash: the defaults (animations on) stay.
-        let (mut bad, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": "nope"}}).to_string()));
-        let ctx2 = egui::Context::default();
-        tick(&mut bad, &ctx2);
-        assert_eq!(both(&ctx2), [on, on]);
+        assert_eq!(animation_times(&ctx), [on, on]);
+        assert!(ctx.global_style().scroll_animation.duration.max > 0.0 && !app.prefs_rt.animations_off);
+    }
+
+    #[test]
+    fn use_system_setting_follows_the_platform() {
+        use std::{cell::Cell, rc::Rc};
+        let on = egui::Style::default().animation_time;
+        let system = Rc::new(Cell::new(None));
+        let (mut app, _) = app_with_store();
+        let read = system.clone();
+        app.services.system_animations = Some(Box::new(move |_| read.get()));
+        let ctx = egui::Context::default();
+        assert_eq!(app.session.prefs().interface.animation_effects, prefs::AnimationEffects::System, "the default");
+        // As the system's setting changes; no answer keeps animations on.
+        for (answer, time) in [(Some(false), 0.0), (Some(true), on), (None, on), (Some(false), 0.0)] {
+            system.set(answer);
+            tick(&mut app, &ctx);
+            assert_eq!(animation_times(&ctx), [time, time], "the system says {answer:?}");
+        }
+        // On and Off hold whatever the system says.
+        for (answer, choice, time) in [(Some(false), "on", on), (Some(true), "off", 0.0), (Some(true), "system", on)] {
+            system.set(answer);
+            app.run("prefs.set", json!({"values": {"interface.animationEffects": choice}})).unwrap();
+            tick(&mut app, &ctx);
+            assert_eq!(animation_times(&ctx), [time, time], "{choice} while the system says {answer:?}");
+        }
+        // A platform without the service can't tell: animations stay on.
+        let (mut plain, _) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut plain, &ctx);
+        assert_eq!(animation_times(&ctx), [on, on]);
+    }
+
+    #[test]
+    fn old_and_hand_edited_animation_settings_load_safely() {
+        let on = egui::Style::default().animation_time;
+        let after_restart = |interface: Value| {
+            let (mut app, _) = app_with_saved(Some(json!({"interface": interface}).to_string()));
+            let ctx = egui::Context::default();
+            tick(&mut app, &ctx);
+            animation_times(&ctx)
+        };
+        // The Enable Animations checkbox this replaced: a saved "off" is still off.
+        assert_eq!(after_restart(json!({"enableAnimations": false})), [0.0, 0.0]);
+        // A value that is no choice doesn't crash: the defaults stay.
+        for junk in [json!("nope"), json!(7), json!(null)] {
+            assert_eq!(after_restart(json!({"animationEffects": junk})), [on, on], "{junk}");
+        }
+    }
+
+    /// Interface › Animation Effects is a dropdown of three choices, the system's first.
+    #[test]
+    fn animation_effects_is_a_three_way_choice_in_the_interface_section() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        assert_eq!(humanize("animationEffects"), "Animation effects");
+        let labels: Vec<String> =
+            prefs::choices("interface.animationEffects").unwrap().iter().map(|c| pref_choice_label("interface.animationEffects", c)).collect();
+        assert_eq!(labels, ["Use system setting", "On", "Off"]);
+        assert_eq!(pref_choice_label("general.colorPicker", "system"), "System", "elsewhere `system` keeps its plain label");
+        let obj = json!({"animationEffects": "system"}).as_object().unwrap().clone();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(700.0, 700.0))
+            .build_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""), obj);
+        h.run_steps(4);
+        assert!(h.get_by_label("Animation effects").rect().is_positive());
+        h.get_all_by_role(Role::ComboBox).last().unwrap().click();
+        h.run_steps(4);
+        for choice in ["Use system setting", "On", "Off"] {
+            assert!(h.query_all_by_label(choice).any(|item| item.rect().is_positive()), "{choice} is offered");
+        }
+        h.get_by_label("Off").click();
+        h.run_steps(4);
+        assert_eq!(h.state()["animationEffects"], "off");
     }
 
     #[test]
