@@ -603,6 +603,21 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
 }
 
+/// A field the dialog shows but that has no effect in the dialog's current state, so it is greyed
+/// out: Smart Sharpen's Angle only steers Motion Blur removal and More Accurate only changes the
+/// deconvolving (Lens and Motion) modes.
+fn param_inactive(command: &str, key: &str, fields: &Map<String, Value>) -> bool {
+    if command != "filter.sharpen.smartSharpen" {
+        return false;
+    }
+    let remove = fields.get("remove").and_then(Value::as_str).unwrap_or("gaussian");
+    match key {
+        "angle" => remove != "motion",
+        "moreAccurate" => remove == "gaussian",
+        _ => false,
+    }
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -663,7 +678,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     continue;
                 }
                 // Replace Color's Range only applies with Localized Color Clusters on, as in Photoshop.
-                let enabled = !(cmd == REPLACE_COLOR && p.key == "range") || f.get("localized").and_then(Value::as_bool) == Some(true);
+                let enabled = (!(cmd == REPLACE_COLOR && p.key == "range") || f.get("localized").and_then(Value::as_bool) == Some(true))
+                    && !param_inactive(&cmd, &p.key, f);
                 let unit = if is_pixel_param_of(&cmd, &p.key) {
                     "px"
                 } else if p.key == "angle" {
@@ -737,7 +753,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             Kind::Bool(default) => {
                 let mut b = f.get(&p.key).and_then(Value::as_bool).unwrap_or(default);
-                crate::widgets::checkbox(ui, &mut b, &label(&p.key));
+                ui.scope(|ui| {
+                    if param_inactive(&cmd, &p.key, f) {
+                        ui.disable();
+                    }
+                    crate::widgets::checkbox(ui, &mut b, &label(&p.key));
+                });
                 f.insert(p.key, json!(b));
             }
             Kind::Text => {
@@ -1455,6 +1476,25 @@ mod tests {
             check(cat.to_string());
         }
         missing
+    }
+
+    #[test]
+    fn smart_sharpen_greys_out_the_fields_its_removal_mode_does_not_use() {
+        let fields = |remove: Option<&str>| {
+            let mut f = Map::new();
+            if let Some(r) = remove {
+                f.insert("remove".into(), json!(r));
+            }
+            f
+        };
+        let cmd = "filter.sharpen.smartSharpen";
+        for (remove, angle, accurate) in [(None, true, true), (Some("gaussian"), true, true), (Some("lens"), true, false), (Some("motion"), false, false)] {
+            let f = fields(remove);
+            assert_eq!(param_inactive(cmd, "angle", &f), angle, "{remove:?} angle");
+            assert_eq!(param_inactive(cmd, "moreAccurate", &f), accurate, "{remove:?} moreAccurate");
+            assert!(!param_inactive(cmd, "amount", &f) && !param_inactive(cmd, "radius", &f) && !param_inactive(cmd, "remove", &f));
+        }
+        assert!(!param_inactive("filter.blur.motionBlur", "angle", &fields(None)), "other filters are never greyed out");
     }
 
     #[test]

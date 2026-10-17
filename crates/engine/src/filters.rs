@@ -111,6 +111,13 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             amount: f(p, "amount", 100.0).clamp(1.0, 500.0),
             radius: f(p, "radius", 1.0).clamp(0.1, 64.0),
             reduce_noise: f(p, "reduceNoise", 10.0).clamp(0.0, 100.0),
+            remove: match s(p, "remove", "gaussian") {
+                "lens" => photocraft_algo::SharpenRemove::Lens,
+                "motion" => photocraft_algo::SharpenRemove::Motion,
+                _ => photocraft_algo::SharpenRemove::Gaussian,
+            },
+            angle: f(p, "angle", 0.0).clamp(-360.0, 360.0),
+            more_accurate: b(p, "moreAccurate", false),
         },
         "filter.other.highPass" => FilterParams::HighPass { radius: f(p, "radius", 10.0).clamp(0.1, 1000.0) },
         "filter.noise.addNoise" => FilterParams::AddNoise {
@@ -378,7 +385,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.sharpen.smartSharpen",
             "Smart Sharpen…",
             ["Filter", "Sharpen"],
-            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10}"##
+            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10,"remove":"gaussian|lens|motion"="gaussian","angle":-360..360=0,"moreAccurate":bool}"##
         ),
         filter_cmd!(
             "filter.noise.addNoise",
@@ -542,6 +549,58 @@ mod tests {
             assert_ne!(active_pixels(&s), before, "{id} changed nothing");
             s.execute("edit.undo", json!({})).unwrap();
             assert_eq!(active_pixels(&s), before, "{id} undo");
+        }
+    }
+
+    #[test]
+    fn smart_sharpen_removes_lens_and_motion_blur_by_deconvolution() {
+        let gaussian = {
+            let mut s = session();
+            paint_pattern(&mut s);
+            s.execute("filter.sharpen.smartSharpen", json!({"amount": 100, "radius": 2})).unwrap();
+            active_pixels(&s)
+        };
+        for params in
+            [json!({"amount": 100, "radius": 2, "remove": "lens"}), json!({"amount": 100, "radius": 3, "remove": "motion", "angle": 45, "moreAccurate": true})]
+        {
+            let mut s = session();
+            paint_pattern(&mut s);
+            let before = active_pixels(&s);
+            s.execute("filter.sharpen.smartSharpen", params.clone()).unwrap();
+            let after = active_pixels(&s);
+            assert_ne!(before, after, "{params}");
+            assert!(after.iter().all(|v| v.is_finite()), "{params}");
+            assert_ne!(after, gaussian, "{params} must not fall back to the unsharp path");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(active_pixels(&s), before, "{params} undoes in one step");
+        }
+    }
+
+    #[test]
+    fn smart_sharpen_checks_its_removal_parameters() {
+        for bad in [
+            json!({"remove": "no-such-blur"}),
+            json!({"remove": "lens", "radius": 1e9}),
+            json!({"remove": "motion", "angle": 1e30}),
+            json!({"moreAccurate": "yes"}),
+        ] {
+            let mut s = session();
+            paint_pattern(&mut s);
+            let before = active_pixels(&s);
+            assert!(matches!(s.execute("filter.sharpen.smartSharpen", bad.clone()), Err(crate::EngineError::BadParams { .. })), "{bad}");
+            assert_eq!(active_pixels(&s), before, "{bad} must leave the layer alone");
+        }
+        // The ends of every range run and stay finite.
+        for good in [
+            json!({"remove": "lens", "radius": 64}),
+            json!({"remove": "lens", "radius": 0.1, "amount": 500}),
+            json!({"remove": "motion", "radius": 64, "angle": -360, "moreAccurate": true}),
+            json!({"remove": "motion", "radius": 0.1, "angle": 360}),
+        ] {
+            let mut s = session();
+            paint_pattern(&mut s);
+            s.execute("filter.sharpen.smartSharpen", good.clone()).unwrap();
+            assert!(active_pixels(&s).iter().all(|v| v.is_finite()), "{good}");
         }
     }
 

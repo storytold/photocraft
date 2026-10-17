@@ -42,7 +42,9 @@ fn all_filters() -> Vec<FilterParams> {
         FilterParams::RadialBlur { amount: 30.0, method: RadialMethod::Zoom, quality: RadialQuality::Good, center_x: 0.3, center_y: 0.6 },
         FilterParams::SurfaceBlur { radius: 3.0, threshold: 20.0 },
         FilterParams::UnsharpMask { amount: 150.0, radius: 1.5, threshold: 2.0 },
-        FilterParams::SmartSharpen { amount: 100.0, radius: 1.0, reduce_noise: 20.0 },
+        FilterParams::SmartSharpen { amount: 100.0, radius: 1.0, reduce_noise: 20.0, remove: SharpenRemove::Gaussian, angle: 0.0, more_accurate: false },
+        FilterParams::SmartSharpen { amount: 100.0, radius: 2.0, reduce_noise: 10.0, remove: SharpenRemove::Lens, angle: 0.0, more_accurate: false },
+        FilterParams::SmartSharpen { amount: 100.0, radius: 2.0, reduce_noise: 10.0, remove: SharpenRemove::Motion, angle: 30.0, more_accurate: false },
         FilterParams::HighPass { radius: 3.0 },
         FilterParams::AddNoise { amount: 25.0, distribution: Distribution::Gaussian, monochromatic: false, seed: 3 },
         FilterParams::Median { radius: 2.0 },
@@ -98,7 +100,16 @@ fn every_filter_is_tile_independent() {
         let a = apply_tiled(&s, &p, area, R, None, 256, None);
         let b = apply_tiled(&s, &p, area, R, None, 7, None);
         let big = area.union(&R);
-        assert!(a.to_interleaved(big) == b.to_interleaved(big), "{} differs between tile sizes", p.label());
+        let (a, b) = (a.to_interleaved(big), b.to_interleaved(big));
+        // Smart Sharpen's deconvolution runs in FFTs whose size follows the tile, so two tilings
+        // round differently in the last bit: the 8-bit result may differ by one level, never more.
+        let fft = matches!(p, FilterParams::SmartSharpen { remove, .. } if remove != SharpenRemove::Gaussian);
+        if fft {
+            let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+            assert!(worst <= 1, "{} differs between tile sizes by {worst} levels", p.label());
+        } else {
+            assert!(a == b, "{} differs between tile sizes", p.label());
+        }
     }
 }
 

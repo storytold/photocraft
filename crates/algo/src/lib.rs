@@ -105,6 +105,16 @@ pub enum Halo {
     Bounds,
 }
 
+/// The blur Smart Sharpen undoes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SharpenRemove {
+    #[default]
+    Gaussian,
+    Lens,
+    Motion,
+}
+
 /// Radial blur method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -233,11 +243,18 @@ pub enum FilterParams {
         radius: f32,
         threshold: f32,
     },
-    /// Amount %, radius px, noise reduction % (basic: Gaussian unsharp).
+    /// Amount %, radius px, noise reduction %. `remove` Gaussian is an unsharp mask; Lens and
+    /// Motion deconvolve (`angle` is Motion's direction, `more_accurate` runs more iterations).
     SmartSharpen {
         amount: f32,
         radius: f32,
         reduce_noise: f32,
+        #[serde(default)]
+        remove: SharpenRemove,
+        #[serde(default)]
+        angle: f32,
+        #[serde(default)]
+        more_accurate: bool,
     },
     HighPass {
         radius: f32,
@@ -555,6 +572,9 @@ impl FilterParams {
         match self {
             FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } => g(*radius),
             FilterParams::UnsharpMask { radius, .. } => Halo::Radius(sharpen::exact::halo(*radius)),
+            FilterParams::SmartSharpen { radius, remove, more_accurate, .. } if *remove != SharpenRemove::Gaussian => {
+                Halo::Radius(sharpen::deconv::reach(*radius, *more_accurate))
+            }
             FilterParams::SmartSharpen { radius, .. } => g(*radius),
             FilterParams::BoxBlur { radius }
             | FilterParams::SurfaceBlur { radius, .. }
@@ -739,7 +759,9 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::SurfaceBlur { radius, threshold } => blur::surface(src, out, ctx, *radius, *threshold),
         FilterParams::UnsharpMask { amount, radius, threshold } => sharpen::unsharp(src, out, ctx, *amount, *radius, *threshold),
-        FilterParams::SmartSharpen { amount, radius, reduce_noise } => sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise),
+        FilterParams::SmartSharpen { amount, radius, reduce_noise, remove, angle, more_accurate } => {
+            sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise, *remove, *angle, *more_accurate)
+        }
         FilterParams::HighPass { radius } => sharpen::high_pass(src, out, ctx, *radius),
         FilterParams::AddNoise { amount, distribution, monochromatic, seed } => noise::add(src, out, ctx, *amount, *distribution, *monochromatic, *seed),
         FilterParams::Median { radius } => noise::median(src, out, *radius, None),

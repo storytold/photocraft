@@ -64,7 +64,14 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
         ],
         "filter.blur.surfaceBlur" => &[("radius", Number(1.0, 100.0)), ("threshold", Number(2.0, 255.0))],
         "filter.sharpen.unsharpMask" => &[("amount", Number(1.0, 500.0)), ("radius", Number(0.1, 1000.0)), ("threshold", Number(0.0, 255.0))],
-        "filter.sharpen.smartSharpen" => &[("amount", Number(1.0, 500.0)), ("radius", Number(0.1, 64.0)), ("reduceNoise", Number(0.0, 100.0))],
+        "filter.sharpen.smartSharpen" => &[
+            ("amount", Number(1.0, 500.0)),
+            ("radius", Number(0.1, 64.0)),
+            ("reduceNoise", Number(0.0, 100.0)),
+            ("remove", Choice("gaussian|lens|motion")),
+            ("angle", Number(-360.0, 360.0)),
+            ("moreAccurate", Bool),
+        ],
         "filter.noise.addNoise" => {
             &[("amount", Number(0.1, 400.0)), ("distribution", Choice("uniform|gaussian")), ("monochromatic", Bool), ("seed", Unsigned(u32::MAX as u64))]
         }
@@ -241,6 +248,7 @@ mod tests {
             ("sharpen.smartSharpen", "amount", 1.0, 500.0),
             ("sharpen.smartSharpen", "radius", 0.1, 64.0),
             ("sharpen.smartSharpen", "reduceNoise", 0.0, 100.0),
+            ("sharpen.smartSharpen", "angle", -360.0, 360.0),
             ("noise.addNoise", "amount", 0.1, 400.0),
             ("noise.median", "radius", 1.0, 500.0),
             ("noise.dustAndScratches", "radius", 1.0, 500.0),
