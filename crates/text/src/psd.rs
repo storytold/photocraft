@@ -227,7 +227,10 @@ fn txt2_frame(txt2: &E, index: usize) -> Option<&E> {
 /// frame's space. Ignoring them put the text far from Photoshop's pixels (off the canvas, so
 /// it "disappeared" as soon as an edit started), and point text a line too high and off its
 /// alignment anchor. Only when the layer's `TextIndex` entry still holds the layer's text, as
-/// for [`apply_txt2`], and the frame agrees with the `TySh` `bounds`.
+/// for [`apply_txt2`], and the frame agrees with the `TySh` `bounds`. The matrix's uniform scale
+/// places the frame; it is not a glyph scale (`FontSize` is already the size the glyphs draw at
+/// and Photoshop's panel shows it unscaled, #1431), so the fold keeps the matrix's rotation and
+/// translation and moves its scale into the box coordinates.
 pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     let Some(t) = parse_tysh(tysh) else { return };
     let Some(index) = (match t.text.get("TextIndex") {
@@ -254,6 +257,14 @@ pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     if to_text == Affine::IDENTITY || to_text.determinant().abs() <= 1e-9 {
         return;
     }
+    // The matrix's uniform scale places the frame; it is not a glyph scale — the engine's
+    // `FontSize` is already the size the glyphs draw at, and Photoshop's panel shows it
+    // unscaled (#1431). Fold the matrix's rotation and translation only (right-multiplying a
+    // scale keeps the translation column, so the anchor and frame land exactly where the full
+    // matrix maps them) and carry its scale in the box coordinates (frame space) instead, so
+    // the type keeps its size in the panel's √|det| and the glyph mapping.
+    let s = to_text.determinant().abs().sqrt();
+    let (frame_scale, to_text) = if s.is_finite() && s > 1e-9 { (s, to_text.mul(&Affine::scale(1.0 / s))) } else { (1.0, to_text) };
     // The frame's origin (point text: the anchor; box text: the box's top left) must land in
     // the text-space `bounds` Photoshop wrote beside it, and not already be there without it. A `TySh` PhotoCraft rewrote (an edited
     // or moved layer whose text is unchanged keeps its old `Txt2` object and frame) already has
@@ -273,13 +284,27 @@ pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
                 })
                 .unwrap_or_default();
             let [x, y, ..] = b[..] else { return };
-            Point::new(x, y)
+            // Frame-space box: the frame scale the transform no longer carries goes here, so
+            // the mapped origin stays where the full matrix puts it.
+            Point::new(x * frame_scale, y * frame_scale)
         }
     };
     let Some([l, top, r, bottom]) = descriptor_rect(&t.text, "bounds") else { return };
     let inside = |p: Point| p.x >= l - 1.0 && p.x <= r + 1.0 && p.y >= top - 1.0 && p.y <= bottom + 1.0;
     if inside(origin) || !inside(to_text.apply(origin)) {
         return;
+    }
+    if let TextShape::Box { x, y, width, height } = &mut layer.shape {
+        // The box coordinates are frame-space: the frame scale the transform no longer carries
+        // goes here, so the box keeps its text-space size and the wrap width it was laid out to.
+        let scaled =
+            [*x as f64 * frame_scale, *y as f64 * frame_scale, *width as f64 * frame_scale, *height as f64 * frame_scale];
+        if scaled.iter().all(|v| (*v as f32).is_finite()) {
+            *x = scaled[0] as f32;
+            *y = scaled[1] as f32;
+            *width = scaled[2] as f32;
+            *height = scaled[3] as f32;
+        }
     }
     {
         // From the file's own transform: the frame's anchor is exact, so it replaces the
