@@ -199,7 +199,7 @@ fn b(f: &Map<String, Value>, k: &str, d: bool) -> bool {
 #[path = "file_ui/web_preview.rs"]
 mod web_preview;
 
-const WEB_FORMATS: [(&str, &str); 5] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("wbmp", "WBMP")];
+const WEB_FORMATS: [(&str, &str); 6] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("webp", "WebP"), ("wbmp", "WBMP")];
 const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
 
 pub fn open_web(app: &mut PhotocraftApp) -> u64 {
@@ -228,6 +228,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     for (k, v) in [
         ("format", json!("jpeg")),
         ("quality", json!(60)),
+        ("lossless", json!(false)),
         ("palette", json!("selective")),
         ("colors", json!(128)),
         ("dither", json!("diffusion")),
@@ -258,7 +259,7 @@ fn variants(p: &Value) -> Vec<Value> {
             m.remove("colorTable");
             m.remove("colorTableEdits");
         }
-        if fmt == "jpeg" {
+        if fmt == "jpeg" || (fmt == "webp" && !p["lossless"].as_bool().unwrap_or(false)) {
             v["quality"] = json!((p["quality"].as_f64().unwrap_or(60.0) / k).round().max(1.0));
         } else if fmt == "gif" || fmt == "png8" {
             v["colors"] = json!((p["colors"].as_f64().unwrap_or(128.0) / k).round().max(2.0));
@@ -580,6 +581,14 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         check(ui, f, "optimized", tl!("Optimized"), true);
                         check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
                     }
+                    "webp" => {
+                        check(ui, f, "lossless", tl!("Lossless"), false);
+                        if !b(f, "lossless", false) {
+                            number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
+                        }
+                        check(ui, f, "transparency", tl!("Transparency"), true);
+                        check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
+                    }
                     "wbmp" => {
                         dropdown_str(
                             ui,
@@ -595,7 +604,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         check(ui, f, "interlaced", tl!("Interlaced"), false);
                     }
                 }
-                if fmt != "png24" || !b(f, "transparency", true) {
+                if !matches!(fmt.as_str(), "png24" | "webp") || !b(f, "transparency", true) {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
                         let mut m = s(f, "matte", "#ffffff");
@@ -1204,6 +1213,16 @@ mod tests {
         let d = app.ui.dialog_mut(r["dialog"].as_u64().unwrap()).unwrap();
         assert_eq!(d.fields["format"], "gif");
         assert!(!d.fields.contains_key("path"));
+        // WebP, with the dialog's own defaults (lossy at quality 60).
+        let id = r["dialog"].as_u64().unwrap();
+        let d = app.ui.dialog_mut(id).unwrap();
+        let path = dir.join("web.webp").to_string_lossy().into_owned();
+        d.fields.insert("format".into(), json!("webp"));
+        d.fields.insert("path".into(), json!(path));
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[8..12], b"WEBP");
+        assert!(bytes.windows(4).any(|w| w == b"VP8 "), "lossy by default");
     }
 
     /// A fresh session's dialog seeds from the preferences: the last export before a restart is
@@ -1498,6 +1517,28 @@ mod web_playback_tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(3);
         h
+    }
+
+    /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
+    #[test]
+    fn webp_settings_show_quality_until_lossless() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("webp"));
+        assert_eq!(fields["lossless"], false);
+        let mut h = harness(app, fields);
+        assert!(h.query_by_label("Quality").is_some());
+        h.get_by_label("Lossless").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["lossless"], true);
+        assert!(h.query_by_label("Quality").is_none(), "lossless has no quality");
+
+        let v = variants(&json!({"format": "webp", "quality": 80}));
+        assert_eq!((v[1]["format"].as_str(), v[1]["quality"].as_f64(), v[2]["quality"].as_f64()), (Some("webp"), Some(40.0), Some(20.0)));
+        let v = variants(&json!({"format": "webp", "lossless": true}));
+        assert_eq!((v[1]["format"].as_str(), v[2]["format"].as_str()), (Some("png8"), Some("gif")));
     }
 
     #[test]
