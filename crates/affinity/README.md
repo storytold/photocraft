@@ -144,6 +144,13 @@ stops; `photocraft-io` adds 300 000 pixels a side per document and 64 megapixels
 canvas. Every archive entry's CRC-32 and size must match. Malformed input returns an `Error`; the
 crate has no panics outside tests.
 
+Compound outlines have a separate active-reference cycle check and a depth cap of 64. Across
+the document, geometry expansion admits at most 500 000 combined outline calls and operand-slot
+visits (including nulls and non-object values), and four million points created or copied into
+compounds. Operand slots are charged before filtering, without first collecting an operand list.
+A compound that crosses a limit or contains a cycle is omitted
+with a warning as a whole; ordinary shared operands remain valid and keep each occurrence's transform.
+
 ## Privacy
 
 Affinity documents can hold the folder they were saved in, user names, original image paths and

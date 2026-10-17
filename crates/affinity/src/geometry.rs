@@ -6,10 +6,103 @@ use crate::stream::{ObjId, Tag, Value};
 
 /// Nodes per curve object.
 const MAX_NODES: usize = 4_000_000;
+const MAX_COMPOUND_DEPTH: usize = 64;
+const MAX_OUTLINE_VISITS: usize = 500_000;
+const MAX_OUTLINE_POINTS: usize = 4_000_000;
+
+/// Geometry is expanded per occurrence, since parametric outlines can depend on their world
+/// transform. Bound work across the entire document instead of memoizing by object id alone.
+pub(crate) struct Budget {
+    visits_left: usize,
+    points_left: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self { visits_left: MAX_OUTLINE_VISITS, points_left: MAX_OUTLINE_POINTS }
+    }
+}
+
+impl Budget {
+    /// Charge an outline call or a raw compound operand slot before inspecting it.
+    fn visit(&mut self) -> Result<(), &'static str> {
+        self.visits_left = self.visits_left.checked_sub(1).ok_or("compound geometry budget exhausted")?;
+        Ok(())
+    }
+
+    /// Charge both leaf geometry and each copy into a compound before allocating that copy.
+    fn path(&mut self, path: &Path) -> Result<(), &'static str> {
+        let points = path.subpaths.iter().fold(0usize, |n, s| n.saturating_add(1).saturating_add(s.segments.len().saturating_mul(3)));
+        let Some(left) = self.points_left.checked_sub(points) else {
+            // Do not rebuild an expensive leaf for every subsequent root after exhaustion.
+            self.visits_left = 0;
+            return Err("compound geometry budget exhausted");
+        };
+        self.points_left = left;
+        Ok(())
+    }
+}
 
 /// The node-space outline of a curve, shape or compound node, and whether it fills even-odd.
 /// Instances (master-page or symbol copies) take the geometry of their master.
 pub(crate) fn outline(r: &mut Reader, id: ObjId, class: Tag, world: Affine) -> Option<(Path, bool)> {
+    match outline_inner(r, id, class, world, &mut Vec::new()) {
+        Ok(path) => path,
+        Err(reason) => {
+            r.warn(reason);
+            None
+        }
+    }
+}
+
+fn outline_inner(r: &mut Reader, id: ObjId, class: Tag, world: Affine, active: &mut Vec<ObjId>) -> Result<Option<(Path, bool)>, &'static str> {
+    r.geometry_budget.visit()?;
+    if active.contains(&id) {
+        return Err("cyclic compound shape");
+    }
+    // Independent of the layer-tree limit: Comp operands do not pass through Reader::node.
+    if active.len() >= MAX_COMPOUND_DEPTH {
+        return Err("compound depth exceeds 64 levels");
+    }
+    if class != Tag::of(b"Comp") {
+        let path = leaf_outline(r, id, class, world);
+        if let Some((path, _)) = &path {
+            r.geometry_budget.path(path)?;
+        }
+        return Ok(path);
+    }
+    active.push(id);
+    let result = compound(r, id, world, active);
+    active.pop();
+    result
+}
+
+fn compound(r: &mut Reader, id: ObjId, world: Affine, active: &mut Vec<ObjId>) -> Result<Option<(Path, bool)>, &'static str> {
+    let s = r.s;
+    // One path of all operands' contours, filled even-odd, as before. A safety failure rejects
+    // the whole outline: a partial add/subtract shape could silently change its meaning.
+    let mut path = Path::default();
+    // Charge every slot before filtering nulls or malformed values. Stream::objs would scan
+    // and allocate the whole list first, repeating uncharged work for each shared occurrence.
+    let children = if let Some(Value::Array(children)) = s.field(id, b"Chld") { children.as_slice() } else { &[] };
+    for child in children {
+        r.geometry_budget.visit()?;
+        let Value::Obj(Some(c)) = child else { continue };
+        let c = *c;
+        let local = s.floats::<6>(c, b"Xfrm").map(Affine::from_xfrm).unwrap_or(Affine::IDENTITY);
+        let Some(class) = s.class(c) else { return Ok(None) };
+        if s.enumeration(c, b"ComO").is_some_and(|(op, _)| op != 0 && op != 2) {
+            r.warn("compound shapes that intersect or exclude (imported as add)");
+        }
+        if let Some((p, _)) = outline_inner(r, c, class, local.then(world), active)? {
+            r.geometry_budget.path(&p)?;
+            path.subpaths.extend(p.transformed(local).subpaths);
+        }
+    }
+    Ok(Some((path, true)))
+}
+
+fn leaf_outline(r: &mut Reader, id: ObjId, class: Tag, world: Affine) -> Option<(Path, bool)> {
     let s = r.s;
     match &class.0.to_be_bytes() {
         b"PCrv" | b"TxtC" => {
@@ -17,23 +110,6 @@ pub(crate) fn outline(r: &mut Reader, id: ObjId, class: Tag, world: Affine) -> O
             let path = curves(r, crvs)?;
             let multi = path.subpaths.len() > 1;
             Some((path, multi))
-        }
-        b"Comp" => {
-            // One path of all the operands' contours in the compound's space, filled even-odd: this
-            // matches add and subtract operands in every public sample; a true union of overlapping
-            // added operands would differ.
-            let mut path = Path::default();
-            for c in s.objs(id, b"Chld") {
-                let local = s.floats::<6>(c, b"Xfrm").map(Affine::from_xfrm).unwrap_or(Affine::IDENTITY);
-                let class = s.class(c)?;
-                if s.enumeration(c, b"ComO").is_some_and(|(op, _)| op != 0 && op != 2) {
-                    r.warn("compound shapes that intersect or exclude (imported as add)");
-                }
-                if let Some((p, _)) = outline(r, c, class, local.then(world)) {
-                    path.subpaths.extend(p.transformed(local).subpaths);
-                }
-            }
-            Some((path, true))
         }
         _ => {
             let (shape, box_owner) = match s.obj(id, b"Shpe") {

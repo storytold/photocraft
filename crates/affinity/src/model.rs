@@ -298,6 +298,7 @@ pub(crate) struct Reader<'s, 'a, 'b> {
     warnings: BTreeMap<String, usize>,
     nodes: usize,
     active: HashSet<ObjId>,
+    pub(crate) geometry_budget: crate::geometry::Budget,
     /// Decoded pixels still available ([`Limits::max_pixel_bytes`] less what the layers read so
     /// far hold).
     pixels_left: usize,
@@ -305,7 +306,16 @@ pub(crate) struct Reader<'s, 'a, 'b> {
 
 impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
     fn new(s: &'s Stream, archive: &'b mut Archive<'a>, limits: Limits) -> Self {
-        Self { s, archive, dpi: 72.0, warnings: BTreeMap::new(), nodes: 0, active: HashSet::new(), pixels_left: limits.max_pixel_bytes }
+        Self {
+            s,
+            archive,
+            dpi: 72.0,
+            warnings: BTreeMap::new(),
+            nodes: 0,
+            active: HashSet::new(),
+            geometry_budget: crate::geometry::Budget::default(),
+            pixels_left: limits.max_pixel_bytes,
+        }
     }
 
     /// Admit a layer's decoded pixels before they are allocated (#4960). `rgba` is the layer's
