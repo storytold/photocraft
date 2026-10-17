@@ -223,13 +223,19 @@ pub fn clear(o: &mut ToolOptions) {
     o.crop_resolution.clear();
 }
 
-/// Swaps W and H (the ⇄ button, X). False outside W x H x Resolution mode.
+/// Swaps W and H for the Crop tool's X. False outside W x H x Resolution mode.
 pub fn swap(o: &mut ToolOptions) -> bool {
     if o.crop_ratio != WHR {
         return false;
     }
-    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
+    swap_fields(o);
     true
+}
+
+/// The ⇄ button between the W and H fields: always swaps, as Perspective Crop shows the fields
+/// without the Crop tool's W x H x Resolution mode.
+fn swap_fields(o: &mut ToolOptions) {
+    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
 }
 
 /// After the preset dropdown chose `crop_ratio`: a size preset fills the fields and Front Image
@@ -295,7 +301,7 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
 pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
     text_field(ui, "crop-width", &mut o.crop_width, tl!("Width"), 64.0, normalize_length);
     if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
-        swap(o);
+        swap_fields(o);
     }
     text_field(ui, "crop-height", &mut o.crop_height, tl!("Height"), 64.0, normalize_length);
     text_field(ui, "crop-resolution", &mut o.crop_resolution, tl!("Resolution"), 64.0, normalize_resolution);
@@ -453,6 +459,15 @@ mod tests {
         app.ui.tool_options.crop_ratio = "16:9".into();
         assert!(!swap(&mut app.ui.tool_options));
         assert!(dropdown_options().iter().any(|(k, _)| k == WHR) && dropdown_options().iter().any(|(k, _)| k == FRONT));
+    }
+
+    #[test]
+    fn the_swap_button_swaps_w_and_h_without_the_crop_tools_mode() {
+        // Perspective Crop shows the fields but never sets `crop_ratio`.
+        let mut o = ToolOptions { crop_width: "4 in".into(), crop_height: "6 in".into(), ..ToolOptions::default() };
+        assert_eq!(o.crop_ratio, "");
+        swap_fields(&mut o);
+        assert_eq!((o.crop_width.as_str(), o.crop_height.as_str()), ("6 in", "4 in"));
     }
 
     #[test]
