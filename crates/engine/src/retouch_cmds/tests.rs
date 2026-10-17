@@ -1097,14 +1097,92 @@ fn content_aware_move_preview_shows_the_result_without_touching_the_session() {
     // The session is untouched.
     assert!(is_object(rgba(&s, 25, 31)) && !is_object(rgba(&s, 95, 31)));
     assert_eq!(s.active().unwrap().revision, before);
-    // A cancelled preview stops; a selection past the preview's size and bad params are errors.
+    // A small selection is solved at full resolution, with nothing to refine.
+    let job = content_aware_move_preview(&s, &p).unwrap();
+    assert!(!job.is_coarse() && job.refine().is_none());
+    // A cancelled preview stops; bad params are errors.
     let ctx = JobCtx::new();
     ctx.cancel();
     assert!(matches!(content_aware_move_preview(&s, &p).unwrap().run(&ctx), Err(EngineError::Cancelled)));
     assert!(content_aware_move_preview(&s, &json!({"offset": [0, 0]})).is_err());
     assert!(content_aware_move_preview(&s, &json!({"offset": [70, 0], "rotate": "x"})).is_err());
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 300, "height": 300})).unwrap();
-    assert!(content_aware_move_preview(&s, &json!({"offset": [1, 0]})).is_err());
+    assert!(content_aware_move_preview(&s, &json!({"offset": [70, 0], "mode": "copy"})).is_err());
+}
+
+/// A 30×30 object in the middle of a 400×300 selection (over the 256×256 a preview solves at full
+/// resolution) on a 700×400 canvas, dragged by (250, 60).
+fn large_move(depth: u64) -> Session {
+    let mut s = session(700, 400, depth, "rgb");
+    paint_layer(&mut s, |x, y| if (195..225).contains(&x) && (145..175).contains(&y) { [0.05, 0.1, 0.9, 1.0] } else { texture(x, y) });
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 400, "height": 300})).unwrap();
+    s
+}
+
+#[test]
+fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths() {
+    use crate::jobs::JobCtx;
+    let p = json!({"offset": [250, 60]});
+    for depth in DEPTHS {
+        let mut s = large_move(depth);
+        let before = s.active().unwrap().revision;
+        let job = content_aware_move_preview(&s, &p).unwrap();
+        assert!(job.is_coarse(), "depth {depth}: solved scaled down");
+        let (coarse, damage) = job.run(&JobCtx::new()).unwrap();
+        let px = |d: &Document, x, y| d.layers[0].surface().unwrap().rgba(x, y);
+        // The object lands where the command puts it (its middle; the coarse pass softens the
+        // edges) and its old place is filled.
+        for (x, y) in [(460, 220), (470, 230), (455, 215), (465, 225)] {
+            assert!(is_object(px(&coarse, x, y)), "depth {depth}: the object lands at {x},{y}: {:?}", px(&coarse, x, y));
+        }
+        for (x, y) in [(435, 220), (485, 220), (460, 195), (460, 245)] {
+            assert!(!is_object(px(&coarse, x, y)), "depth {depth}: nothing of the object at {x},{y}");
+        }
+        assert!(!is_object(px(&coarse, 210, 160)), "depth {depth}: the old place is filled");
+        assert!(damage.contains(470, 230) && damage.contains(210, 160), "{damage:?}");
+        // Outside the selection and where it lands, nothing changes.
+        for (x, y) in [(5, 5), (690, 20), (20, 390)] {
+            assert_eq!(px(&coarse, x, y), rgba(&s, x, y), "depth {depth}: {x},{y} untouched");
+        }
+        // The session is untouched.
+        assert!(is_object(rgba(&s, 210, 160)) && !is_object(rgba(&s, 460, 220)));
+        assert_eq!(s.active().unwrap().revision, before);
+        // Cancelled, either pass stops.
+        let ctx = JobCtx::new();
+        ctx.cancel();
+        assert!(matches!(job.run(&ctx), Err(EngineError::Cancelled)), "depth {depth}");
+        let fine = job.refine().unwrap();
+        assert!(!fine.is_coarse() && fine.refine().is_none());
+        assert!(matches!(fine.run(&ctx), Err(EngineError::Cancelled)), "depth {depth}");
+        if depth != 8 {
+            continue;
+        }
+        // The refined preview is the command's result, bit for bit.
+        let (exact, _) = fine.run(&JobCtx::new()).unwrap();
+        assert_eq!(s.active().unwrap().revision, before);
+        s.execute("paint.contentAwareMove", p.clone()).unwrap();
+        let b = exact.bounds();
+        let made = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(b);
+        assert!(exact.layers[0].surface().unwrap().read_region(b) == made, "refined preview = command");
+    }
+}
+
+#[test]
+fn content_aware_move_coarse_preview_handles_transform_extend_and_limits() {
+    use crate::jobs::JobCtx;
+    let s = large_move(8);
+    let px = |d: &Document, x, y| d.layers[0].surface().unwrap().rgba(x, y);
+    // Transform On Drop: turned 90° about the selection's centre (210, 160), then moved; the
+    // object sits at the centre, so it lands at (460, 220) either way.
+    let (turned, _) = content_aware_move_preview(&s, &json!({"offset": [250, 60], "rotate": 90})).unwrap().run(&JobCtx::new()).unwrap();
+    assert!(is_object(px(&turned, 460, 220)) && !is_object(px(&turned, 210, 160)));
+    // Extend keeps the original.
+    let (extended, _) = content_aware_move_preview(&s, &json!({"offset": [250, 60], "mode": "extend"})).unwrap().run(&JobCtx::new()).unwrap();
+    assert!(is_object(px(&extended, 460, 220)) && is_object(px(&extended, 210, 160)));
+    // Off the canvas, or past the command's own limit, is still an error.
+    assert!(content_aware_move_preview(&s, &json!({"offset": [400, 0]})).is_err());
+    let mut big = session(5000, 4000, 8, "rgb");
+    big.execute("select.rect", json!({"x": 0, "y": 0, "width": 4500, "height": 3900})).unwrap();
+    assert!(content_aware_move_preview(&big, &json!({"offset": [10, 10]})).is_err());
 }
 
 #[test]

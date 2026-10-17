@@ -29,9 +29,9 @@ note = "paint.patch (retouch_cmds/patch.rs, source/destination) + Tool::Patch (J
 [[item]]
 id = "TOOL-213-4"
 target = "Content-Aware Move tool reusing inpaint completion"
-status = "partial"
+status = "done"
 issue = 213
-note = "paint.contentAwareMove (retouch_cmds/content_aware_move.rs: move/extend, Structure 1-7, Color 0-10, Sample All Layers, Transform On Drop's scaleX/scaleY/rotate; background job) + Tool::ContentAwareMove (J group: lasso, then drag; Transform On Drop puts a scale/rotate box on the dropped patch, cam_transform.rs: Enter commits as one step, Esc cancels). cam_preview.rs: once the pointer or the box rests, the result shows (a cancellable background job on a smaller sampling window, small selections only, #4385). Missing: a progressive preview for big selections"
+note = "paint.contentAwareMove (retouch_cmds/content_aware_move.rs: move/extend, Structure 1-7, Color 0-10, Sample All Layers, Transform On Drop's scaleX/scaleY/rotate; background job) + Tool::ContentAwareMove (J group: lasso, then drag; Transform On Drop puts a scale/rotate box on the dropped patch, cam_transform.rs: Enter commits as one step, Esc cancels). cam_preview.rs: once the pointer or the box rests, the result shows (a cancellable background job on a smaller sampling window, #4385); a selection over 256x256 shows a coarse result solved scaled down first, then the command's exact result as a second job (#6680; 24 MP document, release: 600x400 coarse 0.26 s then exact 0.8 s, 1500x1000 0.38 s then 4.1 s, 3000x2000 0.69 s then 9.4 s; was no preview above 256x256). Tests: content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths, content_aware_move_coarse_preview_handles_transform_extend_and_limits, a_preview_within_the_full_resolution_budget_is_the_plain_solve_bit_for_bit, a_large_selection_shows_a_coarse_result_then_the_exact_one"
 
 [[item]]
 id = "TOOL-213-5"
