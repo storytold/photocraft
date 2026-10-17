@@ -361,6 +361,40 @@ different machine classes are never compared, and `--quick` numbers are only com
 quick baseline. Machines that run other work give noisy numbers: check the load average in the
 summary before trusting a regression, and record it next to any number you quote.
 
+**Measuring one scenario.** A full run is tens of minutes; one row is seconds once its bench is
+built. `xtask perf`'s own flags are `--quick`, `--update-baseline`, `--threshold`, `--bench`
+(repeatable, one bench per name), `--skip-build` and `--reuse`; it has no way to pick a single
+*row*. The bench binary takes those filters itself — `--only <substring>` (row names are matched
+with `contains`), `--group <name>` and `--reps N` — so to time one row run the bench directly:
+
+```sh
+cargo run --release -p photocraft-ui-egui --example perf_scenarios -- \
+  --only "Select > Modify > Smooth" --json target/perf/p26.json
+```
+
+That writes the row's own report and stops there: it does **not** evaluate the budget, so read
+`p50_ms`/`p95_ms`/`max_ms` out of the JSON yourself. Use `cargo xtask perf --bench <name>` when you
+want the verdict, the merged `results.json`/`summary.md` and the regression check.
+
+Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
+otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use
+`b.reps.min(5)`); percentiles are nearest-rank, so **at n ≤ 5 the "p95" is simply the maximum**. A
+budgeted scenario the baseline has no row for fails the run (`missing` is in `Status::fails()`),
+so add the `[[scenario]]` and its baseline row together.
+
+**A red `cargo xtask perf` is not always your budget.** The committed baseline carries
+`failed.P12` (a wgpu panic writing `pc_compose_uniforms`), so the command exits non-zero before
+any of this is about your change: read the row, not the exit code. And do not read the committed
+verdicts as a clean-machine measurement: `perf/baseline.json` was written on 2026-10-05 at a load
+average near 225 on a 14-core Apple M4 Pro, which is why P26 and P27 are over budget there while
+`perf/budgets.toml` records 20–45 ms p95 for P26 on a clean 16-core machine (`enforce = false`
+until CI cores are measured). Quote a number with the load average and the machine class beside it.
+
+**Flipping `enforce`.** `enforce = true` makes the nightly fail whenever that budget breaks, and a
+baseline file belongs to exactly one machine class. Flip the row and refresh the baseline on the
+nightly's own class in the same change, or `docs/scorecard.md` turns "BUDGET BROKEN" from numbers
+nobody measured on that machine.
+
 **Adding a scenario.** Add a row to a bench (keep its name stable: it is the key), give the
 bench `--json` support through `photocraft_testkit::perf::{row, report, write_report}`, then add a
 `[[scenario]]` to `perf/budgets.toml` and run `cargo xtask scorecard`.
