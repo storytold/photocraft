@@ -4015,7 +4015,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             // tip keeps the circle.
                             _ => {
                                 let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                                let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
+                                let axes = crate::brush_cursor::pen_axes(&xf, brush, app.stylus.sample());
                                 crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                             }
                         }
