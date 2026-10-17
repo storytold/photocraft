@@ -151,6 +151,39 @@ fn a_fully_transparent_animated_gif_frame_encodes() {
     assert!(f.indices.iter().all(|&i| Some(i) == f.transparent));
 }
 
+/// The GIF frame delays (centiseconds, from each Graphic Control Extension) of a Render Video.
+fn rendered_gif_delays(s: &Session) -> Vec<u16> {
+    let mut gif = Vec::new();
+    render_video_with(
+        s,
+        &json!({"format": "gif"}),
+        |_, bytes| {
+            gif = bytes.to_vec();
+            Ok(())
+        },
+        |_, _| true,
+    )
+    .unwrap();
+    gif.windows(6).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| u16::from_le_bytes([w[4], w[5]])).collect()
+}
+
+#[test]
+fn animated_gif_delay_follows_timelines_under_one_fps() {
+    // 0.5 fps is a valid timeline rate; its frames last 2 s, not the 1 s a 1 fps floor gave.
+    let mut s = session();
+    s.execute("timeline.create", json!({"duration": 2, "fps": 0.5})).unwrap();
+    assert_eq!(rendered_gif_delays(&s), [200, 200]);
+    // A loaded timeline with an unusable rate falls back to 30 fps (3 cs), as with no timeline.
+    let mut doc = (*s.active().unwrap().doc).clone();
+    doc.timeline = Some(Timeline::new(2, f32::NAN));
+    {
+        let st = s.active_mut().unwrap();
+        st.doc = std::sync::Arc::new(doc);
+        st.revision += 1;
+    }
+    assert_eq!(rendered_gif_delays(&s), [3, 3]);
+}
+
 #[test]
 fn inspect_reports_video_layer() {
     let dir = tmpdir("vinsp");
