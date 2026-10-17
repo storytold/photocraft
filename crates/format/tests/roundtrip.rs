@@ -686,6 +686,66 @@ fn video_layer_frames_survive_roundtrip() {
     assert!(px[0][0] > 0.9 && px[0][2] < 0.1, "frame 2 is reddish: {:?}", px[0]);
 }
 
+/// A frame animation survives a save: the delays, the loop count, the selected frame, and which
+/// layers each frame hides, even though loading gives every layer a new id.
+#[test]
+fn frame_animation_survives_roundtrip_with_its_hidden_layers_remapped() {
+    use photocraft_doc::{AnimFrame, FrameAnimation, LoopCount};
+    let mut doc = Document::new("Anim", photocraft_geom::Size { width: 8, height: 6 }, ColorMode::Rgb, SampleType::U8);
+    let fmt = doc.pixel_format();
+    for name in ["One", "Two", "Three"] {
+        let mut l = Layer::raster(name, fmt);
+        l.name = name.into();
+        doc.layers.push(l);
+    }
+    let id = |n: usize| doc.layers[n].id;
+    let hide = |keep: usize| -> Vec<LayerId> {
+        let mut v: Vec<_> = (0..3).filter(|i| *i != keep).map(id).collect();
+        v.sort();
+        v
+    };
+    let frames = vec![AnimFrame { delay_ms: 100, hidden: hide(0) }, AnimFrame { delay_ms: 250, hidden: hide(1) }, AnimFrame { delay_ms: 0, hidden: hide(2) }];
+    doc.frame_animation = Some(FrameAnimation { frames, current: 1, loops: LoopCount::Times(4) });
+    doc.select_animation_frame(1);
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let mut back = load_from_bytes(&bytes).unwrap();
+    let a = back.frame_animation.clone().expect("animation survived");
+    assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [100, 250, 0]);
+    assert_eq!((a.current, a.loops), (1, LoopCount::Times(4)));
+    // Whatever ids the layers got, frame N hides exactly the other two.
+    for n in 0..3 {
+        assert!(back.select_animation_frame(n));
+        let shown: Vec<&str> = back.layers.iter().filter(|l| l.visible).map(|l| l.name.as_str()).collect();
+        assert_eq!(shown, [["One"], ["Two"], ["Three"]][n], "frame {n}");
+    }
+}
+
+/// A hostile manifest's frame animation is repaired on load: no frames, an out-of-range selected
+/// frame, an absurd delay and a frame count past the limit never reach the UI or the engine.
+#[test]
+fn a_malformed_frame_animation_is_repaired_on_load() {
+    use photocraft_doc::frame_animation::{MAX_DELAY_MS, MAX_FRAMES};
+    use photocraft_doc::{AnimFrame, FrameAnimation, LoopCount};
+    let mut doc = Document::new("Bad", photocraft_geom::Size { width: 4, height: 4 }, ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::raster("L", doc.pixel_format()));
+    let load = |a: FrameAnimation| {
+        let mut d = doc.clone();
+        d.frame_animation = Some(a);
+        load_from_bytes(&save_to_bytes(&d, &SaveOptions::default()).unwrap()).unwrap().frame_animation.unwrap()
+    };
+    let none = load(FrameAnimation { frames: Vec::new(), current: 9, loops: LoopCount::Forever });
+    assert_eq!((none.frames.len(), none.current), (1, 0));
+    let wild = load(FrameAnimation {
+        frames: vec![AnimFrame { delay_ms: u32::MAX, hidden: vec![photocraft_doc::LayerId(u64::MAX)] }],
+        current: usize::MAX,
+        loops: LoopCount::Times(0),
+    });
+    assert_eq!((wild.frames[0].delay_ms, wild.current), (MAX_DELAY_MS, 0));
+    let many = load(FrameAnimation { frames: vec![AnimFrame::default(); MAX_FRAMES + 50], current: MAX_FRAMES + 10, loops: LoopCount::Forever });
+    assert_eq!((many.frames.len(), many.current), (MAX_FRAMES, MAX_FRAMES - 1));
+}
+
 /// Issue #1101: serde_json writes NaN and the infinities as `null`, which the manifest's float
 /// fields refuse on load, so such a document saved "successfully" and never opened again. The
 /// save is refused instead, naming the value; finite documents are unaffected.
