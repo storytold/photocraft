@@ -880,9 +880,9 @@ pub struct Refresh {
     pub fallback: Option<String>,
 }
 
-/// How the app creates its wgpu device: egui's defaults, except that the texture and buffer size
-/// limits are the adapter's own rather than egui's 8192 px cap, so large documents stay on the
-/// GPU compositor.
+/// How the app creates its wgpu device: egui's defaults clamped to the adapter's supported limits,
+/// with the adapter's own texture and buffer sizes rather than egui's 8192 px cap, so large
+/// documents stay on the GPU compositor.
 pub fn wgpu_setup() -> egui_wgpu::WgpuSetup {
     let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
     use_adapter_limits(&mut setup);
@@ -891,7 +891,8 @@ pub fn wgpu_setup() -> egui_wgpu::WgpuSetup {
 
 /// Make `setup` request the adapter's own texture and buffer size limits instead of egui's
 /// default 8192 px cap (which sent every document wider or taller than 8192 px to the CPU
-/// compositor). Everything else (features, the WebGL2 base limits on GL) stays egui's default.
+/// compositor). Other limits use egui's defaults (WebGL2's on GL), clamped to adapter support;
+/// features stay egui's default.
 pub fn use_adapter_limits(setup: &mut egui_wgpu::WgpuSetup) {
     use_adapter_limits_with(setup, |_| {});
 }
@@ -907,11 +908,15 @@ pub fn use_adapter_limits_with(setup: &mut egui_wgpu::WgpuSetup, on_adapter: imp
     }
 }
 
-/// egui's base limits (WebGL2's on GL) with the adapter's maximum texture and buffer sizes.
+/// egui's base limits (WebGL2's on GL), clamped to adapter support, with its maximum texture and buffer sizes.
 pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
-    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
-    let a = adapter.limits();
-    wgpu::Limits { max_texture_dimension_2d: a.max_texture_dimension_2d, max_buffer_size: a.max_buffer_size, ..base }
+    device_limits_for(adapter.get_info().backend, adapter.limits())
+}
+
+fn device_limits_for(backend: wgpu::Backend, supported: wgpu::Limits) -> wgpu::Limits {
+    let base = if backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+    let base = base.or_worse_values_from(&supported);
+    wgpu::Limits { max_texture_dimension_2d: supported.max_texture_dimension_2d, max_buffer_size: supported.max_buffer_size, ..base }
 }
 
 /// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
@@ -2374,6 +2379,64 @@ mod mip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_limits_support_v3d_shader_variable_limit() {
+        let supported = wgpu::Limits { max_texture_dimension_2d: 7680, max_inter_stage_shader_variables: 15, ..wgpu::Limits::default() };
+        let requested = device_limits_for(wgpu::Backend::Vulkan, supported.clone());
+        assert_eq!(requested.max_inter_stage_shader_variables, 15);
+        assert!(requested.check_limits(&supported));
+        assert_eq!(requested.max_texture_dimension_2d, 7680);
+        assert_eq!(requested.max_buffer_size, supported.max_buffer_size);
+    }
+
+    #[test]
+    fn device_limits_support_weaker_gl_adapters() {
+        let supported = wgpu::Limits {
+            max_texture_dimension_2d: 1024,
+            max_texture_dimension_3d: 128,
+            max_bind_groups: 2,
+            max_buffer_size: 128 << 20,
+            ..wgpu::Limits::downlevel_webgl2_defaults()
+        };
+        let requested = device_limits_for(wgpu::Backend::Gl, supported.clone());
+        assert!(requested.check_limits(&supported));
+        assert_eq!(requested, supported);
+    }
+
+    #[test]
+    fn device_limits_preserve_backend_defaults_on_capable_adapters() {
+        let supported = wgpu::Limits {
+            max_texture_dimension_2d: 16_384,
+            max_buffer_size: 1 << 30,
+            max_bind_groups: 8,
+            max_inter_stage_shader_variables: 32,
+            min_uniform_buffer_offset_alignment: 64,
+            min_storage_buffer_offset_alignment: 64,
+            ..wgpu::Limits::default()
+        };
+        for (backend, base) in [
+            (wgpu::Backend::Vulkan, wgpu::Limits::default()),
+            (wgpu::Backend::Dx12, wgpu::Limits::default()),
+            (wgpu::Backend::Metal, wgpu::Limits::default()),
+            (wgpu::Backend::Gl, wgpu::Limits::downlevel_webgl2_defaults()),
+        ] {
+            let requested = device_limits_for(backend, supported.clone());
+            assert!(requested.check_limits(&supported));
+            assert_eq!(requested, wgpu::Limits { max_texture_dimension_2d: 16_384, max_buffer_size: 1 << 30, ..base }, "{backend:?}");
+        }
+    }
+
+    #[test]
+    fn device_limits_support_larger_minimum_alignments() {
+        let supported = wgpu::Limits { min_uniform_buffer_offset_alignment: 512, min_storage_buffer_offset_alignment: 1024, ..wgpu::Limits::default() };
+        for backend in [wgpu::Backend::Vulkan, wgpu::Backend::Gl] {
+            let requested = device_limits_for(backend, supported.clone());
+            assert!(requested.check_limits(&supported));
+            assert_eq!(requested.min_uniform_buffer_offset_alignment, 512);
+            assert_eq!(requested.min_storage_buffer_offset_alignment, 1024);
+        }
+    }
 
     /// The scratch-texture workaround is for Intel's DX12 drivers (#892); other DX12 adapters
     /// render straight into the level like every other backend (#4515).
