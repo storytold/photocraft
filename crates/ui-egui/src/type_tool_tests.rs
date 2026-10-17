@@ -1549,6 +1549,27 @@ mod multi_layer_formatting {
         assert_eq!(text(h.state(), ids[1]).char_runs(), peer);
     }
 
+    /// #6491: with Units & Rulers ▸ Type set to pixels, the Character and Paragraph fields show
+    /// and take pixels, like the options bar. 144 ppi so a pixel is not a point.
+    #[test]
+    fn character_and_paragraph_fields_follow_the_type_units_preference() {
+        use egui_kittest::kittest::NodeT;
+        let (mut app, ids) = fixture();
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "pixels"})).unwrap();
+        app.run("image.imageSize", json!({"resolution": 144, "resample": "none"})).unwrap();
+        selected(&mut app, &[ids[0]]);
+        let mut h = controls(app, true);
+        let shown = h.get_by_role_and_label(Role::SpinButton, "Font size").accesskit_node().numeric_value();
+        assert_eq!(shown, Some(24.0), "12 pt at 144 ppi");
+        number(&mut h, "Font size", "60");
+        number(&mut h, "Leading (set to the font size × auto-leading when Auto)", "84");
+        number(&mut h, "Baseline shift", "10");
+        number(&mut h, "Indent left margin", "9");
+        let c = style(h.state(), ids[0], 0);
+        assert_eq!((c.size_pt, c.leading_pt, c.baseline_shift_pt), (30.0, Some(42.0), 5.0));
+        assert_eq!(text(h.state(), ids[0]).paragraph_runs()[0].style.start_indent_pt, 4.5);
+    }
+
     /// #5717: a layer scaled so its shown size or leading is past a field's range (2400 pt, or
     /// 0.08 pt) keeps it while the Character panel and the options bar only show it.
     #[test]
