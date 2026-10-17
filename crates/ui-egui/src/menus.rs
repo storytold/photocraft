@@ -1030,6 +1030,22 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    // Window › Workspace: saved workspaces follow the presets, checked while current.
+    let saved = crate::workspace_ui::saved_names(app);
+    if !saved.is_empty()
+        && let Some(after) = items.iter().position(|i| i.id == "window.workspace.motion")
+    {
+        let wp: Vec<String> = vec!["Window".into(), "Workspace".into()];
+        let separator = MenuItem { id: "---".into(), label: "---".into(), path: wp.clone(), shortcut: None, enabled: false, checked: None, color: None };
+        let entries = saved.into_iter().enumerate().map(|(i, name)| {
+            let id = format!("{}{i}", crate::workspace_ui::SAVED);
+            let checked = checked(app, &id);
+            MenuItem { id, label: name, path: wp.clone(), shortcut: None, enabled: true, checked, color: None }
+        });
+        for (k, it) in std::iter::once(separator).chain(entries).enumerate() {
+            items.insert(after + 1 + k, it);
+        }
+    }
     // Help: the link items, a separator, then System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {
         items.insert(

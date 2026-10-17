@@ -642,16 +642,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let ui = &mut group_ui;
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let mut ws = app.ui.workspace.clone();
-                    let opts = [
-                        // Keys stay English (`apply_workspace` matches them); the dropdown
-                        // shows the labels in the UI language.
-                        ("Essentials".to_string(), tl!("Essentials")),
-                        ("Photography".to_string(), tl!("Photography")),
-                        ("Painting".to_string(), tl!("Painting")),
-                        ("Graphic and Web".to_string(), tl!("Graphic and Web")),
-                        ("Pixel Art".to_string(), tl!("Pixel Art")),
-                        ("Motion".to_string(), tl!("Motion")),
-                    ];
+                    let options = crate::workspace_ui::switcher_options(app);
+                    let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
                     // A narrow bar drops what is also in a menu, the theme toggle first
                     // (Preferences), then search (Edit › Search), and narrows the switcher
                     // (Window › Workspace) before anything runs over.
