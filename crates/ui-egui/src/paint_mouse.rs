@@ -30,7 +30,13 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     let current = app.session.tools.brush.clone();
     save_brush(app, app.ui.brush_tool, current.clone());
     app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
-        Some((_, b)) => session_fields(&current, b),
+        Some((_, b)) => {
+            // A brush remembered from the previous run holds its stored tips as references:
+            // load their full bitmaps (a missing one keeps painting with its preview).
+            let mut b = session_fields(&current, b);
+            let _ = app.session.load_brush_tips(&mut b);
+            b
+        }
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
         None => BrushSettings { smoothing: first_smoothing(), ..current },
     };

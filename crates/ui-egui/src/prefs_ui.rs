@@ -53,6 +53,8 @@ pub struct Runtime {
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    /// The tool owning the session brush and the other tools' brushes, as last remembered.
+    pub(crate) tool_brushes: Option<crate::tool_memory::ToolBrushes>,
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -3395,6 +3397,150 @@ mod tests {
             assert!(o.move_auto_select && o.feather == 0.0, "{bad}");
             assert_eq!(o.tolerance, if bad.is_object() { 5.0 } else { 32.0 });
         }
+    }
+
+    /// #6212: a remembered value its options-bar field could never hold is clamped to the
+    /// field's range (or takes the default) rather than reaching the tool.
+    #[test]
+    fn remembered_tool_options_are_clamped_to_their_fields() {
+        let ctx = egui::Context::default();
+        let hostile = json!({"toolOptions": {
+            "feather": 1e30, "tolerance": -5.0, "polygon_sides": 0, "eyedropper_size": 7,
+            "crop_overlay_orientation": 9, "fill_opacity": 0.0, "magnetic_width": 1e9,
+            "pattern_stamp_angle": -720.0, "marquee_width": 1e7, "shape_stroke": {"miter_limit": -1.0, "opacity": 5.0},
+        }});
+        let (mut app, _) = app_with_saved(Some(hostile.to_string()));
+        tick(&mut app, &ctx);
+        let o = &app.ui.tool_options;
+        let d = crate::state::ToolOptions::default();
+        assert_eq!((o.feather, o.tolerance, o.polygon_sides, o.eyedropper_size), (1000.0, 0.0, 3, d.eyedropper_size));
+        assert_eq!((o.crop_overlay_orientation, o.fill_opacity, o.magnetic_width), (d.crop_overlay_orientation, 1.0, 256.0));
+        assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
+        assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
+        // A good value is left alone, and in-range defaults never change (nothing to save).
+        let (mut app2, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.5}}).to_string()));
+        tick(&mut app2, &ctx);
+        assert_eq!(app2.ui.tool_options, crate::state::ToolOptions { feather: 12.5, ..d.clone() });
+        let mut def = d.clone();
+        crate::tool_memory::sanitize(&mut def);
+        assert_eq!(def, d);
+    }
+
+    /// #6212: every painting tool keeps its own brush across a restart, and the session brush
+    /// comes back as the brush of the tool that had it.
+    #[test]
+    fn tool_brushes_survive_a_restart() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let set_size = |app: &mut PhotocraftApp, size: f32| {
+            app.session.tools.brush.size = size;
+            app.session.tools.brush.opacity = size / 100.0;
+            app.session.tools.brush_changed();
+        };
+        set_size(&mut app, 77.0);
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        set_size(&mut app, 33.0);
+        app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        set_size(&mut app, 12.0);
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"));
+        assert_eq!(saved["toolBrushes"]["brushes"]["Brush"]["size"], json!(77.0));
+        assert_eq!(saved["toolBrushes"]["brushes"]["CloneStamp"]["size"], json!(12.0));
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_none(), "the owner's brush is the last brush");
+
+        let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
+        tick(&mut app2, &ctx);
+        assert_eq!((app2.ui.tool, app2.ui.brush_tool), (Tool::Eraser, Tool::Eraser));
+        assert_eq!(app2.session.tools.brush.size, 33.0, "the Eraser's brush is the session brush");
+        for (tool, size) in [(Tool::Brush, 77.0), (Tool::CloneStamp, 12.0), (Tool::Eraser, 33.0)] {
+            app2.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app2);
+            assert_eq!(app2.session.tools.brush.size, size, "{tool:?}");
+            assert_eq!(app2.session.tools.brush.opacity, size / 100.0, "{tool:?}");
+        }
+    }
+
+    /// #6212: a damaged or hand-edited `toolBrushes` never panics: what reads back loads (clamped
+    /// to the options bar's ranges), the rest is skipped and those tools start from the brush.
+    #[test]
+    fn remembered_tool_brushes_survive_damage() {
+        use crate::state::Tool;
+        let ctx = egui::Context::default();
+        for bad in [json!("junk"), json!(42), json!({"owner": [1], "brushes": "x"}), json!({"brushes": {"Eraser": 5}})] {
+            let (mut app, _) = app_with_saved(Some(json!({"toolBrushes": bad}).to_string()));
+            tick(&mut app, &ctx);
+            assert_eq!(app.ui.brush_tool, Tool::Brush, "{bad}");
+            assert!(app.ui.tool_brushes.is_empty(), "{bad}");
+        }
+        let hostile = json!({"toolBrushes": {"owner": "Move", "brushes": {
+            "Eraser": {"size": 1e30}, "Bogus": {"size": 5.0}, "Move": {"size": 5.0},
+            "Smudge": {"size": -3.0, "opacity": 50.0, "flow": -2.0, "hardness": 1e30},
+            "Brush": {"size": 9.0},
+        }}});
+        let (mut app, _) = app_with_saved(Some(hostile.to_string()));
+        tick(&mut app, &ctx);
+        assert_eq!(app.ui.brush_tool, Tool::Brush, "the Move tool has no brush");
+        let tools: Vec<Tool> = app.ui.tool_brushes.iter().map(|(t, _)| *t).collect();
+        assert_eq!(tools, vec![Tool::Smudge], "too large, unknown, brushless and the owner's own are skipped");
+        let b = &app.ui.tool_brushes[0].1;
+        assert_eq!((b.size, b.opacity, b.flow, b.hardness), (1.0, 1.0, 0.0, 1.0));
+        // A whole preferences file that isn't JSON: defaults, no panic.
+        let (mut app, _) = app_with_saved(Some("{not json".into()));
+        tick(&mut app, &ctx);
+        assert!(app.ui.tool_brushes.is_empty());
+        assert_eq!(app.ui.tool_options, crate::state::ToolOptions::default());
+    }
+
+    /// #6212: Reset Tool forgets that tool's remembered options and brush; Reset All Tools
+    /// forgets every tool's.
+    #[test]
+    fn reset_tools_clear_the_remembered_options_and_brushes() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.ui.tool_options.feather = 12.0;
+        app.ui.tool_options.strength = 80.0;
+        app.session.tools.brush.size = 77.0;
+        app.session.tools.brush_changed();
+        for tool in [Tool::Eraser, Tool::Smudge, Tool::Brush] {
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+        }
+        app.ui.tool = Tool::Smudge;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["toolOptions"]["strength"], json!(80.0));
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_some() && saved["toolBrushes"]["brushes"].get("Brush").is_some());
+
+        crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET, json!({})).unwrap();
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert!(saved["toolOptions"].get("strength").is_none(), "the Smudge's Strength is forgotten");
+        assert_eq!(saved["toolOptions"]["feather"], json!(12.0), "the marquee's Feather is not the Smudge's");
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_some());
+
+        crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET_ALL, json!({"confirmed": true})).unwrap();
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert!(saved["toolOptions"].is_null(), "{saved}");
+        assert!(saved["toolBrushes"]["brushes"].as_object().is_none_or(|m| m.is_empty()), "{saved}");
+        let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
+        assert!(app2.ui.tool_brushes.is_empty());
     }
 
     #[test]

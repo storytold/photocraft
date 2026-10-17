@@ -1041,6 +1041,20 @@ fn the_remembered_brush_restores_at_launch() {
     assert_eq!(bad.tools.brush.size, Session::new().tools.brush.size);
 }
 
+/// #6212: a remembered brush reads back clamped to its controls' ranges; one that fails the
+/// `tools.setBrush` checks, or isn't a brush at all, doesn't read back.
+#[test]
+fn restored_brush_settings_are_clamped_or_rejected() {
+    let s = Session::new();
+    let b = restored_settings(&s, &json!({"size": -4.0, "opacity": 7.0, "flow": -1.0, "hardness": 0.25, "smoothing": {"amount": 9.0}})).unwrap();
+    assert_eq!((b.size, b.opacity, b.flow, b.hardness, b.smoothing.amount), (1.0, 1.0, 0.0, 0.25, 1.0));
+    let round = restored_settings(&s, &remembered_settings(&b).unwrap()).unwrap();
+    assert_eq!(round, b, "a remembered brush reads back as it was");
+    for bad in [json!({"size": 1e30}), json!({"size": "big"}), json!(null), json!([1]), json!("brush")] {
+        assert!(restored_settings(&s, &bad).is_none(), "{bad}");
+    }
+}
+
 #[test]
 fn remembered_brushes_never_embed_large_bitmaps() {
     use std::sync::Arc;
