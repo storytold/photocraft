@@ -560,6 +560,15 @@ fn mixer_options(ui: &mut egui::Ui, b: &mut BrushSettings) {
     ui.label(RichText::new(tl!("Mixer Brush")).font(theme::semibold(11.5)).color(t.text_dim));
     ui.add_space(2.0);
     let m = &mut b.mixer;
+    widgets::checkbox(ui, &mut m.wet_blending, "Wet Blending");
+    if m.wet_blending {
+        pct(ui, tl!("Blending"), &mut m.blending, 1.0);
+        pct(ui, tl!("Dilution"), &mut m.dilution, 1.0);
+        pct(ui, tl!("Persistence"), &mut m.persistence, 1.0);
+    }
+    ui.add_space(4.0);
+    widgets::hairline(ui);
+    ui.add_space(4.0);
     pct(ui, tl!("Wet"), &mut m.wet, 1.0);
     pct(ui, tl!("Load"), &mut m.load, 1.0);
     pct(ui, tl!("Mix"), &mut m.mix, 1.0);

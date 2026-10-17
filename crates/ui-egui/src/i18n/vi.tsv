@@ -1294,6 +1294,8 @@
 
 # Mixer Brush (required for every registered non-English language)
 	Mixer Brush	Cọ trộn
+	Dilution	Độ pha loãng
+	Persistence	Độ giữ màu
 	Mixer Brush Tool	Công cụ Cọ trộn
 	Wet	Ướt
 	Load	Tải

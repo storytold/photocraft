@@ -1020,6 +1020,42 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     Ok(json!({ "damage": damage_json(dmg) }))
 }
 
+/// A snapshot-capable effect lets speculative finishing dabs carry their own state.
+pub(crate) trait ForkableDabEffect {
+    fn apply(&mut self, work: &mut Region, fp: &Footprint);
+    fn fork(&self) -> Box<dyn ForkableDabEffect>;
+}
+
+impl<F: FnMut(&mut Region, &Footprint) + Clone + 'static> ForkableDabEffect for F {
+    fn apply(&mut self, work: &mut Region, fp: &Footprint) {
+        self(work, fp);
+    }
+
+    fn fork(&self) -> Box<dyn ForkableDabEffect> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) enum LiveDabEffect {
+    Plain(DabEffect),
+    Forkable(Box<dyn ForkableDabEffect>),
+}
+
+impl LiveDabEffect {
+    fn apply(&mut self, work: &mut Region, fp: &Footprint) {
+        match self {
+            Self::Plain(effect) => effect(work, fp),
+            Self::Forkable(effect) => effect.apply(work, fp),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct LiveDabOptions {
+    pub halo: i32,
+    pub float_work: bool,
+}
+
 /// A Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke shown while it is drawn: each new dab
 /// runs the tool's effect on a working copy of the target, in order, and the changed area is
 /// mixed back over the original at the brush opacity, as `apply_dab_stroke` does on release.
@@ -1030,7 +1066,7 @@ pub struct LiveDab {
     cmd: String,
     renderer: photocraft_paint::StrokeRenderer,
     done: usize,
-    effect: DabEffect,
+    effect: LiveDabEffect,
     halo: i32,
     pre_surf: Surface,
     work: Surface,
@@ -1041,9 +1077,8 @@ pub struct LiveDab {
     lock: bool,
     bounds: Rect,
     /// Show the dabs finishing the stroke would add, so the preview at the last point is the
-    /// commit. Only for effects that a repeated dab doesn't change (Color Replacement): the
-    /// tail runs on a scratch copy at every push, so an effect that carries paint from dab to
-    /// dab (Smudge) would drift.
+    /// commit. Stateful effects must support forking so speculative dabs cannot change the
+    /// persistent state; plain effects may opt in only when repeated dabs are harmless.
     preview_tail: bool,
     /// Where the shown tail is.
     tail: Rect,
@@ -1059,7 +1094,7 @@ impl LiveDab {
         let (stroke, id) = parse_brush(s, p, cmd)?;
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (halo, spacing) = (tool.halo(), stroke.brush.spacing);
-        Self::with_effect(s, cmd, p, stroke, id, halo, |pre| tool.effect(pre.format(), spacing))
+        Self::with_effect(s, cmd, p, stroke, id, halo, |pre, _| tool.effect(pre.format(), spacing))
     }
 
     /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke)
@@ -1071,13 +1106,34 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         halo: i32,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, bool) -> DabEffect,
+    ) -> Result<Self> {
+        Self::with_effect_working_depth(s, cmd, p, stroke, id, LiveDabOptions { halo, float_work: false }, |pre, lock| LiveDabEffect::Plain(effect(pre, lock)))
+    }
+
+    /// Variant for effects whose committed dab sequence keeps an unquantized working copy until
+    /// the whole stroke is mixed back (Wet Blending is sensitive to this at 8/16-bit depths).
+    pub(crate) fn with_effect_working_depth(
+        s: &Session,
+        cmd: &str,
+        p: &Value,
+        stroke: Stroke,
+        id: Option<LayerId>,
+        options: LiveDabOptions,
+        effect: impl FnOnce(&Surface, bool) -> LiveDabEffect,
     ) -> Result<Self> {
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = effect(&pre_surf);
+        let LiveDabOptions { halo, float_work } = options;
+        let work = if float_work {
+            let fmt = surf.format();
+            surf.convert(photocraft_color::PixelFormat::new(fmt.mode, photocraft_color::SampleType::F32, fmt.alpha))
+        } else {
+            pre_surf.clone()
+        };
+        let effect = effect(&pre_surf, lock);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
@@ -1087,7 +1143,7 @@ impl LiveDab {
             done: 0,
             effect,
             halo,
-            work: pre_surf.clone(),
+            work,
             pre_surf,
             id,
             params: p.clone(),
@@ -1128,7 +1184,7 @@ impl LiveDab {
                 continue;
             }
             let mut region = Region::read(&self.work, r.inflate(self.halo));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+            self.effect.apply(&mut region, &ctx.footprint(d, self.done + k));
             region.crop(r).write(&mut self.work);
             dmg = dmg.union(&r);
         }
@@ -1140,8 +1196,16 @@ impl LiveDab {
             let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
             if !r.is_empty() {
                 let mut region = Region::read(&self.work, r.inflate(self.halo));
+                let mut fork = match &self.effect {
+                    LiveDabEffect::Forkable(effect) => Some(effect.fork()),
+                    LiveDabEffect::Plain(_) => None,
+                };
                 for (k, d) in ds.iter().enumerate() {
-                    (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+                    let fp = ctx.footprint(d, self.done + k);
+                    match &mut fork {
+                        Some(effect) => effect.apply(&mut region, &fp),
+                        None => self.effect.apply(&mut region, &fp),
+                    }
                 }
                 tail = Some((r, region.crop(r)));
             }

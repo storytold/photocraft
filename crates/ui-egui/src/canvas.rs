@@ -562,6 +562,7 @@ pub(crate) fn strokes_live(tool: Tool) -> bool {
         Tool::Brush
             | Tool::Pencil
             | Tool::Eraser
+            | Tool::MixerBrush
             | Tool::ColorReplacement
             | Tool::Blur
             | Tool::Sharpen
@@ -687,7 +688,14 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
-    let stroke = if d.tool == Tool::ColorReplacement {
+    let stroke = if d.tool == Tool::MixerBrush {
+        let mixer = &app.session.tools.brush.mixer;
+        if !mixer.wet_blending {
+            return None;
+        }
+        let p = json!({ "target": paint_target(app), "points": d.points });
+        EngineStroke::Dab(photocraft_engine::brush_cmds::live_mixer_blending(&app.session, &p).ok()?)
+    } else if d.tool == Tool::ColorReplacement {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
         p["points"] = json!(d.points);
@@ -5803,7 +5811,11 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     // A live Clone Stamp preview ends here; the commit below replaces it (the Clone Stamp's and
     // History Brush's with the pixels it already drew).
     offer_live_retouch(app, &d);
-    if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
+    if live_retouch_command(d.tool).is_some()
+        || crate::retouch_ui::dab_params(app, d.tool).is_some()
+        || d.tool == Tool::ColorReplacement
+        || d.tool == Tool::MixerBrush
+    {
         app.live_stroke = None;
     }
     let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points) || crate::retouch_ui::finish_stroke(app, d.tool, &d.points, d.modifiers);
@@ -7582,6 +7594,42 @@ mod tests {
         let doc = app.session.documents()[0].doc.clone();
         assert!(app.live_stroke.is_none() && display_doc(&mut app, 0).1 == 0);
         assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 38)), (alpha(&shown, 40, 30), alpha(&shown, 40, 38)), "commit matches the preview");
+    }
+
+    #[test]
+    fn wet_mixer_drag_shows_the_real_stroke_and_commits_it() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 120, "height": 60, "background": "transparent"})).unwrap();
+        app.run("tools.setColors", json!({"foreground": "#cc3333"})).unwrap();
+        app.run(
+            "tools.setBrush",
+            json!({"brush": {"size": 16, "hardness": 1.0, "smoothing": {"enabled": false}, "mixer": {"wetBlending": true, "blending": 0.0, "dilution": 0.0, "persistence": 0.0, "flow": 1.0}}}),
+        )
+        .unwrap();
+        app.ui.tool = Tool::MixerBrush;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, m);
+        assert!(app.live_stroke.as_ref().is_some_and(|l| matches!(l.stroke, EngineStroke::Dab(_))), "Wet Blending starts an incremental dab preview");
+        for x in [40.0, 70.0, 100.0] {
+            tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, m);
+        }
+        let (shown, key) = display_doc(&mut app, 0);
+        assert_ne!(key, 0);
+        let alpha = |d: &Document, x, y| d.layers[0].surface().unwrap().rgba(x, y)[3];
+        assert!(alpha(&shown, 40, 30) > 0.9, "the mixer has painted while the stroke is held");
+        assert_eq!(alpha(&app.session.documents()[0].doc, 40, 30), 0.0, "the preview is still transient");
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 30.0 }, m);
+        let committed = app.session.documents()[0].doc.clone();
+        assert!(app.live_stroke.is_none());
+        let committed_surface = committed.layers[0].surface().unwrap();
+        let shown_surface = shown.layers[0].surface().unwrap();
+        let mismatch = (0..60).find_map(|y| {
+            (0..120).find_map(|x| {
+                let (a, b) = (committed_surface.rgba(x, y), shown_surface.rgba(x, y));
+                (a != b).then_some((x, y, a, b))
+            })
+        });
+        assert!(mismatch.is_none(), "the committed Wet Blending stroke matches its live preview; first mismatch: {mismatch:?}");
     }
 
     #[test]

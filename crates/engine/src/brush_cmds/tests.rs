@@ -143,6 +143,109 @@ fn mixer_brush_reservoir_and_cleaning() {
 }
 
 #[test]
+fn mixer_wet_blending_command_paints_and_honors_dilution() {
+    let paint_once = |dilution| {
+        let mut s = session(30, 30);
+        s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
+        s.execute(
+            "paint.mixerBrush",
+            json!({
+                "points": [[15, 15]], "size": 8, "wetBlending": true,
+                "blending": 0, "dilution": dilution, "flow": 100,
+                "brush": {"pressureSize": false, "spacing": 0.25}
+            }),
+        )
+        .unwrap();
+        rgba(&s, 15, 15)
+    };
+    let opaque = paint_once(0);
+    assert!(opaque[0] > 0.95 && opaque[3] > 0.95, "zero Dilution paints the source color: {opaque:?}");
+    let transparent = paint_once(100);
+    assert!(transparent[3] < 0.05, "full Dilution follows the transparent sample: {transparent:?}");
+}
+
+/// Every pointer prefix is compared with a completed stroke, including repeated idle previews.
+/// Nonzero persistence and a colored backdrop catch speculative tails changing carried paint.
+#[test]
+fn live_wet_mixer_matches_commit_across_depths_smoothing_and_targets() {
+    for depth in [8, 16, 32] {
+        for smoothing in [json!({"enabled": false}), json!({"enabled": true, "amount": 0.0}), json!({"enabled": true, "amount": 0.6})] {
+            for target in [json!("pixels"), json!("mask"), json!({"channel": 0}), json!("quickMask")] {
+                for carried in [false, true] {
+                    for sample_all in [false, true] {
+                        let mut s = Session::new();
+                        s.execute("file.new", json!({"width": 96, "height": 48, "depth": depth, "background": "transparent"})).unwrap();
+                        s.execute("tools.setColors", json!({"foreground": "#cc3333"})).unwrap();
+                        if target == "mask" {
+                            s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+                        } else if target.is_object() {
+                            s.execute("channel.new", json!({"fill": "black"})).unwrap();
+                        } else if target == "quickMask" {
+                            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+                        }
+                        let id = s.active().unwrap().active_layer;
+                        if carried {
+                            s.edit("Backdrop", |doc, _| {
+                                let (surf, _) = crate::channel_cmds::target_surface(doc, id, &json!({"target": target}))?;
+                                for y in 0..48 {
+                                    for x in 0..96 {
+                                        surf.write_pixel(x, y, &photocraft_raster::from_rgba(&surf.format(), [0.1, x as f32 / 96.0, 0.7, 0.4]));
+                                    }
+                                }
+                                Ok(Rect::new(0, 0, 96, 48))
+                            })
+                            .unwrap();
+                        }
+                        let points = [[12.0, 24.0, 1.0], [35.0, 20.0, 1.0], [60.0, 27.0, 1.0], [79.3, 24.7, 1.0]];
+                        let opts = |points: &[[f64; 3]]| {
+                            json!({
+                                "points": points, "target": target, "wetBlending": true,
+                                "blending": if carried { 45 } else { 0 }, "dilution": if carried { 30 } else { 0 },
+                                "persistence": if carried { 75 } else { 0 }, "flow": 83, "sampleAllLayers": sample_all,
+                                "brush": {"size": 14, "hardness": 0.65, "spacing": 0.23, "pressureSize": true, "smoothing": smoothing}
+                            })
+                        };
+                        let mut live = live_mixer_blending(&s, &opts(&points[..1])).unwrap();
+                        for count in 1..=points.len() {
+                            if count > 1 {
+                                let p = points[count - 1];
+                                live.push(&[StrokePoint::new(p[0], p[1], p[2] as f32)]).unwrap();
+                            }
+                            // Repainting the speculative tail must be idempotent and must not
+                            // affect the state used when the next real point arrives.
+                            let before = live.doc.clone();
+                            live.push(&[]).unwrap();
+                            let p = opts(&points[..count]);
+                            s.execute("paint.mixerBrush", p.clone()).unwrap();
+                            let shown = crate::channel_cmds::read_target_surface(&live.doc, id, &p).unwrap();
+                            let idle = crate::channel_cmds::read_target_surface(&before, id, &p).unwrap();
+                            let committed = crate::channel_cmds::read_target_surface(&s.active().unwrap().doc, id, &p).unwrap();
+                            let area = Rect::new(0, 0, 96, 48).union(&live.bounds());
+                            assert!(same_pixels(shown, idle, area), "idle preview changed pixels");
+                            let mismatch = (area.y0..area.y1).find_map(|y| {
+                                (area.x0..area.x1).find_map(|x| {
+                                    let (a, b) = (shown.pixel(x, y), committed.pixel(x, y));
+                                    // The full-stroke mix-back also visits untouched pixels in
+                                    // its bounding rectangle; premultiply/unpremultiply may
+                                    // round those by one float ULP. Integer depths stay exact.
+                                    let tolerance = if depth == 32 { f32::EPSILON } else { 0.0 };
+                                    a.iter().zip(&b).any(|(a, b)| (a - b).abs() > tolerance).then_some((x, y, a, b))
+                                })
+                            });
+                            assert!(
+                                mismatch.is_none(),
+                                "depth={depth} smoothing={smoothing} target={target} carried={carried} all={sample_all} prefix={count}: {mismatch:?}"
+                            );
+                            s.undo();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn color_replacement_modes() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 60, "height": 40, "background": "#33993f"})).unwrap();
@@ -712,7 +815,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
         "shapeDynamics": {"tiltScale": 1.5, "brushProjection": true},
         "transfer": {"wetness": {"jitter": 0.3, "control": "penPressure"}, "mix": {"jitter": 0.6, "minimum": 0.2}},
         "locks": {"shapeDynamics": true, "texture": true, "noise": true},
-        "mixer": {"wet": 0.8, "load": 0.25, "mix": 0.4, "flow": 0.9, "sampleAllLayers": true},
+        "mixer": {"wetBlending": true, "blending": 0.35, "dilution": 0.6, "persistence": 0.8, "wet": 0.8, "load": 0.25, "mix": 0.4, "flow": 0.9, "sampleAllLayers": true},
     });
     s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
     let b = &s.tools.brush;
@@ -721,6 +824,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
     assert_eq!((b.transfer.mix.jitter, b.transfer.mix.minimum), (0.6, 0.2));
     assert!(b.locks.shape_dynamics && b.locks.texture && b.locks.noise && !b.locks.scattering);
     assert_eq!((b.mixer.wet, b.mixer.load, b.mixer.mix, b.mixer.flow, b.mixer.sample_all_layers), (0.8, 0.25, 0.4, 0.9, true));
+    assert_eq!((b.mixer.wet_blending, b.mixer.blending, b.mixer.dilution, b.mixer.persistence), (true, 0.35, 0.6, 0.8));
     // brush.get reports them, and a fresh session gets the same brush from the reported JSON.
     let got = s.execute("brush.get", json!({})).unwrap();
     for (path, want) in [
@@ -731,8 +835,13 @@ fn new_brush_controls_round_trip_through_set_brush() {
         ("/locks/texture", json!(true)),
         ("/mixer/sampleAllLayers", json!(true)),
         ("/mixer/load", json!(0.25)),
+        ("/mixer/wetBlending", json!(true)),
     ] {
         assert_eq!(got.pointer(path), Some(&want), "{path}");
+    }
+    for (path, want) in [("/mixer/blending", 0.35), ("/mixer/dilution", 0.6), ("/mixer/persistence", 0.8)] {
+        let actual = got.pointer(path).and_then(Value::as_f64).unwrap_or_default();
+        assert!((actual - want).abs() < 1e-6, "{path}: {actual} != {want}");
     }
     let mut t = session(40, 40);
     t.execute("tools.setBrush", json!({ "brush": got })).unwrap();
