@@ -13,6 +13,8 @@ use std::sync::Arc;
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
 
 use crate::brush::{BrushSettings, MaskMode, Pattern, TipShape};
 use crate::dynamics::DabGenerator;
@@ -44,6 +46,8 @@ const SMALL_TIP_RADIUS: f32 = 3.0;
 /// Sub-pixel sample offsets (a 4×4 grid) for the area coverage of small tips.
 const SUBPIXEL: [f32; 4] = [-0.375, -0.125, 0.125, 0.375];
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
+/// Max dabs rasterized in one parallel batch (bounds temporary mask memory).
+const PAR_DAB_BATCH: usize = 64;
 
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
@@ -249,6 +253,58 @@ impl BrushContext {
         let noise = b.noise && !dual;
         let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
         let (cx, cy) = if aliased { grid_center(d.center.x, d.center.y, 2.0 * d.radius) } else { (d.center.x as f32, d.center.y as f32) };
+        let r = d.radius;
+        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let rm = (r * ro).max(0.5);
+        let reach_r = rm + 0.5;
+        let reach2 = reach_r * reach_r;
+        let is_circle = mips.is_none() && ro >= 0.999 && (!dual && d.proj_scale >= 0.999 || dual);
+        let simple = is_circle && !aliased && rm >= SMALL_TIP_RADIUS && !noise && !tex_tip && !wet && depth.is_none();
+        if simple {
+            let inner = rm * hardness.clamp(0.0, 1.0);
+            let has_falloff = rm - inner >= 1e-3;
+            let inv_range = if has_falloff { 1.0 / (rm - inner) } else { 0.0 };
+            let alpha = d.alpha;
+            let rasterize_simple = |yy: usize, row: &mut [f32]| {
+                let y = rect.y0 + yy as i32;
+                let dy = y as f32 + 0.5 - cy;
+                let dy2 = dy * dy;
+                if dy2 >= reach2 {
+                    return;
+                }
+                for (xx, slot) in row.iter_mut().enumerate() {
+                    let dx = rect.x0 as f32 + xx as f32 + 0.5 - cx;
+                    let d2 = dx * dx + dy2;
+                    if d2 >= reach2 {
+                        continue;
+                    }
+                    let dd = d2.sqrt();
+                    let edge = (reach_r - dd).clamp(0.0, 1.0);
+                    let falloff = if !has_falloff || dd <= inner {
+                        1.0
+                    } else {
+                        let t = ((dd - inner) * inv_range).min(1.0);
+                        let s = 1.0 - t * t;
+                        let s2 = s * s;
+                        s2 * s2
+                    };
+                    *slot = edge * falloff * alpha;
+                }
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            if h >= 64 {
+                out.par_chunks_mut(w).enumerate().for_each(|(yy, row)| rasterize_simple(yy, row));
+            } else {
+                for yy in 0..h {
+                    rasterize_simple(yy, &mut out[yy * w..(yy + 1) * w]);
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            for yy in 0..h {
+                rasterize_simple(yy, &mut out[yy * w..(yy + 1) * w]);
+            }
+            return;
+        }
         let (sn, cs) = d.angle.sin_cos();
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         // Brush Projection: stretch the sampling coordinates along the tilt direction, which
@@ -272,7 +328,7 @@ impl BrushContext {
             None => (0, 1.0, 1.0, 1.0),
         };
         // A pixel offset from the dab centre in tip space: to y-up, project, rotate by -angle, flip.
-        let to_tip = |dx: f32, dy: f32| {
+        let to_tip = |dx: f32, dy: f32| -> (f32, f32) {
             let (mut ux, mut uy) = (dx, -dy);
             if let Some((ax, ay, k)) = proj {
                 let t = (ux * ax + uy * ay) * k;
@@ -285,6 +341,8 @@ impl BrushContext {
         // sampling only the pixel centre made a tiny dab's total coverage swing with its sub-pixel
         // position, and thin lines beaded.
         let small = mips.is_none() && !aliased && rm < SMALL_TIP_RADIUS;
+        let small_reach2 = (rm + 0.75) * (rm + 0.75);
+        let mut rasterize_row = |yy: usize, row: &mut [f32]| {
         let small_reach2 = (reach + 0.75) * (reach + 0.75);
         // Keep ordinary computed tips separate from the feature loop, so their dense rows
         // can be vectorised without the per-pixel sampled-mask and stroke-depth branches.
@@ -307,7 +365,7 @@ impl BrushContext {
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
-            for xx in 0..w {
+            for (xx, slot) in row.iter_mut().enumerate() {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
                 let (u, v) = to_tip(dx, dy);
@@ -372,8 +430,11 @@ impl BrushContext {
                 if let Some(slot) = depth.as_deref_mut().and_then(|dp| dp.get_mut(yy * w + xx)) {
                     *slot = (1.0 - rn).clamp(0.0, 1.0);
                 }
-                out[yy * w + xx] = val * d.alpha;
+                *slot = val * d.alpha;
             }
+        };
+        for yy in 0..h {
+            rasterize_row(yy, &mut out[yy * w..(yy + 1) * w]);
         }
     }
 
@@ -765,12 +826,9 @@ impl StrokeRenderer {
         self.cov.bounds
     }
 
-    fn raster_pending(&mut self) {
-        let mut dabs = std::mem::take(&mut self.dab_buf);
-        let mut duals = std::mem::take(&mut self.dual_buf);
-        let wet = self.ctx.brush.wet_edges;
+    fn raster_dabs_seq(&mut self, dabs: &[Dab], wet: bool) {
         let mut native = [0.0f32; 8];
-        for d in &dabs {
+        for d in dabs {
             let rect = self.ctx.dab_rect(d, false);
             // Wet Edges acts on the whole stroke (#2088): the dab records how deep it reaches each
             // pixel and the stroke darkens its own rim when composited, not every dab's.
@@ -786,13 +844,78 @@ impl StrokeRenderer {
             // Bounds track the full dab rectangle (even fully transparent parts), like the damage.
             self.cov.bounds = self.cov.bounds.union(&rect);
         }
+    }
+
+    fn raster_duals_seq(&mut self, duals: &[Dab]) {
         if let Some(dm) = self.dual.as_mut() {
-            for d in &duals {
+            for d in duals {
                 let rect = self.ctx.dab_rect(d, true);
                 self.ctx.rasterize(d, true, rect, &mut self.scratch);
                 dm.accumulate(rect, &self.scratch, 1.0, None, None);
             }
         }
+    }
+
+    fn raster_pending(&mut self) {
+        let mut dabs = std::mem::take(&mut self.dab_buf);
+        let mut duals = std::mem::take(&mut self.dual_buf);
+        let wet = self.ctx.brush.wet_edges;
+        #[cfg(not(target_arch = "wasm32"))]
+        if dabs.len() >= 4 && !wet {
+            let ctx = &self.ctx;
+            for chunk in dabs.chunks(PAR_DAB_BATCH) {
+                let rasterized: Vec<(Rect, Vec<f32>)> = chunk
+                    .par_iter()
+                    .map(|d| {
+                        let rect = ctx.dab_rect(d, false);
+                        let mut buf = Vec::new();
+                        ctx.rasterize(d, false, rect, &mut buf);
+                        (rect, buf)
+                    })
+                    .collect();
+                let mut native = [0.0f32; 8];
+                for (i, (rect, vals)) in rasterized.iter().enumerate() {
+                    let d = &chunk[i];
+                    let col = match (self.per_dab_color, self.fmt) {
+                        (true, Some(f)) => {
+                            from_rgba_into(&f, d.color, &mut native);
+                            Some(&native[..f.mode.color_channels()])
+                        }
+                        _ => None,
+                    };
+                    self.cov.accumulate(*rect, vals, d.opacity, col, None);
+                    self.cov.bounds = self.cov.bounds.union(rect);
+                }
+            }
+        } else {
+            self.raster_dabs_seq(&dabs, wet);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.raster_dabs_seq(&dabs, wet);
+        #[cfg(not(target_arch = "wasm32"))]
+        if duals.len() >= 4 {
+            let ctx = &self.ctx;
+            for chunk in duals.chunks(PAR_DAB_BATCH) {
+                let rasterized: Vec<(Rect, Vec<f32>)> = chunk
+                    .par_iter()
+                    .map(|d| {
+                        let rect = ctx.dab_rect(d, true);
+                        let mut buf = Vec::new();
+                        ctx.rasterize(d, true, rect, &mut buf);
+                        (rect, buf)
+                    })
+                    .collect();
+                if let Some(dm) = self.dual.as_mut() {
+                    for (rect, vals) in &rasterized {
+                        dm.accumulate(*rect, vals, 1.0, None, None);
+                    }
+                }
+            }
+        } else {
+            self.raster_duals_seq(&duals);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.raster_duals_seq(&duals);
         self.dabs_done += dabs.len();
         if let Some(all) = self.all_dabs.as_mut() {
             all.extend_from_slice(&dabs);
@@ -971,6 +1094,8 @@ impl StrokeRenderer {
         let nc = fmt.mode.color_channels();
         let b = &self.ctx.brush;
         let opacity = b.opacity.clamp(0.0, 1.0);
+        let mut base_src = [0.0f32; 8];
+        from_rgba_into(&fmt, b.color, &mut base_src);
         let mut src = [0.0f32; 8];
         from_rgba_into(&fmt, b.color, &mut src);
         // A colour picked as CMYK paints its inks as they are in a CMYK target (#4344).
@@ -980,7 +1105,7 @@ impl StrokeRenderer {
             src[..4].copy_from_slice(&inks);
         }
         if let Some(a) = a_idx {
-            src[a] = b.color[3];
+            base_src[a] = b.color[3];
         }
         // 8-bit targets: the pixels the stroke changes are dithered as they are quantised, so
         // soft, low-flow strokes don't band (see `dither8`). Aliased strokes (the Pencil, the
@@ -988,17 +1113,24 @@ impl StrokeRenderer {
         // gradient to band and are not dithered: a Pencil line at partial opacity is one flat
         // colour, as in Photoshop, not grain that a tolerance-0 Magic Wand or Paint Bucket trips on.
         let dither = fmt.sample == SampleType::U8 && !b.aliased;
-        let mut dmg = Rect::EMPTY;
-        let mut region = Vec::new();
-        for (tx, ty) in keys {
-            let Some(tile) = self.cov.tiles.get(&(tx, ty)) else { continue };
-            let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&bounds);
-            if tr.is_empty() {
-                continue;
-            }
-            pre.read_region_into(tr, &mut region);
+        let per_dab_color = self.per_dab_color;
+        let cov_tiles = &self.cov.tiles;
+
+        let work: Vec<_> = keys
+            .iter()
+            .filter_map(|&(tx, ty)| {
+                let tile = cov_tiles.get(&(tx, ty))?;
+                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&bounds);
+                if tr.is_empty() {
+                    return None;
+                }
+                Some((tx, ty, tile, tr))
+            })
+            .collect();
+        let blend_tile = |tx: i32, ty: i32, tile: &CovTile, tr: Rect, mut region: Vec<f32>| -> (Rect, Vec<f32>) {
             let sel = selection.map(|s| (s.channels(), s.read_region(tr)));
             let w = tr.width() as usize;
+            let mut src = base_src;
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
                     let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
@@ -1032,7 +1164,7 @@ impl StrokeRenderer {
                     if lock_transparency && a_idx.is_some_and(|a| px[a] <= 0.0) {
                         continue;
                     }
-                    if self.per_dab_color && !tile.col.is_empty() {
+                    if per_dab_color && !tile.col.is_empty() {
                         let p = &tile.col[ti * nc..(ti + 1) * nc];
                         for ch in 0..nc {
                             src[ch] = p[ch] / c;
@@ -1056,7 +1188,40 @@ impl StrokeRenderer {
                     }
                 }
             }
-            target.write_region(tr, &region);
+            (tr, region)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let use_par = work.len() >= 4;
+        #[cfg(target_arch = "wasm32")]
+        let use_par = false;
+        if use_par {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let cmyk = photocraft_color::convert::active_cmyk_space();
+                let cmyk_ref = cmyk.as_ref();
+                let results: Vec<(Rect, Vec<f32>)> = work
+                    .par_iter()
+                    .map(|&(tx, ty, tile, tr)| {
+                        photocraft_color::convert::with_cmyk_space(cmyk_ref, || {
+                            blend_tile(tx, ty, tile, tr, pre.read_region(tr))
+                        })
+                    })
+                    .collect();
+                let mut dmg = Rect::EMPTY;
+                for (tr, region) in results {
+                    target.write_region(tr, &region);
+                    dmg = dmg.union(&tr);
+                }
+                return if all { bounds } else { dmg };
+            }
+        }
+        let mut dmg = Rect::EMPTY;
+        let mut region = Vec::new();
+        for &(tx, ty, tile, tr) in &work {
+            pre.read_region_into(tr, &mut region);
+            let (tr, blended) = blend_tile(tx, ty, tile, tr, std::mem::take(&mut region));
+            target.write_region(tr, &blended);
+            region = blended;
             dmg = dmg.union(&tr);
         }
         if all { bounds } else { dmg }
