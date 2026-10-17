@@ -643,7 +643,9 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
         let mut h = harness(tool);
         h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
         h.run_steps(1);
-        assert_eq!(held_tool(h.state(), &h.ctx), None, "{tool:?}");
+        // The Hand's own ⌘ is Zoom In (#6434).
+        let want = (tool == Tool::Hand).then_some(Temporary::ZoomIn);
+        assert_eq!(held_tool(h.state(), &h.ctx), want, "{tool:?}");
     }
     for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::MagneticLasso, Tool::QuickSelection] {
         assert!(cmd_moves(tool), "{tool:?}");
@@ -795,4 +797,133 @@ fn a_held_key_keeps_a_pending_crop_and_another_tools_key_commits_it() {
     assert_eq!(h.state().ui.tool, Tool::Move);
     assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(200, 150));
     assert_eq!(h.state().ui.crop_rect, None);
+}
+
+/// #6434: with the Hand tool selected, ⌘ (Ctrl off the Mac) held is Zoom In and ⌥ (with or
+/// without ⌘) Zoom Out, as in Photoshop; letting go gives the Hand back.
+#[test]
+fn cmd_and_alt_with_the_hand_tool_zoom_in_and_out() {
+    let mut h = harness(Tool::Hand);
+    let z0 = h.state().ui.views[0].zoom;
+    hold_mods(&mut h, Modifiers::COMMAND);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND);
+    let z1 = h.state().ui.views[0].zoom;
+    assert!(z1 > z0, "{z0} -> {z1}");
+    hold_mods(&mut h, Modifiers::NONE);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+
+    hold_mods(&mut h, Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    click(&mut h, 200.0, 150.0, Modifiers::ALT);
+    let z2 = h.state().ui.views[0].zoom;
+    assert!(z2 < z1, "{z1} -> {z2}");
+    hold_mods(&mut h, Modifiers::COMMAND | Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(h.state().ui.views[0].zoom < z2);
+    hold_mods(&mut h, Modifiers::NONE);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+    assert_eq!(h.state().ui.tool, Tool::Hand, "the Hand is still the tool");
+}
+
+/// A ⌘-drag with the Hand is the Zoom tool's scrubby zoom, not a pan.
+#[test]
+fn cmd_drag_with_the_hand_tool_is_a_scrubby_zoom() {
+    let mut h = harness(Tool::Hand);
+    let z0 = h.state().ui.views[0].zoom;
+    drag_with(&mut h, Modifiers::COMMAND, 200.0, 150.0, 300.0, 150.0);
+    assert!(h.state().ui.views[0].zoom > z0 * 1.5, "{z0} -> {}", h.state().ui.views[0].zoom);
+    assert_eq!(h.state().ui.tool, Tool::Hand);
+}
+
+/// ⌘ or ⌥ pressed during a Hand pan doesn't turn the drag into a zoom: the pan goes on.
+#[test]
+fn modifiers_pressed_during_a_hand_pan_keep_panning() {
+    for m in [Modifiers::COMMAND, Modifiers::ALT] {
+        let mut h = harness(Tool::Hand);
+        let (z0, c0) = (h.state().ui.views[0].zoom, h.state().ui.views[0].center);
+        press_at(&mut h, 200.0, 150.0);
+        hold_mods(&mut h, m);
+        assert_eq!(held_tool(h.state(), &h.ctx), None, "{m:?}");
+        let p = screen(&h, 200.0, 150.0) + vec2(60.0, 40.0);
+        h.event(Event::PointerMoved(p));
+        h.run_steps(2);
+        button(&mut h, p, false, m);
+        hold_mods(&mut h, Modifiers::NONE);
+        let v = &h.state().ui.views[0];
+        assert_eq!(v.zoom, z0, "{m:?}: no zoom");
+        assert!(v.center[0] < c0[0] - 30.0 && v.center[1] < c0[1] - 20.0, "{m:?}: panned {c0:?} -> {:?}", v.center);
+    }
+}
+
+/// Free Transform keeps ⌘ (its distort handles) while the Hand is selected.
+#[test]
+fn cmd_with_the_hand_tool_is_not_a_zoom_during_free_transform() {
+    let mut h = harness(Tool::Hand);
+    with_layer(&mut h);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_some());
+    hold_mods(&mut h, Modifiers::COMMAND);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+}
+
+/// The Modifier Keys panel's latched ⌥ and ⌘ count, for desktops that take Alt+click.
+#[test]
+fn latched_modifier_keys_zoom_with_the_hand_tool() {
+    let mut h = harness(Tool::Hand);
+    h.state_mut().ui.shell.sticky_command = true;
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    h.state_mut().ui.shell.sticky_alt = true;
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    h.state_mut().ui.shell = Default::default();
+    h.state_mut().ui.tool = Tool::Brush;
+    h.state_mut().ui.shell.sticky_alt = true;
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), None, "only the Hand's ⌥ zooms");
+}
+
+/// A Hand press made without a modifier stays the Hand through its release: ⌘ or ⌥ pressed
+/// before letting go (without moving past the drag threshold) doesn't zoom on the release.
+#[test]
+fn modifiers_pressed_before_a_hand_click_is_released_do_not_zoom() {
+    for m in [Modifiers::COMMAND, Modifiers::ALT] {
+        let mut h = harness(Tool::Hand);
+        let (z0, c0) = (h.state().ui.views[0].zoom, h.state().ui.views[0].center);
+        let p = screen(&h, 200.0, 150.0);
+        h.event(Event::PointerMoved(p));
+        h.run_steps(1);
+        button(&mut h, p, true, Modifiers::NONE);
+        hold_mods(&mut h, m);
+        button(&mut h, p, false, m);
+        h.run_steps(1);
+        let v = &h.state().ui.views[0];
+        assert_eq!((v.zoom, v.center), (z0, c0), "{m:?}: the release didn't zoom");
+        // The modifier still zooms the next click.
+        click(&mut h, 200.0, 150.0, m);
+        assert_ne!(h.state().ui.views[0].zoom, z0, "{m:?}");
+        hold_mods(&mut h, Modifiers::NONE);
+    }
+}
+
+/// A click whose press and release arrive in one frame, with ⌘ held, still zooms.
+#[test]
+fn a_one_frame_cmd_click_with_the_hand_tool_zooms() {
+    let mut h = harness(Tool::Hand);
+    let z0 = h.state().ui.views[0].zoom;
+    hold_mods(&mut h, Modifiers::COMMAND);
+    let p = screen(&h, 200.0, 150.0);
+    h.event(Event::PointerMoved(p));
+    h.run_steps(1);
+    let m = platform(Modifiers::COMMAND);
+    h.input_mut().events.extend([
+        Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: m },
+        Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: m },
+    ]);
+    h.run_steps(2);
+    assert!(h.state().ui.views[0].zoom > z0);
 }
