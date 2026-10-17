@@ -174,3 +174,6 @@ original for the selection blend, and the instance's memory), i.e. ~12 MiB per t
 - Panel / UI plug-ins, plug-ins that read other layers or documents, host callbacks (progress,
   cancel), plug-in-provided file formats.
 - Filter › Last Filter does not repeat plug-in runs yet.
+
+A design for ABI v2 (panel plug-ins, document read and add-layer, loopback-only network) is
+proposed in [`plugins-v2.md`](plugins-v2.md).
