@@ -240,7 +240,7 @@ fn the_live_outline_snaps_to_pixels_and_matches_the_committed_selection() {
         press_at(&mut h, 10.3, 10.3, Modifiers::NONE);
         move_to(&mut h, 20.6, 15.4);
         let app = h.state();
-        let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(&app.ui.tool_options, d, app.point_zoom())).unwrap();
+        let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(app, d)).unwrap();
         assert_eq!(live, [10.0, 10.0, 21.0, 16.0], "{tool:?}: whole pixels while dragging");
         release_at(&mut h, 20.6, 15.4, Modifiers::NONE);
         assert_eq!(selection(&h), Rect::new(10, 10, 21, 16), "{tool:?}: the commit is what was shown");
@@ -263,7 +263,7 @@ fn the_live_outline_matches_the_committed_selection_in_a_rotated_view() {
         let (live, pts) = {
             let app = h.state();
             let d = app.drag.as_ref().expect("the drag is on");
-            let live = crate::canvas::marquee_preview_px(&app.ui.tool_options, d, app.point_zoom()).expect("a marquee is dragged");
+            let live = crate::canvas::marquee_preview_px(app, d).expect("a marquee is dragged");
             // Exactly what the canvas paints for this drag.
             (live, crate::canvas::marquee_drag_ants(d, &xf, Some(live)))
         };
@@ -334,7 +334,7 @@ fn a_one_pixel_column_or_row_is_kept_on_release() {
                 }
                 drag_to(&mut h, [10.2, 10.4], end);
                 let app = h.state();
-                let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(&app.ui.tool_options, d, app.point_zoom()));
+                let live = app.drag.as_ref().and_then(|d| crate::canvas::marquee_preview_px(app, d));
                 let shown = [want.x0, want.y0, want.x1, want.y1].map(f64::from);
                 assert_eq!(live, Some(shown), "{tool:?} {name} (existing {existing}): the outline while dragging");
                 assert!(readout(&h, want.width() as i32, want.height() as i32), "{tool:?} {name}: W/H readout");
@@ -854,4 +854,46 @@ fn size_readout_follows_the_ruler_unit() {
     assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["58 cm".to_string(), "93.8 cm".to_string()]);
     ur.rulers = Unit::Millimeters;
     assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "579.97 mm");
+}
+
+#[test]
+fn fixed_ratio_bounds_preserve_centred_and_elliptical_gestures() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        for ratio in [[16.0, 9.0], [9.0, 16.0], [1.0, 1.0]] {
+            let mut h = harness(tool);
+            h.state_mut().ui.tool_options.marquee_style = "fixedRatio".into();
+            h.state_mut().ui.tool_options.marquee_width = ratio[0];
+            h.state_mut().ui.tool_options.marquee_height = ratio[1];
+            press_at(&mut h, 200.25, 150.5, Modifiers::NONE);
+            // Alt pressed AFTER the gesture starts means centred drawing, not subtraction.
+            mods(&mut h, Modifiers::ALT);
+            move_to(&mut h, 450.0, 350.0);
+            let app = h.state();
+            let live = crate::canvas::marquee_preview_px(app, app.drag.as_ref().unwrap()).unwrap();
+            assert!(live[0] >= 0.0 && live[1] >= 0.0 && live[2] <= 400.0 && live[3] <= 300.0, "{tool:?}: {live:?}");
+            let error = ((live[2] - live[0]) * f64::from(ratio[1]) - (live[3] - live[1]) * f64::from(ratio[0])).abs();
+            // Each extent is quantized to whole pixels; at most one pixel per axis.
+            assert!(error <= f64::from(ratio[0] + ratio[1]), "{ratio:?}: {live:?}");
+            release_at(&mut h, 450.0, 350.0, Modifiers::ALT);
+            let bounds = selection(&h);
+            for (shown, committed) in live.into_iter().zip([bounds.x0, bounds.y0, bounds.x1, bounds.y1]) {
+                assert!((shown - f64::from(committed)).abs() <= 1.0, "{tool:?}: {live:?} vs {bounds:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn centred_fixed_ratio_square_pixel_snapping_stays_inside_canvas() {
+    let mut h = harness(Tool::RectMarquee);
+    h.state_mut().ui.tool_options.marquee_style = "fixedRatio".into();
+    h.state_mut().ui.tool_options.marquee_width = 1.0;
+    h.state_mut().ui.tool_options.marquee_height = 1.0;
+    // Feed an exact fractional document position to the shared preview/commit calculation;
+    // pointer snapping must not move the regression's press point onto an integer.
+    let mut drag = crate::canvas::Drag::new(Tool::RectMarquee, [200.25, 150.5], vec![[450.0, 350.0, 1.0]], Modifiers::NONE, false);
+    drag.track(Modifiers::ALT);
+    let r = crate::canvas::marquee_preview_px(h.state(), &drag).unwrap();
+    assert!(r[0] >= 0.0 && r[1] >= 0.0 && r[2] <= 400.0 && r[3] <= 300.0, "pixel-snapped centred square escaped canvas: {r:?}");
+    assert_eq!(r[2] - r[0], r[3] - r[1], "fitting must preserve the square");
 }

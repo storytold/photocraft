@@ -796,3 +796,32 @@ fn a_held_key_keeps_a_pending_crop_and_another_tools_key_commits_it() {
     assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(200, 150));
     assert_eq!(h.state().ui.crop_rect, None);
 }
+
+#[test]
+fn fixed_ratio_marquee_space_reposition_keeps_preview_and_release_in_bounds() {
+    let mut h = harness(Tool::RectMarquee);
+    h.state_mut().ui.extras.snap = false;
+    h.state_mut().ui.tool_options.marquee_style = "fixedRatio".into();
+    h.state_mut().ui.tool_options.marquee_width = 16.0;
+    h.state_mut().ui.tool_options.marquee_height = 9.0;
+    press_at(&mut h, 50.0, 50.0);
+    move_to(&mut h, 210.0, 140.0);
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    move_to(&mut h, 260.0, 170.0);
+    let preview = |h: &Harness<'static, PhotocraftApp>| {
+        let app = h.state();
+        crate::canvas::marquee_preview_px(app, app.drag.as_ref().unwrap()).unwrap()
+    };
+    assert_eq!(preview(&h), [100.0, 80.0, 260.0, 170.0], "inside reposition preserves size");
+    let centre = h.state().ui.views[0].center;
+    move_to(&mut h, 450.0, 220.0);
+    let r = preview(&h);
+    assert!(r[0] >= 0.0 && r[1] >= 0.0 && r[2] <= 400.0 && r[3] <= 300.0, "{r:?}");
+    assert!(((r[2] - r[0]) * 9.0 - (r[3] - r[1]) * 16.0).abs() <= 25.0, "{r:?}");
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    move_to(&mut h, 370.0, 175.0);
+    assert_eq!(preview(&h), [290.0, 130.0, 370.0, 175.0], "sizing resumes at translated origin");
+    release(&mut h, 370.0, 175.0, Modifiers::NONE);
+    assert_eq!(selection(&h), Rect::new(290, 130, 370, 175));
+    assert_eq!(h.state().ui.views[0].center, centre, "reposition must not pan");
+}
