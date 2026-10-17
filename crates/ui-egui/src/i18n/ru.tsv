@@ -350,6 +350,10 @@
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Перетащите булавку, чтобы сдвинуть полосу, или ее кольцо, чтобы изменить размытие. Сплошные линии расширяют резкую полосу, пунктирные задают переход, а точки поворачивают ее.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Перетаскивайте маркеры на контуре, чтобы изменить размер и повернуть его; кольцо задает угол размытия.
 	Blur Angle	Угол размытия
+	No path selected	Контур не выбран
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Проведите по изображению, чтобы нарисовать контур; перетаскивайте его точки, чтобы изогнуть, щелкните по линии, чтобы добавить точку, и щелкните точку с Alt, чтобы удалить ее. Delete удаляет выбранный контур.
+	Speed	Скорость
+	Taper	Сужение
 	Iris Blur…	Диафрагменное размытие…
 	Tilt-Shift…	Наклон-сдвиг…
 	Path Blur…	Размытие по контуру…

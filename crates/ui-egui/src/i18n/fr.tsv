@@ -550,6 +550,10 @@
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Faites glisser l’épingle pour déplacer la bande, ou son anneau pour modifier le flou. Faites glisser les lignes pleines pour élargir la bande nette, les lignes pointillées pour régler la transition et les points pour la faire pivoter.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Faites glisser les poignées du contour pour le redimensionner et le faire pivoter ; l’anneau règle l’angle de flou.
 	Blur Angle	Angle de flou
+	No path selected	Aucun tracé sélectionné
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Faites glisser sur l’image pour dessiner un tracé ; faites glisser ses points pour le courber, cliquez sur sa ligne pour ajouter un point et Alt-cliquez sur un point pour le supprimer. Suppr supprime le tracé sélectionné.
+	Speed	Vitesse
+	Taper	Effilement
 	Iris Blur…	Flou d'iris…
 	Tilt-Shift…	Inclinaison-décalage…
 	Path Blur…	Flou de tracé…

@@ -543,6 +543,10 @@
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Seret pin untuk memindahkan pita, atau cincinnya untuk mengubah blur. Seret garis utuh untuk melebarkan pita tajam, garis putus-putus untuk mengatur transisi, dan titik untuk memutarnya.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Seret pegangan pada garis luar untuk mengubah ukuran dan memutarnya; cincin mengatur sudut blur.
 	Blur Angle	Sudut Blur
+	No path selected	Tidak ada jalur yang dipilih
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Seret pada gambar untuk menggambar jalur; seret titiknya untuk membengkokkannya, klik garisnya untuk menambah titik, dan Alt-klik titik untuk menghapusnya. Delete menghapus jalur yang dipilih.
+	Speed	Kecepatan
+	Taper	Lancip
 	Iris Blur…	Iris Blur…
 	Tilt-Shift…	Tilt-Shift…
 	Path Blur…	Path Blur…

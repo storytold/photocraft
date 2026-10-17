@@ -379,9 +379,109 @@ fn spin_blur_handles_and_its_angle_ring() {
     assert!(params["pins"][0].get("blur").is_none() && params["pins"][0].get("roundness").is_none(), "{params}");
 }
 
+fn paths_of(h: &Harness<'static, PhotocraftApp>) -> Vec<crate::blur_paths::Path> {
+    crate::blur_paths::paths(&fields(h))
+}
+
+/// A click at `p` with modifiers `m` held (egui reads them from its key state, as when a key is
+/// held, not from the button event).
+fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, m: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(m));
+    move_to(h, p);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: m });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: m });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+#[test]
+fn path_blur_opens_with_its_straight_path() {
+    let h = harness_for(crate::blur_paths::COMMAND, false);
+    let f = fields(&h);
+    let list = paths_of(&h);
+    assert_eq!(list.len(), 1);
+    assert!((list[0].points[0][0] - 0.2).abs() < 1e-6 && (list[0].points[1][0] - 0.8).abs() < 1e-6, "{:?}", list[0]);
+    assert_eq!((list[0].speed, list[0].taper), (50.0, 0.0));
+    for k in ["startX", "startY", "endX", "endY"] {
+        assert!(!f.contains_key(k), "{k} is in the path now");
+    }
+    assert_eq!(crate::blur_paths::selected(&f), Some(0));
+}
+
+/// Drag draws a path, a click adds none; points bend, a click on the line adds one, Alt-click
+/// removes one (never below two), Delete removes the path; OK sends the paths.
+#[test]
+fn path_blur_paths_are_drawn_bent_and_trimmed_on_the_image() {
+    let mut h = harness_for(crate::blur_paths::COMMAND, false);
+    // The first path runs along y = 150. Draw a second one above it, from (80, 100) to (150, 120).
+    let path = [at_doc(&h, 80.0, 100.0), at_doc(&h, 110.0, 110.0), at_doc(&h, 150.0, 120.0)];
+    drag(&mut h, &path);
+    let list = paths_of(&h);
+    assert_eq!(list.len(), 2);
+    let p = &list[1].points;
+    assert!((p[0][0] - 0.2).abs() < 1e-3 && (p[0][1] - 100.0 / 300.0).abs() < 1e-3, "{p:?}");
+    assert!((p[1][0] - 150.0 / 400.0).abs() < 1e-3 && (p[1][1] - 0.4).abs() < 1e-3, "{p:?}");
+    assert_eq!(crate::blur_paths::selected(&fields(&h)), Some(1));
+    assert!(fields(&h).get("__drag").is_none());
+    // A click without a drag draws nothing.
+    let at = at_doc(&h, 120.0, 200.0);
+    click(&mut h, at, Modifiers::NONE);
+    assert_eq!(paths_of(&h).len(), 2);
+    // Drag the end point 10 px right.
+    let path = [at_doc(&h, 150.0, 120.0), at_doc(&h, 155.0, 120.0), at_doc(&h, 160.0, 120.0)];
+    drag(&mut h, &path);
+    assert!((paths_of(&h)[1].points[1][0] - 0.4).abs() < 1e-3);
+    // A click on the line between the points adds one there.
+    let at = at_doc(&h, 120.0, 110.0);
+    click(&mut h, at, Modifiers::NONE);
+    let p = paths_of(&h)[1].points.clone();
+    assert_eq!(p.len(), 3, "{p:?}");
+    assert!((p[1][0] - 0.3).abs() < 1e-3 && (p[1][1] - 110.0 / 300.0).abs() < 1e-3, "{p:?}");
+    // Alt-click removes it again; a two-point path keeps both.
+    let at = at_doc(&h, 120.0, 110.0);
+    click(&mut h, at, Modifiers::ALT);
+    assert_eq!(paths_of(&h)[1].points.len(), 2);
+    let at = at_doc(&h, 80.0, 100.0);
+    click(&mut h, at, Modifiers::ALT);
+    assert_eq!(paths_of(&h)[1].points.len(), 2, "a path keeps two points");
+    // Delete removes the selected path.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(paths_of(&h).len(), 1);
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let (cmd, params) = h.state().session.journal.last().cloned().unwrap();
+    assert_eq!(cmd, crate::blur_paths::COMMAND);
+    assert_eq!(params["paths"].as_array().map(Vec::len), Some(1), "{params}");
+    assert!(params.get("startX").is_none(), "{params}");
+}
+
+#[test]
+fn path_blur_paths_are_cleaned_and_scaled_for_proxies() {
+    let mut h = harness_for(crate::blur_paths::COMMAND, false);
+    let many: Vec<[f64; 2]> = (0..100).map(|i| [f64::from(i) / 100.0, 0.5]).collect();
+    let bad = json!([
+        {"points": [[0.1, 0.1]], "speed": 10},
+        {"points": [[-3, 0.5], [9, "x"], [0.5, 2.0]], "speed": 1e9, "taper": -4},
+        {"points": many, "speed": 20, "taper": 300},
+    ]);
+    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("paths".into(), bad);
+    let list = paths_of(&h);
+    assert_eq!(list.len(), 2, "a one-point path is dropped");
+    assert_eq!(list[0].points, vec![[0.0, 0.5], [0.5, 1.0]], "bad points dropped, the rest clamped");
+    assert_eq!((list[0].speed, list[0].taper), (500.0, 0.0));
+    assert_eq!((list[1].points.len(), list[1].taper), (crate::blur_paths::MAX_POINTS, 100.0));
+    let mut p = json!({"paths": [{"points": [[0.1, 0.1], [0.9, 0.9]], "speed": 40.0, "taper": 50.0}]});
+    crate::blur_pins::scale_for_proxy(&mut p, 4);
+    assert_eq!(p["paths"][0]["speed"], json!(10.0));
+    assert_eq!(p["paths"][0]["taper"], json!(50.0), "taper is a percentage");
+}
+
 /// Alt+Cancel → Reset (#3871) starts the workspace again from one pin in the middle, as when it
 /// opened, instead of leaving it with no pins; the bounds captured on opening stay. An Iris pin
-/// gets the command's default shape back, and Spin Blur and Tilt-Shift their defaults too.
+/// gets the command's default shape back, Spin Blur and Tilt-Shift their defaults too, and Path
+/// Blur its straight path.
 #[test]
 fn alt_reset_starts_again_from_one_pin() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -424,4 +524,12 @@ fn alt_reset_starts_again_from_one_pin() {
     crate::dialog_alt_reset::apply(&mut app, &egui::Context::default(), &mut fields);
     let p = pins(&fields)[0];
     assert_eq!((p.x, p.y, p.tilt.map(|t| t.angle)), (0.5, 0.5, Some(0.0)));
+    let id = crate::filter_dialog::open(&mut app, crate::blur_paths::COMMAND).unwrap();
+    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    fields.insert("paths".into(), json!([{"points": [[0.1, 0.1], [0.5, 0.9], [0.9, 0.1]], "speed": 90.0, "taper": 40.0}]));
+    crate::dialog_alt_reset::apply(&mut app, &egui::Context::default(), &mut fields);
+    let list = crate::blur_paths::paths(&fields);
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].points.len(), list[0].speed, list[0].taper), (2, 50.0, 0.0));
+    assert!((list[0].points[0][0] - 0.2).abs() < 1e-6 && (list[0].points[1][0] - 0.8).abs() < 1e-6, "{:?}", list[0]);
 }

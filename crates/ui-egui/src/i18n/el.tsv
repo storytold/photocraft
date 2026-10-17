@@ -2405,6 +2405,8 @@
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Σύρετε τις λαβές στο περίγραμμα για αλλαγή μεγέθους και περιστροφή, το τετράγωνο για στρογγύλεμα των γωνιών και τις κουκκίδες μέσα για να ορίσετε πού αρχίζει η θόλωση.
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Σύρετε την καρφίτσα για να μετακινήσετε τη ζώνη ή τον δακτύλιό της για να αλλάξετε τη θόλωση. Σύρετε τις συνεχείς γραμμές για να διευρύνετε την ευκρινή ζώνη, τις διακεκομμένες για τη μετάβαση και τις κουκκίδες για περιστροφή.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Σύρετε τις λαβές στο περίγραμμα για αλλαγή μεγέθους και περιστροφή· ο δακτύλιος ορίζει τη γωνία θόλωσης.
+	No path selected	Δεν έχει επιλεγεί διαδρομή
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Σύρετε στην εικόνα για να σχεδιάσετε διαδρομή· σύρετε τα σημεία της για να την καμπυλώσετε, κάντε κλικ στη γραμμή της για να προσθέσετε σημείο και Alt-κλικ σε σημείο για να το αφαιρέσετε. Το Delete αφαιρεί την επιλεγμένη διαδρομή.
 	File Info	Πληροφορίες αρχείου
 	File Settings	Ρυθμίσεις αρχείου
 	Fill Path	Γέμισμα διαδρομής

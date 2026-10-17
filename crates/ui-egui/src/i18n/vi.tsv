@@ -514,6 +514,8 @@
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Kéo các tay nắm trên đường viền để đổi kích thước và xoay, kéo ô vuông để bo tròn góc, và kéo các chấm bên trong để đặt nơi bắt đầu làm mờ.
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Kéo ghim để di chuyển dải, hoặc kéo vòng của ghim để đổi độ mờ. Kéo các đường liền để nới rộng dải sắc nét, các đường nét đứt để đặt vùng chuyển tiếp, và các chấm để xoay dải.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Kéo các tay nắm trên đường viền để đổi kích thước và xoay; vòng tròn đặt góc làm mờ.
+	No path selected	Chưa chọn đường dẫn nào
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Kéo trên ảnh để vẽ đường dẫn; kéo các điểm để uốn cong, bấm vào đường để thêm điểm, và Alt-bấm một điểm để xóa điểm đó. Delete xóa đường dẫn đã chọn.
 	Filter Gallery…	Thư viện bộ lọc…
 	Find Edges	Tìm cạnh
 	Flame…	Ngọn lửa…

@@ -566,6 +566,8 @@
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Húzd a körvonal fogantyúit az átméretezéshez és az elforgatáshoz, a négyzetet a sarkok lekerekítéséhez, a belső pontokat pedig annak beállításához, hol kezdődjön az elmosás.
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Húzd a tűt a sáv áthelyezéséhez, vagy a gyűrűjét az elmosás módosításához. Húzd a folytonos vonalakat az éles sáv szélesítéséhez, a szaggatott vonalakat az átmenet beállításához, a pontokat pedig a sáv elforgatásához.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Húzd a körvonal fogantyúit az átméretezéshez és az elforgatáshoz; a gyűrű az elmosás szögét állítja be.
+	No path selected	Nincs kijelölt útvonal
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Húzással rajzolj útvonalat a képre; húzd a pontjait a hajlításához, kattints a vonalára új pont hozzáadásához, és Alt+kattintással távolíts el egy pontot. A Delete törli a kijelölt útvonalat.
 	Fill Path…	Útvonal kitöltése…
 	Fill Screen	Képernyő kitöltése
 	Filter	Szűrő

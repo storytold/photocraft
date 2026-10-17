@@ -570,6 +570,10 @@
 	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	拖移圖釘可移動條帶，拖移其圓環可變更模糊程度。拖移實線可加寬清晰條帶，拖移虛線可設定過渡，拖移圓點可旋轉。
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	拖移輪廓上的控點可調整大小並旋轉；圓環設定模糊角度。
 	Blur Angle	模糊角度
+	No path selected	未選取路徑
+	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	在影像上拖移以繪製路徑；拖移其點可彎曲路徑，按一下其線段可新增點，按住 Alt 並按一下點可刪除點。按 Delete 鍵刪除所選路徑。
+	Speed	速度
+	Taper	錐度
 	Iris Blur…	光圈模糊…
 	Tilt-Shift…	傾斜偏移…
 	Path Blur…	路徑模糊…

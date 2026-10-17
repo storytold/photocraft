@@ -84,12 +84,12 @@ fn kind(fields: &Map<String, Value>) -> Option<Kind> {
 }
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
-    kind(fields).is_some()
+    kind(fields).is_some() || crate::blur_paths::owns(fields)
 }
 
 /// The Blur Gallery filters that open as this workspace.
 pub fn handles(command: &str) -> bool {
-    matches!(command, COMMAND | IRIS | SPIN | TILT)
+    matches!(command, COMMAND | IRIS | SPIN | TILT | crate::blur_paths::COMMAND)
 }
 
 /// An Iris or Spin pin's shape, as the command takes it.
@@ -170,16 +170,16 @@ impl Tilt {
 /// filter's bounds with the remembered settings, selected.
 pub fn init(app: &mut PhotocraftApp, fields: &mut Map<String, Value>) {
     reset(fields);
-    let bounds = app.session.active().map(|st| (st.doc.id, st.doc.bounds(), st.doc.selection.clone()));
-    if let Some((doc, canvas, selection)) = bounds {
-        let b = selection.map(|s| app.cached_bounds(u64::MAX - doc.0, &s)).filter(|b| !b.is_empty()).unwrap_or(canvas);
-        fields.insert("__bounds".into(), json!([b.x0, b.y0, b.x1, b.y1]));
-    }
+    insert_bounds(app, fields);
 }
 
-/// One pin in the middle with the dialog's settings, selected. Alt+Cancel (Reset) runs this
-/// alone, so the bounds captured on opening stay.
+/// One pin in the middle with the dialog's settings, or Path Blur's straight path, selected.
+/// Alt+Cancel (Reset) runs this alone, so the bounds captured on opening stay.
 pub fn reset(fields: &mut Map<String, Value>) {
+    if crate::blur_paths::owns(fields) {
+        crate::blur_paths::init(fields);
+        return;
+    }
     let Some(k) = kind(fields) else { return };
     let num = |key: &str, d: f64| fields.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(d);
     let amount = num(k.amount_key(), DEFAULT_BLUR).clamp(0.0, k.max());
@@ -204,6 +204,16 @@ pub fn reset(fields: &mut Map<String, Value>) {
     }
     set_pins(fields, &[pin]);
     select(fields, Some(0));
+}
+
+/// The engine's bounds for the active document: the selection's when there is one, else the
+/// canvas (a modal dialog means the selection can't change while it's open).
+fn insert_bounds(app: &mut PhotocraftApp, fields: &mut Map<String, Value>) {
+    let bounds = app.session.active().map(|st| (st.doc.id, st.doc.bounds(), st.doc.selection.clone()));
+    if let Some((doc, canvas, selection)) = bounds {
+        let b = selection.map(|s| app.cached_bounds(u64::MAX - doc.0, &s)).filter(|b| !b.is_empty()).unwrap_or(canvas);
+        fields.insert("__bounds".into(), json!([b.x0, b.y0, b.x1, b.y1]));
+    }
 }
 
 /// Where the dialog first opens (offset from the window's top-left): at the right edge, beside the
@@ -298,7 +308,7 @@ fn select(fields: &mut Map<String, Value>, i: Option<usize>) {
 }
 
 /// The filter's bounds in document pixels `[x0, y0, x1, y1]`.
-fn bounds(fields: &Map<String, Value>) -> Option<[f64; 4]> {
+pub(crate) fn bounds(fields: &Map<String, Value>) -> Option<[f64; 4]> {
     let b = fields.get("__bounds")?.as_array()?;
     let v = |i: usize| b.get(i).and_then(Value::as_f64);
     let r = [v(0)?, v(1)?, v(2)?, v(3)?];
@@ -314,7 +324,7 @@ fn to_doc(b: [f64; 4], p: Pin) -> [f64; 2] {
     [b[0] + p.x * (b[2] - b[0]), b[1] + p.y * (b[3] - b[1])]
 }
 
-fn from_doc(b: [f64; 4], d: [f64; 2]) -> (f64, f64) {
+pub(crate) fn from_doc(b: [f64; 4], d: [f64; 2]) -> (f64, f64) {
     (((d[0] - b[0]) / (b[2] - b[0])).clamp(0.0, 1.0), ((d[1] - b[1]) / (b[3] - b[1])).clamp(0.0, 1.0))
 }
 
@@ -396,6 +406,9 @@ pub fn remove_selected(fields: &mut Map<String, Value>) -> bool {
 
 /// The dialog body: the selected pin's amount, how to edit the pins, and Preview.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if crate::blur_paths::owns(f) {
+        return crate::blur_paths::body(ui, f);
+    }
     let t = crate::theme::Tokens::get(ui.ctx());
     let k = kind(f).unwrap_or(Kind::Field);
     match selected(f) {
@@ -531,6 +544,9 @@ fn grab(fields: &Map<String, Value>, xf: &ViewXform, at: Pos2) -> Grab {
 /// primary button is held (`dialogs::free_press`), both in screen points. Returns whether the
 /// workspace took it.
 pub fn canvas(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, over: Pos2, press: Option<Pos2>) -> bool {
+    if app.ui.dialogs.last().is_some_and(|d| crate::blur_paths::owns(&d.fields)) {
+        return crate::blur_paths::canvas(app, ctx, xf, over, press);
+    }
     let Some(d) = app.ui.dialogs.last_mut().filter(|d| owns(&d.fields)) else { return false };
     let f = &mut d.fields;
     let Some(b) = bounds(f) else { return false };
@@ -687,6 +703,9 @@ fn draw_line(painter: &egui::Painter, a: Pos2, b: Pos2, dash: bool) {
 /// selected) and, round the selected one, its ring with the amount as an arc from the top, and
 /// its outline and handles or Tilt-Shift's lines.
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    if app.ui.dialogs.last().is_some_and(|d| crate::blur_paths::owns(&d.fields)) {
+        return crate::blur_paths::draw(app, painter, xf);
+    }
     let Some(d) = app.ui.dialogs.last().filter(|d| owns(&d.fields)) else { return };
     let Some(b) = bounds(&d.fields) else { return };
     let Some(k) = kind(&d.fields) else { return };
@@ -759,16 +778,19 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     }
 }
 
-/// Preview proxies run at 1/`k` of the document: the pins' pixel blur scales with them, as the
-/// top-level pixel params (Tilt-Shift's `blur`) already do. Spin's blur angle doesn't.
+/// Preview proxies run at 1/`k` of the document: the pins' pixel blur and the paths' speed scale
+/// with them, as the top-level pixel params (Tilt-Shift's `blur`) already do. Spin's blur angle
+/// doesn't.
 pub fn scale_for_proxy(params: &mut Value, k: u32) {
     if k <= 1 {
         return;
     }
-    let Some(list) = params.get_mut("pins").and_then(Value::as_array_mut) else { return };
-    for pin in list {
-        if let Some(b) = pin.get("blur").and_then(Value::as_f64) {
-            pin["blur"] = json!(b / f64::from(k));
+    for (list, key) in [("pins", "blur"), ("paths", "speed")] {
+        let Some(items) = params.get_mut(list).and_then(Value::as_array_mut) else { continue };
+        for item in items {
+            if let Some(v) = item.get(key).and_then(Value::as_f64) {
+                item[key] = json!(v / f64::from(k));
+            }
         }
     }
 }

@@ -28,6 +28,7 @@ pub(crate) mod background_redraw;
 pub mod bidi_text;
 mod blend_keys;
 pub(crate) mod blend_preview;
+pub mod blur_paths;
 pub mod blur_pins;
 mod brand;
 pub(crate) mod brush_cursor;
