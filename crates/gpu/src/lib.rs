@@ -2161,15 +2161,39 @@ fn convert_tiles(surface: &Surface, tiles: Vec<(TileCoord, Arc<Tile>)>, kind: Te
             }
         }
     }
+    // CMYK and Lab tiles convert pixel by pixel through a colour transform (a CMYK tile took
+    // ~5 ms on one thread, the whole of a brush dab's refresh on an A4 CMYK page, #5108): those
+    // go in bands of rows, so even the one tile a dab touches spreads over the threads. Workers
+    // don't inherit this thread's CMYK profile scope, so each band enters it.
+    let bands = if colour_managed(&surface.format(), kind) { TILE_SIZE / MANAGED_BAND_ROWS } else { 1 };
+    let space = photocraft_color::convert::active_cmyk_space();
     for batch in groups.chunks(CONVERT_BATCH) {
         // A tile's content is the same at every coordinate sharing it: convert it at the first.
-        let jobs: Vec<_> = batch.iter().filter_map(|(t, cs)| cs.first().map(|c| (t, *c))).collect();
-        let converted = fx::par_map(jobs, |(t, c)| convert_tile(surface, Some(t), kind, c));
-        for ((t, cs), bytes) in batch.iter().zip(&converted) {
-            put(t, cs, bytes);
+        let jobs: Vec<_> = batch.iter().filter_map(|(t, cs)| cs.first().map(|c| (t, *c))).flat_map(|(t, c)| (0..bands).map(move |b| (t, c, b))).collect();
+        let parts = fx::par_map(jobs, |(t, c, b)| {
+            photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+                if bands == 1 {
+                    return convert_tile(surface, Some(t), kind, c);
+                }
+                let r = c.rect();
+                let y0 = r.y0 + b * MANAGED_BAND_ROWS;
+                convert_rows(surface, Some(t), kind, Rect::new(r.x0, y0, r.x1, y0 + MANAGED_BAND_ROWS))
+            })
+        });
+        for ((t, cs), bytes) in batch.iter().zip(parts.chunks(bands as usize)) {
+            put(t, cs, &bytes.concat());
         }
     }
     groups.len()
+}
+
+/// Rows per parallel band of a colour-managed (CMYK, Lab) tile conversion.
+const MANAGED_BAND_ROWS: i32 = 16;
+
+/// Whether `fmt` pixels reach `kind` texels through a per-pixel colour transform (CMYK, Lab).
+fn colour_managed(fmt: &PixelFormat, kind: TexKind) -> bool {
+    use photocraft_color::ColorMode;
+    matches!(kind, TexKind::Rgba8 | TexKind::Rgba16F) && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab)
 }
 
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
@@ -2177,27 +2201,47 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
     if let (Some(t), TexKind::Rgba8Direct | TexKind::R8Direct) = (tile, kind) {
         return t.bytes().to_vec();
     }
-    let n = (TILE_SIZE * TILE_SIZE) as usize;
     let fmt = surface.format();
-    let ch = fmt.channels();
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
         && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes()))
     {
         return out;
     }
+    convert_rows(surface, tile, kind, c.rect())
+}
+
+/// [`convert_tile`]'s general path for `rect` (rows of one tile): each pixel through
+/// `photocraft_raster::to_rgba`. A run of identical pixels (the transparent or flat areas around a
+/// brush dab) is converted once: the same samples give the same texels.
+fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect: Rect) -> Vec<u8> {
+    let n = rect.width() as usize * rect.height() as usize;
+    let fmt = surface.format();
+    let ch = fmt.channels();
     let raw: Vec<f32> = match tile {
-        Some(_) => surface.read_region(c.rect()),
+        Some(_) => surface.read_region(rect),
         None => surface.default_pixel().repeat(n),
     };
     let mut out = Vec::with_capacity(n * kind.bytes_per_pixel());
-    for px in raw.chunks_exact(ch) {
+    // The previous pixel and its colour.
+    let mut last: Option<(usize, [f32; 4])> = None;
+    for (i, px) in raw.chunks_exact(ch).enumerate() {
+        let mut rgba = || -> [f32; 4] {
+            if let Some((j, v)) = last
+                && raw.get(j * ch..j * ch + ch).is_some_and(|p| p.iter().zip(px).all(|(a, b)| a.to_bits() == b.to_bits()))
+            {
+                return v;
+            }
+            let v = photocraft_raster::to_rgba(&fmt, px);
+            last = Some((i, v));
+            v
+        };
         match kind {
             TexKind::Rgba8Direct | TexKind::Rgba8 => {
-                let v = photocraft_raster::to_rgba(&fmt, px);
+                let v = rgba();
                 out.extend(v.map(|x| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
             }
             TexKind::Rgba16F => {
-                let v = photocraft_raster::to_rgba(&fmt, px);
+                let v = rgba();
                 for x in v {
                     out.extend(f32_to_f16(x).to_le_bytes());
                 }
@@ -2618,6 +2662,78 @@ mod tests {
         assert!(rgb_gray16_to_f16(&PixelFormat { sample: SampleType::U16, ..PixelFormat::CMYKA8 }, &[]).is_none());
         assert!(rgb_gray32_to_f16(&PixelFormat::RGBA16, &[]).is_none());
         assert!(rgb_gray32_to_f16(&PixelFormat { sample: SampleType::F32, ..PixelFormat::CMYKA8 }, &[]).is_none());
+    }
+
+    /// CMYK and Lab tiles convert in parallel bands of rows, each run of equal pixels once
+    /// (#5108): the texels are still exactly the per-pixel conversion's, at 8 and 16 bits, with
+    /// the built-in CMYK profile and with a document's own (which the worker threads enter).
+    #[test]
+    fn colour_managed_tiles_match_the_per_pixel_conversion() {
+        use photocraft_cms::synth::{CmykParams, cmyk_profile};
+        use photocraft_color::ColorMode;
+        use photocraft_color::convert::{CmykSpace, with_cmyk_space};
+        let icc = Arc::new(
+            cmyk_profile(&CmykParams { description: "GPU test CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() })
+                .to_bytes(),
+        );
+        let own = CmykSpace::for_profile(Some(&icc));
+        assert!(own.is_some(), "the synthetic profile is not the built-in one");
+        let area = Rect::new(0, 0, TILE_SIZE * 3, TILE_SIZE);
+        for (mode, sample, space) in [
+            (ColorMode::Cmyk, SampleType::U8, None),
+            (ColorMode::Cmyk, SampleType::U16, None),
+            (ColorMode::Cmyk, SampleType::U8, own.clone()),
+            (ColorMode::Cmyk, SampleType::U16, own.clone()),
+            (ColorMode::Lab, SampleType::U8, None),
+            (ColorMode::Lab, SampleType::U16, None),
+        ] {
+            let fmt = PixelFormat { mode, sample, alpha: true };
+            let kind = TexKind::for_surface(Role::Content, fmt);
+            assert!(colour_managed(&fmt, kind), "{fmt:?}");
+            let ch = fmt.channels();
+            let mut s = Surface::new(fmt);
+            // Tile 0: noise. Tile 1: transparent with a soft dab (runs of equal pixels). Tile 2:
+            // a flat colour with a few lines of noise.
+            let n = (TILE_SIZE * TILE_SIZE) as usize * ch;
+            let noise: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32).collect();
+            s.write_region(Rect::new(0, 0, TILE_SIZE, TILE_SIZE), &noise);
+            let mut dab = [0.8, 0.6, 0.1, 0.05, 0.0];
+            for r in (1..30).rev() {
+                dab[ch - 1] = 1.0 - r as f32 / 30.0;
+                s.fill_rect(Rect::new(TILE_SIZE + 100 - r, 90 - r, TILE_SIZE + 100 + r, 90 + r), &dab[..ch]);
+            }
+            s.fill_rect(Rect::new(TILE_SIZE * 2, 0, TILE_SIZE * 3, TILE_SIZE), &[0.3, 0.2, 0.7, 0.1, 1.0][..ch]);
+            s.write_region(Rect::new(TILE_SIZE * 2, 40, TILE_SIZE * 3, 43), &noise[..TILE_SIZE as usize * 3 * ch]);
+            let tiles: Vec<_> = area.tiles().filter_map(|c| s.tile(c).map(|t| (c, t.clone()))).collect();
+            assert_eq!(tiles.len(), 3, "{fmt:?}");
+            let mut seen = 0;
+            with_cmyk_space(space.as_ref(), || {
+                convert_tiles(&s, tiles, kind, |_, cs, bytes| {
+                    for &c in cs {
+                        // The old path: every pixel through `to_rgba` on this thread, in this scope.
+                        let want: Vec<u8> = s
+                            .read_region(c.rect())
+                            .chunks_exact(ch)
+                            .flat_map(|px| {
+                                let v = photocraft_raster::to_rgba(&fmt, px);
+                                match kind {
+                                    TexKind::Rgba16F => v.iter().flat_map(|x| f32_to_f16(*x).to_le_bytes()).collect::<Vec<u8>>(),
+                                    _ => v.map(|x| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).to_vec(),
+                                }
+                            })
+                            .collect();
+                        assert!(
+                            bytes == want.as_slice(),
+                            "{fmt:?} {c:?} with {}",
+                            if space.is_some() { "the document's profile" } else { "the built-in profile" }
+                        );
+                        assert_eq!(convert_tile(&s, s.tile(c), kind, c), want, "{fmt:?} {c:?}");
+                        seen += 1;
+                    }
+                });
+            });
+            assert_eq!(seen, 3, "{fmt:?}");
+        }
     }
 
     #[test]
