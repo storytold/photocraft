@@ -893,10 +893,12 @@ impl ViewXform {
     /// The main canvas's mapping for the active document as last laid out (inside the rulers).
     pub fn active(app: &PhotocraftApp) -> Option<Self> {
         let v = app.ui.views.get(app.session.active_index()?)?;
+        let (zoom, center) =
+            if v.zoom_animating && app.session.prefs().general.animated_zoom { v.display_camera.unwrap_or((v.zoom, v.center)) } else { (v.zoom, v.center) };
         Some(Self {
             rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-            zoom: v.zoom / app.canvas_ppp(),
-            center: v.center,
+            zoom: zoom / app.canvas_ppp(),
+            center,
             flip: app.ui.view.flip_horizontal,
             rotation: v.rotation,
             aspect: app.ui.view.display_aspect(),
@@ -1001,6 +1003,54 @@ pub fn fit_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32, aspect: f
     view.center = [w / 2.0, h / 2.0];
     view.fit_pending = false;
     view.fill_pending = false;
+}
+
+/// Ease a transient presentation camera over 220 ms without changing the requested camera.
+fn animated_view(view: &mut View, xf: ViewXform, ppp: f32, animated_zoom: bool, time: f64) -> View {
+    if !animated_zoom {
+        view.request_zoom_animation(false);
+    }
+    let target = (view.zoom, view.center);
+    // Clamping, a canvas resize, or another camera command can make the original anchor
+    // incompatible with the requested camera. The target must always win.
+    if let Some((doc, screen)) = view.zoom_anchor {
+        let offset = xf.unmap_vec((pos2(screen[0], screen[1]) - xf.rect.center()) / (view.zoom / ppp));
+        if (doc[0] as f32 - offset.x - view.center[0]).abs() > 0.01 || (doc[1] as f32 - offset.y - view.center[1]).abs() > 0.01 {
+            view.zoom_anchor = None;
+        }
+    }
+    let mut shown = view.clone();
+    if view.zoom_animating {
+        if view.zoom_transition.is_none_or(|a| a.target != target) {
+            view.zoom_transition = Some(crate::state::ZoomTransition { from: view.display_camera.unwrap_or(target), target, started: time });
+        }
+        if let Some(a) = view.zoom_transition {
+            let elapsed = (time - a.started) / 0.22;
+            let t = if elapsed.is_finite() { elapsed.clamp(0.0, 1.0) as f32 } else { 1.0 };
+            let ease = t * t * (3.0 - 2.0 * t);
+            let lerp = |from: f32, to: f32| from + (to - from) * ease;
+            shown.zoom = lerp(a.from.0, target.0);
+            shown.center = [lerp(a.from.1[0], target.1[0]), lerp(a.from.1[1], target.1[1])];
+            if let Some((doc, screen)) = view.zoom_anchor {
+                let zoom = shown.zoom / ppp;
+                if zoom.is_finite() && zoom > 0.0 {
+                    let offset = xf.unmap_vec((pos2(screen[0], screen[1]) - xf.rect.center()) / zoom);
+                    shown.center = [doc[0] as f32 - offset.x, doc[1] as f32 - offset.y];
+                }
+            }
+            if t >= 1.0 {
+                view.zoom_animating = false;
+            }
+        }
+    }
+    if !view.zoom_animating {
+        shown.zoom = target.0;
+        shown.center = target.1;
+        view.zoom_anchor = None;
+        view.zoom_transition = None;
+    }
+    view.display_camera = Some((shown.zoom, shown.center));
+    shown
 }
 
 /// Centre the document and zoom until it fills the canvas. One axis can extend beyond the
@@ -2962,6 +3012,30 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     let full = rect;
     let rect = if primary { crate::rulers::content_rect(app, rect) } else { rect };
+    // Both wheel reads share one owner so snap-zoom input is accumulated only once per frame.
+    let wheel_owner = ui.id().with(("canvas-wheel", idx));
+    // Direct navigation starts from the authoritative camera. This also means a click or drag
+    // never maps through a camera that is still moving under the pointer.
+    let (pointer_here, hover_here) = ctx.input(|i| {
+        (
+            (i.pointer.any_pressed() || i.pointer.any_down()) && i.pointer.press_origin().is_some_and(|p| rect.contains(p)),
+            i.pointer.hover_pos().is_some_and(|p| rect.contains(p)),
+        )
+    });
+    let direct_input = pointer_here
+        || (hover_here
+            && crate::wheel_nav::read(
+                &ctx,
+                app.session.prefs().general.zoom_with_scroll_wheel,
+                app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
+                wheel_owner,
+                hover_here,
+            )
+            .is_some());
+    if direct_input {
+        view.zoom_animating = false;
+        view.zoom_anchor = None;
+    }
     let doc = app.session.documents()[idx].doc.clone();
     let size = [doc.size.width, doc.size.height];
     if view.doc_size != size {
@@ -2981,12 +3055,23 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     // Preferences › Tools › Overscroll off: clamp before anything is drawn (scrollbars.rs).
     if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
+        view.zoom_anchor = None;
         ctx.request_repaint();
     }
     let flip = app.ui.view.flip_horizontal;
-    // Canvas geometry (ViewXform, ViewParams, painter rects) is in egui points.
-    let point_zoom = view.zoom / ppp;
-    let xf = ViewXform { rect, zoom: point_zoom, center: view.center, flip, rotation: view.rotation, aspect };
+    // Document rendering follows the target; only shader uniforms and overlay geometry ease.
+    let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
+    let render_zoom = view.zoom;
+    let render_visible = visible_doc_rect(&target_xf);
+    let mut display_view = animated_view(&mut view, target_xf, ppp, app.session.prefs().general.animated_zoom, ctx.input(|i| i.time));
+    if primary && let Some(stored) = app.ui.views.get_mut(idx) {
+        stored.zoom_animating = view.zoom_animating;
+        stored.display_camera = view.display_camera;
+    }
+    if view.zoom_animating {
+        ctx.request_repaint();
+    }
+    let xf = ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, ..target_xf };
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let stroke_dismissal = primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response);
@@ -3026,8 +3111,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
         if app.gpu.is_some()
             && gpu_ok
-            && let Some((k, key, preview_size)) =
-                ensure_adjust_proxy(app, idx, view.zoom).or_else(|| ensure_filter_preview(app, idx, &ctx)).or_else(|| ensure_proxy_preview(app, idx, view.zoom))
+            && let Some((k, key, preview_size)) = ensure_adjust_proxy(app, idx, render_zoom)
+                .or_else(|| ensure_filter_preview(app, idx, &ctx))
+                .or_else(|| ensure_proxy_preview(app, idx, render_zoom))
         {
             on_gpu = true;
             app.navigator_gpu.remove(&doc.id);
@@ -3054,7 +3140,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 offset: [0.0, 0.0],
             };
             paint_gpu_view(&painter, rect, params, &pattern);
-        } else if gpu_ok && ensure_gpu(app, &ctx, idx, visible_doc_rect(&xf)) {
+        } else if gpu_ok && ensure_gpu(app, &ctx, idx, render_visible) {
             on_gpu = true;
             app.perf.gpu = true;
             // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
@@ -3245,7 +3331,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
 
         (img_rect, beyond, layer_edges)
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &view, xf)) };
+    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -3265,7 +3351,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         &ctx,
         app.session.prefs().general.zoom_with_scroll_wheel,
         app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
-        response.id.with("wheel"),
+        wheel_owner,
         nav_hovered,
         app.session.prefs().interface.enable_animations,
     );
@@ -3301,6 +3387,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         let rotate_trackpad = app.session.prefs().enhanced_controls.rotate_view_with_trackpad;
         if let Some(delta) = crate::rotate_view::trackpad_delta(&ctx, rotate_trackpad) {
+            view.zoom_animating = false;
+            view.zoom_anchor = None;
             let next = view.rotation + crate::rotate_view::screen_delta(delta, xf.flip);
             if next.is_finite() {
                 view.rotation = crate::rotate_view::wrap_deg(next);
@@ -3440,6 +3528,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         if d.is_finite() {
+            view.zoom_animating = false;
+            view.zoom_anchor = None;
             view.center[0] -= d.x;
             view.center[1] -= d.y;
         }
@@ -3719,7 +3809,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::Zoom if !transform_owns_pointer => {
                     let nz = crate::zoom_levels::step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 }, view.doc_size);
                     let center = app.session.prefs().tools.zoom_clicked_point_to_center;
+                    let doc_anchor = xf.to_doc(p);
+                    let screen_anchor = p;
                     zoom_about(&mut view, &xf, p, nz, center, ppp);
+                    view.request_zoom_animation(app.session.prefs().general.animated_zoom && nz != display_view.zoom);
+                    view.zoom_anchor = (view.zoom_animating && !center).then_some((doc_anchor, [screen_anchor.x, screen_anchor.y]));
                 }
                 // A click with the (temporary) Hand does nothing, never the tool underneath.
                 Tool::Hand | Tool::RotateView => {}
@@ -3812,8 +3906,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.request_repaint();
         }
     }
-    let xf = if crop_camera { ViewXform { center: view.center, rotation: view.rotation, ..xf } } else { xf };
-    let (img_rect, beyond, layer_edges) = painted.unwrap_or_else(|| paint_canvas(app, ui, &view, xf));
+    let xf = if crop_camera {
+        if view.center != target_xf.center {
+            display_view.center = view.center;
+        }
+        display_view.rotation = view.rotation;
+        ViewXform { center: display_view.center, rotation: display_view.rotation, ..xf }
+    } else {
+        xf
+    };
+    let (img_rect, beyond, layer_edges) = painted.unwrap_or_else(|| paint_canvas(app, ui, &display_view, xf));
     if primary && !(hand_pan && response.dragged()) {
         // The transform preview is image content: it goes under the grid and guides, which
         // stay visible across a layer being transformed (#5086); the box is drawn later.
@@ -8702,6 +8804,124 @@ mod rotation_preview_isolation_tests {
     }
 }
 
+#[cfg(test)]
+mod zoom_animation_tests {
+    use super::*;
+
+    fn camera(view: &View) -> ViewXform {
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0)), zoom: view.zoom, center: view.center, flip: false, rotation: 0.0, aspect: 1.0 }
+    }
+
+    fn view() -> View {
+        View { zoom: 1.0, center: [200.0, 150.0], doc_size: [400, 300], fit_pending: false, ..Default::default() }
+    }
+
+    #[test]
+    fn disabling_animated_zoom_snaps_a_secondary_canvas_on_its_next_frame() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+        let mut secondary = view();
+        let frame = |app: &mut PhotocraftApp, view: View, time: f64| {
+            let input = egui::RawInput { screen_rect: Some(rect), time: Some(time), ..Default::default() };
+            let mut shown = view.clone();
+            let mut out = ctx.run_ui(input, |ui| {
+                shown = canvas_view(app, ui, 0, rect, view.clone(), false);
+            });
+            out.textures_delta.clear();
+            shown
+        };
+        secondary = frame(&mut app, secondary, 0.0);
+        secondary.zoom = 2.0;
+        secondary.request_zoom_animation(true);
+        secondary = frame(&mut app, secondary, 0.01);
+        secondary = frame(&mut app, secondary, 0.12);
+        assert!(secondary.zoom_animating);
+        assert!(secondary.display_camera.unwrap().0 < secondary.zoom);
+        app.run("prefs.set", serde_json::json!({"values": {"general.animatedZoom": false}})).unwrap();
+        secondary = frame(&mut app, secondary, 0.13);
+        assert_eq!(secondary.display_camera, Some((secondary.zoom, secondary.center)));
+        assert_eq!(secondary.zoom, 2.0);
+        assert!(!secondary.zoom_animating && secondary.zoom_transition.is_none() && secondary.zoom_anchor.is_none());
+    }
+
+    #[test]
+    fn animated_zoom_off_cancels_each_views_presentation_camera() {
+        for target in [(2.0, [210.0, 170.0]), (3.0, [250.0, 180.0])] {
+            let mut v = view();
+            let xf = camera(&v);
+            animated_view(&mut v, xf, 1.0, true, 0.0);
+            v.zoom = target.0;
+            v.center = target.1;
+            v.request_zoom_animation(true);
+            animated_view(&mut v, xf, 1.0, true, 0.0);
+            let halfway = animated_view(&mut v, xf, 1.0, true, 0.11);
+            assert_ne!((halfway.zoom, halfway.center), target);
+            v.zoom_anchor = Some(([200.0, 150.0], [500.0, 350.0]));
+            let shown = animated_view(&mut v, xf, 1.0, false, 0.11);
+            assert_eq!((shown.zoom, shown.center), target);
+            assert_eq!(v.display_camera, Some(target));
+            assert!(!v.zoom_animating && v.zoom_anchor.is_none() && v.zoom_transition.is_none());
+        }
+    }
+
+    #[test]
+    fn zoom_animation_obeys_clamped_targets_and_eases_recentering() {
+        let mut v = view();
+        let xf = camera(&v);
+        animated_view(&mut v, xf, 1.0, true, 0.0);
+        let pointer = xf.to_screen(390.0, 150.0);
+        zoom_about(&mut v, &xf, pointer, 2.0, false, 1.0);
+        v.zoom_anchor = Some(([390.0, 150.0], [pointer.x, pointer.y]));
+        v.zoom_animating = true;
+        crate::scrollbars::clamp_view(&mut v, xf.rect.size(), 1.0);
+        let xf = camera(&v);
+        animated_view(&mut v, xf, 1.0, true, 0.0);
+        assert!(v.zoom_anchor.is_none());
+        let done = animated_view(&mut v, xf, 1.0, true, 0.22);
+        assert_eq!((done.zoom, done.center), (v.zoom, v.center));
+        assert!(!v.zoom_animating);
+
+        let mut v = view();
+        let xf = camera(&v);
+        animated_view(&mut v, xf, 1.0, true, 0.0);
+        zoom_about(&mut v, &xf, pointer, 2.0, true, 1.0);
+        v.zoom_animating = true;
+        let target = v.center;
+        let xf = camera(&v);
+        let start = animated_view(&mut v, xf, 1.0, true, 0.0);
+        assert_eq!(start.center, [200.0, 150.0], "recentering must not teleport");
+        let halfway = animated_view(&mut v, xf, 1.0, true, 0.11);
+        assert!(halfway.center[0] > start.center[0] && halfway.center[0] < target[0]);
+        assert_eq!(animated_view(&mut v, xf, 1.0, true, 0.22).center, target);
+    }
+
+    #[test]
+    fn zoom_animation_views_are_independent_and_direct_navigation_snaps() {
+        let mut a = view();
+        let mut b = view();
+        let xf = camera(&a);
+        animated_view(&mut a, xf, 1.0, true, 0.0);
+        animated_view(&mut b, xf, 1.0, true, 0.0);
+        a.zoom = 2.0;
+        a.zoom_animating = true;
+        animated_view(&mut a, xf, 1.0, true, 0.0);
+        b.zoom = 3.0;
+        b.zoom_animating = true;
+        animated_view(&mut b, xf, 1.0, true, 0.11);
+        assert_eq!(animated_view(&mut a, xf, 1.0, true, 0.22).zoom, 2.0);
+        let shown = animated_view(&mut b, xf, 1.0, true, 0.22);
+        assert!(shown.zoom > 1.0 && shown.zoom < 3.0);
+        assert!(b.zoom_animating && !a.zoom_animating);
+        b.zoom_animating = false;
+        b.center = [220.0, 170.0];
+        let shown = animated_view(&mut b, xf, 1.0, true, 0.23);
+        assert_eq!((shown.zoom, shown.center), (b.zoom, b.center));
+        assert!(b.zoom_transition.is_none() && b.zoom_anchor.is_none());
+    }
+}
 #[cfg(test)]
 #[path = "canvas_display_memo_tests.rs"]
 mod display_memo_tests;

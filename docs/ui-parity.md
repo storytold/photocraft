@@ -170,7 +170,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Hold any tool letter for a temporary tool | done | `spring_tools.rs`: held ≥ 300 ms or used on the canvas, release gives the previous tool back; ⇧ never springs (#2672) |
 | Scrubby zoom | done | `zoom_tool.rs` |
 | Flick panning | done | `flick_pan.rs` (Preferences › Tools › Enable Flick Panning) |
-| Animated zoom | missing | unread pref; #566 |
+| Animated zoom | done | `canvas.rs`, `zoom_tool.rs`; #566; discrete Zoom clicks and View zoom controls ease over 220 ms by default, with anchored transitions and immediate direct navigation; General › Animated Zoom (default on) controls transitions; off snaps immediately, including when disabled mid-transition |
 | Double-click Zoom tool = 100%, double-click Hand = fit | partial | Zoom missing (#2508) |
 | ⌥-wheel zoom in gentle steps | missing | UI-217-18 |
 | Wheel, smooth scrolling and pinch as in Photoshop | partial | #2485, #2463, #1989 |
@@ -236,10 +236,12 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-10 | minor | Fixed Crop live resize snapping feedback and outdated-camera rendering, applied ratios immediately to centred inscribed previews, and removed two-point options-bar overflow; added pointer, rendering, dropdown/Enter, Swap/X and scrolling regressions |
 | 2026-10-11 | minor | Flick panning done: releasing a moving Hand drag (tool, Space or middle button) glides and decays, gated by Enable Flick Panning |
 | 2026-10-11 | minor | History snapshots: the camera button takes one, snapshot rows return to it as a new state, rename and delete it (#2966) |
+| 2026-10-11 | minor | Animated zoom done: 220 ms transitions per view for discrete Zoom clicks and View controls; GPU composites are reused, coordinates follow the displayed camera, and direct navigation interrupts immediately |
 | 2026-10-14 | minor | History: a clicked snapshot stays selected and the trash deletes it; snapshot and state rows dragged onto the trash are deleted (#5324) |
 | 2026-10-11 | minor | ⇧-drag a guide out of a ruler lands on the nearest ruler tick (#3770) |
 | 2026-10-11 | minor | Layer and selection keys from Photoshop's shortcut set: ⌘, toggles, ⌘\, /, ⌘⌥2, ⌘⌥⌫, Tab rename-next, ⌥-click thumbnail to fit |
 | 2026-10-11 | minor | Tool keys from Photoshop's shortcut set: ← / → rotate the brush tip, ⇧-click for new type, Space+F canvas colour |
+| 2026-10-12 | minor | General › Animated Zoom is visible and gates every discrete zoom transition; disabling it snaps all views to their target on the next frame |
 | 2026-10-11 | minor | Spring-loaded tool letters done (#2672): holding any tool letter (Z included) past 300 ms, or using the canvas while it is down, makes the tool temporary until release |
 | 2026-10-11 | minor | Type formatting keys done: ⇧⌘K, U, B, I and /, ⌥↑/↓, ⇧⌥↑/↓, ⌥←/→ over a selection and ⌥⇧⌘H format the selected type while editing, and no longer reach Color Settings, Desaturate, Auto Color or Inverse |
 | 2026-10-12 | minor | Pen Auto Add/Delete on the active path, with its options-bar checkbox, hover feedback and + / − cursor badge (#4144) |

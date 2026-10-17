@@ -758,6 +758,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     crate::panels::request_dock_width(ctx, w as f32);
                 }
                 if let Some(i) = app.session.active_index() {
+                    if zoom.is_some() || center.is_some() || rotation.is_some() || fit {
+                        app.ui.views[i].zoom_animating = false;
+                        app.ui.views[i].zoom_anchor = None;
+                    }
                     if let Some(z) = zoom {
                         let size = app.session.documents().get(i).map_or([0, 0], |st| [st.doc.size.width, st.doc.size.height]);
                         app.ui.views[i].zoom = crate::zoom_levels::clamp(z as f32, size);

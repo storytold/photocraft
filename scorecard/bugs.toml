@@ -60,7 +60,7 @@ id = "BUG-204-2"
 target = "workspace.large_tabs, animated_zoom, auto_show_home_screen wired or hidden"
 status = "done"
 issue = 204
-note = "workspace.large_tabs controls document tab height in canvas.rs; auto_show_home_screen drives the Home screen; animated_zoom is in prefs::HIDDEN_UNTIL_IMPLEMENTED"
+note = "workspace.large_tabs controls document tab height in canvas.rs; auto_show_home_screen drives the Home screen; general.animated_zoom gates discrete canvas zoom transitions and is exposed in General preferences"
 
 [[item]]
 id = "BUG-204-3"

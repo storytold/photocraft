@@ -1374,7 +1374,18 @@ mod tests {
     fn preset_drops_map_through_the_ruler_inset() {
         let (mut app, _) = app();
         app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        app.ui.views[0] = crate::state::View { zoom: 2.0, center: [32.0, 24.0], fit_pending: false, fill_pending: false, doc_size: [64, 48], rotation: 0.0 };
+        app.ui.views[0] = crate::state::View {
+            zoom: 2.0,
+            center: [32.0, 24.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [64, 48],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        };
         let p = egui::pos2(400.0, 300.0);
         let off = crate::canvas::doc_point_at(&app, p).unwrap();
         assert_eq!(off, [32.0, 24.0], "without rulers the widget rect is the whole mapping");

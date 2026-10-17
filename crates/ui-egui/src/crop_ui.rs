@@ -1387,7 +1387,18 @@ mod tests {
     fn space_on_the_canvas_moves_the_frame_not_the_view() {
         use egui::{Event, Key, PointerButton, pos2};
         let mut a = app(SampleType::U8);
-        let view = crate::state::View { zoom: 2.0, center: [100.0, 50.0], fit_pending: false, fill_pending: false, doc_size: [200, 100], rotation: 0.0 };
+        let view = crate::state::View {
+            zoom: 2.0,
+            center: [100.0, 50.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [200, 100],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        };
         a.ui.views = vec![view.clone()];
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {

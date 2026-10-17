@@ -116,6 +116,9 @@ sync_github_name = false
 [people.axlecoffee]
 sync_github_name = true
 
+[people.zi-ger]
+sync_github_name = true
+
 [people.Losminek]
 sync_github_name = true
 

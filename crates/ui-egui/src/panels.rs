@@ -1422,11 +1422,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             && let Some(i) = app.session.active_index()
                         {
                             app.ui.views[i].fit_pending = true;
+                            app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                            app.ui.views[i].zoom_anchor = None;
                         }
                         if widgets::secondary_button(ui, "100%", 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
                             app.ui.views[i].zoom = 1.0;
+                            app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                            app.ui.views[i].zoom_anchor = None;
+                            app.ui.views[i].fit_pending = false;
+                            app.ui.views[i].fill_pending = false;
                         }
                     }
                     Tool::RotateView => {
@@ -1452,6 +1458,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             && let Some(i) = app.session.active_index()
                         {
                             app.ui.views[i].zoom = 1.0;
+                            app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                            app.ui.views[i].zoom_anchor = None;
                             app.ui.views[i].fit_pending = false;
                             app.ui.views[i].fill_pending = false;
                         }
@@ -1459,12 +1467,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             && let Some(i) = app.session.active_index()
                         {
                             app.ui.views[i].fit_pending = true;
+                            app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                            app.ui.views[i].zoom_anchor = None;
                             app.ui.views[i].fill_pending = false;
                         }
                         if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).clicked()
                             && let Some(i) = app.session.active_index()
                         {
                             app.ui.views[i].fill_pending = true;
+                            app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                            app.ui.views[i].zoom_anchor = None;
                             app.ui.views[i].fit_pending = false;
                         }
                     }
@@ -1629,6 +1641,8 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         .changed()
                     {
                         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
+                        app.ui.views[i].zoom_animating = false;
+                        app.ui.views[i].zoom_anchor = None;
                         app.ui.views[i].fit_pending = false;
                     }
                     widgets::vline(ui, 16.0);
@@ -1944,6 +1958,8 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         let d = (pp - rect.min) / s;
         app.ui.views[idx].center = [d.x.clamp(0.0, size.width as f32), d.y.clamp(0.0, size.height as f32)];
+        app.ui.views[idx].zoom_animating = false;
+        app.ui.views[idx].zoom_anchor = None;
         app.ui.views[idx].fit_pending = false;
     }
     // The Navigator has its own zoom target: an unmodified wheel over the preview
@@ -1958,6 +1974,8 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let next = crate::zoom_levels::clamp(view.zoom * factor, view.doc_size);
         if next != view.zoom {
             view.zoom = next;
+            view.zoom_animating = false;
+            view.zoom_anchor = None;
             view.fit_pending = false;
         }
     }
@@ -1977,18 +1995,22 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let set = |app: &mut PhotocraftApp, zoom: f32| {
-                app.ui.views[idx].zoom = crate::zoom_levels::clamp(zoom, v.doc_size);
+            let set = |app: &mut PhotocraftApp, zoom: f32, animate: bool| {
+                let target = crate::zoom_levels::clamp(zoom, v.doc_size);
+                if target != app.ui.views[idx].zoom {
+                    app.ui.views[idx].zoom = target;
+                    app.ui.views[idx].request_zoom_animation(animate && app.session.prefs().general.animated_zoom);
+                }
                 app.ui.views[idx].fit_pending = false;
             };
             let mut pct = v.zoom * 100.0;
             let field = widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[idx]), "%", vec2(64.0, NAV_ROW_H));
             if field.changed() {
-                set(app, pct / 100.0);
+                set(app, pct / 100.0, false);
             }
             let out = crate::brush_picker::named(icons::button(ui, "minus", NAV_ROW_H, false, tl!("Zoom Out")), "Zoom Out");
             if out.clicked() {
-                set(app, crate::zoom_levels::step(v.zoom, -1, v.doc_size));
+                set(app, crate::zoom_levels::step(v.zoom, -1, v.doc_size), true);
             }
             // The whole zoom range, and always the current zoom: a narrower slider would pull it back.
             let (lo, hi) = (crate::zoom_levels::min(v.doc_size).min(v.zoom).log2(), crate::zoom_levels::MAX.max(v.zoom).log2());
@@ -1996,11 +2018,11 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let slider_w = (ui.available_width() - NAV_ROW_H - 4.0).max(60.0);
             let slid = ui.allocate_ui(vec2(slider_w, NAV_ROW_H), |ui| lz.is_finite() && widgets::slider(ui, &mut lz, lo..=hi, None).changed()).inner;
             if slid {
-                set(app, 2f32.powf(lz));
+                set(app, 2f32.powf(lz), false);
             }
             let zin = crate::brush_picker::named(icons::button(ui, "plus", NAV_ROW_H, false, tl!("Zoom In")), "Zoom In");
             if zin.clicked() {
-                set(app, crate::zoom_levels::step(v.zoom, 1, v.doc_size));
+                set(app, crate::zoom_levels::step(v.zoom, 1, v.doc_size), true);
             }
         });
     });
@@ -6384,6 +6406,43 @@ mod properties_target_regressions {
         h.run_steps(2);
         let after = h.state().session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().content_bounds();
         assert_eq!(after, before, "pending width belongs to the old document/layer");
+    }
+}
+
+#[cfg(test)]
+mod navigator_animated_zoom_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn animated_zoom_off_navigator_buttons_jump_without_a_transition() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.run("prefs.set", json!({"values": {"general.animatedZoom": false}})).unwrap();
+        app.sync_views();
+        app.ui.views[0].zoom = 1.0;
+        app.ui.views[0].fit_pending = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(430.0, 460.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    navigator(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        for (label, direction) in [("Zoom In", 1), ("Zoom Out", -1), ("Zoom Out", -1)] {
+            let before = &h.state().ui.views[0];
+            let zoom = crate::zoom_levels::step(before.zoom, direction, before.doc_size);
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            let view = &h.state().ui.views[0];
+            assert_eq!(view.zoom, zoom, "{label}");
+            assert_eq!(view.display_camera, Some((view.zoom, view.center)), "{label}");
+            assert!(!view.zoom_animating && view.zoom_anchor.is_none() && view.zoom_transition.is_none(), "{label}");
+            assert!(!view.fit_pending, "{label}");
+        }
     }
 }
 

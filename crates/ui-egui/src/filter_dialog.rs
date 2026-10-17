@@ -1951,12 +1951,24 @@ mod tests {
             _ => panic!("a smart object"),
         };
         let k = 4;
-        let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &json!({"points": [[0, 20], [90, 150], [255, 230]]}), k).unwrap();
+        let params = json!({"points": [[0, 20], [90, 150], [255, 230]]});
+        let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, k).unwrap();
+        let full = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, 1).unwrap();
+        let photocraft_doc::LayerContent::Smart(full_sm) = &full.layer(layer).unwrap().content else { panic!("a smart object") };
+        let reference = photocraft_algo::resample::resize_surface(full_sm.cache.as_ref().unwrap(), 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic);
         let photocraft_doc::LayerContent::Smart(sm) = &shown.layer(layer).unwrap().content else { panic!("a smart object") };
         assert_eq!(sm.smart_filters.len(), 1, "the preview adds the Curves smart filter");
         assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
         // The 16 px square at (16, 16) is a 4 px square at (4, 4) on the proxy, not 16 px at (16, 16).
-        // Its corners are partly covered by the smart object's resampling (220/255), its inside fully.
+        // Bicubic reduction blends the square's boundary with transparency; compare all alpha
+        // values with a reduced full-size result, and require opacity only in the interior.
+        for y in 0..shown.size.height as i32 {
+            for x in 0..shown.size.width as i32 {
+                let expected = reference.pixel(x, y).last().copied().unwrap();
+                let actual = alpha(&shown, x, y);
+                assert!((actual - expected).abs() <= 1.0 / 255.0, "({x}, {y}): alpha {actual}, expected {expected}");
+            }
+        }
         for (x, y) in [(5, 5), (5, 6), (6, 6)] {
             assert!(alpha(&shown, x, y) > 0.99, "({x}, {y}) is inside the reduced square");
         }

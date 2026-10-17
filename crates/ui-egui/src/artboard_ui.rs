@@ -73,6 +73,8 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     // overflows an i32 sum (#981).
     v.center = [((f64::from(b.x0) + f64::from(b.x1)) / 2.0) as f32, ((f64::from(b.y0) + f64::from(b.y1)) / 2.0) as f32];
     v.fit_pending = false;
+    v.request_zoom_animation(app.session.prefs().general.animated_zoom);
+    v.zoom_anchor = None;
     Ok(json!({"zoom": v.zoom, "artboard": id.0, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
