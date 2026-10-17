@@ -32,7 +32,7 @@ fn pick(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> String {
     // Panels scroll: bring the swatch into view first.
     h.get_by_role_and_label(Role::ColorWell, label).scroll_to_me();
     h.run_steps(2);
-    h.get_by_role_and_label(Role::ColorWell, label).click();
+    h.get_by_role_and_label(Role::ColorWell, label).click_accesskit();
     answer(h, label)
 }
 

@@ -3212,3 +3212,86 @@ curves	Smooth	Glätten
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Zeichenbereichübersicht · Alle Formate
+	Artboard Overview	Zeichenbereichübersicht
+	Overview · all formats	Übersicht · alle Formate
+	Responsive layout role	Rolle für responsives Layout
+	artboards	Zeichenbereiche
+	This document has no artboards yet.	Dieses Dokument enthält noch keine Zeichenbereiche.
+	Select on canvas	Auf Arbeitsfläche auswählen
+	Reflow	Umbruch
+	Semantic reflow	Semantischer Umbruch
+	Proportional fit	Proportional einpassen
+	Semantic reflow · keep type size	Semantischer Umbruch · Schriftgröße beibehalten
+	Proportional fit · scale all	Proportional einpassen · alles skalieren
+	suggested	Vorschlag
+	Body text	Fließtext
+	Headline	Überschrift
+	Logo	Logo
+	Call to action	Handlungsaufforderung
+	Footer	Fußzeile
+	Decoration	Dekoration
+	Free placement	Freie Platzierung
+	Preview unavailable	Vorschau nicht verfügbar
+	Responsive variants	Responsive-Varianten
+	Set as master	Als Master festlegen
+	Switch variant	Variante wechseln
+	Variant	Variante
+	Badge	Abzeichen
+	Price	Preis
+	Disclaimer	Haftungsausschluss
+	Image mark	Bildmarke
+	Size limits in pixels (0 = none)	Größenlimits in Pixeln (0 = unbegrenzt)
+	Maximum size must be at least the minimum size	Die maximale Größe muss mindestens der Mindestgröße entsprechen
+	Safe area	Sicherheitsbereich
+	Insets as a fraction of artboard size	Abstände als Anteil der Zeichenbereichsgröße
+	Reset to master rule	Auf Master-Regel zurücksetzen
+	Update variants	Varianten aktualisieren
+	Variant name	Variantenname
+	Arrow keys navigate; Enter selects and zooms	Pfeiltasten navigieren; Enter wählt aus und zoomt
+	Review findings	Befunde prüfen
+	Results are capped; some findings are omitted	Ergebnisse sind begrenzt; einige Befunde fehlen
+	No findings to review	Keine Befunde zu prüfen
+	Safe Areas	Sicherheitsbereiche
+	Responsive Template…	Responsive Vorlage…
+	Text reflow	Textumbruch
+	Rewrap	Neu umbrechen
+	Rewrap with auto height	Mit automatischer Höhe umbrechen
+	Rewrap and shrink	Umbrechen und verkleinern
+	Responsive variants updated with conflicts	Responsive-Varianten mit Konflikten aktualisiert
+	These local layers were preserved: {layers}	Diese lokalen Ebenen wurden erhalten: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Responsive-Warnungen
+	All findings	Alle Befunde
+	Outside artboard	Außerhalb der Zeichenfläche
+	Semantic collision	Semantische Kollision
+	Safe-area violation	Verstoß gegen Sicherheitsbereich
+	Review all findings	Alle Befunde prüfen
+	Filter findings	Befunde filtern
+	From file	Aus Datei
+	Manual	Manuell
+	Suggested	Vorschlag
+	Suggested role	Vorgeschlagene Rolle
+	Apply role to similar layers	Rolle auf ähnliche Ebenen anwenden
+	Layer name or text	Ebenenname oder Text
+	Layer name	Ebenenname
+	Text layer	Textebene
+	Covers most of artboard	Deckt den größten Teil der Zeichenfläche ab
+	Shape layer	Formebene
+	No strong role signal	Kein starkes Rollensignal
+	Explicit role	Explizite Rolle
+	Layer unavailable	Ebene nicht verfügbar
+	Master layers removed from variant: {count}	Aus der Variante entfernte Master-Ebenen: {count}
+	Overrides dropped because their layers no longer exist: {count}	Verworfene Überschreibungen, weil ihre Ebenen nicht mehr existieren: {count}
+	Previous Artboard Variant	Vorheriges Zeichenbereichsformat
+	Next Artboard Variant	Nächstes Zeichenbereichsformat
+	Select {name} ({layer})	{name} auswählen ({layer})
+	Could not select conflict layer	Konfliktebene konnte nicht ausgewählt werden
+	The conflict layer no longer exists	Konfliktebene ist nicht mehr vorhanden
+	Layout review: {findings} findings on {boards} artboards.	Layout-Prüfung: {findings} Befunde auf {boards} Zeichenflächen.
+	Some artboards could not be checked and count as affected.	Einige Zeichenflächen konnten nicht geprüft werden und gelten als betroffen.
+	Skip artboards with findings or incomplete checks	Zeichenflächen mit Befunden oder unvollständiger Prüfung überspringen
+	No layout findings on {boards} artboards.	Keine Layout-Befunde auf den Zeichenflächen ({boards}).
+	Some artboard checks were incomplete; they count as affected.	Einige Prüfungen der Zeichenflächen waren unvollständig; sie gelten als betroffen.
+@plural	files|Saved for Web: {n} file	Dateien: {n}|Für Web gespeichert: {n} Datei

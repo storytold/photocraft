@@ -2827,3 +2827,79 @@ curves	Smooth	平滑
 	Replace	替换
 	{name} was changed by another app after it was opened or saved here.	{name} 在此处打开或存储后已被其他应用更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	用此文档替换它，或取消并使用“文件 › 另存为”以保留两者。
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	画板概览 · 所有格式
+	Artboard Overview	画板概览
+	Overview · all formats	查看所有格式
+	Responsive layout role	响应式布局角色
+	artboards	画板
+	This document has no artboards yet.	此文档尚无画板。
+	Select on canvas	在画布上选择
+	Reflow	重新排版
+	Responsive variants	响应式变体
+	Semantic reflow	语义重新排版
+	Proportional fit	按比例适配
+	Semantic reflow · keep type size	语义重新排版 · 保持文字大小
+	Proportional fit · scale all	按比例适配 · 缩放全部
+	suggested	建议
+	Set as master	设为主版
+	Switch variant	切换变体
+	Variant	变体
+	Badge	徽章
+	Price	价格
+	Disclaimer	免责声明
+	Image mark	图像标记
+	Stretch	拉伸
+	Size limits in pixels (0 = none)	尺寸限制（像素，0 = 无）
+	Maximum size must be at least the minimum size	最大尺寸必须不小于最小尺寸
+	Safe area	安全区域
+	Insets as a fraction of artboard size	边距占画板尺寸的比例
+	Reset to master rule	重置为主画板规则
+	Update variants	更新变体
+	Variant name	变体名称
+	Arrow keys navigate; Enter selects and zooms	使用方向键导航；按 Enter 选择并缩放
+	Review findings	查看问题
+	Results are capped; some findings are omitted	结果数量有限；部分问题未显示
+	No findings to review	没有可查看的问题
+	Safe Areas	安全区域
+	Responsive Template…	响应式模板…
+	Text reflow	文本重排
+	Preserve	保留
+	Rewrap	重新换行
+	Rewrap with auto height	自动高度换行
+	Rewrap and shrink	换行并缩小
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	响应式警告
+	All findings	所有问题
+	Outside artboard	超出画板
+	Semantic collision	语义冲突
+	Safe-area violation	安全区域违规
+	Review all findings	查看所有问题
+	Filter findings	筛选问题
+	From file	来自文件
+	Manual	手动
+	Suggested	建议
+	Suggested role	建议角色
+	Apply role to similar layers	将角色应用到相似图层
+	Layer name or text	图层名称或文本
+	Layer name	图层名称
+	Text layer	文本图层
+	Covers most of artboard	覆盖画板的大部分区域
+	Shape layer	形状图层
+	No strong role signal	没有明显的角色信号
+	Explicit role	显式角色
+	Layer unavailable	图层不可用
+	Master layers removed from variant: {count}	从变体中移除的主版图层：{count}
+	Overrides dropped because their layers no longer exist: {count}	因图层不存在而移除的覆盖项：{count}
+	Previous Artboard Variant	上一个画板变体
+	Next Artboard Variant	下一个画板变体
+	Select {name} ({layer})	选择 {name} ({layer})
+	Could not select conflict layer	无法选择冲突图层
+	The conflict layer no longer exists	冲突图层已不存在
+	Layout review: {findings} findings on {boards} artboards.	布局检查：{boards} 个画板中有 {findings} 个问题。
+	Some artboards could not be checked and count as affected.	部分画板无法完成检查，将视为存在问题。
+	Skip artboards with findings or incomplete checks	跳过有问题或检查未完成的画板
+	No layout findings on {boards} artboards.	{boards} 个画板均未发现布局问题。
+	Some artboard checks were incomplete; they count as affected.	部分画板检查未完成，将视为存在问题。

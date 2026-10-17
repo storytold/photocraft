@@ -3216,3 +3216,79 @@ curves	Smooth	Lisser
 	Replace	Remplacer
 	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Remplacez-le par ce document, ou annulez et utilisez Fichier › Enregistrer sous pour garder les deux.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Aperçu des plans de travail · Tous les formats
+	Artboard Overview	Aperçu des plans de travail
+	Overview · all formats	Afficher tous les formats
+	Responsive layout role	Rôle de mise en page adaptative
+	artboards	plans de travail
+	This document has no artboards yet.	Ce document ne contient pas encore de plan de travail.
+	Select on canvas	Sélectionner sur la zone de travail
+	Reflow	Redisposition
+	Responsive variants	Variantes adaptatives
+	Semantic reflow	Redisposition sémantique
+	Proportional fit	Ajustement proportionnel
+	Semantic reflow · keep type size	Redisposition sémantique · conserver la taille du texte
+	Proportional fit · scale all	Ajustement proportionnel · tout redimensionner
+	suggested	suggéré
+	Set as master	Définir comme maître
+	Switch variant	Changer de variante
+	Variant	Variante
+	Badge	Badge
+	Price	Prix
+	Disclaimer	Mentions légales
+	Image mark	Marque d’image
+	Stretch	Étirer
+	Size limits in pixels (0 = none)	Limites de taille en pixels (0 = aucun)
+	Maximum size must be at least the minimum size	La taille maximale doit être au moins égale à la minimale
+	Safe area	Zone de sécurité
+	Insets as a fraction of artboard size	Marges en fraction de la taille du plan de travail
+	Reset to master rule	Rétablir la règle maîtresse
+	Update variants	Mettre à jour les variantes
+	Variant name	Nom de variante
+	Arrow keys navigate; Enter selects and zooms	Les flèches naviguent ; Entrée sélectionne et zoome
+	Review findings	Examiner les résultats
+	Results are capped; some findings are omitted	Les résultats sont limités ; certains sont omis
+	No findings to review	Aucun résultat à examiner
+	Safe Areas	Zones de sécurité
+	Responsive Template…	Modèle adaptatif…
+	Text reflow	Redistribution du texte
+	Preserve	Conserver
+	Rewrap	Réorganiser
+	Rewrap with auto height	Réorganiser avec hauteur automatique
+	Rewrap and shrink	Réorganiser et réduire
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Alertes responsive
+	All findings	Tous les résultats
+	Outside artboard	Hors de la zone de travail
+	Semantic collision	Collision sémantique
+	Safe-area violation	Violation de la zone de sécurité
+	Review all findings	Examiner tous les résultats
+	Filter findings	Filtrer les résultats
+	From file	Depuis le fichier
+	Manual	Manuel
+	Suggested	Suggestion
+	Suggested role	Rôle suggéré
+	Apply role to similar layers	Appliquer le rôle aux calques similaires
+	Layer name or text	Nom du calque ou texte
+	Layer name	Nom du calque
+	Text layer	Calque de texte
+	Covers most of artboard	Couvre la majeure partie du plan de travail
+	Shape layer	Calque de forme
+	No strong role signal	Aucun indice fort de rôle
+	Explicit role	Rôle explicite
+	Layer unavailable	Calque indisponible
+	Master layers removed from variant: {count}	Calques maîtres supprimés de la variante : {count}
+	Overrides dropped because their layers no longer exist: {count}	Remplacements supprimés car leurs calques n’existent plus : {count}
+	Previous Artboard Variant	Plan de travail précédent
+	Next Artboard Variant	Plan de travail suivant
+	Select {name} ({layer})	Sélectionner {name} ({layer})
+	Could not select conflict layer	Impossible de sélectionner le calque en conflit
+	The conflict layer no longer exists	Le calque en conflit a disparu
+	Layout review: {findings} findings on {boards} artboards.	Vérification de la mise en page : {findings} problèmes sur {boards} plans de travail.
+	Some artboards could not be checked and count as affected.	La vérification de certains plans de travail a échoué; ils sont considérés comme concernés.
+	Skip artboards with findings or incomplete checks	Ignorer les plans avec des problèmes ou des vérifications incomplètes
+	No layout findings on {boards} artboards.	Aucun problème de mise en page sur {boards} plans de travail.
+	Some artboard checks were incomplete; they count as affected.	Certaines vérifications de plans de travail sont incomplètes et sont considérées comme concernées.

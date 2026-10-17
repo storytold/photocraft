@@ -4846,7 +4846,7 @@ mod tests {
 
     /// `cargo test --release -p photocraft-ui-egui transform_preview_bench -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "24 MP GPU transform-preview benchmark; requires an available GPU and is intentionally opt-in"]
     fn transform_preview_bench() {
         let (w, h) = (6000, 4000);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

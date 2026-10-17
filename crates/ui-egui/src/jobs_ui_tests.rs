@@ -64,6 +64,56 @@ fn slow_job(app: &mut PhotocraftApp, gate: &Arc<AtomicBool>) -> JobId {
     }
 }
 
+#[test]
+fn responsive_variant_reflow_starts_in_the_background_by_default() {
+    let mut h = app_harness();
+    let app = h.state_mut();
+    app.background_jobs = false;
+    let board = app.session.execute("layer.new.artboard", json!({"rect":[0,0,100,80]})).unwrap();
+    let board = board["layer"].as_u64().unwrap();
+    let started = super::run(app, "layer.artboard.createVariant", json!({"layer":board,"width":80,"height":120})).unwrap();
+    assert_eq!(started["pending"], true);
+    let job = JobId(started["job"].as_u64().unwrap());
+    assert_eq!(app.session.active().unwrap().doc.artboards().len(), 1);
+    let result = app.session.wait_job(job).unwrap();
+    assert_eq!(result["source"], board);
+    assert_eq!(app.session.active().unwrap().doc.artboards().len(), 2);
+}
+
+#[test]
+fn responsive_variant_propagation_starts_in_the_background_by_default() {
+    let mut h = app_harness();
+    let app = h.state_mut();
+    app.background_jobs = false;
+    let board = app.session.execute("layer.new.artboard", json!({"rect":[0,0,100,80]})).unwrap();
+    let board = board["layer"].as_u64().unwrap();
+    let layer = app.session.execute("layer.new.layer", json!({"name":"Before"})).unwrap()["layer"].as_u64().unwrap();
+    app.session.execute("layer.moveTo", json!({"layer":layer,"target":board,"position":"into"})).unwrap();
+    let variant = app.session.execute("layer.artboard.createVariant", json!({"layer":board,"width":120,"height":100})).unwrap()["layer"].as_u64().unwrap();
+    app.session.execute("layer.renameLayer", json!({"layer":layer,"name":"After"})).unwrap();
+    let started = super::run(app, "layer.artboard.variants.update", json!({"layer":board})).unwrap();
+    assert_eq!(started["pending"], true);
+    let job = JobId(started["job"].as_u64().unwrap());
+    let variant_layer = app
+        .session
+        .active()
+        .unwrap()
+        .doc
+        .responsive
+        .variants
+        .iter()
+        .find(|entry| entry.artboard.0 == variant)
+        .unwrap()
+        .layers
+        .iter()
+        .find(|mapping| mapping.master_layer.0 == layer)
+        .unwrap()
+        .variant_layer;
+    assert_eq!(app.session.active().unwrap().doc.layer(variant_layer).map(|item| item.name.as_str()), Some("Before"));
+    app.session.wait_job(job).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(variant_layer).map(|item| item.name.as_str()), Some("After"));
+}
+
 /// Step frames for `ms` of wall time; returns (frames, slowest frame in ms).
 fn frames_for(h: &mut Harness<'_, PhotocraftApp>, ms: u64) -> (u64, f64) {
     frames_for_at_least(h, ms, 0)

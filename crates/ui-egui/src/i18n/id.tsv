@@ -3203,3 +3203,79 @@ curves	Smooth	Haluskan
 	Replace	Ganti
 	{name} was changed by another app after it was opened or saved here.	{name} diubah oleh aplikasi lain setelah dibuka atau disimpan di sini.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ganti dengan dokumen ini, atau batalkan dan gunakan Berkas › Simpan Sebagai untuk menyimpan keduanya.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Ikhtisar artboard · Semua format
+	Artboard Overview	Ikhtisar artboard
+	Overview · all formats	Lihat semua format
+	Responsive layout role	Peran tata letak responsif
+	artboards	artboard
+	This document has no artboards yet.	Dokumen ini belum memiliki artboard.
+	Select on canvas	Pilih di kanvas
+	Reflow	Alur ulang
+	Responsive variants	Varian responsif
+	Semantic reflow	Alur ulang semantik
+	Proportional fit	Sesuaikan proporsional
+	Semantic reflow · keep type size	Alur ulang semantik · pertahankan ukuran teks
+	Proportional fit · scale all	Sesuaikan proporsional · skalakan semua
+	suggested	disarankan
+	Set as master	Jadikan master
+	Switch variant	Ganti varian
+	Variant	Varian
+	Badge	Lencana
+	Price	Harga
+	Disclaimer	Penafian
+	Image mark	Tanda gambar
+	Stretch	Regangkan
+	Size limits in pixels (0 = none)	Batas ukuran dalam piksel (0 = tanpa batas)
+	Maximum size must be at least the minimum size	Ukuran maksimum harus setidaknya sebesar ukuran minimum
+	Safe area	Area aman
+	Insets as a fraction of artboard size	Inset sebagai fraksi ukuran artboard
+	Reset to master rule	Atur ulang ke aturan master
+	Update variants	Perbarui varian
+	Variant name	Nama varian
+	Arrow keys navigate; Enter selects and zooms	Tombol panah untuk navigasi; Enter memilih dan memperbesar
+	Review findings	Tinjau temuan
+	Results are capped; some findings are omitted	Hasil dibatasi; beberapa temuan tidak ditampilkan
+	No findings to review	Tidak ada temuan untuk ditinjau
+	Safe Areas	Area aman
+	Responsive Template…	Templat responsif…
+	Text reflow	Aliran ulang teks
+	Preserve	Pertahankan
+	Rewrap	Alir ulang
+	Rewrap with auto height	Alir ulang dengan tinggi otomatis
+	Rewrap and shrink	Alir ulang dan perkecil
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Peringatan responsif
+	All findings	Semua temuan
+	Outside artboard	Di luar artboard
+	Semantic collision	Konflik semantik
+	Safe-area violation	Pelanggaran area aman
+	Review all findings	Tinjau semua temuan
+	Filter findings	Filter temuan
+	From file	Dari file
+	Manual	Manual
+	Suggested	Saran
+	Suggested role	Peran yang disarankan
+	Apply role to similar layers	Terapkan peran ke layer serupa
+	Layer name or text	Nama layer atau teks
+	Layer name	Nama layer
+	Text layer	Layer teks
+	Covers most of artboard	Menutupi sebagian besar artboard
+	Shape layer	Layer bentuk
+	No strong role signal	Tidak ada sinyal peran yang kuat
+	Explicit role	Peran eksplisit
+	Layer unavailable	Layer tidak tersedia
+	Master layers removed from variant: {count}	Lapisan master yang dihapus dari varian: {count}
+	Overrides dropped because their layers no longer exist: {count}	Override dihapus karena lapisannya sudah tidak ada: {count}
+	Previous Artboard Variant	Varian artboard sebelumnya
+	Next Artboard Variant	Varian artboard berikutnya
+	Select {name} ({layer})	Pilih {name} ({layer})
+	Could not select conflict layer	Tidak dapat memilih layer yang berkonflik
+	The conflict layer no longer exists	Layer yang berkonflik sudah tidak ada
+	Layout review: {findings} findings on {boards} artboards.	Pemeriksaan tata letak: {findings} temuan pada {boards} artboard.
+	Some artboards could not be checked and count as affected.	Beberapa artboard tidak dapat diperiksa dan dianggap terdampak.
+	Skip artboards with findings or incomplete checks	Lewati artboard dengan temuan atau pemeriksaan yang belum lengkap
+	No layout findings on {boards} artboards.	Tidak ada masalah tata letak pada {boards} artboard.
+	Some artboard checks were incomplete; they count as affected.	Beberapa pemeriksaan artboard belum lengkap dan dianggap terdampak.

@@ -940,6 +940,23 @@ pub(crate) fn psd_to_document_decoded(
         // locked whatever its (localized) name and whether or not the file carries an `lspf`
         // block. Its name is kept.
         mark_background(file, &mut doc.layers);
+        // PhotoCraft's semantic roles are stored as a private `shmd` item on each layer.
+        // Keep them in the document's namespaced metadata so the engine/UI sees them normally.
+        let roles: Vec<_> = doc
+            .walk()
+            .into_iter()
+            .filter_map(|(_, _, layer)| {
+                layer
+                    .psd_blocks
+                    .iter()
+                    .find(|(key, _)| key == b"shmd")
+                    .and_then(|(_, data)| crate::comps_map::artboard_role_data(data).map(|role| (layer.id, role.to_owned())))
+            })
+            .collect();
+        for (id, role) in roles {
+            doc.metadata.text.push((format!("{}{}", crate::comps_map::ARTBOARD_ROLE_PREFIX, id.0), role));
+            doc.metadata.text.push((format!("photocraft.artboard-role-source.{}", id.0), "file".to_owned()));
+        }
         // Layer › Link Layers: resource 1026 holds one group id per layer record (0 = unlinked).
         if let Some(Ok(photocraft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
             file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(photocraft_psd::resources::ImageResource::parsed)

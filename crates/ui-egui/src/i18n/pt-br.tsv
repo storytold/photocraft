@@ -4000,3 +4000,77 @@ layerLabel	No Color	Sem cor
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
 	{name} was changed by another app after it was opened or saved here.	{name} foi alterado por outro app depois de ser aberto ou salvo aqui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Substitua-o por este documento, ou cancele e use Arquivo › Salvar como para manter os dois.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Visão geral das pranchetas · Todos os formatos
+	Artboard Overview	Visão geral das pranchetas
+	Overview · all formats	Ver todos os formatos
+	Responsive layout role	Função do layout responsivo
+	artboards	pranchetas
+	This document has no artboards yet.	Este documento ainda não tem pranchetas.
+	Select on canvas	Selecionar na tela
+	Reflow	Refluxo
+	Responsive variants	Variantes responsivas
+	Semantic reflow	Refluxo semântico
+	Proportional fit	Ajuste proporcional
+	Semantic reflow · keep type size	Refluxo semântico · manter tamanho do texto
+	Proportional fit · scale all	Ajuste proporcional · redimensionar tudo
+	suggested	sugerido
+	Set as master	Definir como mestre
+	Switch variant	Alternar variante
+	Variant	Variante
+	Badge	Selo
+	Price	Preço
+	Disclaimer	Aviso legal
+	Image mark	Marca da imagem
+	Size limits in pixels (0 = none)	Limites de tamanho em pixels (0 = nenhum)
+	Maximum size must be at least the minimum size	O tamanho máximo deve ser pelo menos igual ao mínimo
+	Safe area	Área segura
+	Insets as a fraction of artboard size	Margens como fração do tamanho da prancheta
+	Reset to master rule	Redefinir para a regra mestre
+	Update variants	Atualizar variantes
+	Variant name	Nome da variante
+	Arrow keys navigate; Enter selects and zooms	As setas navegam; Enter seleciona e amplia
+	Review findings	Revisar ocorrências
+	Results are capped; some findings are omitted	Os resultados são limitados; algumas ocorrências foram omitidas
+	No findings to review	Nenhuma ocorrência para revisar
+	Safe Areas	Áreas seguras
+	Responsive Template…	Modelo responsivo…
+	Text reflow	Refluxo do texto
+	Rewrap	Refluir
+	Rewrap with auto height	Refluir com altura automática
+	Rewrap and shrink	Refluir e reduzir
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Avisos responsivos
+	All findings	Todas as ocorrências
+	Outside artboard	Fora da prancheta
+	Semantic collision	Colisão semântica
+	Safe-area violation	Violação da área segura
+	Review all findings	Revisar todas as ocorrências
+	Filter findings	Filtrar ocorrências
+	From file	Do arquivo
+	Suggested	Sugestão
+	Suggested role	Função sugerida
+	Apply role to similar layers	Aplicar função a camadas semelhantes
+	Layer name or text	Nome da camada ou texto
+	Layer name	Nome da camada
+	Text layer	Camada de texto
+	Covers most of artboard	Cobre a maior parte da prancheta
+	Shape layer	Camada de forma
+	No strong role signal	Sem sinal forte de função
+	Explicit role	Função explícita
+	Layer unavailable	Camada indisponível
+	Master layers removed from variant: {count}	Camadas mestre removidas da variante: {count}
+	Overrides dropped because their layers no longer exist: {count}	Substituições removidas porque as camadas não existem mais: {count}
+	Previous Artboard Variant	Variante anterior da prancheta
+	Next Artboard Variant	Próxima variante da prancheta
+	Select {name} ({layer})	Selecionar {name} ({layer})
+	Could not select conflict layer	Não foi possível selecionar a camada em conflito
+	The conflict layer no longer exists	A camada em conflito não existe mais
+	Layout review: {findings} findings on {boards} artboards.	Revisão do layout: {findings} problemas em {boards} pranchetas.
+	Some artboards could not be checked and count as affected.	Algumas pranchetas não puderam ser verificadas e são consideradas afetadas.
+	Skip artboards with findings or incomplete checks	Ignorar pranchetas com problemas ou verificações incompletas
+	No layout findings on {boards} artboards.	Nenhum problema de layout em {boards} pranchetas.
+	Some artboard checks were incomplete; they count as affected.	Algumas verificações de pranchetas ficaram incompletas e são consideradas afetadas.
+@plural	files|Saved for Web: {n} file	Arquivos: {n}|Salvo para Web: {n} arquivo

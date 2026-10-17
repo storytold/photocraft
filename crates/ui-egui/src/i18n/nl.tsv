@@ -3970,3 +3970,77 @@ curves	Smooth	Vloeiend maken
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
 	{name} was changed by another app after it was opened or saved here.	{name} is door een andere app gewijzigd nadat het hier is geopend of bewaard.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Vervang het door dit document, of annuleer en gebruik Bestand › Opslaan als om beide te houden.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Overzicht tekengebieden · Alle formaten
+	Artboard Overview	Overzicht tekengebieden
+	Overview · all formats	Alle formaten bekijken
+	Responsive layout role	Rol voor responsieve indeling
+	artboards	tekengebieden
+	This document has no artboards yet.	Dit document bevat nog geen tekengebieden.
+	Select on canvas	Selecteren op canvas
+	Reflow	Opnieuw indelen
+	Responsive variants	Responsieve varianten
+	Semantic reflow	Semantisch opnieuw indelen
+	Proportional fit	Proportioneel aanpassen
+	Semantic reflow · keep type size	Semantisch opnieuw indelen · tekstgrootte behouden
+	Proportional fit · scale all	Proportioneel aanpassen · alles schalen
+	suggested	voorgesteld
+	Set as master	Instellen als master
+	Switch variant	Variant wisselen
+	Variant	Variant
+	Badge	Badge
+	Price	Prijs
+	Disclaimer	Disclaimer
+	Image mark	Afbeeldingsmerk
+	Size limits in pixels (0 = none)	Maatlimieten in pixels (0 = geen)
+	Maximum size must be at least the minimum size	De maximale grootte moet minstens de minimale grootte zijn
+	Safe area	Veilige zone
+	Insets as a fraction of artboard size	Marges als fractie van de tekengebiedgrootte
+	Reset to master rule	Terugzetten naar hoofdregel
+	Update variants	Varianten bijwerken
+	Variant name	Variantnaam
+	Arrow keys navigate; Enter selects and zooms	Pijltjestoetsen navigeren; Enter selecteert en zoomt
+	Review findings	Bevindingen bekijken
+	Results are capped; some findings are omitted	Resultaten zijn begrensd; sommige bevindingen zijn weggelaten
+	No findings to review	Geen bevindingen om te bekijken
+	Safe Areas	Veilige gebieden
+	Responsive Template…	Responsieve sjabloon…
+	Text reflow	Tekst opnieuw laten lopen
+	Rewrap	Opnieuw laten lopen
+	Rewrap with auto height	Opnieuw laten lopen met automatische hoogte
+	Rewrap and shrink	Opnieuw laten lopen en verkleinen
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Responsive-waarschuwingen
+	All findings	Alle bevindingen
+	Outside artboard	Buiten het tekengebied
+	Semantic collision	Semantische botsing
+	Safe-area violation	Veilige-zoneovertreding
+	Review all findings	Alle bevindingen bekijken
+	Filter findings	Bevindingen filteren
+	From file	Uit bestand
+	Suggested	Suggestie
+	Suggested role	Voorgestelde rol
+	Apply role to similar layers	Rol toepassen op vergelijkbare lagen
+	Layer name or text	Laagnaam of tekst
+	Layer name	Laagnaam
+	Text layer	Tekstlaag
+	Covers most of artboard	Bedekt het grootste deel van het tekengebied
+	Shape layer	Vormlaag
+	No strong role signal	Geen sterk rolsignaal
+	Explicit role	Expliciete rol
+	Layer unavailable	Laag niet beschikbaar
+	Master layers removed from variant: {count}	Masterlagen verwijderd uit variant: {count}
+	Overrides dropped because their layers no longer exist: {count}	Overschrijvingen verwijderd omdat de lagen niet meer bestaan: {count}
+	Previous Artboard Variant	Vorige tekengebiedvariant
+	Next Artboard Variant	Volgende tekengebiedvariant
+	Select {name} ({layer})	Selecteer {name} ({layer})
+	Could not select conflict layer	Conflicterende laag kon niet worden geselecteerd
+	The conflict layer no longer exists	Conflicterende laag bestaat niet meer
+	Layout review: {findings} findings on {boards} artboards.	Lay-outcontrole: {findings} bevindingen op {boards} tekengebieden.
+	Some artboards could not be checked and count as affected.	Sommige tekengebieden konden niet worden gecontroleerd en gelden als getroffen.
+	Skip artboards with findings or incomplete checks	Tekengebieden met bevindingen of onvolledige controles overslaan
+	No layout findings on {boards} artboards.	Geen lay-outbevindingen op {boards} tekengebieden.
+	Some artboard checks were incomplete; they count as affected.	Sommige controles van tekengebieden waren onvolledig; deze gelden als getroffen.
+@plural	files|Saved for Web: {n} file	Bestanden: {n}|Opgeslagen voor web: {n} bestand

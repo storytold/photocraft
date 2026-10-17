@@ -174,7 +174,10 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
-    if !app.background_jobs {
+    // Responsive reflow can reshape many editable type layers and run text layout. Keep the
+    // native canvas responsive even when the optional general background-jobs switch is off.
+    let responsive_reflow = matches!(id, "layer.artboard.createVariant" | "layer.artboard.variants.update");
+    if !app.background_jobs && !responsive_reflow {
         return app.session.execute(id, params).map_err(|e| e.to_string());
     }
     match app.session.start(id, params).map_err(|e| e.to_string())? {
@@ -501,9 +504,20 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;
         }
+
         JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.print" | "file.printOneCopy") => {
             app.sync_views();
             crate::file_ui::print_status(app, result);
+        }
+
+        JobOutcome::Done(v) if e.command == "layer.artboard.variants.update" => {
+            app.sync_views();
+            let (conflicts, lines, actions) = variant_conflict_notice(&v);
+            if conflicts > 0 {
+                notices::post_with_actions(app, tl!("Responsive variants updated with conflicts"), lines, false, None, actions);
+            }
+            app.ui.status = e.label;
+            app.ui.status_error = false;
         }
         JobOutcome::Done(_) => {
             app.sync_views();
@@ -521,6 +535,83 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+    }
+}
+
+fn variant_conflict_notice(result: &Value) -> (usize, Vec<String>, Vec<notices::NoticeAction>) {
+    let Some(conflicts) = result.get("conflicts").and_then(Value::as_array) else { return (0, Vec::new(), Vec::new()) };
+    let preserved: Vec<String> = conflicts
+        .iter()
+        .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("preserved_variant_layer"))
+        .filter_map(|entry| {
+            let name: String = entry.get("name")?.as_str()?.chars().filter(|c| !c.is_control()).take(128).collect();
+            let id = entry.get("layer")?.as_u64()?;
+            Some(format!("{name} ({id})"))
+        })
+        .take(8)
+        .collect();
+    let preserved_count = conflicts.iter().filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("preserved_variant_layer")).count();
+    let removed_master = conflicts.iter().filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("removed_master_layer")).count();
+    let removed_overrides = conflicts.iter().filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("orphaned_override")).count();
+    let mut lines = Vec::new();
+    let mut actions = Vec::new();
+    if preserved_count > 0 {
+        let layers = preserved.join(", ");
+        lines.push(crate::i18n::fmt(tl!("These local layers were preserved: {layers}"), &[("layers", &layers)]));
+        if preserved_count > preserved.len() {
+            lines.push(tl!("More preserved layers are listed in the command result.").to_owned());
+        }
+        for entry in conflicts.iter().filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("preserved_variant_layer")).take(8) {
+            if let Some(layer) = entry.get("layer").and_then(Value::as_u64) {
+                let name = entry.get("name").and_then(Value::as_str).unwrap_or_default().chars().filter(|c| !c.is_control()).take(128).collect::<String>();
+                actions.push(notices::NoticeAction {
+                    label: "Select {name} ({layer})".to_owned(),
+                    layer,
+                    args: vec![("name".to_owned(), name), ("layer".to_owned(), layer.to_string())],
+                });
+            }
+        }
+    }
+    if removed_master > 0 {
+        lines.push(crate::i18n::fmt(tl!("Master layers removed from variant: {count}"), &[("count", &removed_master.to_string())]));
+    }
+    if removed_overrides > 0 {
+        lines.push(crate::i18n::fmt(tl!("Overrides dropped because their layers no longer exist: {count}"), &[("count", &removed_overrides.to_string())]));
+    }
+    (conflicts.len(), lines, actions)
+}
+
+#[cfg(test)]
+mod variant_conflict_notice_tests {
+    use super::variant_conflict_notice;
+    use serde_json::json;
+
+    #[test]
+    fn conflict_notice_reports_preserved_layers_and_removed_master_state_separately() {
+        let (count, lines, actions) = variant_conflict_notice(&json!({"conflicts":[
+            {"kind":"preserved_variant_layer","layer":7,"name":"local CTA"},
+            {"kind":"removed_master_layer","masterLayer":3,"variantLayer":8},
+            {"kind":"orphaned_override","layer":9}
+        ]}));
+        assert_eq!(count, 3);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].layer, 7);
+        assert_eq!(actions[0].label, "Select {name} ({layer})");
+        assert_eq!(actions[0].args, vec![("name".to_owned(), "local CTA".to_owned()), ("layer".to_owned(), "7".to_owned())]);
+        assert_eq!(
+            crate::i18n::fmt(crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), &actions[0].label), &[("name", "local CTA"), ("layer", "7")]),
+            "local CTA auswählen (7)"
+        );
+        assert!(lines[0].contains("local CTA (7)"));
+        assert!(lines[1].contains("1"));
+        assert!(lines[2].contains("1"));
+    }
+
+    #[test]
+    fn malformed_conflict_results_produce_no_notice_content() {
+        assert_eq!(variant_conflict_notice(&json!({"conflicts":[]})), (0, vec![], vec![]));
+        assert_eq!(variant_conflict_notice(&json!({"conflicts":"bad"})), (0, vec![], vec![]));
     }
 }
 

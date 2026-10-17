@@ -81,6 +81,44 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             json!({"dialog": open_print(app)})
         }
         "file.export.exportPreferences" => return crate::prefs_ui::invoke(app, ctx, "edit.preferences.export", &json!({})),
+        "file.export.responsiveTemplate" => {
+            return Some((|| -> Result<Value, String> {
+                let board = app
+                    .session
+                    .active()
+                    .and_then(|state| {
+                        let layer = state.active_layer?;
+                        let board = state.doc.artboard_of(layer).or_else(|| state.doc.layer(layer).and_then(photocraft_doc::Layer::artboard).map(|_| layer))?;
+                        Some(board)
+                    })
+                    .ok_or("select an artboard before exporting a responsive template")?;
+                let exported = app.run("file.export.responsiveTemplate", json!({"layer":board.0}))?;
+                let data = serde_json::to_vec_pretty(&exported["template"]).map_err(|error| error.to_string())?;
+                let suggested = format!("{}.responsive.json", doc_stem(app));
+                app.pick_save(&suggested, move |app, path| {
+                    let write = app.services.write.as_mut().ok_or("no writer configured")?;
+                    write(&path, &data)?;
+                    Ok(json!({"path":path,"bytes":data.len()}))
+                })
+            })());
+        }
+        "file.import.responsiveTemplate" => {
+            return Some((|| -> Result<Value, String> {
+                let board = app
+                    .session
+                    .active()
+                    .and_then(|state| {
+                        state.active_layer.and_then(|layer| {
+                            state.doc.artboard_of(layer).or_else(|| state.doc.layer(layer).and_then(photocraft_doc::Layer::artboard).map(|_| layer))
+                        })
+                    })
+                    .ok_or("select an artboard before importing a responsive template")?;
+                app.pick_file_bytes_filtered(&["json"], move |app, _name, bytes| {
+                    let template: Value = serde_json::from_slice(&bytes).map_err(|error| format!("invalid template JSON: {error}"))?;
+                    app.run("file.import.responsiveTemplate", json!({"layer":board.0,"template":template}))
+                })
+            })());
+        }
         "file.automate.contactSheetII" => form(
             app,
             id,

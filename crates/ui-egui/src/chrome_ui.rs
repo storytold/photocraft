@@ -161,6 +161,14 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.views[i].fit_pending = false;
     }
     ui.add_space(12.0);
+    if let Some(variant) = st
+        .active_layer
+        .and_then(|layer| st.doc.artboard_of(layer))
+        .and_then(|artboard| st.doc.responsive.variants.iter().find(|variant| variant.artboard == artboard))
+    {
+        ui.label(RichText::new(format!("{}: {}", tl!("Responsive variants"), variant.name)).color(t.text_faint).size(12.0));
+        ui.add_space(8.0);
+    }
     ui.label(RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if resp.hovered() {
@@ -500,6 +508,22 @@ mod tests {
         h.run_steps(2);
         assert!(h.query_by_label("No document").is_some());
         assert!(h.query_by_label(&e).is_some(), "status bar shows {e:?}");
+    }
+
+    #[test]
+    fn status_bar_names_the_active_responsive_variant() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":100,"height":80})).unwrap();
+        let master = session.execute("layer.new.artboard", json!({"rect":[0,0,100,80],"name":"Master"})).unwrap();
+        let master = master["layer"].as_u64().unwrap();
+        let variant = session.execute("layer.artboard.createVariant", json!({"layer":master,"width":80,"height":80,"name":"Portrait"})).unwrap();
+        session.execute("layer.select", json!({"layer":variant["layer"]})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.sync_views();
+        let mut h = Harness::builder().with_size(vec2(900.0, 40.0)).build_ui_state(|ui, app| status_bar_pro(app, ui), app);
+        h.run_steps(2);
+        assert!(h.query_by_label("Responsive variants: Portrait").is_some());
     }
 
     #[test]

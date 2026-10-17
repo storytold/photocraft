@@ -197,6 +197,24 @@ fn synthetic_psd_roundtrip_all_depths() {
 }
 
 #[test]
+fn semantic_artboard_roles_survive_native_psd_roundtrip() {
+    let mut doc = synthetic(SampleType::U8);
+    let layer = &doc.layers[0].children().unwrap()[0];
+    doc.metadata.text.push((format!("photocraft.artboard-role.{}", layer.id.0), "headline".into()));
+    let first = to_psd(&doc);
+    let parsed = PsdFile::from_bytes(&first).unwrap();
+    let metadata = layer_block(&parsed, "A", b"shmd").expect("role stored in layer shmd");
+    let imported = import("x.psd", &first).unwrap().document;
+    let layer = imported.walk().into_iter().find(|(_, _, layer)| layer.name == "A").map(|(_, _, layer)| layer).unwrap();
+    assert!(imported.metadata.text.iter().any(|(key, value)| key == &format!("photocraft.artboard-role.{}", layer.id.0) && value == "headline"));
+    assert!(imported.metadata.text.iter().any(|(key, value)| key == &format!("photocraft.artboard-role-source.{}", layer.id.0) && value == "file"));
+
+    let second = to_psd(&imported);
+    let roundtripped = PsdFile::from_bytes(&second).unwrap();
+    assert_eq!(layer_block(&roundtripped, "A", b"shmd"), Some(metadata));
+}
+
+#[test]
 fn synthetic_pcraft_roundtrip_keeps_everything() {
     let mut d = synthetic(SampleType::U16);
     d.last_document_state = Some(LayerComp {

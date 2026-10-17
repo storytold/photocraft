@@ -3940,3 +3940,44 @@ cameraData	Lens	Lens
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
 	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.
+	Artboard Overview	Artboard genel görünümü
+	Next Artboard Variant	Sonraki artboard varyantı
+	Previous Artboard Variant	Önceki artboard varyantı
+	Responsive Template…	Duyarlı şablon…
+	Responsive Warnings	Duyarlılık uyarıları
+	Safe Areas	Güvenli alanlar
+	Apply role to similar layers	Rolü benzer katmanlara uygula
+	Could not select conflict layer	Çakışma katmanı seçilemedi
+	Insets as a fraction of artboard size	Artboard boyutunun kesri olarak iç paylar
+	Layout review: {findings} findings on {boards} artboards.	Yerleşim incelemesi: {boards} artboard üzerinde {findings} bulgu.
+	Master layers removed from variant: {count}	Varyanttan kaldırılan ana katmanlar: {count}
+	Maximum size must be at least the minimum size	En büyük boyut en az en küçük boyut kadar olmalı
+	More preserved layers are listed in the command result.	Korunan diğer katmanlar komut sonucunda listelenir.
+	No layout findings on {boards} artboards.	{boards} artboard üzerinde yerleşim bulgusu yok.
+	Overrides dropped because their layers no longer exist: {count}	Katmanları artık olmadığından düşürülen geçersiz kılmalar: {count}
+	Overview · all formats	Genel görünüm · tüm biçimler
+	Proportional fit	Orantılı sığdırma
+	Proportional fit · scale all	Orantılı sığdırma · tümünü ölçekle
+	Reflow	Yeniden akıtma
+	Reset to master rule	Ana kurala sıfırla
+	Responsive layout role	Duyarlı yerleşim rolü
+	Responsive variants	Duyarlı varyantlar
+	Responsive variants updated with conflicts	Duyarlı varyantlar çakışmalarla güncellendi
+	Safe area	Güvenli alan
+	Semantic reflow	Anlamsal yeniden akıtma
+	Semantic reflow · keep type size	Anlamsal yeniden akıtma · yazı boyutunu koru
+	Set as master	Ana olarak ayarla
+	Size limits in pixels (0 = none)	Piksel cinsinden boyut sınırları (0 = yok)
+	Skip artboards with findings or incomplete checks	Bulgu içeren veya denetimi tamamlanmamış artboardları atla
+	Some artboard checks were incomplete; they count as affected.	Bazı artboard denetimleri tamamlanmadı; etkilenmiş sayılırlar.
+	Some artboards could not be checked and count as affected.	Bazı artboardlar denetlenemedi ve etkilenmiş sayılır.
+	Suggested	Önerilen
+	Suggested role	Önerilen rol
+	Switch variant	Varyantı değiştir
+	Text reflow	Metni yeniden akıt
+	The conflict layer no longer exists	Çakışma katmanı artık yok
+	These local layers were preserved: {layers}	Şu yerel katmanlar korundu: {layers}
+	Update variants	Varyantları güncelle
+	Variant	Varyant
+	Variant name	Varyant adı
+	suggested	önerilen

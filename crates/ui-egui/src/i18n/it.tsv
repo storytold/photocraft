@@ -4331,3 +4331,77 @@ shape	Appearance	Aspetto
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
 	{name} was changed by another app after it was opened or saved here.	{name} è stato modificato da un'altra app dopo essere stato aperto o salvato qui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Sostituiscilo con questo documento, oppure annulla e usa File › Salva con nome per tenerli entrambi.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Panoramica tavole da disegno · Tutti i formati
+	Artboard Overview	Panoramica tavole da disegno
+	Overview · all formats	Mostra tutti i formati
+	Responsive layout role	Ruolo del layout adattivo
+	artboards	tavole da disegno
+	This document has no artboards yet.	Questo documento non contiene ancora tavole da disegno.
+	Select on canvas	Seleziona sulla tela
+	Reflow	Ridimensionamento adattivo
+	Responsive variants	Varianti adattive
+	Semantic reflow	Ridimensionamento semantico
+	Proportional fit	Adattamento proporzionale
+	Semantic reflow · keep type size	Ridimensionamento semantico · mantieni la dimensione del testo
+	Proportional fit · scale all	Adattamento proporzionale · scala tutto
+	suggested	suggerito
+	Set as master	Imposta come master
+	Switch variant	Cambia variante
+	Variant	Variante
+	Badge	Distintivo
+	Price	Prezzo
+	Disclaimer	Dichiarazione di esclusione
+	Image mark	Marchio immagine
+	Size limits in pixels (0 = none)	Limiti di dimensione in pixel (0 = nessuno)
+	Maximum size must be at least the minimum size	La dimensione massima deve essere almeno pari alla minima
+	Safe area	Area sicura
+	Insets as a fraction of artboard size	Margini come frazione delle dimensioni della tavola da disegno
+	Reset to master rule	Ripristina la regola principale
+	Update variants	Aggiorna varianti
+	Variant name	Nome variante
+	Arrow keys navigate; Enter selects and zooms	Le frecce navigano; Invio seleziona e ingrandisce
+	Review findings	Esamina i risultati
+	Results are capped; some findings are omitted	I risultati sono limitati; alcuni vengono omessi
+	No findings to review	Nessun risultato da esaminare
+	Safe Areas	Aree sicure
+	Responsive Template…	Modello adattivo…
+	Text reflow	Ridisposizione testo
+	Rewrap	Riavvolgi
+	Rewrap with auto height	Riavvolgi con altezza automatica
+	Rewrap and shrink	Riavvolgi e riduci
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Avvisi responsive
+	All findings	Tutti i risultati
+	Outside artboard	Fuori dalla tavola da disegno
+	Semantic collision	Collisione semantica
+	Safe-area violation	Violazione dell’area sicura
+	Review all findings	Esamina tutti i risultati
+	Filter findings	Filtra i risultati
+	From file	Da file
+	Suggested	Suggerito
+	Suggested role	Ruolo suggerito
+	Apply role to similar layers	Applica il ruolo a livelli simili
+	Layer name or text	Nome livello o testo
+	Layer name	Nome livello
+	Text layer	Livello testo
+	Covers most of artboard	Copre gran parte della tavola da disegno
+	Shape layer	Livello forma
+	No strong role signal	Nessun segnale di ruolo forte
+	Explicit role	Ruolo esplicito
+	Layer unavailable	Livello non disponibile
+	Master layers removed from variant: {count}	Livelli master rimossi dalla variante: {count}
+	Overrides dropped because their layers no longer exist: {count}	Override rimossi perché i relativi livelli non esistono più: {count}
+	Previous Artboard Variant	Variante tavola da disegno precedente
+	Next Artboard Variant	Variante tavola da disegno successiva
+	Select {name} ({layer})	Seleziona {name} ({layer})
+	Could not select conflict layer	Impossibile selezionare il livello in conflitto
+	The conflict layer no longer exists	Il livello in conflitto non esiste più
+	Layout review: {findings} findings on {boards} artboards.	Controllo layout: {findings} problemi su {boards} tavole da disegno.
+	Some artboards could not be checked and count as affected.	Alcune tavole da disegno non sono state verificate e sono considerate interessate.
+	Skip artboards with findings or incomplete checks	Salta le tavole con problemi o verifiche incomplete
+	No layout findings on {boards} artboards.	Nessun problema di layout su {boards} tavole da disegno.
+	Some artboard checks were incomplete; they count as affected.	Alcuni controlli delle tavole sono incompleti e vengono considerate interessate.
+@plural	files|Saved for Web: {n} file	File: {n}|Salvato per il Web: {n} file

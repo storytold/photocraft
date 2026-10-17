@@ -3910,3 +3910,78 @@ curves	Smooth	Згладити
 	Replace	Замінити
 	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замініть його цим документом або скасуйте й скористайтеся Файл › Зберегти як, щоб зберегти обидва.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Огляд монтажних областей · Усі формати
+	Artboard Overview	Огляд монтажних областей
+	Overview · all formats	Показати всі формати
+	Responsive layout role	Роль адаптивного макета
+	artboards	монтажних областей
+	This document has no artboards yet.	У цьому документі ще немає монтажних областей.
+	Select on canvas	Вибрати на полотні
+	Reflow	Перекомпонування
+	Responsive variants	Адаптивні варіанти
+	Semantic reflow	Семантичне перекомпонування
+	Proportional fit	Пропорційне вписування
+	Semantic reflow · keep type size	Семантичне перекомпонування · зберегти розмір тексту
+	Proportional fit · scale all	Пропорційне вписування · масштабувати все
+	suggested	запропоновано
+	Set as master	Установити як майстер
+	Switch variant	Перемкнути варіант
+	Variant	Варіант
+	Badge	Значок
+	Price	Ціна
+	Disclaimer	Відмова від відповідальності
+	Image mark	Знак зображення
+	Size limits in pixels (0 = none)	Обмеження розміру в пікселях (0 = немає)
+	Maximum size must be at least the minimum size	Максимальний розмір має бути не меншим за мінімальний
+	Safe area	Безпечна зона
+	Insets as a fraction of artboard size	Відступи як частка розміру монтажної області
+	Reset to master rule	Скинути до правила головної області
+	Update variants	Оновити варіанти
+	Variant name	Назва варіанта
+	Arrow keys navigate; Enter selects and zooms	Стрілки переміщують; Enter вибирає та збільшує
+	Review findings	Переглянути зауваження
+	Results are capped; some findings are omitted	Кількість результатів обмежена; частину зауважень пропущено
+	No findings to review	Немає зауважень для перегляду
+	Safe Areas	Безпечні області
+	Responsive Template…	Адаптивний шаблон…
+	Text reflow	Перенесення тексту
+	Rewrap	Перенесення рядків
+	Rewrap with auto height	Перенесення з автоматичною висотою
+	Rewrap and shrink	Перенесення та зменшення
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Попередження адаптивного макета
+	All findings	Усі результати
+	Outside artboard	За межами монтажної області
+	Semantic collision	Семантичне зіткнення
+	Safe-area violation	Порушення безпечної області
+	Review all findings	Переглянути всі зауваження
+	Filter findings	Фільтр зауважень
+	From file	З файлу
+	Manual	Вручну
+	Suggested	Пропозиція
+	Suggested role	Запропонована роль
+	Apply role to similar layers	Застосувати роль до схожих шарів
+	Layer name or text	Назва шару або текст
+	Layer name	Назва шару
+	Text layer	Текстовий шар
+	Covers most of artboard	Покриває більшу частину монтажної області
+	Shape layer	Шар-фігура
+	No strong role signal	Немає сильного сигналу ролі
+	Explicit role	Явна роль
+	Layer unavailable	Шар недоступний
+	Master layers removed from variant: {count}	Шари майстра, видалені з варіанта: {count}
+	Overrides dropped because their layers no longer exist: {count}	Перевизначення видалено, оскільки їхніх шарів більше немає: {count}
+	Previous Artboard Variant	Попередній варіант монтажної області
+	Next Artboard Variant	Наступний варіант монтажної області
+	Select {name} ({layer})	Вибрати {name} ({layer})
+	Could not select conflict layer	Не вдалося вибрати конфліктний шар
+	The conflict layer no longer exists	Конфліктний шар більше не існує
+	Layout review: {findings} findings on {boards} artboards.	Перевірка макета: {findings} зауважень на {boards} монтажних областях.
+	Some artboards could not be checked and count as affected.	Деякі монтажні області не вдалося перевірити; вони вважаються проблемними.
+	Skip artboards with findings or incomplete checks	Пропуск областей із зауваженнями або неповною перевіркою
+	No layout findings on {boards} artboards.	На {boards} монтажних областях проблем із макетом не виявлено.
+	Some artboard checks were incomplete; they count as affected.	Деякі перевірки областей не завершені; вони вважаються проблемними.
+@plural	files|Saved for Web: {n} file	Файлів: {n}|Файли: {n}|Збережено для вебу: {n} файлів

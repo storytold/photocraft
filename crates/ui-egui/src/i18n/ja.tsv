@@ -3887,3 +3887,78 @@ curves	Smooth	スムーズ
 	Replace	置き換え
 	{name} was changed by another app after it was opened or saved here.	{name} は、ここで開くか保存した後に別のアプリで変更されました。
 	Replace it with this document, or cancel and use File › Save As to keep both.	この書類で置き換えるか、キャンセルしてファイル › 名前を付けて保存で両方を残してください。
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	アートボード一覧 · すべての形式
+	Artboard Overview	アートボード一覧
+	Overview · all formats	すべての形式を表示
+	Responsive layout role	レスポンシブレイアウトの役割
+	artboards	アートボード
+	This document has no artboards yet.	このドキュメントにはまだアートボードがありません。
+	Select on canvas	キャンバス上で選択
+	Reflow	リフロー
+	Responsive variants	レスポンシブバリエーション
+	Semantic reflow	セマンティックリフロー
+	Proportional fit	比例フィット
+	Semantic reflow · keep type size	セマンティックリフロー · 文字サイズを維持
+	Proportional fit · scale all	比例フィット · すべてを拡大縮小
+	suggested	推奨
+	Set as master	マスターに設定
+	Switch variant	バリアントを切り替え
+	Variant	バリアント
+	Badge	バッジ
+	Price	価格
+	Disclaimer	免責事項
+	Image mark	画像マーク
+	Size limits in pixels (0 = none)	サイズ制限（ピクセル、0 = なし）
+	Maximum size must be at least the minimum size	最大サイズは最小サイズ以上にしてください
+	Safe area	セーフエリア
+	Insets as a fraction of artboard size	アートボードサイズに対する余白の割合
+	Reset to master rule	マスタールールにリセット
+	Update variants	バリエーションを更新
+	Variant name	バリエーション名
+	Arrow keys navigate; Enter selects and zooms	矢印キーで移動、Enterで選択して拡大
+	Review findings	検出結果を確認
+	Results are capped; some findings are omitted	結果数に上限があり、一部の検出結果は省略されています
+	No findings to review	確認する検出結果はありません
+	Safe Areas	セーフエリア
+	Responsive Template…	レスポンシブテンプレート…
+	Text reflow	テキストの再配置
+	Rewrap	再折り返し
+	Rewrap with auto height	自動高さで再折り返し
+	Rewrap and shrink	再折り返して縮小
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	レスポンシブ警告
+	All findings	すべての検出結果
+	Outside artboard	アートボード外
+	Semantic collision	セマンティック衝突
+	Safe-area violation	セーフエリア違反
+	Review all findings	すべての検出結果を確認
+	Filter findings	検出結果を絞り込む
+	From file	ファイル由来
+	Manual	手動
+	Suggested	候補
+	Suggested role	候補の役割
+	Apply role to similar layers	類似レイヤーに役割を適用
+	Layer name or text	レイヤー名またはテキスト
+	Layer name	レイヤー名
+	Text layer	テキストレイヤー
+	Covers most of artboard	アートボードの大部分を覆う
+	Shape layer	シェイプレイヤー
+	No strong role signal	役割を示す強い手がかりなし
+	Explicit role	明示された役割
+	Layer unavailable	レイヤーを利用できません
+	Master layers removed from variant: {count}	バリアントから削除されたマスターレイヤー: {count}
+	Overrides dropped because their layers no longer exist: {count}	レイヤーが存在しないため削除されたオーバーライド: {count}
+	Previous Artboard Variant	前のアートボードバリアント
+	Next Artboard Variant	次のアートボードバリアント
+	Select {name} ({layer})	{name} を選択 ({layer})
+	Could not select conflict layer	競合するレイヤーを選択できませんでした
+	The conflict layer no longer exists	競合するレイヤーはもう存在しません
+	Layout review: {findings} findings on {boards} artboards.	レイアウト確認: {boards} 個のアートボードに {findings} 件の問題があります。
+	Some artboards could not be checked and count as affected.	確認できなかったアートボードは問題ありとして扱われます。
+	Skip artboards with findings or incomplete checks	問題または未完了の確認があるアートボードをスキップ
+	No layout findings on {boards} artboards.	{boards} 個のアートボードにレイアウトの問題はありません。
+	Some artboard checks were incomplete; they count as affected.	確認が不完全なアートボードは問題ありとして扱われます。
+@plural	files|Saved for Web: {n} file	Web 用に {n} 個のファイルを保存しました

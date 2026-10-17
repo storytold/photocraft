@@ -4172,3 +4172,77 @@ navigator	Zoom	Zoom
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
 	{name} was changed by another app after it was opened or saved here.	Otra aplicación cambió {name} después de abrirlo o guardarlo aquí.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Reemplázalo con este documento, o cancela y usa Archivo › Guardar como para conservar ambos.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Resumen de mesas de trabajo · Todos los formatos
+	Artboard Overview	Resumen de mesas de trabajo
+	Overview · all formats	Ver todos los formatos
+	Responsive layout role	Rol del diseño adaptable
+	artboards	mesas de trabajo
+	This document has no artboards yet.	Este documento aún no tiene mesas de trabajo.
+	Select on canvas	Seleccionar en el lienzo
+	Reflow	Reflujo
+	Responsive variants	Variantes adaptables
+	Semantic reflow	Reflujo semántico
+	Proportional fit	Ajuste proporcional
+	Semantic reflow · keep type size	Reflujo semántico · conservar tamaño del texto
+	Proportional fit · scale all	Ajuste proporcional · escalar todo
+	suggested	sugerido
+	Set as master	Establecer como principal
+	Switch variant	Cambiar variante
+	Variant	Variante
+	Badge	Insignia
+	Price	Precio
+	Disclaimer	Aviso legal
+	Image mark	Marca de imagen
+	Size limits in pixels (0 = none)	Límites de tamaño en píxeles (0 = ninguno)
+	Maximum size must be at least the minimum size	El tamaño máximo debe ser al menos igual al mínimo
+	Safe area	Área segura
+	Insets as a fraction of artboard size	Márgenes como fracción del tamaño de la mesa de trabajo
+	Reset to master rule	Restablecer regla maestra
+	Update variants	Actualizar variantes
+	Variant name	Nombre de variante
+	Arrow keys navigate; Enter selects and zooms	Las flechas navegan; Intro selecciona y amplía
+	Review findings	Revisar hallazgos
+	Results are capped; some findings are omitted	Los resultados están limitados; se omiten algunos hallazgos
+	No findings to review	No hay hallazgos que revisar
+	Safe Areas	Áreas seguras
+	Responsive Template…	Plantilla adaptable…
+	Text reflow	Ajuste de texto
+	Rewrap	Reajustar
+	Rewrap with auto height	Reajustar con altura automática
+	Rewrap and shrink	Reajustar y reducir
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Avisos adaptativos
+	All findings	Todos los hallazgos
+	Outside artboard	Fuera del lienzo
+	Semantic collision	Colisión semántica
+	Safe-area violation	Incumplimiento del área segura
+	Review all findings	Revisar todos los hallazgos
+	Filter findings	Filtrar hallazgos
+	From file	Desde archivo
+	Suggested	Sugerida
+	Suggested role	Rol sugerido
+	Apply role to similar layers	Aplicar el rol a capas similares
+	Layer name or text	Nombre de capa o texto
+	Layer name	Nombre de capa
+	Text layer	Capa de texto
+	Covers most of artboard	Cubre la mayor parte de la mesa
+	Shape layer	Capa de forma
+	No strong role signal	Sin una señal clara del rol
+	Explicit role	Rol explícito
+	Layer unavailable	Capa no disponible
+	Master layers removed from variant: {count}	Capas maestras eliminadas de la variante: {count}
+	Overrides dropped because their layers no longer exist: {count}	Anulaciones descartadas porque sus capas ya no existen: {count}
+	Previous Artboard Variant	Variante de mesa de trabajo anterior
+	Next Artboard Variant	Variante de mesa de trabajo siguiente
+	Select {name} ({layer})	Seleccionar {name} ({layer})
+	Could not select conflict layer	No se pudo seleccionar la capa en conflicto
+	The conflict layer no longer exists	La capa en conflicto ya no existe
+	Layout review: {findings} findings on {boards} artboards.	Revisión del diseño: {findings} hallazgos en {boards} mesas de trabajo.
+	Some artboards could not be checked and count as affected.	No se pudieron revisar algunas mesas de trabajo y se consideran afectadas.
+	Skip artboards with findings or incomplete checks	Omitir mesas con hallazgos o comprobaciones incompletas
+	No layout findings on {boards} artboards.	No se encontraron problemas de diseño en {boards} mesas de trabajo.
+	Some artboard checks were incomplete; they count as affected.	Algunas revisiones de mesas quedaron incompletas y se consideran afectadas.
+@plural	files|Saved for Web: {n} file	Archivos: {n}|Guardado para web: {n} archivo

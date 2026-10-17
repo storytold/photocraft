@@ -120,11 +120,236 @@ fn align_glyph(ui: &egui::Ui, r: Rect, kind: &str, color: egui::Color32) {
 /// Width of the link toggle between the W and H fields (the X/Y row leaves the same gap).
 const LINK_W: f32 = 20.0;
 
+fn responsive_rule_params(
+    layer: photocraft_doc::LayerId,
+    rule: Option<&photocraft_doc::responsive::LayerLayoutRule>,
+    mode: &str,
+    horizontal: &str,
+    vertical: &str,
+    text_flow: &str,
+) -> Value {
+    let mut params = json!({"layer":layer.0,"mode":mode,"horizontal":horizontal,"vertical":vertical});
+    if let Some(rule) = rule {
+        if let Some(size) = rule.min_size {
+            params["minSize"] = json!({"width":size.width,"height":size.height});
+        }
+        if let Some(size) = rule.max_size {
+            params["maxSize"] = json!({"width":size.width,"height":size.height});
+        }
+        if let Some(size) = rule.min_font_size_pt {
+            params["minFontSizePt"] = json!(size);
+        }
+        if let Some(stack) = &rule.stack {
+            let direction = match stack.direction {
+                photocraft_doc::responsive::StackDirection::Vertical => "vertical",
+                photocraft_doc::responsive::StackDirection::Horizontal => "horizontal",
+            };
+            let alignment = match stack.alignment {
+                photocraft_doc::responsive::StackAlignment::Start => "start",
+                photocraft_doc::responsive::StackAlignment::Center => "center",
+                photocraft_doc::responsive::StackAlignment::End => "end",
+                photocraft_doc::responsive::StackAlignment::Stretch => "stretch",
+            };
+            params["stack"] = json!({"direction":direction,"alignment":alignment,"gap":stack.gap});
+        }
+    }
+    params["textFlow"] = json!(text_flow);
+    params
+}
+
 /// Pro Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
 /// sections (Character/Paragraph/Type Options for type, Appearance/Shape for shapes), then Quick
 /// Actions, all with the same collapsible headers (#155).
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut run: Vec<(String, Value)> = Vec::new();
+    let t = Tokens::get(ui.ctx());
+    if let Some(st) = app.session.active()
+        && st.doc.artboard_of(layer.id).is_some_and(|board| board != layer.id)
+    {
+        let doc = st.doc.clone();
+        let suggestion = photocraft_engine::artboard_cmds::semantic_role_suggestion(&doc, layer.id);
+        let suggestion_role = suggestion.role;
+        let selected = photocraft_engine::artboard_cmds::explicit_semantic_role(&doc, layer.id).unwrap_or("auto");
+        let source = photocraft_engine::artboard_cmds::semantic_role_source(&doc, layer.id);
+        ui.label(egui::RichText::new(tl!("Responsive layout role")).font(crate::theme::semibold(12.0)).color(t.text));
+        let role_label = |role: &str| {
+            photocraft_engine::artboard_cmds::SEMANTIC_ROLES.iter().find(|(value, _)| *value == role).map_or("Free placement", |(_, label)| *label)
+        };
+        let selected_label = if selected == "auto" {
+            format!("{} · {}: {}", tl!("Auto"), tl!("suggested"), tl!(role_label(suggestion_role)))
+        } else {
+            tl!(role_label(selected)).to_owned()
+        };
+        let source_label = match source {
+            "file" => "From file",
+            "manual" => "Manual",
+            "document" => "Document",
+            _ => "Suggested",
+        };
+        let provenance = if selected == "auto" {
+            format!("{} · {}%", tl!("Suggested"), (suggestion.confidence * 100.0).round() as u32)
+        } else {
+            tl!(source_label).to_owned()
+        };
+        ui.label(provenance).on_hover_text(format!("{}: {} · {}", tl!("Suggested role"), tl!(role_label(suggestion_role)), tl!(suggestion.evidence)));
+        let mut role = selected.to_owned();
+        egui::ComboBox::from_id_salt(("artboard-semantic-role", layer.id.0)).selected_text(selected_label).show_ui(ui, |ui| {
+            for (value, label) in photocraft_engine::artboard_cmds::SEMANTIC_ROLES {
+                let text = if *value == "auto" {
+                    format!("{} · {}: {}", tl!("Auto"), tl!("suggested"), tl!(role_label(suggestion_role)))
+                } else {
+                    tl!(*label).to_owned()
+                };
+                ui.selectable_value(&mut role, (*value).to_owned(), text);
+            }
+        });
+        let apply_similar = role != "auto" && ui.small_button(tl!("Apply role to similar layers")).clicked();
+        if apply_similar {
+            run.push(("layer.artboard.semanticRole.set".into(), json!({"layer":layer.id.0,"role":role,"applyToSimilar":true})));
+        } else if role != selected {
+            run.push(("layer.artboard.semanticRole.set".into(), json!({"layer": layer.id.0, "role": role})));
+        }
+        let board = doc.artboard_of(layer.id).unwrap_or(layer.id);
+        let variant = doc.responsive.variants.iter().find(|entry| entry.artboard == board);
+        let master_layer = variant.and_then(|entry| entry.layers.iter().find(|mapping| mapping.variant_layer == layer.id).map(|mapping| mapping.master_layer));
+        let has_variant_override = variant.is_some_and(|_| doc.responsive.overrides.iter().any(|entry| entry.variant == board && entry.layer == layer.id));
+        let rule = variant
+            .and_then(|_| doc.responsive.overrides.iter().find(|entry| entry.variant == board && entry.layer == layer.id).map(|entry| &entry.rule))
+            .or_else(|| doc.responsive.rules.iter().find(|rule| rule.layer == layer.id || master_layer == Some(rule.layer)));
+        let mode_name = |mode: photocraft_doc::responsive::ResizeMode| match mode {
+            photocraft_doc::responsive::ResizeMode::Fixed => "fixed",
+            photocraft_doc::responsive::ResizeMode::Stretch => "stretch",
+            photocraft_doc::responsive::ResizeMode::Fill => "fill",
+            photocraft_doc::responsive::ResizeMode::Fit => "fit",
+        };
+        let horizontal_name = |anchor: photocraft_doc::responsive::HorizontalAnchor| match anchor {
+            photocraft_doc::responsive::HorizontalAnchor::Left => "left",
+            photocraft_doc::responsive::HorizontalAnchor::Center => "center",
+            photocraft_doc::responsive::HorizontalAnchor::Right => "right",
+        };
+        let vertical_name = |anchor: photocraft_doc::responsive::VerticalAnchor| match anchor {
+            photocraft_doc::responsive::VerticalAnchor::Top => "top",
+            photocraft_doc::responsive::VerticalAnchor::Center => "center",
+            photocraft_doc::responsive::VerticalAnchor::Bottom => "bottom",
+        };
+        let mut mode = rule.map_or("fixed", |rule| mode_name(rule.mode)).to_owned();
+        let mut horizontal = rule.map_or("left", |rule| horizontal_name(rule.anchor.horizontal)).to_owned();
+        let mut vertical = rule.map_or("top", |rule| vertical_name(rule.anchor.vertical)).to_owned();
+        let mut min_width = rule.and_then(|rule| rule.min_size).map_or(0, |size| size.width);
+        let mut min_height = rule.and_then(|rule| rule.min_size).map_or(0, |size| size.height);
+        let mut max_width = rule.and_then(|rule| rule.max_size).map_or(0, |size| size.width);
+        let mut max_height = rule.and_then(|rule| rule.max_size).map_or(0, |size| size.height);
+        let flow_name = |flow: photocraft_doc::responsive::TextFlow| match flow {
+            photocraft_doc::responsive::TextFlow::Preserve => "preserve",
+            photocraft_doc::responsive::TextFlow::Rewrap => "rewrap",
+            photocraft_doc::responsive::TextFlow::RewrapAutoHeight => "rewrap_auto_height",
+            photocraft_doc::responsive::TextFlow::RewrapAndShrink => "rewrap_and_shrink",
+        };
+        let mut flow = rule.map_or("preserve", |rule| flow_name(rule.text_flow)).to_owned();
+        let original = (mode.clone(), horizontal.clone(), vertical.clone(), flow.clone());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("Mode")).color(t.text_dim).size(12.0));
+            egui::ComboBox::from_id_salt(("artboard-layout-mode", layer.id.0))
+                .selected_text(tl!(match mode.as_str() {
+                    "stretch" => "Stretch",
+                    "fill" => "Fill",
+                    "fit" => "Fit",
+                    _ => "Fixed",
+                }))
+                .show_ui(ui, |ui| {
+                    for (key, label) in [("fixed", "Fixed"), ("stretch", "Stretch"), ("fill", "Fill"), ("fit", "Fit")] {
+                        ui.selectable_value(&mut mode, key.to_owned(), tl!(label));
+                    }
+                });
+        });
+        egui::Grid::new(("artboard-anchor-picker", layer.id.0)).spacing([2.0, 2.0]).show(ui, |ui| {
+            for v in ["top", "center", "bottom"] {
+                for h in ["left", "center", "right"] {
+                    let glyph = match (v, h) {
+                        ("top", "left") => "↖",
+                        ("top", "center") => "↑",
+                        ("top", "right") => "↗",
+                        ("center", "left") => "←",
+                        ("center", "center") => "•",
+                        ("center", "right") => "→",
+                        ("bottom", "left") => "↙",
+                        ("bottom", "center") => "↓",
+                        _ => "↘",
+                    };
+                    let response = ui.selectable_label(horizontal == h && vertical == v, glyph).on_hover_text(format!(
+                        "{} {}",
+                        tl!(match v {
+                            "top" => "Top",
+                            "center" => "Center",
+                            _ => "Bottom",
+                        }),
+                        tl!(match h {
+                            "left" => "Left",
+                            "center" => "Center",
+                            _ => "Right",
+                        })
+                    ));
+                    if response.clicked() {
+                        horizontal = h.to_owned();
+                        vertical = v.to_owned();
+                    }
+                }
+                ui.end_row();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("Text reflow")).color(t.text_dim).size(12.0));
+            egui::ComboBox::from_id_salt(("artboard-text-flow", layer.id.0))
+                .selected_text(tl!(match flow.as_str() {
+                    "rewrap" => "Rewrap",
+                    "rewrap_auto_height" => "Rewrap with auto height",
+                    "rewrap_and_shrink" => "Rewrap and shrink",
+                    _ => "Preserve",
+                }))
+                .show_ui(ui, |ui| {
+                    for (key, label) in [
+                        ("preserve", "Preserve"),
+                        ("rewrap", "Rewrap"),
+                        ("rewrap_auto_height", "Rewrap with auto height"),
+                        ("rewrap_and_shrink", "Rewrap and shrink"),
+                    ] {
+                        ui.selectable_value(&mut flow, key.to_owned(), tl!(label));
+                    }
+                });
+        });
+        ui.label(tl!("Size limits in pixels (0 = none)"));
+        let mut limits_changed = false;
+        egui::Grid::new(("artboard-size-limits", layer.id.0)).num_columns(3).show(ui, |ui| {
+            ui.label("");
+            ui.label(tl!("Width"));
+            ui.label(tl!("Height"));
+            ui.end_row();
+            ui.label(tl!("Minimum"));
+            limits_changed |= ui.add(egui::DragValue::new(&mut min_width).range(0..=1_000_000).speed(1)).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut min_height).range(0..=1_000_000).speed(1)).changed();
+            ui.end_row();
+            ui.label(tl!("Maximum"));
+            limits_changed |= ui.add(egui::DragValue::new(&mut max_width).range(0..=1_000_000).speed(1)).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut max_height).range(0..=1_000_000).speed(1)).changed();
+            ui.end_row();
+        });
+        let invalid_limits = min_width > 0 && max_width > 0 && min_width > max_width || min_height > 0 && max_height > 0 && min_height > max_height;
+        if invalid_limits {
+            ui.colored_label(t.danger, tl!("Maximum size must be at least the minimum size"));
+        } else if limits_changed
+            || (mode.as_str(), horizontal.as_str(), vertical.as_str(), flow.as_str())
+                != (original.0.as_str(), original.1.as_str(), original.2.as_str(), original.3.as_str())
+        {
+            let mut params = responsive_rule_params(layer.id, rule, &mode, &horizontal, &vertical, &flow);
+            params["minSize"] = if min_width == 0 || min_height == 0 { Value::Null } else { json!({"width":min_width,"height":min_height}) };
+            params["maxSize"] = if max_width == 0 || max_height == 0 { Value::Null } else { json!({"width":max_width,"height":max_height}) };
+            run.push(("layer.artboard.layoutRule.set".into(), params));
+        }
+        if has_variant_override && ui.button(tl!("Reset to master rule")).clicked() {
+            run.push(("layer.artboard.layoutRule.reset".into(), json!({"layer":layer.id.0})));
+        }
+        ui.add_space(ROW_GAP);
+    }
     if let Some(s) = layer.surface() {
         let b = app.cached_bounds(layer.id.0, s);
         let u = LenUnit::of(app);

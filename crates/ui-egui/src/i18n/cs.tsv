@@ -3079,7 +3079,6 @@ cameraData	Lens	Objektiv
 	Make	Výrobce
 	Make Selection	Vytvořit výběr
 	Make Work Path	Vytvořit pracovní cestu
-	Manual	Ručně
 	Map Document	Dokument mapy
 	Map Layer	Vrstva mapy
 	Map Path	Cesta k mapě
@@ -3195,7 +3194,6 @@ cameraData	Lens	Objektiv
 	Pond Ripples	Vlnky na hladině
 	Poster Edges	Plakátové okraje
 	Posterization	Posterizace
-	Preserve	Zachovat
 	Preset Manager	Správce přednastavení
 	Preview Image	Náhled obrazu
 	Previous	Předchozí
@@ -3358,7 +3356,6 @@ cameraData	Lens	Objektiv
 	Stop	Zastavit
 	Stops	Zarážky
 	Strength	Síla
-	Stretch	Roztáhnout
 	Stroke Color	Barva tahu
 	Stroke Detail	Detail tahů
 	Stroke Direction	Směr tahů
@@ -3537,7 +3534,6 @@ curves	Smooth	Vyhladit
 	Create Vector Mask	Vytvořit vektorovou masku
 	Make Selection…	Vytvořit výběr…
 	Fill Path…	Vyplnit cestu…
-	Stroke Path…	Obtáhnout cestu…
 	Clipping Path…	Ořezová cesta…
 	Free Transform Path	Volná transformace cesty
 	Unite Shapes at Overlap	Sjednotit tvary v překryvu
@@ -3818,3 +3814,78 @@ navigator	Zoom	Zvětšení
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
 	{name} was changed by another app after it was opened or saved here.	Soubor {name} změnila jiná aplikace poté, co byl zde otevřen nebo uložen.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Nahraďte ho tímto dokumentem, nebo zrušte a použijte Soubor › Uložit jako, abyste zachovali obojí.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Přehled kreslicích pláten · všechny formáty
+	Artboard Overview	Přehled kreslicích pláten
+	Overview · all formats	Zobrazit všechny formáty
+	Responsive layout role	Role responzivního rozvržení
+	artboards	kreslicích pláten
+	This document has no artboards yet.	Tento dokument zatím nemá žádná kreslicí plátna.
+	Select on canvas	Vybrat na plátně
+	Reflow	Přizpůsobení rozvržení
+	Responsive variants	Responzivní varianty
+	Semantic reflow	Sémantické přizpůsobení
+	Proportional fit	Proporcionální přizpůsobení
+	Semantic reflow · keep type size	Sémantické přizpůsobení · zachovat velikost písma
+	Proportional fit · scale all	Proporcionální přizpůsobení · škálovat vše
+	suggested	navrženo
+	Set as master	Nastavit jako hlavní
+	Switch variant	Přepnout variantu
+	Variant	Varianta
+	Badge	Odznak
+	Price	Cena
+	Disclaimer	Vyloučení odpovědnosti
+	Image mark	Značka obrázku
+	Size limits in pixels (0 = none)	Omezení velikosti v pixelech (0 = žádné)
+	Maximum size must be at least the minimum size	Maximální velikost musí být alespoň minimální velikost
+	Safe area	Bezpečná oblast
+	Insets as a fraction of artboard size	Odsazení jako zlomek velikosti kreslicího plátna
+	Reset to master rule	Obnovit pravidlo předlohy
+	Update variants	Aktualizovat varianty
+	Variant name	Název varianty
+	Arrow keys navigate; Enter selects and zooms	Šipky navigují; Enter vybere a přiblíží
+	Review findings	Zobrazit nálezy
+	Results are capped; some findings are omitted	Výsledky jsou omezené; některé nálezy jsou skryté
+	No findings to review	Žádné nálezy ke kontrole
+	Safe Areas	Bezpečné oblasti
+	Responsive Template…	Responzivní šablona…
+	Text reflow	Zalomit text
+	Rewrap	Znovu zalomit
+	Rewrap with auto height	Znovu zalomit s automatickou výškou
+	Rewrap and shrink	Znovu zalomit a zmenšit
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Responzivní upozornění
+	All findings	Všechna zjištění
+	Outside artboard	Mimo plátno
+	Semantic collision	Sémantický střet
+	Safe-area violation	Porušení bezpečné oblasti
+	Review all findings	Zobrazit všechna zjištění
+	Filter findings	Filtrovat zjištění
+	From file	Ze souboru
+	Suggested	Návrh
+	Suggested role	Navržená role
+	Apply role to similar layers	Použít roli na podobné vrstvy
+	Layer name or text	Název vrstvy nebo text
+	Layer name	Název vrstvy
+	Text layer	Textová vrstva
+	Covers most of artboard	Pokrývá většinu plátna
+	Shape layer	Tvarová vrstva
+	No strong role signal	Žádný výrazný signál role
+	Explicit role	Explicitní role
+	Layer unavailable	Vrstva není k dispozici
+	Master layers removed from variant: {count}	Hlavní vrstvy odebrané z varianty: {count}
+	Overrides dropped because their layers no longer exist: {count}	Vypuštěná přepsání, protože jejich vrstvy už neexistují: {count}
+	Previous Artboard Variant	Předchozí varianta kreslicího plátna
+	Next Artboard Variant	Další varianta kreslicího plátna
+	Select {name} ({layer})	Vybrat {name} ({layer})
+	Could not select conflict layer	Konfliktní vrstvu nelze vybrat
+	The conflict layer no longer exists	Konfliktní vrstva již neexistuje
+	Layout review: {findings} findings on {boards} artboards.	Kontrola rozvržení: {findings} nálezů na {boards} plátnech.
+	Some artboards could not be checked and count as affected.	Některá plátna nebylo možné zkontrolovat a jsou považována za problematická.
+	Skip artboards with findings or incomplete checks	Přeskočit plátna s nálezy nebo neúplnou kontrolou
+	No layout findings on {boards} artboards.	Na {boards} plátnech nebyly nalezeny problémy s rozvržením.
+	Some artboard checks were incomplete; they count as affected.	Některé kontroly pláten nebyly úplné a jsou považovány za problematické.
+
+@plural	files|Saved for Web: {n} file	Souborů: {n}|Souborů: {n}|Uloženo pro web: {n} souborů

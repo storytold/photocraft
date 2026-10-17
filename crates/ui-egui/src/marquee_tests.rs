@@ -428,7 +428,7 @@ fn shift_alt_before_the_drag_intersects_the_selection() {
 
 /// `cargo test --release -p photocraft-ui-egui marquee_drag_bench -- --ignored --nocapture`
 #[test]
-#[ignore]
+#[ignore = "24 MP release interaction benchmark; run explicitly with --release --ignored --nocapture"]
 fn marquee_drag_bench() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 6000, "height": 4000})).unwrap();

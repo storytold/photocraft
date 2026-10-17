@@ -4129,3 +4129,44 @@ cameraRaw	Yellow	Sárga
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
 	{name} was changed by another app after it was opened or saved here.	A(z) {name} fájlt egy másik alkalmazás módosította, miután itt megnyitották vagy mentették.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Cserélje le erre a dokumentumra, vagy válassza a Mégse gombot, és a Fájl › Mentés másként paranccsal tartsa meg mindkettőt.
+	Artboard Overview	Artboard-áttekintés
+	Next Artboard Variant	Következő artboard-változat
+	Previous Artboard Variant	Előző artboard-változat
+	Responsive Template…	Reszponzív sablon…
+	Responsive Warnings	Reszponzív figyelmeztetések
+	Safe Areas	Biztonságos területek
+	Apply role to similar layers	Szerep alkalmazása hasonló rétegekre
+	Could not select conflict layer	Az ütköző réteg nem választható ki
+	Insets as a fraction of artboard size	Belső margók az artboard méretének törtjeként
+	Layout review: {findings} findings on {boards} artboards.	Elrendezés-áttekintés: {findings} találat {boards} artboardon.
+	Master layers removed from variant: {count}	Mester rétegek eltávolítva a változatból: {count}
+	Maximum size must be at least the minimum size	A maximális méret legalább a minimális méret legyen
+	More preserved layers are listed in the command result.	További megőrzött rétegek a parancs eredményében találhatók.
+	No layout findings on {boards} artboards.	Nincsenek elrendezési találatok {boards} artboardon.
+	Overrides dropped because their layers no longer exist: {count}	Elvetett felülírások, mert a rétegeik már nem léteznek: {count}
+	Overview · all formats	Áttekintés · minden formátum
+	Proportional fit	Arányos illesztés
+	Proportional fit · scale all	Arányos illesztés · mind méretezése
+	Reflow	Újrarendezés
+	Reset to master rule	Visszaállítás a mester szabályára
+	Responsive layout role	Reszponzív elrendezési szerep
+	Responsive variants	Reszponzív változatok
+	Responsive variants updated with conflicts	Reszponzív változatok frissítve, ütközésekkel
+	Safe area	Biztonságos terület
+	Semantic reflow	Szemantikus újrarendezés
+	Semantic reflow · keep type size	Szemantikus újrarendezés · betűméret megtartása
+	Set as master	Beállítás mesterként
+	Size limits in pixels (0 = none)	Méretkorlátok pixelben (0 = nincs)
+	Skip artboards with findings or incomplete checks	Artboardok kihagyása találatok vagy hiányos ellenőrzések esetén
+	Some artboard checks were incomplete; they count as affected.	Néhány artboard-ellenőrzés hiányos volt; ezek érintettnek számítanak.
+	Some artboards could not be checked and count as affected.	Néhány artboardot nem sikerült ellenőrizni, és érintettnek számítanak.
+	Suggested	Javasolt
+	Suggested role	Javasolt szerep
+	Switch variant	Váltás változatra
+	Text reflow	Szöveg újrarendezése
+	The conflict layer no longer exists	Az ütköző réteg már nem létezik
+	These local layers were preserved: {layers}	Ezek a helyi rétegek megőrződtek: {layers}
+	Update variants	Változatok frissítése
+	Variant	Változat
+	Variant name	Változat neve
+	suggested	javasolt

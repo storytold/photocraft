@@ -1131,7 +1131,7 @@ mod tests {
 
     /// Preview cost on 24 MP: `cargo test -p photocraft-ui-egui --lib bench_gallery_preview -- --ignored --nocapture`.
     #[test]
-    #[ignore]
+    #[ignore = "24 MP preview performance benchmark; run explicitly with --ignored --nocapture"]
     fn bench_gallery_preview() {
         let (w, h) = (6000, 4000);
         let canvas = Rect::new(0, 0, w, h);

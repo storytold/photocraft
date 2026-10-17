@@ -2812,3 +2812,80 @@ curves	Smooth	平滑
 	Replace	取代
 	{name} was changed by another app after it was opened or saved here.	{name} 在此處開啟或儲存後已被其他 App 更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	以此文件取代它，或取消並使用「檔案 › 另存新檔」以保留兩者。
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	畫板總覽 · 所有格式
+	Artboard Overview	畫板總覽
+	Overview · all formats	檢視所有格式
+	Responsive layout role	回應式版面角色
+	artboards	畫板
+	This document has no artboards yet.	此文件尚無畫板。
+	Select on canvas	在畫布上選取
+	Reflow	重新排版
+	Responsive variants	回應式變體
+	Semantic reflow	語意重新排版
+	Proportional fit	依比例調整
+	Semantic reflow · keep type size	語意重新排版 · 保留文字大小
+	Proportional fit · scale all	依比例調整 · 縮放全部
+	suggested	建議
+	Set as master	設為主版
+	Switch variant	切換變體
+	Variant	變體
+	Badge	徽章
+	Price	價格
+	Disclaimer	免責聲明
+	Image mark	圖像標記
+	Stretch	拉伸
+	Size limits in pixels (0 = none)	尺寸限制（像素，0 = 無）
+	Maximum size must be at least the minimum size	最大尺寸必須不小於最小尺寸
+	Safe area	安全區域
+	Insets as a fraction of artboard size	邊界佔畫板尺寸的比例
+	Reset to master rule	重設為主畫板規則
+	Update variants	更新變體
+	Variant name	變體名稱
+	Arrow keys navigate; Enter selects and zooms	使用方向鍵導覽；按 Enter 選取並縮放
+	Review findings	檢視問題
+	Results are capped; some findings are omitted	結果數量有限；部分問題未顯示
+	No findings to review	沒有可檢視的問題
+	Safe Areas	安全區域
+	Responsive Template…	回應式範本…
+	Text reflow	文字重排
+	Preserve	保留
+	Rewrap	重新換行
+	Rewrap with auto height	自動高度換行
+	Rewrap and shrink	換行並縮小
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	回應式警告
+	All findings	所有問題
+	Outside artboard	超出畫板
+	Semantic collision	語意衝突
+	Safe-area violation	安全區域違規
+	Review all findings	檢視所有問題
+	Filter findings	篩選問題
+	From file	來自檔案
+	Manual	手動
+	Suggested	建議
+	Suggested role	建議角色
+	Apply role to similar layers	將角色套用至相似圖層
+	Layer name or text	圖層名稱或文字
+	Layer name	圖層名稱
+	Text layer	文字圖層
+	Covers most of artboard	覆蓋畫板的大部分區域
+	Shape layer	形狀圖層
+	No strong role signal	沒有明顯角色訊號
+	Explicit role	明確角色
+	Layer unavailable	無法使用圖層
+	Master layers removed from variant: {count}	從變體中移除的主版圖層：{count}
+	Overrides dropped because their layers no longer exist: {count}	因圖層已不存在而移除的覆寫：{count}
+	Previous Artboard Variant	上一個畫板變體
+	Next Artboard Variant	下一個畫板變體
+	Select {name} ({layer})	選取 {name} ({layer})
+	Could not select conflict layer	無法選取衝突圖層
+	The conflict layer no longer exists	衝突圖層已不存在
+	Layout review: {findings} findings on {boards} artboards.	版面檢查：{boards} 個畫板中有 {findings} 個問題。
+	Some artboards could not be checked and count as affected.	部分畫板無法完成檢查，將視為有問題。
+	Skip artboards with findings or incomplete checks	略過有問題或檢查未完成的畫板
+	No layout findings on {boards} artboards.	{boards} 個畫板皆未發現版面問題。
+	Some artboard checks were incomplete; they count as affected.	部分畫板檢查未完成，將視為有問題。
+@plural	files|Saved for Web: {n} file	已為網頁儲存 {n} 個檔案

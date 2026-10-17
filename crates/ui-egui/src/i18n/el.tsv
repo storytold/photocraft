@@ -3910,3 +3910,77 @@ curves	Smooth	Εξομάλυνση
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
 	{name} was changed by another app after it was opened or saved here.	Το {name} άλλαξε από άλλη εφαρμογή αφού ανοίχτηκε ή αποθηκεύτηκε εδώ.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Αντικαταστήστε το με αυτό το έγγραφο ή ακυρώστε και χρησιμοποιήστε Αρχείο › Αποθήκευση ως για να κρατήσετε και τα δύο.
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Επισκόπηση artboard · Όλες οι μορφές
+	Artboard Overview	Επισκόπηση artboard
+	Overview · all formats	Εμφάνιση όλων των μορφών
+	Responsive layout role	Ρόλος responsive διάταξης
+	artboards	artboard
+	This document has no artboards yet.	Αυτό το έγγραφο δεν έχει artboard ακόμη.
+	Select on canvas	Επιλογή στον καμβά
+	Reflow	Αναδιάταξη
+	Responsive variants	Responsive παραλλαγές
+	Semantic reflow	Σημασιολογική αναδιάταξη
+	Proportional fit	Αναλογική προσαρμογή
+	Semantic reflow · keep type size	Σημασιολογική αναδιάταξη · διατήρηση μεγέθους γραμματοσειράς
+	Proportional fit · scale all	Αναλογική προσαρμογή · κλιμάκωση όλων
+	suggested	προτεινόμενο
+	Set as master	Ορισμός ως κύριου
+	Switch variant	Αλλαγή παραλλαγής
+	Variant	Παραλλαγή
+	Badge	Σήμα
+	Price	Τιμή
+	Disclaimer	Αποποίηση ευθύνης
+	Image mark	Σήμα εικόνας
+	Size limits in pixels (0 = none)	Όρια μεγέθους σε pixel (0 = χωρίς όριο)
+	Maximum size must be at least the minimum size	Το μέγιστο μέγεθος πρέπει να είναι τουλάχιστον ίσο με το ελάχιστο
+	Safe area	Περιοχή ασφαλείας
+	Insets as a fraction of artboard size	Εσωτερικά περιθώρια ως κλάσμα του μεγέθους του artboard
+	Reset to master rule	Επαναφορά στον κανόνα κύριου artboard
+	Update variants	Ενημέρωση παραλλαγών
+	Variant name	Όνομα παραλλαγής
+	Arrow keys navigate; Enter selects and zooms	Τα βέλη πλοηγούν· Enter επιλέγει και κάνει ζουμ
+	Review findings	Έλεγχος ευρημάτων
+	Results are capped; some findings are omitted	Τα αποτελέσματα περιορίζονται· ορισμένα ευρήματα παραλείπονται
+	No findings to review	Δεν υπάρχουν ευρήματα για έλεγχο
+	Safe Areas	Ασφαλείς περιοχές
+	Responsive Template…	Αποκρινόμενο πρότυπο…
+	Text reflow	Αναδίπλωση κειμένου
+	Rewrap	Αναδίπλωση
+	Rewrap with auto height	Αναδίπλωση με αυτόματο ύψος
+	Rewrap and shrink	Αναδίπλωση και σμίκρυνση
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Προειδοποιήσεις responsive
+	All findings	Όλα τα ευρήματα
+	Outside artboard	Εκτός καμβά
+	Semantic collision	Σημασιολογική σύγκρουση
+	Safe-area violation	Παραβίαση ασφαλούς περιοχής
+	Review all findings	Έλεγχος όλων των ευρημάτων
+	Filter findings	Φιλτράρισμα ευρημάτων
+	From file	Από αρχείο
+	Suggested	Πρόταση
+	Suggested role	Προτεινόμενος ρόλος
+	Apply role to similar layers	Εφαρμογή ρόλου σε παρόμοια επίπεδα
+	Layer name or text	Όνομα επιπέδου ή κείμενο
+	Layer name	Όνομα επιπέδου
+	Text layer	Επίπεδο κειμένου
+	Covers most of artboard	Καλύπτει το μεγαλύτερο μέρος του καμβά
+	Shape layer	Επίπεδο σχήματος
+	No strong role signal	Δεν υπάρχει ισχυρή ένδειξη ρόλου
+	Explicit role	Ρητός ρόλος
+	Layer unavailable	Το επίπεδο δεν είναι διαθέσιμο
+	Master layers removed from variant: {count}	Επίπεδα κύριας διάταξης που αφαιρέθηκαν από την παραλλαγή: {count}
+	Overrides dropped because their layers no longer exist: {count}	Παρακάμφθηκαν ρυθμίσεις επειδή τα επίπεδά τους δεν υπάρχουν πλέον: {count}
+	Previous Artboard Variant	Προηγούμενη παραλλαγή καμβά
+	Next Artboard Variant	Επόμενη παραλλαγή καμβά
+	Select {name} ({layer})	Επιλογή {name} ({layer})
+	Could not select conflict layer	Δεν ήταν δυνατή η επιλογή του επιπέδου διένεξης
+	The conflict layer no longer exists	Το επίπεδο διένεξης δεν υπάρχει πλέον
+	Layout review: {findings} findings on {boards} artboards.	Έλεγχος διάταξης: {findings} ευρήματα σε {boards} artboards.
+	Some artboards could not be checked and count as affected.	Ορισμένα artboards δεν ήταν δυνατό να ελεγχθούν και θεωρούνται προβληματικά.
+	Skip artboards with findings or incomplete checks	Παράλειψη artboards με ευρήματα ή μη ολοκληρωμένο έλεγχο
+	No layout findings on {boards} artboards.	Δεν βρέθηκαν προβλήματα διάταξης σε {boards} artboards.
+	Some artboard checks were incomplete; they count as affected.	Ορισμένοι έλεγχοι artboard ήταν ελλιπείς και θεωρούνται προβληματικοί.
+@plural	files|Saved for Web: {n} file	Αρχεία: {n}|Αποθηκεύτηκε για web: {n} αρχείο
