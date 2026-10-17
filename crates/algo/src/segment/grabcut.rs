@@ -144,6 +144,10 @@ pub const OBJECT_AT_WORK_PX: usize = 60_000;
 /// foreground, the cursor definite foreground, outside the box definite background), the part
 /// connected to the cursor is kept and the boundary is re-cut at full resolution, as the
 /// rectangle mode does.
+///
+/// When the whole-canvas pass finds nothing in a large document (an object only a few working
+/// pixels wide blurs into its surroundings), the search is repeated at finer steps in windows of
+/// the same working size around the point, down to full resolution.
 pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: usize) -> Option<Region> {
     if canvas.width() < 4 || canvas.height() < 4 || !x.is_finite() || !y.is_finite() {
         return None;
@@ -152,7 +156,30 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
     if !canvas.contains(px, py) {
         return None;
     }
-    let step = super::scale_for(canvas, work_px.max(1024));
+    let work_px = work_px.max(1024);
+    let mut step = super::scale_for(canvas, work_px);
+    if let Some(r) = object_in(sampler, canvas, px, py, step) {
+        return Some(r);
+    }
+    // Side (working pixels) of the square windows of the finer passes.
+    let side = (work_px as f64).sqrt() as usize;
+    while step > 1 {
+        step = (step / 4).max(1);
+        let half = (side.saturating_mul(step) / 2).min(i32::MAX as usize / 4) as i32;
+        let window = Rect::new(px.saturating_sub(half), py.saturating_sub(half), px.saturating_add(half), py.saturating_add(half)).intersect(&canvas);
+        if window.width() < 4 || window.height() < 4 {
+            continue;
+        }
+        if let Some(r) = object_in(sampler, window, px, py, step) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// One [`object_at`] pass over `canvas` (the document or a window of it) at working step `step`;
+/// `(px, py)` lies inside `canvas`.
+fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize) -> Option<Region> {
     let img = sampler.rgb_scaled(canvas, step);
     let (w, h) = (img.w, img.h);
     if w < 2 || h < 2 {

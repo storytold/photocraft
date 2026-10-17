@@ -762,6 +762,28 @@ fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     assert!(grabcut::object_at(&s, canvas, 400.0, 10.0, 0).is_none());
 }
 
+/// #6576: a 24 px object in a 4000×3000 document is found (a 1000×800 one still is).
+#[test]
+fn object_at_finds_small_object_in_large_canvas() {
+    let (w, h) = (4000usize, 3000usize);
+    let canvas = Rect::new(0, 0, w as i32, h as i32);
+    for (ox, oy, ow, oh) in [(188usize, 138usize, 24usize, 24usize), (1500, 1100, 1000, 800)] {
+        let inside = |x: usize, y: usize| x >= ox && x < ox + ow && y >= oy && y < oy + oh;
+        let img = RgbImage::from_fn(w, h, |x, y| if inside(x, y) { [0.8, 0.1, 0.1] } else { [0.9, 0.9, 0.9] });
+        let truth: Vec<bool> = (0..w * h).map(|i| inside(i % w, i / w)).collect();
+        let s = ImageSampler { img: &img, origin: (0, 0) };
+        let (cx, cy) = ((ox + ow / 2) as f32, (oy + oh / 2) as f32);
+        let reg = grabcut::object_at(&s, canvas, cx, cy, grabcut::OBJECT_AT_WORK_PX);
+        let reg = reg.unwrap_or_else(|| panic!("the {ow}×{oh} object is not found"));
+        let v = iou(&reg, &truth, w, h);
+        assert!(v > 0.8, "{ow}×{oh}: IoU {v}");
+    }
+    // The flat background around the small object is still nothing.
+    let img = RgbImage::from_fn(w, h, |x, y| if (188..212).contains(&x) && (138..162).contains(&y) { [0.8, 0.1, 0.1] } else { [0.9, 0.9, 0.9] });
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    assert!(grabcut::object_at(&s, canvas, 400.0, 300.0, grabcut::OBJECT_AT_WORK_PX).is_none());
+}
+
 // ---------- Select Subject on the cases reported in #2788 ----------
 
 /// A figure whose upper part is close to the background colour (a cream shirt on a near-white
