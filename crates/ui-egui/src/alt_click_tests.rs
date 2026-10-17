@@ -245,3 +245,14 @@ fn alt_click_with_the_zoom_tool_zooms_out_held_or_latched() {
         assert_eq!(h.state().ui.views[0].zoom, 1.0, "sticky={sticky} scrubby={scrubby}");
     }
 }
+
+#[test]
+fn alt_click_with_the_mixer_brush_samples_the_foreground() {
+    let mut h = harness(two_colours());
+    h.state_mut().ui.tool = Tool::MixerBrush;
+    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+    let rev = h.state().session.active().unwrap().revision;
+    click(&mut h, 50.0, 50.0, Modifiers::ALT);
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "⌥-click sampled red");
+    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted");
+}

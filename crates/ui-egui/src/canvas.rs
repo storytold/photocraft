@@ -4995,7 +4995,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
 /// foreground colour, as with the Eyedropper itself (#417).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Gradient | Tool::PaintBucket)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
@@ -7398,6 +7398,7 @@ mod tests {
         // Control+Alt stays the brush-resize gesture, never a sample.
         assert!(!alt_samples(Tool::Brush, egui::Modifiers { alt: true, ctrl: true, ..Default::default() }));
         assert!(!alt_samples(Tool::Eraser, alt), "⌥ with the Eraser is not the Eyedropper");
+        assert!(alt_samples(Tool::MixerBrush, alt), "⌥ with the Mixer Brush samples like the Brush");
     }
 
     /// #2078: the opaque mask-view texture must show the live stroke, not cover it with
