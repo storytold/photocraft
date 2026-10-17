@@ -444,6 +444,32 @@ fn ase_swatch_cap_is_enforced_on_hostile_input() {
     assert!(ase::parse(&f).is_ok(), "a file exactly at MAX_SWATCHES must still parse");
 }
 
+/// A file with more group starts than [`ase::MAX_GROUPS`] must be refused. Each block here is an
+/// empty group start, six bytes long.
+#[test]
+fn ase_group_cap_is_enforced_on_hostile_input() {
+    let mut block = Vec::new();
+    block.extend_from_slice(&0xC001u16.to_be_bytes()); // block type: group start
+    block.extend_from_slice(&0u32.to_be_bytes()); // empty body: no name
+
+    let total = ase::MAX_GROUPS + 1;
+    let mut f = b"ASEF".to_vec();
+    f.extend_from_slice(&1u16.to_be_bytes()); // major
+    f.extend_from_slice(&0u16.to_be_bytes()); // minor
+    f.extend_from_slice(&(total as u32).to_be_bytes());
+    for _ in 0..total {
+        f.extend_from_slice(&block);
+    }
+    assert!(matches!(ase::parse(&f), Err(PsdError::LimitExceeded(_))), "a file over MAX_GROUPS must be refused");
+    // With one block fewer the file is exactly at the cap and parses.
+    f.truncate(f.len() - block.len());
+    let trimmed = total - 1;
+    // signature (4) + major (2) + minor (2) puts the block count at offset 8.
+    f[8..12].copy_from_slice(&(trimmed as u32).to_be_bytes());
+    let parsed = ase::parse(&f).expect("a file exactly at MAX_GROUPS must still parse");
+    assert_eq!(parsed.entries.len(), ase::MAX_GROUPS, "every group up to the cap is kept");
+}
+
 /// A name longer than [`ase::MAX_NAME_UNITS`] is truncated on read rather than refused: the file
 /// is legal, only the name is long, and `read_name` is the only thing standing between the declared
 /// length and the string it builds.
