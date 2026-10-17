@@ -192,7 +192,8 @@ pub struct VectorMask {
     pub linked: bool,
     /// Density `0..=1` (Properties panel), like [`crate::LayerMask::density`].
     pub density: f32,
-    /// Feather radius in px (stored; rendered unfeathered for now).
+    /// Feather radius in px (Properties panel); the compositor blurs the rasterised path by it
+    /// (`photocraft_compose::masks::feather_sigma`), as it does a pixel mask's feather.
     pub feather: f32,
 }
 

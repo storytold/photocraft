@@ -4295,6 +4295,9 @@ shape	Appearance	Aspetto
 # View › Guides › right-click a guide
 	Edit Selected Guides	Modifica guide selezionate
 	Clear Selected Guides	Cancella guide selezionate
+	Bicubic Automatic	Bicubica automatica
+	Bicubic Smoother	Bicubica più morbida
+	Bicubic Sharper	Bicubica più nitida
 	Delete this set	Elimina questo set
 	New Set…	Nuovo set…
 	PhotoCraft Defaults	Predefiniti di PhotoCraft

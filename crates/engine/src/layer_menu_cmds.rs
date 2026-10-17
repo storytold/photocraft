@@ -876,11 +876,16 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
         return Err(bad(cmd, "Quick Export as PNG writes .png files"));
     }
     let scale = num(p, "scale", 100.0).clamp(1.0, 1000.0);
+    // Export As › Resample; checked even at 100 % so a typo never goes unnoticed.
+    let resample = match p.get("resample") {
+        None | Some(Value::Null) => crate::export_preset_cmds::DEFAULT_RESAMPLE,
+        Some(v) => crate::export_preset_cmds::export_resample(v.as_str().ok_or_else(|| bad(cmd, "`resample` must be a string"))?).map_err(|e| bad(cmd, e))?,
+    };
     if (scale - 100.0).abs() > 1e-3 {
         let mut tmp = Session::new();
         tmp.add_document(ldoc, None);
         let w = (tmp.active().map_or(1, |d| d.doc.size.width) as f32 * scale / 100.0).round().max(1.0);
-        tmp.execute("image.imageSize", json!({"width": w}))?;
+        tmp.execute("image.imageSize", json!({"width": w, "resample": resample}))?;
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
     let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;
@@ -994,7 +999,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.exportAs",
             "Export As…",
             ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100} (format from the path's extension)"##,
+            r##"{"layer":id?,"path":text,"scale":1..1000=100,"resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"} (format from the path's extension; the document is not resampled)"##,
             has_layer,
             |s, p| export_layer(s, p, "layer.exportAs", false)
         ),

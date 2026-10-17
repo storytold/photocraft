@@ -3964,6 +3964,9 @@ layerLabel	No Color	Sem cor
 # View › Guides › right-click a guide
 	Edit Selected Guides	Editar guias selecionadas
 	Clear Selected Guides	Limpar guias selecionadas
+	Bicubic Automatic	Bicúbica automática
+	Bicubic Smoother	Bicúbica mais suave
+	Bicubic Sharper	Bicúbica mais nítida
 	Delete this set	Excluir este conjunto
 	New Set…	Novo conjunto…
 	PhotoCraft Defaults	Padrões do PhotoCraft

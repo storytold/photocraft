@@ -3165,6 +3165,9 @@ curves	Smooth	Haluskan
 # View › Guides › right-click a guide
 	Edit Selected Guides	Edit Panduan Terpilih
 	Clear Selected Guides	Hapus Panduan Terpilih
+	Bicubic Automatic	Bicubic otomatis
+	Bicubic Smoother	Bicubic lebih halus
+	Bicubic Sharper	Bicubic lebih tajam
 	Delete this set	Hapus set ini
 	New Set…	Set Baru…
 	PhotoCraft Defaults	Bawaan PhotoCraft

@@ -127,9 +127,9 @@ note = "compose multichannel.rs:1 spot preview for Multichannel only"
 [[item]]
 id = "FILE-215-18"
 target = "Save for Web per-slice settings remembered; Export As remembers and offers nearest scaling"
-status = "partial"
+status = "done"
 issue = 215
-note = "Save for Web settings survive a restart through the remembered dialog settings in prefs.dialogs (web_cmds::remember_web_settings stores them on a complete export, never the destination; file_ui.rs open_web seeds from the session's last export, else the preferences). export_dialog seeds Export As the same way (seed_remembered: format, quality, transparency, scale, metadata, TGA bits) and confirm remembers them as used. Missing: Export As nearest-neighbour scaling"
+note = "Save for Web settings survive a restart through the remembered dialog settings in prefs.dialogs (web_cmds::remember_web_settings stores them on a complete export, never the destination; file_ui.rs open_web seeds from the session's last export, else the preferences). export_dialog seeds Export As the same way (seed_remembered: format, quality, transparency, scale, resample, metadata, TGA bits) and confirm remembers them as used. Export As › Image Size › Resample offers Photoshop's six methods (Bicubic Automatic default, Nearest Neighbor included; export_preset_cmds::RESAMPLE, unknown values are errors) for the exported copy only; also layer.exportAs `resample` and export presets (#5838). Tests: export_dialog nearest_neighbor_doubles_each_pixel_into_an_exact_block (8/16-bit), resample_choices_are_checked, resample_is_remembered_and_a_bad_saved_value_falls_back; layer_menu_cmds export_layer_resamples_with_the_chosen_method; tests/export_as_scaling.rs export_as_resample_menu_writes_nearest_neighbor_blocks"
 
 [[item]]
 id = "FILE-215-19"

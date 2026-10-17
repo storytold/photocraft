@@ -3660,6 +3660,9 @@ curves	Smooth	Làm mượt
 # View › Guides › right-click a guide
 	Edit Selected Guides	Sửa đường căn đã chọn
 	Clear Selected Guides	Xóa đường căn đã chọn
+	Bicubic Automatic	Bicubic tự động
+	Bicubic Smoother	Bicubic mượt hơn
+	Bicubic Sharper	Bicubic sắc hơn
 	Delete this set	Xóa bộ này
 	New Set…	Bộ mới…
 	PhotoCraft Defaults	Mặc định của PhotoCraft

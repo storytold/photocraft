@@ -2774,6 +2774,9 @@ curves	Smooth	平滑
 # View › Guides › right-click a guide
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
+	Bicubic Automatic	雙三次 (自動)
+	Bicubic Smoother	雙三次 (較平滑)
+	Bicubic Sharper	雙三次 (較銳利)
 	Delete this set	刪除此組合
 	New Set…	新增組合…
 	PhotoCraft Defaults	PhotoCraft 預設值

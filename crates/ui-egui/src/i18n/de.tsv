@@ -3176,6 +3176,9 @@ curves	Smooth	Glätten
 # View › Guides › right-click a guide
 	Edit Selected Guides	Ausgewählte Hilfslinien bearbeiten
 	Clear Selected Guides	Ausgewählte Hilfslinien löschen
+	Bicubic Automatic	Bikubisch automatisch
+	Bicubic Smoother	Bikubisch glatter
+	Bicubic Sharper	Bikubisch schärfer
 	Delete this set	Diesen Satz löschen
 	New Set…	Neuer Satz…
 	PhotoCraft Defaults	PhotoCraft-Standard

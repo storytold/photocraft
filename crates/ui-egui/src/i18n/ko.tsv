@@ -3352,6 +3352,9 @@ curves	Smooth	매끄럽게
 # View › Guides › right-click a guide
 	Edit Selected Guides	선택한 안내선 편집
 	Clear Selected Guides	선택한 안내선 지우기
+	Bicubic Automatic	쌍입방 자동
+	Bicubic Smoother	쌍입방 더 부드럽게
+	Bicubic Sharper	쌍입방 더 선명하게
 	Delete this set	이 세트 삭제
 	New Set…	새 세트…
 	PhotoCraft Defaults	PhotoCraft 기본값

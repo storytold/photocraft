@@ -3904,6 +3904,9 @@ cameraData	Lens	Lens
 # View › Guides › right-click a guide
 	Edit Selected Guides	Seçili Kılavuzları Düzenle
 	Clear Selected Guides	Seçili Kılavuzları Temizle
+	Bicubic Automatic	Bikübik Otomatik
+	Bicubic Smoother	Bikübik Pürüzsüzleştirici
+	Bicubic Sharper	Bikübik Daha Keskin
 	Delete this set	Bu Kümeyi Sil
 	New Set…	Yeni Küme…
 	PhotoCraft Defaults	PhotoCraft Varsayılanları

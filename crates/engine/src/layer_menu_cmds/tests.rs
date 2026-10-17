@@ -385,6 +385,38 @@ fn export_layer_trims_to_its_pixels() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Layer › Export As › Resample: Nearest Neighbor turns each layer pixel into an exact 2 × 2
+/// block at 200 %, an unknown method is an error (never a silent Bicubic), and the document is
+/// left as it was.
+#[test]
+fn export_layer_resamples_with_the_chosen_method() {
+    let dir = std::env::temp_dir().join(format!("pc-layer-export-resample-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for depth in [8, 16] {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |x, y| if (x + y) % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] });
+        let before = s.active().unwrap().doc.clone();
+        let path = dir.join(format!("nearest-{depth}.png"));
+        let path = path.to_string_lossy();
+        let r = s.execute("layer.exportAs", json!({"path": path, "scale": 200, "resample": "nearest"})).unwrap();
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(80), Some(60)));
+        let out = photocraft_io::import("x.png", &std::fs::read(&*path).unwrap()).unwrap().document;
+        let surf = out.layers[0].surface().unwrap();
+        for y in 0..60 {
+            for x in 0..80 {
+                let want = if (x / 2 + y / 2) % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] };
+                assert_eq!(surf.rgba(x, y), want, "{depth}-bit pixel {x},{y}");
+            }
+        }
+        for bad in [json!("lanczos"), json!("Nearest"), json!(""), json!(2)] {
+            let err = s.execute("layer.exportAs", json!({"path": path, "scale": 200, "resample": bad})).unwrap_err().to_string();
+            assert!(err.contains("resample"), "{depth}-bit {bad}: {err}");
+        }
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before), "{depth}-bit: exporting never edits the document");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn stack_modes_render_from_the_nested_layers() {
     let mut s = session(8, "rgb");

@@ -3873,6 +3873,9 @@ curves	Smooth	Згладити
 # View › Guides › right-click a guide
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
+	Bicubic Automatic	Бікубічна, автоматично
+	Bicubic Smoother	Бікубічна, гладкіша
+	Bicubic Sharper	Бікубічна, чіткіша
 	Delete this set	Видалити цей набір
 	New Set…	Новий набір…
 	PhotoCraft Defaults	Стандартні PhotoCraft

@@ -3143,6 +3143,9 @@ curves	Smooth	Сгладить
 # View › Guides › right-click a guide
 	Edit Selected Guides	Изменить выбранные направляющие
 	Clear Selected Guides	Удалить выбранные направляющие
+	Bicubic Automatic	Бикубическая, автоматически
+	Bicubic Smoother	Бикубическая, глаже
+	Bicubic Sharper	Бикубическая, чётче
 	Delete this set	Удалить этот набор
 	New Set…	Новый набор…
 	PhotoCraft Defaults	Стандартные PhotoCraft

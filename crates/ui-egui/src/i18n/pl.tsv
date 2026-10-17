@@ -3772,6 +3772,9 @@ curves	Smooth	Wygładź
 # View › Guides › right-click a guide
 	Edit Selected Guides	Edytuj zaznaczone prowadnice
 	Clear Selected Guides	Usuń zaznaczone prowadnice
+	Bicubic Automatic	Dwusześcienna automatyczna
+	Bicubic Smoother	Dwusześcienna wygładzona
+	Bicubic Sharper	Dwusześcienna wyostrzona
 	Delete this set	Usuń ten zestaw
 	New Set…	Nowy zestaw…
 	PhotoCraft Defaults	Domyślne PhotoCraft

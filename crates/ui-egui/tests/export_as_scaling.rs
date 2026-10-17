@@ -129,3 +129,82 @@ fn export_as_scales_a_narrow_image_without_editing_the_source() {
         assert_eq!(st.revision, revision, "export must not change source revision");
     }
 }
+
+/// #5838: Export As › Image Size › Resample. Choose Nearest Neighbor in the real dropdown, export
+/// at 200 %, and every source pixel arrives as an exact 2 × 2 block; the choice is remembered.
+#[test]
+fn export_as_resample_menu_writes_nearest_neighbor_blocks() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some((mut h, writes)) = harness() else { return };
+    h.run_steps(4);
+    {
+        let app = h.state_mut();
+        app.run("file.new", json!({"width": 4, "height": 3, "depth": 8, "background": "white"})).expect("new document");
+        app.session
+            .edit("checker", |doc, active| {
+                let b = doc.bounds();
+                let layer = (*active).ok_or(photocraft_engine::EngineError::NoDocument)?;
+                let surf = doc.layer_mut(layer).and_then(|l| l.surface_mut()).ok_or(photocraft_engine::EngineError::NoDocument)?;
+                let fmt = surf.format();
+                let mut data = Vec::new();
+                for y in b.y0..b.y1 {
+                    for x in b.x0..b.x1 {
+                        data.extend(photocraft_raster::from_rgba(&fmt, if (x + y) % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] }));
+                    }
+                }
+                surf.write_region(b, &data);
+                Ok(())
+            })
+            .expect("paint a checkerboard");
+        app.sync_views();
+    }
+    let source = h.state().session.active().expect("document").doc.clone();
+    let ctx = h.ctx.clone();
+    menus::invoke(h.state_mut(), &ctx, "file.export.exportAs", json!({})).expect("open Export As");
+    h.run_steps(6);
+
+    let label = h.get_by_label("Resample").rect();
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| {
+            let r = n.rect();
+            r.left() >= label.right() && (r.center().y - label.center().y).abs() < 3.0
+        })
+        .expect("Resample dropdown beside its label")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Nearest Neighbor").click();
+    h.run_steps(3);
+
+    let label = h.get_by_label("Scale").rect();
+    h.query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| {
+            let r = n.rect();
+            r.left() >= label.right() && r.left() < label.right() + 100.0 && (r.center().y - label.center().y).abs() < 3.0
+        })
+        .expect("Scale numeric field")
+        .click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("200".into()));
+    h.run_steps(3);
+    h.get_by_label("Image Size").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("8 × 6 px").is_some(), "dialog shows the requested output size");
+    evidence(&mut h, 8, "resample-dialog");
+
+    h.get_by_label("Export").click();
+    h.run_steps(6);
+    let written = writes.borrow();
+    assert_eq!(written.len(), 1, "Export writes one file");
+    let png = photocraft_io::import("out.png", &written[0].1).expect("decode the written PNG").document;
+    assert_eq!((png.size.width, png.size.height), (8, 6));
+    let surf = png.layers[0].surface().expect("pixels");
+    for y in 0..6 {
+        for x in 0..8 {
+            let want = if (x / 2 + y / 2) % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] };
+            assert_eq!(surf.rgba(x, y), want, "pixel {x},{y}");
+        }
+    }
+    let st = h.state().session.active().expect("source remains open");
+    assert!(Arc::ptr_eq(&st.doc, &source), "the source document is unchanged");
+    assert_eq!(h.state().session.prefs().dialogs["file.export.exportAs"]["resample"], "nearest", "the choice is remembered");
+}

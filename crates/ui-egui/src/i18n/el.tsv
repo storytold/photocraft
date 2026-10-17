@@ -3874,6 +3874,9 @@ curves	Smooth	Εξομάλυνση
 # View › Guides › right-click a guide
 	Edit Selected Guides	Επεξεργασία επιλεγμένων οδηγών
 	Clear Selected Guides	Απαλοιφή επιλεγμένων οδηγών
+	Bicubic Automatic	Δικυβική αυτόματη
+	Bicubic Smoother	Δικυβική πιο ομαλή
+	Bicubic Sharper	Δικυβική πιο ευκρινής
 	Delete this set	Διαγραφή αυτού του συνόλου
 	New Set…	Νέο σύνολο…
 	PhotoCraft Defaults	Προεπιλογές PhotoCraft
