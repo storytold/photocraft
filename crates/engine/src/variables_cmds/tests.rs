@@ -137,6 +137,38 @@ fn csv_import_and_apply() {
 }
 
 #[test]
+fn csv_import_ignores_utf8_bom() {
+    let dir = tmp("csv-bom");
+    let csv = format!("{dir}/sets.csv");
+
+    // BOM before the `DataSet` name column: sets keep their names.
+    let (mut s, _p, badge, title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+            {"name": "headline", "layer": title.0, "type": "textReplacement"},
+        ]}),
+    )
+    .unwrap();
+    std::fs::write(&csv, "\u{feff}DataSet,showBadge,headline\nrow-on,true,On Sale\n").unwrap();
+    let r = s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+    assert_eq!(r["imported"], 1);
+    s.execute("image.applyDataSet", json!({"name": "row-on"})).unwrap();
+    assert!(doc(&s).layer(badge).unwrap().visible);
+    assert_eq!(text_of(&s, title), "On Sale");
+
+    // BOM before a variable column (no name column): the variable is still imported.
+    let (mut s, _p, badge, title) = session();
+    s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+    let _ = badge;
+    let r = import_data_sets_text(&mut s, "\u{feff}headline\nHello\n", &json!({})).unwrap();
+    assert_eq!(r["imported"], 1);
+    s.execute("image.applyDataSet", json!({"index": 0})).unwrap();
+    assert_eq!(text_of(&s, title), "Hello");
+}
+
+#[test]
 fn csv_fields_preserve_unicode_and_quoting() {
     for (line, delimiter, expected) in [
         ("Café,Привет,日本語,👩‍🎨,e\u{301}", b',', vec!["Café", "Привет", "日本語", "👩‍🎨", "e\u{301}"]),

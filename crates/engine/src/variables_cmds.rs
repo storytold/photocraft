@@ -284,6 +284,8 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
 /// file beneath its read root and hands the text over (#3216).
 pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<Value> {
     let delim = p.get("delimiter").and_then(Value::as_str).and_then(|d| d.bytes().next()).unwrap_or(b',');
+    // Excel's "CSV UTF-8" starts with a byte order mark that is not part of the first header cell.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     let mut records = csv_records(text).filter(|r| !r.trim().is_empty());
     let header: Vec<String> = records.next().map(|h| split_csv(h, delim)).unwrap_or_default();
