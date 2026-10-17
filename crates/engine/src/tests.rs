@@ -355,6 +355,37 @@ fn new_fill_layer_with_a_missing_path_fails_without_a_layer() {
     }
 }
 
+/// #5752: `angle`/`phase` values that overflow `f32` (JSON `1e39` saturates to `inf`) are
+/// bad-params errors, not stored `inf`/`NaN` that later refuse `.pcraft` saves — and in-range
+/// angles are normalised to (-180, 180] like `gradient.fill.set`.
+#[test]
+fn fill_angles_and_phases_reject_non_finite_values() {
+    let mut s = session_with_doc();
+    let before = s.active().unwrap().doc.layers.len();
+    for (id, params) in [
+        ("layer.newFillLayer.gradient", json!({"angle": 1e39})),
+        ("layer.newFillLayer.gradient", json!({"angle": "fast"})),
+        ("gradient.presets.apply", json!({"preset": "Blue 01", "angle": -1e39})),
+        ("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard", "angle": 1e39})),
+        ("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard", "phase": [1e39, 0]})),
+        ("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard", "phase": "left"})),
+        ("edit.fill", json!({"contents": "pattern", "pattern": "Checkerboard", "angle": 1e39})),
+        ("paint.bucket", json!({"x": 1, "y": 1, "contents": "pattern", "pattern": "Checkerboard", "phase": [0, 1e39]})),
+    ] {
+        assert!(s.execute(id, params.clone()).is_err(), "{id} {params}: no error");
+        assert_eq!(s.active().unwrap().doc.layers.len(), before, "{id} {params}: added a layer");
+    }
+
+    s.execute("layer.newFillLayer.gradient", json!({"angle": 450})).unwrap();
+    let layer = &s.active().unwrap().doc.layers.last().unwrap().content;
+    let photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Gradient { angle, .. }) = layer else { panic!("expected a gradient fill layer") };
+    assert_eq!(*angle, 90.0);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard", "angle": 270})).unwrap();
+    let layer = &s.active().unwrap().doc.layers.last().unwrap().content;
+    let photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Pattern { angle, .. }) = layer else { panic!("expected a pattern fill layer") };
+    assert_eq!(*angle, -90.0);
+}
+
 #[test]
 fn every_adjustment_command_runs() {
     let mut s = session_with_doc();

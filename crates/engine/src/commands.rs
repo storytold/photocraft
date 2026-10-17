@@ -229,8 +229,14 @@ pub(crate) fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32
     p.get(key).map(|v| u32_id(cmd, key, v)).transpose()
 }
 
-fn f32_or(p: &Value, key: &str, default: f32) -> f32 {
-    p.get(key).and_then(Value::as_f64).map(|v| v as f32).unwrap_or(default)
+/// A finite `f32` angle in degrees, normalised to (-180, 180] as Photoshop's angle fields do.
+/// A present value that is not a number, or one that overflows `f32` (`1e39` saturates to `inf`),
+/// is a bad-params error — storing it would make rendering `NaN` and `.pcraft` saves fail (#5752).
+pub(crate) fn angle_deg(cmd: &str, p: &Value, key: &str, default: f32) -> Result<f32> {
+    let Some(v) = p.get(key) else { return Ok(default) };
+    let raw = v.as_f64().map(|v| v as f32).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` is a finite number (degrees)")))?;
+    let a = raw.rem_euclid(360.0);
+    Ok(if a > 180.0 { a - 360.0 } else { a })
 }
 pub(crate) fn color_param(p: &Value, key: &str, default: [f32; 4]) -> [f32; 4] {
     match p.get(key) {
@@ -1013,7 +1019,7 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let a = color_param(p, "from", s.tools.foreground);
                 let b = color_param(p, "to", s.tools.background);
-                let angle = f32_or(p, "angle", 90.0);
+                let angle = angle_deg("layer.newFillLayer.gradient", p, "angle", 90.0)?;
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {

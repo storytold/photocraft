@@ -300,19 +300,38 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "count": pats.len(), "bytes": bytes.len()}))
 }
 
-pub(crate) fn placement(p: &Value) -> (f32, f32, bool, (f32, f32)) {
-    let num = |k: &str, d: f64| p.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
-    let phase = p
-        .get("phase")
-        .and_then(Value::as_array)
-        .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0) as f32, a.get(1).and_then(Value::as_f64).unwrap_or(0.0) as f32));
-    ((num("scale", 100.0) / 100.0).clamp(0.01, 10.0), num("angle", 0.0), p.get("link").and_then(Value::as_bool).unwrap_or(true), phase)
+pub(crate) fn placement(cmd: &str, p: &Value) -> Result<(f32, f32, bool, (f32, f32))> {
+    let num = |k: &str, d: f64| -> Result<f32> {
+        match p.get(k) {
+            None => Ok(d as f32),
+            Some(v) => v.as_f64().map(|v| v as f32).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{k}` is a finite number"))),
+        }
+    };
+    let phase = match p.get("phase") {
+        None => (0.0, 0.0),
+        Some(Value::Array(a)) => {
+            let f = |i: usize| -> Result<f32> {
+                match a.get(i) {
+                    None => Ok(0.0),
+                    Some(v) => v.as_f64().map(|v| v as f32).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, "`phase` is [x, y] finite offsets")),
+                }
+            };
+            (f(0)?, f(1)?)
+        }
+        Some(_) => return Err(bad(cmd, "`phase` is [x, y]")),
+    };
+    Ok((
+        (num("scale", 100.0)? / 100.0).clamp(0.01, 10.0),
+        crate::commands::angle_deg(cmd, p, "angle", 0.0)?,
+        p.get("link").and_then(Value::as_bool).unwrap_or(true),
+        phase,
+    ))
 }
 
 /// The edit of `layer.newFillLayer.pattern`: a Pattern Fill layer of `pat` placed as `p` asks,
 /// above `active`. The Pattern Fill dialog previews it on a copy of the document.
 pub(crate) fn insert_fill_layer(doc: &mut Document, active: &mut Option<photocraft_doc::LayerId>, pat: &Pattern, p: &Value) -> Result<photocraft_doc::LayerId> {
-    let (scale, angle, link, phase) = placement(p);
+    let (scale, angle, link, phase) = placement("layer.newFillLayer.pattern", p)?;
     ensure_in_doc(doc, pat);
     let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
     let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
