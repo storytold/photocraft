@@ -65,9 +65,13 @@ pub struct TransformPreview {
     pub opacity: f32,
     /// The layers stacked over the moving one, drawn over its pixels ([`Above`]).
     above: Option<Above>,
-    /// A layer with a style: its pixels composited with the style as the box has them now,
-    /// drawn instead of the bare pixels (transform_fx.rs, #3653).
+    /// A whole layer: when it has a style (#3653) or blends in a mode other than Normal (#5513),
+    /// its pixels composited with them as the box has them now, drawn instead of the bare pixels
+    /// (transform_fx.rs).
     styled: Option<crate::transform_fx::StyledPreview>,
+    /// The selected part of a layer with a style or a blend mode: the rest of the layer, which
+    /// the preview composites the moving pixels over ([`Part`]).
+    part: Option<Part>,
     gesture: Option<Gesture>,
     /// Warp-mode drag in progress.
     warp_drag: Option<WarpDrag>,
@@ -91,6 +95,36 @@ pub struct TransformPreview {
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+}
+
+/// The rest of a layer whose selected part is moving, when the layer has a style or a blend mode.
+/// The style is drawn round the moved part and the rest together, and the two blend as one layer,
+/// so the whole layer leaves the document under the box and the preview composites the moving
+/// pixels over the rest with the layer's style and mode (transform_fx.rs), as the commit draws it.
+pub(crate) struct Part {
+    /// The rest of the layer alone: its pixels with their masks, without style, opacity or mode.
+    pub rest: Document,
+    /// Where the rest has pixels, in document pixels.
+    pub bounds: photocraft_geom::Rect,
+}
+
+impl Part {
+    /// `layer` with `rest` for its pixels.
+    fn new(doc: &Document, layer: &photocraft_doc::Layer, rest: photocraft_raster::Surface) -> Self {
+        let mut l = layer.clone();
+        l.content = LayerContent::Raster(rest);
+        l.visible = true;
+        l.clipped = false;
+        l.opacity = 1.0;
+        l.fill_opacity = 1.0;
+        l.blend = photocraft_color::BlendMode::Normal;
+        l.effects.enabled = false;
+        let bounds = photocraft_compose::layer_bounds(&l, doc.bounds());
+        let mut rest = doc.clone();
+        rest.layers = vec![l];
+        rest.selection = None;
+        Part { rest, bounds }
+    }
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.
@@ -239,9 +273,20 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // The layers covering the moving pixels draw over them instead of under them.
     let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
     above.hide_in(&mut pd.layers);
-    // A style is drawn again from the pixels as the box moves them, so they are read without it.
-    // Not for the selected part of a layer: its style belongs to that part and the rest together.
-    let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
+    // A style or a blend mode is applied again to the pixels as the box moves them (also one
+    // given while the box is open), so they are read without the layer's style, opacity and fill.
+    // The selected part of a layer with one is composited over the rest of the layer, which
+    // leaves the document under the box: the style belongs to both together, and they blend as one.
+    let blends = !matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough);
+    let part = match (&lifted, pd.layer_mut(id)) {
+        (Some(_), Some(l)) if photocraft_compose::effects::has_effects(layer) || blends => {
+            let rest = l.surface().cloned().unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8));
+            l.visible = false;
+            Some(Part::new(&doc, layer, rest))
+        }
+        _ => None,
+    };
+    let styled = lifted.is_none() || part.is_some();
     let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
@@ -251,7 +296,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
         styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: lifted.is_none() }),
+        follow: Some(Follow { revision, hidden: lifted.is_none() || part.is_some() }),
+        part,
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -364,6 +410,7 @@ pub(crate) fn begin_content_aware(
         path: None,
         content_aware: Some(live),
         styled: None,
+        part: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -473,6 +520,7 @@ fn begin_lone(
         opacity: 0.6,
         above: None,
         styled: None,
+        part: None,
         follow: None,
         committing: None,
         gesture: None,
@@ -525,6 +573,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         texture,
         opacity: 1.0,
         styled: None,
+        part: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -611,6 +660,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         opacity: 1.0,
         above: None,
         styled: None,
+        part: None,
         follow: None,
         committing: None,
         gesture: None,
@@ -2303,14 +2353,23 @@ pub(crate) fn draw_selection(
 }
 
 /// What the styled preview of the moving layer is drawn from (transform_fx.rs), at `zoom` screen
-/// pixels per document pixel. `None` for a layer without a style (also once it is switched off
-/// while the box is open) or a hidden one: the bare pixels are drawn instead. The style, opacity
-/// and fill are the layer's as they are now, so edits made while the box is open show.
+/// pixels per document pixel. `None` for a layer without a style or a blend mode it can show
+/// (also once they are switched off while the box is open) or a hidden one: the bare pixels are
+/// drawn instead. The style, blend mode, opacity and fill are the layer's as they are now, so
+/// edits made while the box is open show.
 pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Option<(&crate::transform_fx::StyledPreview, crate::transform_fx::Frame<'_>)> {
     let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
     let styled = pv.styled.as_ref().filter(|_| t.warp.is_none())?;
     let st = app.session.active().filter(|st| st.doc.id == pv.doc.id)?;
-    let layer = st.doc.layer(LayerId(t.layer)).filter(|l| l.visible && photocraft_compose::effects::has_effects(l))?;
+    let id = LayerId(t.layer);
+    let layer = st.doc.layer(id).filter(|l| l.visible)?;
+    let covering = pv.above.as_ref().map_or(&[][..], |a| &a.ids);
+    let blends = !matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+        && blends_with_canvas(&st.doc.layers, id, covering);
+    // The rest of a moving part is drawn only here, so a part session always composites.
+    if !blends && !photocraft_compose::effects::has_effects(layer) && pv.part.is_none() {
+        return None;
+    }
     let frame = crate::transform_fx::Frame {
         doc: &st.doc,
         layer,
@@ -2321,8 +2380,40 @@ pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Op
         nearest: t.interpolation == "nearest",
         zoom,
         dragging,
+        under: blends.then_some(&*pv.doc),
+        rest: pv.part.as_ref().map(|p| (&p.rest, p.bounds)),
     };
     Some((styled, frame))
+}
+
+/// Whether moving layer `id` blends with exactly what the canvas under the box shows (the
+/// preview document: the layer and the layers `covering` it left out), so its blend mode can be
+/// previewed against that. True when every layer over it is one of those covering it (or
+/// hidden), and every group holding it passes through to the layers under it untouched (Pass
+/// Through at full opacity, without masks or a style). Otherwise its mode would blend with
+/// something else (a group's own layers, or layers over it would apply to it too), and the
+/// preview draws it in Normal as before.
+fn blends_with_canvas(layers: &[photocraft_doc::Layer], id: LayerId, covering: &[LayerId]) -> bool {
+    let Some(at) = layers.iter().position(|l| contains(l, id)) else { return false };
+    let over = layers.get(at + 1..).unwrap_or_default();
+    if !over.iter().all(|l| !l.visible || covering.contains(&l.id)) {
+        return false;
+    }
+    let Some(l) = layers.get(at) else { return false };
+    if l.id == id {
+        return !l.clipped;
+    }
+    let untouched = l.blend == photocraft_color::BlendMode::PassThrough
+        && l.opacity >= 1.0
+        && l.fill_opacity >= 1.0
+        && !l.clipped
+        && l.mask.as_ref().is_none_or(|m| !m.enabled)
+        && l.vector_mask.as_ref().is_none_or(|m| !m.enabled)
+        && !photocraft_compose::effects::has_effects(l);
+    match &l.content {
+        LayerContent::Group(g) if untouched => blends_with_canvas(&g.children, id, covering),
+        _ => false,
+    }
 }
 
 /// The value shown beside the pointer while the box is dragged, like Photoshop's Show
