@@ -44,9 +44,12 @@ fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::
     let server = zbus::blocking::connection::Builder::address(address.as_str()).unwrap().name("org.freedesktop.portal.Desktop").unwrap().build().unwrap();
     let seen: Seen = Arc::default();
     let log = seen.clone();
+    // Subscribe before the client exists: a stream only sees messages that arrive after it is
+    // made, so one made in the thread could miss `SaveFile` and leave the test waiting forever.
+    let messages = zbus::blocking::MessageIterator::from(&server);
     std::thread::spawn(move || {
         let mut script = script.into_iter();
-        for msg in zbus::blocking::MessageIterator::from(&server) {
+        for msg in messages {
             let Ok(msg) = msg else { break };
             let header = msg.header();
             if header.message_type() != zbus::message::Type::MethodCall || header.member().map(|m| m.as_str()) != Some("SaveFile") {
