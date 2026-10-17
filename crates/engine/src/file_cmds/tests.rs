@@ -542,6 +542,23 @@ fn fit_image_and_conditional_mode_change() {
 }
 
 #[test]
+fn conditional_mode_change_single_gray_source_matches_grayscale() {
+    // A single `"from"` string is normalised like the array form: "gray" names Grayscale (#7042).
+    let mut s = session(4, 4, 8);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let r = s.execute("file.automate.conditionalModeChange", json!({"from": "rgb", "to": "rgb"})).unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(doc(&s).mode, ColorMode::Grayscale);
+    let r = s.execute("file.automate.conditionalModeChange", json!({"from": "gray", "to": "rgb"})).unwrap();
+    assert_eq!(r["changed"], true, "{r}");
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let r = s.execute("file.automate.conditionalModeChange", json!({"from": "Gray", "to": "rgb"})).unwrap();
+    assert_eq!(r["changed"], true, "{r}");
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+}
+
+#[test]
 fn conditional_mode_change_cannot_run_a_mode_change_the_gate_denies() {
     fn deny_mode(id: &str, _: &Value) -> Result<()> {
         if id.starts_with("image.mode.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
