@@ -102,9 +102,7 @@ fn psd_background(doc: &Document) -> Option<photocraft_doc::LayerId> {
     if canvas.is_empty() || s.content_bounds() != canvas {
         return None;
     }
-    let n = s.channels();
-    let opaque = s.read_region(canvas).chunks_exact(n).all(|p| p.last().is_some_and(|a| *a >= 1.0));
-    opaque.then_some(l.id)
+    crate::flat::opaque_surface(s, canvas).then_some(l.id)
 }
 
 /// How deep embedded documents are exported inside each other before a smart object is written
