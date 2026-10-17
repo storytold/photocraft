@@ -56,6 +56,42 @@ fn active_smart(s: &Session) -> SmartObject {
     }
 }
 
+#[test]
+fn gaussian_blur_keeps_an_opaque_scaled_smart_object_opaque_to_its_edges() {
+    let (w, h) = (128, 96);
+    let px = vec![255u8; w * h * 4];
+    let img = photocraft_codecs::Image::from_u8(w as u32, h as u32, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
+    let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    for depth in DEPTHS {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
+        crate::file_cmds::place_bytes(&mut s, "solid.png", bytes.clone(), None, &json!({})).unwrap();
+        let sm = active_smart(&s);
+        let initial = sm.cache.as_ref().expect("placing creates the initial render");
+        for (x, y) in [(0, 0), (63, 0), (0, 47), (63, 47)] {
+            assert!(initial.sample_channel(x, y, 3) >= 0.999, "{depth}-bit initial alpha at ({x},{y})");
+        }
+        let (name, source) = source_bytes(&s.active().unwrap().doc.metadata, &sm.source).unwrap();
+        let placed = place(&name, &source, s.active().unwrap().doc.pixel_format(), &sm).unwrap();
+        let corners = [(0, 0), (63, 0), (0, 47), (63, 47)];
+        for (x, y) in corners {
+            assert!(placed.sample_channel(x, y, 3) >= 0.999, "{depth}-bit placed alpha at ({x},{y})");
+        }
+        let mut sm = sm;
+        sm.smart_filters.push(SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": 10.0}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        let after = apply_smart_filters(&placed, &sm, s.active().unwrap().doc.bounds());
+        for (x, y) in corners {
+            assert!(after.sample_channel(x, y, 3) >= 0.999, "{depth}-bit blurred alpha at ({x},{y})");
+        }
+    }
+}
+
 fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }
