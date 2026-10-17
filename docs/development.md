@@ -61,6 +61,37 @@ cargo test --doc --workspace               # nextest does not run doctests
 
 [cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); a full `cargo test` stays the final check before a PR.
 
+### Shortcut capture without a GPU, and native snapshots
+
+The ordinary `shortcut_capture_tests` check modifier capture, conflicts, restored bindings and
+visible labels without starting a GPU renderer. `captured_shortcut_gpu_snapshots` repeats the Ctrl+K
+capture assertions at 1x and 2x with a native renderer when `PHOTOCRAFT_SHORTCUT_SNAPSHOTS` names
+an output directory. Its `gpu` test name selects the existing Nextest GPU group. It also holds
+`photocraft_testkit::gpu_lock`, requires successful rendering and
+checks physical image dimensions before saving both PNGs. As with the Camera Raw localization
+snapshots, pixel appearance is reviewed from the saved images rather than a golden-image test.
+
+On a native host with a working wgpu adapter, capture the two images into a fresh directory:
+
+```sh
+(
+    set -eu
+    shortcut_snapshots="$(mktemp -d)"
+    PHOTOCRAFT_SHORTCUT_SNAPSHOTS="$shortcut_snapshots" cargo test -p photocraft-ui-egui --lib \
+        prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
+    test -s "$shortcut_snapshots/ctrl-k-1x.png"
+    test -s "$shortcut_snapshots/ctrl-k-2x.png"
+    printf 'Review the shortcut row and conflict message in %s\n' "$shortcut_snapshots"
+)
+```
+
+The file checks intentionally reject a successful zero-test selection. Keep the fresh directory
+until both scales have been inspected: the row must show the captured shortcut without a stray ControlLeft
+key name, and the conflict message must remain readable. Rendering and file-write failures fail
+the opted-in test; an unset variable leaves the ordinary behavior tests available without a GPU.
+After review, remove only the two generated PNGs and their owned temporary directory. The same
+Rust test and variable work on Windows with the native shell's environment-variable syntax.
+
 ## Fonts (craft-fonts)
 
 Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts). The rules are in `craftrules/standards/fonts.md` in a sibling `craftrules` checkout (see below); that repository is not public, so outside contributors can ask a maintainer for the rules that apply to their change.
