@@ -295,6 +295,14 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
         }
         return;
     }
+    // And Liquify, which re-opens with the filter's recorded strokes.
+    if f.command == photocraft_engine::distort_cmds::LIQUIFY {
+        if let Err(e) = crate::liquify_ui::open_smart_filter(app, ctx, photocraft_doc::LayerId(layer), index) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
     // An adjustment recorded on the smart object (Brightness/Contrast, Levels…) re-opens its own
     // Image › Adjustments editor, like the filters above.
     if crate::adjust_dialog::has_dialog(&f.command) {

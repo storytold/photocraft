@@ -158,6 +158,8 @@ pub struct LiquifyDialog {
     pub dab_ms: f64,
     /// CPU time spent refreshing the zoomed-in source-resolution preview.
     pub preview_ms: f64,
+    /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
+    smart_filter: Option<usize>,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -194,6 +196,7 @@ impl LiquifyDialog {
             "dabMs": self.dab_ms,
             "fullResolutionPreview": self.view_bounds.is_some(),
             "previewMs": self.preview_ms,
+            "smartFilter": self.smart_filter,
         })
     }
 
@@ -450,10 +453,42 @@ impl LiquifyDialog {
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let canvas = app.session.active().ok_or("no document")?.doc.bounds();
+    open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)
+}
+
+/// Re-opens Liquify smart filter `index` of smart object `layer` with its recorded strokes and
+/// mesh size, previewing on the pixels below it; OK updates that filter
+/// (`layer.smartFilter.setParams`).
+pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: LayerId, index: usize) -> Result<(), String> {
+    use photocraft_engine::distort_cmds::{LIQUIFY, liquify_params};
+    let st = app.session.active().ok_or("no document")?;
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else {
+        return Err("the layer is not a smart object".into());
+    };
+    let filter = sm.smart_filters.get(index).ok_or("no such smart filter")?;
+    if filter.command != LIQUIFY {
+        return Err("the smart filter is not a Liquify filter".into());
+    }
+    let (strokes, cell) = liquify_params(LIQUIFY, &filter.params, st.doc.bounds()).map_err(|e| e.to_string())?;
+    let surf = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
+        .map_err(|e| e.to_string())?
+        .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
+    open_on(app, ctx, layer, surf, strokes, cell, Some(index))
+}
+
+fn open_on(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    layer: LayerId,
+    surf: Surface,
+    strokes: Vec<LiquifyStroke>,
+    cell: f64,
+    smart_filter: Option<usize>,
+) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let cell = auto_cell(canvas);
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
@@ -462,8 +497,8 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         layer_name: name,
         canvas,
         cell,
-        field: LiquifyField::new(canvas, cell),
-        strokes: Vec::new(),
+        field: LiquifyField::from_strokes(canvas, cell, &strokes),
+        strokes,
         redo: Vec::new(),
         cur: None,
         lasso: None,
@@ -488,6 +523,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         last_dab: 0.0,
         dab_ms: 0.0,
         preview_ms: 0.0,
+        smart_filter,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
@@ -514,11 +550,17 @@ pub fn cancel(app: &mut PhotocraftApp) {
     }
 }
 
-/// OK: runs `filter.liquify` with the recorded strokes (one history step).
+/// OK: runs `filter.liquify` with the recorded strokes (one history step). When the dialog edits
+/// a smart filter, OK updates that filter instead (also when Restore All left no strokes).
 pub fn commit(app: &mut PhotocraftApp) {
     let Some(mut d) = app.distort.liquify.take() else { return };
     remember(app, &d.opts);
     d.end();
+    if let Some(index) = d.smart_filter {
+        let params = json!({"strokes": d.strokes, "meshSize": d.cell});
+        let _ = app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": params}));
+        return;
+    }
     if d.strokes.is_empty() {
         return;
     }
@@ -1433,5 +1475,98 @@ mod tests {
         control(&mut app, &json!({"cancel": true})).unwrap();
         assert!(app.distort.liquify.is_none());
         assert_eq!(app.session.active().unwrap().history.past_len(), 2, "cancel records nothing");
+    }
+
+    /// A smart object with a Liquify smart filter (one stroke, mesh size 3) and a Gaussian Blur
+    /// above it.
+    fn smart_liquify_app() -> (PhotocraftApp, LayerId) {
+        let mut app = app_with_layer();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let stroke = json!({"tool": "forwardWarp", "size": 40, "points": [[40.0, 40.0, 1.0], [48.0, 41.0, 1.0], [56.0, 40.0, 1.0]]});
+        app.run("filter.liquify", json!({"strokes": [stroke], "meshSize": 3.0})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2.0})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        (app, layer)
+    }
+
+    fn smart(app: &PhotocraftApp, layer: LayerId) -> photocraft_doc::SmartObject {
+        match &app.session.active().unwrap().doc.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Smart(sm) => sm.clone(),
+            _ => panic!("not a smart object"),
+        }
+    }
+
+    fn drag(app: &mut PhotocraftApp, from: f64, to: f64) {
+        for ev in [ToolEvent::Down { x: from, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: to, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: to, y: 40.0 }] {
+            pointer(app, ev, egui::Modifiers::NONE);
+        }
+    }
+
+    #[test]
+    fn smart_filter_double_click_edits_the_recorded_liquify() {
+        let ctx = egui::Context::default();
+        let (mut app, layer) = smart_liquify_app();
+        let steps = app.session.active().unwrap().history.past_len();
+        let sm = smart(&app, layer);
+        let recorded: Vec<LiquifyStroke> = serde_json::from_value(sm.smart_filters[0].params["strokes"].clone()).unwrap();
+        assert_eq!(recorded.len(), 1);
+
+        crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
+        assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
+        let d = app.distort.liquify.as_ref().expect("the Liquify workspace opens");
+        assert_eq!((d.smart_filter, d.cell), (Some(0), 3.0));
+        assert_eq!(d.strokes, recorded);
+        assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, 3.0, &recorded));
+        // The preview starts from the pixels below the filter (no liquify, no blur).
+        let below = photocraft_engine::smart_cmds::render_below_filter(&app.session.active().unwrap().doc, &sm, 0).unwrap().unwrap();
+        assert_eq!(d.source.read_region(d.canvas), below.read_region(d.canvas));
+
+        drag(&mut app, 70.0, 84.0);
+        control(&mut app, &json!({"commit": true})).unwrap();
+        assert!(app.distort.liquify.is_none());
+        let sm = smart(&app, layer);
+        assert_eq!(sm.smart_filters.len(), 2, "edited in place, not added");
+        assert_eq!(sm.smart_filters[0].command, photocraft_engine::distort_cmds::LIQUIFY);
+        assert_eq!(sm.smart_filters[0].params["strokes"].as_array().map(Vec::len), Some(2));
+        assert_eq!(sm.smart_filters[0].params["meshSize"], json!(3.0));
+        assert_eq!(sm.smart_filters[1].command, "filter.blur.gaussianBlur");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(smart(&app, layer).smart_filters[0].params["strokes"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn smart_filter_cancel_keeps_and_restore_all_clears_the_recorded_strokes() {
+        let ctx = egui::Context::default();
+        let (mut app, layer) = smart_liquify_app();
+        let steps = app.session.active().unwrap().history.past_len();
+        let params = smart(&app, layer).smart_filters[0].params.clone();
+
+        open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
+        drag(&mut app, 70.0, 84.0);
+        control(&mut app, &json!({"cancel": true})).unwrap();
+        assert_eq!(smart(&app, layer).smart_filters[0].params, params, "Cancel leaves the filter as it was");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+
+        // OK after Restore All keeps the filter, with no strokes.
+        open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
+        control(&mut app, &json!({"restoreAll": true})).unwrap();
+        control(&mut app, &json!({"commit": true})).unwrap();
+        let sm = smart(&app, layer);
+        assert_eq!(sm.smart_filters.len(), 2);
+        assert_eq!(sm.smart_filters[0].params["strokes"], json!([]));
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    }
+
+    #[test]
+    fn open_smart_filter_rejects_other_filters_and_layers() {
+        let ctx = egui::Context::default();
+        let (mut app, layer) = smart_liquify_app();
+        assert!(open_smart_filter(&mut app, &ctx, layer, 1).is_err(), "the Gaussian Blur");
+        assert!(open_smart_filter(&mut app, &ctx, layer, 9).is_err(), "no such filter");
+        let mut plain = app_with_layer();
+        let pixels = plain.session.active().unwrap().active_layer.unwrap();
+        assert!(open_smart_filter(&mut plain, &ctx, pixels, 0).is_err(), "not a smart object");
+        assert!(app.distort.liquify.is_none() && plain.distort.liquify.is_none());
     }
 }
