@@ -250,8 +250,11 @@ fn package_copies_links_and_relinks() {
     crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
     let mut s = session("rgb", 8);
     s.execute("file.placeLinked", json!({"path": link})).unwrap();
-    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
-    let copied = format!("{dir}/pkg/Print Me/Links/art.png");
+    let pkg = format!("{dir}/pkg");
+    let r = s.execute("file.package", json!({"dir": pkg})).unwrap();
+    // The package folder is `dir` made absolute, which on Windows also turns its `/` into `\`.
+    let pkg = std::path::absolute(&pkg).unwrap().to_string_lossy().into_owned();
+    let copied = format!("{pkg}/Print Me/Links/art.png");
     assert_eq!(r["links"], json!([copied]));
     assert!(std::path::Path::new(&copied).is_file());
     let docp = r["document"].as_str().unwrap();
