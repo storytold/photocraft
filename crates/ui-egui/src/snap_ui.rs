@@ -235,6 +235,12 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // doesn't snap to its own layer.
         let exclude = if cut { app.session.active().map(|s| s.selected_layers()).unwrap_or_default() } else { Vec::new() };
         selection_rect(app).map(|rect| (Gesture::SelectionMove { rect }, exclude))
+    } else if tool.is_type()
+        && let Some(layer) = app.ui.text_edit.as_ref().map(|e| LayerId(e.layer))
+    {
+        // Editing type: a paragraph-box handle drag snaps to guides and other layers, not to the
+        // text being resized; a press in the text places the caret where it is (#6819).
+        crate::type_tool::box_handle_at(app, layer, p[0], p[1]).map(|_| (Gesture::Point, vec![layer]))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
     } else {

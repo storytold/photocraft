@@ -5467,7 +5467,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     polygon_click(app, x, y, mods);
                     return;
                 }
-                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask if crate::type_tool::pointer_down(app, x, y, mods) => {
+                // The Type tools pick the box handle or glyph under the press where the user
+                // clicked: the snapped press can land off an edge handle's grab area (#6819).
+                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+                    if {
+                        let [px, py] = if let ToolEvent::Down { x, y, .. } = raw { [x, y] } else { [x, y] };
+                        crate::type_tool::pointer_down(app, px, py, mods)
+                    } =>
+                {
                     return;
                 }
                 _ => {}
