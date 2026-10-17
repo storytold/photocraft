@@ -3118,6 +3118,47 @@ curves	Smooth	Lisser
 	Remove after each stroke	Supprimer après chaque trait
 	Apply the removal ({key})	Appliquer la suppression ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traits à supprimer : {n} (Entrée applique, Échap annule)
+
+# Help › System Info
+	Application	Application
+	Display	Affichage
+	Platform	Plateforme
+	Adapter	Adaptateur
+	Backend	Backend
+	Driver	Pilote
+	GPU preference	Préférence GPU
+	At launch	Au lancement
+	Compositor	Compositeur
+	Monitor	Moniteur
+	Images: {images}. Window: {window}.	Images : {images}. Fenêtre : {window}.
+	Discrete GPU	GPU dédié
+	Integrated GPU	GPU intégré
+	Virtual GPU	GPU virtuel
+	Other GPU	Autre GPU
+	Unknown adapter	Adaptateur inconnu
+	Software graphics	Graphisme logiciel
+	{display} (main)	{display} (principal)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Rendu d'image par CPU ; aucun adaptateur graphique logiciel n'est disponible, la fenêtre utilise donc le matériel graphique
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Graphismes Intel sous Windows : DirectX 12 (le pilote Vulkan Intel est connu pour planter)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu : moteur CPU pour ce lancement
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} remplace le backend
+	the previous start didn't finish on {backend}; using {next}	Le démarrage précédent ne s'est pas terminé sur {backend} ; utilisation de {next}
+	this platform doesn't report display profiles	Cette plateforme ne signale pas de profils d'écran
+	the display profile hasn't been read yet	Le profil d'écran n'a pas encore été lu
+	{display} has no ICC profile	{display} n'a pas de profil ICC
+	the display profile can't be read: {error}	Le profil d'écran ne peut pas être lu : {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` est un profil {space}, pas RVB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` ne peut pas servir de profil d'écran : {error}
+	GPU device lost	Périphérique GPU perdu
+	GPU device lost: {detail}	Périphérique GPU perdu : {detail}
+	GPU error: {detail}	Erreur GPU : {detail}
+	previous reading kept; the last re-read failed: {reason}	Lecture précédente conservée ; la dernière relecture a échoué : {reason}
+	auto	automatique
+	manual	manuel
+	fallback	repli
+
 	Show home recent files	Afficher les fichiers récents sur l'écran d'accueil
 	Clear Brush Controls	Effacer les commandes de pinceau
 	Reset All Locked Settings	Réinitialiser tous les paramètres verrouillés

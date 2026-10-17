@@ -3875,6 +3875,46 @@ curves	Smooth	Vloeiend maken
 	Remove after each stroke	Verwijderen na elke streek
 	Apply the removal ({key})	Verwijdering toepassen ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Streken om te verwijderen: {n} (Enter past toe, Esc annuleert)
+
+# Help › System Info
+	Application	Programma
+	Platform	Platform
+	Adapter	Adapter
+	Backend	Backend
+	Driver	Stuurprogramma
+	GPU preference	GPU-voorkeur
+	At launch	Bij het starten
+	Compositor	Compositor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Afbeeldingen: {images}. Venster: {window}.
+	Discrete GPU	Discrete GPU
+	Integrated GPU	Geïntegreerde GPU
+	Virtual GPU	Virtuele GPU
+	Other GPU	Andere GPU
+	Unknown adapter	Onbekende adapter
+	Software graphics	Softwaregrafiek
+	{display} (main)	{display} (hoofdvenster)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU-beeldweergave; er is geen softwarematige grafische adapter, dus het venster gebruikt hardwaregrafiek
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Intel-grafiek op Windows: DirectX 12 (het Intel Vulkan-stuurprogramma staat bekend om crashes)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: CPU-renderer voor deze start
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} overschrijft de backend
+	the previous start didn't finish on {backend}; using {next}	De vorige start is niet afgemaakt op {backend}; {next} wordt gebruikt
+	this platform doesn't report display profiles	Dit platform meldt geen beeldschermprofielen
+	the display profile hasn't been read yet	Het beeldschermprofiel is nog niet gelezen
+	{display} has no ICC profile	{display} heeft geen ICC-profiel
+	the display profile can't be read: {error}	Het beeldschermprofiel kan niet worden gelezen: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` is een {space}-profiel, geen RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` kan niet als beeldschermprofiel worden gebruikt: {error}
+	GPU device lost	GPU-apparaat verloren
+	GPU device lost: {detail}	GPU-apparaat verloren: {detail}
+	GPU error: {detail}	GPU-fout: {detail}
+	previous reading kept; the last re-read failed: {reason}	Vorige uitlezing behouden; de laatste herlezing is mislukt: {reason}
+	auto	automatisch
+	fallback	terugval
+	manual	handmatig
+
 	Show home recent files	Recente bestanden tonen op het startscherm
 	Clear Brush Controls	Penseelbesturing wissen
 	Reset All Locked Settings	Alle vergrendelde instellingen opnieuw instellen

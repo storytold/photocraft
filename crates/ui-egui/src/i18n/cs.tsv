@@ -3723,6 +3723,42 @@ navigator	Zoom	Zvětšení
 	Remove after each stroke	Odstranit po každém tahu
 	Apply the removal ({key})	Použít odstranění ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tahy k odstranění: {n} (Enter použije, Esc zruší)
+
+# Help › System Info
+	Application	Aplikace
+	Platform	Platforma
+	Adapter	Adaptér
+	Backend	Backend
+	Driver	Ovladač
+	GPU preference	Předvolba GPU
+	At launch	Při spuštění
+	Compositor	Kompozitor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Obrazy: {images}. Okno: {window}.
+	Discrete GPU	Dedikovaná GPU
+	Integrated GPU	Integrovaná GPU
+	Virtual GPU	Virtuální GPU
+	Other GPU	Jiná GPU
+	Unknown adapter	Neznámý adaptér
+	Software graphics	Softwarová grafika
+	{display} (main)	{display} (hlavní)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Vykreslování obrazu na CPU; není k dispozici softwarový grafický adaptér, okno proto používá hardwarovou grafiku
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Grafika Intel ve Windows: DirectX 12 (ovladač Intel Vulkan je známý pády)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: CPU renderer pro toto spuštění
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} přepisuje backend
+	the previous start didn't finish on {backend}; using {next}	Předchozí spuštění neskončilo na {backend}; používá se {next}
+	this platform doesn't report display profiles	Tato platforma nehlásí profily displeje
+	the display profile hasn't been read yet	Profil displeje ještě nebyl načten
+	{display} has no ICC profile	{display} nemá ICC profil
+	the display profile can't be read: {error}	Profil displeje nelze přečíst: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` je profil {space}, ne RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` nelze použít jako profil displeje: {error}
+	GPU device lost	GPU zařízení ztraceno
+	GPU device lost: {detail}	GPU zařízení ztraceno: {detail}
+	GPU error: {detail}	Chyba GPU: {detail}
+
 	Show home recent files	Zobrazit nedávné soubory na úvodní obrazovce
 	Clear Brush Controls	Obnovit ovládací prvky stopy
 	Reset All Locked Settings	Obnovit všechna zamknutá nastavení

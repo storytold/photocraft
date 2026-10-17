@@ -3105,6 +3105,47 @@ curves	Smooth	Haluskan
 	Remove after each stroke	Hapus setelah setiap goresan
 	Apply the removal ({key})	Terapkan penghapusan ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Goresan untuk dihapus: {n} (Enter menerapkan, Esc membatalkan)
+
+# Help › System Info
+	Application	Aplikasi
+	Display	Layar
+	Platform	Platform
+	Adapter	Adaptor
+	Backend	Backend
+	Driver	Driver
+	GPU preference	Preferensi GPU
+	At launch	Saat mulai
+	Compositor	Kompositor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Gambar: {images}. Jendela: {window}.
+	Discrete GPU	GPU diskret
+	Integrated GPU	GPU terintegrasi
+	Virtual GPU	GPU virtual
+	Other GPU	GPU lain
+	Unknown adapter	Adaptor tidak diketahui
+	Software graphics	Grafis perangkat lunak
+	{display} (main)	{display} (utama)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Perenderan gambar CPU; tidak ada adaptor grafis perangkat lunak, jadi jendela memakai grafis perangkat keras
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Grafis Intel di Windows: DirectX 12 (driver Vulkan Intel diketahui sering mogok)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: perender CPU untuk peluncuran ini
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} menimpa backend
+	the previous start didn't finish on {backend}; using {next}	Peluncuran sebelumnya tidak selesai di {backend}; memakai {next}
+	this platform doesn't report display profiles	Platform ini tidak melaporkan profil tampilan
+	the display profile hasn't been read yet	Profil tampilan belum dibaca
+	{display} has no ICC profile	{display} tidak punya profil ICC
+	the display profile can't be read: {error}	Profil tampilan tidak dapat dibaca: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` adalah profil {space}, bukan RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` tidak dapat dipakai sebagai profil tampilan: {error}
+	GPU device lost	Perangkat GPU hilang
+	GPU device lost: {detail}	Perangkat GPU hilang: {detail}
+	GPU error: {detail}	Galat GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Pembacaan sebelumnya dipertahankan; pembacaan ulang terakhir gagal: {reason}
+	auto	otomatis
+	manual	manual
+	fallback	cadangan
+
 	Show home recent files	Tampilkan file terbaru di layar beranda
 	Clear Brush Controls	Hapus Kontrol Kuas
 	Reset All Locked Settings	Atur Ulang Semua Pengaturan Terkunci

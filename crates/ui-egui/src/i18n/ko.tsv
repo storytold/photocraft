@@ -3290,6 +3290,48 @@ curves	Smooth	매끄럽게
 	Remove after each stroke	획마다 제거
 	Apply the removal ({key})	제거 적용 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	제거할 획: {n} (Enter 적용, Esc 취소)
+
+# Help › System Info
+	Application	애플리케이션
+	Display	디스플레이
+	Platform	플랫폼
+	Adapter	어댑터
+	Backend	백엔드
+	Driver	드라이버
+	GPU preference	GPU 기본 설정
+	At launch	실행 시
+	Compositor	컴포지터
+	Monitor	모니터
+	Images: {images}. Window: {window}.	이미지: {images}. 창: {window}.
+	Discrete GPU	독립형 GPU
+	Integrated GPU	내장 GPU
+	Virtual GPU	가상 GPU
+	Other GPU	기타 GPU
+	Unknown adapter	알 수 없는 어댑터
+	Software graphics	소프트웨어 그래픽
+	{display} (main)	{display} (주)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU로 이미지를 렌더링합니다. 소프트웨어 그래픽 어댑터가 없어 창은 하드웨어 그래픽을 사용합니다
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Windows의 Intel 그래픽: DirectX 12 (Intel Vulkan 드라이버는 충돌하는 것으로 알려져 있습니다)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: 이번 실행은 CPU 렌더러
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value}이(가) 백엔드를 덮어씁니다
+	the previous start didn't finish on {backend}; using {next}	이전 실행이 {backend}에서 끝나지 않았습니다. {next}을(를) 사용합니다
+	this platform doesn't report display profiles	이 플랫폼은 디스플레이 프로파일을 보고하지 않습니다
+	the display profile hasn't been read yet	디스플레이 프로파일을 아직 읽지 않았습니다
+	{display} has no ICC profile	{display}에 ICC 프로파일이 없습니다
+	the display profile can't be read: {error}	디스플레이 프로파일을 읽을 수 없습니다: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}`은(는) {space} 프로파일이며 RGB가 아닙니다
+	`{profile}` can't be used as a display profile: {error}	`{profile}`은(는) 디스플레이 프로파일로 쓸 수 없습니다: {error}
+	GPU device lost	GPU 장치가 손실되었습니다
+	GPU device lost: {detail}	GPU 장치가 손실되었습니다: {detail}
+	GPU error: {detail}	GPU 오류: {detail}
+	previous reading kept; the last re-read failed: {reason}	이전 읽기를 유지합니다. 마지막 다시 읽기에 실패했습니다: {reason}
+	auto	자동
+	manual	수동
+	fallback	대체
+	Unknown	알 수 없음
+
 	Show home recent files	홈 화면에 최근 파일 표시
 	Clear Brush Controls	브러시 제어 지우기
 	Reset All Locked Settings	모든 잠긴 설정 재설정

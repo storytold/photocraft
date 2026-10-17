@@ -4079,6 +4079,42 @@ navigator	Zoom	Zoom
 	Remove after each stroke	Rimuovi dopo ogni tratto
 	Apply the removal ({key})	Applica la rimozione ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tratti da rimuovere: {n} (Invio applica, Esc annulla)
+
+# Help › System Info
+	Application	Applicazione
+	Platform	Piattaforma
+	Adapter	Adattatore
+	Backend	Backend
+	Driver	Driver
+	GPU preference	Preferenza GPU
+	At launch	All'avvio
+	Compositor	Compositore
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Immagini: {images}. Finestra: {window}.
+	Discrete GPU	GPU dedicata
+	Integrated GPU	GPU integrata
+	Virtual GPU	GPU virtuale
+	Other GPU	Altra GPU
+	Unknown adapter	Adattatore sconosciuto
+	Software graphics	Grafica software
+	{display} (main)	{display} (principale)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Rendering immagine via CPU; non c'è un adattatore grafico software, quindi la finestra usa la grafica hardware
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Grafica Intel su Windows: DirectX 12 (il driver Vulkan Intel è noto per bloccarsi)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: renderer CPU per questo avvio
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} sostituisce il backend
+	the previous start didn't finish on {backend}; using {next}	L'avvio precedente non è terminato su {backend}; si usa {next}
+	this platform doesn't report display profiles	Questa piattaforma non segnala profili dello schermo
+	the display profile hasn't been read yet	Il profilo dello schermo non è stato ancora letto
+	{display} has no ICC profile	{display} non ha un profilo ICC
+	the display profile can't be read: {error}	Il profilo dello schermo non può essere letto: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` è un profilo {space}, non RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` non può essere usato come profilo dello schermo: {error}
+	GPU device lost	Dispositivo GPU perso
+	GPU device lost: {detail}	Dispositivo GPU perso: {detail}
+	GPU error: {detail}	Errore GPU: {detail}
+
 	Show home recent files	Mostra i file recenti nella schermata iniziale
 	Clear Brush Controls	Cancella controlli pennello
 	Reset All Locked Settings	Ripristina tutte le impostazioni bloccate

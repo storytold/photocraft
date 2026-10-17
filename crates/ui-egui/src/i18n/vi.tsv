@@ -3597,6 +3597,47 @@ curves	Smooth	Làm mượt
 	Remove after each stroke	Xóa sau mỗi nét vẽ
 	Apply the removal ({key})	Áp dụng việc xóa ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Nét vẽ cần xóa: {n} (Enter áp dụng, Esc hủy)
+
+# Help › System Info
+	Application	Ứng dụng
+	Display	Màn hình
+	Platform	Nền tảng
+	Adapter	Bộ chuyển đổi
+	Backend	Backend
+	Driver	Trình điều khiển
+	GPU preference	Tùy chọn GPU
+	At launch	Khi khởi động
+	Compositor	Trình tổng hợp
+	Monitor	Màn hình
+	Images: {images}. Window: {window}.	Hình ảnh: {images}. Cửa sổ: {window}.
+	Discrete GPU	GPU rời
+	Integrated GPU	GPU tích hợp
+	Virtual GPU	GPU ảo
+	Other GPU	GPU khác
+	Unknown adapter	Bộ chuyển đổi không rõ
+	Software graphics	Đồ họa phần mềm
+	{display} (main)	{display} (chính)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Kết xuất ảnh bằng CPU; không có bộ chuyển đổi đồ họa phần mềm, nên cửa sổ dùng đồ họa phần cứng
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Đồ họa Intel trên Windows: DirectX 12 (trình điều khiển Vulkan của Intel được biết là hay gặp sự cố)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: bộ kết xuất CPU cho lần khởi động này
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} ghi đè backend
+	the previous start didn't finish on {backend}; using {next}	Lần khởi động trước không xong trên {backend}; dùng {next}
+	this platform doesn't report display profiles	Nền tảng này không báo cáo hồ sơ màn hình
+	the display profile hasn't been read yet	Hồ sơ màn hình chưa được đọc
+	{display} has no ICC profile	{display} không có hồ sơ ICC
+	the display profile can't be read: {error}	Không đọc được hồ sơ màn hình: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` là hồ sơ {space}, không phải RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` không dùng được làm hồ sơ màn hình: {error}
+	GPU device lost	Mất thiết bị GPU
+	GPU device lost: {detail}	Mất thiết bị GPU: {detail}
+	GPU error: {detail}	Lỗi GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Giữ lần đọc trước; lần đọc lại gần nhất thất bại: {reason}
+	auto	tự động
+	manual	thủ công
+	fallback	dự phòng
+
 	Show home recent files	Hiện tệp gần đây trên màn hình chính
 	Clear Brush Controls	Xóa điều khiển cọ
 	Reset All Locked Settings	Đặt lại tất cả cài đặt đã khóa

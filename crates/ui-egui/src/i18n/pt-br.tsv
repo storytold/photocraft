@@ -3905,6 +3905,46 @@ layerLabel	No Color	Sem cor
 	Remove after each stroke	Remover após cada traço
 	Apply the removal ({key})	Aplicar a remoção ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traços a remover: {n} (Enter aplica, Esc cancela)
+
+# Help › System Info
+	Application	Aplicativo
+	Platform	Plataforma
+	Adapter	Adaptador
+	Backend	Backend
+	Driver	Driver
+	GPU preference	Preferência de GPU
+	At launch	Na inicialização
+	Compositor	Compositor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Imagens: {images}. Janela: {window}.
+	Discrete GPU	GPU dedicada
+	Integrated GPU	GPU integrada
+	Virtual GPU	GPU virtual
+	Other GPU	Outra GPU
+	Unknown adapter	Adaptador desconhecido
+	Software graphics	Gráficos por software
+	{display} (main)	{display} (principal)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Renderização de imagem na CPU; não há adaptador gráfico por software, então a janela usa gráficos por hardware
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Gráficos Intel no Windows: DirectX 12 (o driver Vulkan da Intel é conhecido por travar)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: renderizador de CPU para esta inicialização
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} substitui o backend
+	the previous start didn't finish on {backend}; using {next}	A inicialização anterior não terminou em {backend}; usando {next}
+	this platform doesn't report display profiles	Esta plataforma não informa perfis de tela
+	the display profile hasn't been read yet	O perfil de tela ainda não foi lido
+	{display} has no ICC profile	{display} não tem perfil ICC
+	the display profile can't be read: {error}	Não foi possível ler o perfil de tela: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` é um perfil {space}, não RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` não pode ser usado como perfil de tela: {error}
+	GPU device lost	Dispositivo GPU perdido
+	GPU device lost: {detail}	Dispositivo GPU perdido: {detail}
+	GPU error: {detail}	Erro de GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Leitura anterior mantida; a última releitura falhou: {reason}
+	auto	automático
+	fallback	reserva
+	manual	manual
+
 	Show home recent files	Mostrar arquivos recentes na tela inicial
 	Clear Brush Controls	Limpar controles de pincel
 	Reset All Locked Settings	Redefinir todas as configurações bloqueadas

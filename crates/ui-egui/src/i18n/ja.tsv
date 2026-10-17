@@ -3725,6 +3725,48 @@ curves	Smooth	スムーズ
 	No object found there — drag a rectangle around it	そこにオブジェクトが見つかりません — 周囲に矩形をドラッグしてください
 	Remove after each stroke	ストロークごとに削除
 	Apply the removal ({key})	削除を適用 ({key})
+
+# Help › System Info
+	Application	アプリケーション
+	Display	ディスプレイ
+	Platform	プラットフォーム
+	Adapter	アダプター
+	Backend	バックエンド
+	Driver	ドライバー
+	GPU preference	GPU の優先設定
+	At launch	起動時
+	Compositor	コンポジター
+	Monitor	モニター
+	Images: {images}. Window: {window}.	画像: {images}。ウィンドウ: {window}。
+	Discrete GPU	ディスクリート GPU
+	Integrated GPU	統合 GPU
+	Virtual GPU	仮想 GPU
+	Other GPU	その他の GPU
+	Unknown adapter	不明なアダプター
+	Software graphics	ソフトウェア描画
+	{display} (main)	{display}（メイン）
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU で画像を描画しています。ソフトウェアのグラフィックアダプターがないため、ウィンドウはハードウェアグラフィックスを使います
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Windows の Intel グラフィックス: DirectX 12（Intel の Vulkan ドライバーはクラッシュすることで知られています）
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: この起動では CPU レンダラー
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} がバックエンドを上書きします
+	the previous start didn't finish on {backend}; using {next}	前回の起動は {backend} で完了しませんでした。{next} を使います
+	this platform doesn't report display profiles	このプラットフォームはディスプレイプロファイルを報告しません
+	the display profile hasn't been read yet	ディスプレイプロファイルはまだ読み込まれていません
+	{display} has no ICC profile	{display} には ICC プロファイルがありません
+	the display profile can't be read: {error}	ディスプレイプロファイルを読み取れません: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` は {space} プロファイルであり、RGB ではありません
+	`{profile}` can't be used as a display profile: {error}	`{profile}` はディスプレイプロファイルとして使えません: {error}
+	GPU device lost	GPU デバイスが失われました
+	GPU device lost: {detail}	GPU デバイスが失われました: {detail}
+	GPU error: {detail}	GPU エラー: {detail}
+	previous reading kept; the last re-read failed: {reason}	前回の読み取りを維持しました。最後の再読み取りに失敗しました: {reason}
+	auto	自動
+	manual	手動
+	fallback	代替
+
+
 	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n}（Enter で適用、Esc で取り消し）
 	Show home recent files	ホーム画面に最近使ったファイルを表示
 

@@ -3829,6 +3829,46 @@ cameraData	Lens	Lens
 @plural	{n} step|{n} steps	{n} adım
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} fırça ön ayarı uyarısı daha)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} uyarı ile
+
+# Help › System Info
+	Application	Uygulama
+	Platform	Platform
+	Adapter	Bağdaştırıcı
+	Backend	Backend
+	Driver	Sürücü
+	GPU preference	GPU tercihi
+	At launch	Başlangıçta
+	Compositor	Birleştirici
+	Monitor	Monitör
+	Images: {images}. Window: {window}.	Görüntüler: {images}. Pencere: {window}.
+	Discrete GPU	Ayrık GPU
+	Integrated GPU	Tümleşik GPU
+	Virtual GPU	Sanal GPU
+	Other GPU	Diğer GPU
+	Unknown adapter	Bilinmeyen bağdaştırıcı
+	Software graphics	Yazılımsal grafik
+	{display} (main)	{display} (ana)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU ile görüntü işleme; yazılım grafik bağdaştırıcısı yok, bu yüzden pencere donanım grafiğini kullanıyor
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Windows'ta Intel grafikleri: DirectX 12 (Intel Vulkan sürücüsünün çöktüğü bilinir)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: bu başlangıç için CPU işleyici
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} backend'i geçersiz kılar
+	the previous start didn't finish on {backend}; using {next}	Önceki başlangıç {backend} üzerinde bitmedi; {next} kullanılıyor
+	this platform doesn't report display profiles	Bu platform görüntü profillerini bildirmiyor
+	the display profile hasn't been read yet	Görüntü profili henüz okunmadı
+	{display} has no ICC profile	{display} için ICC profili yok
+	the display profile can't be read: {error}	Görüntü profili okunamıyor: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` bir {space} profilidir, RGB değil
+	`{profile}` can't be used as a display profile: {error}	`{profile}` görüntü profili olarak kullanılamaz: {error}
+	GPU device lost	GPU aygıtı kayboldu
+	GPU device lost: {detail}	GPU aygıtı kayboldu: {detail}
+	GPU error: {detail}	GPU hatası: {detail}
+	previous reading kept; the last re-read failed: {reason}	Önceki okuma korundu; son yeniden okuma başarısız: {reason}
+	auto	otomatik
+	fallback	yedek
+	manual	manuel
+
 	Response curve	Yanıt eğrisi
 	Show home recent files	Ana ekranda son dosyaları göster
 	Clear Brush Controls	Fırça Denetimlerini Temizle

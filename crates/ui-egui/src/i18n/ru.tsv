@@ -3063,6 +3063,47 @@ curves	Smooth	Сгладить
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)
+
+# Help › System Info
+	Application	Приложение
+	Display	Дисплей
+	Platform	Платформа
+	Adapter	Адаптер
+	Backend	Бэкенд
+	Driver	Драйвер
+	GPU preference	Предпочтение GPU
+	At launch	При запуске
+	Compositor	Композитор
+	Monitor	Монитор
+	Images: {images}. Window: {window}.	Изображения: {images}. Окно: {window}.
+	Discrete GPU	Дискретная GPU
+	Integrated GPU	Встроенная GPU
+	Virtual GPU	Виртуальная GPU
+	Other GPU	Другая GPU
+	Unknown adapter	Неизвестный адаптер
+	Software graphics	Программная графика
+	{display} (main)	{display} (основной)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Визуализация изображения на CPU; нет программного графического адаптера, поэтому окно использует аппаратную графику
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Графика Intel в Windows: DirectX 12 (драйвер Intel Vulkan известен сбоями)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: рендерер CPU для этого запуска
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} переопределяет бэкенд
+	the previous start didn't finish on {backend}; using {next}	Предыдущий запуск не завершился на {backend}; используется {next}
+	this platform doesn't report display profiles	Эта платформа не сообщает профили дисплея
+	the display profile hasn't been read yet	Профиль дисплея ещё не прочитан
+	{display} has no ICC profile	У {display} нет профиля ICC
+	the display profile can't be read: {error}	Не удаётся прочитать профиль дисплея: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` — профиль {space}, не RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` нельзя использовать как профиль дисплея: {error}
+	GPU device lost	Устройство GPU потеряно
+	GPU device lost: {detail}	Устройство GPU потеряно: {detail}
+	GPU error: {detail}	Ошибка GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Сохранено предыдущее чтение; последнее повторное чтение не удалось: {reason}
+	auto	автоматически
+	manual	вручную
+	fallback	запасной
+
 	Show home recent files	Показывать недавние файлы на домашнем экране
 	Clear Brush Controls	Очистить параметры кисти
 	Reset All Locked Settings	Сбросить все заблокированные параметры

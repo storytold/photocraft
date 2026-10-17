@@ -227,13 +227,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             // The About window: room for the contributor table, the same width on every tab.
             let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
+            let system_info = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true);
             if about_tabs {
                 ui.set_min_width(700.0);
+            }
+            if system_info {
+                ui.set_min_width(560.0);
             }
             ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
                 800.0
             } else if about_tabs {
                 700.0
+            } else if system_info {
+                560.0
             } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
                 600.0
             } else if compact {
@@ -283,14 +289,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                 }
                 DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
-                    let lines = crate::gpu_status::system_info_ui(app);
-                    for l in &lines {
-                        ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
-                    }
-                    ui.add_space(8.0);
-                    if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
-                        ui.ctx().copy_text(crate::gpu_status::system_info(app).join("\n"));
-                    }
+                    crate::gpu_status::show_system_info(app, ui);
                 }
                 DialogKind::About => {
                     // Tabs About · Contributors · Models (craftrules standards/contributors.md). The

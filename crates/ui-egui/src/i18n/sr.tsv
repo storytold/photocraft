@@ -4224,6 +4224,39 @@ shape	Appearance	Izgled
 	Color Indicates:	Boja označava:
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
+
+# Help › System Info
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: CPU renderer za ovo pokretanje
+	Adapter	Adapter
+	Application	Aplikacija
+	At launch	Pri pokretanju
+	Backend	Backend
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Renderovanje slike procesorom; softverski grafički adapter nije dostupan, pa prozor koristi hardversku grafiku
+	Compositor	Kompozitor
+	Discrete GPU	Diskretna GPU
+	Driver	Upravljački program
+	GPU device lost	GPU uređaj je izgubljen
+	GPU device lost: {detail}	GPU uređaj je izgubljen: {detail}
+	GPU error: {detail}	Greška GPU-a: {detail}
+	GPU preference	GPU podešavanje
+	Integrated GPU	Integrisana GPU
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Intel grafika na Windowsu: DirectX 12 (Intel Vulkan upravljački program je poznat po padovima)
+	Monitor	Monitor
+	Other GPU	Druga GPU
+	Platform	Platforma
+	Software graphics	Softverska grafika
+	Unknown adapter	Nepoznat adapter
+	Virtual GPU	Virtuelna GPU
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} menja backend
+	`{profile}` can't be used as a display profile: {error}	`{profile}` se ne može koristiti kao profil monitora: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` je profil {space}, a ne RGB
+	the display profile can't be read: {error}	Profil monitora se ne može pročitati: {error}
+	the display profile hasn't been read yet	Profil monitora još nije pročitan
+	the previous start didn't finish on {backend}; using {next}	Prethodno pokretanje se nije završilo na {backend}; koristi se {next}
+	this platform doesn't report display profiles	Ova platforma ne prijavljuje profile monitora
+	{display} (main)	{display} (glavni)
+	{display} has no ICC profile	{display} nema ICC profil
+
 	Redrawing	Ponovno iscrtavanje
 	Response curve	Kriva odziva
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice

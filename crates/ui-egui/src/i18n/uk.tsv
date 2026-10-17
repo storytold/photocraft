@@ -3814,6 +3814,47 @@ curves	Smooth	Згладити
 	Remove after each stroke	Видаляти після кожного штриха
 	Apply the removal ({key})	Застосувати видалення ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихів для видалення: {n} (Enter застосовує, Esc скасовує)
+
+# Help › System Info
+	Application	Програма
+	Display	Дисплей
+	Platform	Платформа
+	Adapter	Адаптер
+	Backend	Бекенд
+	Driver	Драйвер
+	GPU preference	Параметр GPU
+	At launch	Під час запуску
+	Compositor	Композитор
+	Monitor	Монітор
+	Images: {images}. Window: {window}.	Зображення: {images}. Вікно: {window}.
+	Discrete GPU	Дискретна GPU
+	Integrated GPU	Вбудована GPU
+	Virtual GPU	Віртуальна GPU
+	Other GPU	Інша GPU
+	Unknown adapter	Невідомий адаптер
+	Software graphics	Програмна графіка
+	{display} (main)	{display} (основний)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Візуалізація зображення на CPU; немає програмного графічного адаптера, тож вікно використовує апаратну графіку
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Графіка Intel у Windows: DirectX 12 (драйвер Intel Vulkan відомий збоями)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: рендерер CPU для цього запуску
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} замінює бекенд
+	the previous start didn't finish on {backend}; using {next}	Попередній запуск не завершився на {backend}; використовується {next}
+	this platform doesn't report display profiles	Ця платформа не повідомляє профілі дисплея
+	the display profile hasn't been read yet	Профіль дисплея ще не прочитано
+	{display} has no ICC profile	{display} не має профілю ICC
+	the display profile can't be read: {error}	Не вдається прочитати профіль дисплея: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` — профіль {space}, не RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` не можна використати як профіль дисплея: {error}
+	GPU device lost	Пристрій GPU втрачено
+	GPU device lost: {detail}	Пристрій GPU втрачено: {detail}
+	GPU error: {detail}	Помилка GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Збережено попереднє зчитування; останнє повторне зчитування не вдалося: {reason}
+	auto	автоматично
+	manual	вручну
+	fallback	запасний
+
 	Show home recent files	Показувати нещодавні файли на головному екрані
 	Clear Brush Controls	Очистити параметри пензля
 	Reset All Locked Settings	Скинути всі заблоковані параметри

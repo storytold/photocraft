@@ -4017,6 +4017,42 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
+
+# Help › System Info
+	Application	Alkalmazás
+	Platform	Platform
+	Adapter	Adapter
+	Backend	Backend
+	Driver	Illesztőprogram
+	GPU preference	GPU-beállítás
+	At launch	Indításkor
+	Compositor	Kompozitor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Képek: {images}. Ablak: {window}.
+	Discrete GPU	Dedikált GPU
+	Integrated GPU	Integrált GPU
+	Virtual GPU	Virtuális GPU
+	Other GPU	Egyéb GPU
+	Unknown adapter	Ismeretlen adapter
+	Software graphics	Szoftveres grafika
+	{display} (main)	{display} (fő)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU-s képalkotás; nincs szoftveres grafikus adapter, ezért az ablak hardveres grafikát használ
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Intel grafika Windows alatt: DirectX 12 (az Intel Vulkan illesztőprogramjáról ismert, hogy összeomlik)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: CPU-megjelenítő ehhez az indításhoz
+	WGPU_BACKEND={value} overrides the backend	A WGPU_BACKEND={value} felülbírálja a backendet
+	the previous start didn't finish on {backend}; using {next}	Az előző indítás nem fejeződött be ezen: {backend}; {next} használata
+	this platform doesn't report display profiles	Ez a platform nem közöl megjelenítőprofilokat
+	the display profile hasn't been read yet	A megjelenítőprofil még nincs beolvasva
+	{display} has no ICC profile	{display} nem rendelkezik ICC-profillal
+	the display profile can't be read: {error}	A megjelenítőprofil nem olvasható: {error}
+	`{profile}` is a {space} profile, not RGB	A(z) `{profile}` {space}-profil, nem RGB
+	`{profile}` can't be used as a display profile: {error}	A(z) `{profile}` nem használható megjelenítőprofilként: {error}
+	GPU device lost	A GPU-eszköz elveszett
+	GPU device lost: {detail}	A GPU-eszköz elveszett: {detail}
+	GPU error: {detail}	GPU-hiba: {detail}
+
 	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
 	Response curve	Válaszgörbe
 	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn

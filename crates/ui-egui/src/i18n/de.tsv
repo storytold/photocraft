@@ -2811,7 +2811,6 @@ curves	Smooth	Glätten
 # Document Info and color profiles
 	Author Title	Position des Urhebers
 	Copyright Status	Urheberrechtsstatus
-	Unknown	Unbekannt
 	Copyrighted	Urheberrechtlich geschützt
 	Public Domain	Gemeinfrei
 	Copyright Url	Urheberrechts-URL
@@ -3113,6 +3112,48 @@ curves	Smooth	Glätten
 	Remove after each stroke	Nach jedem Strich entfernen
 	Apply the removal ({key})	Entfernen anwenden ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Striche zum Entfernen: {n} (Eingabe wendet an, Esc bricht ab)
+
+# Help › System Info
+	Application	Anwendung
+	Display	Anzeige
+	Platform	Plattform
+	Adapter	Adapter
+	Backend	Backend
+	Driver	Treiber
+	GPU preference	GPU-Präferenz
+	At launch	Beim Start
+	Compositor	Kompositor
+	Monitor	Monitor
+	Images: {images}. Window: {window}.	Bilder: {images}. Fenster: {window}.
+	Discrete GPU	Dedizierte GPU
+	Integrated GPU	Integrierte GPU
+	Virtual GPU	Virtuelle GPU
+	Other GPU	Andere GPU
+	Unknown adapter	Unbekannter Adapter
+	Software graphics	Softwaregrafik
+	{display} (main)	{display} (Hauptfenster)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU-Bildrendering; kein Software-Grafikadapter verfügbar, daher nutzt das Fenster Hardwaregrafik
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Intel-Grafik unter Windows: DirectX 12 (der Intel-Vulkan-Treiber stürzt bekanntermaßen ab)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: CPU-Renderer für diesen Start
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} setzt das Backend außer Kraft
+	the previous start didn't finish on {backend}; using {next}	Der vorherige Start wurde auf {backend} nicht fertig; es wird {next} verwendet
+	this platform doesn't report display profiles	Diese Plattform meldet keine Monitorprofile
+	the display profile hasn't been read yet	Das Monitorprofil wurde noch nicht gelesen
+	{display} has no ICC profile	{display} hat kein ICC-Profil
+	the display profile can't be read: {error}	Das Monitorprofil kann nicht gelesen werden: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` ist ein {space}-Profil, kein RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` kann nicht als Monitorprofil verwendet werden: {error}
+	GPU device lost	GPU-Gerät verloren
+	GPU device lost: {detail}	GPU-Gerät verloren: {detail}
+	GPU error: {detail}	GPU-Fehler: {detail}
+	previous reading kept; the last re-read failed: {reason}	Vorherige Abfrage behalten; das letzte erneute Lesen ist fehlgeschlagen: {reason}
+	auto	automatisch
+	manual	manuell
+	fallback	Ersatz
+	Unknown	Unbekannt
+
 	Show home recent files	Zuletzt geöffnete Dateien auf dem Startbildschirm anzeigen
 	Clear Brush Controls	Pinselsteuerungen löschen
 	Reset All Locked Settings	Alle gesperrten Einstellungen zurücksetzen

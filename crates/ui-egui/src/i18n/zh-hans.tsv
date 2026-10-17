@@ -2726,6 +2726,48 @@ curves	Smooth	平滑
 	Remove after each stroke	每次描边后移除
 	Apply the removal ({key})	应用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描边：{n}（Enter 应用，Esc 取消）
+
+# Help › System Info
+	Application	应用程序
+	Display	显示
+	Platform	平台
+	Adapter	适配器
+	Backend	后端
+	Driver	驱动程序
+	GPU preference	GPU 偏好
+	At launch	启动时
+	Compositor	合成器
+	Monitor	显示器
+	Images: {images}. Window: {window}.	图像：{images}。窗口：{window}。
+	Discrete GPU	独立 GPU
+	Integrated GPU	集成 GPU
+	Virtual GPU	虚拟 GPU
+	Other GPU	其他 GPU
+	Unknown adapter	未知适配器
+	Software graphics	软件图形
+	{display} (main)	{display}（主）
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	正在用 CPU 渲染图像；没有可用的软件图形适配器，因此窗口使用硬件图形
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Windows 上的 Intel 显卡：使用 DirectX 12（Intel 的 Vulkan 驱动已知会崩溃）
+	--safe-gpu: CPU renderer for this launch	--safe-gpu：本次启动使用 CPU 渲染器
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} 覆盖了后端
+	the previous start didn't finish on {backend}; using {next}	上次启动在 {backend} 上没有完成；改用 {next}
+	this platform doesn't report display profiles	此平台不报告显示器配置文件
+	the display profile hasn't been read yet	尚未读取显示器配置文件
+	{display} has no ICC profile	{display} 没有 ICC 配置文件
+	the display profile can't be read: {error}	无法读取显示器配置文件：{error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` 是 {space} 配置文件，不是 RGB
+	`{profile}` can't be used as a display profile: {error}	`{profile}` 不能用作显示器配置文件：{error}
+	GPU device lost	GPU 设备丢失
+	GPU device lost: {detail}	GPU 设备丢失：{detail}
+	GPU error: {detail}	GPU 错误：{detail}
+	previous reading kept; the last re-read failed: {reason}	保留上次的读取；最近一次重新读取失败：{reason}
+	auto	自动
+	manual	手动
+	fallback	回退
+	Unknown	未知
+
 	Show home recent files	在主屏幕上显示最近的文件
 	Clear Brush Controls	清除画笔控件
 	Reset All Locked Settings	复位所有锁定的设置

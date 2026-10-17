@@ -3813,6 +3813,46 @@ curves	Smooth	Εξομάλυνση
 	Remove after each stroke	Αφαίρεση μετά από κάθε πινελιά
 	Apply the removal ({key})	Εφαρμογή της αφαίρεσης ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Πινελιές προς αφαίρεση: {n} (Enter εφαρμόζει, Esc ακυρώνει)
+
+# Help › System Info
+	Application	Εφαρμογή
+	Platform	Πλατφόρμα
+	Adapter	Προσαρμογέας
+	Backend	Backend
+	Driver	Οδηγός
+	GPU preference	Προτίμηση GPU
+	At launch	Κατά την εκκίνηση
+	Compositor	Συνθέτης
+	Monitor	Οθόνη
+	Images: {images}. Window: {window}.	Εικόνες: {images}. Παράθυρο: {window}.
+	Discrete GPU	Διακριτή GPU
+	Integrated GPU	Ενσωματωμένη GPU
+	Virtual GPU	Εικονική GPU
+	Other GPU	Άλλη GPU
+	Unknown adapter	Άγνωστος προσαρμογέας
+	Software graphics	Γραφικά λογισμικού
+	{display} (main)	{display} (κύρια)
+
+# Help › System Info diagnostics
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	Απόδοση εικόνας στην CPU· δεν υπάρχει προσαρμογέας γραφικών λογισμικού, οπότε το παράθυρο χρησιμοποιεί γραφικά υλικού
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Γραφικά Intel στα Windows: DirectX 12 (ο οδηγός Vulkan της Intel είναι γνωστό ότι κρασάρει)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: απόδοση CPU για αυτή την εκκίνηση
+	WGPU_BACKEND={value} overrides the backend	Το WGPU_BACKEND={value} παρακάμπτει το backend
+	the previous start didn't finish on {backend}; using {next}	Η προηγούμενη εκκίνηση δεν ολοκληρώθηκε στο {backend}· χρησιμοποιείται το {next}
+	this platform doesn't report display profiles	Αυτή η πλατφόρμα δεν αναφέρει προφίλ οθόνης
+	the display profile hasn't been read yet	Το προφίλ οθόνης δεν έχει διαβαστεί ακόμη
+	{display} has no ICC profile	Η οθόνη {display} δεν έχει προφίλ ICC
+	the display profile can't be read: {error}	Το προφίλ οθόνης δεν μπορεί να διαβαστεί: {error}
+	`{profile}` is a {space} profile, not RGB	Το `{profile}` είναι προφίλ {space}, όχι RGB
+	`{profile}` can't be used as a display profile: {error}	Το `{profile}` δεν μπορεί να χρησιμοποιηθεί ως προφίλ οθόνης: {error}
+	GPU device lost	Η συσκευή GPU χάθηκε
+	GPU device lost: {detail}	Η συσκευή GPU χάθηκε: {detail}
+	GPU error: {detail}	Σφάλμα GPU: {detail}
+	previous reading kept; the last re-read failed: {reason}	Διατηρήθηκε η προηγούμενη ανάγνωση· η τελευταία επανάληψη απέτυχε: {reason}
+	auto	αυτόματα
+	fallback	εναλλακτική
+	manual	χειροκίνητα
+
 	Show home recent files	Εμφάνιση πρόσφατων αρχείων στην αρχική οθόνη
 	Clear Brush Controls	Απαλοιφή στοιχείων ελέγχου πινέλου
 	Reset All Locked Settings	Επαναφορά όλων των κλειδωμένων ρυθμίσεων
