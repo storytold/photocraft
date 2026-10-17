@@ -134,8 +134,19 @@ fn floats(v: &Value) -> Option<Vec<f64>> {
     }
 }
 
+/// Spot colours defined through spot colours. A spot colour (`Pant`) is read through its RGB
+/// equivalent, else its base colour, which in real files hold plain colours. Colours are shared
+/// objects, so one can link to itself, and with both links followed at every level a colour read
+/// costs up to 2^(depth+1) lookups.
+const MAX_SPOT_DEPTH: usize = 4;
+
 /// A colour object (`RGBA`, `HSLA`, `CMYK`, `GRAY`, `LABA`, `Pant`).
 pub(crate) fn color(r: &mut Reader, id: ObjId) -> Option<Color> {
+    color_at(r, id, 0)
+}
+
+/// [`color`] of an object `depth` spot colours down.
+fn color_at(r: &mut Reader, id: ObjId, depth: usize) -> Option<Color> {
     let s = r.s;
     let class = s.class(id)?;
     let col = || -> Option<Vec<f64>> {
@@ -166,8 +177,12 @@ pub(crate) fn color(r: &mut Reader, id: ObjId) -> Option<Color> {
             Color::Lab { l: 100.0 * u(0)?, a: 255.0 * u(1)? - 128.0, b: 255.0 * u(2)? - 128.0, alpha: u(3)? }
         }
         b"Pant" => {
+            if depth >= MAX_SPOT_DEPTH {
+                r.warn("spot colours nested deeper than 4 levels (left empty)");
+                return None;
+            }
             r.warn("spot colours (imported as their RGB equivalent)");
-            return s.obj(id, b"srgb").and_then(|c| color(r, c)).or_else(|| s.obj(id, b"base").and_then(|c| color(r, c)));
+            return s.obj(id, b"srgb").and_then(|c| color_at(r, c, depth + 1)).or_else(|| s.obj(id, b"base").and_then(|c| color_at(r, c, depth + 1)));
         }
         b"RegC" => Color::Cmyk { c: 1.0, m: 1.0, y: 1.0, k: 1.0, a: 1.0 },
         _ => {
