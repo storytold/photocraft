@@ -1504,17 +1504,43 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             };
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, mnemonic, |ui, nav| {
-                    let r = ui.menu_button(title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
-                    if r.inner.is_some() {
+                    let (response, inner) = submenu_row(ui, title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
+                    if inner.is_some() {
                         // Where the submenu hangs from, to keep it below the menu bar (#319).
-                        nav.set_anchor(depth, r.response.rect);
+                        nav.set_anchor(depth, response.rect);
                     }
-                    (r.response, ())
+                    (response, ())
                 });
             });
             last_was_sep = false;
         }
     }
+}
+
+/// A submenu row, drawn as `ui.menu_button` draws it, except that a row scrolled out of view
+/// doesn't open its submenu. egui opens a submenu whenever the pointer is over its row, clipped
+/// or not: a menu reopened scrolled down (after Edit › Preferences or Window › Theme) has rows
+/// hidden above its view, over the menu bar, and the hidden one under the title opened on the
+/// press; the release on the title then counted as a click outside that submenu and closed the
+/// whole menu (#5896, #6225). An open submenu (e.g. opened from the keyboard) is drawn as usual.
+fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
+    use egui::containers::menu::{MenuState, SubMenu, SubMenuButton};
+    let sub = SubMenu::id_from_widget_id(ui.next_auto_id());
+    let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(sub));
+    let inactive = ui.style().visuals.widgets.inactive;
+    if open {
+        ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
+    }
+    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::RIGHT_ARROW));
+    ui.style_mut().visuals.widgets.inactive = inactive;
+    // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
+    let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
+    if hidden && !open {
+        return (response, None);
+    }
+    let inner = SubMenu::new().show(ui, &response, content);
+    (response, inner.map(|r| r.inner))
 }
 
 /// A submenu header is enabled only while some item under it (at any depth) can run, so a

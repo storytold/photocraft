@@ -844,3 +844,62 @@ fn heading_is_the_triangle_to_the_submenus_near_edge() {
     assert!(!heading(egui::pos2(150.0, 110.0), egui::pos2(170.0, 160.0), left));
     assert!(!heading(from, from, egui::Rect::NOTHING));
 }
+
+/// #5896, #6225: a menu scrolled down (to reach Edit › Preferences or Window › Theme) reopens
+/// scrolled, with the rows above its view lying over the menu bar. egui opens a submenu when the
+/// pointer is over its row even where the row is scrolled out of sight, so a hidden submenu row
+/// under the title opened on the press and the click on the title then closed the whole menu.
+/// Rows out of view must not open their submenus: the menu stays open.
+#[test]
+fn a_scrolled_menu_reopens_and_stays_open_with_a_hidden_submenu_row_under_its_title() {
+    use egui::{Modifiers, PointerButton};
+    for top in ["Edit", "Window"] {
+        let mut h = harness((1280.0, 420.0, 1.0));
+        open(&mut h, top);
+        let title = h.get_by_label(top).rect().center();
+        let view = Nav::current(&h.ctx).views[0];
+        assert!(Nav::current(&h.ctx).contents[0] > view.height() + 1.0, "{top} must overflow for this test to mean anything");
+        // Scroll to the end, then back up until a submenu row is out of view right under the title.
+        h.hover_at(egui::pos2(view.center().x, view.bottom() - 2.0));
+        let wheel = |h: &mut Harness<'static, PhotocraftApp>, dy: f32| {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, dy),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            h.run_steps(1);
+        };
+        for _ in 0..60 {
+            wheel(&mut h, -60.0);
+        }
+        let under = |h: &Harness<'static, PhotocraftApp>| {
+            rows(h, 0).iter().any(|r| r.command.is_none() && r.enabled && r.rect.x_range().contains(title.x) && r.rect.y_range().contains(title.y))
+        };
+        for _ in 0..400 {
+            if under(&h) {
+                break;
+            }
+            wheel(&mut h, 8.0);
+        }
+        assert!(under(&h), "{top}: a submenu row scrolled under the title");
+        key(&mut h, egui::Key::Escape);
+        assert!(!is_open(&h.ctx), "{top}: Esc closed it");
+        // Click the title again: press, release, as a mouse does.
+        h.hover_at(title);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        // Per frame after the click: is the menu open, and how many levels are drawn?
+        let frames: Vec<(bool, usize)> = (0..6)
+            .map(|_| {
+                h.run_steps(1);
+                let nav = Nav::current(&h.ctx);
+                (nav.rows.first().is_some_and(|r| !r.is_empty()), nav.rows.len())
+            })
+            .collect();
+        assert!(frames.iter().all(|f| f.0), "{top}: the menu closed again right after the click: {frames:?}");
+        assert!(frames.iter().all(|f| f.1 == 1), "{top}: a submenu scrolled out of view opened under the title: {frames:?}");
+    }
+}
