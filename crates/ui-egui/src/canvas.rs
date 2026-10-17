@@ -5935,15 +5935,29 @@ pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64
     [from[0] + length * angle.cos(), from[1] + length * angle.sin()]
 }
 
+/// How close (in document units) a click must land to a polygon's first vertex to close it: 8
+/// points on screen, but never more than a quarter of the outline's own on-screen size (at least
+/// 1 point), so the last corner of a small shape doesn't close it early (#6578).
+pub(crate) fn polygon_close_reach(points: impl IntoIterator<Item = [f64; 2]>, point_zoom: f32) -> f64 {
+    let zoom = f64::from(point_zoom.max(0.01));
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in points.into_iter().filter(|p| p.iter().all(|n| n.is_finite())) {
+        lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+        hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+    }
+    let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]) * zoom;
+    let screen = if extent.is_finite() { (extent / 4.0).clamp(1.0, 8.0) } else { 8.0 };
+    screen / zoom
+}
+
 /// A polygonal lasso click adds a vertex; clicking near the first vertex closes the polygon. The
 /// first click fixes the selection mode; a new-selection polygon hides the old outline while it is
 /// drawn, and replaces it in one history step when it closes.
 fn polygon_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    let close = app
-        .ui
-        .polygon
-        .first()
-        .is_some_and(|p0| app.ui.polygon.len() >= 3 && ((p0[0] - x).powi(2) + (p0[1] - y).powi(2)).sqrt() < 8.0 / app.point_zoom().max(0.01) as f64);
+    let close =
+        app.ui.polygon.first().is_some_and(|p0| {
+            app.ui.polygon.len() >= 3 && (p0[0] - x).hypot(p0[1] - y) < polygon_close_reach(app.ui.polygon.iter().copied(), app.point_zoom())
+        });
     if close {
         commit_polygon(app);
         return;

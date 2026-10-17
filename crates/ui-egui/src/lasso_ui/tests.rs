@@ -306,6 +306,28 @@ fn clicking_the_last_point_again_closes_the_outline() {
     assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 100, 0) > 0.9);
 }
 
+/// #6578: Alt-clicking the four corners of a small square leaves the outline open (the last corner
+/// lands within 8 points of the first, but is a new vertex); a click on the first point closes it.
+#[test]
+fn alt_clicking_the_last_corner_of_a_small_shape_does_not_close_it() {
+    let mut app = app();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].fit_pending = false;
+    assert_eq!(app.point_zoom(), 1.0);
+    for [x, y] in [[100.0, 100.0], [106.0, 100.0], [106.0, 106.0], [100.0, 106.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+        assert!(active(&app), "corner ({x}, {y}): the outline stays open");
+    }
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 4, "four corners");
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    event(&mut app, "down", 100.0, 100.0, Modifiers::ALT);
+    assert!(!active(&app), "a click on the first point closes");
+    let b = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    let close_to = |v: i32, want: i32| v.abs_diff(want) <= 1;
+    assert!(close_to(b.x0, 100) && close_to(b.y0, 100) && close_to(b.x1, 106) && close_to(b.y1, 106), "a square, not a triangle: {b:?}");
+}
+
 /// ⌘ (Ctrl) with the Lasso is the Move tool for the drag: through the real canvas, a ⌘-drag outside
 /// the selection (here: without one) moves the layer and draws no outline (`canvas::command_moves_layer`).
 #[test]
