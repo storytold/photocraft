@@ -2618,3 +2618,22 @@ fn pass_through_clipping_base_with_an_adjustment() {
     d.layers.push(clip);
     check(&mut g, &d, "pass-through clipping base with an adjustment");
 }
+
+/// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
+/// Fill, #5692); the GPU has no pass for it and leaves such documents to the CPU. Other modes look
+/// the same either way and stay on the GPU.
+#[test]
+fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(64, 48);
+    let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
+    l.blend = BlendMode::ColorDodge;
+    l.opacity = 0.53;
+    l.advanced.transparency_shapes = false;
+    d.layers.push(l);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "Color Dodge with Transparency Shapes Layer off");
+    if let Some(l) = d.layers.last_mut() {
+        l.blend = BlendMode::Multiply;
+    }
+    check(&mut g, &d, "Multiply with Transparency Shapes Layer off");
+}

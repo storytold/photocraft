@@ -1465,12 +1465,12 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
             *p = psblend::composite(BlendMode::Normal, *p, *s, 1.0);
             p[3] *= mask_k(&mask, i);
         }
-        blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, 1.0);
+        blend_layer_into(backdrop, &content, layer, cx, 1.0);
         return;
     }
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
-    blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, text_gamma(layer));
+    blend_layer_into(backdrop, &content, layer, cx, text_gamma(layer));
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -1848,6 +1848,30 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
 /// Blend an isolated layer buffer into the backdrop.
 fn blend_into(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32) {
     blend_into_g(backdrop, src, mode, opacity, 1.0);
+}
+
+/// `layer`'s masked content `src` blended into the backdrop with its own mode, Opacity and Fill
+/// ([`blend_into_fill`]). With Transparency Shapes Layer off, the special eight
+/// ([`psblend::fill_is_special`]) take the layer's own transparency (its content's alpha, not its
+/// masks) inside the blend, as Fill: Photoshop composites a pixel of alpha `a` at Fill `f` as
+/// an opaque one at Fill `a × f`, covering the backdrop with Opacity × masks only. Other modes
+/// look the same either way (#5692).
+fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx, gamma: f32) {
+    let (mode, opacity, fill) = (layer.blend, layer.opacity, layer.fill_opacity);
+    if layer.advanced.transparency_shapes || !psblend::fill_is_special(mode) {
+        return blend_into_fill(backdrop, src, mode, opacity, fill, gamma);
+    }
+    let mv = mask_vals(layer, backdrop.rect, cx);
+    let fill = fill.clamp(0.0, 1.0);
+    for (i, (b, s)) in backdrop.px.iter_mut().zip(&src.px).enumerate() {
+        // `src` carries alpha × masks; split them again.
+        let m = mv.as_ref().map_or(1.0, |v| v.get(i).copied().unwrap_or(1.0));
+        if s[3] <= 0.0 || m <= 0.0 {
+            continue;
+        }
+        let alpha = (s[3] / m).clamp(0.0, 1.0);
+        *b = psblend::composite_fill(mode, *b, [s[0], s[1], s[2], m], opacity, fill * alpha, gamma);
+    }
 }
 
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
