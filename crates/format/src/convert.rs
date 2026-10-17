@@ -237,7 +237,8 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
             psd_resources: d.metadata.psd_resources.iter().map(|(id, n, b)| (*id, n.clone(), sink.blob(b))).collect(),
-            psd_global_blocks: d.metadata.psd_global_blocks.iter().map(|(s, k, b)| (hex(s), hex(k), sink.blob(b))).collect(),
+            // Deferred blocks are loaded before conversion (`PcraftWriter::prepare`).
+            psd_global_blocks: d.metadata.psd_global_blocks.iter().map(|(s, k, b)| (hex(s), hex(k), sink.blob(&b.in_memory().cloned().unwrap_or_default()))).collect(),
         },
         global_light: d.global_light,
         paths: d.paths.iter().map(|p| NamedPathM { name: p.name.clone(), path: p.path.clone(), psd_raw: opt_blob(&p.psd_raw, sink) }).collect(),
@@ -585,7 +586,7 @@ impl Loader<'_> {
             md.psd_resources.push((*id, n.clone(), self.fetch.blob(h)?));
         }
         for (s, k, h) in &m.metadata.psd_global_blocks {
-            md.psd_global_blocks.push((key4(s)?, key4(k)?, self.fetch.blob(h)?));
+            md.psd_global_blocks.push((key4(s)?, key4(k)?, self.fetch.blob(h)?.into()));
         }
         let mut paths = Vec::with_capacity(m.paths.len());
         for p in &m.paths {

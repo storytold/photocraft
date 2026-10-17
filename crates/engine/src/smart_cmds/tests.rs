@@ -496,7 +496,7 @@ fn psd_placed_layer_renders_from_lnk2_data() {
     let lnk2 = photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile { uuid: "uuid-1".into(), file_name: "in.png".into(), bytes: png });
     let mut s = session(8);
     s.edit("place", |doc, active| {
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(lnk2)));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(lnk2)));
         // Photoshop's rendering (deliberately different, to see the re-render happen).
         let mut cache = Surface::new(doc.pixel_format());
         cache.fill_rect(Rect::new(20, 10, 40, 26), &[0.0, 0.0, 1.0, 1.0]);
@@ -876,7 +876,7 @@ fn automation_smart_contents_accepts_memory_sources_and_explicit_targets() {
             s.edit("PSD source", |doc, _| {
                 let SmartSource::Embedded { file_name, bytes } = smart(doc, LayerId(id))?.source.clone() else { panic!() };
                 let linked = photocraft_io::linked::LinkedFile { uuid: "embedded-id".into(), file_name, bytes: bytes.to_vec() };
-                doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+                doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(photocraft_io::linked::encode_linked_file(&linked))));
                 smart_mut(doc, LayerId(id))?.source = SmartSource::Linked { path: linked.uuid };
                 Ok(())
             })
@@ -972,7 +972,7 @@ fn automation_smart_contents_checks_nested_reads_at_nontrivial_placements() {
         let source_path = if psd_uuid {
             let linked =
                 photocraft_io::linked::LinkedFile { uuid: "nested-id".into(), file_name: "source.pcraft".into(), bytes: std::fs::read(&path).unwrap() };
-            inner.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+            inner.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(photocraft_io::linked::encode_linked_file(&linked))));
             linked.uuid
         } else {
             path.to_string_lossy().into_owned()
@@ -1053,7 +1053,7 @@ fn inspect_reports_the_smart_source() {
     let lnk2 = photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile { uuid: "uuid-1".into(), file_name: "in.png".into(), bytes: png });
     let mut s = session(8);
     s.edit("place", |doc, active| {
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(lnk2)));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(lnk2)));
         let sm = SmartObject::new(SmartSource::Linked { path: "uuid-1".into() }, Affine::IDENTITY, None);
         *active = Some(doc.insert_above(*active, Layer::new("front", LayerContent::Smart(sm))));
         Ok(())

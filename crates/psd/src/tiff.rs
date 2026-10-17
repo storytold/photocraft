@@ -224,7 +224,7 @@ impl ImageSourceData {
 /// A block padded to a multiple of 4, as Photoshop writes them in TIFFs.
 fn padded_block(key: [u8; 4], data: Vec<u8>) -> TaggedBlock {
     let pad = (4 - data.len() % 4) % 4;
-    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]) }
+    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]), stored: None }
 }
 
 /// Parses a 34377 tag (image resources). Little-endian resource blocks (`MIB8`) are converted;
@@ -2219,7 +2219,7 @@ mod tests {
         let d = ImageSourceData {
             version: Version::Psb,
             byte_order: ByteOrder::Little,
-            global_blocks: vec![TaggedBlock { signature: *b"MIB8", key: *b"Mt16", data: vec![9, 8, 7, 6, 5, 4], padding: None }],
+            global_blocks: vec![TaggedBlock { signature: *b"MIB8", key: *b"Mt16", data: vec![9, 8, 7, 6, 5, 4], padding: None, stored: None }],
             ..Default::default()
         };
         let (little, w) = d.to_bytes(ByteOrder::Little).unwrap();

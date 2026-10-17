@@ -728,6 +728,17 @@ impl PcraftWriter {
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        // Global blocks left in the file the document was opened from are read for the save
+        // (a failed read fails it rather than writing them empty).
+        let loaded;
+        let doc = if doc.metadata.has_deferred_blocks() {
+            let mut d = doc.clone();
+            d.metadata.load_deferred_blocks().map_err(|e| FormatError::Io(std::io::Error::other(format!("a smart object's embedded file could not be read: {e}"))))?;
+            loaded = d;
+            &loaded
+        } else {
+            doc
+        };
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
         let mut previews = Vec::new();

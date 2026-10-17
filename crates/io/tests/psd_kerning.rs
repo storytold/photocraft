@@ -187,7 +187,7 @@ fn txt2_extras_survive_a_resave_of_unchanged_text() {
         let mut r = t.clone();
         photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
         doc.layers.push(Layer::new("kept", LayerContent::Text(r)));
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(prev.clone())));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(prev.clone())));
         let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
         let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
         photocraft_text::psd::parse_txt2(&file.global_blocks.iter().find(|b| &b.key == b"Txt2").unwrap().data).unwrap()

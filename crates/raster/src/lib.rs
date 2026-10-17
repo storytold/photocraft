@@ -35,6 +35,24 @@ impl fmt::Display for AllocationError {
 
 impl std::error::Error for AllocationError {}
 
+/// One shared tile per pixel value (and tile size), for [`Surface::share_uniform_tiles`].
+#[derive(Debug, Default)]
+pub struct TileInterner {
+    tiles: std::collections::HashMap<usize, std::collections::HashMap<Vec<u8>, Arc<Tile>>>,
+}
+
+impl TileInterner {
+    /// Number of distinct uniform tiles held.
+    pub fn len(&self) -> usize {
+        self.tiles.values().map(|m| m.len()).sum()
+    }
+
+    /// `true` when no tile is held.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Pixel storage for one tile: `TILE_SIZE² × bytes_per_pixel`, row-major, interleaved channels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tile {
@@ -315,6 +333,28 @@ impl Surface {
             }
         }
         out
+    }
+
+    /// Makes every tile that holds one pixel value throughout share the interner's tile for that
+    /// value: a white background, an opaque mask or a solid fill then costs one tile however
+    /// large it is, and across every surface that shares `interner`. Tiles are copy-on-write, so
+    /// editing one splits it off again. Returns the bytes no longer held by this surface alone.
+    pub fn share_uniform_tiles(&mut self, interner: &mut TileInterner) -> usize {
+        let bpp = self.format.bytes_per_pixel();
+        let mut saved = 0;
+        for t in self.tiles.values_mut() {
+            let mut px = t.data.chunks_exact(bpp);
+            let Some(p0) = px.next() else { continue };
+            if !px.all(|p| p == p0) {
+                continue;
+            }
+            let shared = interner.tiles.entry(t.data.len()).or_default().entry(p0.to_vec()).or_insert_with(|| t.clone());
+            if !Arc::ptr_eq(shared, t) {
+                saved += t.data.len();
+                *t = shared.clone();
+            }
+        }
+        saved
     }
 
     /// Drop tiles that are entirely the default pixel.
@@ -1108,6 +1148,38 @@ mod tests {
         seen.sort();
         seen.dedup();
         seen.len()
+    }
+
+    /// Uniform tiles written pixel by pixel end up as one shared tile per value, across
+    /// surfaces, with every pixel unchanged; editing one splits it off.
+    #[test]
+    fn uniform_tiles_are_shared() {
+        let mut interner = TileInterner::default();
+        let r = Rect::new(0, 0, 1024, 600);
+        let mut bytes = Vec::new();
+        for y in 0..600 {
+            for x in 0..1024 {
+                // White, except a gradient in the tiles of column 3.
+                bytes.extend(if x >= 768 { [x as u8, y as u8, 0, 255] } else { [255, 255, 255, 255] });
+            }
+        }
+        let mut a = Surface::from_interleaved(PixelFormat::RGBA8, r, &bytes);
+        let mut b = Surface::from_interleaved(PixelFormat::RGBA8, r, &bytes);
+        let before = a.to_interleaved(r);
+        assert_eq!(distinct_tiles(&a), 12);
+        // Rows 512..600 cover only part of their tiles: the rest is the default pixel, so those
+        // tiles are not uniform.
+        let saved = a.share_uniform_tiles(&mut interner);
+        assert_eq!(distinct_tiles(&a), 1 + 3 + 3);
+        assert_eq!(saved, 5 * TILE_SIZE as usize * TILE_SIZE as usize * 4);
+        b.share_uniform_tiles(&mut interner);
+        assert_eq!(interner.len(), 1);
+        assert!(Arc::ptr_eq(a.tile(TileCoord { tx: 0, ty: 0 }).unwrap(), b.tile(TileCoord { tx: 2, ty: 1 }).unwrap()));
+        assert_eq!(a.to_interleaved(r), before);
+        a.write_pixel(5, 5, &[0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(b.pixel(5, 5), vec![1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(a.pixel(5, 5), vec![0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(a.pixel(300, 5), vec![1.0, 1.0, 1.0, 1.0]);
     }
 
     /// Converting or tone-mapping a surface keeps a shared tile shared (#4531) and gives the

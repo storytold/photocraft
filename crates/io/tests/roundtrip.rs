@@ -302,8 +302,8 @@ fn gradient_and_pattern_fills_roundtrip() {
 fn psd_raw_resources_and_global_blocks_preserved() {
     let mut d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
     d.metadata.psd_resources.push((4001, "named".into(), std::sync::Arc::new(vec![1])));
-    d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", std::sync::Arc::new(vec![7; 6])));
-    d.metadata.psd_global_blocks.push((*b"8B64", *b"lnk2", std::sync::Arc::new(vec![1, 2])));
+    d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", photocraft_doc::Blob::new(vec![7; 6])));
+    d.metadata.psd_global_blocks.push((*b"8B64", *b"lnk2", photocraft_doc::Blob::new(vec![1, 2])));
     let back = roundtrip(&d);
     // A PSD holds no `8B64` blocks (Photoshop refuses the file): a kept PSB block is written as `8BIM`.
     let mut expected = d.metadata.clone();

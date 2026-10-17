@@ -296,14 +296,15 @@ fn independent_of_document(id: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    // Bounded reads, and a clear error for a file larger than memory (#375).
-    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+fn import_path(name: &str, path: &str, max_svg_group_depth: usize, ctl: &photocraft_raster::Interrupt) -> std::result::Result<photocraft_io::ImportResult, photocraft_io::IoError> {
+    // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
+    // parsed from the open file instead of being read whole.
+    photocraft_io::import_file(name, std::path::Path::new(path), max_svg_group_depth, ctl)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
+fn import_path(_: &str, path: &str, _: usize, _: &photocraft_raster::Interrupt) -> std::result::Result<photocraft_io::ImportResult, photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -487,15 +488,16 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
-                };
-                ctx.check()?;
-                ctx.progress(0.02, "Decoding");
-                let imported = ctx
-                    .stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl))
-                    .map_err(|e| match e {
+                let imported = match source {
+                    OpenSource::Bytes(bytes) => {
+                        ctx.check()?;
+                        ctx.progress(0.02, "Decoding");
+                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl))
+                    }
+                    // A PSD/PSB is decoded straight from the file, which is never read whole.
+                    OpenSource::Path(p) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, max_svg_group_depth, ctl)),
+                }
+                .map_err(|e| match e {
                         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
                         e => EngineError::Other(e.to_string()),
                     })?;
