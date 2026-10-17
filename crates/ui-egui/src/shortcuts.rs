@@ -341,6 +341,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.camera_raw.is_some() {
         return;
     }
+    // A foreground save (Save in Background off, #6207) blocks the app until the file is written;
+    // only Esc reaches it, to cancel while it still encodes (see `jobs_ui::tick`).
+    if crate::jobs_ui::foreground_save(app).is_some() {
+        return;
+    }
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu; so does the menu bar
     // once Alt or F10 put the keyboard on it (#4988), and an open dropdown list, whose letters
     // pick an option rather than a tool (#1481).

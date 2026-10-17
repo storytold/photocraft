@@ -10,8 +10,12 @@
 //!   shown after a short delay so quick jobs don't flash it. Esc cancels.
 //! - Files opening in the background get a document tab at once ([`OpenTab`]); its canvas area
 //!   shows the progress, and closing the tab cancels the open.
-//! - Saves encode and write on a worker ([`start_save`], #2017) under the modal progress dialog;
-//!   the document is locked meanwhile, and the save is recorded when the job ends.
+//! - Saves encode and write on a worker ([`start_save`], #2017); the document is locked
+//!   meanwhile, and the save is recorded when the job ends. With Preferences › File Handling ›
+//!   Save in Background on (the default) you keep working while the file is written, the progress
+//!   in the document's tab and the status bar; off, the save runs in the foreground (#6207): the
+//!   modal progress dialog shows at once and no shortcut or tool input reaches the app until the
+//!   file is complete ([`foreground_save`]).
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
@@ -147,6 +151,9 @@ pub struct SaveJob {
     /// The job has ended (cancelled, say) but its worker may still be running: kept until it
     /// returns, so quitting and another save to the same file wait for it.
     pub ended: bool,
+    /// Started with Save in Background off: the app waits for it under the modal progress dialog
+    /// (see [`foreground_save`]).
+    pub foreground: bool,
 }
 
 /// The shell's job bookkeeping.
@@ -301,7 +308,9 @@ pub fn start_save(
             Ok(Some((path, warnings)))
         }
         Started::Job(job) => {
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false });
+            // Preferences › File Handling › Save in Background, read when the save starts.
+            let foreground = !app.session.prefs().file_handling.save_in_background;
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -394,9 +403,20 @@ pub fn keep_polling(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
-/// The job the user is looking at: the open tab in view, the active document's job, or (for
-/// the status bar) the newest running job.
+/// The save the app is waiting on, while it runs: one started with Preferences › File Handling ›
+/// Save in Background off (#6207). Like Photoshop's foreground save it blocks the app: the modal
+/// progress dialog shows at once ([`dialog`]) and no shortcut or tool reaches the documents
+/// until the file is written; anything after it (a close prompt, quitting) waits for it.
+pub fn foreground_save(app: &PhotocraftApp) -> Option<JobInfo> {
+    app.jobs.saves.iter().filter(|s| s.foreground && !s.ended).find_map(|s| app.session.job(s.job))
+}
+
+/// The job the user is looking at: a foreground save, the open tab in view, the active
+/// document's job, or (for the status bar) the newest running job.
 pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
+    if let Some(j) = foreground_save(app) {
+        return Some(j);
+    }
     if let Some(j) = app.jobs.focus.and_then(|j| app.session.job(j)) {
         return Some(j);
     }
@@ -697,12 +717,20 @@ pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The modal progress window for a job locking the active document (Photoshop shows one for
 /// long filters): title, status, bar, percentage and elapsed time, Cancel. Appears after
-/// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]).
+/// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]). A save shows it only when it runs in the
+/// foreground (Save in Background off), and then at once, so nothing can be clicked meanwhile; a
+/// background save shows its progress in the tab and the status bar instead.
 pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(j) = app.session.active_job() else { return };
-    if j.elapsed_ms < DIALOG_DELAY_MS {
-        return;
-    }
+    let j = match foreground_save(app) {
+        Some(j) => j,
+        None => {
+            let Some(j) = app.session.active_job() else { return };
+            if j.elapsed_ms < DIALOG_DELAY_MS || app.jobs.saves.iter().any(|s| s.job == j.id) {
+                return;
+            }
+            j
+        }
+    };
     let t = Tokens::get(ctx);
     let mut cancel_it = false;
     // Photoshop doesn't dim the window behind its progress dialog either.
