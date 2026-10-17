@@ -1977,6 +1977,7 @@
 	Show font names in english	글꼴 이름을 영어로 표시
 	Show menu colors	메뉴 색상 표시
 	Show only crosshair while painting	칠하는 동안 십자선만 표시
+	Show brush leash while smoothing	보정 중 브러시 끈 표시
 	Show slice numbers	분할 영역 번호 표시
 	Show tooltips	도구 설명 표시
 	Enable animations	애니메이션 사용

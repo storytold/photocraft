@@ -1511,6 +1511,7 @@ cameraRaw	Shadows	Vùng tối
 	Show crosshair in brush tip	Hiện tâm chữ thập trong đầu cọ
 	Show menu colors	Hiện màu mục menu
 	Show only crosshair while painting	Chỉ hiện tâm chữ thập khi vẽ
+	Show brush leash while smoothing	Hiện dây cọ khi làm mượt
 	Show slice numbers	Hiện số lát cắt
 	Show tooltips	Hiện chú giải
 	Slice color	Màu lát cắt

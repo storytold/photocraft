@@ -44,15 +44,37 @@ fn has_ident(text: &str, prefix: &str, ident: &str) -> bool {
     })
 }
 
-/// Production source of a file: everything before its unit-test module.
-fn production(text: &str) -> &str {
-    // Windows checkouts may use CRLF; test-only reads must stay excluded.
-    let cut = ["#[cfg(test)]\nmod ", "#[cfg(test)]\r\nmod ", "#[cfg(test)]\npub mod ", "#[cfg(test)]\r\npub mod "]
-        .into_iter()
-        .filter_map(|marker| text.find(marker))
-        .min()
-        .unwrap_or(text.len());
-    &text[..cut]
+/// Production source of a file: the file without its top-level `#[cfg(test)]` items (a
+/// `mod tests { .. }` block up to its `}` at column 0, a `mod x;`, a test-only helper), like the
+/// scorecard's prefs audit (`xtask/src/scorecard.rs`). Code after an inline test module halfway
+/// down a file (`canvas.rs`) still counts; test-only reads stay excluded.
+fn production(text: &str) -> String {
+    // Windows checkouts may use CRLF: compare lines without their line ending, keep them as is.
+    let bare = |l: &str| l.trim_end_matches(['\r', '\n']).to_string();
+    let mut out = String::with_capacity(text.len());
+    let mut lines = text.split_inclusive('\n');
+    while let Some(line) = lines.next() {
+        if bare(line) != "#[cfg(test)]" {
+            out.push_str(line);
+            continue;
+        }
+        // Further attributes, then the item: one line (`mod x;`) or a block up to `}` at column 0.
+        for item in lines.by_ref() {
+            let item = bare(item);
+            if item.starts_with("#[") {
+                continue;
+            }
+            if !item.trim_end().ends_with(';') {
+                for l in lines.by_ref() {
+                    if bare(l) == "}" {
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    out
 }
 
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -100,7 +122,7 @@ fn every_preference_is_read_or_hidden() {
         .iter()
         .filter(|p| !p.ends_with("engine/src/prefs.rs"))
         .filter_map(|p| std::fs::read_to_string(p).ok())
-        .map(|t| production(&t).to_string())
+        .map(|t| production(&t))
         .collect();
     assert!(sources.len() > 100, "found only {} source files under {}", sources.len(), root.display());
 
@@ -183,6 +205,18 @@ fn production_excludes_test_modules_with_lf_or_crlf() {
             );
             assert_eq!(production(&source), prefix, "newline={newline:?}, visibility={visibility:?}");
         }
+    }
+}
+
+#[test]
+fn production_keeps_code_after_an_inline_test_module() {
+    // `canvas.rs` has test modules halfway down; the code after them is still production code.
+    for newline in ["\n", "\r\n"] {
+        let source = format!(
+            "fn a() {{}}{newline}#[cfg(test)]{newline}#[allow(dead_code)]{newline}mod inline_tests {{{newline}    fn t() {{ p.x.hidden }}{newline}}}{newline}{newline}fn b() {{ p.x.read }}{newline}#[cfg(test)]{newline}mod more;{newline}fn c() {{}}{newline}"
+        );
+        let kept = format!("fn a() {{}}{newline}{newline}fn b() {{ p.x.read }}{newline}fn c() {{}}{newline}");
+        assert_eq!(production(&source), kept, "newline={newline:?}");
     }
 }
 

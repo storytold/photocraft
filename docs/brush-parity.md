@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (Show Brush Leash While Smoothing preference; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -76,6 +76,7 @@ tablets against Photoshop side by side.
 | Clear painting mode in the Brush and Pencil Mode menus | done | `paint_mode_dropdown` in `panels.rs`, `"mode": "clear"`, #3439 |
 | Right-click opens the Brush Preset picker | done | [`context-menu-parity.md`](context-menu-parity.md); XP-Pen right-click not (#1980), macOS issue #2360 |
 | Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor requested (#2662, #1057) |
+| Brush leash while smoothing, switchable in Preferences › Cursors (Show Brush Leash While Smoothing, on by default) | done | `draw_drag_preview` in `canvas.rs`, `brush_leash_preference_off_hides_the_smoothing_string` |
 | Brush choice kept per tool (Brush, Eraser, Blur each their own) | partial | #2542 |
 
 ## Symmetry
@@ -124,3 +125,4 @@ tablets against Photoshop side by side.
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
+| 2026-10-16 | minor | Preferences › Cursors › Show Brush Leash While Smoothing (on by default, like Photoshop) hides the smoothing string without turning smoothing off. No brush-feel estimate changed. |

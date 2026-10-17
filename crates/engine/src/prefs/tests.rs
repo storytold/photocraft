@@ -828,6 +828,22 @@ fn shift_key_tool_switch_is_on_by_default_and_a_stored_false_is_kept() {
     assert!(!stored.use_shift_key_for_tool_switch);
 }
 
+/// Like Photoshop, Cursors › "Show Brush Leash While Smoothing" is on by default; older settings
+/// files without the key load with it on, and a stored choice wins.
+#[test]
+fn brush_leash_while_smoothing_is_on_by_default_and_a_stored_false_is_kept() {
+    assert!(Preferences::default().cursors.show_brush_leash_while_smoothing);
+    let missing: Cursors = serde_json::from_value(json!({"showOnlyCrosshairWhilePainting": true})).unwrap();
+    assert!(missing.show_brush_leash_while_smoothing, "a settings file without the key gets the default");
+    let stored: Cursors = serde_json::from_value(json!({"showBrushLeashWhileSmoothing": false})).unwrap();
+    assert!(!stored.show_brush_leash_while_smoothing);
+    let mut s = session();
+    s.execute("prefs.set", json!({"path": "cursors.showBrushLeashWhileSmoothing", "value": false})).unwrap();
+    assert!(!s.prefs().cursors.show_brush_leash_while_smoothing);
+    let back: Preferences = serde_json::from_str(&s.prefs_to_json()).unwrap();
+    assert!(!back.cursors.show_brush_leash_while_smoothing, "the choice persists");
+}
+
 /// Shortcut exports are all or nothing (#5801): a rename that fails after the first file was
 /// moved in puts the user's files back as they were and leaves nothing staged.
 #[test]

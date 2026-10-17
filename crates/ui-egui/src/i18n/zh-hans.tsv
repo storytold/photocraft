@@ -2025,6 +2025,7 @@
 	Show font names in english	以英文显示字体名称
 	Show menu colors	显示菜单颜色
 	Show only crosshair while painting	绘画时仅显示十字线
+	Show brush leash while smoothing	平滑时显示画笔牵引线
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
 	Enable animations	启用动画

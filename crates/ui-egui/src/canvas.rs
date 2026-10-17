@@ -4896,8 +4896,10 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         // The canvas shows the live stroke itself (`LiveStroke`); a stroke that couldn't start one
         // (Sample All Layers, say) keeps the trail.
         t if strokes_live(t) && app.live_stroke.is_some() => {
-            // Smoothing holds the brush back from the pointer: draw the string between them.
-            if let Some(EngineStroke::Brush(l)) = app.live_stroke.as_ref().map(|l| &l.stroke)
+            // Smoothing holds the brush back from the pointer: draw the string between them
+            // (Preferences › Cursors › Show Brush Leash While Smoothing).
+            if app.session.prefs().cursors.show_brush_leash_while_smoothing
+                && let Some(EngineStroke::Brush(l)) = app.live_stroke.as_ref().map(|l| &l.stroke)
                 && let Some(s) = l.smoothing_string()
             {
                 draw_smoothing_string(painter, xf, s);
@@ -8009,6 +8011,31 @@ mod tests {
                 tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
             }
             assert_eq!(lines(&mut app) > 0, string, "smoothing {amount}");
+            tool_event(&mut app, ToolEvent::Up { x: 90.0, y: 30.0 }, egui::Modifiers::NONE);
+        }
+    }
+
+    #[test]
+    fn brush_leash_preference_off_hides_the_smoothing_string() {
+        // Preferences › Cursors › Show Brush Leash While Smoothing (on by default, like
+        // Photoshop): off, a smoothed stroke still lags but no line joins brush and pointer.
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+        app.ui.tool = Tool::Brush;
+        app.run("tools.setBrush", json!({"brush": {"size": 10, "smoothing": {"amount": 0.8}}})).unwrap();
+        let lines = |app: &mut PhotocraftApp| drag_preview_shapes(app, &ctx, 4.0).iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count();
+        for (leash, string) in [(true, true), (false, false)] {
+            app.run("prefs.set", json!({"path": "cursors.showBrushLeashWhileSmoothing", "value": leash})).unwrap();
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            for x in [30.0, 60.0, 90.0] {
+                tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            let Some(EngineStroke::Brush(l)) = app.live_stroke.as_ref().map(|l| &l.stroke) else {
+                panic!("leash {leash}: a live brush stroke");
+            };
+            assert!(l.smoothing_string().is_some(), "leash {leash}: the brush still lags the pointer");
+            assert_eq!(lines(&mut app) > 0, string, "leash {leash}");
             tool_event(&mut app, ToolEvent::Up { x: 90.0, y: 30.0 }, egui::Modifiers::NONE);
         }
     }

@@ -606,6 +606,9 @@ pub struct Cursors {
     pub painting: PaintingCursor,
     pub show_crosshair_in_brush_tip: bool,
     pub show_only_crosshair_while_painting: bool,
+    /// Draw the line from the brush to the pointer while stroke smoothing holds the brush back
+    /// (Photoshop's Show Brush Leash While Smoothing).
+    pub show_brush_leash_while_smoothing: bool,
     pub other: OtherCursor,
     /// Brush preview (HUD) colour.
     pub brush_preview_color: String,
@@ -617,6 +620,7 @@ impl Default for Cursors {
             painting: PaintingCursor::NormalTip,
             show_crosshair_in_brush_tip: false,
             show_only_crosshair_while_painting: false,
+            show_brush_leash_while_smoothing: true,
             other: OtherCursor::Standard,
             brush_preview_color: "#ff0000".into(),
         }

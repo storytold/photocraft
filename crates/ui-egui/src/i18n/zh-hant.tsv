@@ -2018,6 +2018,7 @@
 	Show font names in english	以英文顯示字體名稱
 	Show menu colors	顯示選單顏色
 	Show only crosshair while painting	繪圖時僅顯示十字線
+	Show brush leash while smoothing	平滑時顯示筆刷牽引線
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
 	Enable animations	啟用動畫

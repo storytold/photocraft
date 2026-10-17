@@ -2011,6 +2011,7 @@
 	Show font names in english	フォント名を英語で表示
 	Show menu colors	メニューの色を表示
 	Show only crosshair while painting	描画中は十字線のみ表示
+	Show brush leash while smoothing	スムージング中にブラシのリードを表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
 	Enable animations	アニメーションを有効にする
