@@ -188,6 +188,39 @@ fn gradient_fill_angle_follows_the_canvas() {
     assert_eq!(map_angle(&Turn::Ccw90.affine(10.0, 20.0), 0.0), 90.0);
 }
 
+/// The gradient fill's centre offset after `cmd`, as `gradient.fill.get` reports it (% of the frame).
+fn fill_offset_after(cmd: &str, p: serde_json::Value) -> (f64, f64) {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("gradient.fill.create", json!({"from": [10, 50], "to": [90, 50], "style": "radial"})).unwrap();
+    s.execute("gradient.fill.set", json!({"angle": 0, "offset": [25, 0]})).unwrap();
+    s.execute(cmd, p).unwrap();
+    let g = s.execute("gradient.fill.get", json!({})).unwrap();
+    (g["offset"][0].as_f64().unwrap(), g["offset"][1].as_f64().unwrap())
+}
+
+#[test]
+fn gradient_fill_offset_stays_a_fraction_of_the_frame() {
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3;
+    // Image Size scales the frame, so the offset (a fraction of it) stays put.
+    for (w, h) in [(200, 200), (50, 50), (200, 50)] {
+        let o = fill_offset_after("image.imageSize", json!({"width": w, "height": h}));
+        assert!(near(o, (25.0, 0.0)), "{w}x{h}: {o:?}");
+    }
+    // Flips and 90° turns still mirror and turn it.
+    assert!(near(fill_offset_after("image.imageRotation.flipCanvasHorizontal", json!({})), (-25.0, 0.0)));
+    assert!(near(fill_offset_after("image.imageRotation.90cw", json!({})), (0.0, 25.0)));
+    assert!(near(fill_offset_after("image.imageRotation.180", json!({})), (-25.0, 0.0)));
+    // Non-uniform scale with a turn: only the axis swap applies.
+    let mut f = Fill::gradient(Vec::new(), 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    if let Fill::Gradient { offset, .. } = &mut f {
+        *offset = (0.25, -0.1);
+    }
+    map_fill(&Affine { m: [0.0, 3.0, -0.5, 0.0, 7.0, 1.0] }, &mut f);
+    let Fill::Gradient { offset, .. } = f else { panic!("not a gradient") };
+    assert!((offset.0 - 0.1).abs() < 1e-6 && (offset.1 - 0.25).abs() < 1e-6, "{offset:?}");
+}
+
 fn type_and_shape_origin(d: &Document) -> ([f64; 6], [f64; 2]) {
     let mut t = None;
     let mut k = None;

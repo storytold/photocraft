@@ -55,9 +55,15 @@ fn map_fill(a: &Affine, f: &mut Fill) {
     if let Fill::Gradient { angle, offset, .. } = f {
         *angle = map_angle(a, *angle);
         // The centre offset (a fraction of the frame) turns with the canvas: exact for 90° turns
-        // and flips, where the frame's sides swap with the axes.
+        // and flips, where the frame's sides swap with the axes. Scale (Image Size) resizes the
+        // frame too, so only each axis's direction applies.
+        let unit = |x: f64, y: f64| {
+            let n = x.hypot(y);
+            if n < EPS { (x, y) } else { (x / n, y / n) }
+        };
+        let ((m0, m1), (m2, m3)) = (unit(a.m[0], a.m[1]), unit(a.m[2], a.m[3]));
         let (ox, oy) = (f64::from(offset.0), f64::from(offset.1));
-        *offset = ((a.m[0] * ox + a.m[2] * oy) as f32, (a.m[1] * ox + a.m[3] * oy) as f32);
+        *offset = ((m0 * ox + m2 * oy) as f32, (m1 * ox + m3 * oy) as f32);
     }
 }
 
