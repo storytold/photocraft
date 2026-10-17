@@ -480,7 +480,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     if r.is_empty() {
         return Err(EngineError::Other("nothing to crop: pass x/y/width/height or make a selection".into()));
     }
-    s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0)));
+    s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
     s.edit("Crop", |doc, active| {
         let original = doc.size;
@@ -511,6 +511,19 @@ impl CropTarget {
         }
         if let Some(r) = self.resolution {
             doc.resolution_dpi = r;
+        }
+    }
+
+    /// Where Color Sampler points go: shifted by the crop's origin, then scaled with the pixels
+    /// when [`Self::apply`] resamples the cropped area `r` (as Image Size scales them).
+    fn sampler_map(&self, r: Rect) -> photocraft_geom::Affine {
+        let shift = photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0));
+        match self.size {
+            Some((w, h)) if r.width() > 0 && r.height() > 0 => {
+                let (sx, sy) = (f64::from(w) / f64::from(r.width()), f64::from(h) / f64::from(r.height()));
+                shift.then(&photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] })
+            }
+            _ => shift,
         }
     }
 }
@@ -631,7 +644,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
     crate::analysis_cmds::compound(s, "Crop", |s| {
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
-        s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(target.x0), -f64::from(target.y0)));
+        s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
         s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
