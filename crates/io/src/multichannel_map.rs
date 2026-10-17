@@ -64,7 +64,8 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
 }
 
 /// Writes a Multichannel document as a mode-7 PSD (no layer section; every channel a plane).
-pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<String>) {
+/// A file past `size_limit` bytes is written as PSB (see `psd_export::fit_psd_size`).
+pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: u64) -> (PsdFile, Vec<String>) {
     let mut warnings = Vec::new();
     // Photoshop's Multichannel mode is 8 or 16 bits per channel.
     let sample = match doc.depth {
@@ -95,12 +96,9 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
         }
     }
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
-    let size_exceeds_limit = !force_psb && !big && crate::psd_export::psd_size_exceeds_limit(doc);
-    let version = crate::psd_export::psd_version(doc, force_psb, size_exceeds_limit);
+    let version = crate::psd_export::psd_version(doc, force_psb);
     if big && !force_psb {
         warnings.push("document exceeds 30000 px; written as PSB".into());
-    } else if size_exceeds_limit && !force_psb {
-        warnings.push("estimated encoded size exceeds 2 GB; written as PSB".into());
     }
     let header = Header::new(version, doc.size.width, doc.size.height, channels.len().max(1) as u16, psd_depth(sample), PsdMode::Multichannel);
     let image_data = ImageData::encode(Compression::Rle, &planes, &header)
@@ -155,7 +153,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
         .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, &data))
         .collect();
     let color_mode_data = photocraft_psd::hdr::color_mode_data_for_depth(header.depth);
-    let file = PsdFile {
+    let mut file = PsdFile {
         header,
         color_mode_data,
         resources,
@@ -165,6 +163,8 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
         global_blocks,
         layer_mask_trailing: Vec::new(),
         image_data,
+        write_as_psb: false,
     };
+    warnings.extend(crate::psd_export::fit_psd_size(&mut file, size_limit));
     (file, warnings)
 }
