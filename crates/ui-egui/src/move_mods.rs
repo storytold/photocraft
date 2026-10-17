@@ -152,6 +152,22 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64;
     [start[0] + d[0], start[1] + d[1]]
 }
 
+/// ⇧ while a selection tool drags the selection (#6231): lock the move to the dominant axis, as
+/// the Move tool's layer drags do. The caller skips this when [`filter_event`] has already
+/// rewritten the event (the Move tool itself); it covers the `sel_move` drags the marquee and
+/// lasso tools start, including ⌘-drags of the selected pixels. The locked offset is kept on the
+/// drag between events so the axis doesn't flicker near 45°.
+pub(crate) fn selection_drag_to(d: &mut crate::canvas::Drag, p: [f64; 2], shift: bool) -> [f64; 2] {
+    if d.sel_move.is_none() || !shift {
+        d.sel_axis = None;
+        return p;
+    }
+    let delta = [p[0] - d.start[0], p[1] - d.start[1]];
+    let locked = constrain(delta, d.sel_axis, MOVE_DIRECTIONS);
+    d.sel_axis = Some(locked);
+    [d.start[0] + locked[0], d.start[1] + locked[1]]
+}
+
 /// Call after the Move tool finished its drag: an ⌥-drag's copy and move become one step.
 pub fn finish(app: &mut PhotocraftApp) {
     let st = std::mem::take(&mut app.move_mods);
