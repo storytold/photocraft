@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (historical effort calibration dated; estimates unchanged; oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
 the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
@@ -12,8 +12,9 @@ the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](d
 [architecture](docs/architecture.md).
 
 Hours are Opus 5.5 agent wall-clock hours for one agent working sequentially, calibrated from this
-repository's 1,004 merged PRs (see [calibration](docs/target-app-parity.md#remaining-effort-and-calibration)).
-About 80% of the work parallelizes.
+repository's 1,004 merged PRs as of 2026-10-10 (see [calibration](docs/target-app-parity.md#remaining-effort-and-calibration)).
+The tables below retain that historical model; subsequent project growth does not automatically
+recalibrate these estimates. About 80% of the work parallelizes.
 
 ## Headline numbers
 
@@ -34,7 +35,7 @@ About 80% of the work parallelizes.
 | Mainstream practitioner | ~43% | 1,700–2,800 | Depth in the 11 weekly areas (1,180–2,000), performance budgets, stability on real machines, PSD exchange with Photoshop |
 | Essentials user | ~61% | 400–700 | Startup and GPU robustness, brush and transform responsiveness, Type tool, discoverability (flyouts, commit buttons), AVIF/PDF open |
 
-Hours calibrated as in [Remaining effort](docs/target-app-parity.md#remaining-effort-and-calibration) (2–9 h per checklist
+Hours use the [2026-10-10 calibration](docs/target-app-parity.md#remaining-effort-and-calibration) (2–9 h per checklist
 item, 8–20 h per format or subsystem, from the repo's 1,004 merged PRs); each tier is a subset of
 the one above. About 80% parallelizes (independent crates and command modules); performance
 architecture and the PSD writer are the serial parts.
@@ -47,6 +48,8 @@ needs ~75% ready and no blocking PSD gap. The [alpha gate](docs/roadmap.md#alpha
 four are partial in depth, none blocked.
 
 ## By dimension
+
+Hours use the [2026-10-10 calibration](docs/target-app-parity.md#remaining-effort-and-calibration).
 
 | Dimension | % ready | Hours to full | Doc |
 |---|---:|---:|---|
@@ -62,6 +65,8 @@ four are partial in depth, none blocked.
 | AI features | 10% | 300–600 | [gaps](docs/gaps.md#g15-ai-and-generative-features) |
 
 ## Features
+
+Hours use the [2026-10-10 calibration](docs/target-app-parity.md#remaining-effort-and-calibration).
 
 | Area | % ready | Hours |
 |---|---:|---:|
@@ -108,6 +113,8 @@ Also shipped: Traditional Chinese, Russian, Ukrainian, Czech, Polish, Greek, Dut
 
 ## Upcoming
 
+Hours use the [2026-10-10 calibration](docs/target-app-parity.md#remaining-effort-and-calibration).
+
 | Rank | Milestone | Estimate |
 |---|---|---:|
 | 1 | PSD that Photoshop trusts: Save As corruption, Photoshop re-open check, Photoshop-oracle floor 145 → 200+ of 258 | 150–250 h |
@@ -135,6 +142,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Dated the historical effort calibration and linked it beside estimate tables; numerical estimates unchanged |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
 | 2026-10-11 | minor | Toolbox count 56 of 68 (12 missing) with the Convert Point tool (#3204) |
 | 2026-10-10 | minor | Readiness by audience with hours per tier |

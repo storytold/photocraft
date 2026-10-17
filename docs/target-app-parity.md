@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-15 · **Change:** minor (historical effort calibration dated; estimates unchanged; on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -36,7 +36,7 @@ ready for real work 25–35%) was closer; ~700 merged PRs since then moved both 
 | Mainstream practitioner | ~43% | 1,700–2,800 | Depth in the 11 weekly areas (1,180–2,000), performance budgets, stability on real machines, PSD exchange with Photoshop |
 | Essentials user | ~61% | 400–700 | Startup and GPU robustness, brush and transform responsiveness, Type tool, discoverability (flyouts, commit buttons), AVIF/PDF open |
 
-Hours calibrated as in [Remaining effort](#remaining-effort-and-calibration) (2–9 h per checklist
+Hours use the [2026-10-10 calibration](#remaining-effort-and-calibration) (2–9 h per checklist
 item, 8–20 h per format or subsystem, from the repo's 1,004 merged PRs); each tier is a subset of
 the one above. About 80% parallelizes (independent crates and command modules); performance
 architecture and the PSD writer are the serial parts.
@@ -72,6 +72,7 @@ architecture and the PSD writer are the serial parts.
 ## Ready for real work: ~45% (weighted)
 
 Weights reflect what a working Photoshop user depends on (photographers, retouchers, designers).
+Remaining hours use the [2026-10-10 calibration](#remaining-effort-and-calibration).
 
 | Dimension | Weight | % ready | Remaining (agent-h) | Evidence | Detail |
 |---|---:|---:|---:|---|---|
@@ -163,7 +164,8 @@ people send ×0.95 (JPEG, PNG, HEIC, WebP, PSD open; AVIF and PDF don't, #463, #
 ## Feature areas
 
 Percent is ready-for-real-work for that area (depth and fidelity, not presence). Hours are to full
-parity for the area and are already contained in the dimension rows above.
+parity for the area and are already contained in the dimension rows above, using the
+[2026-10-10 calibration](#remaining-effort-and-calibration).
 
 | Area | % | Hours | Notes |
 |---|---:|---:|---|
@@ -188,9 +190,13 @@ Batch supports [output naming templates](batch-naming.md); AUTO-219-5 remains pa
 
 ## Remaining effort and calibration
 
-**Calibration.** The repository's history from the first commit (2026-09-30) to 2026-10-10: 1,152
+**Calibration snapshot: 2026-10-10.** The effort and parallelism estimates retain this historical
+snapshot; they have not been recalibrated using subsequent merged PRs.
+
+The repository's history from the first commit (2026-09-30) to 2026-10-10: 1,152
 commits on `main` and 1,004 merged PRs in 10.5 days. Median PR open-to-merge time is 3.4 h
-(p75 6.4 h, p90 14.3 h; that includes CI and review queueing). Comparable features:
+(p75 6.4 h, p90 14.3 h; that includes CI and review queueing). These elapsed times are not direct
+measurements of agent computation. Comparable features:
 
 | Feature | PRs | Lines added | PR hours |
 |---|---|---:|---:|
@@ -204,13 +210,13 @@ commits on `main` and 1,004 merged PRs in 10.5 days. Median PR open-to-merge tim
 | Korean catalog and live switching | #582, #604 | ~3,800 | 13.0 |
 
 So one checklist item of tool or UI depth costs about 2–9 agent-hours including tests, and a new
-format or subsystem 8–20. With roughly 2–4 agent-hours per merged PR, the ~1,000 PRs so far
+format or subsystem 8–20. With roughly 2–4 agent-hours per merged PR, the ~1,000 PRs in that snapshot
 represent about **2,000–4,000 agent-hours**, which took ready-for-real-work from 0 to ~45%. The
 remaining points are harder per point (fidelity against Photoshop's unpublished maths, feel,
 performance on large documents, user-reported long tail), so the remaining estimate is not lower
 than the work already done.
 
-**Totals.**
+**Totals (2026-10-10 calibration).**
 
 | Milestone | Scope | Opus 5.5 agent-hours |
 |---|---|---:|
@@ -565,6 +571,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Marked the effort calibration as a historical snapshot and dated table references; numerical estimates unchanged |
 | 2026-10-13 | minor | Vector shapes: on-canvas corner radius widgets on live rectangles (TOOL-214-12); estimates unchanged |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the Pen flyout) are live toolbar tools and Frame landed, so Art History Brush is the only tool still missing; percentages unchanged |
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
