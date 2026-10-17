@@ -289,12 +289,13 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, stored: Value, float_bg: 
         let locks = doc.effective_locks(id);
         let background = doc.is_background(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        // A pixel or full lock refuses the smart filter too, as it does for other filters.
+        if locks.all || locks.pixels {
+            return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+        }
         if let LayerContent::Smart(_) = l.content {
             let sf = SmartFilter { command: cmd.to_string(), params: stored.clone(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
             return crate::smart_cmds::add_smart_filter(doc, id, sf, selection.as_ref());
-        }
-        if locks.all || locks.pixels {
-            return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         // A Background layer gains transparency when the edge mode exposes it (as in Photoshop).
         if float_bg && background {
@@ -552,6 +553,36 @@ mod tests {
         assert_eq!(sm.smart_filters[0].command, LENS);
         let corner = active_px(&s, 3, 3);
         assert!(corner[0] > 0.4, "{corner:?}");
+    }
+
+    #[test]
+    fn locked_smart_objects_refuse_lens_filters() {
+        // As other filters do: a pixel or full lock (the layer's own or its group's) refuses the
+        // smart filter, leaving the layer and the history as they were.
+        let filters = [(LENS, json!({"distortion": 10})), (WIDE, json!({"model": "perspective", "scale": 90})), (RAW, json!({"saturation": -100}))];
+        for lock in [json!({"all": true}), json!({"pixels": true})] {
+            for on_group in [false, true] {
+                for (cmd, p) in &filters {
+                    let mut s = session(8);
+                    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                    let layer = s.active().unwrap().active_layer.unwrap();
+                    if on_group {
+                        s.execute("layer.new.groupFromLayers", json!({})).unwrap();
+                    }
+                    s.execute("layer.lockLayers", lock.clone()).unwrap();
+                    s.execute("layer.select", json!({"layer": layer.0})).unwrap();
+                    let locks = s.active().unwrap().doc.effective_locks(layer);
+                    assert!(locks.all || locks.pixels, "the lock reaches the smart object ({lock}, group: {on_group})");
+                    let steps = s.active().unwrap().history.past_len();
+                    let r = s.execute(cmd, p.clone());
+                    assert!(r.is_err(), "{cmd} edited a smart object locked with {lock} (group: {on_group}): {r:?}");
+                    let st = s.active().unwrap();
+                    let LayerContent::Smart(sm) = &st.doc.layer(layer).unwrap().content else { panic!("not smart") };
+                    assert!(sm.smart_filters.is_empty(), "{cmd} {lock} group: {on_group}");
+                    assert_eq!(st.history.past_len(), steps, "{cmd} {lock} group: {on_group}: no history step");
+                }
+            }
+        }
     }
 
     #[test]
