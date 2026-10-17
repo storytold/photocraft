@@ -672,6 +672,15 @@ impl<'a> Planner<'a> {
                 p.mask = self.mask_use(layer);
                 after = self.emit(p);
             }
+            // A Frame's stroke over the frame's content, at the group's opacity (compose).
+            if let Some(stroke) = photocraft_compose::shape_split::frame_stroke(layer, self.cx.canvas, self.cx.depth) {
+                let stroke = self.shape_part(layer, Role::Stroke, stroke);
+                let mut p = Pass::new(Kernel::Blend, 0);
+                p.a = Some(after);
+                p.b = Some(stroke);
+                p.opacity = opacity;
+                after = self.emit(p);
+            }
             if visible_clipped.is_empty() {
                 self.release(before);
                 return Ok(after);
@@ -837,12 +846,20 @@ impl<'a> Planner<'a> {
         match &layer.content {
             LayerContent::Group(g) => {
                 let empty = self.clear();
-                let s = self.stack(&g.children, empty)?;
+                let mut s = self.stack(&g.children, empty)?;
                 if layer.mask.is_some() || layer.vector_mask.is_some() {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
-                    return Ok(self.emit(p));
+                    s = self.emit(p);
+                }
+                // A Frame's stroke over its masked content (compose::render_content).
+                if let Some(stroke) = photocraft_compose::shape_split::frame_stroke(layer, self.cx.canvas, self.cx.depth) {
+                    let stroke = self.shape_part(layer, Role::Stroke, stroke);
+                    let mut p = Pass::new(Kernel::Blend, 0);
+                    p.a = Some(s);
+                    p.b = Some(stroke);
+                    s = self.emit(p);
                 }
                 Ok(s)
             }
