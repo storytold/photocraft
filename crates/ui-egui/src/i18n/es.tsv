@@ -4150,6 +4150,8 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+	Rotate View Left	Girar vista a la izquierda
+	Rotate View Right	Girar vista a la derecha
 	Accept and Go to Conflict	Aceptar e ir al conflicto
 	Changes undone.	Cambios deshechos.
 	Choose a new shortcut for this command, or leave it without one.	Elija un nuevo método abreviado para este comando o déjelo sin ninguno.

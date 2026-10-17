@@ -3978,6 +3978,8 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+	Rotate View Left	Girar visualização para a esquerda
+	Rotate View Right	Girar visualização para a direita
 	Accept and Go to Conflict	Aceitar e ir para o conflito
 	Changes undone.	Alterações desfeitas.
 	Choose a new shortcut for this command, or leave it without one.	Escolha um novo atalho para este comando ou deixe-o sem atalho.

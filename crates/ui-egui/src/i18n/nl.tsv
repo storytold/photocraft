@@ -3948,6 +3948,8 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+	Rotate View Left	Weergave naar links draaien
+	Rotate View Right	Weergave naar rechts draaien
 	Accept and Go to Conflict	Accepteren en naar conflict
 	Changes undone.	Wijzigingen ongedaan gemaakt.
 	Choose a new shortcut for this command, or leave it without one.	Kies een nieuwe sneltoets voor deze opdracht of laat hem zonder.

@@ -3674,6 +3674,8 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+	Rotate View Left	Xoay chế độ xem sang trái
+	Rotate View Right	Xoay chế độ xem sang phải
 	Accept and Go to Conflict	Chấp nhận và đến xung đột
 	Changes undone.	Đã hoàn tác thay đổi.
 	Choose a new shortcut for this command, or leave it without one.	Chọn phím tắt mới cho lệnh này, hoặc để lệnh không có phím tắt.

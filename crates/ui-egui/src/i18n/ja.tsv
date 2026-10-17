@@ -3864,6 +3864,8 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+	Rotate View Left	表示を左に回転
+	Rotate View Right	表示を右に回転
 	Accept and Go to Conflict	適用して競合へ移動
 	Changes undone.	変更を取り消しました。
 	Choose a new shortcut for this command, or leave it without one.	このコマンドに新しいショートカットを選択するか、なしのままにしてください。

@@ -3193,6 +3193,8 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+	Rotate View Left	Faire pivoter la vue à gauche
+	Rotate View Right	Faire pivoter la vue à droite
 	Accept and Go to Conflict	Accepter et aller au conflit
 	Changes undone.	Modifications annulées.
 	Choose a new shortcut for this command, or leave it without one.	Choisissez un nouveau raccourci pour cette commande ou laissez-la sans raccourci.

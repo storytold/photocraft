@@ -3190,6 +3190,8 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+	Rotate View Left	Ansicht nach links drehen
+	Rotate View Right	Ansicht nach rechts drehen
 	Accept and Go to Conflict	Übernehmen und zum Konflikt
 	Changes undone.	Änderungen rückgängig gemacht.
 	Choose a new shortcut for this command, or leave it without one.	Wählen Sie einen neuen Kurzbefehl für diesen Befehl oder lassen Sie ihn ohne.

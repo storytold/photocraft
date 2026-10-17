@@ -3796,6 +3796,8 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+	Rotate View Left	Otočit zobrazení doleva
+	Rotate View Right	Otočit zobrazení doprava
 	Accept and Go to Conflict	Přijmout a přejít ke konfliktu
 	Changes undone.	Změny vráceny.
 	Choose a new shortcut for this command, or leave it without one.	Zvolte pro tento příkaz novou zkratku, nebo ho nechte bez ní.

@@ -4261,6 +4261,8 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+	Rotate View Left	Rotiraj prikaz ulevo
+	Rotate View Right	Rotiraj prikaz udesno
 	Accept and Go to Conflict	Prihvati i idi na sukob
 	Changes undone.	Izmene su poništene.
 	Choose a new shortcut for this command, or leave it without one.	Izaberite novu prečicu za ovu komandu ili je ostavite bez prečice.

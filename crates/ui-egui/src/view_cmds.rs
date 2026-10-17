@@ -438,6 +438,8 @@ pub fn handles(id: &str) -> bool {
             | "view.patternPreview"
             | "view.pixelArtPreview"
             | "view.rotateView"
+            | "view.rotateLeft"
+            | "view.rotateRight"
             | "view.resetView"
             | "window.panel.layers"
             | "window.panel.history"
@@ -470,7 +472,13 @@ fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabled: impl Fn
     let doc = app.session.active().is_some();
     Some(match id {
         "view.screenMode.cycle" => app.ui.text_edit.is_none(),
-        "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
+        "view.twoHundredPercent"
+        | "view.printSize"
+        | "view.fitLayersOnScreen"
+        | "view.rotateView"
+        | "view.rotateLeft"
+        | "view.rotateRight"
+        | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
@@ -664,6 +672,9 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     }
     if id == "view.rotateView" {
         return crate::rotate_view::command(app, p);
+    }
+    if matches!(id, "view.rotateLeft" | "view.rotateRight") {
+        return crate::rotate_view::step(app, id == "view.rotateRight", p);
     }
     if id == "view.resetView" {
         return crate::rotate_view::reset(app);
