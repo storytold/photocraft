@@ -311,18 +311,31 @@ fn resize(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>)
     resize_with_budget(s, sx, sy, filter, canvas, READ_BUDGET)
 }
 
+/// [`resize_surface`] with Bicubic, but each axis filtered for its own scale: two Image Sizes, the
+/// smaller scale first. Image Size designs one filter for both axes, which blurs the axis that
+/// shrinks less; a transform's prefilter filters each for its own scale instead, so an axis that
+/// shrinks less stays as sharp as it can (#4864). Equal scales, or one of exactly 1, give what
+/// [`resize_surface`] gives.
+pub(crate) fn resize_surface_per_axis(s: &Surface, sx: f64, sy: f64) -> Surface {
+    let x = Pass { sx, sy: 1.0, kx: keys(Resample::Bicubic, sx), ky: Kernel::Nearest };
+    let y = Pass { sx: 1.0, sy, kx: Kernel::Nearest, ky: keys(Resample::Bicubic, sy) };
+    let passes = match (sx == 1.0, sy == 1.0) {
+        (true, true) => Vec::new(),
+        (true, false) => vec![y],
+        (false, true) => vec![x],
+        _ if sy < sx => vec![y, x],
+        _ => vec![x, y],
+    };
+    let mut out = run_passes(s, passes, None, READ_BUDGET);
+    out.prune();
+    out
+}
+
 /// Runs `filter`'s passes. Between two passes the image is stored in its own format, which
 /// clips it (and rounds it at 8 and 16 bits) as Photoshop does; the smaller scale goes first, so
 /// the intermediate image is never larger than the result.
 fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize) -> Surface {
-    let mut cur: Option<Surface> = None;
-    let mut canvas = canvas;
-    for p in plan(filter, sx, sy) {
-        let next = resize_pass(cur.as_ref().unwrap_or(s), p, canvas, budget);
-        canvas = canvas.map(|c| scaled_rect(c, p.sx, p.sy));
-        cur = Some(next);
-    }
-    let mut out = cur.unwrap_or_else(|| s.clone());
+    let mut out = run_passes(s, plan(filter, sx, sy), canvas, budget);
     if filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0) {
         let dst = out.content_bounds();
         let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
@@ -331,6 +344,18 @@ fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: O
     }
     out.prune();
     out
+}
+
+/// Runs `passes` in order, each on the result of the one before.
+fn run_passes(s: &Surface, passes: Vec<Pass>, canvas: Option<Rect>, budget: usize) -> Surface {
+    let mut cur: Option<Surface> = None;
+    let mut canvas = canvas;
+    for p in passes {
+        let next = resize_pass(cur.as_ref().unwrap_or(s), p, canvas, budget);
+        canvas = canvas.map(|c| scaled_rect(c, p.sx, p.sy));
+        cur = Some(next);
+    }
+    cur.unwrap_or_else(|| s.clone())
 }
 
 /// One pass. With `canvas`, the content and the canvas repeat their edge outwards (see
@@ -707,6 +732,31 @@ mod tests {
             // Mid-gray channel and the ramp's monotonicity are preserved.
             let row: Vec<f32> = (8..120).map(|x| dbl.pixel(x, 30)[0]).collect();
             assert!(row.windows(2).all(|w| w[1] >= w[0] - 0.02), "{f:?}");
+        }
+    }
+
+    /// A free transform's per-axis prefilter (#4864) is Image Size's Bicubic, bit for bit, when the
+    /// scales are equal or one is 1; otherwise it is two Image Sizes, one per axis, the smaller first.
+    #[test]
+    fn per_axis_bicubic_is_image_size_for_each_axis() {
+        for sample in SampleType::ALL {
+            let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+            let r = Rect::new(3, 5, 67, 45);
+            let v: Vec<f32> = (0..r.height())
+                .flat_map(|y| (0..r.width()).flat_map(move |x| [((x * 7 + y * 13) % 17) as f32 / 16.0, ((x * y) % 5) as f32 / 4.0, 0.5, 1.0]))
+                .collect();
+            s.write_region(r, &v);
+            let same = |a: &Surface, b: &Surface, what: &str| {
+                assert_eq!(a.content_bounds(), b.content_bounds(), "{sample:?} {what}");
+                assert_eq!(a.read_region(a.content_bounds()), b.read_region(b.content_bounds()), "{sample:?} {what}");
+            };
+            for (sx, sy) in [(0.5, 0.5), (0.3, 0.3), (1.0, 0.25), (0.4, 1.0), (1.0 / 64.0, 1.0 / 64.0)] {
+                same(&resize_surface_per_axis(&s, sx, sy), &resize_surface(&s, sx, sy, Resample::Bicubic), &format!("{sx} x {sy}"));
+            }
+            let y_first = resize_surface(&resize_surface(&s, 1.0, 0.25, Resample::Bicubic), 0.875, 1.0, Resample::Bicubic);
+            same(&resize_surface_per_axis(&s, 0.875, 0.25), &y_first, "0.875 x 0.25");
+            let x_first = resize_surface(&resize_surface(&s, 0.3, 1.0, Resample::Bicubic), 1.0, 0.6, Resample::Bicubic);
+            same(&resize_surface_per_axis(&s, 0.3, 0.6), &x_first, "0.3 x 0.6");
         }
     }
 
