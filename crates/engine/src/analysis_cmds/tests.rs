@@ -449,3 +449,47 @@ fn count_set_group_rejects_sizes_that_are_not_whole_numbers() {
     assert_eq!((g.marker_size, g.label_size), (3, 12), "a rejected call changes nothing");
     assert_eq!(s.active().unwrap().history.past_len(), past);
 }
+
+#[test]
+fn count_add_rejects_unknown_groups_without_changing_the_document() {
+    for groups in [0, 1, 3] {
+        for group in [(groups as u64).max(1), u64::MAX] {
+            let mut s = session(10, 10, 8);
+            for _ in 0..groups {
+                s.execute("count.newGroup", json!({})).unwrap();
+            }
+            let before = d(&s);
+            let history = s.active().unwrap().history.past_len();
+            let journal = s.journal.len();
+            let error = s.execute("count.add", json!({"x": 2, "y": 3, "group": group})).unwrap_err();
+            assert!(error.to_string().contains("no such group"), "{error}");
+            assert!(Arc::ptr_eq(&before, &d(&s)), "an invalid target must not create a group or add a marker");
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            assert_eq!(s.journal.len(), journal);
+        }
+    }
+}
+
+#[test]
+fn count_add_keeps_first_group_creation_and_targets_the_requested_group() {
+    let mut s = session(10, 10, 8);
+    // Group zero can be requested before the first marker creates it.
+    let r = s.execute("count.add", json!({"x": 2, "y": 3, "group": 0})).unwrap();
+    assert_eq!(r["groups"][0]["points"], json!([[2.0, 3.0]]));
+    s.execute("count.newGroup", json!({})).unwrap();
+    let before = d(&s).measurement.clone();
+    let history = s.active().unwrap().history.past_len();
+    let r = s.execute("count.add", json!({"x": 4, "y": 5, "group": 0})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][0]["points"], json!([[2.0, 3.0], [4.0, 5.0]]));
+    assert_eq!(r["groups"][1]["count"], 0);
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    let after = d(&s).measurement.clone();
+    assert!(s.undo());
+    assert_eq!(d(&s).measurement, before);
+    assert!(s.redo());
+    assert_eq!(d(&s).measurement, after);
+    // Omitting the group still uses the active group.
+    let r = s.execute("count.add", json!({"x": 6, "y": 7})).unwrap();
+    assert_eq!(r["groups"][1]["points"], json!([[6.0, 7.0]]));
+}
