@@ -89,6 +89,8 @@ pub const TYPE_SIZE_MIN_PT: f64 = 0.1;
 pub const TYPE_SIZE_MAX_PT: f64 = 1296.0;
 pub const TRACKING_MIN: f64 = -1000.0;
 pub const TRACKING_MAX: f64 = 10_000.0;
+/// Photoshop's horizontal and vertical scale range, in percent.
+pub const SCALE_MAX_PERCENT: f64 = 1000.0;
 
 /// Validates the `kerning` key of character params: a number in [`KERN_MIN`]..=[`KERN_MAX`] or
 /// `"metrics"`, `"optical"`, `"off"` (`"none"`, `"0"`).
@@ -104,7 +106,8 @@ pub fn check_kerning(p: &Value) -> std::result::Result<(), String> {
     }
 }
 
-/// Validates text metrics that can otherwise exceed the rasterizer's supported range.
+/// Validates text metrics (size, tracking, leading, baseline shift, scales) that can otherwise
+/// exceed the rasterizer's supported range or overflow `f32`, which a .pcraft manifest cannot hold.
 pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     if let Some(v) = p.get("size") {
         match v.as_f64() {
@@ -116,6 +119,30 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
         match v.as_f64() {
             Some(tracking) if tracking.is_finite() && (TRACKING_MIN..=TRACKING_MAX).contains(&tracking) => {}
             _ => return Err(format!("tracking must be between {TRACKING_MIN} and {TRACKING_MAX} (1/1000 em)")),
+        }
+    }
+    if let Some(v) = p.get("leading") {
+        let (min, max) = (f64::from(LEADING_MIN_PT), f64::from(LEADING_MAX_PT));
+        match v {
+            Value::Null => {}
+            Value::String(a) if a == "auto" => {}
+            Value::Number(n) if n.as_f64().is_some_and(|x| x.is_finite() && (min..=max).contains(&x)) => {}
+            _ => return Err(format!("leading must be between {min} and {max} pt, or \"auto\"")),
+        }
+    }
+    if let Some(v) = p.get("baselineShift") {
+        let max = f64::from(BASELINE_SHIFT_MAX_PT);
+        match v.as_f64() {
+            Some(shift) if shift.is_finite() && shift.abs() <= max => {}
+            _ => return Err(format!("baselineShift must be between -{max} and {max} pt")),
+        }
+    }
+    for key in ["horizontalScale", "verticalScale"] {
+        if let Some(v) = p.get(key) {
+            match v.as_f64() {
+                Some(scale) if scale.is_finite() && (0.0..=SCALE_MAX_PERCENT).contains(&scale) => {}
+                _ => return Err(format!("{key} must be between 0 and {SCALE_MAX_PERCENT} %")),
+            }
         }
     }
     Ok(())
