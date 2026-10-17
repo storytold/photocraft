@@ -208,6 +208,8 @@ pub struct DocState {
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
+    /// [`History::current_id`] at the last save. Undo/redo that lands on this id is clean again (#6867).
+    pub saved_history_id: u64,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
     /// Area changed by the latest revision (None = assume everything changed).
@@ -269,6 +271,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            saved_history_id: 0,
             view_revision: 0,
             last_damage: None,
             coalesce: None,
@@ -933,6 +936,9 @@ impl Session {
                 st.doc = d;
                 restore_target(st, layers);
                 st.revision += 1;
+                if st.history.current_id() == st.saved_history_id {
+                    st.saved_revision = st.revision;
+                }
                 st.last_damage = damage;
                 true
             }
@@ -955,6 +961,9 @@ impl Session {
                 st.doc = d;
                 restore_target(st, layers);
                 st.revision += 1;
+                if st.history.current_id() == st.saved_history_id {
+                    st.saved_revision = st.revision;
+                }
                 st.last_damage = damage;
                 true
             }

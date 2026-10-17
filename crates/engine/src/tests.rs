@@ -1119,6 +1119,25 @@ fn move_selected_layers_invalid_targets_leave_document_and_history_unchanged() {
 }
 
 #[test]
+fn undoing_back_to_the_saved_step_clears_dirty() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.active_mut().unwrap().saved_to("crop.psd".into());
+    assert!(!s.active().unwrap().is_dirty());
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.active().unwrap().is_dirty());
+    assert!(s.undo());
+    assert!(!s.active().unwrap().is_dirty(), "undo back to the save is clean");
+    assert!(s.redo());
+    assert!(s.active().unwrap().is_dirty(), "redo of the edit is dirty again");
+    assert!(s.undo());
+    assert!(!s.active().unwrap().is_dirty());
+    assert!(s.undo());
+    assert!(s.active().unwrap().is_dirty(), "undo past the save is dirty");
+}
+
+#[test]
 fn selecting_a_layer_does_not_dirty_the_document() {
     let mut s = session_with_doc();
     let bg = s.active().unwrap().doc.layers[0].id;

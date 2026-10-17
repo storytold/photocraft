@@ -33,6 +33,8 @@ pub struct HistoryState {
     pub doc: Arc<Document>,
     /// The layers targeted when this state was created.
     pub layers: LayerTarget,
+    /// Stable identity of this document in the undo/redo graph (#6867).
+    id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,9 @@ pub struct History {
     current_label: String,
     /// The layers targeted when the current document was created (opened or edited).
     current_layers: LayerTarget,
+    /// Identity of the current document in the undo/redo graph (never reused after a new edit).
+    current_id: u64,
+    next_id: u64,
 }
 
 impl Default for History {
@@ -68,6 +73,8 @@ impl History {
             max_bytes: 0,
             current_label: "Open".into(),
             current_layers: LayerTarget::default(),
+            current_id: 0,
+            next_id: 1,
         }
     }
 
@@ -82,7 +89,9 @@ impl History {
         }
         let prev_label = std::mem::replace(&mut self.current_label, label.into());
         let prev_layers = std::mem::replace(&mut self.current_layers, layers);
-        self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers });
+        self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers, id: self.current_id });
+        self.current_id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
         self.clear_redo();
         while self.undo.len() > self.max_states {
             if let Some(state) = self.undo.pop_front()
@@ -126,7 +135,8 @@ impl History {
         }
         let label = std::mem::replace(&mut self.current_label, prev.label);
         let layers = std::mem::replace(&mut self.current_layers, prev.layers.clone());
-        self.redo.push(HistoryState { label, doc: current, layers });
+        self.redo.push(HistoryState { label, doc: current, layers, id: self.current_id });
+        self.current_id = prev.id;
         Some((prev.doc, prev.layers))
     }
 
@@ -139,7 +149,8 @@ impl History {
         }
         let label = std::mem::replace(&mut self.current_label, next.label);
         let layers = std::mem::replace(&mut self.current_layers, next.layers.clone());
-        self.undo.push_back(HistoryState { label, doc: current, layers });
+        self.undo.push_back(HistoryState { label, doc: current, layers, id: self.current_id });
+        self.current_id = next.id;
         Some((next.doc, next.layers))
     }
 
@@ -157,6 +168,12 @@ impl History {
     /// Number of past states (entries before the current one).
     pub fn past_len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// Stable identity of the current document in the undo/redo graph. Saved documents compare
+    /// this after undo/redo so a return to the saved step is clean again (#6867).
+    pub fn current_id(&self) -> u64 {
+        self.current_id
     }
 
     /// Rename the current step (e.g. after folding several steps into one with [`Self::purge_last`]).
@@ -189,6 +206,8 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
+        self.current_id = 0;
+        self.next_id = 1;
     }
 
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
@@ -338,6 +357,24 @@ mod tests {
         cur = h.redo(cur).unwrap().0;
         assert_eq!(cur.layers.len(), 2);
         assert!(h.redo(cur.clone()).is_none());
+    }
+
+    #[test]
+    fn current_id_returns_to_the_saved_step_and_is_unique_after_a_branch() {
+        let mut h = History::default();
+        let mut cur = Arc::new(base());
+        let open = h.current_id();
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        let after_a = h.current_id();
+        assert_ne!(after_a, open);
+        cur = h.undo(cur).unwrap().0;
+        assert_eq!(h.current_id(), open);
+        cur = h.redo(cur).unwrap().0;
+        assert_eq!(h.current_id(), after_a);
+        cur = h.undo(cur).unwrap().0;
+        edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+        assert_ne!(h.current_id(), after_a);
+        assert_ne!(h.current_id(), open);
     }
 
     #[test]

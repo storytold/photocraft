@@ -145,6 +145,7 @@ impl crate::DocState {
         }
         self.path = Some(path);
         self.saved_revision = self.revision;
+        self.saved_history_id = self.history.current_id();
     }
 }
 
@@ -439,6 +440,7 @@ fn revert(s: &mut Session) -> Result<Value> {
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.saved_revision = st.revision;
+    st.saved_history_id = st.history.current_id();
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }
 
