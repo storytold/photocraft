@@ -95,10 +95,10 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
         let image = display_image(display.as_deref(), &buf);
         match app.clone_preview.as_mut() {
             Some(cache) => {
-                cache.texture.set(image, TextureOptions::LINEAR);
+                cache.texture.set(image, canvas_texture_options(1));
                 cache.key = key;
             }
-            None => app.clone_preview = Some(ClonePreviewCache { key, texture: painter.ctx().load_texture("clone-preview", image, TextureOptions::LINEAR) }),
+            None => app.clone_preview = Some(ClonePreviewCache { key, texture: painter.ctx().load_texture("clone-preview", image, canvas_texture_options(1)) }),
         }
     }
     let Some(cache) = &app.clone_preview else { return };
@@ -7054,6 +7054,29 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(output.shapes.iter().all(|s| !matches!(s.shape, egui::Shape::Mesh(_))));
+    }
+
+    #[test]
+    fn clone_overlay_keeps_magnified_pixels_crisp_on_upload_and_refresh() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
+        app.ui.tool = Tool::CloneStamp;
+        app.session.tools.brush.size = 20.0;
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 4.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        for invert in [false, true] {
+            app.session.presets.clone.overlay.invert = invert;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                draw_clone_preview(&mut app, ui.painter(), &xf, [32.0, 32.0], None);
+            });
+            let upload = output.textures_delta.set.values().flatten().find(|d| d.image.size() == [20, 20]).expect("clone overlay upload");
+            let options = upload.options;
+            output.textures_delta.clear();
+            assert_eq!(options.magnification, egui::TextureFilter::Nearest, "invert={invert}");
+            assert_eq!(options.minification, egui::TextureFilter::Linear, "zoomed-out previews remain filtered");
+        }
     }
 
     #[test]
