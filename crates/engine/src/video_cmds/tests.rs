@@ -330,6 +330,32 @@ fn a_still_gif_is_one_frame_at_the_default_rate() {
     assert_eq!(s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().fps, 10.0);
 }
 
+/// Interpret Footage and New Video Layer from File reject an fps that isn't a finite number in
+/// `(0, MAX_FPS]` and keep the layer as it was (#5657). 1e39 used to become an infinite rate the
+/// next `.pcraft` save refused.
+#[test]
+fn an_invalid_frame_rate_is_an_error_and_changes_nothing() {
+    let mut s = session();
+    let id = LayerId(s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let fps = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().fps;
+    assert_eq!(fps(&s), 30.0);
+    for bad in [json!(0), json!(-1), json!(1e39), json!("x")] {
+        assert!(s.execute("layer.videoLayers.interpretFootage", json!({"fps": bad})).is_err(), "fps {bad}");
+        assert_eq!(fps(&s), 30.0, "fps {bad}");
+    }
+    s.execute("layer.videoLayers.interpretFootage", json!({"fps": 24})).unwrap();
+    assert_eq!(fps(&s), 24.0);
+
+    let dir = tmpdir("gifin-badfps");
+    let path = format!("{dir}/anim.gif");
+    write_gif(&path, 8, 8, &[([255, 0, 0], 10), ([0, 255, 0], 10)]);
+    let layers = s.active().unwrap().doc.layer_count();
+    for bad in [json!(0), json!(-1), json!(1e39), json!("x")] {
+        assert!(s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path, "fps": bad})).is_err(), "fps {bad}");
+        assert_eq!(s.active().unwrap().doc.layer_count(), layers, "fps {bad}");
+    }
+}
+
 #[test]
 fn video_frames_to_layers_takes_every_gif_frame() {
     let dir = tmpdir("gifin-ftl");

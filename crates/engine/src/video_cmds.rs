@@ -301,7 +301,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     let Footage { frames, fps: footage_fps } = load_frames(&path, fmt)?;
     // An explicit `fps` wins, then the rate the footage implies, then 30.
-    let fps = p.get("fps").and_then(Value::as_f64).map(|f| f as f32).or(footage_fps).unwrap_or(30.0);
+    let fps = crate::timeline_cmds::fps_param("layer.videoLayers.newVideoLayerFromFile", p)?.or(footage_fps).unwrap_or(30.0);
     let n = frames.len();
     let id = s.edit("New Video Layer from File", |doc, active| {
         store(doc);
@@ -341,10 +341,10 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn interpret_footage(s: &mut Session, p: &Value) -> Result<Value> {
-    let fps = p.get("fps").and_then(Value::as_f64);
+    let fps = crate::timeline_cmds::fps_param("layer.videoLayers.interpretFootage", p)?;
     edit_video(s, "Interpret Footage", move |v, _| {
         if let Some(f) = fps {
-            v.fps = f as f32;
+            v.fps = f;
         }
         Ok(())
     })

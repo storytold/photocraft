@@ -59,7 +59,7 @@ fn duration_param(cmd: &str, p: &Value) -> Result<Option<usize>> {
 }
 
 /// The optional `fps` param, rejected unless it's a finite number in `(0, MAX_FPS]` (#1009).
-fn fps_param(cmd: &str, p: &Value) -> Result<Option<f32>> {
+pub(crate) fn fps_param(cmd: &str, p: &Value) -> Result<Option<f32>> {
     let Some(v) = p.get("fps").filter(|v| !v.is_null()) else { return Ok(None) };
     v.as_f64()
         .filter(|f| f.is_finite() && *f > 0.0 && *f <= f64::from(MAX_FPS))
