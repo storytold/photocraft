@@ -155,6 +155,31 @@ pub fn trackpad_delta(ctx: &egui::Context, enabled: bool) -> Option<f32> {
     apply_trackpad(0.0, true, rad).filter(|_| rad != 0.0)
 }
 
+/// Shift + middle-drag rotates the view instead of panning. Keep the document point
+/// under the pointer in place, including when the view is flipped or stretched.
+pub fn middle_drag(view: &mut View, xf: &ViewXform, pointer: Pos2, delta_x: f32) -> bool {
+    if !pointer.x.is_finite() || !pointer.y.is_finite() || !delta_x.is_finite() || delta_x == 0.0 {
+        return false;
+    }
+    let current = ViewXform { center: view.center, rotation: view.rotation, ..*xf };
+    let before = current.to_doc(pointer);
+    let rotation = wrap_deg(view.rotation + delta_x * 0.35);
+    if rotation == view.rotation {
+        return false;
+    }
+    let after = ViewXform { rotation, ..current }.to_doc(pointer);
+    if !before.into_iter().chain(after).all(f64::is_finite) {
+        return false;
+    }
+    let center = [view.center[0] + (before[0] - after[0]) as f32, view.center[1] + (before[1] - after[1]) as f32];
+    if !center.into_iter().all(f32::is_finite) {
+        return false;
+    }
+    view.center = center;
+    view.rotation = rotation;
+    true
+}
+
 /// `view.rotateView`: set or add degrees on the active document's camera.
 pub fn command(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document open")?;
@@ -267,6 +292,38 @@ mod tests {
     use egui::{Event, PointerButton, pos2};
     use egui_kittest::Harness;
     use serde_json::json;
+
+    #[test]
+    fn middle_drag_rotates_about_the_pointer_without_panning() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let pointer = pos2(600.0, 180.0);
+        for flip in [false, true] {
+            let mut view = View { zoom: 2.0, center: [130.0, 80.0], ..Default::default() };
+            let xf = ViewXform { rect, zoom: 2.0, center: view.center, flip, rotation: 0.0, aspect: 1.25 };
+            let original = xf.to_doc(pointer);
+            assert!(middle_drag(&mut view, &xf, pointer, 90.0));
+            assert!((view.rotation - 31.5).abs() < 0.001);
+            let next = ViewXform { center: view.center, rotation: view.rotation, ..xf }.to_doc(pointer);
+            assert!((next[0] - original[0]).abs() < 0.001 && (next[1] - original[1]).abs() < 0.001, "{original:?} {next:?}");
+        }
+    }
+
+    #[test]
+    fn middle_drag_ignores_invalid_or_stationary_input() {
+        let mut view = View::default();
+        let xf = ViewXform {
+            rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)),
+            zoom: 1.0,
+            center: view.center,
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        assert!(!middle_drag(&mut view, &xf, pos2(200.0, 120.0), 0.0));
+        assert!(!middle_drag(&mut view, &xf, pos2(200.0, 120.0), f32::NAN));
+        assert!(!middle_drag(&mut view, &xf, pos2(f32::INFINITY, 120.0), 20.0));
+        assert_eq!(view.rotation, 0.0);
+    }
 
     #[test]
     fn wrap_deg_folds_huge_and_hostile_angles() {
