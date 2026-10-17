@@ -855,3 +855,35 @@ fn size_readout_follows_the_ruler_unit() {
     ur.rulers = Unit::Millimeters;
     assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "579.97 mm");
 }
+
+/// #5775: a second Magic Wand click on the selected region clears the selection (marquee parity).
+#[test]
+fn magic_wand_click_inside_the_selection_deselects() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
+    app.sync_views();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("paint", |doc, _| {
+            doc.layer_mut(layer).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool = Tool::MagicWand;
+    app.ui.tool_options.tolerance = 0.0;
+    app.ui.tool_options.anti_alias = false;
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    // ⇧ add mode still samples on a selected pixel.
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::SHIFT);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::SHIFT);
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+}
