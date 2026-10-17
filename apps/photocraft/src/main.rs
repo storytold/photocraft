@@ -459,8 +459,21 @@ fn main() -> eframe::Result {
     gpu_startup::configure(&mut options.wgpu_options.wgpu_setup, &plan, os, sentinel.clone(), gpu_note.clone());
     // Preferences › Performance › Low-Latency Drawing (#1343): without vsync a stroke shows about
     // 50 ms sooner; wgpu picks Immediate, else Mailbox, else Fifo by what the driver offers.
-    if gpu_startup::read_low_latency(services::prefs_file().as_deref()) {
+    let low_latency = gpu_startup::read_low_latency(services::prefs_file().as_deref());
+    if low_latency {
         options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
+    }
+    // Preferences › Performance › Prevent G-SYNC/FreeSync Flicker: a transparent window on a DX12
+    // DirectComposition swapchain is always composed by DWM, so the driver never treats it as full
+    // screen. A flip swapchain (Vulkan, DX12 from the HWND) engaged G-SYNC even with "full screen
+    // only", and input-driven repaints then flickered VA/OLED panels [OBSERVED 2026-10-17].
+    if gpu_startup::composes_window(os, &plan, gpu_startup::read_compose_window(services::prefs_file().as_deref()), low_latency) {
+        options.viewport = options.viewport.with_transparent(true);
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+            create.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+            create.instance_descriptor.backend_options.dx12.presentation_system = eframe::wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
+        log::info!("presenting through the desktop compositor (DX12 DirectComposition, transparent window)");
     }
     // Testers' present mode and frame latency overrides (#1343), after the preference.
     let present = presentation::Overrides::from_args_or_env(present_mode_arg.as_deref(), frame_latency_arg.as_deref());

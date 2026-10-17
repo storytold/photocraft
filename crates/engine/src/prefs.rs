@@ -536,6 +536,14 @@ pub struct Performance {
     /// missing. Frames are capped at 240 fps. Off (the default): vsync, smooth but late. Desktop
     /// only.
     pub low_latency_drawing: bool,
+    /// Present through the Windows desktop compositor (applies at next launch; Windows only, on by
+    /// default). G-SYNC and FreeSync engage even with "full screen only" whenever Windows lets a
+    /// flip swapchain bypass the compositor (independent flip, overlay planes), and PhotoCraft
+    /// draws only on input, so the refresh rate swings with every hover and VA/OLED panels flicker.
+    /// On: the Auto and DX12 backends use DX12 with a transparent DirectComposition swapchain,
+    /// which the compositor always composes. Skipped under Low-Latency Drawing, which wants the
+    /// bypass, and for an explicit Vulkan, OpenGL or CPU backend.
+    pub compose_window: bool,
     /// Linux display server (applies at next launch; see [`LinuxDisplayServer`]).
     pub linux_display_server: LinuxDisplayServer,
     /// GPU memory the canvas compositor may hold for layer pages and effect maps, in MB; 0 is
@@ -572,6 +580,7 @@ impl Default for Performance {
             gpu_backend: GpuBackend::Auto,
             low_resolution_previews: true,
             low_latency_drawing: false,
+            compose_window: true,
             linux_display_server: LinuxDisplayServer::Auto,
             gpu_memory_mb: 0,
             effect_cache_mb: 768,
@@ -1055,8 +1064,13 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
 pub fn is_hidden(path: &str) -> bool {
-    HIDDEN_UNTIL_IMPLEMENTED.contains(&path) || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+    HIDDEN_UNTIL_IMPLEMENTED.contains(&path)
+        || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+        || (!cfg!(target_os = "windows") && WINDOWS_ONLY.contains(&path))
 }
+
+/// Preferences that only do something on Windows; like [`LINUX_ONLY`], hidden elsewhere.
+pub const WINDOWS_ONLY: &[&str] = &["performance.composeWindow"];
 
 /// Preferences that only do something on Linux; the dialog doesn't show them elsewhere. They
 /// still load, save and round-trip on every platform.
