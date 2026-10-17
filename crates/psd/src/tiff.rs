@@ -1284,6 +1284,7 @@ pub mod transcode {
                     self.i32()?;
                 }
                 b"Idnt" | b"indx" => {
+                    self.class()?;
                     self.u32()?;
                 }
                 b"name" => {
@@ -1787,6 +1788,17 @@ mod tests {
         assert_eq!(&big[body_at + 4..body_at + 8], &[0, 0, 0, 16]);
         assert!(little.windows(4).any(|w| w == b"crP#"), "unit key reversed");
         assert!(little.windows(11).any(|w| w == b"longKeyName"), "string ids are not reversed");
+    }
+
+    #[test]
+    fn descriptor_references_by_identifier_and_index_keep_their_class() {
+        use crate::descriptor::{Class, ReferenceItem};
+        let class = || Class { name: UnicodeString::new(""), class_id: Id::new("Lyr ") };
+        let desc = Descriptor::new("null")
+            .with("null", Value::Reference(vec![ReferenceItem::Identifier { class: class(), id: 7 }, ReferenceItem::Index { class: class(), index: 2 }]));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(desc).to_bytes());
+        block_rt(*b"lfx2", data);
     }
 
     #[test]
