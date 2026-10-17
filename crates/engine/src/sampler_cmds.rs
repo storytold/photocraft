@@ -378,6 +378,35 @@ mod tests {
     }
 
     #[test]
+    fn flips_and_right_angle_turns_keep_points_on_their_pixel() {
+        use crate::canvas_geom::Turn;
+        for (id, turn) in [
+            ("image.imageRotation.flipCanvasHorizontal", Turn::FlipHorizontal),
+            ("image.imageRotation.flipCanvasVertical", Turn::FlipVertical),
+            ("image.imageRotation.180", Turn::Rotate180),
+            ("image.imageRotation.90cw", Turn::Cw90),
+            ("image.imageRotation.90ccw", Turn::Ccw90),
+        ] {
+            // A black pixel at (3, 3) of a white 100×80 document, with a point on it.
+            let mut s = session();
+            s.edit("paint", |doc, _| {
+                let surf = doc.layers[0].surface_mut().unwrap();
+                let black = photocraft_raster::from_rgba(&surf.format(), [0.0, 0.0, 0.0, 1.0]);
+                surf.fill_rect(Rect::new(3, 3, 4, 4), &black);
+                Ok(())
+            })
+            .unwrap();
+            s.execute("view.colorSamplers.add", json!({"x": 3, "y": 3})).unwrap();
+            s.execute(id, json!({})).unwrap();
+            let (x, y) = turn.pixel_map(100, 80)(3, 3);
+            let p = points(&mut s);
+            assert_eq!(p.len(), 1, "{id}");
+            assert_eq!(p[0]["position"], json!([f64::from(x), f64::from(y)]), "{id}");
+            assert_eq!(p[0]["rgb"], json!([0, 0, 0]), "{id}");
+        }
+    }
+
+    #[test]
     fn a_rotated_crop_moves_points() {
         // The crop frame is centred on the point, so the point lands at the new canvas centre.
         let mut s = session();

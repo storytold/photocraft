@@ -117,7 +117,10 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     if let Some(d) = s.active() {
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
-        s.set_sampler_map(a);
+        // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
+        // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).
+        let half = photocraft_geom::Affine::translate(0.5, 0.5);
+        s.set_sampler_map(half.then(&a).then(&photocraft_geom::Affine::translate(-0.5, -0.5)));
     }
     s.edit(label, |doc, _| {
         crate::canvas_geom::turn_canvas(doc, t);
