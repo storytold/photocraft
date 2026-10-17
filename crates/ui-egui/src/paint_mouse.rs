@@ -198,6 +198,8 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::brush_picker::apply(app, ui.ctx(), picks);
         closes
     });
+    let t = crate::theme::Tokens::get(ctx);
+    crate::theme::upgrade_popup_shadow(ctx, area.response.layer_id, t.popup_shadow);
     // Not a press on a menu the picker opened (the gear, a preset's context menu), nor on the
     // options-bar chip, whose click toggles the picker. A menu floats over the picker in the
     // foreground order, so the press is told apart by the layer it lands on, not by any popup

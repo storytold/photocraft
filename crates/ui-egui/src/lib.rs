@@ -1993,13 +1993,15 @@ impl eframe::App for PhotocraftApp {
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
-            egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {
+            let modal = egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {
                 ui.spinner();
                 ui.label(tl!("Pick a screen pixel or press Esc to cancel"));
                 if ui.button(tl!("Cancel")).clicked() {
                     screen_picker::cancel(&ctx);
                 }
             });
+            let t = theme::Tokens::get(&ctx);
+            theme::upgrade_shadow(&ctx, modal.response.layer_id, theme::ShadowElevation::Modal, t.modal_shadow);
             self.automation_input = false;
             return;
         }

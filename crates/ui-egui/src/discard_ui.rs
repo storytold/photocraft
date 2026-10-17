@@ -314,6 +314,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         });
     });
+    let t = crate::theme::Tokens::get(ctx);
+    crate::theme::upgrade_shadow(ctx, modal.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
     if modal.should_close() {
         answer = Some(Answer::Cancel);
     }

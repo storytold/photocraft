@@ -779,7 +779,7 @@ fn float_window(
         .inner_margin(egui::Margin::same(8));
     let canvas = canvas_drop_rect(app);
     let mut close = false;
-    egui::Window::new(title)
+    let win = egui::Window::new(title)
         .id(egui::Id::new(("preset-window", key)))
         .title_bar(false)
         .resizable(false)
@@ -800,6 +800,9 @@ fn float_window(
             ui.add_space(4.0);
             body(app, ui);
         });
+    if let Some(win) = win {
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
+    }
     close
 }
 

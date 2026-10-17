@@ -88,7 +88,12 @@ pub fn show<R>(button: &Response, content: impl FnOnce(&mut Ui, &PressMenu) -> R
     // The release ending the press that opened the menu is a click outside the popup: it must not
     // close it again.
     let close = if button.clicked() && menu.owns_gesture(&ctx) { PopupCloseBehavior::IgnoreClicks } else { PopupCloseBehavior::CloseOnClick };
-    let shown = Popup::menu(button).open_memory(open).close_behavior(close).show(|ui| content(ui, &menu)).map(|r| r.inner);
+    let shown = Popup::menu(button).open_memory(open).close_behavior(close).show(|ui| content(ui, &menu));
+    if let Some(p) = &shown {
+        let t = crate::theme::Tokens::get(&ctx);
+        crate::theme::upgrade_popup_shadow(&ctx, p.response.layer_id, t.popup_shadow);
+    }
+    let shown = shown.map(|r| r.inner);
     // This menu's gesture ends with the button (its release was handled by the items above).
     if menu.owns_gesture(&ctx) && ctx.input(|i| i.pointer.primary_released() || !i.pointer.primary_down()) {
         ctx.data_mut(|d| d.remove::<egui::Id>(gesture_id()));

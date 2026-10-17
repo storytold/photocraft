@@ -98,6 +98,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             });
         });
     });
+    let t = crate::theme::Tokens::get(ctx);
+    crate::theme::upgrade_popup_shadow(ctx, area.response.layer_id, t.popup_shadow);
     if let Some(layer) = chosen {
         choose(app, layer);
         return;

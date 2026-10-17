@@ -503,7 +503,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .inner_margin(egui::Margin::same(10));
     let canvas = app.last_canvas_rect;
     let mut open = true;
-    egui::Window::new(tl!("Brush Settings"))
+    let win = egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::new("brush-settings"))
         .title_bar(false)
         .resizable(false)
@@ -549,6 +549,9 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 settings_tab(app, ui);
             }
         });
+    if let Some(win) = win {
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
+    }
     if !open {
         app.ui.panels.brush_settings = false;
     }

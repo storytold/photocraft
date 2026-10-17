@@ -616,7 +616,7 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut show_panel = false;
     // Resolved before the closure so `app` is borrowed only once inside it.
     let layer = selected_gradient(app);
-    egui::Window::new(tl!("Gradient Editor"))
+    let win = egui::Window::new(tl!("Gradient Editor"))
         .id(egui::Id::new("gradient-editor"))
         .open(&mut open)
         .collapsible(false)
@@ -643,6 +643,10 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 });
             }
         });
+    if let Some(win) = win {
+        let t = crate::theme::Tokens::get(ctx);
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
+    }
     if show_panel {
         let _ = crate::preset_panels::menu(app, "window.panel.gradients", &Value::Null);
     }

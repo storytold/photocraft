@@ -168,6 +168,8 @@ pub struct Tokens {
     pub accent_text: Color32,
     pub separator: Color32,
     pub shadow: Color32,
+    pub popup_shadow: Color32,
+    pub modal_shadow: Color32,
     pub primary_bg: Color32,
     pub primary_text: Color32,
     pub danger: Color32,
@@ -246,6 +248,7 @@ impl Tokens {
                 accent_text: Color32::from_rgb(0, 66, 150),
                 separator: Color32::from_rgb(158, 158, 158),
                 shadow: Color32::from_black_alpha(70),
+                modal_shadow: Color32::from_black_alpha(45),
                 tab_strip: Color32::from_rgb(170, 170, 170),
                 row_selected: Color32::from_rgb(212, 212, 212),
                 ..Tokens::for_kind(ThemeKind::Pro)
@@ -271,6 +274,7 @@ impl Tokens {
                 accent_text: Color32::from_rgb(16, 98, 196),
                 separator: Color32::from_rgb(214, 214, 214),
                 shadow: Color32::from_black_alpha(50),
+                modal_shadow: Color32::from_black_alpha(26),
                 tab_strip: Color32::from_rgb(226, 226, 226),
                 row_selected: Color32::from_rgb(204, 204, 204),
                 ..Tokens::for_kind(ThemeKind::Pro)
@@ -296,7 +300,9 @@ impl Tokens {
                 accent_border: Color32::from_rgb(55, 142, 240),
                 accent_text: Color32::WHITE,
                 separator: Color32::from_rgb(30, 30, 30),
-                shadow: Color32::from_black_alpha(150),
+                shadow: Color32::from_black_alpha(100),
+                popup_shadow: Color32::from_black_alpha(40),
+                modal_shadow: Color32::from_black_alpha(100),
                 primary_bg: Color32::from_rgb(55, 142, 240),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(236, 91, 98),
@@ -336,7 +342,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(160, 148, 255, 110),
                 accent_text: Color32::from_rgb(214, 208, 255),
                 separator: Color32::from_rgb(38, 38, 42),
-                shadow: Color32::from_black_alpha(140),
+                shadow: Color32::from_black_alpha(95),
+                popup_shadow: Color32::from_black_alpha(35),
+                modal_shadow: Color32::from_black_alpha(95),
                 primary_bg: Color32::from_rgb(246, 246, 248),
                 primary_text: Color32::from_rgb(12, 12, 14),
                 danger: Color32::from_rgb(240, 96, 96),
@@ -376,7 +384,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(108, 92, 231, 120),
                 accent_text: Color32::from_rgb(80, 64, 200),
                 separator: Color32::from_rgb(226, 226, 232),
-                shadow: Color32::from_black_alpha(50),
+                shadow: Color32::from_black_alpha(28),
+                popup_shadow: Color32::from_black_alpha(18),
+                modal_shadow: Color32::from_black_alpha(20),
                 primary_bg: Color32::from_rgb(20, 20, 24),
                 primary_text: Color32::from_rgb(250, 250, 252),
                 danger: Color32::from_rgb(210, 60, 60),
@@ -417,6 +427,8 @@ impl Tokens {
                 accent_text: Color32::WHITE,
                 separator: Color32::from_rgb(128, 128, 128),
                 shadow: Color32::from_black_alpha(0),
+                popup_shadow: Color32::from_black_alpha(0),
+                modal_shadow: Color32::from_black_alpha(0),
                 primary_bg: Color32::from_rgb(212, 208, 200),
                 primary_text: Color32::BLACK,
                 danger: Color32::from_rgb(160, 0, 0),
@@ -459,7 +471,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(53, 132, 228, 130),
                 accent_text: Color32::from_rgb(28, 113, 216),
                 separator: Color32::from_rgb(222, 222, 225),
-                shadow: Color32::from_black_alpha(45),
+                shadow: Color32::from_black_alpha(25),
+                popup_shadow: Color32::from_black_alpha(18),
+                modal_shadow: Color32::from_black_alpha(20),
                 primary_bg: Color32::from_rgb(53, 132, 228),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(192, 28, 40),
@@ -499,7 +513,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(120, 174, 237, 140),
                 accent_text: Color32::from_rgb(120, 174, 237),
                 separator: Color32::from_rgb(24, 24, 27),
-                shadow: Color32::from_black_alpha(140),
+                shadow: Color32::from_black_alpha(95),
+                popup_shadow: Color32::from_black_alpha(35),
+                modal_shadow: Color32::from_black_alpha(95),
                 primary_bg: Color32::from_rgb(53, 132, 228),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(255, 123, 99),
@@ -545,7 +561,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(58, 172, 232, 170),
                 accent_text: Color32::from_rgb(30, 94, 136),
                 separator: Color32::from_rgb(214, 218, 222),
-                shadow: Color32::from_black_alpha(45),
+                shadow: Color32::from_black_alpha(25),
+                popup_shadow: Color32::from_black_alpha(18),
+                modal_shadow: Color32::from_black_alpha(20),
                 primary_bg: Color32::from_rgb(35, 122, 180),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(170, 50, 64),
@@ -595,7 +613,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(58, 172, 232, 160),
                 accent_text: Color32::from_rgb(80, 184, 238),
                 separator: Color32::from_rgb(46, 50, 54),
-                shadow: Color32::from_black_alpha(150),
+                shadow: Color32::from_black_alpha(95),
+                popup_shadow: Color32::from_black_alpha(35),
+                modal_shadow: Color32::from_black_alpha(95),
                 primary_bg: Color32::from_rgb(30, 118, 176),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(227, 111, 123),
@@ -639,6 +659,8 @@ impl Tokens {
                 accent_text: Color32::from_rgb(190, 200, 252),
                 separator: Color32::from_rgb(36, 36, 44),
                 shadow: Color32::from_black_alpha(110),
+                popup_shadow: Color32::from_black_alpha(35),
+                modal_shadow: Color32::from_black_alpha(110),
                 primary_bg: Color32::from_rgb(86, 104, 196),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(250, 160, 172),
@@ -681,6 +703,8 @@ impl Tokens {
                 accent_text: Color32::from_rgb(46, 58, 146),
                 separator: Color32::from_rgb(210, 207, 218),
                 shadow: Color32::from_black_alpha(40),
+                popup_shadow: Color32::from_black_alpha(20),
+                modal_shadow: Color32::from_black_alpha(22),
                 primary_bg: Color32::from_rgb(80, 98, 190),
                 primary_text: Color32::WHITE,
                 danger: Color32::from_rgb(166, 44, 62),
@@ -723,7 +747,9 @@ impl Tokens {
                 accent_border: Color32::from_rgba_unmultiplied(38, 139, 210, 120),
                 accent_text: Color32::from_rgb(253, 246, 227),
                 separator: Color32::from_rgb(0, 37, 47),
-                shadow: Color32::from_black_alpha(150),
+                shadow: Color32::from_black_alpha(100),
+                popup_shadow: Color32::from_black_alpha(40),
+                modal_shadow: Color32::from_black_alpha(100),
                 primary_bg: Color32::from_rgb(38, 139, 210),
                 primary_text: Color32::from_rgb(253, 246, 227),
                 danger: Color32::from_rgb(220, 50, 47),
@@ -990,8 +1016,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.error_fg_color = t.danger;
     v.window_corner_radius = CornerRadius::same(t.radius_lg as u8);
     v.menu_corner_radius = CornerRadius::same(t.radius as u8);
-    v.window_shadow = egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: t.shadow };
-    v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: t.shadow };
+    v.window_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: t.shadow };
+    v.popup_shadow = egui::Shadow { offset: [0, 3], blur: 12, spread: 0, color: t.popup_shadow };
     v.selection.bg_fill = if t.bevel || t.pro { t.accent } else { t.accent_soft };
     v.selection.stroke = Stroke::new(1.0, t.accent_text);
     v.slider_trailing_fill = true;
@@ -1065,6 +1091,90 @@ pub const ROW_GAP: f32 = 4.0;
 
 pub fn canvas_bg(t: &Tokens) -> Color32 {
     t.canvas
+}
+
+/// Shared CPU/GPU canvas-shadow opacity. Pro and Classic retain their flat canvas treatment.
+pub fn canvas_shadow_alpha(t: &Tokens, enabled: bool) -> f32 {
+    if !enabled || t.bevel || t.pro {
+        return 0.0;
+    }
+    // Light palettes use a weaker shadow to avoid a dark band around the document.
+    let strength = if t.dark() { 0.85 } else { 0.50 };
+    f32::from(t.shadow.a()) / 255.0 * strength
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowElevation {
+    Low,
+    Medium,
+    High,
+    Modal,
+}
+
+fn find_frame_idx(list: &egui::layers::PaintList) -> Option<egui::layers::ShapeIdx> {
+    let mut fallback = None;
+    for (i, clipped) in list.all_entries().take(5).enumerate() {
+        match &clipped.shape {
+            egui::Shape::Vec(shapes) if shapes.len() >= 2 && matches!(shapes.last(), Some(egui::Shape::Rect(_))) => {
+                return Some(egui::layers::ShapeIdx(i));
+            }
+            egui::Shape::Rect(frame) if frame.corner_radius != egui::CornerRadius::ZERO && fallback.is_none() => {
+                fallback = Some(egui::layers::ShapeIdx(i));
+            }
+            _ => {}
+        }
+    }
+    fallback
+}
+
+pub fn upgrade_shadow(ctx: &egui::Context, layer_id: egui::LayerId, elevation: ShadowElevation, base_color: Color32) {
+    if base_color.a() == 0 {
+        return;
+    }
+    let alpha = base_color.a() as f32;
+    let layers: [([i8; 2], u8, f32); 4] = match elevation {
+        ShadowElevation::Low => [([0, 2], 10, 0.30), ([0, 1], 6, 0.35), ([0, 1], 3, 0.25), ([0, 0], 2, 0.10)],
+        ShadowElevation::Medium => [([0, 5], 18, 0.30), ([0, 3], 10, 0.35), ([0, 2], 5, 0.25), ([0, 1], 3, 0.10)],
+        ShadowElevation::High => [([0, 8], 28, 0.30), ([0, 4], 14, 0.35), ([0, 2], 7, 0.25), ([0, 1], 4, 0.10)],
+        ShadowElevation::Modal => [([0, 12], 44, 0.30), ([0, 6], 20, 0.35), ([0, 3], 10, 0.25), ([0, 1], 5, 0.10)],
+    };
+
+    ctx.graphics_mut(|graphics| {
+        let Some(list) = graphics.get_mut(layer_id) else {
+            return;
+        };
+        let Some(frame_idx) = find_frame_idx(list) else {
+            return;
+        };
+        list.mutate_shape(frame_idx, |clipped| {
+            let frame = match &clipped.shape {
+                egui::Shape::Vec(shapes) => match shapes.last() {
+                    Some(egui::Shape::Rect(frame)) => frame.clone(),
+                    _ => return,
+                },
+                egui::Shape::Rect(frame) => frame.clone(),
+                _ => return,
+            };
+
+            let mut shapes: Vec<egui::Shape> = layers
+                .iter()
+                .map(|&(offset, blur, weight)| {
+                    let color = Color32::from_black_alpha((alpha * weight).round() as u8);
+                    egui::Shape::Rect(egui::Shadow { offset, blur, spread: 0, color }.as_shape(frame.rect, frame.corner_radius))
+                })
+                .collect();
+            shapes.push(egui::Shape::Rect(frame));
+            clipped.shape = egui::Shape::Vec(shapes);
+        });
+    });
+}
+
+pub fn upgrade_popup_shadow(ctx: &egui::Context, layer_id: egui::LayerId, base_color: Color32) {
+    upgrade_shadow(ctx, layer_id, ShadowElevation::Medium, base_color);
+}
+
+pub fn upgrade_modal_shadow(ctx: &egui::Context, layer_id: egui::LayerId, base_color: Color32) {
+    upgrade_shadow(ctx, layer_id, ShadowElevation::Modal, base_color);
 }
 
 #[cfg(test)]
@@ -1377,6 +1487,114 @@ mod tests {
             assert!(contrast(t.caption_close_text, t.caption_close) >= 4.5, "{kind:?}: close button glyph");
         }
     }
+
+    #[test]
+    fn canvas_shadow_respects_theme_and_visibility() {
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            assert_eq!(canvas_shadow_alpha(&t, false), 0.0, "{kind:?}: disabled shadow");
+            let alpha = canvas_shadow_alpha(&t, true);
+            assert!(alpha.is_finite() && (0.0..=1.0).contains(&alpha), "{kind:?}");
+            assert_eq!(alpha > 0.0, !t.pro && !t.bevel && t.shadow.a() > 0, "{kind:?}");
+        }
+        let mut dark = Tokens::for_kind(ThemeKind::Studio);
+        let mut light = Tokens::for_kind(ThemeKind::StudioLight);
+        dark.shadow = Color32::from_black_alpha(80);
+        light.shadow = dark.shadow;
+        assert!(canvas_shadow_alpha(&light, true) < canvas_shadow_alpha(&dark, true));
+        light.shadow = Color32::TRANSPARENT;
+        assert_eq!(canvas_shadow_alpha(&light, true), 0.0);
+    }
+
+    #[test]
+    fn upgrade_shadow_leaves_unrelated_shapes_alone_when_frame_is_missing() {
+        let ctx = egui::Context::default();
+        let layer_id = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("no_frame"));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let backdrop = egui::epaint::RectShape::new(rect, egui::CornerRadius::ZERO, Color32::BLACK, egui::Stroke::NONE, egui::epaint::StrokeKind::Inside);
+        ctx.graphics_mut(|g| {
+            g.entry(layer_id).add(rect, egui::Shape::Rect(backdrop.clone()));
+        });
+        upgrade_shadow(&ctx, layer_id, ShadowElevation::Modal, Color32::from_black_alpha(100));
+        ctx.graphics(|g| {
+            let first = g.get(layer_id).unwrap().all_entries().next().unwrap();
+            assert_eq!(first.shape, egui::Shape::Rect(backdrop));
+        });
+    }
+
+    #[test]
+    fn upgrade_popup_shadow_replaces_single_shadow_with_multi_layer() {
+        let ctx = egui::Context::default();
+        let layer_id = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("test_popup"));
+        ctx.graphics_mut(|g| {
+            let list = g.entry(layer_id);
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(100.0, 200.0));
+            let corner_radius = egui::CornerRadius::same(6);
+            let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(55) }.as_shape(rect, corner_radius);
+            let frame = egui::epaint::RectShape::new(rect, corner_radius, Color32::BLACK, egui::Stroke::NONE, egui::epaint::StrokeKind::Inside);
+            list.add(rect, egui::Shape::Vec(vec![egui::Shape::Rect(shadow), egui::Shape::Rect(frame)]));
+        });
+        upgrade_popup_shadow(&ctx, layer_id, Color32::from_black_alpha(55));
+        ctx.graphics(|g| {
+            let list = g.get(layer_id).unwrap();
+            let first = list.all_entries().next().unwrap();
+            let egui::Shape::Vec(shapes) = &first.shape else { panic!() };
+            assert_eq!(shapes.len(), 5);
+        });
+    }
+
+    #[test]
+    fn upgrade_popup_shadow_noop_when_transparent() {
+        let ctx = egui::Context::default();
+        let layer_id = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("test_popup_zero"));
+        ctx.graphics_mut(|g| {
+            let list = g.entry(layer_id);
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(100.0, 200.0));
+            let corner_radius = egui::CornerRadius::same(6);
+            let frame = egui::epaint::RectShape::new(rect, corner_radius, Color32::BLACK, egui::Stroke::NONE, egui::epaint::StrokeKind::Inside);
+            list.add(rect, egui::Shape::Rect(frame));
+        });
+        upgrade_popup_shadow(&ctx, layer_id, Color32::TRANSPARENT);
+        ctx.graphics(|g| {
+            let list = g.get(layer_id).unwrap();
+            let first = list.all_entries().next().unwrap();
+            assert!(matches!(first.shape, egui::Shape::Rect(_)));
+        });
+    }
+
+    #[test]
+    fn upgrade_shadow_skips_modal_backdrop() {
+        let ctx = egui::Context::default();
+        let layer_id = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("test_modal"));
+        ctx.graphics_mut(|g| {
+            let list = g.entry(layer_id);
+            let screen_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0));
+            let backdrop = egui::epaint::RectShape::new(
+                screen_rect,
+                egui::CornerRadius::ZERO,
+                egui::Color32::TRANSPARENT,
+                egui::Stroke::NONE,
+                egui::epaint::StrokeKind::Inside,
+            );
+            list.add(screen_rect, egui::Shape::Rect(backdrop));
+
+            let modal_rect = egui::Rect::from_min_size(egui::pos2(500.0, 300.0), egui::vec2(800.0, 500.0));
+            let corner_radius = egui::CornerRadius::same(8);
+            let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(55) }.as_shape(modal_rect, corner_radius);
+            let frame = egui::epaint::RectShape::new(modal_rect, corner_radius, Color32::BLACK, egui::Stroke::NONE, egui::epaint::StrokeKind::Inside);
+            list.add(modal_rect, egui::Shape::Vec(vec![egui::Shape::Rect(shadow), egui::Shape::Rect(frame)]));
+        });
+        upgrade_shadow(&ctx, layer_id, ShadowElevation::Modal, Color32::from_black_alpha(150));
+        ctx.graphics(|g| {
+            let list = g.get(layer_id).unwrap();
+            let mut entries = list.all_entries();
+            let first = entries.next().unwrap();
+            assert!(matches!(first.shape, egui::Shape::Rect(_)));
+            let second = entries.next().unwrap();
+            let egui::Shape::Vec(shapes) = &second.shape else { panic!() };
+            assert_eq!(shapes.len(), 5);
+        });
+    }
 }
 
 /// Development feature: live design-token overrides.
@@ -1487,6 +1705,8 @@ pub mod live {
                 accent_text,
                 separator,
                 shadow,
+                popup_shadow,
+                modal_shadow,
                 primary_bg,
                 primary_text,
                 danger,

@@ -1186,7 +1186,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 } else {
                     config.close_behavior
                 };
-                egui::Popup::menu(&title)
+                let popup = egui::Popup::menu(&title)
                     .align(crate::direction::below())
                     .open_memory(open)
                     .close_behavior(close)
@@ -1216,6 +1216,9 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                             render_level(ui, &mine, 1, &mut clicked, &mut nav);
                         }
                     });
+                if let Some(p) = &popup {
+                    crate::theme::upgrade_popup_shadow(ui.ctx(), p.response.layer_id, t.popup_shadow);
+                }
                 buttons.push(title);
             }
             edge = if rtl { buttons.iter().map(|b| b.rect.left()).fold(edge, f32::min) } else { buttons.iter().map(|b| b.rect.right()).fold(edge, f32::max) };
@@ -1506,6 +1509,10 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
                 nav.row(ui, depth - 1, enabled, None, mnemonic, |ui, nav| {
                     let r = ui.menu_button(title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
                     if r.inner.is_some() {
+                        let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(r.response.id);
+                        let sub_layer = egui::LayerId::new(egui::Order::Foreground, sub_id);
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        crate::theme::upgrade_popup_shadow(ui.ctx(), sub_layer, t.popup_shadow);
                         // Where the submenu hangs from, to keep it below the menu bar (#319).
                         nav.set_anchor(depth, r.response.rect);
                     }

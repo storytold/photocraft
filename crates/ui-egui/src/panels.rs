@@ -273,6 +273,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                 });
                                             },
                                         );
+                                        crate::theme::upgrade_popup_shadow(ui.ctx(), area.response.layer_id, t.popup_shadow);
                                         // Any press outside the flyout and its button closes it, as in Photoshop: a
                                         // drag on the canvas (cropping, painting) isn't a click (#4460).
                                         let pressed_outside = ui.input(|i| {
@@ -346,7 +347,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     };
                     // The release ending the hold counts as a click; it mustn't close the list it opened.
                     let close = if was_held || long_press { egui::PopupCloseBehavior::IgnoreClicks } else { egui::PopupCloseBehavior::CloseOnClick };
-                    egui::Popup::menu(&sm).open_memory(open).close_behavior(close).at_pointer_fixed().show(|ui| {
+                    let popup = egui::Popup::menu(&sm).open_memory(open).close_behavior(close).at_pointer_fixed().show(|ui| {
                         ui.set_min_width(220.0);
                         for (id, label) in [
                             ("view.screenMode.standard", tl!("Standard Screen Mode")),
@@ -360,6 +361,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             }
                         }
                     });
+                    if let Some(p) = &popup {
+                        crate::theme::upgrade_popup_shadow(&ctx, p.response.layer_id, t.popup_shadow);
+                    }
                 });
             }
         });
@@ -1366,7 +1370,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                         ui.add_space(6.0);
                         let more = icons::button(ui, "ellipsis", 24.0, false, tl!("Align and distribute"));
-                        egui::Popup::menu(&more).show(|ui| {
+                        let popup = egui::Popup::menu(&more).show(|ui| {
                             ui.set_min_width(200.0);
                             let mut section = |ui: &mut egui::Ui, title: &str, prefix: &str| {
                                 ui.label(egui::RichText::new(tl!(&title)).small().color(t.text_dim));
@@ -1381,6 +1385,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             ui.separator();
                             section(ui, tl!("Distribute"), "layer.distribute.");
                         });
+                        if let Some(p) = &popup {
+                            crate::theme::upgrade_popup_shadow(ui.ctx(), p.response.layer_id, t.popup_shadow);
+                        }
                     }
                     Tool::RectMarquee | Tool::EllipseMarquee => hint(
                         ui,
@@ -3436,6 +3443,7 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             properties_body(app, ui);
         });
     });
+    crate::theme::upgrade_shadow(ctx, shown.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
     if drag != egui::Vec2::ZERO && canvas.is_positive() {
         // Keep the title bar inside the canvas.
         let r = shown.response.rect.translate(drag);

@@ -221,7 +221,7 @@ pub fn show_offer(app: &mut PhotocraftApp, ctx: &egui::Context) {
         &[("set", &offer.set), ("n", &n)],
     );
     let mut answer = None;
-    egui::Window::new(tl!("Import keyboard shortcuts?"))
+    let win = egui::Window::new(tl!("Import keyboard shortcuts?"))
         .id(egui::Id::new("kys-offer"))
         .collapsible(false)
         .resizable(false)
@@ -240,6 +240,10 @@ pub fn show_offer(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
         });
+    if let Some(win) = win {
+        let t = crate::theme::Tokens::get(ctx);
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
+    }
     if let Some(import) = answer {
         answer_offer(app, import);
     }

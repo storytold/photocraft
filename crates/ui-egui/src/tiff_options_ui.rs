@@ -62,6 +62,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
         });
     });
+    let t = crate::theme::Tokens::get(ctx);
+    crate::theme::upgrade_shadow(ctx, modal.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
     cancel |= modal.should_close();
     p.discard_layers = discard;
     p.dont_ask_again = dont_ask;

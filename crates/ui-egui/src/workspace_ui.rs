@@ -368,9 +368,12 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
-    egui::Window::new(title).id(egui::Id::new("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
-        ctx,
-        |ui| {
+    let win = egui::Window::new(title)
+        .id(egui::Id::new("shell-dialog"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .show(ctx, |ui| {
             ui.label(RichText::new(tl!(&title)).color(t.text).size(13.0).strong());
             crate::widgets::hairline(ui);
             ui.add_space(6.0);
@@ -466,8 +469,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                 });
             });
-        },
-    );
+        });
+    if let Some(win) = win {
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
+    }
     match result {
         Some(true) => {
             app.ui.shell.dialog = Some((kind, f));

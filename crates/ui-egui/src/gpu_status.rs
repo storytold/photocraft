@@ -123,7 +123,7 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(reason) = app.ui.gpu_fallback_notice.clone() else { return };
     let t = crate::theme::Tokens::get(ctx);
     let mut choice = None;
-    egui::Window::new(tl!("Switched to CPU rendering"))
+    let win = egui::Window::new(tl!("Switched to CPU rendering"))
         .id(egui::Id::new("gpu-fallback-warning"))
         .collapsible(false)
         .resizable(false)
@@ -146,6 +146,9 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
         });
+    if let Some(win) = win {
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
+    }
     if let Some(retry) = choice
         && let Err(error) = choose_recovery(app, retry)
     {

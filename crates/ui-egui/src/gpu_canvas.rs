@@ -44,8 +44,8 @@ const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// documents (a 14000² one would need 2.1 GB) use `Rgba8Unorm`, so they stay on the GPU like
 /// 8-bit ones. `PHOTOCRAFT_CANVAS_F16=0` turns the float canvas off, `=1` ignores this budget.
 pub const F16_BUDGET_PX: u64 = 100_000_000;
-const VIEW_UNIFORM_SIZE: u64 = 128;
-const VIEW_FLOATS: usize = 32;
+const VIEW_FLOATS: usize = 36;
+const VIEW_UNIFORM_SIZE: u64 = (VIEW_FLOATS * std::mem::size_of::<f32>()) as u64;
 const TILE_UNIFORM_SIZE: u64 = 16;
 
 /// Whether this view can use the GPU canvas. Flip and non-square pixel aspect correction are
@@ -68,8 +68,8 @@ pub struct ViewParams {
     /// Camera rotation in radians, clockwise in Y-down screen space. Rotate around [`Self::center`]
     /// before sampling. Flip stays on the CPU path.
     pub rotation: f32,
-    /// Draw the drop shadow on the pasteboard.
-    pub shadow: bool,
+    /// Drop-shadow opacity on the pasteboard, in 0..=1; zero disables its draw pass.
+    pub shadow_alpha: f32,
     /// Draw the pixel grid at high zoom.
     pub pixel_grid: bool,
     /// Distinguishes views painted in the same frame (main canvas, extra windows).
@@ -2041,6 +2041,10 @@ impl CanvasCallback {
             },
             p.center[0],
             p.center[1],
+            if p.shadow_alpha.is_finite() { p.shadow_alpha.clamp(0.0, 1.0) } else { 0.0 },
+            0.0,
+            0.0,
+            0.0,
         ]
     }
 }
@@ -2099,7 +2103,7 @@ impl CallbackTrait for CanvasCallback {
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_scissor_rect(clip.left_px.max(0) as u32, clip.top_px.max(0) as u32, clip.width_px as u32, clip.height_px as u32);
         pass.set_bind_group(0, &view.bind_group, &[]);
-        if self.params.shadow {
+        if self.params.shadow_alpha > 0.0 {
             pass.set_pipeline(&res.shadow_pipeline);
             pass.draw(0..6, 0..1);
         }
@@ -2138,6 +2142,7 @@ struct View {
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
     h: vec4<f32>, // cos, sin, center_doc_x, center_doc_y
+    shadow: vec4<f32>, // opacity, reserved yzw (independent of pattern preview offset)
 };
 struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
 
@@ -2209,7 +2214,7 @@ fn box_blur(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>, sigma: f32) -> f32 {
 
 @vertex
 fn vs_shadow(@builtin(vertex_index) vi: u32) -> VOut {
-    let pad = 64.0 * view.a.w;
+    let pad = 96.0 * view.a.w;
     let c0 = doc_to_px(vec2(0.0, 0.0));
     let c1 = doc_to_px(vec2(view.b.z, 0.0));
     let c2 = doc_to_px(vec2(view.b.z, view.b.w));
@@ -2231,9 +2236,8 @@ fn fs_shadow(in: VOut) -> @location(0) vec4<f32> {
     let lo = doc_min();
     let hi = doc_max();
     let u = view.a.w;
-    let ambient = box_blur(p_align - vec2(0.0, 7.0 * u), lo, hi, 16.0 * u) * 0.40;
-    let contact = box_blur(p_align - vec2(0.0, 0.75 * u), lo, hi, 1.25 * u) * 0.30;
-    let a = 1.0 - (1.0 - ambient) * (1.0 - contact);
+    let ambient = box_blur(p_align - vec2(0.0, 4.0 * u), lo, hi, 28.0 * u);
+    let a = ambient * view.shadow.x;
     return vec4(0.0, 0.0, 0.0, a);
 }
 
@@ -2513,8 +2517,8 @@ mod tests {
 
     #[test]
     fn view_uniform_packs_rotation() {
-        assert_eq!(VIEW_FLOATS, 32);
-        assert_eq!(VIEW_UNIFORM_SIZE, 128);
+        assert_eq!(VIEW_FLOATS, 36);
+        assert_eq!(VIEW_UNIFORM_SIZE, 144);
         assert_eq!(VIEW_FLOATS * 4, VIEW_UNIFORM_SIZE as usize);
         assert!(gpu_view_ok(false, 0.0, 1.0));
         assert!(gpu_view_ok(false, 45.0_f32.to_radians(), 1.0));
@@ -2529,6 +2533,41 @@ mod tests {
         let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, center, 1.0, 0.0, [0.0, 0.0, 10.0, 4.0]);
         assert!((x0 - origin[0]).abs() < 1e-4 && (y0 - origin[1]).abs() < 1e-4);
         assert!((x1 - (origin[0] + 20.0)).abs() < 1e-4 && (y1 - (origin[1] + 8.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn view_uniform_keeps_shadow_independent_of_pattern_offset() {
+        let mut callback = CanvasCallback {
+            rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            params: ViewParams {
+                doc: 1,
+                doc_size: [128, 64],
+                zoom: 2.0,
+                center: [64.0, 32.0],
+                rotation: 0.0,
+                shadow_alpha: 0.25,
+                pixel_grid: false,
+                view_key: 1,
+                display: 2,
+                output: 0,
+                hdr: None,
+                offset: [128.0, -64.0],
+            },
+        };
+        let style = CanvasStyle::default();
+        let data = callback.uniforms([800, 600], 1.0, false, &style);
+        assert_eq!(&data[12..16], &[128.0, -64.0, 2.0, 0.0]);
+        assert_eq!(&data[32..36], &[0.25, 0.0, 0.0, 0.0]);
+
+        // Turning the shadow off must not move the document or change its display transform.
+        callback.params.shadow_alpha = 0.0;
+        let unshadowed = callback.uniforms([800, 600], 1.0, false, &style);
+        assert_eq!(&data[..32], &unshadowed[..32]);
+        assert_eq!(unshadowed[32], 0.0);
+        for (alpha, expected) in [(f32::NAN, 0.0), (f32::INFINITY, 0.0), (-1.0, 0.0), (2.0, 1.0)] {
+            callback.params.shadow_alpha = alpha;
+            assert_eq!(callback.uniforms([800, 600], 1.0, false, &style)[32], expected);
+        }
     }
 
     #[test]
@@ -2578,6 +2617,19 @@ mod tests {
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
                 .validate(&module)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            if name == "canvas" {
+                let (members, span) = module
+                    .types
+                    .iter()
+                    .find_map(|(_, ty)| match &ty.inner {
+                        naga::TypeInner::Struct { members, span } if ty.name.as_deref() == Some("View") => Some((members, *span)),
+                        _ => None,
+                    })
+                    .expect("canvas View uniform");
+                assert_eq!(u64::from(span), VIEW_UNIFORM_SIZE);
+                assert_eq!(members.iter().find(|m| m.name.as_deref() == Some("d")).unwrap().offset, 12 * 4);
+                assert_eq!(members.iter().find(|m| m.name.as_deref() == Some("shadow")).unwrap().offset, 32 * 4);
+            }
         }
     }
 }

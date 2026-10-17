@@ -208,7 +208,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     .stroke(egui::Stroke::new(1.0, if n.error { t.warning } else { t.card_border }))
                     .corner_radius(t.radius)
                     .inner_margin(egui::Margin::same(10))
-                    .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: t.shadow })
+                    .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: t.popup_shadow })
                     .show(ui, |ui| {
                         ui.set_width(340.0);
                         ui.horizontal(|ui| {

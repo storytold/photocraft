@@ -144,7 +144,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let canvas = app.last_canvas_rect;
     if app.ui.type_panels.styles {
         let mut close = false;
-        egui::Window::new(tl!("Type Styles"))
+        let win = egui::Window::new(tl!("Type Styles"))
             .id(egui::Id::new("type-styles-window"))
             .title_bar(false)
             .resizable(false)
@@ -173,13 +173,16 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 styles_panel(app, ui, app.ui.type_panels.styles_tab == 1);
             });
+        if let Some(win) = win {
+            crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
+        }
         if close {
             app.ui.type_panels.styles = false;
         }
     }
     if app.ui.type_panels.glyphs {
         let mut close = false;
-        egui::Window::new(tl!("Glyphs"))
+        let win = egui::Window::new(tl!("Glyphs"))
             .id(egui::Id::new("glyphs-window"))
             .title_bar(false)
             .resizable(false)
@@ -199,6 +202,9 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 glyphs_panel(app, ui);
             });
+        if let Some(win) = win {
+            crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::High, t.shadow);
+        }
         if close {
             app.ui.type_panels.glyphs = false;
         }
@@ -759,7 +765,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut act: Option<&str> = None;
     let mut change_to = d.change_to.clone();
     let mut all_layers = d.all_layers;
-    egui::Window::new(tl!("Check Spelling"))
+    let win = egui::Window::new(tl!("Check Spelling"))
         .id(egui::Id::new("check-spelling"))
         .collapsible(false)
         .resizable(false)
@@ -845,6 +851,9 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 });
             });
         });
+    if let Some(win) = win {
+        crate::theme::upgrade_shadow(ctx, win.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
+    }
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.change_to = change_to.clone();
         s.all_layers = all_layers;

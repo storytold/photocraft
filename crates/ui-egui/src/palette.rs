@@ -133,7 +133,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     });
     let width = 560.0;
     let mut run: Option<String> = None;
-    egui::Area::new(egui::Id::new("palette"))
+    let area = egui::Area::new(egui::Id::new("palette"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 110.0))
@@ -245,6 +245,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     });
                 });
         });
+    crate::theme::upgrade_shadow(ctx, area.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
     if let Some(id) = run {
         app.ui.palette_open = false;
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("palette-query"), String::new()));

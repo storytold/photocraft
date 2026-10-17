@@ -730,6 +730,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.label(RichText::new(tl!("Esc to cancel")).color(t.text_faint).size(11.0));
         });
     });
+    crate::theme::upgrade_shadow(ctx, modal.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
     // A click on the backdrop doesn't cancel the work; Esc is handled in `tick`.
     let _ = modal;
     if cancel_it {

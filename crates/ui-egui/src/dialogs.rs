@@ -478,6 +478,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // The frame around the content (Frame::popup's margin and stroke).
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
+        let t = crate::theme::Tokens::get(ctx);
+        crate::theme::upgrade_shadow(ctx, modal.response.layer_id, crate::theme::ShadowElevation::Modal, t.modal_shadow);
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
         shown.push(if color_picker { modal.response.rect } else { modal.inner });
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).

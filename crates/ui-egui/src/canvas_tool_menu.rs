@@ -881,6 +881,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             });
         });
     });
+    let t = crate::theme::Tokens::get(ctx);
+    crate::theme::upgrade_popup_shadow(ctx, area.response.layer_id, t.popup_shadow);
     if let Some(command) = selected {
         choose(app, ctx, &command);
     } else if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {

@@ -601,7 +601,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if dragging == Some(g) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        egui::Popup::menu(&resp.menu).show(|ui| {
+        let popup = egui::Popup::menu(&resp.menu).show(|ui| {
             crate::widgets::style_spectrum_popup_menu(ui);
             ui.set_min_width(170.0);
             if tabs.get(sel) == Some(&"Layers") {
@@ -642,6 +642,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.close();
             }
         });
+        if let Some(p) = &popup {
+            crate::theme::upgrade_popup_shadow(ui.ctx(), p.response.layer_id, t.popup_shadow);
+        }
         // Splitter in the gap below this group: resizes it, pushing the neighbouring groups.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
