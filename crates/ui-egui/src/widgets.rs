@@ -655,12 +655,21 @@ pub struct PopupFieldResponse {
 /// A [`value_field`] with Photoshop's pop-up slider (the Layers panel's Opacity and Fill): a click
 /// on the ▾ inside the field's right edge opens a slider below it, a click outside closes it.
 /// Pressing the ▾ and dragging moves the value straight away, as far as the slider would, and
-/// closes the slider on release. The number can still be typed, scrubbed and stepped like any
-/// value field. `name` (already translated) names the ▾ for its tooltip and for accessibility.
+/// closes the slider on release. Hold Ctrl during any drag to use whole percentage points;
+/// without Ctrl, fractional values remain available. Typing and arrow-key steps are unchanged.
+/// `name` (already translated) names the ▾ for its tooltip and for accessibility.
+fn percentage_on_drag(value: f32, ctrl: bool) -> f32 {
+    if ctrl { value.round() } else { value }
+}
+
 pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> PopupFieldResponse {
     let t = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
+    let before_field = *value;
     let (field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W, FieldOpts::default());
+    if field.dragged() {
+        *value = percentage_on_drag(*value, ui.input(|i| i.modifiers.ctrl));
+    }
     let arrow = Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - vec2(2.0, 2.0));
     let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag());
     let name = name.trim_end_matches([':', '：']).to_string();
@@ -675,7 +684,7 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
         }
         ui.data(|d| d.get_temp::<u64>(drag_key))
     };
-    let mut out = PopupFieldResponse { changed: field.changed(), drag: None };
+    let mut out = PopupFieldResponse { changed: *value != before_field, drag: None };
     let scrub = gesture(ui, field.drag_started());
     if field.changed() && field.dragged() {
         out.drag = scrub;
@@ -695,7 +704,7 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
         // The pointer moves the value as much as it would move the slider's knob.
         let track = POPUP_SLIDER_W - 14.0;
         let v = start + (pos.x - origin.x) / track * (hi - lo);
-        let v = if lo <= hi && v.is_finite() { v.clamp(lo, hi) } else { start };
+        let v = if lo <= hi && v.is_finite() { percentage_on_drag(v.clamp(lo, hi), ui.input(|i| i.modifiers.ctrl)) } else { start };
         if v != *value {
             *value = v;
             out.changed = true;
@@ -718,10 +727,14 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     chevron_icon(ui, arrow, ui.style().interact(&resp), open);
     popup.show(|ui| {
         ui.set_width(POPUP_SLIDER_W);
+        let before_slider = *value;
         let s = slider(ui, value, range, None);
+        if s.dragged() || s.clicked() {
+            *value = percentage_on_drag(*value, ui.input(|i| i.modifiers.ctrl));
+        }
         s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), &name));
         let key = gesture(ui, s.drag_started());
-        if s.changed() {
+        if *value != before_slider {
             out.changed = true;
             // A click on the track is one edit of its own; a drag is one edit however long.
             if s.dragged() {
@@ -1812,6 +1825,16 @@ fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use egui::{Key, Modifiers};
+
+    #[test]
+    fn ctrl_rounds_percentages_only_during_slider_drags() {
+        for value in [0.49, 10.2, 55.5, 99.8] {
+            assert_eq!(super::percentage_on_drag(value, false), value, "ordinary drag retains fractions");
+            assert_eq!(super::percentage_on_drag(value, true), value.round(), "Ctrl snaps to whole percentages");
+        }
+        assert_eq!(super::percentage_on_drag(0.0, true), 0.0);
+        assert_eq!(super::percentage_on_drag(100.0, true), 100.0);
+    }
 
     #[test]
     fn checkbox_label_is_a_button_target_not_selectable_text() {
