@@ -3,8 +3,12 @@
 //!
 //! The preview runs [`photocraft_algo::camera_raw::develop`] on a CPU proxy of the layer
 //! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
-//! control changes. OK runs `filter.cameraRaw` with the non-default settings, so the result is
-//! one history step (or a smart filter on a smart object) and exactly replayable.
+//! control changes: on a worker for the dialog's own controls, so a drag never waits for it, and
+//! on the UI thread for the control channel, so a reply describes its own settings. Settings
+//! whose stages are per pixel, or Shadows and Highlights, develop on the GPU instead where it can
+//! (`camera_raw_gpu`).
+//! OK runs `filter.cameraRaw` with the non-default settings, so the result is one history step
+//! (or a smart filter on a smart object) and exactly replayable.
 //!
 //! Control channel: `ui.menu.invoke {"id":"filter.cameraRaw","params":{"ui":{"set":{…},
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
@@ -38,11 +42,11 @@ pub struct CameraRawDialog {
     curve_state: crate::state::PointCurveState,
     curve_rect: Option<ERect>,
     /// Proxy pixels (straight RGBA) and size.
-    pub(crate) proxy: Vec<[f32; 4]>,
-    pub(crate) selection: Option<Vec<f32>>,
+    pub(crate) proxy: std::sync::Arc<Vec<[f32; 4]>>,
+    pub(crate) selection: Option<std::sync::Arc<Vec<f32>>>,
     pub(crate) pw: usize,
     pub(crate) ph: usize,
-    full_w: usize,
+    pub(crate) full_w: usize,
     full_h: usize,
     preview_ppp: f32,
     pub(crate) detail: super::camera_raw_detail_ui::DetailPreview,
@@ -68,7 +72,16 @@ pub struct CameraRawDialog {
     raw_open: Option<RawOpen>,
     /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there,
     /// in linear light before this curve, and the preview undoes it to show the same.
-    raw_curve: Option<Vec<[f32; 2]>>,
+    raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    /// The proxy develop running on a worker ([`Self::request_render`]).
+    pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
+    /// The GPU develop, when the app may use one.
+    pub(crate) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
+    /// Names [`Self::proxy`] for the GPU pass's upload cache.
+    source_key: u64,
+    /// The last frame's develop alone, and where it ran ("gpu" or "cpu").
+    develop_ms: f64,
+    pub(crate) develop_backend: &'static str,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
     undo: Vec<CameraRaw>,
     redo: Vec<CameraRaw>,
@@ -80,7 +93,7 @@ impl CameraRawDialog {
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
-            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
+            "renderMs": self.render_ms, "developMs": self.develop_ms, "developBackend": self.develop_backend, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
@@ -91,6 +104,7 @@ impl CameraRawDialog {
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
+        result["previewPending"] = json!(self.render_pending());
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
         result["detailError"] = json!(self.detail.error);
@@ -139,45 +153,173 @@ impl CameraRawDialog {
         })
     }
 
+    /// Develops the proxy with the current settings and shows it, on this thread. The control
+    /// channel and the first frame use this, so a reply always describes its own settings; the
+    /// dialog's own controls go through [`Self::request_render`].
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
+        // A render still running on the worker has older settings than this one.
+        self.pending = None;
+        let frame = self.proxy_job().run();
+        self.publish(ctx, frame);
+        self.dirty = false;
+    }
+
+    fn proxy_job(&self) -> ProxyJob {
+        ProxyJob {
+            proxy: self.proxy.clone(),
+            selection: self.selection.clone(),
+            raw_curve: self.raw_curve.clone(),
+            params: self.params.clone(),
+            float: self.float,
+            size: (self.pw, self.ph),
+            full_w: self.full_w,
+            display: self.display.clone(),
+            gpu: self.gpu.clone(),
+            source_key: self.source_key,
+        }
+    }
+
+    fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
+        match &mut self.tex {
+            Some(t) => t.set(frame.image, egui::TextureOptions::LINEAR),
+            None => self.tex = Some(ctx.load_texture("camera-raw-after", frame.image, egui::TextureOptions::LINEAR)),
+        }
+        if self.before_display_key != Some(frame.display.key) {
+            let before = Self::image(&self.proxy, self.pw, self.ph, &frame.display);
+            match &mut self.before_tex {
+                Some(t) => t.set(before, egui::TextureOptions::LINEAR),
+                None => self.before_tex = Some(ctx.load_texture("camera-raw-before", before, egui::TextureOptions::LINEAR)),
+            }
+            self.before_display_key = Some(frame.display.key);
+        }
+        self.after_histogram = frame.histogram;
+        self.histogram_ms = frame.histogram_ms;
+        self.processed = frame.px;
+        self.scope.cache = None;
+        self.render_ms = frame.ms;
+        self.develop_ms = frame.develop_ms;
+        self.develop_backend = frame.backend;
+        self.preview_revision = self.preview_revision.saturating_add(1);
+    }
+
+    /// Starts developing the proxy with the current settings on a worker, unless one is already
+    /// running: then [`Self::poll_render`] starts the next one with the settings of that moment.
+    /// A slider drag never waits for the develop, which takes hundreds of milliseconds with
+    /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
+    fn request_render(&mut self, ctx: &egui::Context) {
+        if !self.dirty || self.pending.is_some() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let job = self.proxy_job();
+            let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
+            let repaint = ctx.clone();
+            let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
+                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "Camera Raw preview failed".to_string());
+                // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
+                if tx.send(frame).is_ok() {
+                    repaint.request_repaint();
+                }
+            });
+            match spawned {
+                Ok(_) => {
+                    self.pending = Some(rx);
+                    self.dirty = false;
+                }
+                // No thread to spare: develop here rather than show stale settings.
+                Err(_) => self.render(ctx),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.render(ctx);
+    }
+
+    /// Shows the worker's frame once it is done. `Err` when the develop failed; the preview keeps
+    /// the last frame then.
+    fn poll_render(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let Some(rx) = &self.pending else { return Ok(()) };
+        let frame = match rx.try_recv() {
+            Ok(frame) => frame,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Camera Raw preview worker stopped".to_string()),
+        };
+        self.pending = None;
+        self.publish(ctx, frame?);
+        Ok(())
+    }
+
+    pub(crate) fn render_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+}
+
+/// Everything one develop of the proxy reads, owned, so it can run off the UI thread.
+struct ProxyJob {
+    proxy: std::sync::Arc<Vec<[f32; 4]>>,
+    selection: Option<std::sync::Arc<Vec<f32>>>,
+    raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    params: CameraRaw,
+    float: bool,
+    size: (usize, usize),
+    full_w: usize,
+    display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+    gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
+    source_key: u64,
+}
+
+/// A developed proxy, ready to show.
+struct ProxyFrame {
+    px: Vec<[f32; 4]>,
+    histogram: RgbHistogram,
+    histogram_ms: f64,
+    image: egui::ColorImage,
+    display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+    ms: f64,
+    develop_ms: f64,
+    backend: &'static str,
+}
+
+impl ProxyJob {
+    fn run(self) -> ProxyFrame {
         let t0 = crate::gpu_canvas::now_ms();
-        let mut px = self.proxy.clone();
-        let mut p = self.params.clone();
-        p.pixel_scale = (self.pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        if let Some(curve) = &self.raw_curve {
-            let tone = raw_stage(&p);
-            photocraft_io::raw::retone(&mut px, self.pw, self.ph, curve, tone);
+        let (pw, ph) = self.size;
+        let mut p = self.params;
+        p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
+        // The open-time dialog re-tones the proxy for each job; otherwise the GPU reads the
+        // proxy as it is and uploads it once.
+        let retoned = self.raw_curve.as_ref().map(|curve| {
+            let mut px = self.proxy.to_vec();
+            photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
+            px
+        });
+        if retoned.is_some() {
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
         }
-        photocraft_algo::camera_raw::develop(&mut px, self.pw, self.ph, &p, self.float);
+        let develop_start = crate::gpu_canvas::now_ms();
+        let key = retoned.is_none().then_some(self.source_key);
+        let input = retoned.as_deref().unwrap_or(&self.proxy);
+        let (mut px, backend) = match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
+            Some(out) => (out, "gpu"),
+            None => {
+                let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
+                photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
+                (px, "cpu")
+            }
+        };
+        let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
         if let Some(mask) = &self.selection {
-            for ((out, original), coverage) in px.iter_mut().zip(&self.proxy).zip(mask) {
+            for ((out, original), coverage) in px.iter_mut().zip(self.proxy.iter()).zip(mask.iter()) {
                 for (out, original) in out.iter_mut().zip(original) {
                     *out = *original + (*out - *original) * coverage;
                 }
             }
         }
         let histogram_start = crate::gpu_canvas::now_ms();
-        self.after_histogram = RgbHistogram::from_rgba(&px);
-        self.histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
-        let img = Self::image(&px, self.pw, self.ph, &self.display);
-        match &mut self.tex {
-            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-            None => self.tex = Some(ctx.load_texture("camera-raw-after", img, egui::TextureOptions::LINEAR)),
-        }
-        if self.before_display_key != Some(self.display.key) {
-            let before = Self::image(&self.proxy, self.pw, self.ph, &self.display);
-            match &mut self.before_tex {
-                Some(t) => t.set(before, egui::TextureOptions::LINEAR),
-                None => self.before_tex = Some(ctx.load_texture("camera-raw-before", before, egui::TextureOptions::LINEAR)),
-            }
-            self.before_display_key = Some(self.display.key);
-        }
-        self.processed = px;
-        self.scope.cache = None;
-        self.render_ms = crate::gpu_canvas::now_ms() - t0;
-        self.preview_revision = self.preview_revision.saturating_add(1);
-        self.dirty = false;
+        let histogram = RgbHistogram::from_rgba(&px);
+        let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
+        let image = CameraRawDialog::image(&px, pw, ph, &self.display);
+        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
     }
 }
 
@@ -245,7 +387,7 @@ fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Resul
     };
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
-        d.raw_curve = curve;
+        d.raw_curve = curve.map(std::sync::Arc::new);
         d.raw_open = Some(raw);
     }
     Ok(())
@@ -597,6 +739,8 @@ fn open_pixels(
         app.ui.camera_raw_scope.selected_region = false;
     }
     let float = surf.format().sample == photocraft_color::SampleType::F32;
+    // Builds the GPU pass the first time any Camera Raw dialog opens.
+    let gpu = crate::camera_raw_gpu::for_app(app);
     let mut d = CameraRawDialog {
         layer,
         layer_name: name,
@@ -611,8 +755,8 @@ fn open_pixels(
         after_histogram: RgbHistogram::default(),
         preview_revision: 0,
         histogram_ms: 0.0,
-        proxy,
-        selection,
+        proxy: std::sync::Arc::new(proxy),
+        selection: selection.map(std::sync::Arc::new),
         pw,
         ph,
         full_w: w,
@@ -643,6 +787,11 @@ fn open_pixels(
         render_ms: 0.0,
         raw_open: None,
         raw_curve: None,
+        pending: None,
+        gpu,
+        source_key: crate::camera_raw_gpu::source_key(),
+        develop_ms: 0.0,
+        develop_backend: "cpu",
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
@@ -1073,9 +1222,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         d.curve_rect = None;
         d.scope.vectorscope_rect = None;
-        if d.dirty {
-            d.render(ctx);
+        if let Err(e) = d.poll_render(ctx) {
+            app.ui.status = e;
+            app.ui.status_error = true;
         }
+        d.request_render(ctx);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, t.chrome);
@@ -1247,6 +1398,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if d.dirty {
             ctx.request_repaint();
         }
+        if d.render_pending() {
+            // The worker asks for a repaint when it is done; this catches a missed wake-up.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         // Footer.
         let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
         painter.rect_filled(foot, 0.0, t.dock);
@@ -1396,6 +1551,104 @@ mod tests {
         frame(&mut app, true);
         assert!(app.camera_raw.is_none(), "closing the window is Cancel");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    }
+
+    /// A layer with tonal variation, a selection over part of it and the dialog open on it.
+    fn worker_app() -> (PhotocraftApp, egui::Context) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 30})).unwrap();
+        open(&mut app, &ctx).unwrap();
+        (app, ctx)
+    }
+
+    fn finish_worker(d: &mut CameraRawDialog, ctx: &egui::Context) {
+        for _ in 0..2000 {
+            d.poll_render(ctx).unwrap();
+            if !d.render_pending() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the Camera Raw preview worker never finished");
+    }
+
+    /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
+    /// the UI thread would have developed, and settings changed while it runs are developed next.
+    #[test]
+    fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings() {
+        let (mut app, ctx) = worker_app();
+        let d = app.camera_raw.as_mut().unwrap();
+        assert!(d.selection.is_some());
+        let revision = d.preview_revision;
+        d.params.exposure = 1.0;
+        d.dirty = true;
+        d.request_render(&ctx);
+        assert!(d.render_pending() && !d.dirty);
+        // A drag moves on while the first develop runs; the request waits for it.
+        d.params.highlights = -60.0;
+        d.params.shadows = 45.0;
+        d.dirty = true;
+        d.request_render(&ctx);
+        finish_worker(d, &ctx);
+        assert_eq!(d.preview_revision, revision + 1);
+        assert!(d.dirty, "the newer settings are still to be developed");
+        d.request_render(&ctx);
+        finish_worker(d, &ctx);
+        assert_eq!(d.preview_revision, revision + 2);
+        let (from_worker, histogram) = (d.processed.clone(), d.after_histogram.channels);
+        d.render(&ctx);
+        assert_eq!(d.processed, from_worker, "the worker develops exactly what the UI thread does");
+        assert_eq!(d.after_histogram.channels, histogram);
+        assert!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["previewPending"] == false);
+    }
+
+    /// The control channel renders on its own thread so its reply describes its settings; a worker
+    /// still running with older settings must not replace that frame afterwards.
+    #[test]
+    fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
+        let (mut app, ctx) = worker_app();
+        let d = app.camera_raw.as_mut().unwrap();
+        d.params.highlights = -80.0;
+        d.dirty = true;
+        d.request_render(&ctx);
+        assert!(d.render_pending());
+        let reply = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
+        assert_eq!(reply["previewPending"], false);
+        let d = app.camera_raw.as_mut().unwrap();
+        let (revision, shown) = (d.preview_revision, d.processed.clone());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        d.poll_render(&ctx).unwrap();
+        assert_eq!((d.preview_revision, &d.processed), (revision, &shown));
+        d.render(&ctx);
+        assert_eq!(d.processed, shown, "the frame shown is the one for the control channel's settings");
+    }
+
+    /// Dragging a slider in the dialog itself never develops on the UI thread: the frame that
+    /// takes the change returns with the develop still running, and the preview catches up.
+    #[test]
+    fn a_dialog_edit_develops_off_the_ui_thread() {
+        let (mut app, ctx) = worker_app();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let frame = |app: &mut PhotocraftApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx())).textures_delta.clear();
+        };
+        frame(&mut app);
+        let d = app.camera_raw.as_mut().unwrap();
+        let revision = d.preview_revision;
+        d.params.highlights = -60.0;
+        d.dirty = true;
+        frame(&mut app);
+        let d = app.camera_raw.as_mut().unwrap();
+        assert!(d.render_pending() && d.preview_revision == revision, "the frame returned before the develop finished");
+        finish_worker(d, &ctx);
+        assert_eq!(d.preview_revision, revision + 1);
+        assert!(!d.dirty);
+        frame(&mut app);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
     }
 
     #[test]

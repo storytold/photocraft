@@ -34,10 +34,16 @@
 //! (Multichannel documents, patterns larger than the texture limit, uncached gradients with
 //! coincident colour or opacity stops) returns [`Unsupported`];
 //! callers fall back to the CPU compositor.
+//!
+//! [`CameraRawDevelop`] (`camera_raw.rs`, `camera_raw_tone.rs`) is separate from the compositor:
+//! Camera Raw's develop for the dialog's preview (every stage but Detail), built the first time
+//! the dialog opens.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bounds;
+mod camera_raw;
+mod camera_raw_tone;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -53,6 +59,8 @@ use photocraft_doc::{DocId, Document, LayerContent, LayerId, Pattern};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
+pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
+pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 

@@ -116,6 +116,9 @@ pub struct GpuCanvas {
     /// [`canvas_budget`], shared with the paint callback's resources: [`GpuCanvas::format_for`]
     /// reads it while the renderer is locked.
     canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
+    camera_raw: crate::camera_raw_gpu::Slot,
+    camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
@@ -173,12 +176,48 @@ impl GpuCanvas {
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget }
+        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
     pub fn health(&self) -> &photocraft_gpu::DeviceHealth {
         &self.health
+    }
+
+    /// Camera Raw's GPU preview develop on this device; the first call starts building its
+    /// pipeline. `None` on a software adapter, without `Rgba32Float` render targets, after a
+    /// fault, or when the driver couldn't build the pipeline; the dialog then develops on the CPU.
+    pub(crate) fn camera_raw(&self) -> Option<crate::camera_raw_gpu::CameraRawGpu> {
+        if self.fault().is_some() {
+            return None;
+        }
+        if !self.camera_raw_started.swap(true, Ordering::AcqRel) {
+            crate::camera_raw_gpu::Pass::start(&self.rs.adapter, &self.rs.device, &self.camera_raw);
+        }
+        if matches!(self.camera_raw.get(), Some(None)) {
+            return None;
+        }
+        Some(crate::camera_raw_gpu::CameraRawGpu::new(self.rs.device.clone(), self.rs.queue.clone(), self.health.clone(), self.camera_raw.clone()))
+    }
+
+    /// Whether [`Self::camera_raw`] started building the pass.
+    #[cfg(test)]
+    pub(crate) fn camera_raw_started(&self) -> bool {
+        self.camera_raw_started.load(Ordering::Acquire)
+    }
+
+    /// Waits until the pass is built or refused.
+    #[cfg(test)]
+    pub(crate) fn wait_camera_raw_pass(&self) {
+        let _ = self.camera_raw.wait();
+    }
+
+    /// Builds Camera Raw's pass even where [`Self::camera_raw`] wouldn't (egui_kittest's software
+    /// adapter), so tests drive the GPU develop.
+    #[cfg(test)]
+    pub(crate) fn force_camera_raw_pass(&self) {
+        self.camera_raw_started.store(true, Ordering::Release);
+        let _ = self.camera_raw.set(crate::camera_raw_gpu::Pass::build_on(&self.rs.device));
     }
 
     /// Why the GPU can't be used any more (`None` while it can).
