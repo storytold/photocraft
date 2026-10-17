@@ -255,7 +255,7 @@ pub fn system_font_files() -> &'static [std::path::PathBuf] {
     FILES.get_or_init(|| {
         let mut files = Vec::new();
         for d in crate::fonts::system_font_dirs() {
-            crate::fonts::collect_font_files(&d, 0, &mut files);
+            crate::fonts::collect_font_files(&d, 0, usize::MAX, &mut files);
         }
         files.sort();
         files.dedup();

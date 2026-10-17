@@ -16,18 +16,21 @@ photocraft-cli: headless PhotoCraft
 
 USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+      [--font-dir <dir>]…
       Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
       --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
       its alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24.
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
-  photocraft-cli info <file> [--compact]
+  photocraft-cli info <file> [--compact] [--font-dir <dir>]…
       Print the document as JSON (size, mode, depth, layer tree).
   photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+      [--font-dir <dir>]…
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
   photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+      [--font-dir <dir>]…
       Apply an action list to every image in a directory. A Photoshop Actions file (.atn) is a
       set: its action --action names plays, as below. JSON steps are [id, params] pairs,
       {\"command\": id, \"params\": {…}} objects or bare ids, as a recorded action or droplet stores them
@@ -41,14 +44,20 @@ USAGE:
   photocraft-cli commands [--json] [--filter <text>]
       List the engine command registry.
   photocraft-cli mcp [--bridge <127.0.0.1:port>] [--control-token <64-hex> | --control-token-file <path>]
-      [--automation-read-root <dir>] [--automation-write-root <dir>]
+      [--automation-read-root <dir>] [--automation-write-root <dir>] [--font-dir <dir>]…
       Run the MCP server on stdio (headless engine, or bridge to a running `photocraft --control <port>`).
   photocraft-cli serve [--port <port>] [--control-token <64-hex> | --control-token-file <path>]
-      [--automation-read-root <dir>] [--automation-write-root <dir>]
+      [--automation-read-root <dir>] [--automation-write-root <dir>] [--font-dir <dir>]…
       Keep one headless session open and answer JSON lines ({\"id\",\"method\",\"params\"}) on stdio,
       or on 127.0.0.1:<port>. Methods: engine.execute, jobs.list/cancel, engine.commands,
       doc.open/new/place/save/exportLayers/exportDataSets/importDataSets/inspect/render/select/close, session.list, batch, methods
       (docs/control-protocol.md#headless-server).
+
+  --font-dir <dir> (repeatable) loads the fonts in <dir> and its subfolders (.ttf, .otf, .ttc, .otc),
+      or one font file, before anything opens, in addition to the bundled and installed fonts. It is
+      launch configuration, not limited to the automation read root. A missing path or a folder
+      without fonts is an error; a file that can't be loaded is skipped with a warning. Not with
+      mcp --bridge. PHOTOCRAFT_NO_SYSTEM_FONTS=1 leaves out the installed fonts.
 
   photocraft-cli <subcommand> --help (or -h) prints this text. A flag the subcommand doesn't take is
   an error.
@@ -69,17 +78,17 @@ struct Subcommand {
 }
 
 const SUBCOMMANDS: &[Subcommand] = &[
-    Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers"], run: convert },
-    Subcommand { name: "info", values: &[], bare: &["--compact"], run: |a, out, _| info(a, out) },
+    Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits", "--font-dir"], bare: &["--tiff-layers"], run: convert },
+    Subcommand { name: "info", values: &["--font-dir"], bare: &["--compact"], run: info },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--font-dir"],
         bare: &["--tiff-layers"],
         run: run_cmds,
     },
     Subcommand {
         name: "batch",
-        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--font-dir"],
         bare: &["--in-place", "--tiff-layers"],
         run: batch,
     },
@@ -87,13 +96,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand { name: "commands", values: &["--filter"], bare: &["--json"], run: |a, out, _| commands(a, out) },
     Subcommand {
         name: "mcp",
-        values: &["--bridge", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root"],
+        values: &["--bridge", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root", "--font-dir"],
         bare: &[],
-        run: |a, _, _| mcp(a),
+        run: |a, _, err| mcp(a, err),
     },
     Subcommand {
         name: "serve",
-        values: &["--port", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root"],
+        values: &["--port", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root", "--font-dir"],
         bare: &[],
         run: |a, _, err| serve(a, err),
     },
@@ -138,6 +147,10 @@ impl Args {
     }
     fn has(&self, k: &str) -> bool {
         self.flags.iter().any(|(f, _)| f == k)
+    }
+    /// Every value of a repeatable flag, in order.
+    fn all<'a>(&'a self, k: &'a str) -> impl Iterator<Item = &'a str> {
+        self.flags.iter().filter(move |(f, _)| f == k).filter_map(|(_, v)| v.as_deref())
     }
 }
 
@@ -234,6 +247,22 @@ fn missing_font_warnings(fonts: Vec<String>) -> Vec<String> {
     fonts.into_iter().map(|font| format!("font '{font}' is not installed; text may render using a fallback face")).collect()
 }
 
+/// Registers each `--font-dir` (a font folder or file) in the process-wide text engine. Called
+/// before anything opens: PSD import resolves font names then, and every session of the process
+/// (each file of a batch, a server's session) shares the fonts. Files that fail are warnings.
+fn load_font_dirs(a: &Args, err: &mut dyn Write) -> R {
+    for dir in a.all("--font-dir") {
+        let r = photocraft_engine::font_cmds::register_font_path(Path::new(dir)).map_err(|e| match e {
+            photocraft_engine::EngineError::BadParams { msg, .. } => format!("--font-dir: {msg}"),
+            other => format!("--font-dir: {other}"),
+        })?;
+        for (file, why) in &r.skipped {
+            let _ = writeln!(err, "warning: --font-dir {dir}: skipped {file}: {why}");
+        }
+    }
+    Ok(())
+}
+
 fn automation_workspace(args: &Args) -> Result<AuthorizedWorkspace, String> {
     AuthorizedWorkspace::new(args.get("--automation-read-root").map(Path::new), args.get("--automation-write-root").map(Path::new))
         .map_err(|error| error.to_string())
@@ -244,6 +273,7 @@ fn convert(a: &Args, _out: &mut dyn Write, err: &mut dyn Write) -> R {
         return Err("convert needs <in> <out>".into());
     };
     let opts = export_opts(a)?;
+    load_font_dirs(a, err)?;
     let o = files::open(Path::new(input)).map_err(|e| e.to_string())?;
     warn_all(err, &o.warnings);
     warn_all(err, &photocraft_engine::type_extra_cmds::missing_font_warnings(&o.document));
@@ -257,10 +287,11 @@ fn print_json(out: &mut dyn Write, v: &Value, compact: bool) -> R {
     writeln!(out, "{s}").map_err(|e| e.to_string())
 }
 
-fn info(a: &Args, out: &mut dyn Write) -> R {
+fn info(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let [file] = a.positional.as_slice() else {
         return Err("info needs <file>".into());
     };
+    load_font_dirs(a, err)?;
     let mut h = Headless::trusted_local();
     let opened = h.open(Path::new(file)).map_err(|e| e.to_string())?;
     let mut doc = h.inspect(None).map_err(|e| e.to_string())?;
@@ -297,6 +328,7 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
 
 fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let opts = export_opts(a)?;
+    load_font_dirs(a, err)?;
     let mut h = Headless::trusted_local();
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
@@ -461,6 +493,8 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
             out_dir.display()
         ));
     }
+    // Once for the process: every file's session sees the fonts.
+    load_font_dirs(a, err)?;
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     let mut inputs: Vec<PathBuf> =
         std::fs::read_dir(&in_dir).map_err(|e| format!("{}: {e}", in_dir.display()))?.flatten().map(|e| e.path()).filter(|p| is_input(p)).collect();
@@ -555,7 +589,9 @@ fn commands(a: &Args, out: &mut dyn Write) -> R {
 
 fn serve(a: &Args, err: &mut dyn Write) -> R {
     use std::sync::{Arc, Mutex};
-    let h = Arc::new(Mutex::new(Headless::with_workspace(automation_workspace(a)?)));
+    let workspace = automation_workspace(a)?;
+    load_font_dirs(a, err)?;
+    let h = Arc::new(Mutex::new(Headless::with_workspace(workspace)));
     match a.get("--port") {
         Some(port) => {
             let port: u16 = port.parse().map_err(|_| format!("bad --port `{port}`"))?;
@@ -579,14 +615,21 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
     }
 }
 
-fn mcp(a: &Args) -> R {
+fn mcp(a: &Args, err: &mut dyn Write) -> R {
     let server = match a.get("--bridge") {
+        Some(_) if a.has("--font-dir") => {
+            return Err("--font-dir can't be used with --bridge: it would load the fonts into photocraft-cli, not the app".into());
+        }
         Some(addr) => {
             let (supplied, token_file) = security::token_inputs(a.get("--control-token").map(str::to_owned), a.get("--control-token-file").map(PathBuf::from));
             let token = security::client_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
             PhotocraftMcp::bridge(addr, &token).map_err(|e| e.to_string())?
         }
-        None => PhotocraftMcp::headless_with_workspace(automation_workspace(a)?),
+        None => {
+            let workspace = automation_workspace(a)?;
+            load_font_dirs(a, err)?;
+            PhotocraftMcp::headless_with_workspace(workspace)
+        }
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(server.serve_stdio()).map_err(|e| e.to_string())

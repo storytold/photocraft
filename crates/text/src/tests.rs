@@ -358,7 +358,7 @@ fn rtl_text_is_reordered() {
 }
 
 /// Builds a TrueType collection from standalone fonts (table offsets rebased).
-fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
+pub(crate) fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
     let header_len = 12 + 4 * fonts.len();
     let mut out = Vec::new();
     out.extend_from_slice(b"ttcf");

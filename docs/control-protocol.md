@@ -161,7 +161,7 @@ automation permissions.
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
-Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, preset imports, and plug-in install/reload) are refused the same way. `prefs.set` rejects whole-preference updates and file-backed sections (`colorSettings`, `scriptEvents`, `historyLog`, `plugIns` and `scratchDisks`) so automation cannot configure ambient file access indirectly. The desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
+Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, `type.registerFonts {path}`, preset imports, and plug-in install/reload) are refused the same way; the [headless server](#headless-server) and headless MCP read `type.registerFonts`' fonts under the read root instead. `prefs.set` rejects whole-preference updates and file-backed sections (`colorSettings`, `scriptEvents`, `historyLog`, `plugIns` and `scratchDisks`) so automation cannot configure ambient file access indirectly. The desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
 
 Embedded Smart Objects can be opened with `layer.smartObjects.editContents {layer?}` or
 unpacked with `layer.smartObjects.convertToLayers {layer?}`. This includes Photoshop sources
@@ -393,6 +393,15 @@ printf '%s\n' \
 The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params, wait?}], stop_on_error}`),
 in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
 does; later steps that edit the same document fail with a message naming the job until it ends.
+
+Fonts that are neither bundled nor installed (#3393): start the server with `--font-dir <dir>`
+(repeatable; launch configuration like the roots, so any folder), or use `engine.execute` with
+`{"command": "type.registerFonts", "params": {"path": "fonts"}}` registers a font file, or every
+`.ttf`, `.otf`, `.ttc` and `.otc` file in a folder and its subfolders (8 levels deep), read under
+the read root. The reply is `{families, files, skipped: [{file, error}]}`, and `type.fonts` lists
+the families for the rest of the process; there is no history step. Errors name the path as it
+was sent. Each call reads at most 4096 files and 1 GiB in total; a file over 256 MiB is skipped.
+A step inside `actions.play` is still refused, and so is the desktop control channel.
 
 ## Transport limits
 

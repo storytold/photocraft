@@ -51,3 +51,5 @@ photocraft-raw = { workspace = true, features = ["testgen"] }
 wat = "1.228"
 # Synthetic multi-part EXR fixtures for the parts-commands tests.
 exr = { version = "1.73", default-features = false }
+# Renamed copies of the bundled Inter for the font-file tests (no font files committed).
+photocraft-testkit = { workspace = true }

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use photocraft_engine::{Session, command_specs, file_cmds};
+use photocraft_engine::{Session, command_specs, file_cmds, font_cmds};
 use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
@@ -339,6 +339,9 @@ impl Headless {
             if id == "file.export.renderVideo" {
                 return self.render_video(params, |_, _| true);
             }
+            if id == font_cmds::REGISTER {
+                return self.register_fonts(&params);
+            }
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
@@ -354,6 +357,18 @@ impl Headless {
 }
 
 impl Headless {
+    /// A direct automation `type.registerFonts` reads its font file or folder through the read
+    /// root; errors name the path as the client gave it. Nested engine actions still reject the
+    /// command, which would read the host path.
+    fn register_fonts(&mut self, params: &Value) -> Result<Value, AutomationError> {
+        let path = font_cmds::path_param(params)?;
+        let Filesystem::Workspace(workspace) = &self.filesystem else {
+            return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into()));
+        };
+        let files = workspace.read_font_files(path)?;
+        Ok(font_cmds::result_json(&font_cmds::register_font_files(path, files)?))
+    }
+
     /// A direct automation Render Video uses only the launch-time write capability. Nested
     /// engine actions still reject this filesystem command until they can carry capabilities.
     pub(crate) fn render_video(&mut self, params: Value, progress: impl FnMut(usize, usize) -> bool) -> Result<Value, AutomationError> {

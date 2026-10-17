@@ -33,7 +33,33 @@ even if later commands still use it.
 
 Warnings do not change the saved document's font declarations and do not stop
 the operation. To list or replace the missing families intentionally, use
-`type.resolveMissingFonts` on the document.
+`type.resolveMissingFonts` on the document, or supply the fonts with `--font-dir`.
+
+### Fonts that are not installed
+
+`--font-dir <dir>` loads the font files in a folder and its subfolders (`.ttf`,
+`.otf`, `.ttc`, `.otc`), or one font file, before anything opens. Type layers,
+PSD text and `type.fonts` can then use them as well as the bundled and installed
+fonts. `convert`, `info`, `run`, `batch`, `serve` and `mcp` take it, and it can
+be given more than once:
+
+```sh
+photocraft-cli convert --font-dir brand/fonts poster.psd poster.png
+```
+
+A missing path, a folder without font files, or a folder none of whose files
+load is an error, and nothing else runs. A file that can't be loaded is skipped
+with a warning on standard error. Each folder is limited to 4096 files and 1 GiB,
+and a file over 256 MiB is skipped. With `mcp --bridge` the flag is an error:
+the fonts would load into `photocraft-cli`, not the app.
+
+For output that doesn't depend on the machine (CI jobs, containers), set
+`PHOTOCRAFT_NO_SYSTEM_FONTS=1` so that only the bundled fonts and the
+`--font-dir` fonts are used.
+
+`--font-dir` is launch configuration, like the automation roots, so it isn't
+limited to the read root. A `serve` or `mcp` client can add fonts from under
+the read root with the `type.registerFonts` command (`{"path": "fonts"}`).
 
 ### Export selected adjustment layers as a .cube LUT
 

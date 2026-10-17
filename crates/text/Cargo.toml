@@ -31,3 +31,7 @@ parley = { version = "0.11", default-features = false, features = ["std", "compl
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
+
+[dev-dependencies]
+# Renamed copies of the bundled Inter for the font-file tests (no font files committed).
+photocraft-testkit = { workspace = true }

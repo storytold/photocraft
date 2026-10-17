@@ -1,11 +1,13 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
 //! fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
-//! user-registered font data, and PostScript-name lookup for PSD import.
+//! user-registered font data and font files or folders ([`FontDb::register_font_path`]), and
+//! PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -184,6 +186,102 @@ pub struct ResolvedFont {
     pub exact: bool,
 }
 
+/// How deep [`FontDb::register_font_path`] (and the system font scan) looks into subfolders.
+pub const FONT_DIR_DEPTH: u32 = 8;
+
+/// Bounds on one registration of font files, so a path can't exhaust memory: the font data is
+/// held in memory once registered.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FontFileLimits {
+    /// A larger file is skipped.
+    pub max_file_bytes: u64,
+    /// More font files is an error.
+    pub max_files: usize,
+    /// Files adding up to more is an error.
+    pub max_total_bytes: u64,
+}
+
+impl FontFileLimits {
+    /// The largest CJK collections are about 100 MB.
+    pub const DEFAULT: Self = Self { max_file_bytes: 256 << 20, max_files: 4096, max_total_bytes: 1 << 30 };
+}
+
+/// What registering font files added.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RegisteredFonts {
+    /// The families the registered files provide (private `.` families left out), sorted. A file
+    /// registered before still reports its families.
+    pub families: Vec<String>,
+    /// Files that registered.
+    pub files: usize,
+    /// Files that didn't, with the reason (names as given, or relative to the folder).
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Why registering font files failed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FontFileError {
+    /// Nothing exists at the path.
+    NotFound(String),
+    /// The path can't be read, or is neither a file nor a folder.
+    Io { path: String, error: String },
+    /// A folder with no `.ttf`, `.otf`, `.ttc` or `.otc` file in it or its subfolders.
+    NoFontFiles(String),
+    /// More font files than [`FontFileLimits::max_files`].
+    TooManyFiles { path: String, max: usize },
+    /// Font files adding up to more than [`FontFileLimits::max_total_bytes`].
+    TooLarge { path: String, max_bytes: u64 },
+    /// No file registered a font: each file with the reason.
+    NoFonts { path: String, failures: Vec<(String, String)> },
+}
+
+impl std::fmt::Display for FontFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(path) => write!(f, "no font file or folder at `{path}`"),
+            Self::Io { path, error } => write!(f, "cannot read `{path}`: {error}"),
+            Self::NoFontFiles(path) => write!(f, "no font files (.ttf, .otf, .ttc, .otc) in `{path}`"),
+            Self::TooManyFiles { path, max } => write!(f, "`{path}` holds more than {max} font files; register a smaller folder"),
+            Self::TooLarge { path, max_bytes } => {
+                write!(f, "the font files in `{path}` add up to more than {}; register a smaller folder", size_text(*max_bytes))
+            }
+            Self::NoFonts { path, failures } => {
+                write!(f, "no fonts could be read from `{path}`")?;
+                for (i, (name, why)) in failures.iter().take(3).enumerate() {
+                    write!(f, "{} {name}: {why}", if i == 0 { ":" } else { ";" })?;
+                }
+                if failures.len() > 3 {
+                    write!(f, "; and {} more", failures.len() - 3)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for FontFileError {}
+
+const NOT_A_FONT: &str = "not a font file: expected TrueType or OpenType data (.ttf, .otf, .ttc, .otc)";
+const WOFF: &str = "WOFF and WOFF2 web fonts are not supported: use the .ttf or .otf file";
+const NO_FACES: &str = "no font faces could be read from it";
+
+fn too_large(max_bytes: u64) -> String {
+    format!("larger than {}", size_text(max_bytes))
+}
+
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 && b.is_multiple_of(1 << 30) => format!("{} GiB", b >> 30),
+        b if b >= 1 << 20 && b.is_multiple_of(1 << 20) => format!("{} MiB", b >> 20),
+        b => format!("{b} bytes"),
+    }
+}
+
+/// A font file extension (`ttf`, `otf`, `ttc` or `otc`, any case): what folder scans pick up.
+pub fn is_font_extension(ext: &str) -> bool {
+    matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc")
+}
+
 pub struct FontDb {
     pub(crate) fcx: FontContext,
     system_loaded: bool,
@@ -195,6 +293,9 @@ pub struct FontDb {
     missing_glyph_protection: bool,
     face_cache: HashMap<String, Vec<FaceInfo>>,
     face_aliases: HashMap<(String, usize), String>,
+    /// Hash of each file registered by [`Self::register_font_files`] → its families, so the same
+    /// file registered again adds no duplicate faces.
+    registered_files: HashMap<u64, Vec<String>>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
 }
@@ -217,6 +318,7 @@ impl FontDb {
             missing_glyph_protection: true,
             face_cache: HashMap::new(),
             face_aliases: HashMap::new(),
+            registered_files: HashMap::new(),
             shared: false,
         };
         for (_, bytes) in BUNDLED {
@@ -250,7 +352,7 @@ impl FontDb {
             // One call per file: fontique's directory scan is much slower on large folders.
             let mut files = Vec::new();
             for d in system_font_dirs() {
-                collect_font_files(&d, 0, &mut files);
+                collect_font_files(&d, 0, usize::MAX, &mut files);
             }
             #[cfg(target_os = "linux")]
             files.extend(fontconfig_font_paths());
@@ -274,6 +376,113 @@ impl FontDb {
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)))
+    }
+
+    /// Registers a font file (TTF/OTF/TTC/OTC, judged by its data, not its name) or every font
+    /// file in a folder and its subfolders ([`FONT_DIR_DEPTH`] deep, by extension). Files that
+    /// fail are reported in [`RegisteredFonts::skipped`]; it is an error only when nothing could
+    /// be registered or `limits` are exceeded.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn register_font_path(&mut self, path: &std::path::Path, limits: FontFileLimits) -> Result<RegisteredFonts, FontFileError> {
+        let shown = path.display().to_string();
+        let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => FontFileError::NotFound(shown.clone()),
+            _ => FontFileError::Io { path: shown.clone(), error: e.to_string() },
+        })?;
+        if meta.is_file() {
+            let name = path.file_name().map_or_else(|| shown.clone(), |n| n.to_string_lossy().into_owned());
+            let bytes = read_font_file(path, limits.max_file_bytes);
+            return self.register_font_files(&shown, vec![(name, bytes)], limits);
+        }
+        if !meta.is_dir() {
+            return Err(FontFileError::Io { path: shown, error: "not a file or folder".into() });
+        }
+        let mut paths = Vec::new();
+        collect_font_files(path, 0, limits.max_files.saturating_add(1), &mut paths);
+        if paths.len() > limits.max_files {
+            return Err(FontFileError::TooManyFiles { path: shown, max: limits.max_files });
+        }
+        // Deterministic registration order: a directory listing's isn't.
+        paths.sort();
+        let mut total = 0u64;
+        let mut files = Vec::with_capacity(paths.len());
+        for p in &paths {
+            // Stop before reading past the total; an oversized file is skipped unread.
+            let size = std::fs::metadata(p).map_or(0, |m| m.len());
+            if size <= limits.max_file_bytes {
+                total = total.saturating_add(size);
+                if total > limits.max_total_bytes {
+                    return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
+                }
+            }
+            files.push((relative_name(path, p), read_font_file(p, limits.max_file_bytes)));
+        }
+        self.register_font_files(&shown, files, limits)
+    }
+
+    /// Registers font files already read: `(name, bytes or why they couldn't be read)`, `source`
+    /// naming them in errors. A file registered before (same bytes) adds no faces again but
+    /// still reports its families. Errors as for [`Self::register_font_path`].
+    pub fn register_font_files(
+        &mut self,
+        source: &str,
+        files: Vec<(String, Result<Vec<u8>, String>)>,
+        limits: FontFileLimits,
+    ) -> Result<RegisteredFonts, FontFileError> {
+        if files.is_empty() {
+            return Err(FontFileError::NoFontFiles(source.into()));
+        }
+        if files.len() > limits.max_files {
+            return Err(FontFileError::TooManyFiles { path: source.into(), max: limits.max_files });
+        }
+        let total = files.iter().filter_map(|(_, b)| b.as_ref().ok()).fold(0u64, |t, b| t.saturating_add(b.len() as u64));
+        if total > limits.max_total_bytes {
+            return Err(FontFileError::TooLarge { path: source.into(), max_bytes: limits.max_total_bytes });
+        }
+        let mut out = RegisteredFonts::default();
+        for (name, bytes) in files {
+            match bytes.and_then(|b| self.register_font_file(b, limits.max_file_bytes)) {
+                Ok(families) => {
+                    out.files += 1;
+                    for f in families {
+                        if !is_hidden_family(&f) && !out.families.contains(&f) {
+                            out.families.push(f);
+                        }
+                    }
+                }
+                Err(why) => out.skipped.push((name, why)),
+            }
+        }
+        if out.files == 0 {
+            return Err(FontFileError::NoFonts { path: source.into(), failures: out.skipped });
+        }
+        out.families.sort_by_key(|f| f.to_lowercase());
+        Ok(out)
+    }
+
+    /// One file of [`Self::register_font_files`]: its families, or why it isn't a usable font.
+    fn register_font_file(&mut self, bytes: Vec<u8>, max_bytes: u64) -> Result<Vec<String>, String> {
+        if bytes.len() as u64 > max_bytes {
+            return Err(too_large(max_bytes));
+        }
+        if bytes.starts_with(b"wOFF") || bytes.starts_with(b"wOF2") {
+            return Err(WOFF.into());
+        }
+        if face_count(&bytes) == 0 {
+            return Err(NOT_A_FONT.into());
+        }
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(families) = self.registered_files.get(&key) {
+            return Ok(families.clone());
+        }
+        let families = self.register_font_data(bytes);
+        if families.is_empty() {
+            return Err(NO_FACES.into());
+        }
+        self.registered_files.insert(key, families.clone());
+        Ok(families)
     }
 
     /// Registers embedded font data without copying it.
@@ -696,21 +905,57 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
+/// Font files below `dir` ([`FONT_DIR_DEPTH`] deep), stopping once `out` holds `limit` paths.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, limit: usize, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
+        if out.len() >= limit {
+            return;
+        }
         let p = e.path();
         if p.is_dir() {
-            if depth < 8 {
-                collect_font_files(&p, depth + 1, out);
+            if depth < FONT_DIR_DEPTH {
+                collect_font_files(&p, depth + 1, limit, out);
             }
-        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc")) {
+        } else if p.extension().and_then(|x| x.to_str()).is_some_and(is_font_extension) {
             out.push(p);
         }
     }
+}
+
+/// A file's bytes, unless it is larger than `max_bytes` (then not read).
+#[cfg(not(target_arch = "wasm32"))]
+fn read_font_file(path: &std::path::Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    read_font_data(std::fs::File::open(path).map_err(|e| e.to_string())?, max_bytes)
+}
+
+/// An open font file's bytes, unless it is larger than `max_bytes` (then not read), or why not:
+/// the reason [`FontDb::register_font_files`] reports for it. For files opened another way, such
+/// as through a directory capability.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_font_data(file: std::fs::File, max_bytes: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    if len > max_bytes {
+        return Err(too_large(max_bytes));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    // Bounded again: the file can grow after the size check.
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(too_large(max_bytes));
+    }
+    Ok(bytes)
+}
+
+/// `file`'s path below `root`, with `/` separators (as reported in [`RegisteredFonts::skipped`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn relative_name(root: &std::path::Path, file: &std::path::Path) -> String {
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 /// Fontconfig knows about configured font directories that are not in our portable path list.
@@ -906,7 +1151,7 @@ mod tests {
     #[test]
     fn missing_font_dirs_are_skipped() {
         let mut files = Vec::new();
-        super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
+        super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, usize::MAX, &mut files);
         assert!(files.is_empty());
     }
 }
@@ -914,3 +1159,9 @@ mod tests {
 #[cfg(test)]
 #[path = "font_names_tests.rs"]
 mod font_names_tests;
+
+// Two attributes: clippy's unwrap-in-tests allowance looks for a plain `cfg(test)`.
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "font_files_tests.rs"]
+mod font_files_tests;

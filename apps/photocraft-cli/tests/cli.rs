@@ -724,6 +724,133 @@ fn a_non_unicode_argument_is_a_usage_error_not_a_panic() {
     }
 }
 
+/// A folder holding one font of its own family (a renamed copy of the bundled Inter), in a
+/// subfolder, as brand fonts often are.
+fn font_dir(d: &Path, name: &str, family: &str) -> PathBuf {
+    let dir = d.join(name);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub").join("font.ttf"), photocraft_testkit::fonts::renamed_font(family).unwrap()).unwrap();
+    dir
+}
+
+fn families(v: &Value) -> Vec<String> {
+    v["families"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect()
+}
+
+/// #3393: every `--font-dir` (a folder or one file) is loaded before the commands run; a file
+/// that can't be loaded is a warning, and stdout stays the commands' JSON.
+#[test]
+fn font_dirs_are_loaded_before_run_and_bad_files_are_warnings() {
+    let d = tmp("font-dir-run");
+    let alpha = font_dir(&d, "alpha", "PC3393 Cli Alpha");
+    std::fs::write(alpha.join("broken.ttf"), b"garbage").unwrap();
+    let beta = d.join("Beta.otf");
+    std::fs::write(&beta, photocraft_testkit::fonts::renamed_font("PC3393 Cli Beta").unwrap()).unwrap();
+    let (out, err) = ok(bin().arg("run").arg("--font-dir").arg(&alpha).arg(format!("--font-dir={}", beta.display())).args([
+        "--new",
+        r#"{"width":8,"height":8}"#,
+        "--cmd",
+        "type.fonts",
+    ]));
+    let line: Value = serde_json::from_str(out.trim()).unwrap();
+    let listed = families(&line["result"]);
+    assert!(listed.iter().any(|f| f == "PC3393 Cli Alpha") && listed.iter().any(|f| f == "PC3393 Cli Beta"), "{listed:?}");
+    assert!(err.contains("warning: --font-dir") && err.contains("skipped broken.ttf: not a font file"), "{err}");
+    // Without the flag the fonts aren't there.
+    let (out, _) = ok(bin().args(["run", "--new", r#"{"width":8,"height":8}"#, "--cmd", "type.fonts"]));
+    let line: Value = serde_json::from_str(out.trim()).unwrap();
+    assert!(!families(&line["result"]).iter().any(|f| f == "PC3393 Cli Alpha"));
+}
+
+/// A document set in a font that isn't installed is warned about (#1251); with the font's
+/// folder given to `convert`, `info`, `run` and `batch` the font is found and nothing is warned.
+#[test]
+fn font_dir_supplies_a_documents_missing_font() {
+    let d = tmp("font-dir-missing");
+    let fonts = font_dir(&d, "fonts", "PC3393 Cli Brand");
+    let doc = d.join("in").join("brand.pcraft");
+    std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
+    let png = d.join("brand.png");
+    let params = json!({"x": 4, "y": 30, "text": "Brand", "font": "PC3393 Cli Brand", "size": 20}).to_string();
+    let (_, err) = ok(bin().args(["run", "--new", r#"{"width":128,"height":48}"#, "--cmd", "type.create", "--params", &params, "--out"]).arg(&doc));
+    assert!(err.contains("font 'PC3393 Cli Brand' is not installed"), "{err}");
+
+    let (_, err) = ok(bin().arg("convert").arg(&doc).arg(&png).arg("--font-dir").arg(&fonts));
+    assert!(!err.contains("PC3393 Cli Brand") && png.is_file(), "{err}");
+    let (out, err) = ok(bin().arg("info").arg(&doc).arg("--compact").arg("--font-dir").arg(&fonts));
+    let info: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(info["warnings"], json!([]), "{info}");
+    assert!(err.is_empty(), "{err}");
+    let (_, err) = ok(bin().arg("run").arg(&doc).arg("--font-dir").arg(&fonts).arg("--out").arg(&png));
+    assert!(!err.contains("PC3393 Cli Brand"), "{err}");
+
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, r#"[{"command":"image.imageRotation.90cw"}]"#).unwrap();
+    let (out, err) = ok(bin()
+        .args(["batch", "--actions"])
+        .arg(&actions)
+        .arg("--in")
+        .arg(d.join("in"))
+        .arg("--out")
+        .arg(d.join("out"))
+        .args(["--format", "png", "--font-dir"])
+        .arg(&fonts));
+    assert!(out.contains("1 succeeded, 0 failed") && d.join("out").join("brand.png").is_file(), "{out}{err}");
+}
+
+/// A bad `--font-dir` stops the subcommand before it reads inputs, writes outputs or serves.
+#[test]
+fn font_dir_errors_stop_before_any_work() {
+    let d = tmp("font-dir-errors");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    write_png(&input.join("a.png"), 8, 4, 3);
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    std::fs::create_dir_all(d.join("empty")).unwrap();
+    let missing = d.join("missing");
+    let fonts = font_dir(&d, "fonts", "PC3393 Cli Errors");
+    let fails = |cmd: &mut Command, code: i32, says: &str| {
+        let o = cmd.stdin(Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(code), "{err}");
+        assert!(err.contains(says), "{err}");
+    };
+    let out = d.join("out.png");
+    fails(bin().arg("convert").arg(input.join("a.png")).arg(&out).arg("--font-dir").arg(&missing), 1, "error: --font-dir: no font file or folder at");
+    assert!(!out.exists());
+    let out_dir = d.join("out");
+    fails(
+        bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir).arg("--font-dir").arg(d.join("empty")),
+        1,
+        "error: --font-dir: no font files (.ttf, .otf, .ttc, .otc) in",
+    );
+    assert!(!out_dir.exists(), "nothing written");
+    fails(bin().arg("info").arg(input.join("a.png")).arg("--font-dir").arg(&missing), 1, "no font file or folder");
+    fails(bin().arg("serve").arg("--font-dir").arg(&missing), 1, "no font file or folder");
+    fails(bin().arg("mcp").arg("--font-dir").arg(&missing), 1, "no font file or folder");
+    fails(bin().args(["mcp", "--bridge", "127.0.0.1:9"]).arg("--font-dir").arg(&fonts), 1, "--font-dir can't be used with --bridge");
+    fails(bin().args(["info", "--font-dir"]), 2, "--font-dir needs a value");
+    fails(bin().args(["commands", "--font-dir"]).arg(&fonts), 2, "unknown flag --font-dir");
+}
+
+/// The JSON-lines server answers with the `--font-dir` fonts.
+#[test]
+fn serve_lists_font_dir_fonts() {
+    let d = tmp("font-dir-serve");
+    let fonts = font_dir(&d, "fonts", "PC3393 Cli Serve");
+    let mut child = bin().arg("serve").arg("--font-dir").arg(&fonts).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, r#"{{"id":1,"method":"engine.execute","params":{{"command":"type.fonts"}}}}"#).unwrap();
+    drop(stdin);
+    let mut reply = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut reply).unwrap();
+    let reply: Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(families(&reply["result"]).iter().any(|f| f == "PC3393 Cli Serve"), "{reply}");
+    assert!(child.wait().unwrap().success());
+}
+
 /// `batch --actions set.atn`: a Photoshop Actions file plays like an Actions set, and its steps
 /// PhotoCraft can't play are warned about up front.
 #[test]

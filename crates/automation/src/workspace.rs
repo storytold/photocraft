@@ -7,11 +7,15 @@ use std::sync::Arc;
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use photocraft_format::atomic::RenameRetry;
+use photocraft_text::fonts::{FONT_DIR_DEPTH, FontFileError, FontFileLimits, is_font_extension, read_font_data};
 use serde_json::Value;
 
 use crate::AutomationError;
 
 const DENIED: &str = "automation filesystem access is not granted";
+
+/// Font files read for `type.registerFonts`: `(name, bytes or why they couldn't be read)`.
+pub type FontFiles = Vec<(String, Result<Vec<u8>, String>)>;
 
 #[derive(Clone)]
 struct RootCapability {
@@ -67,6 +71,53 @@ impl AuthorizedWorkspace {
         };
         let source = DirHandle { dir };
         Ok(Some(photocraft_format::load_bytes_source(&source, &photocraft_format::LoadOptions::default())?))
+    }
+
+    /// The font files `type.registerFonts` names below the read root: one file (whatever its
+    /// name), or every `.ttf`/`.otf`/`.ttc`/`.otc` file in a folder and its subfolders, named
+    /// relative to the folder and sorted. Sizes are checked before each read, so nothing past
+    /// the limits is read into memory. Errors name `path` as the client gave it, never the
+    /// root's host path.
+    pub fn read_font_files(&self, path: &str) -> Result<FontFiles, AutomationError> {
+        self.read_font_files_with(path, FontFileLimits::DEFAULT)
+    }
+
+    pub(crate) fn read_font_files_with(&self, path: &str, limits: FontFileLimits) -> Result<FontFiles, AutomationError> {
+        let relative = request_path(path, self.read.as_ref())?;
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let metadata = root.dir.metadata(&relative).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => font_error(FontFileError::NotFound(path.into())),
+            _ => file_error("read", path, e),
+        })?;
+        if metadata.is_file() {
+            let name = relative.file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+            return Ok(vec![(name, read_font(&root.dir, &relative, limits.max_file_bytes))]);
+        }
+        if !metadata.is_dir() {
+            return Err(AutomationError::BadRequest(format!("automation read path is not a file or folder: `{path}`")));
+        }
+        let folder = root.dir.open_dir(&relative).map_err(|e| file_error("read", path, e))?;
+        let mut found = Vec::new();
+        collect_font_files(&folder, Path::new(""), 0, limits.max_files.saturating_add(1), &mut found);
+        if found.len() > limits.max_files {
+            return Err(font_error(FontFileError::TooManyFiles { path: path.into(), max: limits.max_files }));
+        }
+        found.sort();
+        let mut total = 0u64;
+        let mut files = Vec::with_capacity(found.len());
+        for name in found {
+            // A running total, checked before each read; an oversized file is skipped unread.
+            let size = folder.metadata(&name).map_or(0, |m| m.len());
+            if size <= limits.max_file_bytes {
+                total = total.saturating_add(size);
+                if total > limits.max_total_bytes {
+                    return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
+                }
+            }
+            let bytes = read_font(&folder, &name, limits.max_file_bytes);
+            files.push((slash_name(&name), bytes));
+        }
+        Ok(files)
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -211,6 +262,45 @@ fn is_windows_device_name(component: &str) -> bool {
         || stem.strip_prefix("LPT").is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
 }
 
+/// Font files below `dir` ([`FONT_DIR_DEPTH`] deep) as paths relative to it, stopping once `out`
+/// holds `limit`. Everything resolves through the capability, so links can't lead outside it.
+fn collect_font_files(dir: &Dir, prefix: &Path, depth: u32, limit: usize, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = dir.entries() else { return };
+    for entry in entries.flatten() {
+        if out.len() >= limit {
+            return;
+        }
+        let name = entry.file_name();
+        // `file_type` doesn't follow links; a link to a folder inside the capability is a folder.
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && dir.metadata(&name).is_ok_and(|m| m.is_dir())));
+        if is_dir {
+            if depth < FONT_DIR_DEPTH
+                && let Ok(sub) = dir.open_dir(&name)
+            {
+                collect_font_files(&sub, &prefix.join(&name), depth + 1, limit, out);
+            }
+        } else if Path::new(&name).extension().and_then(|x| x.to_str()).is_some_and(is_font_extension) {
+            out.push(prefix.join(&name));
+        }
+    }
+}
+
+/// One font file below `dir`, size-limited, or why it couldn't be read.
+fn read_font(dir: &Dir, name: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let file = dir.open(name).map_err(|e| e.to_string())?;
+    read_font_data(file.into_std(), max_bytes)
+}
+
+/// A relative path with `/` separators, as font files are reported.
+fn slash_name(path: &Path) -> String {
+    path.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+}
+
+/// Font file errors read as the engine command's own (`invalid parameters for …`).
+fn font_error(error: FontFileError) -> AutomationError {
+    photocraft_engine::EngineError::BadParams { cmd: photocraft_engine::font_cmds::REGISTER.into(), msg: error.to_string() }.into()
+}
+
 fn path_error(path: &str, reason: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation path rejected: {reason}: `{path}`"))
 }
@@ -275,6 +365,7 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
             id,
             "pattern.import"
                 | "pattern.export"
+                | "type.registerFonts"
                 | "edit.presets.migratePresets"
                 | "measurementLog.export"
                 | "layer.videoLayers.newVideoLayerFromFile"
@@ -696,9 +787,14 @@ mod tests {
             "measurementLog.export",
             "layer.videoLayers.reloadFrame",
             "edit.colorSettings",
+            "type.registerFonts",
         ] {
             assert!(authorize_engine_command(id, &serde_json::json!({})).is_err());
         }
+        // A host path, inside an action or on the desktop channel too.
+        let fonts = serde_json::json!({"path": "/outside/fonts"});
+        assert!(authorize_engine_step("type.registerFonts", &fonts).is_err());
+        assert!(authorize_desktop_engine_command("type.registerFonts", &fonts).is_err());
         assert!(authorize_engine_command("file.new", &serde_json::json!({})).is_ok());
         assert!(authorize_engine_command("file.automate.cropAndStraightenPhotos", &serde_json::json!({})).is_ok());
         assert!(authorize_desktop_engine_command("file.automate.cropAndStraightenPhotos", &serde_json::json!({})).is_ok());
@@ -976,5 +1072,105 @@ mod tests {
         assert!(workspace.read(&target.to_string_lossy()).is_err(), "not under the read root");
         let none = AuthorizedWorkspace::default();
         assert!(none.read(&target.to_string_lossy()).is_err());
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn read_ok(name: &str, bytes: &[u8]) -> (String, Result<Vec<u8>, String>) {
+        (name.into(), Ok(bytes.to_vec()))
+    }
+
+    /// #3393: font files are found and read under the read root and named as requested; the
+    /// root's host path never appears in an error.
+    #[test]
+    fn font_files_are_read_under_the_read_root() {
+        let (inside, outside, workspace) = roots("fonts");
+        write_file(&inside.join("fonts/a.ttf"), b"a");
+        write_file(&inside.join("fonts/sub/b.OTF"), b"bb");
+        write_file(&inside.join("fonts/readme.txt"), b"not collected");
+        write_file(&inside.join("empty/.keep"), b"");
+        write_file(&outside.join("secret.ttf"), b"outside");
+
+        assert_eq!(workspace.read_font_files("fonts").unwrap(), [read_ok("a.ttf", b"a"), read_ok("sub/b.OTF", b"bb")]);
+        // One file, whatever its name, and an absolute path beneath the root.
+        assert_eq!(workspace.read_font_files("fonts/readme.txt").unwrap(), [read_ok("readme.txt", b"not collected")]);
+        assert_eq!(workspace.read_font_files(&inside.join("fonts").join("a.ttf").to_string_lossy()).unwrap(), [read_ok("a.ttf", b"a")]);
+        assert!(workspace.read_font_files("empty").unwrap().is_empty(), "the engine reports a folder without fonts");
+
+        let host = inside.to_string_lossy().into_owned();
+        let missing = workspace.read_font_files("fonts/missing").unwrap_err().to_string();
+        assert!(missing.contains("no font file or folder at `fonts/missing`") && !missing.contains(&host), "{missing}");
+        let outside_file = outside.join("secret.ttf").to_string_lossy().into_owned();
+        for path in ["", "../outside", "fonts/../../outside", "fonts\\a.ttf", "C:/fonts", outside_file.as_str()] {
+            let error = workspace.read_font_files(path).unwrap_err().to_string();
+            assert!(error.contains("automation path rejected"), "{path}: {error}");
+        }
+        let write_only = AuthorizedWorkspace::new(None, Some(&inside)).unwrap();
+        assert!(write_only.read_font_files("fonts").unwrap_err().to_string().contains("read authority is absent"));
+    }
+
+    /// The limits are checked on sizes before reading: an oversized file is skipped unread, and
+    /// the running total stops the walk before the file that would pass it is read.
+    #[test]
+    fn font_file_limits_are_checked_before_reading() {
+        let (inside, _, workspace) = roots("font-limits");
+        for name in ["a.ttf", "b.ttf", "c.ttf"] {
+            write_file(&inside.join("fonts").join(name), &[0; 10]);
+        }
+        let limits = FontFileLimits { max_file_bytes: 10, max_files: 3, max_total_bytes: 25 };
+        let error = workspace.read_font_files_with("fonts", limits).unwrap_err().to_string();
+        assert!(error.contains("the font files in `fonts` add up to more than 25 bytes"), "{error}");
+        let error = workspace.read_font_files_with("fonts", FontFileLimits { max_files: 2, ..limits }).unwrap_err().to_string();
+        assert!(error.contains("`fonts` holds more than 2 font files"), "{error}");
+        let small = workspace.read_font_files_with("fonts", FontFileLimits { max_file_bytes: 5, ..limits }).unwrap();
+        assert_eq!(small.len(), 3);
+        assert!(small.iter().all(|(_, read)| read.as_ref().is_err_and(|why| why == "larger than 5 bytes")), "{small:?}");
+        assert_eq!(workspace.read_font_files_with("fonts", FontFileLimits { max_total_bytes: 30, ..limits }).unwrap().len(), 3);
+    }
+
+    /// `fonts/outside-dir` and `fonts/escape.ttf` link out of the read root: a folder walk skips
+    /// them, and named directly they are refused before anything is read. No error names a host
+    /// path.
+    fn assert_font_links_refused(base: &Path, workspace: &AuthorizedWorkspace) {
+        let host = base.to_string_lossy().into_owned();
+        let files = workspace.read_font_files("fonts").unwrap();
+        assert!(files.contains(&read_ok("own.ttf", b"own")), "{files:?}");
+        for (name, read) in &files {
+            assert!(read.as_deref() != Ok(&b"outside"[..]), "{name} was read through a link: {files:?}");
+            assert!(read.as_ref().err().is_none_or(|why| !why.contains(&host)), "{name}: {files:?}");
+        }
+        for path in ["fonts/outside-dir", "fonts/escape.ttf"] {
+            let error = workspace.read_font_files(path).unwrap_err().to_string();
+            assert!(error.contains(&format!("automation read `{path}` failed")) && error.contains("outside of the filesystem"), "{path}: {error}");
+            assert!(!error.contains(&host), "{path}: {error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn font_folders_cannot_follow_links_out_of_the_root() {
+        let (inside, outside, workspace) = roots("font-links");
+        write_file(&outside.join("secret.ttf"), b"outside");
+        write_file(&inside.join("fonts/own.ttf"), b"own");
+        std::os::unix::fs::symlink(&outside, inside.join("fonts/outside-dir")).unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.ttf"), inside.join("fonts/escape.ttf")).unwrap();
+        assert_font_links_refused(inside.parent().unwrap(), &workspace);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn font_folders_cannot_follow_windows_links_out_of_the_root_when_supported() {
+        let (inside, outside, workspace) = roots("font-windows-links");
+        write_file(&outside.join("secret.ttf"), b"outside");
+        write_file(&inside.join("fonts/own.ttf"), b"own");
+        // Creating links needs Developer Mode or elevation; without it there is nothing to test.
+        if std::os::windows::fs::symlink_dir(&outside, inside.join("fonts/outside-dir")).is_err() {
+            return;
+        }
+        std::os::windows::fs::symlink_file(outside.join("secret.ttf"), inside.join("fonts/escape.ttf")).unwrap();
+        assert_font_links_refused(inside.parent().unwrap(), &workspace);
     }
 }

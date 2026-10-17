@@ -17,6 +17,8 @@ photocraft-codecs = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-format = { path = "../format" }
 photocraft-engine = { workspace = true }
+# Font files for `type.registerFonts` under the read root (limits, size-limited reads).
+photocraft-text = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -30,3 +32,5 @@ cap-std = "4"
 [dev-dependencies]
 rmcp = { version = "3.5", default-features = false, features = ["client", "server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }
+# Renamed copies of the bundled Inter for the font tests (no font files committed).
+photocraft-testkit = { workspace = true }

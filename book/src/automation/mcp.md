@@ -11,6 +11,9 @@ Start the headless server with:
 photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
 ```
 
+Add `--font-dir <dir>` (repeatable) to use fonts that aren't installed; a client can add more
+from under the read root with `type.registerFonts` (see [Command-line interface](cli.md)).
+
 Bridge to a running desktop application with the same private token file used by the app:
 
 ```sh
