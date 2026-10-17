@@ -19,6 +19,10 @@ pub struct Units<'s> {
     pub dpi: f64,
     /// Points per inch (72 PostScript, 72.27 traditional).
     pub ppi: f64,
+    /// The length in pixels that 100 % stands for, in a field that is both (Free Transform's W
+    /// and H, #6284): a length then converts into its percent and a percentage into its length.
+    /// `None` (most fields) keeps lengths and percentages apart.
+    pub extent: Option<f64>,
 }
 
 /// Unit names a number may carry, longest first so `pica` wins over `pc`.
@@ -34,8 +38,9 @@ const UNIT_NAMES: [(&str, Unit); 8] = [
 ];
 
 /// [`parse`] where a number may carry a unit (`2in`, `5 mm`, `50%`), converted into the field's
-/// unit. A unit that can't convert (a length in a percent field, any unit in a unitless one) makes
-/// the whole text invalid; without `units`, unit names are invalid as before.
+/// unit. A unit that can't convert (a length in a percent field without an [`Units::extent`], any
+/// unit in a unitless one) makes the whole text invalid; without `units`, unit names are invalid
+/// as before.
 pub(crate) fn parse_with_units(text: &str, units: Option<Units>) -> Option<f64> {
     if text.len() > 1024 {
         return None;
@@ -168,7 +173,13 @@ impl Parser<'_> {
             Some(field) if field == typed => Some(value),
             // Lengths convert through pixels; a percentage has no length to convert against.
             Some(field) if field != Unit::Percent && typed != Unit::Percent => Some(field.from_px(typed.to_px(value, dpi, 1.0, ppi), dpi, 1.0, ppi)),
-            _ => None,
+            // A field whose 100 % is a length: convert through that length's pixels.
+            Some(field) => {
+                let extent = units.extent.map(f64::abs).filter(|e| e.is_finite() && *e > 1e-9)?;
+                let v = field.from_px(typed.to_px(value, dpi, extent, ppi), dpi, extent, ppi);
+                v.is_finite().then_some(v)
+            }
+            None => None,
         }
     }
 }
@@ -206,10 +217,10 @@ mod tests {
     #[test]
     fn units_convert_into_the_field_unit_and_bad_input_is_rejected() {
         use super::{Unit, Units, parse_with_units};
-        let px = Units { unit: Some(Unit::Pixels), suffix: "px", dpi: 300.0, ppi: 72.0 };
-        let pt = Units { unit: Some(Unit::Points), suffix: "pt", dpi: 144.0, ppi: 72.0 };
-        let pct = Units { unit: Some(Unit::Percent), suffix: "%", dpi: 72.0, ppi: 72.0 };
-        let deg = Units { unit: None, suffix: "°", dpi: 72.0, ppi: 72.0 };
+        let px = Units { unit: Some(Unit::Pixels), suffix: "px", dpi: 300.0, ppi: 72.0, extent: None };
+        let pt = Units { unit: Some(Unit::Points), suffix: "pt", dpi: 144.0, ppi: 72.0, extent: None };
+        let pct = Units { unit: Some(Unit::Percent), suffix: "%", dpi: 72.0, ppi: 72.0, extent: None };
+        let deg = Units { unit: None, suffix: "°", dpi: 72.0, ppi: 72.0, extent: None };
         for (text, units, want) in [
             ("1in", px, 300.0),
             ("2.54cm", px, 300.0),
@@ -254,6 +265,40 @@ mod tests {
             assert_eq!(parse_with_units(text, Some(units)), None, "{text}");
         }
         assert_eq!(parse("1in"), None, "without a field unit, unit names stay invalid");
+    }
+    #[test]
+    fn a_field_with_an_extent_converts_between_lengths_and_percent() {
+        use super::{Unit, Units, parse_with_units};
+        // Free Transform's W at 300 ppi for a 600 px side (#6284): 100 % is 600 px, 2 in.
+        let pct = Units { unit: Some(Unit::Percent), suffix: "%", dpi: 300.0, ppi: 72.0, extent: Some(600.0) };
+        let px = Units { unit: Some(Unit::Pixels), suffix: "px", ..pct };
+        let inches = Units { unit: Some(Unit::Inches), suffix: "in", ..pct };
+        for (text, units, want) in [
+            ("300px", pct, 50.0),
+            ("1in", pct, 50.0),
+            ("2in*2", pct, 200.0),
+            ("2.54cm", pct, 50.0),
+            ("-1in", pct, -50.0),
+            ("50%", pct, 50.0),
+            ("50", pct, 50.0),
+            ("50%", px, 300.0),
+            ("50%+10", px, 310.0),
+            ("150%", inches, 3.0),
+            ("10%3", px, 1.0),
+        ] {
+            let got = parse_with_units(text, Some(units));
+            assert!(got.is_some_and(|v| (v - want).abs() < 1e-9), "{text}: {got:?}, want {want}");
+        }
+        // A degenerate or hostile extent can't convert, and never divides by zero.
+        for extent in [Some(0.0), Some(f64::NAN), Some(f64::INFINITY), None] {
+            assert_eq!(parse_with_units("1in", Some(Units { extent, ..pct })), None, "{extent:?}");
+            assert_eq!(parse_with_units("50%", Some(Units { extent, ..px })), None, "{extent:?}");
+        }
+        assert_eq!(parse_with_units("1e308in", Some(Units { extent: Some(1e-6), ..pct })), None, "an overflow is invalid");
+        // Other percent fields (opacity, fill …) still reject a length.
+        let opacity = Units { extent: None, ..pct };
+        assert_eq!(parse_with_units("40px", Some(opacity)), None);
+        assert_eq!(parse_with_units("2in", Some(opacity)), None);
     }
 }
 

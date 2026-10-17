@@ -350,6 +350,25 @@ pub fn value_field_units(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInc
     value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }).0
 }
 
+/// A [`value_field_prec`] in `units` whose 100 % is a length of `extent` px (Free Transform's W
+/// and H): a length typed while it shows percent becomes that share of `extent` (`40px`, `2in`),
+/// and a percentage typed while it shows a length becomes that share of `extent` (`50%`), at
+/// `units`' resolution (#6284). The field keeps its own unit.
+#[allow(clippy::too_many_arguments)]
+pub fn value_field_extent(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    decimals: u32,
+    units: FieldUnits,
+    extent: f64,
+) -> Response {
+    let opts = FieldOpts { decimals: Some(decimals), units: Some(units), extent: Some(extent), ..Default::default() };
+    value_field_in(ui, value, range, suffix, width, 0.0, opts).0
+}
+
 fn field_resolution_id() -> egui::Id {
     egui::Id::new("pc-field-resolution")
 }
@@ -499,6 +518,8 @@ struct FieldOpts {
     decimals: Option<u32>,
     /// The unit typed units convert into (default: the suffix's, at [`set_field_resolution`]).
     units: Option<FieldUnits>,
+    /// The length (px) 100 % stands for, so lengths and percentages convert into each other.
+    extent: Option<f64>,
     wrap_drag: bool,
 }
 
@@ -526,7 +547,7 @@ fn value_field_box(
     trailing: f32,
     opts: FieldOpts,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, units, wrap_drag } = opts;
+    let FieldOpts { decimals, units, extent, wrap_drag } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let scrub = take_label_scrub(ui, rect).map(|s| {
@@ -544,8 +565,8 @@ fn value_field_box(
     // Typed text loses its spaces before parsing, so a " pt" suffix reads as "pt".
     let typed_suffix = suffix.trim();
     let units = match units {
-        Some(u) => crate::numeric_expression::Units { unit: Some(u.unit), suffix: typed_suffix, dpi: u.dpi, ppi: u.ppi },
-        None => crate::numeric_expression::Units { unit: unit_of_suffix(typed_suffix), suffix: typed_suffix, dpi, ppi },
+        Some(u) => crate::numeric_expression::Units { unit: Some(u.unit), suffix: typed_suffix, dpi: u.dpi, ppi: u.ppi, extent },
+        None => crate::numeric_expression::Units { unit: unit_of_suffix(typed_suffix), suffix: typed_suffix, dpi, ppi, extent },
     };
     surface(ui, rect, t.field, false);
     if !t.bevel {

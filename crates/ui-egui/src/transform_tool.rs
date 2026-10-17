@@ -2840,14 +2840,17 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     let (suffix, places) = (u.unit.suffix(), u.unit.decimals() as u32);
     // Lengths need more room than a percentage ("2116.67 mm").
     let size_w = if u.unit == photocraft_engine::prefs::Unit::Percent { 66.0 } else { 84.0 };
+    // Whatever their unit, W and H take any other typed in (`500 px` or `2 in` in percent, `50%`
+    // in a length), converted at the document's resolution against the box's original side (#6284).
+    let units = crate::widgets::FieldUnits { unit: u.unit, dpi: u.dpi, ppi: u.ppi };
     lbl(ui, "W:");
-    let rw = crate::widgets::value_field_prec(ui, &mut w, -wlim_u..=wlim_u, suffix, size_w, places);
+    let rw = crate::widgets::value_field_extent(ui, &mut w, -wlim_u..=wlim_u, suffix, size_w, places, units, side_w);
     let link = !app.ui.transform_unlinked;
     if crate::icons::button(ui, if link { "link" } else { "unlink" }, 22.0, link, tl!("Maintain aspect ratio")).clicked() {
         app.ui.transform_unlinked = link;
     }
     lbl(ui, "H:");
-    let rh = crate::widgets::value_field_prec(ui, &mut h, -hlim_u..=hlim_u, suffix, size_w, places);
+    let rh = crate::widgets::value_field_extent(ui, &mut h, -hlim_u..=hlim_u, suffix, size_w, places, units, side_h);
     for r in [&rw, &rh] {
         r.context_menu(|ui| {
             if let Some(name) = crate::rulers::unit_menu(ui, u.unit) {
@@ -3435,6 +3438,93 @@ mod tests {
         assert!((t.quad[1][0] - t.quad[0][0] - 250.0).abs() < 0.01, "{:?}", t.quad);
         // Percent is still the default.
         assert_eq!(shown_size(&bar_harness(|_| {})), ["100", "100"]);
+    }
+
+    /// Opens a document at `dpi` so the W/H fields convert typed lengths at its resolution.
+    fn at_dpi(app: &mut PhotocraftApp, dpi: f32) {
+        app.session.execute("file.new", json!({"width": 400, "height": 400})).unwrap();
+        app.session
+            .edit("resolution", |doc, _| {
+                doc.resolution_dpi = dpi;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// The box's width and height in px after a W/H edit.
+    fn box_size(t: &TransformSession) -> (f64, f64) {
+        (t.quad[1][0] - t.quad[0][0], t.quad[3][1] - t.quad[0][1])
+    }
+
+    #[test]
+    fn w_and_h_in_percent_take_a_typed_length() {
+        use photocraft_engine::prefs::Unit;
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        // The 100 × 50 px box with W/H showing percent (#6284): a typed length is the box's new side.
+        for (text, px) in
+            [("40px", 40.0), ("40 px", 40.0), ("2in", 600.0), ("2 in", 600.0), ("5cm", 5.0 / 2.54 * 300.0), ("25.4mm", 300.0), ("72pt", 300.0), ("1pica", 50.0)]
+        {
+            // Linked: the height follows the width.
+            let t = type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, text);
+            let (w, h) = box_size(&t);
+            assert!(near(w, px) && near(h, px / 2.0), "{text} linked: {w} × {h}");
+            // Unlinked: only the width changes.
+            let t = type_into_bar_field_with(
+                |app| {
+                    at_dpi(app, 300.0);
+                    app.ui.transform_unlinked = true;
+                },
+                2,
+                text,
+            );
+            let (w, h) = box_size(&t);
+            assert!(near(w, px) && near(h, 50.0), "{text} unlinked: {w} × {h}");
+        }
+        // H takes a length too; linked, the width follows.
+        let t = type_into_bar_field_with(|app| at_dpi(app, 300.0), 3, "1in");
+        let (w, h) = box_size(&t);
+        assert!(near(w, 600.0) && near(h, 300.0), "H 1in: {w} × {h}");
+        // A plain number is still the percentage.
+        let (w, _) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, "40"));
+        assert!(near(w, 40.0), "40 is 40 % of 100 px: {w}");
+        // A percentage typed into a length field is that share of the box's original side.
+        let px = |app: &mut PhotocraftApp| {
+            at_dpi(app, 300.0);
+            set_size_unit(app, Unit::Pixels.name());
+        };
+        let (w, h) = box_size(&type_into_bar_field_with(px, 2, "50%"));
+        assert!(near(w, 50.0) && near(h, 25.0), "50% in px: {w} × {h}");
+        let inches = |app: &mut PhotocraftApp| {
+            at_dpi(app, 300.0);
+            set_size_unit(app, Unit::Inches.name());
+        };
+        let (w, h) = box_size(&type_into_bar_field_with(inches, 3, "300%"));
+        assert!(near(w, 300.0) && near(h, 150.0), "300% in inches: {w} × {h}");
+    }
+
+    #[test]
+    fn w_and_h_reject_or_clamp_hostile_typed_lengths() {
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        // Text that is no number leaves the box alone.
+        for text in ["px", "in", "NaN", "%"] {
+            let (w, h) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, text));
+            assert!(near(w, 100.0) && near(h, 50.0), "{text}: {w} × {h}");
+        }
+        // Invalid text after a number keeps only what applied while typing (a plain number applies
+        // per keystroke), never a NaN or a box past the largest document.
+        for text in ["1in/0", "1e400px", "2 inches", "1e308in"] {
+            let (w, h) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, text));
+            assert!(w.is_finite() && h.is_finite() && w.abs() <= f64::from(POSITION_LIMIT_PX) + 0.01, "{text}: {w} × {h}");
+        }
+        // A huge length stops at the field's limit: the box stays within the largest document.
+        let (w, h) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, "1e9in"));
+        assert!(w.is_finite() && w <= f64::from(POSITION_LIMIT_PX) + 0.01 && h <= f64::from(POSITION_LIMIT_PX), "{w} × {h}");
+        // A negative length flips, as a negative percentage does.
+        let (w, _) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, "-40px"));
+        assert!(near(w, -40.0), "{w}");
+        // Zero collapses the side without dividing by zero.
+        let (w, h) = box_size(&type_into_bar_field_with(|app| at_dpi(app, 300.0), 2, "0px"));
+        assert!(w.is_finite() && h.is_finite(), "{w} × {h}");
     }
 
     #[test]
