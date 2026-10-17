@@ -1407,38 +1407,33 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         label(ui, tl!("Preset:"));
         let mut picked = None;
         let (press, close) = crate::press_menu::PressCombo::before(ui, cx.mem.with("gm-preset"));
-        let combo = egui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
-            .selected_text(tl!("Custom"))
-            .width(ui.available_width().min(190.0))
-            .height(420.0)
-            .icon(widgets::chevron_icon)
-            .close_behavior(close)
-            .show_ui(ui, |ui| {
-                let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
-                egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
-                    if ui.button(tl!("Import .GRD")).clicked() {
-                        e.import_gradients = true;
-                        ui.close();
-                    }
-                });
-                ui.separator();
-                for g in &cx.gradients {
-                    ui.label(RichText::new(&g.name).color(t.text_faint));
-                    for p in &g.items {
-                        ui.horizontal(|ui| {
-                            // A map has no transparency: colour stops only, shown opaque.
-                            let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
-                            let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                            crate::preset_panels::paint_gradient(ui, r, &rgba);
-                            // Both, not short-circuited: the name is drawn either way.
-                            let name = ui.selectable_label(false, &p.name);
-                            if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
-                                picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
-                            }
-                        });
-                    }
+        let width = ui.available_width().min(190.0);
+        let combo = widgets::combo_list(ui, cx.mem.with("gm-preset"), tl!("Custom"), width, close, |ui| {
+            let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
+            egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
+                if ui.button(tl!("Import .GRD")).clicked() {
+                    e.import_gradients = true;
+                    ui.close();
                 }
             });
+            ui.separator();
+            for g in &cx.gradients {
+                ui.label(RichText::new(&g.name).color(t.text_faint));
+                for p in &g.items {
+                    ui.horizontal(|ui| {
+                        // A map has no transparency: colour stops only, shown opaque.
+                        let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                        let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                        crate::preset_panels::paint_gradient(ui, r, &rgba);
+                        // Both, not short-circuited: the name is drawn either way.
+                        let name = ui.selectable_label(false, &p.name);
+                        if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
+                            picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                        }
+                    });
+                }
+            }
+        });
         press.after(&combo.response);
         if let Some(p) = picked {
             stops = p;
