@@ -143,11 +143,11 @@ opt-level = 3
 [profile.wasm-release.package.photocraft-color]
 opt-level = 3
 [profile.wasm-release.package.photocraft-cms]
-opt-level = "z"
+opt-level = 3
 [profile.wasm-release.package.photocraft-compose]
-opt-level = "z"
+opt-level = 3
 [profile.wasm-release.package.photocraft-algo]
-opt-level = "z"
+opt-level = 3
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
