@@ -451,6 +451,22 @@ pub fn read_low_latency(path: Option<&Path>) -> bool {
     v.get("performance").and_then(|p| p.get("lowLatencyDrawing")).and_then(Value::as_bool).unwrap_or(default)
 }
 
+/// Preferences › Performance › Prevent G-SYNC/FreeSync Flicker (`performance.composeWindow`, on
+/// unless turned off), read before the window opens.
+pub fn read_compose_window(path: Option<&Path>) -> bool {
+    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let default = photocraft_engine::prefs::Preferences::default().performance.compose_window;
+    v.get("performance").and_then(|p| p.get("composeWindow")).and_then(Value::as_bool).unwrap_or(default)
+}
+
+/// Whether this launch presents through the Windows compositor (`compose_window`): a transparent
+/// DX12 DirectComposition swapchain, which DWM always composes, so G-SYNC/FreeSync never engage
+/// on PhotoCraft's input-driven repaints. Not under Low-Latency Drawing (it wants the compositor
+/// bypassed), nor for an explicit Vulkan, OpenGL or CPU backend or `WGPU_BACKEND`.
+pub fn composes_window(os: Os, plan: &Plan, compose_window: bool, low_latency: bool) -> bool {
+    os == Os::Windows && compose_window && !low_latency && plan.env.is_none() && matches!(plan.backend, GpuBackend::Auto | GpuBackend::Dx12)
+}
+
 /// Read the policy leniently at startup, including old settings without renderingMode.
 pub fn read_rendering_prefs(path: Option<&Path>) -> (GpuBackend, RenderingMode) {
     let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
@@ -486,6 +502,29 @@ mod tests {
         assert!(!read("not json"));
         assert!(!read_low_latency(None), "no settings file: the default (off)");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_window_is_composed_on_windows_by_default_unless_something_wants_the_bypass() {
+        let dir = std::env::temp_dir().join(format!("photocraft-compose-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("preferences.json");
+        std::fs::write(&file, r#"{"performance":{"composeWindow":false}}"#).unwrap();
+        assert!(!read_compose_window(Some(&file)));
+        assert!(read_compose_window(None), "no settings file: the default (on)");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let plan = |backend, env: Option<&str>| Plan { backend, env: env.map(str::to_string), reason: None, remember: false };
+        assert!(composes_window(Os::Windows, &plan(Auto, None), true, false));
+        assert!(composes_window(Os::Windows, &plan(Dx12, None), true, false));
+        assert!(!composes_window(Os::Windows, &plan(Auto, None), false, false), "turned off");
+        assert!(!composes_window(Os::Windows, &plan(Auto, None), true, true), "Low-Latency Drawing wants the bypass");
+        for backend in [Vulkan, Gl, Cpu] {
+            assert!(!composes_window(Os::Windows, &plan(backend, None), true, false), "{backend:?} chosen explicitly");
+        }
+        assert!(!composes_window(Os::Windows, &plan(Auto, Some("vulkan")), true, false), "WGPU_BACKEND wins");
+        assert!(!composes_window(Os::Mac, &plan(Auto, None), true, false));
+        assert!(!composes_window(Os::Other, &plan(Auto, None), true, false));
     }
 
     #[test]

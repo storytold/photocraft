@@ -4158,6 +4158,7 @@ navigator	Zoom	Zoom
 	Undo Changes	Deshacer cambios
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} está reservado por el sistema y no se puede asignar.
 	Low-Latency Drawing (vsync off, applies at next launch)	Dibujo de baja latencia (sin sincronización vertical, se aplica al volver a iniciar)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Evitar el parpadeo de G-SYNC/FreeSync (se aplica al volver a iniciar)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Transformación libre aún se está aplicando; inténtelo de nuevo cuando termine.
 	The transform couldn't be applied.	No se pudo aplicar la transformación.

@@ -3926,6 +3926,7 @@ cameraData	Lens	Lens
 	Undo Changes	Değişiklikleri Geri Al
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} sistem tarafından ayrılmıştır ve atanamaz.
 	Low-Latency Drawing (vsync off, applies at next launch)	Düşük gecikmeli çizim (dikey eşitleme kapalı, sonraki açılışta geçerli)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	G-SYNC/FreeSync titremesini önle (sonraki açılışta geçerli)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Serbest Dönüştürme hâlâ uygulanıyor; bittiğinde yeniden deneyin.
 	The transform couldn't be applied.	Dönüştürme uygulanamadı.

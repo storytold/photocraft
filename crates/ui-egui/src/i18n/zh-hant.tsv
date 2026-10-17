@@ -2797,6 +2797,7 @@ curves	Smooth	平滑
 	Undo Changes	還原變更
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} 由系統保留，無法指定。
 	Low-Latency Drawing (vsync off, applies at next launch)	低延遲繪圖（關閉垂直同步，下次啟動時生效）
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	任意變形仍在套用中；請在完成後再試一次。
 	The transform couldn't be applied.	無法套用變形。

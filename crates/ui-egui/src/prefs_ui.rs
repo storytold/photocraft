@@ -1122,6 +1122,10 @@ fn humanize(key: &str) -> String {
     if key == "lowLatencyDrawing" {
         return "Low-Latency Drawing (vsync off, applies at next launch)".into();
     }
+    // Performance: present through the Windows compositor so G-SYNC/FreeSync never engage.
+    if key == "composeWindow" {
+        return "Prevent G-SYNC/FreeSync Flicker (applies at next launch)".into();
+    }
     // Performance: the canvas compositor's GPU memory, 0 for the automatic budget (L3).
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();

@@ -3896,6 +3896,7 @@ curves	Smooth	Εξομάλυνση
 	Undo Changes	Αναίρεση αλλαγών
 	{shortcut} is reserved by the system and can't be assigned.	Η συντόμευση {shortcut} δεσμεύεται από το σύστημα και δεν μπορεί να εκχωρηθεί.
 	Low-Latency Drawing (vsync off, applies at next launch)	Σχεδίαση χαμηλής καθυστέρησης (χωρίς vsync, ισχύει στην επόμενη εκκίνηση)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Αποτροπή τρεμοπαίγματος G-SYNC/FreeSync (ισχύει στην επόμενη εκκίνηση)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Ο Ελεύθερος μετασχηματισμός εφαρμόζεται ακόμη· δοκιμάστε ξανά όταν ολοκληρωθεί.
 	The transform couldn't be applied.	Δεν ήταν δυνατή η εφαρμογή του μετασχηματισμού.

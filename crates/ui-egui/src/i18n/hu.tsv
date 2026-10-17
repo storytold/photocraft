@@ -4115,6 +4115,7 @@ cameraRaw	Yellow	Sárga
 	Undo Changes	Változások visszavonása
 	{shortcut} is reserved by the system and can't be assigned.	A(z) {shortcut} a rendszer számára fenntartott, nem rendelhető hozzá.
 	Low-Latency Drawing (vsync off, applies at next launch)	Kis késleltetésű rajzolás (vsync nélkül, a következő indításkor lép életbe)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	G-SYNC/FreeSync villódzás megelőzése (a következő indításkor lép életbe)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A szabad alakítás alkalmazása még folyamatban van; próbáld újra, ha befejeződött.
 	The transform couldn't be applied.	Az átalakítás nem alkalmazható.
