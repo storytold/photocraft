@@ -101,6 +101,8 @@ fn shift_centres_the_copy_when_the_documents_differ_in_size() {
 fn a_move_tool_drag_onto_a_tab_copies_the_layer_under_the_pointer_and_leaves_the_source() {
     let (mut h, paint) = harness();
     h.state_mut().ui.tool = Tool::Move;
+    // A 10 px layer is all handles; this test grabs its middle to drag it.
+    h.state_mut().ui.tool_options.move_show_transform = false;
     h.run_steps(2);
     let before = source_square(&h, paint);
     let steps = h.state().session.documents()[0].history.entries().len();

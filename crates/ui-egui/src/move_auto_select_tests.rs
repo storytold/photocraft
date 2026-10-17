@@ -63,6 +63,16 @@ fn auto_select_is_on_by_default_with_the_group_target() {
 }
 
 #[test]
+fn show_transform_controls_is_on_by_default() {
+    // #4402: on unless the user unticks it; saved options without the field get it on too.
+    let o = ToolOptions::default();
+    assert!(o.move_show_transform);
+    let mut v = serde_json::to_value(&o).unwrap();
+    v.as_object_mut().unwrap().remove("move_show_transform");
+    assert!(serde_json::from_value::<ToolOptions>(v).unwrap().move_show_transform);
+}
+
+#[test]
 fn a_press_picks_the_layer_under_the_pointer_and_drags_it() {
     let (mut app, a, b) = app();
     assert_eq!(active(&app), Some(b));
