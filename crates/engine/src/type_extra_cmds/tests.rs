@@ -399,3 +399,21 @@ fn exact_postscript_face_outside_the_guessed_family_is_not_missing() {
     assert!(!fonts.has_family(&photocraft_text::fonts::guess_from_postscript("UnrelatedPS30").family));
     assert_eq!((style_font_missing(&mut fonts, &style("UnrelatedPS30")), style_font_missing(&mut fonts, &style("UnrelatedPS31"))), (false, true));
 }
+
+/// #5044: PostScript names whose family has its space elsewhere (`BMDoHyeon`, family
+/// "BM DoHyeon") or an underscore style suffix (`Daum_SemiBold`). Guessing splits them as
+/// "BM Do Hyeon" and "Daum_Semi Bold", neither installed; the exact installed face resolves them.
+#[test]
+fn camel_case_and_underscore_postscript_names_resolve_to_their_installed_faces() {
+    let mut fonts = photocraft_text::FontDb::new();
+    fonts.register_font_data(renamed_face(&photocraft_text::fonts::INTER_REGULAR, "BM DoHyeon", "BMDoHyeon"));
+    fonts.register_font_data(renamed_face(&photocraft_text::fonts::INTER_REGULAR, "Daum", "Daum_SemiBold"));
+    for (ps, family) in [("BMDoHyeon", "BM DoHyeon"), ("Daum_SemiBold", "Daum")] {
+        let guess = photocraft_text::fonts::guess_from_postscript(ps).family;
+        assert!(!fonts.has_family(&guess), "{ps}: the guess {guess:?} is not an installed family");
+        let r = fonts.resolve_postscript(ps);
+        assert_eq!((r.family.as_str(), r.exact), (family, true), "{ps}");
+        let style = photocraft_doc::text::CharStyle { font_family: guess.clone(), postscript_name: Some(ps.into()), ..Default::default() };
+        assert!(!style_font_missing(&mut fonts, &style), "{ps} stored as {guess:?} is not missing");
+    }
+}
