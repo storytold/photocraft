@@ -91,6 +91,7 @@ fn outline_share_treats_stroke_and_shape_as_disjoint_areas() {
     // Outside the shape the stroke covers the pixel; inside it nothing.
     assert_eq!(effects::outline_share(0.0, 0.0), 1.0);
     assert_eq!(effects::outline_share(1.0, 0.3), 0.0);
+    assert_eq!(effects::outline_share(1.0, 1.0), 0.0);
     // Beneath an opaque edge pixel the result ends opaque: share + l (1 - share) = 1 - cov + l.
     let (cov, l) = (0.6, 0.6);
     let s = effects::outline_share(cov, l);
@@ -247,3 +248,48 @@ fn hairline_vector_stroke_keeps_the_files_edge_pixel_colour() {
         assert!(close4(px(&d, 20, 20), [fill, fill, fill, 1.0]), "{sample:?} {:?}", px(&d, 20, 20));
     }
 }
+
+#[test]
+fn outside_stroke_on_raster_layer_does_not_paint_inside_opaque_pixels() {
+    let mut d = doc(40, 40);
+    let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    pixels.fill_rect(Rect::new(15, 15, 25, 25), &[1.0, 0.0, 0.0, 1.0]);
+    let mut l = Layer::new("raster", LayerContent::Raster(pixels));
+    l.effects.items = vec![stroke(3.0, StrokePosition::Outside, blue())];
+    d.layers.push(l);
+    let center = px(&d, 20, 20);
+    assert!(close4(center, [1.0, 0.0, 0.0, 1.0]), "interior must stay red, got: {center:?}");
+    let stroke_pixel = px(&d, 13, 20);
+    assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue, got: {stroke_pixel:?}");
+}
+
+#[test]
+fn outside_stroke_on_zero_fill_raster_layer_keeps_interior_clear() {
+    let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+    let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    pixels.fill_rect(Rect::new(15, 15, 25, 25), &[1.0, 0.0, 0.0, 1.0]);
+    let mut l = Layer::new("raster", LayerContent::Raster(pixels));
+    l.fill_opacity = 0.0;
+    l.effects.items = vec![stroke(3.0, StrokePosition::Outside, blue())];
+    d.layers.push(l);
+    let center = px(&d, 20, 20);
+    assert_eq!(center[3], 0.0, "interior with 0% fill must stay clear: {center:?}");
+    let stroke_pixel = px(&d, 13, 20);
+    assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
+}
+
+#[test]
+fn outside_stroke_on_partial_fill_raster_layer_keeps_interior_free_of_stroke() {
+    let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+    let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    pixels.fill_rect(Rect::new(15, 15, 25, 25), &[1.0, 0.0, 0.0, 1.0]);
+    let mut l = Layer::new("raster", LayerContent::Raster(pixels));
+    l.fill_opacity = 0.5;
+    l.effects.items = vec![stroke(3.0, StrokePosition::Outside, blue())];
+    d.layers.push(l);
+    let center = px(&d, 20, 20);
+    assert!(close4(center, [1.0, 0.0, 0.0, 0.5]), "interior must be 50% red: {center:?}");
+    let stroke_pixel = px(&d, 13, 20);
+    assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
+}
+
