@@ -12,6 +12,7 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 serde = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
