@@ -354,10 +354,16 @@ impl Ctx<'_> {
             // Kept verbatim for saving, but it renders as nothing: say so rather than open the
             // layer silently without its effect (#1763).
             if matches!(adj, photocraft_doc::Adjustment::Unsupported { .. }) {
-                let why = adjust_map::unreadable_reason(k, &data).map(|r| format!(" ({r})")).unwrap_or_default();
+                // Photoshop 2026's Light adjustment shares the Brightness/Contrast key (#6542).
+                let light = k == b"brit" && adjust_map::is_extended_brit(cged);
+                let why = if light {
+                    " (Light adjustments, with Exposure, Highlights, Shadows, Whites and Blacks, aren't supported yet)".to_string()
+                } else {
+                    adjust_map::unreadable_reason(k, &data).map(|r| format!(" ({r})")).unwrap_or_default()
+                };
                 self.warn(format!(
                     "layer \"{name}\": its {} settings could not be read{why}; the layer is kept as saved but has no effect",
-                    adjust_map::label(k)
+                    if light { "Light" } else { adjust_map::label(k) }
                 ));
             }
             LayerContent::Adjustment(adj)
