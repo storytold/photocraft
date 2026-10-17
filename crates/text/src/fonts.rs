@@ -1,10 +1,12 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
-//! fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
-//! user-registered font data, and PostScript-name lookup for PSD import.
+//! fonts indexed by CoreText on macOS, found through Fontconfig's file list on Linux, or
+//! scanned from platform directories elsewhere; user-registered font data, and
+//! PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
+// The two users (the directory scan, the fontconfig path parser) are compiled off on Apple.
+#[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -238,14 +240,34 @@ impl FontDb {
         db
     }
 
-    /// Scans the platform font directories once, plus Fontconfig's file list on Linux. Font files
+    /// Loads installed platform fonts once — CoreText's collection on macOS, the platform
+    /// directories plus Fontconfig's file list on Linux, the directories elsewhere. Font files
     /// are memory-mapped lazily by fontique when a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
             return;
         }
         self.system_loaded = true;
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(target_vendor = "apple")]
+        {
+            // Fontique's CoreText backend enumerates and indexes installed fonts in one pass.
+            // The generic directory scanner registers each file separately; on macOS that
+            // repeatedly merges the growing font database and can stall the UI for minutes.
+            self.fcx.collection.load_system_fonts();
+            // PingFang (the macOS Chinese UI font) lives outside the normal font folders.
+            // CoreText's collection usually lists it, but the CJK fallback relies on the
+            // family being present, so add the files when the collection missed them.
+            if !self.has_family("PingFang SC")
+                && !self.has_family("PingFang TC")
+                && let Some(f) = crate::cjk::mac_pingfang()
+            {
+                self.fcx.collection.load_fonts_from_paths([f]);
+            }
+            self.ps_cache.clear();
+            self.face_cache.clear();
+            self.refresh_generics();
+        }
+        #[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
         {
             // One call per file: fontique's directory scan is much slower on large folders.
             let mut files = Vec::new();
@@ -904,10 +926,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_vendor = "apple"))]
     fn missing_font_dirs_are_skipped() {
         let mut files = Vec::new();
         super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
         assert!(files.is_empty());
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn core_text_backend_loads_system_families() {
+        let mut db = super::FontDb::with_system_fonts();
+        assert!(db.has_family("Apple Color Emoji"), "CoreText system fonts should be available");
     }
 }
 
