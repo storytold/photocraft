@@ -37,6 +37,15 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     let mut h = Headless::with_workspace(a.automation.workspace()?);
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(crate::CliError::Other)?;
     policy.apply_to_headless(&mut h);
+    // Operator settings, applied before any request. Clients stay gated: they may not run
+    // `edit.colorSettings`, so they cannot point the working spaces at another file.
+    if let Some(json) = &a.color_settings {
+        let params: serde_json::Value = serde_json::from_str(json).map_err(|e| crate::CliError::Other(format!("bad --color-settings: {e}")))?;
+        let gate = h.session.authorize.take();
+        let applied = h.session.execute("edit.colorSettings", params);
+        h.session.authorize = gate;
+        applied.map_err(|e| crate::CliError::Other(format!("--color-settings: {e}")))?;
+    }
     for d in h.drain_diagnostics() {
         let _ = writeln!(err, "warning: {d}");
     }
