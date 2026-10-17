@@ -152,6 +152,26 @@ fn a_configured_but_disabled_effect_stays_discoverable_in_the_panel() {
     assert!(effect_row.is_positive(), "a configured disabled effect remains visible for discovery");
 }
 
+#[test]
+fn saved_collapse_effects_preference_still_allows_the_fx_triangle_to_expand() {
+    let source = busy();
+    let doc = (*source.active().unwrap().doc).clone();
+    let mut session = photocraft_engine::Session::new();
+    session.execute("prefs.set", json!({"path": "interface.collapseLayerEffectsOnOpen", "value": true})).unwrap();
+    let mut restored = photocraft_engine::Session::new();
+    restored.load_prefs_json(&session.prefs_to_json()).unwrap();
+    restored.add_document(doc, Some("styled.pcraft".into()));
+    let mut h = harness(restored, 1.0, "promedium", 290.0);
+    let top = h.state().session.active().unwrap().doc.layers.last().unwrap().clone();
+    assert!(h.query_by_label("Drop Shadow").is_none(), "effects rows start hidden");
+    let at = h.get_by_label(&format!("Expand effects {}", top.name)).rect().center();
+    click(&mut h, at);
+    assert!(h.get_by_label("Drop Shadow").rect().is_positive());
+    assert!(!h.state().session.active().unwrap().fx_collapsed.contains(&top.id));
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    assert!(h.state().session.prefs().interface.collapse_layer_effects_on_open);
+}
+
 /// #1622: the eyes on the effects rows work. The "Effects" eye hides and shows the whole list, an
 /// effect's eye only that effect; each click is one history step, keeps the effect's settings and
 /// never opens the Layer Style dialog.

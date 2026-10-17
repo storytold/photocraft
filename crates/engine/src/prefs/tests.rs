@@ -49,6 +49,25 @@ fn canvas_dot_grid_can_be_disabled_persisted_and_reset() {
     assert!(s.prefs().interface.show_canvas_dots);
 }
 
+/// #5320: the default effects-list view is a saved option, not document data.
+#[test]
+fn collapse_layer_effects_on_open_preference_persists_and_resets() {
+    let path = "interface.collapseLayerEffectsOnOpen";
+    let mut s = Session::new();
+    assert_eq!(s.execute("prefs.get", json!({"path": path})).unwrap(), json!(false));
+    s.execute("prefs.set", json!({"path": path, "value": true})).unwrap();
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(restored.prefs().interface.collapse_layer_effects_on_open);
+    assert!(restored.execute("prefs.set", json!({"path": path, "value": "yes"})).is_err());
+    assert!(restored.prefs().interface.collapse_layer_effects_on_open);
+    restored.execute("prefs.reset", json!({"path": path})).unwrap();
+    assert!(!restored.prefs().interface.collapse_layer_effects_on_open);
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"interface": {"theme": "studio"}}"#).unwrap();
+    assert!(!legacy.prefs().interface.collapse_layer_effects_on_open);
+}
+
 /// UI-217-10: the Home screen's recent-files list can be switched off and the choice persists.
 #[test]
 fn home_recent_files_preference_defaults_on_persists_and_resets() {

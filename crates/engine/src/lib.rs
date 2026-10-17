@@ -221,7 +221,8 @@ pub struct DocState {
     /// Painting symmetry preset or sampled path (tool state, not document pixels).
     pub symmetry: Option<symmetry_cmds::PaintingSymmetry>,
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
-    /// view state, not history). Effects lists start open.
+    /// view state, not history). Effects lists start open unless the saved Interface
+    /// preference collapses them when the document is admitted.
     pub fx_collapsed: Vec<LayerId>,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
@@ -588,6 +589,9 @@ impl Session {
             doc.id = photocraft_doc::DocId::fresh();
         }
         let mut st = DocState::new(doc, path);
+        if self.prefs.get().interface.collapse_layer_effects_on_open {
+            st.fx_collapsed = st.doc.walk().into_iter().filter(|(_, _, l)| !l.effects.items.is_empty()).map(|(_, _, l)| l.id).collect();
+        }
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
         self.docs.push(st);

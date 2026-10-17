@@ -131,4 +131,39 @@ mod tests {
         empty.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         assert!(empty.execute(ID, json!({"all": true})).is_err(), "no effects: disabled");
     }
+
+    /// #5320: a saved preference seeds view state on admission, including nested layers.
+    #[test]
+    fn opening_documents_can_collapse_effects_without_changing_the_document() {
+        let (mut source, a, b) = session();
+        source.execute("layer.select", json!({"layer": a})).unwrap();
+        source.execute("layer.select", json!({"layer": b, "mode": "toggle"})).unwrap();
+        source.execute("layer.groupLayers", json!({"name": "Styled group"})).unwrap();
+        source.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
+        let doc = (*source.active().unwrap().doc).clone();
+        let styled: Vec<_> = doc.walk().into_iter().filter(|(_, _, l)| !l.effects.items.is_empty()).map(|(_, _, l)| l.id).collect();
+        assert_eq!(styled.len(), 3, "the group and both nested layers have effects");
+        let mut s = Session::new();
+        s.add_document(doc.clone(), Some("first.pcraft".into()));
+        assert!(s.active().unwrap().fx_collapsed.is_empty(), "default remains expanded");
+        s.execute("prefs.set", json!({"path": "interface.collapseLayerEffectsOnOpen", "value": true})).unwrap();
+        assert!(s.active().unwrap().fx_collapsed.is_empty(), "existing documents keep their view state");
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        for name in ["first.psd", "second.pcraft"] {
+            restored.add_document(doc.clone(), Some(name.into()));
+            let st = restored.active().unwrap();
+            assert_eq!(st.fx_collapsed, styled);
+            assert!(!st.is_dirty());
+            assert_eq!(st.history.past_len(), 0);
+            assert_eq!(st.doc.layers, doc.layers, "effects and pixels are unchanged");
+            restored.execute(ID, json!({"layer": a, "expanded": true})).unwrap();
+            assert!(open(&restored, a) && !open(&restored, b));
+            assert!(!restored.active().unwrap().is_dirty());
+            assert!(restored.prefs().interface.collapse_layer_effects_on_open);
+        }
+        restored.execute("prefs.reset", json!({"path": "interface.collapseLayerEffectsOnOpen"})).unwrap();
+        restored.add_document(doc, None);
+        assert!(restored.active().unwrap().fx_collapsed.is_empty());
+    }
 }

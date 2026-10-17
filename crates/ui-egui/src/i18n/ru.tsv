@@ -3181,3 +3181,4 @@ curves	Smooth	Сгладить
 	Replace	Заменить
 	{name} was changed by another app after it was opened or saved here.	Файл {name} был изменён другим приложением после того, как его открыли или сохранили здесь.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замените его этим документом или отмените и используйте Файл › Сохранить как, чтобы сохранить оба.
+	Collapse Layer Effects on Open	Сворачивать эффекты слоёв при открытии
