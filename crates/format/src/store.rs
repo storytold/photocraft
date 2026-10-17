@@ -163,6 +163,10 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     let layers = take_array(&mut v, "/document/layers");
     let mut m: Manifest = serde_json::from_value(v)?;
     m.document.layers = layers_from_json(layers)?;
+    // A number past f32's range decodes as infinity, which no save could write back (#6862).
+    if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
+        return Err(FormatError::corrupt(format!("`{path}` is out of range")));
+    }
     Ok(m)
 }
 

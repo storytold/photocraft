@@ -94,6 +94,24 @@ fn bad_manifest_json() {
     assert!(matches!(load_from_bytes(&b), Err(FormatError::Json(_))));
 }
 
+/// A number past f32's range would load as infinity, and every later save would then fail
+/// (#6862): it is refused when the file is opened, naming the value.
+#[test]
+fn out_of_range_number_refused_on_open() {
+    let b = rebuild(&sample(), |n, d| {
+        Some(if n == "manifest.json" {
+            let mut v: serde_json::Value = serde_json::from_slice(&d).unwrap();
+            v["document"]["layers"][0]["opacity"] = serde_json::json!(1e39);
+            serde_json::to_vec(&v).unwrap()
+        } else {
+            d
+        })
+    });
+    let Err(e) = load_from_bytes(&b) else { panic!("a manifest with opacity 1e39 opened") };
+    assert!(matches!(e, FormatError::Corrupt(_)), "{e}");
+    assert!(e.to_string().contains("document.layers[0].opacity"), "{e}");
+}
+
 /// Hostile nesting fails with an error instead of overflowing the stack; nesting as deep as the
 /// deepest groups a bundle may hold (three JSON levels each) parses, and is then rejected for
 /// lacking a format version.
