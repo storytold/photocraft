@@ -11,9 +11,20 @@ use crate::canvas::ViewXform;
 use crate::theme::Tokens;
 
 /// Screen rects covering the document image minus every artboard (vertical slabs between the
-/// boards' x edges, split around the boards they cross).
+/// boards' x edges, split around the boards they cross), and minus where visible layers outside
+/// the boards draw: Photoshop shows those over the pasteboard, so a board added next to earlier
+/// work must not paint over it (#5712).
 pub fn pasteboard_rects(xf: &ViewXform, doc: &Document) -> Vec<Rect> {
     let canvas = doc.bounds();
+    let mut loose = Vec::new();
+    for l in doc.layers.iter().filter(|l| l.visible && !is_artboard(l)) {
+        match photocraft_compose::composite_bounds(l, canvas) {
+            // It may draw anywhere: no pasteboard shows.
+            None => return Vec::new(),
+            Some(b) if !b.is_empty() => loose.push(b),
+            Some(_) => {}
+        }
+    }
     let boards: Vec<photocraft_geom::Rect> = doc.artboards().iter().map(|b| b.2.rect.intersect(&canvas)).filter(|r| !r.is_empty()).collect();
     let mut xs: Vec<i32> = vec![canvas.x0, canvas.x1];
     for b in &boards {
@@ -29,15 +40,43 @@ pub fn pasteboard_rects(xf: &ViewXform, doc: &Document) -> Vec<Rect> {
         let mut y = canvas.y0;
         for (a, b) in spans {
             if a > y {
-                out.push(xf.doc_rect(photocraft_geom::Rect::new(x0, y, x1, a)));
+                out.extend(subtract(photocraft_geom::Rect::new(x0, y, x1, a), &loose).into_iter().map(|r| xf.doc_rect(r)));
             }
             y = y.max(b);
         }
         if y < canvas.y1 {
-            out.push(xf.doc_rect(photocraft_geom::Rect::new(x0, y, x1, canvas.y1)));
+            out.extend(subtract(photocraft_geom::Rect::new(x0, y, x1, canvas.y1), &loose).into_iter().map(|r| xf.doc_rect(r)));
         }
     }
     out
+}
+
+fn is_artboard(l: &Layer) -> bool {
+    matches!(&l.content, photocraft_doc::LayerContent::Group(g) if g.artboard.is_some())
+}
+
+/// `r` minus every hole, as disjoint rects (each hole splits a piece into at most four).
+fn subtract(r: photocraft_geom::Rect, holes: &[photocraft_geom::Rect]) -> Vec<photocraft_geom::Rect> {
+    let mut pieces = vec![r];
+    for h in holes {
+        let mut next = Vec::with_capacity(pieces.len());
+        for p in pieces {
+            let i = p.intersect(h);
+            if i.is_empty() {
+                next.push(p);
+                continue;
+            }
+            let parts = [
+                photocraft_geom::Rect::new(p.x0, p.y0, p.x1, i.y0),
+                photocraft_geom::Rect::new(p.x0, i.y1, p.x1, p.y1),
+                photocraft_geom::Rect::new(p.x0, i.y0, i.x0, i.y1),
+                photocraft_geom::Rect::new(i.x1, i.y0, p.x1, i.y1),
+            ];
+            next.extend(parts.into_iter().filter(|q| !q.is_empty()));
+        }
+        pieces = next;
+    }
+    pieces
 }
 
 /// Board outlines and names (the active board's name is highlighted, as in Photoshop).
@@ -169,7 +208,7 @@ mod tests {
 
     fn app() -> (PhotocraftApp, egui::Context) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 100, "height": 50})).unwrap();
+        app.run("file.new", json!({"width": 100, "height": 50, "background": "transparent"})).unwrap();
         app.sync_views();
         (app, egui::Context::default())
     }
@@ -193,6 +232,38 @@ mod tests {
         // 100×50 canvas − 40×50 − 40×30 boards.
         assert!((area - (5000.0 - 2000.0 - 1200.0)).abs() < 0.5, "{rects:?}");
         assert!(rects.iter().all(|r| !r.intersects(Rect::from_min_max(Pos2::new(0.5, 0.5), Pos2::new(39.5, 49.5)))));
+    }
+
+    #[test]
+    fn layers_outside_the_boards_show_over_the_pasteboard() {
+        // #5712: a board drawn left of earlier work must not cover it with pasteboard.
+        let (mut app, _) = app();
+        app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 50]})).unwrap();
+        let mut doc = (*app.session.active().unwrap().doc).clone();
+        let mut px = photocraft_doc::Layer::raster("Work", doc.pixel_format());
+        px.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(60, 10, 80, 30), &[1.0, 0.0, 0.0, 1.0]);
+        doc.layers.insert(0, px);
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)),
+            zoom: 1.0,
+            center: [50.0, 25.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        let rects = pasteboard_rects(&xf, &doc);
+        let area: f32 = rects.iter().map(|r| r.area()).sum();
+        // 100×50 canvas − the 40×50 board − the 20×20 loose pixels.
+        assert!((area - (5000.0 - 2000.0 - 400.0)).abs() < 0.5, "{rects:?}");
+        assert!(rects.iter().all(|r| !r.intersects(Rect::from_min_max(Pos2::new(60.5, 10.5), Pos2::new(79.5, 29.5)))));
+    }
+
+    #[test]
+    fn subtract_splits_around_holes() {
+        let r = photocraft_geom::Rect::new(0, 0, 10, 10);
+        let parts = subtract(r, &[photocraft_geom::Rect::new(2, 2, 4, 4), photocraft_geom::Rect::new(20, 20, 30, 30)]);
+        assert_eq!(parts.iter().map(|p| i64::from(p.width()) * i64::from(p.height())).sum::<i64>(), 96);
+        assert!(subtract(r, &[photocraft_geom::Rect::new(-5, -5, 50, 50)]).is_empty());
     }
 
     #[test]
