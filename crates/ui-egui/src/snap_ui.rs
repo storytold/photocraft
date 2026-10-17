@@ -499,10 +499,15 @@ fn hex_color(s: &str, fallback: Color32) -> Color32 {
     photocraft_engine::prefs::parse_hex(s).map_or(fallback, |c| Color32::from_rgb(c[0], c[1], c[2]))
 }
 
+/// The Smart Guides colour from Preferences › Guides, Grid & Slices (magenta by default).
+pub(crate) fn smart_color(app: &PhotocraftApp) -> Color32 {
+    hex_color(&app.session.prefs().guides_grid_and_slices.smart_guide_color, Color32::from_rgb(255, 0, 255))
+}
+
 /// Draw smart guides (and the moving bounds) for the drag in progress.
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(snap) = &app.prefs_rt.snap else { return };
-    let smart_color = hex_color(&app.session.prefs().guides_grid_and_slices.smart_guide_color, Color32::from_rgb(255, 0, 255));
+    let smart_color = smart_color(app);
     // The moved layers' bounds follow the Move tool (Free Transform draws its own box).
     if let (Gesture::Move { rect }, Some(d)) =
         (&snap.gesture, app.drag.as_ref().and_then(|d| d.points.last()).map(|p| [p[0] - snap.start[0], p[1] - snap.start[1]]))

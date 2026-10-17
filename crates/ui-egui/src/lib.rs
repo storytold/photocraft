@@ -135,6 +135,7 @@ pub mod menu_nav;
 pub mod menus;
 pub mod monitor_status;
 pub mod move_box;
+pub mod move_distance;
 pub mod move_hover;
 pub mod move_lock;
 pub mod move_mods;
@@ -592,6 +593,8 @@ pub struct PhotocraftApp {
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
+    /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
+    pub(crate) move_distance: Option<move_distance::Cache>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
@@ -855,6 +858,7 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            move_distance: None,
             object_finder: None,
             blend_preview: None,
             patch_preview: None,
