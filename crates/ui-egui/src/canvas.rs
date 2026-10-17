@@ -1819,6 +1819,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         if !fresh && !app.filter_preview_worker.busy() {
             let doc = app.session.documents().get(idx)?.doc.clone();
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
+            let color = app.session.color.settings.clone();
             let task = request.clone();
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
                 let t0 = crate::gpu_canvas::now_ms();
@@ -1831,6 +1832,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                     Some(cancel),
                     task.target,
                     &documents,
+                    &color,
                 )
                 .map(|doc| {
                     let buffer = photocraft_compose::flatten(&doc);
@@ -1869,12 +1871,14 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             None,
             request.target,
             &documents,
+            &app.session.color.settings,
         )
         .map(std::sync::Arc::new);
         if let Some(r) = &result {
             let buf = photocraft_compose::flatten(r);
             let t1 = crate::gpu_canvas::now_ms();
-            let (display, _) = canvas_display(app, &doc, None);
+            // The preview's own profile: Assign and Convert to Profile change it (see `publish_filter_preview`).
+            let (display, _) = canvas_display(app, r, None);
             if let Some(gpu) = app.gpu.as_ref() {
                 gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
             }
@@ -1910,7 +1914,9 @@ fn publish_filter_preview(
     let result = computed.and_then(|(result, buffer)| {
         let t0 = crate::gpu_canvas::now_ms();
         let doc = app.session.documents().get(idx)?.doc.clone();
-        let (display, _) = canvas_display(app, &doc, None);
+        // Shown through the preview's own colour management, as the result will be: Assign and
+        // Convert to Profile change the profile (and Convert the mode), not just the pixels.
+        let (display, _) = canvas_display(app, &result, None);
         // A GPU texture is an optimisation: headless/CPU tests must still see the preview.
         if let Some(gpu) = app.gpu.as_ref() {
             gpu.upload_buffer_full(request.doc.0 ^ (1u64 << 61), &texture_buffer(display.as_deref(), &buffer), doc.depth);
@@ -1919,6 +1925,16 @@ fn publish_filter_preview(
         Some(result)
     });
     app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, committing: false });
+}
+
+/// The document whose colour management the canvas texture under `key` is shown through: a filter
+/// preview's own result (it keeps the document's id, so Proof Colors still apply), else `doc`.
+/// Assign Profile changes only the profile, so through `doc`'s its preview looked unchanged.
+fn filter_preview_display_doc(app: &PhotocraftApp, doc: &std::sync::Arc<Document>, key: u64) -> std::sync::Arc<Document> {
+    if key != doc.id.0 ^ (1u64 << 61) {
+        return doc.clone();
+    }
+    app.filter_preview.as_ref().and_then(|p| p.result.clone()).filter(|r| r.id == doc.id).unwrap_or_else(|| doc.clone())
 }
 
 /// After a filter dialog's OK: `Some(shown)` while its preview stands in for the background job
@@ -3032,6 +3048,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             on_gpu = true;
             app.navigator_gpu.remove(&doc.id);
             let original_size = [doc.size.width.div_ceil(k), doc.size.height.div_ceil(k)];
+            let shown = filter_preview_display_doc(app, &doc, key);
             let params = crate::gpu_canvas::ViewParams {
                 doc: key,
                 doc_size: preview_size,
@@ -3048,7 +3065,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 },
                 pixel_grid: false,
                 view_key: egui::Id::new(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
-                display: sync_display_lut(app, &doc, key, output),
+                display: sync_display_lut(app, &shown, key, output),
                 output: output.unwrap_or(0),
                 hdr: hdr_preview(app, &doc),
                 offset: [0.0, 0.0],
@@ -6279,13 +6296,21 @@ mod tests {
         app.filter_preview_worker
             .start(key.clone(), ctx.clone(), move |_| {
                 wait.recv_timeout(std::time::Duration::from_secs(60)).expect("the test releases the job");
-                let result =
-                    crate::filter_dialog::preview_document_for_target(&doc, key.active, &key.command, &key.params, key.k, None, key.target, &documents).map(
-                        |d| {
-                            let buffer = photocraft_compose::flatten(&d);
-                            (std::sync::Arc::new(d), buffer)
-                        },
-                    );
+                let result = crate::filter_dialog::preview_document_for_target(
+                    &doc,
+                    key.active,
+                    &key.command,
+                    &key.params,
+                    key.k,
+                    None,
+                    key.target,
+                    &documents,
+                    &Default::default(),
+                )
+                .map(|d| {
+                    let buffer = photocraft_compose::flatten(&d);
+                    (std::sync::Arc::new(d), buffer)
+                });
                 crate::filter_preview_worker::Computed { result, ms: 0.0 }
             })
             .expect("the worker starts");
@@ -8658,6 +8683,64 @@ mod rotation_preview_isolation_tests {
             let expected = crate::channel_view::render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
             assert_eq!(image.pixels, expected, "quick_mask={quick_mask}");
             delta.clear();
+        }
+    }
+
+    /// Assign and Convert to Profile have Photoshop's Preview. Assign changes only the profile, so
+    /// its preview must be shown through the profile it assigns (through the document's own it
+    /// looked unchanged); Convert keeps the look of in-gamut colours. Their `working` is the
+    /// working space from Color Settings, not the built-in default.
+    #[test]
+    fn profile_dialogs_preview_through_the_profile_they_choose() {
+        let mut session = photocraft_engine::Session::new();
+        session.color.settings.monitor_profile = "srgb".into();
+        session.color.settings.working_rgb = "display-p3".into();
+        session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        session.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+        session
+            .edit("Fixture", |doc, _| {
+                let layer = doc.layers.last_mut().unwrap();
+                for y in 0..4 {
+                    for x in 0..4 {
+                        layer.surface_mut().unwrap().write_pixel(x, y, &[0.6, 0.35, 0.25, 1.0]);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        let shown_pixels = |app: &PhotocraftApp, doc: &Document| {
+            let (display, _) = canvas_display(app, doc, None);
+            display_image(display.as_deref(), &photocraft_compose::flatten(doc)).pixels[0]
+        };
+        let original = app.session.active().unwrap().doc.clone();
+        let before = shown_pixels(&app, &original);
+        let preview = |app: &mut PhotocraftApp, command: &str, profile: &str| {
+            crate::filter_dialog::open(app, command).unwrap();
+            let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+            assert_eq!(fields.get("__preview"), Some(&json!(true)), "{command} has a Preview checkbox, on");
+            fields.insert("profile".into(), json!(profile));
+            ensure_filter_preview(app, 0, &egui::Context::default()).expect("a preview");
+            let result = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
+            let key = original.id.0 ^ (1u64 << 61);
+            assert_eq!(filter_preview_display_doc(app, &original, key).icc_profile, result.icc_profile, "the canvas shows it through its own profile");
+            assert_eq!(app.session.active().unwrap().doc.icc_profile, original.icc_profile, "previewing changes nothing");
+            app.ui.dialogs.clear();
+            app.filter_preview = None;
+            result
+        };
+        let description = |doc: &Document| photocraft_engine::color_cmds::profile_from_bytes(doc.icc_profile.as_ref().unwrap()).unwrap().description.clone();
+
+        let assigned = preview(&mut app, "edit.assignProfile", "prophoto-compat");
+        assert_eq!(description(&assigned), photocraft_cms::Builtin::ProPhotoCompat.description());
+        let shown = shown_pixels(&app, &assigned);
+        assert!(shown.r().abs_diff(before.r()) > 10 || shown.b().abs_diff(before.b()) > 10, "the assigned profile shows: {before:?} → {shown:?}");
+
+        let converted = preview(&mut app, "edit.convertToProfile", "working");
+        assert_eq!(description(&converted), photocraft_cms::Builtin::DisplayP3.description(), "`working` is Color Settings' working space");
+        let shown = shown_pixels(&app, &converted);
+        for (a, b) in [(shown.r(), before.r()), (shown.g(), before.g()), (shown.b(), before.b())] {
+            assert!(a.abs_diff(b) <= 2, "converting keeps the look: {before:?} → {shown:?}");
         }
     }
 

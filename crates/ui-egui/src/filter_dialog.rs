@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use photocraft_doc::Document;
+use photocraft_engine::color_cmds::ColorSettings;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -279,6 +280,9 @@ pub const PREVIEWED: &[&str] = &[
     "layer.matting.colorDecontaminate",
     "layer.layerStyle.scaleEffects",
     "type.warpText",
+    // The preview shows the image through the chosen profile, as Photoshop's Preview does.
+    "edit.assignProfile",
+    "edit.convertToProfile",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
@@ -293,8 +297,6 @@ pub fn has_dialog(command: &str) -> bool {
             command,
             "image.trim"
                 | "select.refineEdge"
-                | "edit.assignProfile"
-                | "edit.convertToProfile"
                 | "view.proofSetup"
                 | "layer.layerStyle.globalLight"
                 | "image.mode.colorTable"
@@ -555,6 +557,10 @@ pub(crate) fn source_label(key: &str) -> String {
     // Photoshop's name for the localized colour matching (Replace Color, Color Range).
     if key == "localized" {
         return "Localized Color Clusters".into();
+    }
+    // Convert to Profile's, Proof Setup's…: spelled out, as in Photoshop (not "Bpc").
+    if key == "bpc" {
+        return "Black Point Compensation".into();
     }
     // A name that already reads as text ("iPhone 14 Pro Max", "Web 1920") is not camelCase.
     if key.contains(' ') {
@@ -875,12 +881,23 @@ pub fn preview_document_with(
     k: u32,
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
-    preview_document_for_target(doc, active, command, params, k, cancel, photocraft_engine::channel_cmds::ChannelTarget::Composite, &[])
+    preview_document_for_target(
+        doc,
+        active,
+        command,
+        params,
+        k,
+        cancel,
+        photocraft_engine::channel_cmds::ChannelTarget::Composite,
+        &[],
+        &ColorSettings::default(),
+    )
 }
 
 /// Run the preview with the same pixel target as the final command, including individual channels.
 /// `documents` are the open documents in session order: document params (Match Color's Source,
-/// Displace's map) index into them.
+/// Displace's map) index into them. `color` is the app's Edit › Color Settings: Assign and Convert
+/// to Profile's `working` is the working space chosen there, not the built-in default.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_document_for_target(
     doc: &Document,
@@ -891,6 +908,7 @@ pub(crate) fn preview_document_for_target(
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
     target: photocraft_engine::channel_cmds::ChannelTarget,
     documents: &[Arc<Document>],
+    color: &ColorSettings,
 ) -> Option<Document> {
     if command == crate::select_mask_view::COMMAND {
         return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
@@ -900,6 +918,7 @@ pub(crate) fn preview_document_for_target(
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
     let proxy = crate::proxy::proxy_document(doc, run_k);
     let mut s = photocraft_engine::Session::new();
+    s.color.settings = color.clone();
     s.set_inline_job_ctx(cancel.cloned());
     let doc_id = proxy.id;
     s.add_document(proxy, None);
@@ -1048,6 +1067,16 @@ mod tests {
         assert_eq!(source_label("iPhone 14 Pro Max"), "iPhone 14 Pro Max");
         assert_eq!(source_label("Web 1920"), "Web 1920");
         assert_eq!(source_label("centerX"), "Center X");
+    }
+
+    /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out, and translated.
+    #[test]
+    fn black_point_compensation_is_spelled_out() {
+        assert_eq!(source_label("bpc"), "Black Point Compensation");
+        // English is the source: it has no catalog.
+        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
+            assert!(crate::i18n::has(lang, "Black Point Compensation"), "{lang:?}");
+        }
     }
 
     fn key() -> FilterPreviewKey {
@@ -1569,6 +1598,7 @@ mod tests {
                 None,
                 photocraft_engine::channel_cmds::ChannelTarget::Composite,
                 &documents,
+                &ColorSettings::default(),
             )
             .unwrap_or_else(|| panic!("{label}: no preview"));
             let got = preview.layers[0].surface().unwrap().pixel(24, 16);
@@ -1584,6 +1614,7 @@ mod tests {
             None,
             photocraft_engine::channel_cmds::ChannelTarget::Composite,
             &documents,
+            &ColorSettings::default(),
         )
         .unwrap();
         let px = preview.layers[0].surface().unwrap().pixel(12, 8);
