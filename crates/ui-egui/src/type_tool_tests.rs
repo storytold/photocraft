@@ -115,6 +115,49 @@ fn new_app() -> PhotocraftApp {
     app
 }
 
+/// #6085: the text caret is a solid black line inside a white halo, so it shows on a white
+/// background (the black used to be a 0.75 pt hairline inside a white line) and on a dark one.
+#[test]
+fn the_caret_reads_on_white_and_on_black() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = new_app();
+    app.ui.tool = crate::state::Tool::Type;
+    tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 100.0 }, Modifiers::NONE);
+    // A caret, not the placeholder's selection; solid, whatever the blink (as while dragging).
+    let ed = app.ui.text_edit.as_mut().expect("editing");
+    ed.anchor = ed.caret;
+    ed.dragging = true;
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)),
+        zoom: 1.0,
+        center: [100.0, 100.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let mut h =
+        Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(move |ui, app: &mut PhotocraftApp| super::draw_overlay(app, ui.painter(), &xf), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    // Vertical line segments are the caret (the frame and underline run sideways).
+    let caret: Vec<(f32, egui::Color32)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::LineSegment { points: [a, b], stroke } if (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() > 1.0 => Some((stroke.width, stroke.color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(caret.len(), 2, "a halo and a line: {caret:?}");
+    let ((halo_w, halo), (line_w, line)) = (caret[0], caret[1]);
+    assert_eq!(line, egui::Color32::BLACK);
+    assert!(line_w >= 1.0, "a solid black line, not a hairline: {line_w}");
+    assert_eq!(halo, egui::Color32::WHITE);
+    assert!(halo_w >= line_w + 2.0, "at least 1 pt of white on each side: {halo_w}");
+}
+
 fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {

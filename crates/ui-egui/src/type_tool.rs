@@ -1099,12 +1099,17 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         if ed.dragging || (elapsed * 1000.0 / 530.0) as i64 % 2 == 0 {
             let (x, top, bot) = l.caret(a);
             let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
-            let c = if crate::theme::Tokens::get(painter.ctx()).pro { Color32::WHITE } else { Color32::BLACK };
-            painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(1.5, c));
-            painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(0.75, Color32::BLACK));
+            for stroke in CARET_STROKES {
+                painter.line_segment([scr(x, top), scr(x, bot)], stroke);
+            }
         }
     }
 }
+
+/// The text caret, drawn in order: a white halo, then a solid black line inside it, so it reads on
+/// any background (#6085). The black line used to be a 0.75 pt hairline inside a white one, which
+/// on a white background left only a faint grey line.
+const CARET_STROKES: [Stroke; 2] = [Stroke { width: 3.0, color: Color32::WHITE }, Stroke { width: 1.0, color: Color32::BLACK }];
 
 /// The Type Mask tools while typing: Quick Mask's colour over the canvas with the glyphs clear,
 /// as Photoshop shows the selection-to-be. The glyphs come from the hidden working layer's pixels.
@@ -2727,7 +2732,7 @@ mod tests {
                 draw_overlay(app, &painter, &xf);
             });
             out.textures_delta.clear();
-            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if (stroke.width - 1.5).abs() < 1e-4))
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if CARET_STROKES.contains(stroke)))
         };
 
         // Before resetting, the caret is in the off phase at t = 10.5 s (10500 / 530 = 19, odd phase)
