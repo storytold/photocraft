@@ -186,6 +186,7 @@ impl Session {
             tool_presets: take(&mut m, "tool_presets"),
             documents: take(&mut m, "documents"),
             recent_documents: take(&mut m, "recent_documents"),
+            export_presets: take(&mut m, "export_presets"),
             custom_shapes: take(&mut m, "custom_shapes"),
             layer_defaults: take(&mut m, "layer_defaults"),
             swatches: take(&mut m, "swatches"),

@@ -1163,25 +1163,33 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
 
 /// Big white primary button.
 pub fn primary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
+    primary_button_with_mnemonic(ui, label, None, min_width)
+}
+
+pub fn primary_button_with_mnemonic(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    button_impl(ui, label, min_width, t.primary_bg, t.primary_text, true)
+    button_impl(ui, label, mnemonic, min_width, t.primary_bg, t.primary_text, true)
 }
 
 /// The width of the widest of `labels` as a button, for a column of equal-width buttons.
 pub fn button_width(ui: &Ui, labels: &[&str]) -> f32 {
     let fg = Tokens::get(ui.ctx()).text;
-    labels.iter().map(|l| button_layout(ui, l, 0.0, None, fg).1.x).fold(0.0, f32::max)
+    labels.iter().map(|l| button_layout(ui, l, None, 0.0, None, fg).1.x).fold(0.0, f32::max)
 }
 
 pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
+    secondary_button_with_mnemonic(ui, label, None, min_width)
+}
+
+pub fn secondary_button_with_mnemonic(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    button_impl(ui, label, min_width, t.field, t.text, false)
+    button_impl(ui, label, mnemonic, min_width, t.field, t.text, false)
 }
 
 /// A [`secondary_button`] `height` points tall, for slim bars such as the status bar (#2823).
 pub fn compact_button(ui: &mut Ui, label: &str, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    button_impl_h(ui, label, 0.0, Some(height), t.field, t.text, false)
+    button_impl_h(ui, label, None, 0.0, Some(height), t.field, t.text, false)
 }
 
 /// What a dialog button does, which decides where the platform's button order puts it.
@@ -1220,11 +1228,12 @@ pub struct DialogButton<'a> {
     pub enabled: bool,
     /// Take keyboard focus this frame (see [`DialogButton::focus`]).
     pub focus: bool,
+    pub mnemonic: Option<char>,
 }
 
 impl<'a> DialogButton<'a> {
     pub fn new(role: ButtonRole, label: &'a str, min_width: f32) -> Self {
-        Self { role, label, min_width, enabled: true, focus: false }
+        Self { role, label, min_width, enabled: true, focus: false, mnemonic: None }
     }
 
     pub fn enabled(self, enabled: bool) -> Self {
@@ -1236,6 +1245,10 @@ impl<'a> DialogButton<'a> {
     pub fn focus(self, focus: bool) -> Self {
         Self { focus, ..self }
     }
+
+    pub fn mnemonic(self, mnemonic: Option<char>) -> Self {
+        Self { mnemonic, ..self }
+    }
 }
 
 /// A dialog's button row at the cursor, in the platform's order (see [`ButtonRole`]): every modal
@@ -1246,16 +1259,22 @@ pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRol
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let gap = ui.spacing().item_spacing.x;
     let size = buttons.iter().fold(Vec2::ZERO, |acc, b| {
-        let s = button_size(ui, b.label, b.min_width);
+        let m = if mac { None } else { b.mnemonic };
+        let s = button_size(ui, b.label, m, b.min_width);
         vec2(acc.x + s.x, acc.y.max(s.y))
     }) + vec2(gap * buttons.len().saturating_sub(1) as f32, 0.0);
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
         let mut hit = None;
         for slot in 0..4 {
             for b in buttons.iter().filter(|b| b.role.slot(mac) == slot) {
+                let m = if mac { None } else { b.mnemonic };
                 let r = ui
                     .add_enabled_ui(b.enabled, |ui| {
-                        if b.role == ButtonRole::Default { primary_button(ui, b.label, b.min_width) } else { secondary_button(ui, b.label, b.min_width) }
+                        if b.role == ButtonRole::Default {
+                            primary_button_with_mnemonic(ui, b.label, m, b.min_width)
+                        } else {
+                            secondary_button_with_mnemonic(ui, b.label, m, b.min_width)
+                        }
                     })
                     .inner;
                 if b.focus && b.enabled {
@@ -1272,25 +1291,47 @@ pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRol
 }
 
 /// The size of a primary or secondary button: its label plus padding, at least `min_width` wide.
-fn button_size(ui: &Ui, label: &str, min_width: f32) -> Vec2 {
-    button_layout(ui, label, min_width, None, Tokens::get(ui.ctx()).text).1
+fn button_size(ui: &Ui, label: &str, mnemonic: Option<char>, min_width: f32) -> Vec2 {
+    button_layout(ui, label, mnemonic, min_width, None, Tokens::get(ui.ctx()).text).1
 }
 
-fn button_layout(ui: &Ui, label: &str, min_width: f32, height: Option<f32>, fg: Color32) -> (std::sync::Arc<egui::Galley>, Vec2) {
-    let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), theme::medium(13.0), fg);
+fn button_layout(ui: &Ui, label: &str, mnemonic: Option<char>, min_width: f32, height: Option<f32>, fg: Color32) -> (std::sync::Arc<egui::Galley>, Vec2) {
+    let text = tl!(label);
+    let galley = if let Some(m) = mnemonic {
+        let font_id = theme::medium(13.0);
+        let plain = egui::TextFormat { font_id: font_id.clone(), color: fg, ..Default::default() };
+        let at = text.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m.to_ascii_uppercase()).map(|(i, c)| (i, c.len_utf8()));
+        if let Some((i, len)) = at {
+            let mut job = egui::text::LayoutJob::default();
+            job.wrap.max_width = f32::INFINITY;
+            let underlined = egui::TextFormat { underline: Stroke::new(1.0, fg), ..plain.clone() };
+            if i > 0 {
+                job.append(&text[..i], 0.0, plain.clone());
+            }
+            job.append(&text[i..i + len], 0.0, underlined);
+            if i + len < text.len() {
+                job.append(&text[i + len..], 0.0, plain);
+            }
+            ui.painter().layout_job(job)
+        } else {
+            ui.painter().layout_no_wrap(text.to_owned(), theme::medium(13.0), fg)
+        }
+    } else {
+        ui.painter().layout_no_wrap(text.to_owned(), theme::medium(13.0), fg)
+    };
     let h = height.unwrap_or(if Tokens::get(ui.ctx()).pro { 28.0 } else { 30.0 });
     let size = vec2((galley.size().x + 28.0).max(min_width), h);
     (galley, size)
 }
 
-fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color32, primary: bool) -> Response {
-    button_impl_h(ui, label, min_width, None, bg, fg, primary)
+fn button_impl(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32, bg: Color32, fg: Color32, primary: bool) -> Response {
+    button_impl_h(ui, label, mnemonic, min_width, None, bg, fg, primary)
 }
 
 /// [`button_impl`] with an explicit `height` (`None`: the theme's button height).
-fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool) -> Response {
+fn button_impl_h(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let (galley, size) = button_layout(ui, label, min_width, height, fg);
+    let (galley, size) = button_layout(ui, label, mnemonic, min_width, height, fg);
     let h = size.y;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     // Painted text: name the button for accessibility (and so tests and agents can find it).
