@@ -448,15 +448,35 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
 
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
-/// canvas centre.
+/// canvas centre, then kept on the canvas as Photoshop keeps it: pixels that fit stay wholly
+/// inside, larger ones start at the canvas's top-left corner (#6759). `"clampToCanvas": false` skips that, for
+/// Paste Into / Outside, which centre on the selection.
 pub(crate) fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
     if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
         return (0, 0);
     }
     let c = p.get("center").and_then(Value::as_array).filter(|a| a.len() >= 2).map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)));
-    let (cx, cy) = c.unwrap_or(((canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0));
+    let (cx, cy) = c.unwrap_or((mid(canvas.x0, canvas.x1), mid(canvas.y0, canvas.y1)));
     let b = clip.bounds;
-    ((cx - (b.x0 + b.x1) as f64 / 2.0).round() as i32, (cy - (b.y0 + b.y1) as f64 / 2.0).round() as i32)
+    let (dx, dy) = ((cx - mid(b.x0, b.x1)).round(), (cy - mid(b.y0, b.y1)).round());
+    if p.get("clampToCanvas").and_then(Value::as_bool) == Some(false) || b.is_empty() {
+        return (dx as i32, dy as i32);
+    }
+    (clamp_shift(dx, b.x0, b.x1, canvas.x0, canvas.x1), clamp_shift(dy, b.y0, b.y1, canvas.y0, canvas.y1))
+}
+
+/// The midpoint of `a..b`, each edge converted before adding so extreme coordinates can't overflow.
+fn mid(a: i32, b: i32) -> f64 {
+    (f64::from(a) + f64::from(b)) / 2.0
+}
+
+/// Shift `d` of the span `b0..b1` along one axis, changed as little as needed to keep the span
+/// inside `c0..c1` when it fits; a span longer than the canvas starts at `c0`.
+fn clamp_shift(d: f64, b0: i32, b1: i32, c0: i32, c1: i32) -> i32 {
+    let (b0, b1, c0, c1) = (i64::from(b0), i64::from(b1), i64::from(c0), i64::from(c1));
+    // `as` saturates a NaN or out-of-range shift, then the clamp brings it into range.
+    let start = if b1 - b0 <= c1 - c0 { b0.saturating_add(d as i64).clamp(c0, c1 - (b1 - b0)) } else { c0 };
+    i32::try_from(start - b0).unwrap_or(if start > b0 { i32::MAX } else { i32::MIN })
 }
 
 pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
@@ -992,7 +1012,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Edit"],
             Some("Cmd+V"),
             concat!(
-                r#"{"center":[x,y]? (view centre; default keeps the position when it overlaps the canvas),"#,
+                r#"{"center":[x,y]? (view centre; default keeps the position when it overlaps the canvas),"clampToCanvas":bool=true (keep the paste on the canvas, or covering it when larger),"#,
                 paste_target!(),
                 "} (with no document open: a new document from the clipboard)"
             ),
@@ -1270,6 +1290,77 @@ mod tests {
         s.execute("edit.paste", json!({"center": [70, 70]})).unwrap();
         assert_eq!(active_bounds(&s), Rect::new(60, 60, 80, 80));
         assert_eq!(s.active().unwrap().doc.layers.len(), 4);
+    }
+
+    /// A `w`×`h` document with an opaque `cw`×`ch` image from another app on the clipboard.
+    fn external_clip_session(w: i32, h: i32, cw: i32, ch: i32) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+        let mut surface = Surface::new(PixelFormat::RGBA8);
+        surface.fill_rect(Rect::new(0, 0, cw, ch), &[1.0, 0.0, 0.0, 1.0]);
+        s.clipboard = Some(Clip { surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None });
+        s
+    }
+
+    /// #6759: wherever the view is centred, a paste that fits the canvas stays wholly on it.
+    #[test]
+    fn paste_that_fits_stays_on_the_canvas() {
+        for (w, h, center, want) in [
+            (60, 100, [40.0, 45.0], Rect::new(0, 0, 60, 100)),
+            (60, 100, [-500.0, 900.0], Rect::new(0, 0, 60, 100)),
+            (100, 100, [10.0, 80.0], Rect::new(0, 0, 60, 100)),
+            (100, 100, [95.0, 50.0], Rect::new(40, 0, 100, 100)),
+            (100, 120, [50.0, 60.0], Rect::new(20, 10, 80, 110)),
+        ] {
+            let mut s = external_clip_session(w, h, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), want, "{w}x{h} canvas, view centre {center:?}");
+        }
+    }
+
+    /// #6759: a paste larger than the canvas starts at its top-left corner, wherever the view is.
+    #[test]
+    fn paste_larger_than_the_canvas_starts_at_its_top_left() {
+        for center in [[0.0, 0.0], [25.0, 20.0], [1000.0, 1000.0], [-1000.0, 30.0]] {
+            let mut s = external_clip_session(50, 40, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), Rect::new(0, 0, 60, 100), "view centre {center:?}");
+        }
+        // Wider but not taller: at the left edge, and wholly inside vertically.
+        for (center, want) in
+            [([500.0, 500.0], Rect::new(0, 100, 60, 200)), ([-500.0, -500.0], Rect::new(0, 0, 60, 100)), ([25.0, 120.0], Rect::new(0, 70, 60, 170))]
+        {
+            let mut s = external_clip_session(50, 200, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), want, "view centre {center:?}");
+        }
+    }
+
+    /// Paste Into centres on the selection even where that runs off the canvas.
+    #[test]
+    fn paste_into_is_not_clamped_to_the_canvas() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 40, "height": 20})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 90, "y": 90, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.pasteSpecial.pasteInto", json!({})).unwrap();
+        assert_eq!(active_bounds(&s), Rect::new(75, 85, 115, 105));
+    }
+
+    #[test]
+    fn paste_offset_clamp_survives_extreme_coordinates() {
+        assert_eq!(clamp_shift(f64::NAN, 0, 10, 0, 100), 0);
+        assert_eq!(clamp_shift(f64::INFINITY, 0, 10, 0, 100), 90);
+        assert_eq!(clamp_shift(f64::NEG_INFINITY, i32::MIN, i32::MAX, 0, 1), i32::MAX);
+        assert_eq!(clamp_shift(1e30, i32::MIN, i32::MIN + 1, i32::MAX - 1, i32::MAX), i32::MAX);
+        let clip = Clip {
+            surface: Surface::new(PixelFormat::RGBA8),
+            bounds: Rect::new(i32::MAX - 2, i32::MAX - 2, i32::MAX, i32::MAX),
+            layers: None,
+            resolution: None,
+        };
+        let (dx, dy) = paste_offset(&clip, Rect::new(i32::MIN, i32::MIN, i32::MIN + 4, i32::MIN + 4), &json!({}), false);
+        assert_eq!((dx, dy), (i32::MIN, i32::MIN), "an unrepresentable shift saturates instead of wrapping");
     }
 
     #[test]

@@ -2900,8 +2900,9 @@ mod clipboard_tests {
         assert!(crate::menus::is_enabled(&app, "edit.paste"));
         assert!(crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"));
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "enablement never reads the clipboard");
+        app.ui.views[0].center = [40.0, 20.0];
         let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
-        assert_ne!(r["offset"], serde_json::json!([0, 0]), "external image is centred: {r}");
+        assert_eq!(r["offset"], serde_json::json!([38, 18]), "external image is centred in the view: {r}");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one read per explicit paste");
         // Without a clipboard service Paste greys until something is copied in the app.
         let mut plain = PhotocraftApp::new(Session::new(), Services::default());
