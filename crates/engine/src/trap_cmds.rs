@@ -24,6 +24,7 @@ fn trap(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Trap", |doc, active| {
         let id = active.ok_or(EngineError::NoDocument)?;
+        crate::commands::check_pixels_unlocked(doc, id)?;
         let bounds = doc.bounds();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let LayerContent::Raster(surf) = &mut l.content else {
@@ -63,11 +64,8 @@ mod tests {
     use super::*;
     use photocraft_geom::Rect;
 
-    #[test]
-    fn traps_a_cmyk_document() {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8, "height": 4, "mode": "cmyk"})).unwrap();
-        // Paint cyan | magenta halves on the Background.
+    /// Paints cyan | magenta halves on the active layer.
+    fn paint_halves(s: &mut Session) {
         s.edit("paint", |doc, active| {
             let id = active.unwrap();
             let fmt = doc.pixel_format();
@@ -93,6 +91,13 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn traps_a_cmyk_document() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 4, "mode": "cmyk"})).unwrap();
+        paint_halves(&mut s);
 
         let r = s.execute("image.trap", json!({"width": 1})).unwrap();
         assert_eq!(r["trapped"], true);
@@ -107,6 +112,35 @@ mod tests {
         }
         // One history step.
         assert_eq!(st.history.entries().last().map(|e| e.as_str()), Some("Trap"));
+    }
+
+    #[test]
+    fn refuses_locked_layers() {
+        // Lock All or the pixel lock, on the layer itself or on its group: Trap refuses, leaving the
+        // pixels and the history as they were.
+        for lock in [json!({"all": true}), json!({"pixels": true})] {
+            for on_group in [false, true] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 8, "height": 4, "mode": "cmyk"})).unwrap();
+                s.execute("layer.new.layer", json!({})).unwrap();
+                paint_halves(&mut s);
+                let layer = s.active().unwrap().active_layer.unwrap();
+                if on_group {
+                    s.execute("layer.new.groupFromLayers", json!({})).unwrap();
+                }
+                s.execute("layer.lockLayers", lock.clone()).unwrap();
+                s.execute("layer.select", json!({"layer": layer.0})).unwrap();
+                let locks = s.active().unwrap().doc.effective_locks(layer);
+                assert!(locks.all || locks.pixels, "the lock reaches the layer ({lock}, group: {on_group})");
+                let steps = s.active().unwrap().history.past_len();
+                let before = s.active().unwrap().doc.layer(layer).unwrap().surface().cloned();
+                let r = s.execute("image.trap", json!({"width": 1}));
+                assert!(r.is_err(), "trapped a layer locked with {lock} (group: {on_group}): {r:?}");
+                let st = s.active().unwrap();
+                assert_eq!(st.doc.layer(layer).unwrap().surface().cloned(), before, "{lock} group: {on_group}");
+                assert_eq!(st.history.past_len(), steps, "{lock} group: {on_group}: no history step");
+            }
+        }
     }
 
     #[test]
