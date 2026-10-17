@@ -562,6 +562,11 @@ impl LiveStroke {
         self.renderer.wants_time()
     }
 
+    /// Current smoothed brush position.
+    pub fn current_pos(&self) -> Option<photocraft_paint::StrokePoint> {
+        self.renderer.current_pos()
+    }
+
     /// Render more points; returns the rectangle that changed. The doc shows the stroke as
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and

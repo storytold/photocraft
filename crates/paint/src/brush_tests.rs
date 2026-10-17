@@ -1275,6 +1275,20 @@ fn transfer_wetness_and_mix_vary_per_dab() {
     assert_eq!(old.mixer, crate::mixer::MixerSettings::default());
 }
 
+#[test]
+fn fast_corner_smoothing_rounds_sharp_turn() {
+    // Fast 90-degree corner: (0, 0) -> (60, 0) -> (60, 60)
+    let pts = vec![StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(60.0, 0.0, 1.0), StrokePoint::new(60.0, 60.0, 1.0)];
+    let b = BrushSettings { size: 10.0, spacing: 0.05, smoothing: Smoothing { amount: 0.5, ..Default::default() }, ..brush() };
+    let dabs = dabs_of(&b, &pts);
+    assert!(!dabs.is_empty());
+    // Straight line segments (the pristine base without curved path interpolation) constrain
+    // all dabs strictly to the polygonal axes: either y == 0.0 or x == 60.0.
+    // Continuous cubic spline interpolation curves around the vertex at (60, 0), so dabs
+    // deviate from both straight coordinate planes.
+    let curved_dabs: Vec<&Dab> = dabs.iter().filter(|d| (d.center.x - 60.0).abs() > 0.5 && d.center.y > 0.5).collect();
+    assert!(!curved_dabs.is_empty(), "spline interpolation must curve dabs off the straight polygonal axes at turns");
+}
 /// Primary and Dual Brush dabs of a stroke (the generator, as the renderer drives it).
 fn all_dabs(b: &BrushSettings, pts: &[StrokePoint]) -> (Vec<Dab>, Vec<Dab>) {
     let mut g = crate::dynamics::DabGenerator::new(b, 1.0);

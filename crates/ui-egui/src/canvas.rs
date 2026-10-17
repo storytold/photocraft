@@ -480,6 +480,12 @@ impl EngineStroke {
             Self::Dab(_) => None,
         }
     }
+    fn current_pos(&self) -> Option<[f64; 2]> {
+        match self {
+            Self::Brush(s) => s.current_pos().map(|p| [p.x, p.y]),
+            _ => None,
+        }
+    }
 }
 
 /// A stroke shown while it is drawn: the engine renders the real result onto a copy of the
@@ -492,7 +498,7 @@ pub(crate) struct LiveStroke {
     key: u64,
     /// Damage of each step (step 0 = the document before the stroke).
     damage: Vec<DRect>,
-    /// Drag points rendered so far.
+    /// Drag points fed so far.
     fed: usize,
 }
 
@@ -714,6 +720,8 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
 /// rotation the commit's `paint.stroke` gets for them.
+///
+/// With brush smoothing active, the live stroke maintains a trailing lag behind the real-time
 fn feed_live_stroke(app: &mut PhotocraftApp) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
@@ -3677,9 +3685,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
             }
             app.defer_live_stroke = false;
-            // One live-stroke update for the whole frame, not one per recovered sample.
             feed_live_stroke(app);
             crate::magnetic_lasso_ui::flush(app);
+        } else if app.drag.is_some() && app.live_stroke.is_some() {
+            feed_live_stroke(app);
+        }
+        if app.drag.is_some() && app.live_stroke.is_some() {
+            ctx.request_repaint();
         }
         if buttons.stopped {
             // The live painting press already created the stroke and this release commits it.
@@ -3949,7 +3961,21 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
             };
             ui.ctx().set_cursor_icon(icon);
-        } else if let Some(p) = response.hover_pos() {
+        } else if let Some(p) = ui
+            .input(|i| {
+                i.events
+                    .iter()
+                    .rev()
+                    .find_map(|e| match e {
+                        egui::Event::PointerMoved(pos) => Some(*pos),
+                        _ => None,
+                    })
+                    .or(i.pointer.latest_pos())
+                    .or(i.pointer.hover_pos())
+            })
+            .filter(|p| rect.contains(*p) || response.dragged() || app.drag.is_some())
+            .or_else(|| response.hover_pos())
+        {
             let alt = ui.input(|i| i.modifiers.alt);
             if !resizing && !alt && !app.ui.shell.sticky_alt {
                 draw_clone_preview(app, &painter, &xf, xf.to_doc(p), output);
@@ -4010,13 +4036,27 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                                 }
                                 egui::CursorIcon::None
                             }
-                            // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                            // traces its outline, turned and flipped with the view; a plain round
-                            // tip keeps the circle.
                             _ => {
                                 let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
                                 let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
-                                crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
+                                let cursor_painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pc_brush_cursor")));
+                                let res = crate::brush_cursor::cursor(&cursor_painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre);
+                                if painting && brush.smoothing.pulled_string {
+                                    let sp = app
+                                        .session
+                                        .active()
+                                        .and_then(|st| app.live_stroke.as_ref().filter(|l| l.doc == st.doc.id).and_then(|l| l.stroke.current_pos()));
+                                    if let Some(sp) = sp {
+                                        let trail = xf.to_screen(sp[0] as f32, sp[1] as f32);
+                                        if (p - trail).length() > 2.0 {
+                                            cursor_painter.line_segment([trail, p], Stroke::new(2.0, Color32::from_black_alpha(130)));
+                                            cursor_painter.line_segment([trail, p], Stroke::new(1.0, Color32::from_rgb(255, 60, 110)));
+                                            cursor_painter.circle_filled(trail, 2.5, Color32::from_black_alpha(160));
+                                            cursor_painter.circle_filled(trail, 1.5, Color32::from_white_alpha(240));
+                                        }
+                                    }
+                                }
+                                res
                             }
                         }
                     }
@@ -7693,6 +7733,7 @@ mod tests {
         assert!(partial);
         let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
         assert!(end(&live) >= 170, "the end reaches the pointer while drawing ({})", end(&live));
+        assert!(end(&done) >= 170, "the committed stroke reaches the release point ({})", end(&done));
         // The options-bar value reaches the stroke: 50 % smooths the wiggle, 0 % doesn't.
         let (_, rough, _, _) = drag_frames(0.0, &xs);
         assert!(!same_pixels(&rough, &done), "smoothing changes the stroke");

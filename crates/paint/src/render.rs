@@ -765,6 +765,11 @@ impl StrokeRenderer {
         self.cov.bounds
     }
 
+    /// Current smoothed brush position.
+    pub fn current_pos(&self) -> Option<StrokePoint> {
+        self.generator.current_pos()
+    }
+
     fn raster_pending(&mut self) {
         let mut dabs = std::mem::take(&mut self.dab_buf);
         let mut duals = std::mem::take(&mut self.dual_buf);
