@@ -783,6 +783,10 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     } else {
         fields.insert("name".into(), json!(name));
     }
+    if command == "path.toSelection" {
+        // OK deselects and hides the path, as ⌘↩ does (#6079).
+        fields.insert("__deselectPath".into(), json!(true));
+    }
     if command == "path.fill" {
         let fg = app.session.tools.foreground;
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1471,6 +1475,10 @@ mod tests {
         crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
         assert!(h.state().session.active().unwrap().doc.selection.is_some());
         assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("path.toSelection"));
+        // Like ⌘↩, it deselects and hides the work path, which stays in the document (#6079).
+        assert_eq!(h.state().ui.selected_path, None);
+        assert!(h.state().session.active().unwrap().doc.work_path.is_some());
+        assert!(!crate::vector_ui::work_path_shown(h.state()));
     }
 
     #[test]

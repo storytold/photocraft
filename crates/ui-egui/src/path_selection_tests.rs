@@ -74,6 +74,9 @@ fn cmd_enter_while_drawing_finishes_the_path_and_loads_it() {
     assert!(app.ui.pen.is_none(), "the pen path was finished");
     assert!(app.session.active().unwrap().doc.work_path.is_some(), "into the work path");
     assert!(app.session.active().unwrap().doc.selection.is_some(), "and loaded as a selection: {}", app.ui.status);
+    // Then deselected and no longer drawn, as in Photoshop; the work path stays (#6079).
+    assert_eq!(app.ui.selected_path, None);
+    assert!(!crate::vector_ui::work_path_shown(app));
     // Plain ↩ still only finishes a path.
     let mut h = harness();
     h.state_mut().ui.tool = Tool::Pen;

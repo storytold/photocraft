@@ -705,7 +705,34 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
         .ok_or_else(|| tl!("No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
     let mut p = params.as_object().cloned().unwrap_or_default();
     p.insert("name".into(), json!(name));
-    app.run("path.toSelection", Value::Object(p))
+    let r = app.run("path.toSelection", Value::Object(p))?;
+    deselect_loaded_path(app, &name);
+    Ok(r)
+}
+
+/// After the Pen or Path Selection tool made a selection from the path `name` (⌘↩, the canvas
+/// menu's Make Selection…), Photoshop deselects it in the Paths panel and stops drawing it; the
+/// path itself stays (#6079). A shape layer's path or vector mask (`"layer"`) stays the active
+/// path, so layer targeting is unchanged.
+pub(crate) fn deselect_loaded_path(app: &mut PhotocraftApp, name: &str) {
+    if name == "layer" {
+        return;
+    }
+    app.ui.selected_path = None;
+    if name == "work" {
+        app.ui.hidden_work_path = app.session.active().and_then(|st| st.doc.work_path.clone().map(|p| (st.doc.id.0, p)));
+    }
+}
+
+/// Is the active document's Work Path drawn and edited on the canvas? Not after
+/// [`deselect_loaded_path`] hid it, until a path is selected again in the Paths panel or the Work
+/// Path changes (a new one drawn, Make Work Path, `path.set`…) (#6079).
+pub(crate) fn work_path_shown(app: &PhotocraftApp) -> bool {
+    if app.ui.selected_path.is_some() {
+        return true;
+    }
+    let Some((doc, hidden)) = &app.ui.hidden_work_path else { return true };
+    app.session.active().is_none_or(|st| st.doc.id.0 != *doc || st.doc.work_path.as_ref() != Some(hidden))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -759,6 +786,9 @@ fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
     }
     if let Some((id, p)) = active_shape_path(app) {
         return Some((PathTarget::Shape(id), p));
+    }
+    if !work_path_shown(app) {
+        return None;
     }
     app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
 }
@@ -1003,7 +1033,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     } else if paths {
         // Paths remain visible as outlines with any tool. Path Selection adds anchor squares; Direct
         // Selection has its own overlay above.
-        if let Some(wp) = &doc.work_path {
+        if let Some(wp) = doc.work_path.as_ref().filter(|_| work_path_shown(app)) {
             draw_path(wp, tool == Tool::PathSelection);
         }
         let st = app.session.active();
@@ -2070,6 +2100,50 @@ mod tests {
         app.ui.pen = Some(PenPath { knots: vec![[[20.0, 20.0]; 3], [[60.0, 40.0]; 3]], ..Default::default() });
         toggle(&mut app, "view.show.targetPath");
         assert!(overlay_shapes(&app, &ctx) > 0, "the pen path in progress is still drawn");
+    }
+
+    #[test]
+    fn making_a_selection_from_the_pen_path_deselects_and_hides_it() {
+        // #6079: after ⌘↩ the work path's outline stayed on the canvas; Photoshop deselects it.
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.pen = Some(PenPath { knots: vec![[[20.0, 20.0]; 3], [[120.0, 20.0]; 3], [[120.0, 80.0]; 3]], ..Default::default() });
+        path_to_selection(&mut app, json!({})).unwrap();
+        let st = app.session.active().unwrap();
+        assert!(st.doc.selection.is_some(), "the selection is made");
+        assert!(st.doc.work_path.is_some(), "the work path is kept");
+        assert_eq!(app.ui.selected_path, None, "and deselected in the Paths panel");
+        assert_eq!(overlay_shapes(&app, &ctx), 0, "so the canvas no longer draws it");
+        assert!(target_path(&app).is_none() && !delete_key_deletes_work_path(&app), "nor edits or deletes it");
+        // Undo removes the selection; the path stays.
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.work_path.is_some());
+        assert!(app.session.active().unwrap().doc.selection.is_none());
+        assert_eq!(overlay_shapes(&app, &ctx), 0, "still hidden");
+        // Another Work Path made any other way (Make Work Path, `path.set` over the control
+        // channel…) is a different path: it shows without being selected.
+        let other = json!({"subpaths": [{"closed": true, "knots": [{"anchor": [5, 5]}, {"anchor": [50, 5]}, {"anchor": [50, 50]}]}]});
+        app.run("path.set", json!({"name": "work", "path": other})).unwrap();
+        assert_eq!(app.ui.selected_path, None);
+        assert!(work_path_shown(&app) && overlay_shapes(&app, &ctx) > 0, "a changed Work Path is shown");
+        // Selecting it in the Paths panel shows it again.
+        app.ui.selected_path = Some("work".into());
+        assert!(overlay_shapes(&app, &ctx) > 0);
+        // A new path drawn after the deselect replaces the work path and is shown.
+        path_to_selection(&mut app, json!({})).unwrap();
+        assert_eq!(overlay_shapes(&app, &ctx), 0);
+        app.ui.pen = Some(PenPath { knots: vec![[[10.0, 10.0]; 3], [[40.0, 10.0]; 3]], ..Default::default() });
+        pen_commit(&mut app, false);
+        assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+        assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths.len(), 1, "replaced, not combined");
+        assert!(overlay_shapes(&app, &ctx) > 0);
+        // A shape layer's path stays the active path: layer targeting is unchanged.
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.pen = Some(PenPath { knots: vec![[[20.0, 20.0]; 3], [[120.0, 20.0]; 3], [[120.0, 80.0]; 3]], ..Default::default() });
+        path_to_selection(&mut app, json!({})).unwrap();
+        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+        assert!(active_shape_path(&app).is_some());
     }
 
     #[test]

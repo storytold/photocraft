@@ -1167,6 +1167,11 @@ pub struct UiState {
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    /// The document and Work Path deselected by making a selection from it with the Pen or Path
+    /// Selection tool (#6079): the canvas hides that path until a path is selected again or the
+    /// Work Path changes.
+    #[serde(default)]
+    pub hidden_work_path: Option<(u64, photocraft_doc::Path)>,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
@@ -1357,6 +1362,7 @@ impl Default for UiState {
             direct_selection: Default::default(),
             corner_radius: None,
             selected_path: None,
+            hidden_work_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
