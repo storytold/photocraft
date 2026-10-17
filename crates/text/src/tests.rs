@@ -1516,10 +1516,17 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     let l = e.layout(&point(text, 24.0), 72.0);
     assert_eq!(l.glyphs.len(), text.chars().count());
     assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with craft-fonts");
-    // Sans (Inter) runs fall back to the Gothic UI family.
-    assert_eq!(craft_family_of(&l), vec![crate::craft_fonts::UI_JAPANESE_FAMILY]);
-    // Serif runs fall back to a Mincho face when the build has one (not the web build).
-    if crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
+    // Sans (Inter) runs fall back to the first CJK craft family in the UI locale's script order:
+    // the Gothic UI family when Japanese leads that order or the build has no other CJK craft font.
+    let cjk = |f: &crate::CraftFont| f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant" | "Kore"));
+    let first = e.fonts.fallback_stack().find_map(|fam| crate::CRAFT_FONTS.iter().find(|f| f.family == fam && cjk(f))).map(|f| f.family);
+    if !crate::CRAFT_FONTS.iter().any(|f| cjk(f) && !f.is_japanese()) || crate::cjk::ui_script_order()[0] == crate::cjk::CjkScript::Japanese {
+        assert_eq!(first, Some(crate::craft_fonts::UI_JAPANESE_FAMILY));
+    }
+    assert_eq!(craft_family_of(&l), first.into_iter().collect::<Vec<_>>());
+    // Serif runs fall back to a Mincho face when the build has one (not the web build) and the
+    // Japanese craft fonts come first.
+    if first == Some(crate::craft_fonts::UI_JAPANESE_FAMILY) && crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
         let mut t = point(text, 24.0);
         t.font_family = "Times New Roman".into();
         let l = e.layout(&t, 72.0);
@@ -1530,6 +1537,23 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     // Latin keeps Inter.
     let l = e.layout(&point("Layer 1", 24.0), 72.0);
     assert!(craft_family_of(&l).is_empty());
+}
+
+/// Chinese, Arabic and Thai set in Inter fall back to the craft font for their script when the
+/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer craft-fonts).
+#[test]
+fn craft_fonts_cover_their_other_scripts_without_system_fonts() {
+    let mut e = TextEngine::new();
+    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย")] {
+        if !crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&script)) {
+            eprintln!("skipping {script}: built without a craft font for it (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+            continue;
+        }
+        let l = e.layout(&point(text, 24.0), 72.0);
+        assert!(!l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0), "{script}: no .notdef with craft-fonts");
+        let fams = craft_family_of(&l);
+        assert!(fams.iter().any(|fam| crate::CRAFT_FONTS.iter().any(|f| f.family == *fam && f.scripts.contains(&script))), "{script}: drawn with {fams:?}");
+    }
 }
 
 #[test]
