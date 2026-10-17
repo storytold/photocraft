@@ -106,7 +106,7 @@ glyphs) and bidirectional word order: egui 0.36 shapes each right-to-left word w
 so letters join, but lays a line's words out left to right, and its caret indexing is off in
 right-to-left text (emilk/egui#8576, #8577). Document text is laid out by the text engine.
 
-No right-to-left catalog ships yet. To check the mirrored layout with any language, launch with
+Arabic (`ar`) is the first shipped right-to-left catalog. To check the mirrored layout with any language, launch with
 `PHOTOCRAFT_UI_DIRECTION=rtl` (or `ltr` to force left-to-right); it is read once per process
 and has no effect on the web build:
 

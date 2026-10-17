@@ -95,7 +95,7 @@ because engine messages are still English. Detail: [localization-parity](docs/lo
 | Simplified Chinese | `zh-hans` | 100% | partial |
 | Spanish | `es` | 100% | partial |
 | Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 0% (RTL shell only) | none |
+| Arabic | `ar` | 100% | partial |
 | French | `fr` | 100% | partial |
 | Portuguese (Brazil) | `pt-br` | 100% | partial |
 | Indonesian | `id` | 100% | partial |

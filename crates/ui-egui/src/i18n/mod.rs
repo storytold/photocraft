@@ -115,6 +115,23 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// Arabic: 6 CLDR forms (zero, one, two, few, many, other).
+fn plural_ar(n: u64) -> usize {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else if n == 2 {
+        2
+    } else {
+        match n % 100 {
+            3..=10 => 3,
+            11..=99 => 4,
+            _ => 5,
+        }
+    }
+}
+
 /// A catalog file as packed by build.rs (`pack_catalogs`; the binary would otherwise carry ~2.2 MB
 /// of translations, which the web build's size gate can't afford). See [`unpack`].
 macro_rules! catalog {
@@ -187,7 +204,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 21] = [
+pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -220,6 +237,8 @@ pub static LANGUAGES: [LangInfo; 21] = [
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Arabic; right-to-left layout; 6 CLDR plural forms (zero, one, two, few, many, other).
+    LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_ar, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -829,6 +848,59 @@ mod tests {
             (21, "Uklonjena je 21 tačka uzorkovanja"),
         ] {
             assert_eq!(trn(sr, n, "{n} sample point removed", "{n} sample points removed"), expected);
+        }
+    }
+
+    #[test]
+    fn arabic_resolves_locales_and_preferences() {
+        let ar = Lang::from_code("ar").expect("ar registered");
+        assert_eq!(ar.name(), "العربية");
+        assert!(ar.complete_menus());
+        assert_eq!(ar.dir(), Dir::Rtl);
+        for tag in ["ar", "AR", "ar-SA", "ar_SA", "ar_SA.UTF-8", "ar-EG", "ar-AE", "ar-MA"] {
+            assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+            assert_eq!(Lang::from_pref(tag), ar, "{tag}");
+        }
+        assert_eq!(tr(ar, "File"), "ملف");
+        assert_eq!(tr(ar, "Layer"), "طبقة");
+        assert_eq!(tr(ar, "New document…"), "مستند جديد…");
+        assert_eq!(tr_id(ar, "select.all", "All"), "تحديد الكل", "an id override wins over the plain label");
+        assert_eq!(tr_ctx(ar, "cameraRaw", "Light"), "إضاءة");
+        assert_eq!(tr_ctx(ar, "fontWeight", "Light"), "خفيف");
+        assert_eq!(tr_ctx(ar, "cameraRaw", "Highlights"), "إبرازات");
+        assert_eq!(tr_ctx(ar, "cameraRaw", "Lights"), "مناطق مضيئة");
+        assert_eq!(tr_ctx(ar, "cameraRaw", "Shadows"), "ظلال");
+        assert_eq!(tr_ctx(ar, "cameraRaw", "Darks"), "مناطق داكنة");
+        assert_eq!(fmt(tr(ar, "Camera Raw Filter ({layer})"), &[("layer", "Background")]), "مرشح Camera Raw (Background)");
+        for key in ["Alt", "⌥"] {
+            assert_eq!(
+                fmt(tr(ar, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]),
+                format!("إضافة قناع  (من التحديد؛ {key} يعكس)")
+            );
+        }
+    }
+
+    #[test]
+    fn arabic_plural_messages_handle_six_forms() {
+        let ar = Lang::from_code("ar").expect("ar registered");
+        for (n, item, layer) in [
+            (0, "عنصر", "طبقة"),
+            (1, "عنصر", "طبقة"),
+            (2, "عنصران", "طبقتان"),
+            (3, "عناصر", "طبقات"),
+            (5, "عناصر", "طبقات"),
+            (10, "عناصر", "طبقات"),
+            (11, "عنصرًا", "طبقة"),
+            (25, "عنصرًا", "طبقة"),
+            (99, "عنصرًا", "طبقة"),
+            (100, "عنصر", "طبقة"),
+            (101, "عنصر", "طبقة"),
+            (102, "عنصر", "طبقة"),
+            (103, "عناصر", "طبقات"),
+            (115, "عنصرًا", "طبقة"),
+        ] {
+            assert_eq!(trn(ar, n, "{n} item", "{n} items"), format!("{n} {item}"));
+            assert_eq!(trn(ar, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
         }
     }
 
