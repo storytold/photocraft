@@ -607,6 +607,8 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
+/// What OK on an edited smart filter runs (`smart_ui::confirm_command`); its preview too.
+const SMART_FILTER_SET_PARAMS: &str = "layer.smartFilter.setParams";
 const COLOR_EYEDROPPER: &str = "__colorEyedropper";
 
 fn color_eyedropper_owns(f: &Map<String, Value>) -> bool {
@@ -896,8 +898,9 @@ pub(crate) fn preview_document_for_target(
         return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
     }
     // Warp Text renders the type again from the layer model (font size, position), which a
-    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
-    let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
+    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218). So does
+    // a smart filter being edited: the smart object renders again from its source (#6324).
+    let (run_k, reduce_k) = if command == "type.warpText" || command == SMART_FILTER_SET_PARAMS { (1, k) } else { (k, 1) };
     let proxy = crate::proxy::proxy_document(doc, run_k);
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());

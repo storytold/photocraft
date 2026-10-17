@@ -1762,8 +1762,14 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         return None;
     }
     let cmd = d.fields.get("__command")?.as_str()?.to_string();
-    // Previews edit what the command will: a targeted layer mask included (#780).
-    let mut params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(&d.fields));
+    // Previews edit what the command will: a targeted layer mask included (#780), and a smart
+    // filter being edited is replaced in its stack rather than stacked again (#6324).
+    let (cmd, mut params) = if d.fields.contains_key("__smartFilter") {
+        crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields))
+    } else {
+        let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(&d.fields));
+        (cmd, params)
+    };
     // Select and Mask previews in its view mode; holding X shows the image without one.
     if crate::select_mask_view::owns(&d.fields) {
         if crate::select_mask_view::hides_view(&d.fields) {

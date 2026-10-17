@@ -43,7 +43,11 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // decides whether the filtered result (rather than the original) is shown.
     let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
     let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
-        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == cmd).then(|| p.result.clone().map(|r| (p.key.clone(), r))).flatten()
+        // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
+        let previewed = crate::smart_ui::preview_command(f, &cmd);
+        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
+            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+            .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
     // The fallback must be the factor the canvas will ask for, not the document's own: since #6326
