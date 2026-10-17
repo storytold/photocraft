@@ -8,6 +8,7 @@
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
   - Arch: `sudo pacman -S libxkbcommon wayland libx11 libxrandr libxi mesa gtk3`
   - openSUSE: `sudo zypper install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel Mesa-libGL-devel gtk3-devel`
+- Or, with Nix: `nix develop` provides all of the above plus debuggers and profilers (see [Nix](#nix)).
 
 ### Windows source builds
 
@@ -83,6 +84,42 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 ## One instance per user
 
 On Windows and Linux the first PhotoCraft holds an exclusive lock on `instance.lock` in the config directory and listens on a loopback port named in `instance.json` (with a fresh 256-bit token; the file is 0600 on Unix). A later launch hands its file arguments there and exits, so files opened from Explorer or a file manager become tabs in the running window (#3708). The primary answers `ok` only once its UI has taken the files; a launch that gets anything else (the primary is starting, hung or closing) keeps retrying the lock for up to 10 s, becoming the primary itself once the old one lets go, and then starts a separate instance, so a file is never acknowledged and lost. When the event loop ends (and before the CPU-compatibility relaunch) the primary refuses new files and frees the lock. It applies only with the per-user settings folder: a portable copy (`PhotoCraftData` beside the executable) or `PHOTOCRAFT_CONFIG_DIR` may be shared between users, so those launches run separately. So do `--new-instance` (or `PHOTOCRAFT_NEW_INSTANCE=1`), every `--control` launch, and launches given a per-process option (`--safe-gpu`, `--present-mode`, `--frame-latency`, `--stroke-trace`, `--in-window-menus`, `--automation-*-root`). A `cargo run` while an installed PhotoCraft is running forwards to it: pass `--new-instance` or set `PHOTOCRAFT_CONFIG_DIR`. macOS gets the same behaviour from LaunchServices (`apple_events.rs`). On native Wayland the running window can't bring itself forward (that takes the launcher's `XDG_ACTIVATION_TOKEN`, and winit 0.30 can't activate an existing window with one), so it asks for attention instead and the taskbar highlights it; X11, XWayland and Windows bring it to the front. Flatpak needs its own follow-up (#1540). Code: `apps/photocraft/src/single_instance.rs`.
+
+## Nix
+
+`flake.nix` builds a release and provides a development shell. The package is in `nix/package.nix`, written in nixpkgs style (`callPackage`, `lib.fileset`, `versionCheckHook`); the shell is in `nix/devshell.nix`.
+
+```sh
+nix run .                                   # the desktop app (release build)
+nix run .#photocraft-cli -- info image.psd  # the headless CLI
+nix build                                   # ./result/bin/{photocraft,photocraft-cli}
+nix profile add .                           # install into your profile (older Nix: nix profile install)
+nix build .#photocraft-debug                # dev profile: debug assertions, full debug info, unstripped
+nix develop                                 # the development shell
+nix flake check                             # builds the package (with tests) and the shell; checks pins and formatting
+nix fmt                                     # formats the Nix files (nixfmt)
+```
+
+On NixOS, add the flake as an input and use `inputs.photocraft.packages.${system}.default`, or `overlays.default`, which adds `pkgs.photocraft`.
+
+**The package is a release build.** It is built like `packaging/linux/package.sh`: `--release`, craft-fonts embedded at the commit pinned in `.github/workflows/release.yml` (the `craft-fonts` flake input; `nix flake check` fails if the two differ), the commit and its date baked in for `--version` and About, and the desktop file, MIME type, AppStream metainfo, hicolor icons and licences installed, validated with `desktop-file-validate` and `appstreamcli validate`. The tests of `photocraft` and `photocraft-cli` run during the build; the whole workspace's tests run in CI. On macOS it also builds an unsigned `Applications/PhotoCraft.app`.
+
+**Runtime libraries.** winit and wgpu `dlopen` the windowing and GPU libraries, so the package adds them to the binary's RUNPATH and sets `PHOTOCRAFT_SKIP_LIB_CHECK=1` (the start-up check reads the host's linker cache, which says nothing about the Nix closure). The GPU driver comes from the system: NixOS provides it through `hardware.graphics.enable` (`/run/opengl-driver`). Elsewhere the Nix build may not find the host's driver and stops with `FailedToCreateSurfaceForAnyBackend`; run it through [nixGL](https://github.com/nix-community/nixGL).
+
+**The development shell** has the toolchain the package builds with (rustc's `wasm32-unknown-unknown` std included, so `cargo xtask wasm` and `trunk` work without rustup), `clippy`, `rustfmt`, `rust-analyzer` and:
+
+| Purpose | Tools |
+|---|---|
+| Debugging | `gdb`, `lldb`, `rr` (record and replay), `cargo-expand` |
+| Profiling | `samply`, `perf`, `cargo flamegraph`, `heaptrack`, `valgrind`, `cargo-bloat` |
+| System calls | `strace`, `ltrace` |
+| GPU and windowing | `renderdoc` (`qrenderdoc`), `vulkaninfo`, the Vulkan validation layers, `eglinfo`/`glxinfo`, `wayland-info`, `xdpyinfo`, `xvfb-run` |
+| Web build | `trunk`, `wasm-opt` (trunk fetches the `wasm-bindgen` matching `Cargo.lock`) |
+| Driving and packaging | `nc` and `jq` for the control channel, `curl` and `git` for `cargo xtask corpus`, `shellcheck`, `desktop-file-validate`, `appstreamcli` |
+
+Linux-only tools are left out on macOS. The shell sets `LD_LIBRARY_PATH` to the runtime libraries so `cargo run` opens a window, `RUST_SRC_PATH` for rust-analyzer, `RUST_BACKTRACE=1`, and `VK_ADD_LAYER_PATH` so wgpu's validation (on in debug builds) finds `VK_LAYER_KHRONOS_validation`. `CRAFT_FONTS_DIR` defaults to the pinned craft-fonts, as in CI; set it to empty (`export CRAFT_FONTS_DIR=`) to build without it.
+
+To move to a newer nixpkgs, run `nix flake update nixpkgs`. To bump craft-fonts, change its commit in `flake.nix` together with `release.yml` and `ci.yml`, then run `nix flake update craft-fonts`.
 
 ## Graphics startup and device loss
 

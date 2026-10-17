@@ -295,6 +295,13 @@ tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr
 photocraft
 ```
 
+With [Nix](https://nixos.org) (Linux or macOS), the flake builds the same release from source; `nix develop` gives you the development shell ([`docs/development.md`](docs/development.md#nix)):
+
+```sh
+nix run github:storytold/photocraft                # run it
+nix profile add github:storytold/photocraft        # or install it (older Nix: nix profile install)
+```
+
 Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
 
 > [!IMPORTANT]
