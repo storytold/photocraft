@@ -810,14 +810,24 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
     match doc.mode {
         ColorMode::Indexed if format == Format::Png => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
+            // PNG transparency belongs to a palette index, not its RGB value. Keep the
+            // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
+            let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != table.transparent.map(usize::from)).map(|(i, c)| (i as u8, c)).unzip();
+            let opaque = photocraft_doc::ColorTable { colors, transparent: None };
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
-            let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
-                idx.extend(band.px.iter().map(|p| match table.transparent {
-                    Some(t) if p[3] < 0.5 => t,
-                    _ => table.nearest([p[0], p[1], p[2]]) as u8,
-                }));
+            photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+                for p in &band.px {
+                    let i = match table.transparent {
+                        Some(t) if p[3] < 0.5 => t,
+                        _ => *opaque_indices
+                            .get(opaque.nearest([p[0], p[1], p[2]]))
+                            .ok_or_else(|| IoError::Unsupported("Indexed PNG palette has no opaque entry; add an opaque colour or convert to RGB".into()))?,
+                    };
+                    idx.push(i);
+                }
                 Ok(())
-            });
+            })?;
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi)?;
