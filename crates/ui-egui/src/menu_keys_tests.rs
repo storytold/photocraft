@@ -210,3 +210,41 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
     h.run_steps(3);
     assert_ne!(h.state().ui.tool, tool, "off the bar, E picks the Eraser again");
 }
+
+/// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
+/// any script: the checkmark column has a fixed width instead of padding characters (#5705).
+#[test]
+fn every_menu_row_starts_its_label_after_one_checkmark_column() {
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let start = |checked: bool, label: &str, mnemonic: Option<char>| {
+            let galley = crate::menu_keys::menu_row_text(ui, checked, label, mnemonic).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            );
+            let first = label.chars().next().unwrap_or(' ');
+            let row = galley.rows.first().expect("one row");
+            let glyph = row.glyphs.iter().find(|g| g.chr == first).expect("the label's first glyph");
+            assert!(galley.text().ends_with(label), "the label is shown whole: {:?}", galley.text());
+            glyph.pos.x
+        };
+        let gutter = crate::menu_keys::check_gutter(ui);
+        assert!(gutter > 0.0, "the column has room for the mark");
+        for label in ["Lock Guides", "锁定参考线", "清除参考线"] {
+            let checked = start(true, label, None);
+            let unchecked = start(false, label, None);
+            assert!((checked - unchecked).abs() < 0.01, "{label}: checked {checked} vs unchecked {unchecked}");
+            assert!((unchecked - gutter).abs() < 1.0, "{label}: the label starts right after the column ({unchecked} vs {gutter})");
+        }
+        let underlined = start(false, "Clear Guides", Some('C'));
+        let plain = start(false, "Clear Guides", None);
+        assert!((underlined - plain).abs() < 0.01, "an underlined mnemonic doesn't move the label");
+        let underlined_mid = start(true, "Lock Guides", Some('G'));
+        assert!((underlined_mid - plain).abs() < 0.01, "nor a mnemonic after the first letter");
+        let t = crate::menu_keys::menu_row_text(ui, true, "Rulers", None);
+        assert_eq!(t.text(), "✔ Rulers", "a checked row keeps its mark (and its accessible label)");
+    });
+    out.textures_delta.clear();
+}

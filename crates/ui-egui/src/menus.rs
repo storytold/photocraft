@@ -1456,15 +1456,10 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
                 continue;
             }
             let label = translated_menu_label(lang, it);
-            let prefix = match it.checked {
-                Some(true) => "✔ ",
-                Some(false) => "   ",
-                None => "",
-            };
             let mnemonic = mnemonics.get(next_row).copied().flatten();
             next_row += 1;
-            let text: egui::WidgetText =
-                if nav.underline { crate::menu_keys::mnemonic_text(ui, prefix, &label, mnemonic, None) } else { format!("{prefix}{label}").into() };
+            // Checked, unchecked and plain rows share one checkmark column (#5705).
+            let text = crate::menu_keys::menu_row_text(ui, it.checked == Some(true), &label, mnemonic.filter(|_| nav.underline));
             let mut b = egui::Button::new(text);
             if let Some(tint) = it.color.as_deref().and_then(menu_tint) {
                 b = b.fill(tint.gamma_multiply(0.55));
@@ -1497,11 +1492,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             let enabled = submenu_enabled(&child);
             let mnemonic = mnemonics.get(next_row).copied().flatten();
             next_row += 1;
-            let title: egui::WidgetText = if nav.underline {
-                crate::menu_keys::mnemonic_text(ui, "", crate::i18n::tr(lang, name), mnemonic, None)
-            } else {
-                crate::i18n::tr(lang, name).into()
-            };
+            let title = crate::menu_keys::menu_row_text(ui, false, crate::i18n::tr(lang, name), mnemonic.filter(|_| nav.underline));
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, mnemonic, |ui, nav| {
                     let r = ui.menu_button(title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
