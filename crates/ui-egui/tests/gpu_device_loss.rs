@@ -219,3 +219,77 @@ fn canvas_over_the_texture_budget_builds_no_textures() {
     assert!(g.texture_info(key).is_none());
     g.release();
 }
+
+/// #3438, #1215: when the window's own device is really lost (a driver reset, for example after
+/// the PC slept), egui-wgpu can't draw another frame. One with shapes panicked inside it ("Failed
+/// to create staging buffer for index data"), and a frozen window's close button opened an
+/// unsaved-changes prompt nobody could see. Now the app draws nothing, writes the unsaved document
+/// for recovery and closes. Runs the real frame loop on the harness's own device.
+#[test]
+fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
+    let _gpu = gpu_lock();
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let (autosaves, flushes) = (log.clone(), log.clone());
+    let render_state = std::sync::Arc::new(std::sync::Mutex::new(None::<RenderState>));
+    let window = render_state.clone();
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_max_steps(16).wgpu().build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let services = photocraft_ui_egui::Services {
+                autosave: Some(Box::new(move |doc: &std::sync::Arc<Document>, revision: u64, _: Option<&str>| {
+                    autosaves.lock().unwrap().push(format!("autosave {} {revision}", doc.id.0));
+                    Ok(())
+                })),
+                flush_autosaves: Some(Box::new(move || {
+                    flushes.lock().unwrap().push("flush".into());
+                    Vec::new()
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                *window.lock().unwrap() = Some(rs.clone());
+                app.set_wgpu(rs.clone());
+            }
+            app.run("file.new", json!({"width": 320, "height": 240})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app
+        })
+    }));
+    // Upload and submit the last frame's shapes the way the window's renderer does each frame: on
+    // a lost device, egui-wgpu panics here when there is anything to draw (#1215).
+    let upload = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let rs = render_state.lock().unwrap().clone().expect("the harness renders with wgpu");
+        let output = h.output();
+        let jobs = h.ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+        let screen = eframe::egui_wgpu::ScreenDescriptor { size_in_pixels: [1000, 700], pixels_per_point: output.pixels_per_point };
+        let mut encoder = rs.device.create_command_encoder(&Default::default());
+        let uploaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let commands = rs.renderer.write().update_buffers(&rs.device, &rs.queue, &mut encoder, &jobs, &screen);
+            rs.queue.submit(commands.into_iter().chain([encoder.finish()]));
+        }));
+        (jobs.len(), uploaded.is_ok())
+    };
+    let Ok(mut h) = built else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    h.run_steps(4);
+    let (jobs, uploaded) = upload(&h);
+    assert!(jobs > 0 && uploaded, "draws before the loss");
+    let (doc, revision, dirty) = h.state().session.active().map(|d| (d.doc.id.0, d.revision, d.is_dirty())).unwrap();
+    assert!(dirty, "the new layer is unsaved");
+    assert!(log.lock().unwrap().is_empty(), "no autosave before the loss");
+    assert!(h.state_mut().destroy_window_device());
+    // wgpu reports a destroyed device lost once the work submitted before finished (slow on a
+    // software adapter); a driver reset reports it at once.
+    if let Some(rs) = render_state.lock().unwrap().as_ref() {
+        let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) });
+    }
+    h.run_steps(2);
+    assert!(h.state().window_lost(), "the loss was noticed");
+    assert_eq!(*log.lock().unwrap(), vec![format!("autosave {doc} {revision}"), "flush".to_string()], "saved for recovery once");
+    // The frame on the lost device has nothing to draw, so egui-wgpu has nothing to upload.
+    assert_eq!(upload(&h), (0, true), "a frame with shapes panics inside egui-wgpu on a lost device");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays until the app closes");
+}

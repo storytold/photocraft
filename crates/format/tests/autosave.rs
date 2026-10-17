@@ -188,6 +188,27 @@ fn recovered_entries_survive_a_second_crash_until_saved_or_closed() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #3438: a session about to end without asking (its window's graphics device was lost) writes
+/// everything queued before it returns, so the next launch recovers it.
+#[test]
+fn flush_writes_every_queued_autosave_before_returning() {
+    let dir = temp_dir("flush");
+    let (a, b) = (version(1, 3, ColorMode::Rgb), version(2, 5, ColorMode::Grayscale));
+    let mut store = RecoveryStore::new(&dir);
+    store.autosave_checked(&Arc::new(a.clone()), 4, None).unwrap();
+    store.autosave_checked(&Arc::new(b.clone()), 6, Some("/work/b.pcraft".into())).unwrap();
+    let mut done = store.flush();
+    done.sort_by_key(|(id, ..)| *id);
+    assert_eq!(done, vec![(1, 4, Ok(())), (2, 6, Ok(()))]);
+    // On disk while the store is still alive, not only once it is dropped.
+    let docs = recovered(&RecoveryStore::new(&dir));
+    assert_eq!(docs.len(), 2);
+    assert!(docs.values().any(|d| *d == same(a.clone())) && docs.values().any(|d| *d == same(b.clone())));
+    assert!(store.autosave_checked(&Arc::new(a), 5, None).is_err(), "the workers stopped");
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn new_documents_never_overwrite_surviving_entries() {
     let dir = temp_dir("collision");

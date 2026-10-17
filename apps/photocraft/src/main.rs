@@ -555,8 +555,9 @@ fn main() -> eframe::Result {
                 {
                     app.set_wgpu(rs);
                 } else {
-                    // The window still draws with wgpu: record its errors instead of panicking.
-                    let _ = photocraft_ui_egui::gpu_canvas::DeviceHealth::watch(&rs.device);
+                    // The window still draws with wgpu: record its errors instead of panicking,
+                    // and notice when the device is lost (#3438).
+                    app.watch_window_device(&rs.device);
                 }
             }
             let fallback_reason = std::env::var("PHOTOCRAFT_GPU_STARTUP_FAILURE").ok().or_else(|| {

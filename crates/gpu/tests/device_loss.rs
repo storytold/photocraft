@@ -82,6 +82,28 @@ fn health_wait_on_a_destroyed_device_is_safe() {
     assert!(!health.wait(&device, None));
 }
 
+/// #3438: only wgpu reporting the device lost counts as a real loss. A fault recorded by hand (a
+/// simulated loss, or an uncaptured error that names one) leaves the device usable, and
+/// [`DeviceHealth::probe`] keeps polling it so a later real loss is still noticed.
+#[test]
+fn only_wgpu_reports_a_real_device_loss() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((_adapter, device, _queue)) = device() else { return };
+    let health = DeviceHealth::watch(&device);
+    health.probe(&device);
+    assert!(health.is_ok() && !health.device_lost());
+    health.mark(Fault::Lost("simulated".into()));
+    health.probe(&device);
+    assert!(!health.is_ok());
+    assert!(!health.device_lost(), "a recorded fault is not a real loss");
+    device.destroy();
+    health.probe(&device);
+    assert!(health.device_lost(), "a destroyed device is lost: {:?}", health.fault());
+    // Once lost, probing is a no-op rather than another caught panic.
+    health.probe(&device);
+    assert!(health.device_lost());
+}
+
 fn assert_unwatched_destroyed_device(encode_only: bool) {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((adapter, device, queue)) = device() else { return };

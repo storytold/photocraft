@@ -297,6 +297,17 @@ impl RecoveryStore {
         self.savers.iter().flat_map(|(&id, saver)| saver.take_completed().into_iter().map(move |(revision, result)| (id, revision, result))).collect()
     }
 
+    /// Finish every queued autosave and wait for it, then return the outcomes as
+    /// [`take_completed`](Self::take_completed) does. For a session that ends without asking,
+    /// e.g. because the window's graphics device was lost (#3438). The workers stop, so later
+    /// autosaves of the same documents report a stopped worker.
+    pub fn flush(&mut self) -> Vec<(u64, u64, std::result::Result<(), String>)> {
+        for saver in self.savers.values_mut() {
+            saver.shutdown();
+        }
+        self.take_completed()
+    }
+
     /// Document `doc_id` was saved or closed: remove its recovery data, both its own autosaves
     /// and the entry it adopted.
     pub fn discard(&mut self, doc_id: u64) -> Result<()> {

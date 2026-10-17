@@ -38,6 +38,52 @@ pub fn check(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// End-of-frame check of the device the window itself draws with (#3438). Once wgpu reports it
+/// lost (a driver reset, for example after the PC slept), egui-wgpu can't draw another frame: one
+/// with shapes panics creating its staging buffers (#1215), and one without leaves a frozen window
+/// whose close button opens an unsaved-changes prompt nobody can see. So this frame and every later
+/// one draw nothing; the first writes every unsaved document to crash recovery, waits for the
+/// writes, and closes the app without asking. The next launch reopens the documents.
+pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some((device, health)) = app.window_device.as_ref() else { return };
+    // A loss while the app sat idle or the PC slept is noticed here, before the next frame.
+    health.probe(device);
+    if !health.device_lost() {
+        return;
+    }
+    ctx.graphics_mut(|g| *g = Default::default());
+    if app.window_lost {
+        return;
+    }
+    app.window_lost = true;
+    let reason = health.fault().map_or_else(|| "GPU device lost".to_string(), |f| f.to_string());
+    log::error!("{reason}: the window can't be drawn any more; saving unsaved documents for recovery and closing");
+    save_for_recovery(app);
+    app.allow_close = true;
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+}
+
+/// Queue a crash-recovery autosave of every document with unsaved changes, whatever the autosave
+/// timer and preference, and wait until the writes finished (see `Services::flush_autosaves`).
+fn save_for_recovery(app: &mut PhotocraftApp) {
+    let jobs: Vec<_> = app.session.documents().iter().filter(|d| d.is_dirty()).map(|d| (d.doc.clone(), d.revision, d.path.clone())).collect();
+    if let Some(save) = app.services.autosave.as_mut() {
+        for (doc, revision, path) in &jobs {
+            if let Err(e) = save(doc, *revision, path.as_deref()) {
+                log::error!("couldn't save {} for recovery: {e}", doc.name);
+            }
+        }
+    }
+    if let Some(flush) = app.services.flush_autosaves.as_mut() {
+        for (id, revision, outcome) in flush() {
+            match outcome {
+                Ok(()) => log::info!("document {id} (revision {revision}) saved for recovery"),
+                Err(e) => log::error!("couldn't save document {id} for recovery: {e}"),
+            }
+        }
+    }
+}
+
 /// Drop the GPU canvas after `fault`: free its resources, send every view through the CPU
 /// path, record why, and tell the user. Documents are untouched.
 pub fn fall_back(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) {
