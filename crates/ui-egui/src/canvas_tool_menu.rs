@@ -284,8 +284,14 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::ObjectSelection
-            | Tool::Pen
-    )
+    ) || path_menu(tool)
+}
+
+/// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path
+/// Selection and Direct Selection tools, whose Photoshop menu offers the same whole-path actions
+/// for the selected path (#1056).
+pub fn path_menu(tool: Tool) -> bool {
+    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -310,7 +316,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         VIEW_MENU
     } else if menu.text {
         TYPE_EDIT_MENU
-    } else if menu.tool == Tool::Pen {
+    } else if path_menu(menu.tool) {
         PEN_MENU
     } else {
         selection_rows(menu.has_selection)
@@ -471,7 +477,7 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && tool != Tool::Pen && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
+    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
 }
 
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
@@ -572,7 +578,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
             c => TYPE_EDIT_MENU.iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
         };
     }
-    if menu.transform || menu.tool != Tool::Pen {
+    if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
     let Some(st) = app.session.active() else { return false };
@@ -699,7 +705,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         choose_spelling(app, &menu, command)
     } else if menu.text {
         choose_type(app, ctx, command)
-    } else if menu.tool == Tool::Pen && !menu.transform {
+    } else if path_menu(menu.tool) && !menu.transform {
         choose_pen(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
@@ -1490,6 +1496,32 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert!(app.session.active().unwrap().doc.work_path.is_some());
         assert!(app.session.active().unwrap().doc.selection.is_some());
+    }
+
+    /// #1056: the Path Selection and Direct Selection tools' right-click opens the path menu for
+    /// the selected path, as the Pen's does, instead of nothing.
+    #[test]
+    fn path_selection_tools_open_the_path_menu() {
+        for tool in [Tool::PathSelection, Tool::DirectSelection] {
+            let mut app = app();
+            app.ui.tool = Tool::Pen;
+            for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
+                crate::vector_ui::pen_down(&mut app, x, y, false);
+                crate::vector_ui::pen_up(&mut app);
+            }
+            crate::vector_ui::pen_commit(&mut app, false);
+            assert!(app.session.active().unwrap().doc.work_path.is_some());
+            app.ui.tool = tool;
+            assert!(applies(tool));
+            assert!(open(&mut app, &Context::default(), tool, [10.0, 10.0]), "{tool:?}");
+            let menu = app.ui.canvas_tool_menu.clone().unwrap();
+            assert_eq!(rows(&menu), PEN_MENU, "{tool:?}");
+            assert!(menu.has_path && entry_enabled(&app, &menu, "path.toSelection"), "{tool:?}");
+            choose(&mut app, &Context::default(), "path.toSelection");
+            let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
+            crate::dialogs::confirm(&mut app, dialog).unwrap();
+            assert!(app.session.active().unwrap().doc.selection.is_some(), "{tool:?}: Make Selection made one");
+        }
     }
 
     #[test]
