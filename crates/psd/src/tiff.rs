@@ -1410,9 +1410,27 @@ pub mod transcode {
             })
         }
 
-        /// `FEid` / `FXid`: version, u64 length, items with per-channel planes (4-byte RLE counts).
+        /// `FEid` / `FXid`: version, then one section per smart object (u64 length, items with
+        /// per-channel planes and 4-byte RLE counts), each padded to 4 bytes.
         fn filter_effects(&mut self) -> Result<()> {
             self.u32()?;
+            loop {
+                let len = self.r.clone().len_field(true)?;
+                self.filter_effects_section()?;
+                // Mirrors `FilterEffects::parse`: the last section's padding may be cut short.
+                let pad = usize::try_from((4 - len % 4) % 4).unwrap_or(0).min(self.remaining());
+                self.raw(pad)?;
+                let rest = self.r.peek_rest();
+                if rest.len() <= 3 && rest.iter().all(|&b| b == 0) {
+                    return Ok(());
+                }
+                if rest.len() < 8 {
+                    return Err(PsdError::invalid(format!("filter effects: {} unexpected bytes after the data", rest.len())));
+                }
+            }
+        }
+
+        fn filter_effects_section(&mut self) -> Result<()> {
             self.sized_region(true, |t| {
                 while !t.r.is_empty() {
                     t.pascal(1)?;
@@ -2049,6 +2067,39 @@ mod tests {
         let d = ImageSourceData { global_blocks: vec![TaggedBlock::new(*b"FEid", data)], ..Default::default() };
         let (little, _) = d.to_bytes(ByteOrder::Little).unwrap();
         let (back, _) = ImageSourceData::from_bytes(&little).unwrap();
+        assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
+    }
+
+    /// Photoshop writes one `FEid` section per smart object: every section's lengths and
+    /// numbers are swapped, not only the first one's.
+    #[test]
+    fn filter_effects_block_swaps_every_section() {
+        use crate::filter_effects::{EffectsPlane, FilterEffects, FilterEffectsItem};
+        let rect = crate::layer::Rect { top: 0, left: 0, bottom: 2, right: 3 };
+        let item = |id: &str, v: u8| FilterEffectsItem {
+            id: id.into(),
+            version: 1,
+            rect,
+            depth: 8,
+            max_channels: 1,
+            slots: vec![Some(EffectsPlane::encode(Compression::Raw, &[v; 6], 3, 2, 8).unwrap()), None, None],
+            mask: None,
+        };
+        let fx = FilterEffects { version: 1, items: vec![item("first", 1), item("second-object", 2)] };
+        let data = fx.to_bytes();
+        let len1 = u64::from_be_bytes(data[4..12].try_into().unwrap()) as usize;
+        let second = 12 + len1 + (4 - len1 % 4) % 4;
+        let len2 = &data[second..second + 8];
+        block_rt(*b"FEid", data.clone());
+        let d = ImageSourceData { global_blocks: vec![TaggedBlock::new(*b"FEid", data.clone())], ..Default::default() };
+        let (little, _) = d.to_bytes(ByteOrder::Little).unwrap();
+        // 36-byte signature, then `MIB8`, the reversed key and a u32 length: the block data.
+        let body = &little[36 + 12..];
+        let mut swapped = len2.to_vec();
+        swapped.reverse();
+        assert_eq!(&body[second..second + 8], &swapped[..], "second section's length is little-endian");
+        let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
         assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
     }
 
