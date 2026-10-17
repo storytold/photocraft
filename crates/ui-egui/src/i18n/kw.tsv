@@ -1,0 +1,62 @@
+# Kernewek (kw) catalogue. Columns, separated by a TAB: context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id; it takes precedence over the English text
+#            @plural              `source` is "one|other"; translations follow the plural rule
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# NOTE: This is a starter subset from the translation workbook, not a complete catalogue.
+# Cornish wording is unreviewed; please have a fluent speaker review it before public release.
+	File	Restren
+	Edit	Golegi
+	Image	Imach
+	Layer	Gwiskas
+	Filter	Sidhel
+	View	Gwel
+	Window	Fenester
+	Help	Gweres
+	Open…	Ygeri…
+	Save	Gwitha
+	Save As…	Gwitha avel…
+	Export	Esperthi
+	Export As…	Esperthi avel…
+	Close	Dege
+	Undo	Diswul
+	Redo	Daswul
+	Copy	Kopi
+	Paste	Glusa
+	Cut	Trogh
+	Select	Dewis
+	Deselect	Didhewis
+	Invert	Gorthtreylya
+	Crop	Treghi
+	Rotate	Treyl
+	Flip Horizontal	Flyppya Gorwelweyth
+	Flip Vertical	Flyppya serthweyth
+	Brightness/Contrast…	Golowder…
+	Curves…	Krommennow…
+	Levels…	Nivellow…
+	Hue/Saturation…	Hue/Soubans…
+	Color Balance…	Balans Liw…
+	Exposure…	Diskudhans…
+	Blur	Disklerya
+	Sharpen	Lymma
+	Gaussian Blur…	Diskleryans Gaussek…
+	Layers	Gwiskasow
+	Preferences	Preferyans
+	Settings…	Settyansow…
+	Keyboard Shortcuts…	Skochfordhow Bysowek…
+	Opacity	Diskleradewder
+	Brush	Skubyllen
+	Canvas Size…	Braster Kewarghlen…
+	Image Size…	Braster Imach…
+	Gradient…	Ledras…
+	Fill…	Lenwel…
+	Mask	Mask
+	Layer Mask	Mask gwiskas
+	Blend Mode	Furv mellyans
+	New…	Nowydh…
+	Cancel	Dilea
+	Apply	Gweytha
