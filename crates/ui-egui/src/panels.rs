@@ -2121,6 +2121,46 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.add_space(6.0);
 }
 
+/// A selected solid-colour shape takes its Color panel colour from its fill, not from the
+/// previous drawing tool's foreground. Other layer types keep the normal foreground colour.
+fn selected_shape_fill(app: &PhotocraftApp) -> Option<(LayerId, [f32; 4])> {
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    let layer = st.doc.layer(id)?;
+    let LayerContent::Shape(shape) = &layer.content else { return None };
+    let Some(photocraft_doc::Fill::Solid(fill)) = shape.fill.as_ref() else { return None };
+    let [r, g, b] = fill.to_rgb();
+    Some((id, [r, g, b, fill.alpha]))
+}
+
+fn color_panel_foreground(app: &PhotocraftApp) -> [f32; 4] {
+    selected_shape_fill(app).map_or(app.session.tools.foreground, |(_, fill)| fill)
+}
+
+/// Apply a Color panel edit to the selected solid shape as well as the toolbox foreground.
+/// The shape keeps its existing alpha; consecutive slider/field drag ticks share an undo step.
+fn set_color_panel_foreground(app: &mut PhotocraftApp, color: [f32; 4], gesture: u64) {
+    let shape = selected_shape_fill(app).and_then(|(id, fill)| {
+        let locked = app.session.active().is_some_and(|st| {
+            let locks = st.doc.effective_locks(id);
+            locks.all || locks.pixels
+        });
+        (!locked).then_some((id, fill[3]))
+    });
+    app.session.tools.foreground = color;
+    if let Some((id, alpha)) = shape
+        && let Err(err) = app.run("shape.edit", json!({
+            "layer": id.0,
+            "fill": [color[0], color[1], color[2], alpha],
+            "coalesce": format!("color-panel-shape-{}-{gesture}", id.0),
+        }))
+    {
+        app.ui.status = err;
+        app.ui.status_error = true;
+    }
+    crate::type_tool::foreground_changed(app);
+}
+
 /// The Color tab of the themes other than Photoshop's: the same spectrum field (chips, saturation
 /// and brightness field, hue strip and readout) with HSB sliders under it (#4367).
 fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -2131,7 +2171,7 @@ fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Hue, Saturation and Brightness sliders for the foreground colour.
 fn hsb_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let fg = app.session.tools.foreground;
+    let fg = color_panel_foreground(app);
     // Keep the last edited HSB while it still gives the foreground: black and greys have no hue or
     // saturation of their own, so recomputing them from RGB would reset what was just typed to 0.
     let key = egui::Id::new("color-picker-hsva");
@@ -2153,9 +2193,9 @@ fn hsb_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Only an edit counts: the h/s/v round trip isn't exact, so comparing values would rewrite
     // the foreground (and recolour selected type) every frame.
     if changed {
-        app.session.tools.foreground = hsva_srgb(hsva);
+        let gesture = crate::vector_ui::paint_gesture(ui, ui.id().with("color-panel-fill"));
+        set_color_panel_foreground(app, hsva_srgb(hsva), gesture);
         ui.data_mut(|d| d.insert_temp(key, hsva));
-        crate::type_tool::foreground_changed(app);
     }
 }
 
@@ -3618,7 +3658,7 @@ fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rect) {
     if bg_active {
         p.rect_stroke(bgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
     }
-    p.rect_filled(fgr, 2.0, c32(app.session.tools.foreground));
+    p.rect_filled(fgr, 2.0, c32(color_panel_foreground(app)));
     p.rect_stroke(fgr, 2.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Outside);
     if !bg_active {
         p.rect_stroke(fgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
@@ -3667,7 +3707,7 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let bg_active = app.ui.color_panel.background;
     let key = egui::Id::new(("color-field-hue", bg_active));
-    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { app.session.tools.foreground });
+    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { color_panel_foreground(app) });
     // What the field showed last: a grey carries no hue, black neither hue nor saturation (#3228).
     let remembered: (f32, f32) = ui.data(|d| d.get_temp(key)).unwrap_or((hsva.h, hsva.s));
     hsva = field_hsva(hsva, remembered);
@@ -3743,21 +3783,21 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if bg_active {
                 app.session.tools.background = hsva_srgb(hsva);
             } else {
-                app.session.tools.foreground = hsva_srgb(hsva);
-                crate::type_tool::foreground_changed(app);
+                let gesture = crate::vector_ui::paint_gesture(ui, ui.id().with("color-panel-fill"));
+                set_color_panel_foreground(app, hsva_srgb(hsva), gesture);
             }
             ui.data_mut(|d| d.insert_temp(key, (hsva.h, hsva.s)));
         }
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
+        let mut c = if bg_active { app.session.tools.background } else { color_panel_foreground(app) };
         if color_readout(ui, ui.id().with(("color-field", bg_active)), &mut c) {
             if bg_active {
                 app.session.tools.background = c;
             } else {
-                app.session.tools.foreground = c;
-                crate::type_tool::foreground_changed(app);
+                let gesture = crate::vector_ui::paint_gesture(ui, ui.id().with("color-panel-fill"));
+                set_color_panel_foreground(app, c, gesture);
             }
             // Keep the hue for greys, so the field marker doesn't jump to red; the saturation with
             // it, so a later black lands on the corner it was last dragged to (#3228).
@@ -4282,6 +4322,27 @@ mod color_tests {
         let c = [0.847, 0.271, 0.180];
         let (ours, dialog) = (srgb_hsva([c[0], c[1], c[2], 1.0]), crate::color_picker_ui::rgb_to_hsv(c));
         assert!((ours.h * 360.0 - dialog[0]).abs() < 0.5 && (ours.s - dialog[1]).abs() < 1e-3 && (ours.v - dialog[2]).abs() < 1e-3, "{ours:?} vs {dialog:?}");
+    }
+
+
+    #[test]
+    fn selected_shape_fill_stays_in_sync_with_color_panel_edits() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+        let id = app.run("shape.create", json!({
+            "kind": "rect", "rect": [10, 10, 40, 30], "fill": "#ff0000"
+        })).unwrap()["layer"].as_u64().unwrap();
+
+        assert_eq!(srgb_bytes(color_panel_foreground(&app)), [255, 0, 0]);
+        // A Properties/toolbar shape.edit is reflected even when the toolbox stays red.
+        app.run("shape.edit", json!({"layer": id, "fill": "#00ff00"})).unwrap();
+        assert_eq!(srgb_bytes(color_panel_foreground(&app)), [0, 255, 0]);
+
+        set_color_panel_foreground(&mut app, [0.0, 0.0, 1.0, 1.0], 1);
+        assert_eq!(srgb_bytes(color_panel_foreground(&app)), [0, 0, 255]);
+        assert_eq!(srgb_bytes(app.session.tools.foreground), [0, 0, 255]);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(srgb_bytes(color_panel_foreground(&app)), [0, 255, 0]);
     }
 
     #[test]

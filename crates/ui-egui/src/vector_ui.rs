@@ -1462,7 +1462,7 @@ fn corner_radii_patch(radii: [f64; 4], corner: usize, radius: f32) -> Value {
 
 /// Follow the existing brush/mask continuous-edit convention: one history state per press or
 /// keyboard edit, with every value tick of a held-pointer gesture sharing its key.
-fn paint_gesture(ui: &egui::Ui, key: egui::Id) -> u64 {
+pub(crate) fn paint_gesture(ui: &egui::Ui, key: egui::Id) -> u64 {
     let pass = ui.ctx().cumulative_pass_nr();
     let pressed = ui.input(|i| i.pointer.any_pressed());
     ui.data_mut(|d| {
