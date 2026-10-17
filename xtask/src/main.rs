@@ -25,7 +25,7 @@ commands:
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
   ci              fmt --check, clippy -D warnings, test, layers, wasm (stops at first failure)
-  corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --photoshop] [--local] [--update-manifest]
+  corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
                   them into corpus/ (pinned commits, sha256-verified; --all = every corpus but pixls,
                   --photoshop --local copies from ../photocraft-corpus or $PHOTOCRAFT_CORPUS_REPO)

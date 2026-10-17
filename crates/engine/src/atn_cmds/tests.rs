@@ -6,9 +6,9 @@ use serde_json::json;
 fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
     let event = match event.as_bytes() {
         [a, b, c, dd] => AtnEvent::Code([*a, *b, *c, *dd]),
-        _ => AtnEvent::Name(event.into()),
+        _ => AtnEvent::name(event),
     };
-    AtnItem { event, dictionary: label.into(), descriptor: d, ..Default::default() }
+    AtnItem { event, dictionary: label.as_bytes().to_vec(), descriptor: d, ..Default::default() }
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -299,6 +299,16 @@ fn every_mapped_command_exports_and_imports_back() {
         ("file.openAs", json!({"path": "/tmp/a.psd"})),
         ("actions.conditional", json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers", "set": "S"})),
         ("actions.conditional", json!({"if": "landscape", "then": "Wide", "else": null, "set": "S"})),
+        ("tools.setColors", json!({"foreground": "#102030"})),
+        ("tools.setColors", json!({"background": "#ffffff"})),
+        ("view.fitOnScreen", json!({})),
+        ("view.zoomIn", json!({})),
+        ("layer.createClippingMask", json!({})),
+        ("layer.ungroupLayers", json!({})),
+        ("layer.layerStyle.copyLayerStyle", json!({})),
+        ("layer.layerStyle.pasteLayerStyle", json!({})),
+        ("layer.setExpanded", json!({"all": true, "expanded": false})),
+        ("layerComp.apply", json!({"comp": "Original"})),
         ("actions.play", json!({"action": "Other", "set": "S"})),
         (STOP_MESSAGE, json!({"message": "Hi", "allowContinue": false})),
         // The TrueGrit Texture Supply sets (Debaser, Distress Press, Halftone Zine Machine).
@@ -399,6 +409,8 @@ fn every_mapped_command_exports_and_imports_back() {
         "select.modify.smooth",
         "select.reselect",
         "select.similar",
+        "view.actualPixels",
+        "view.zoomOut",
         "tools.swapColors",
         "edit.cut",
         "edit.copy",
@@ -428,7 +440,10 @@ fn every_mapped_command_exports_and_imports_back() {
     // Every command the table names exists.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
     for id in EVENTS.iter().flat_map(|e| e.ids.iter()) {
-        assert!(crate::commands::find(id).is_some() || crate::actions_cmds::shell_save_command(id), "the .atn table names an unknown command `{id}`");
+        assert!(
+            crate::commands::find(id).is_some() || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id),
+            "the .atn table names an unknown command `{id}`"
+        );
     }
 }
 
@@ -758,6 +773,50 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     let rest_steps = &rest.actions[0].steps;
     let rest_ids: Vec<&str> = rest_steps.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(rest_ids, ["actions.conditional", "image.imageSize", "paint.bucket", PHOTOSHOP_STEP, "file.placeEmbedded", "file.openAs"]);
+    // A transform without a reference (a replaced smart object) is the target layer's; the
+    // selection outline nudged; a layer moved to index 0 (the bottom); a View menu item; the
+    // foreground colour.
+    let replaced = desc("null")
+        .with("FTcs", enm("QCSt", "Qcsa"))
+        .with("Ofst", D::Descriptor(desc("Ofst").with("Hrzn", px(4.0)).with("Vrtc", px(6.0))))
+        .with("Wdth", pct(50.0))
+        .with("Hght", pct(50.0))
+        .with("replaceLayer", D::Descriptor(desc("null")));
+    let nudged = desc("null")
+        .with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]))
+        .with("T   ", D::Descriptor(desc("Ofst").with("Hrzn", px(3.0)).with("Vrtc", px(-2.0))));
+    let to_bottom = desc("null")
+        .with("null", target_ref("Lyr "))
+        .with("T   ", D::Reference(vec![ReferenceItem::Index { class: class("Lyr "), index: 0 }]))
+        .with("Adjs", D::Boolean(false));
+    let fit =
+        desc("null").with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Mn  "), type_id: Id::new("MnIt"), value: Id::new("FtOn") }]));
+    let fg = desc("null")
+        .with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("FrgC") }]))
+        .with("T   ", D::Descriptor(desc("RGBC").with("Rd  ", D::Double(0.0)).with("Grn ", D::Double(0.0)).with("Bl  ", D::Double(0.0))));
+    let items = vec![
+        item("transform", "Transform", Some(replaced)),
+        item("move", "Move", Some(nudged)),
+        item("move", "Move", Some(to_bottom)),
+        item("select", "Select", Some(fit)),
+        item("set", "Set", Some(fg)),
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("More2"),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
+        warnings: vec![],
+    };
+    let more = import(&atn::write(&file).unwrap()).unwrap();
+    let more_steps = &more.actions[0].steps;
+    assert_eq!(
+        more_steps.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        ["edit.transform", "select.transformSelection", "layer.arrange.sendToBack", "view.fitOnScreen", "tools.setColors"]
+    );
+    assert_eq!(more_steps[0].1, json!({"dx": 4, "dy": 6, "scaleX": 50, "scaleY": 50}));
+    assert_eq!(more_steps[1].1, json!({"dx": 3, "dy": -2}));
+    assert_eq!(more_steps[4].1, json!({"foreground": "#000000"}));
+    assert!(more.unsupported.is_empty());
     assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
     assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic"}));
     assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false}));

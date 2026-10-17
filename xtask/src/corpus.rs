@@ -34,7 +34,7 @@ const CRITICAL: &[&str] = &[
     "crates/affinity/",
     "crates/raw/",
 ];
-/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --photoshop [--local]] [--update-manifest]`
+/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
     let mut did = false;
@@ -67,6 +67,10 @@ pub fn cmd(args: &[&str]) -> Result<(), String> {
     }
     if args.contains(&"--affinity") {
         corpus_pins::AFFINITY.fetch(update)?;
+        did = true;
+    }
+    if args.contains(&"--atn") {
+        corpus_pins::ATN.fetch(update)?;
         did = true;
     }
     if args.contains(&"--photoshop") {
@@ -146,6 +150,8 @@ fn list() {
                      manifest xtask/exr-corpus.sha256. Fetch: --exr
   corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
                      manifest xtask/affinity-corpus.sha256. Fetch: --affinity
+  corpus/atn/        [{}] Photoshop Actions sets from seven public repositories (MIT, BSD, Unlicense);
+                     manifest xtask/atn-corpus.sha256. Fetch: --atn
   corpus/pngsuite/   [{}] PngSuite (public domain), {PNGSUITE_URL}. Fetch: --pngsuite
   corpus/pixls/      [opt-in] real camera raws from raw.pixls.us (public domain), one per decode
                      path plus the known-unsupported packed ORF. Fetch: --pixls (opt-in)
@@ -163,6 +169,7 @@ Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-ma
         status(corpus_pins::EXR.is_current()),
         &OPENEXR_COMMIT[..12],
         status(corpus_pins::AFFINITY.is_current()),
+        status(corpus_pins::ATN.is_current()),
         status(png_ok),
     );
 }

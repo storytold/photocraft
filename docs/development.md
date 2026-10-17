@@ -456,7 +456,13 @@ recorded) when adding an event to the table:
 
 ```sh
 cargo run -p photocraft-psd --example atn_dump -- "Default Actions.atn"
+cargo run -p photocraft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
+
+The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
+corpora*): `photocraft-psd`'s corpus test parses every file and rewrites it byte for byte;
+`photocraft-engine`'s loads, saves and reloads every set and caps the steps that still have no
+PhotoCraft equivalent.
 
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
@@ -497,6 +503,7 @@ against committed **sha256 manifests**. All pins are in one place:
 | `corpus/heif/` | 9 small HEIC/HEIF files (checkerboards, RGB strips, a grid-tiled photo with EXIF/XMP, each with Apple's decode as `.ref.png`; a 10-bit RGBA file with its source PNG), for the `heif` feature | heic-rs (MIT OR Apache-2.0) and pillow-heif (BSD-3-Clause) upstreams | `xtask/heif-corpus.sha256` |
 | `corpus/exr/` | the 5 deep OpenEXR test images (scanline deep data with half colour and u32 ID channels; 2.3 MB), checked against the ID manifests of their upstream sidecars | OpenEXR upstream at v3.5.2 (BSD-3-Clause) | `xtask/exr-corpus.sha256` |
 | `corpus/affinity/` | 21 public Affinity documents and the 18 Affinity 3 samples for #1606, with exported PNG references | vector-art and affinity-samples (CC0), AFDesignLoad, Jac21/Branding and AssetStoreTemplate (MIT) upstreams | `xtask/affinity-corpus.sha256` |
+| `corpus/atn/` | 16 Photoshop Actions sets from seven public repositories (frequency separation, adjustments, Save for Web, generative workflows…), the real-file oracles of the `.atn` parser and import | sbaril, bjango, BKWLD, atntools, trimmer, alpha-utility, gif-creator upstreams (MIT, BSD, Unlicense) | `xtask/atn-corpus.sha256` |
 | `corpus/pngsuite/` | PngSuite | schaik.com release archive (public domain) | (fixed archive) |
 
 ```sh
