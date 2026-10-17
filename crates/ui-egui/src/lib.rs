@@ -1157,6 +1157,26 @@ impl PhotocraftApp {
                 dock::reveal(self, dock::Group::Properties);
             }
         }
+        // Making a new selection reveals its outline after View > Extras was hidden (#5597).
+        // These interactive selection commands complete inline; a failed command, deselection,
+        // or painting inside an existing selection must leave the user's view choice alone.
+        if r.as_ref().is_ok_and(|v| v.get("changed") != Some(&Value::Bool(false)) && v.get("pending") != Some(&Value::Bool(true)))
+            && matches!(
+                id,
+                "select.rect"
+                    | "select.lasso"
+                    | "select.magneticLasso"
+                    | "select.magicWand"
+                    | "select.quick"
+                    | "select.object"
+                    | "select.loadSelection"
+                    | "select.loadLuminosity"
+                    | "path.toSelection"
+            )
+            && self.session.active().is_some_and(|st| st.doc.selection.is_some())
+        {
+            self.ui.view.extras = true;
+        }
         if r.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());

@@ -532,3 +532,84 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     assert_eq!(app.ui.view.screen_mode, "standard");
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
+
+#[test]
+fn creating_a_selection_restores_hidden_extras() {
+    let mut hidden = Vec::new();
+    for (command, params) in [
+        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})),
+        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20, "ellipse": true})),
+        ("select.lasso", json!({"points": [[10,10], [30,10], [20,30]]})),
+        ("select.magneticLasso", json!({"points": [[10,10], [30,10], [20,30]], "trace": false})),
+        ("select.magicWand", json!({"x": 10, "y": 10})),
+        ("select.quick", json!({"points": [[10,10]], "size": 8})),
+        ("select.loadSelection", json!({"channel": "transparency"})),
+        ("select.loadLuminosity", json!({})),
+    ] {
+        let (mut app, ctx) = app_with(1);
+        app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
+        menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(!app.ui.view.extras, "explicit hide remains effective before a new selection");
+        app.run(command, params).unwrap();
+        assert!(app.session.active().unwrap().doc.selection.is_some(), "{command} creates a selection");
+        if !app.ui.view.shows(app.ui.view.show.selection_edges) || checked(&app, "view.extras") != Some(true) {
+            hidden.push(command);
+        }
+    }
+    assert!(hidden.is_empty(), "new selections stayed hidden after Extras was disabled: {hidden:?}");
+}
+
+#[test]
+fn failed_selection_and_unrelated_edits_keep_extras_hidden() {
+    let (mut app, ctx) = app_with(1);
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    assert!(!app.ui.view.extras);
+    assert!(app.run("select.rect", json!({"x": "invalid"})).is_err());
+    assert!(!app.ui.view.extras, "failed selection must not change the view");
+    app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
+    assert!(!app.ui.view.extras, "painting an existing hidden selection keeps it hidden");
+    app.run("select.deselect", json!({})).unwrap();
+    assert!(!app.ui.view.extras, "deselecting has no new outline to reveal");
+}
+
+#[test]
+fn new_selection_preserves_individual_show_preferences() {
+    let (mut app, ctx) = app_with(1);
+    app.ui.view.show.selection_edges = false;
+    app.ui.view.show.pixel_grid = false;
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    assert!(app.ui.view.extras);
+    assert!(!app.ui.view.show.selection_edges);
+    assert!(!app.ui.view.show.pixel_grid);
+}
+
+#[test]
+fn object_selection_finding_nothing_keeps_extras_hidden() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    let result = app.run("select.object", json!({"point": [3,3]})).unwrap();
+    assert_eq!(result["changed"], false);
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+    assert!(!app.ui.view.extras, "finding no object must not reveal an old selection");
+}
+
+#[test]
+fn object_selection_restores_extras_when_it_finds_an_object() {
+    let (mut app, ctx) = app_with(0);
+    app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
+    app.run("edit.fill", json!({"color": "#4073b3"})).unwrap();
+    app.run("select.rect", json!({"x": 55, "y": 35, "width": 90, "height": 90, "ellipse": true})).unwrap();
+    app.run("edit.fill", json!({"color": "#e64d26"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    assert!(!app.ui.view.extras);
+    let result = app.run("select.object", json!({"rect": [45,25,110,110]})).unwrap();
+    assert_eq!(result["changed"], true, "the fixture must produce a new object selection");
+    let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+    assert!(selection.sample_channel(100, 80, 0) > 0.5, "the central object is selected");
+    assert!(app.ui.view.shows(app.ui.view.show.selection_edges));
+}
