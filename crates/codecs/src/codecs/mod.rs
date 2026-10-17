@@ -6,6 +6,7 @@ pub(crate) mod exr_cryptomatte;
 pub(crate) mod fits;
 pub(crate) mod gif_frames;
 pub(crate) mod heif;
+pub(crate) mod iff;
 pub(crate) mod jpeg;
 pub(crate) mod pcx;
 pub(crate) mod png;

@@ -35,6 +35,8 @@ pub enum Format {
     Dpx,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from): read-only.
     Cineon,
+    /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette, read-only.
+    Iff,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -67,6 +69,7 @@ pub struct FormatCaps {
 /// The test-suite asserts that every other enabled format is read+write.
 pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     (Format::Xpm, "XPM is a legacy Unix icon interchange format. Reading existing XPM icons is supported; writing modern image assets should use PNG instead."),
+    (Format::Iff, "Amiga IFF/ILBM is supported for opening legacy Amiga artwork; this crate has no IFF writer, so save as PNG instead."),
     (
         Format::Pcx,
         "PCX is supported for opening legacy paint and clipart assets. New files should use PNG; writing obsolete indexed and planar variants is intentionally not provided.",
@@ -104,7 +107,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 20] = [
+    pub const ALL: [Format; 21] = [
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -125,6 +128,7 @@ impl Format {
         Format::Fits,
         Format::Dpx,
         Format::Cineon,
+        Format::Iff,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -159,6 +163,7 @@ impl Format {
             Format::Fits => "FITS",
             Format::Dpx => "DPX",
             Format::Cineon => "Cineon",
+            Format::Iff => "Amiga IFF",
         }
     }
 
@@ -186,6 +191,7 @@ impl Format {
             Format::Fits => &["fits", "fit", "fts"],
             Format::Dpx => &["dpx"],
             Format::Cineon => &["cin"],
+            Format::Iff => &["iff", "lbm", "ilbm"],
         }
     }
 
@@ -211,6 +217,7 @@ impl Format {
             Format::Fits => "image/fits",
             Format::Dpx => "image/x-dpx",
             Format::Cineon => "image/x-cin",
+            Format::Iff => "image/x-iff",
         }
     }
 
@@ -267,6 +274,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         Format::Cineon => FormatCaps { read: true, write: false, depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Iff => FormatCaps { read: true, write: false, depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
     }
 }
 
@@ -323,6 +331,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if crate::codecs::dpx::is_cineon(b) {
         return Some(Format::Cineon);
+    }
+    if crate::codecs::iff::looks_like_iff(b) {
+        return Some(Format::Iff);
     }
     if b.starts_with(b"SIMPLE  =") {
         return Some(Format::Fits);

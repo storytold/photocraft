@@ -47,7 +47,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | DICOM | R/W | no | no | |
 | PCX | R/W | no | no | |
 | Pixar | R/W | no | no | |
-| Amiga IFF | R/W | no | no | |
+| Amiga IFF | R/W | yes | no | Read-only: 1–8 planes with CMAP, stored and ByteRun1 |
 | Wireless Bitmap | R/W | no | no | |
 | MPO / JPS (stereo) | R/W | no | no | |
 | PICT | R | no | no | Legacy |
