@@ -170,6 +170,11 @@ pub fn color_from_desc(d: &Descriptor) -> Option<Color> {
         b"Grsc" => Color::gray(1.0 - g("Gry ")? / 100.0),
         // CIE L*a*b*: L 0..100, a / b −128..127 (stored like Lab pixels: offset by 128).
         b"LbCl" => Color { mode: ColorMode::Lab, c: [g("Lmnc")? / 100.0, (g("A   ")? + 128.0) / 255.0, (g("B   ")? + 128.0) / 255.0, 0.0], alpha: 1.0 },
+        // HSB: hue an angle in degrees, saturation / brightness 0..100.
+        b"HSBC" => {
+            let [r, gr, b] = crate::channel_map::hsb_to_rgb(g("H   ")?, g("Strt")? / 100.0, g("Brgh")? / 100.0);
+            Color::rgb(r, gr, b)
+        }
         // Newer Photoshop writes 0..1 floats.
         _ if d.get("redFloat").is_some() => Color::rgb(g("redFloat")?, g("greenFloat")?, g("blueFloat")?),
         _ => {
@@ -820,6 +825,30 @@ mod tests {
         }
         // Missing components are rejected, not defaulted.
         assert!(super::color_from_desc(&Descriptor::new("LbCl").with("Lmnc", Value::Double(50.0))).is_none());
+    }
+
+    /// Colours stored as HSB (`HSBC`: `H   ` an angle in degrees, `Strt`/`Brgh` 0..100), as in
+    /// psd-tools `stroke-color-descriptors-hsb-with-rgb-mode.psd`, used to be dropped (#6774).
+    #[test]
+    fn hsb_descriptor_colours_parse() {
+        use photocraft_doc::Fill;
+        use photocraft_psd::descriptor::{Descriptor, Value};
+        let hsb = |h: f64, s: f64, b: f64| {
+            Descriptor::new("HSBC").with("H   ", Value::UnitFloat { unit: *b"#Ang", value: h }).with("Strt", Value::Double(s)).with("Brgh", Value::Double(b))
+        };
+        let close = |c: [f32; 3], e: [f32; 3]| c.iter().zip(e).all(|(a, b)| (a - b).abs() < 1e-5);
+        let green = super::color_from_desc(&hsb(120.0, 100.0, 100.0)).unwrap().to_rgb();
+        assert!(close(green, [0.0, 1.0, 0.0]), "{green:?}");
+        let white = super::color_from_desc(&hsb(0.0, 0.0, 100.0)).unwrap().to_rgb();
+        assert!(close(white, [1.0, 1.0, 1.0]), "{white:?}");
+        let half = super::color_from_desc(&hsb(240.0, 50.0, 50.0)).unwrap().to_rgb();
+        assert!(close(half, [0.25, 0.25, 0.5]), "{half:?}");
+        // A solid fill (`SoCo`) with an HSB colour is read, not lost.
+        let soco = Descriptor::new("null").with("Clr ", Value::Descriptor(hsb(0.0, 100.0, 100.0)));
+        let Some(Fill::Solid(c)) = super::fill_from_desc(b"SoCo", &soco) else { panic!("solid fill") };
+        assert!(close(c.to_rgb(), [1.0, 0.0, 0.0]), "{:?}", c.to_rgb());
+        // Missing components are rejected, not defaulted.
+        assert!(super::color_from_desc(&Descriptor::new("HSBC").with("Strt", Value::Double(50.0))).is_none());
     }
 
     #[test]
