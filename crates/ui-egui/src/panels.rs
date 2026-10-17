@@ -602,7 +602,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| "PhotoCraft".into());
+            let title = title_text(app);
             // The menus and the far-end controls are laid out first; the title is centred in
             // whatever room is left between them (`free`, left to right: menus then controls, or
             // controls then menus in a right-to-left UI), shortened or dropped rather than drawn
@@ -726,11 +726,28 @@ pub fn system_title_bar(app: &PhotocraftApp) -> bool {
     !app.custom_titlebar && app.session.prefs().interface.system_title_bar && !cfg!(any(target_os = "macos", target_arch = "wasm32"))
 }
 
-/// The OS window title: the active document's name suffixed with the app name (a `*` prefix
-/// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
-/// document open.
+/// The app's name and version, as the About window names it (`build_info::VERSION`, the workspace
+/// version). Shown in the title bar and the OS window title so a screen recording or review says
+/// which build it shows (#3807); the launcher and About already carried it.
+pub fn app_label() -> String {
+    format!("PhotoCraft {}", photocraft_engine::build_info::VERSION)
+}
+
+/// The in-app title bar's centred text: the active document's name, separated from the app label
+/// for the app name and version, or just the app label with no document open. An unsaved document
+/// gains a `•` where a clean one has the em dash, like the `*` in [`window_title`].
+fn title_text(app: &PhotocraftApp) -> String {
+    match app.session.active() {
+        Some(d) => format!("{}{}{}", d.doc.name, if d.is_dirty() { "  •  " } else { "  \u{2014}  " }, app_label()),
+        None => app_label(),
+    }
+}
+
+/// The OS window title: the active document's name suffixed with the app name and version (a `*`
+/// prefix marks unsaved changes, like the `•` in the app-drawn title), or just the app label with
+/// no document open.
 pub fn window_title(app: &PhotocraftApp) -> String {
-    app.session.active().map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name)).unwrap_or_else(|| "PhotoCraft".into())
+    app.session.active().map(|d| format!("{}{} \u{2014} {}", if d.is_dirty() { "*" } else { "" }, d.doc.name, app_label())).unwrap_or_else(app_label)
 }
 
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
@@ -765,7 +782,7 @@ fn title_x(center: f32, left: f32, right: f32, width: f32) -> Option<f32> {
 
 #[cfg(test)]
 mod title_tests {
-    use super::{system_title_bar, title_x, window_title};
+    use super::{app_label, system_title_bar, title_text, title_x, window_title};
 
     #[test]
     fn title_never_overlaps_menus_or_controls() {
@@ -804,20 +821,37 @@ mod title_tests {
     }
 
     #[test]
-    fn window_title_with_no_document_is_the_app_name() {
-        assert_eq!(window_title(&app(true)), "PhotoCraft");
+    fn window_title_with_no_document_is_the_app_label() {
+        assert_eq!(window_title(&app(true)), app_label());
+        // The version the About window shows is in the OS title.
+        assert!(window_title(&app(true)).contains(photocraft_engine::build_info::VERSION));
     }
 
     #[test]
     fn window_title_follows_the_active_file() {
         let mut app = app(true);
         open_named(&mut app, "foo.psd");
-        assert_eq!(window_title(&app), "foo.psd \u{2014} PhotoCraft");
+        assert_eq!(window_title(&app), format!("foo.psd \u{2014} {}", app_label()));
         // Unsaved changes gain a `*` prefix, like the `•` in the app-drawn title.
         if let Some(st) = app.session.active_mut() {
             st.revision += 1;
         }
-        assert_eq!(window_title(&app), "*foo.psd \u{2014} PhotoCraft");
+        assert_eq!(window_title(&app), format!("*foo.psd \u{2014} {}", app_label()));
+    }
+
+    #[test]
+    fn title_text_shows_the_app_version() {
+        // The in-app title bar carries the version too, so a document open or not (#3807).
+        let mut app = app(true);
+        assert_eq!(title_text(&app), app_label());
+        assert!(title_text(&app).contains(photocraft_engine::build_info::VERSION));
+        open_named(&mut app, "foo.psd");
+        assert_eq!(title_text(&app), format!("foo.psd  \u{2014}  {}", app_label()));
+        assert!(title_text(&app).contains(photocraft_engine::build_info::VERSION));
+        if let Some(st) = app.session.active_mut() {
+            st.revision += 1;
+        }
+        assert_eq!(title_text(&app), format!("foo.psd  \u{2022}  {}", app_label()));
     }
 
     #[test]
@@ -855,11 +889,11 @@ mod title_tests {
         let ctx = egui::Context::default();
         crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         super::sync_window_title(&mut app, &ctx);
-        assert_eq!(app.last_window_title, "PhotoCraft");
+        assert_eq!(app.last_window_title, app_label());
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         let cmds = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
-        assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "PhotoCraft")), "{cmds:?}");
+        assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t.as_str() == app_label())), "{cmds:?}");
         // Same document state again: the cached title stops a repeat command.
         super::sync_window_title(&mut app, &ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -868,7 +902,7 @@ mod title_tests {
         assert!(!cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(_))), "repeat Title: {cmds:?}");
         open_named(&mut app, "foo.psd");
         super::sync_window_title(&mut app, &ctx);
-        assert_eq!(app.last_window_title, "foo.psd \u{2014} PhotoCraft");
+        assert_eq!(app.last_window_title, format!("foo.psd \u{2014} {}", app_label()));
     }
 }
 
