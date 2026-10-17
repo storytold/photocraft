@@ -3605,7 +3605,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
             let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
             tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
-            app.press_stroke = app.drag.is_some();
+            // A source pick or refused Clone/Healing press is handled too.
+            // Consume its release rather than replaying it as a painting click.
+            app.press_stroke = app.drag.is_some() || matches!(tool, Tool::CloneStamp | Tool::Healing);
         }
         let press_stroke = app.press_stroke;
         if press_stroke {
@@ -3706,7 +3708,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
             }
         }
-        if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
+        if press_stroke && !ui.input(|i| i.pointer.primary_down()) {
             app.press_stroke = false;
         }
         if buttons.clicked
@@ -5359,7 +5361,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
         ToolEvent::Down { x, y, pressure } => {
             // Painting a type, shape, Smart Object or fill layer asks to rasterize it first
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
-            let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
+            let clone_tool = matches!(tool, Tool::CloneStamp | Tool::Healing);
+            let sets_source = clone_tool && (mods.alt || crate::retouch_ui::source_pick_active(app));
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).
             if !sets_source && let Some(why) = hidden_target(app, tool) {
                 app.ui.status = why.into();
@@ -5367,6 +5370,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 return;
             }
             if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
+                return;
+            }
+            if clone_tool && !sets_source && !crate::retouch_ui::require_source(app) {
                 return;
             }
             // ⌘ with a selection tool is the Move tool for the drag: outside the selection (or
@@ -5429,7 +5435,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     crate::vector_ui::curvature_down(app, x, y);
                     return;
                 }
-                Tool::CloneStamp | Tool::Healing if mods.alt => {
+                Tool::CloneStamp | Tool::Healing if sets_source => {
                     crate::retouch_ui::set_source(app, x, y);
                     return;
                 }

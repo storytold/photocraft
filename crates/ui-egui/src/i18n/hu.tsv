@@ -4107,6 +4107,8 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+	Set Source	Forrás beállítása
+	Click to set the source	Kattintson a forrás beállításához
 	Accept and Go to Conflict	Elfogadás és ugrás az ütközéshez
 	Changes undone.	Változások visszavonva.
 	Choose a new shortcut for this command, or leave it without one.	Válasszon új billentyűparancsot ehhez a parancshoz, vagy hagyja nélküle.

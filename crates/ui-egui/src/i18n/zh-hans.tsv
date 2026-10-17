@@ -2804,6 +2804,8 @@ curves	Smooth	平滑
 	set name	组名称
 	{set} (modified)	{set}（已修改）
 	Random	随机
+	Set Source	设置源点
+	Click to set the source	单击以设置源点
 	Accept and Go to Conflict	接受并转到冲突
 	Changes undone.	已撤消更改。
 	Choose a new shortcut for this command, or leave it without one.	为此命令选择新的快捷键，或保留为无快捷键。

@@ -4150,6 +4150,8 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+	Set Source	Definir origen
+	Click to set the source	Haz clic para definir el origen
 	Accept and Go to Conflict	Aceptar e ir al conflicto
 	Changes undone.	Cambios deshechos.
 	Choose a new shortcut for this command, or leave it without one.	Elija un nuevo método abreviado para este comando o déjelo sin ninguno.

@@ -113,14 +113,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         }
         Tool::Healing | Tool::CloneStamp => {
             let Some(p) = clone_params(app) else {
-                // Option-click on the Mac, Alt-click on Windows.
-                app.ui.status = if cfg!(target_os = "macos") {
-                    tl!("Option-click to define a source point to clone from")
-                } else {
-                    tl!("Alt-click to define a source point to clone from")
-                }
-                .into();
-                app.ui.status_error = true;
+                require_source(app);
                 return true;
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
@@ -396,12 +389,51 @@ pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, 
 
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
 pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
-    app.ui.clone_source = Some([x.round(), y.round()]);
-    app.ui.clone_offset = None;
-    let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
-    let template = "Clone source set at {x}, {y}";
-    app.ui.status = crate::i18n::fmt(tl!(template), &[("x", &format!("{x:.0}")), ("y", &format!("{y:.0}"))]);
+    let source = [x.round(), y.round()];
+    match app.run("cloneSource.set", json!({"source": source})) {
+        Ok(_) => {
+            app.ui.clone_source = Some(source);
+            app.ui.clone_offset = None;
+            app.ui.clone_source_pick = None;
+            let template = "Clone source set at {x}, {y}";
+            app.ui.status = crate::i18n::fmt(tl!(template), &[("x", &format!("{x:.0}")), ("y", &format!("{y:.0}"))]);
+            app.ui.status_error = false;
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+/// Source picking cannot survive a tool/document change or a restored workspace.
+pub(crate) fn source_pick_active(app: &mut PhotocraftApp) -> bool {
+    let current = app.session.active().map(|st| (app.ui.tool, st.doc.id.0));
+    if app.ui.clone_source_pick != current || !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
+        app.ui.clone_source_pick = None;
+    }
+    app.ui.clone_source_pick.is_some()
+}
+
+pub(crate) fn source_pick_cancel(app: &mut PhotocraftApp) {
+    app.ui.clone_source_pick = None;
+    app.ui.status.clear();
     app.ui.status_error = false;
+}
+
+/// Refuse immediately instead of showing a stroke that disappears at release (#3697).
+pub(crate) fn require_source(app: &mut PhotocraftApp) -> bool {
+    if clone_params(app).is_some() {
+        return true;
+    }
+    app.ui.status = if cfg!(target_os = "macos") {
+        tl!("Option-click to define a source point to clone from")
+    } else {
+        tl!("Alt-click to define a source point to clone from")
+    }
+    .into();
+    app.ui.status_error = true;
+    false
 }
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
@@ -445,6 +477,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     {
         return false;
     }
+    let source_picking = source_pick_active(app);
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -542,8 +575,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("all".to_string(), tl!("All Layers")),
             ];
             crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
-            if app.ui.clone_source.is_none() {
-                crate::widgets::vline(ui, 22.0);
+            crate::widgets::vline(ui, 22.0);
+            if ui.button(if source_picking { tl!("Cancel") } else { tl!("Set Source") }).clicked() {
+                if source_picking {
+                    source_pick_cancel(app);
+                } else if let Some(st) = app.session.active() {
+                    app.ui.clone_source_pick = Some((tool, st.doc.id.0));
+                    app.ui.status = tl!("Click to set the source").into();
+                    app.ui.status_error = false;
+                }
+            }
+            if source_picking {
+                opt(ui, tl!("Click to set the source"));
+            } else if clone_params(app).is_none() {
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             }
         }
@@ -672,6 +716,66 @@ mod tests {
         app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0}})).unwrap();
         app
+    }
+
+    #[test]
+    fn missing_clone_source_is_refused_before_a_preview_starts() {
+        for tool in [Tool::CloneStamp, Tool::Healing] {
+            let mut app = app();
+            app.ui.tool = tool;
+            let revision = app.session.active().unwrap().revision;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            assert!(app.ui.status_error);
+            assert!(app.drag.is_none());
+            tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+            assert!(app.drag.is_none());
+            assert_eq!(app.session.active().unwrap().revision, revision);
+        }
+    }
+
+    #[test]
+    fn one_shot_source_pick_needs_no_alt_and_does_not_paint() {
+        for tool in [Tool::CloneStamp, Tool::Healing] {
+            let mut app = app();
+            app.ui.tool = tool;
+            let doc = app.session.active().unwrap().doc.id.0;
+            let revision = app.session.active().unwrap().revision;
+            app.ui.clone_source_pick = Some((tool, doc));
+            tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 20.0 }, egui::Modifiers::NONE);
+            assert_eq!(app.session.presets.clone.active().source, Some([70.0, 20.0]));
+            assert!(app.ui.clone_source_pick.is_none());
+            assert!(app.drag.is_none());
+            assert!(!app.ui.status_error);
+            assert_eq!(app.session.active().unwrap().revision, revision);
+            assert!(require_source(&mut app));
+        }
+    }
+
+    #[test]
+    fn source_picker_cancels_on_tool_document_and_escape_changes() {
+        let mut app = app();
+        app.ui.tool = Tool::CloneStamp;
+        let doc = app.session.active().unwrap().doc.id.0;
+        app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+        app.ui.tool = Tool::Brush;
+        assert!(!source_pick_active(&mut app));
+        app.ui.tool = Tool::CloneStamp;
+        app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+        app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+        assert!(!source_pick_active(&mut app));
+        let doc = app.session.active().unwrap().doc.id.0;
+        app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        });
+        crate::shortcuts::handle(&mut app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+        assert!(app.ui.clone_source_pick.is_none());
+        assert!(app.session.presets.clone.active().source.is_none());
     }
 
     fn drag(app: &mut PhotocraftApp, tool: Tool) {

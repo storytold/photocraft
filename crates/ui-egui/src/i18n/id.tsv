@@ -3180,6 +3180,8 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+	Set Source	Atur Sumber
+	Click to set the source	Klik untuk mengatur sumber
 	Accept and Go to Conflict	Terima dan Buka Konflik
 	Changes undone.	Perubahan dibatalkan.
 	Choose a new shortcut for this command, or leave it without one.	Pilih pintasan baru untuk perintah ini, atau biarkan tanpa pintasan.

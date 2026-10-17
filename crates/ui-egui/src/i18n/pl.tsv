@@ -3786,6 +3786,8 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+	Set Source	Ustaw źródło
+	Click to set the source	Kliknij, aby ustawić źródło
 	Accept and Go to Conflict	Akceptuj i przejdź do konfliktu
 	Changes undone.	Zmiany cofnięte.
 	Choose a new shortcut for this command, or leave it without one.	Wybierz nowy skrót dla tego polecenia lub zostaw je bez skrótu.

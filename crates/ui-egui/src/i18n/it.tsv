@@ -4309,6 +4309,8 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+	Set Source	Imposta sorgente
+	Click to set the source	Fai clic per impostare la sorgente
 	Accept and Go to Conflict	Accetta e vai al conflitto
 	Changes undone.	Modifiche annullate.
 	Choose a new shortcut for this command, or leave it without one.	Scegli una nuova scorciatoia per questo comando o lascialo senza.

@@ -1110,6 +1110,9 @@ pub struct UiState {
     pub clone_source: Option<[f64; 2]>,
     #[serde(default)]
     pub clone_offset: Option<[f64; 2]>,
+    /// One-shot source picking, scoped to the tool and document and never restored.
+    #[serde(default, skip_deserializing)]
+    pub clone_source_pick: Option<(Tool, u64)>,
     /// Pattern Stamp aligned origin in document pixels, kept across strokes.
     #[serde(default)]
     pub pattern_stamp_phase: Option<[f32; 2]>,
@@ -1335,6 +1338,7 @@ impl Default for UiState {
             tool_brushes: Vec::new(),
             clone_source: None,
             clone_offset: None,
+            clone_source_pick: None,
             pattern_stamp_phase: None,
             extras: Extras::default(),
             view: Default::default(),

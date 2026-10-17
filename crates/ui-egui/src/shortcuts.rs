@@ -335,6 +335,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
+    crate::retouch_ui::source_pick_active(app);
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -397,6 +398,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // A focused field keeps its typing and editing keys; menu shortcuts (⌘J, ⌘S, F7…) still
         // fire, as in Photoshop.
         dispatch_pressed(app, ctx, focus, false);
+        return;
+    }
+    if crate::retouch_ui::source_pick_active(app) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::retouch_ui::source_pick_cancel(app);
         return;
     }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.

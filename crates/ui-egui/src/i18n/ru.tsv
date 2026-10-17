@@ -3158,6 +3158,8 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+	Set Source	Задать источник
+	Click to set the source	Нажмите, чтобы задать источник
 	Accept and Go to Conflict	Принять и перейти к конфликту
 	Changes undone.	Изменения отменены.
 	Choose a new shortcut for this command, or leave it without one.	Выберите новую комбинацию для этой команды или оставьте её без комбинации.

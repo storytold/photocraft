@@ -3888,6 +3888,8 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+	Set Source	Ορισμός πηγής
+	Click to set the source	Κάντε κλικ για να ορίσετε την πηγή
 	Accept and Go to Conflict	Αποδοχή και μετάβαση στη σύγκρουση
 	Changes undone.	Οι αλλαγές αναιρέθηκαν.
 	Choose a new shortcut for this command, or leave it without one.	Επιλέξτε νέα συντόμευση για αυτήν την εντολή ή αφήστε την χωρίς.

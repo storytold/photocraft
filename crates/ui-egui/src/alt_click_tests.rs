@@ -3,6 +3,7 @@
 
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -10,13 +11,23 @@ use crate::canvas::ViewXform;
 use crate::state::Tool;
 
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    harness_with_options(app, false)
+}
+
+fn harness_with_options(app: PhotocraftApp, options: bool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(900.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
             crate::shortcuts::handle(app, &ctx);
+            if options {
+                ui.horizontal(|ui| {
+                    let tool = app.ui.tool;
+                    crate::retouch_ui::options_bar(app, ui, tool);
+                });
+            }
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
         },
         app,
@@ -243,5 +254,69 @@ fn alt_click_with_the_zoom_tool_zooms_out_held_or_latched() {
         h.state_mut().ui.shell.sticky_alt = false;
         click(&mut h, 50.0, 50.0, Modifiers::NONE);
         assert_eq!(h.state().ui.views[0].zoom, 1.0, "sticky={sticky} scrubby={scrubby}");
+    }
+}
+
+#[test]
+fn set_source_button_consumes_the_whole_click_before_aligned_painting() {
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        let mut app = two_colours();
+        app.ui.tool = tool;
+        app.ui.tool_options.clone_aligned = true;
+        app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
+        let mut h = harness_with_options(app, true);
+        let rev = h.state().session.active().unwrap().revision;
+        h.get_by_label("Set Source").click();
+        h.run_steps(2);
+        assert!(h.state().ui.clone_source_pick.is_some());
+        click(&mut h, 150.0, 50.0, Modifiers::NONE);
+        let slot = h.state().session.presets.clone.active();
+        assert_eq!(slot.source, Some([150.0, 50.0]));
+        assert_eq!(slot.anchor, None);
+        assert_eq!(slot.offset(), None);
+        assert_eq!(h.state().session.active().unwrap().revision, rev);
+        assert!(!h.state().press_stroke);
+        drag(&mut h, [30.0, 50.0], [70.0, 50.0], Modifiers::NONE);
+        assert!(!h.state().ui.status_error);
+        let slot = h.state().session.presets.clone.active();
+        assert_eq!(slot.anchor, Some([30.0, 50.0]));
+        assert_eq!(slot.offset(), Some([120.0, 0.0]));
+        assert!(h.state().session.active().unwrap().revision > rev);
+        if tool == Tool::CloneStamp {
+            assert_eq!(h.state().session.active().unwrap().doc.layers[0].surface().unwrap().rgba(50, 50), [0.0, 1.0, 0.0, 1.0]);
+        }
+    }
+}
+
+#[test]
+fn source_pick_drag_released_outside_does_not_paint_or_leave_a_latch() {
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        let mut app = two_colours();
+        app.ui.tool = tool;
+        let mut h = harness_with_options(app, true);
+        let rev = h.state().session.active().unwrap().revision;
+        h.get_by_label("Set Source").click();
+        h.run_steps(2);
+        let p = screen(&h, 150.0, 50.0);
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        button(&mut h, p, true, Modifiers::NONE);
+        let q = screen(&h, 175.0, 65.0);
+        h.event(egui::Event::PointerMoved(q));
+        h.run_steps(1);
+        assert!(h.state().press_stroke);
+        assert!(h.state().drag.is_none());
+        let outside = egui::pos2(-20.0, -20.0);
+        h.event(egui::Event::PointerMoved(outside));
+        h.run_steps(1);
+        button(&mut h, outside, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert!(!h.state().press_stroke);
+        assert_eq!(h.state().session.active().unwrap().revision, rev);
+        assert_eq!(h.state().session.presets.clone.active().anchor, None);
+        drag(&mut h, [30.0, 20.0], [70.0, 20.0], Modifiers::NONE);
+        assert!(!h.state().ui.status_error);
+        assert!(h.state().session.active().unwrap().revision > rev);
+        assert!(!h.state().press_stroke);
     }
 }

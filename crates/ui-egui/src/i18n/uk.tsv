@@ -3887,6 +3887,8 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+	Set Source	Установити джерело
+	Click to set the source	Клацніть, щоб установити джерело
 	Accept and Go to Conflict	Прийняти й перейти до конфлікту
 	Changes undone.	Зміни скасовано.
 	Choose a new shortcut for this command, or leave it without one.	Виберіть нове клавіатурне скорочення для цієї команди або залиште її без нього.
