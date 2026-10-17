@@ -317,6 +317,75 @@ fn presets_save_appends_at_the_end_and_update_overwrites_in_place() {
 }
 
 #[test]
+fn preset_writes_reject_invalid_brush_bounds_without_mutating_the_library() {
+    use crate::preset_store::{MemBackend, open};
+    let max_size = photocraft_paint::MAX_BRUSH_SIZE;
+    let max_scatter = photocraft_paint::MAX_SCATTER;
+    let invalid = [
+        json!({"size":max_size + 1.0}),
+        json!({"size":1e39}),
+        json!({"dualBrush":{"enabled":true,"size":max_size + 1.0}}),
+        json!({"scattering":{"enabled":true,"scatter":{"jitter":max_scatter + 1.0}}}),
+        json!({"scattering":{"enabled":true,"scatter":{"jitter":-0.1}}}),
+        json!({"dualBrush":{"enabled":true,"scatter":max_scatter + 1.0}}),
+        json!({"dualBrush":{"enabled":true,"scatter":-0.1}}),
+    ];
+    for mode in ["new", "replace", "current", "named"] {
+        for patch in &invalid {
+            let disk = MemBackend::default();
+            let mut s = session(10, 10);
+            assert!(s.attach_preset_store(open(Box::new(disk.clone()))).is_empty());
+            s.execute("tools.setBrush", json!({"size":17.25,"noise":true,"opacity":0.37})).unwrap();
+            s.execute("tools.setColors", json!({"foreground":"#00ff00","background":"#0000ff"})).unwrap();
+            s.execute("brush.presets.save", json!({"name":"Keep","captureSize":false,"color":true})).unwrap();
+            if mode == "named" {
+                s.execute("tools.setBrush", json!({"preset":"Hard Round"})).unwrap();
+            }
+            let snapshot = |s: &Session| {
+                (
+                    s.tools.brush.clone(),
+                    s.tools.current_preset.clone(),
+                    (s.tools.foreground, s.tools.background),
+                    (s.tools.brush_rev, s.tools.brush_saved_rev, s.tools.presets_rev),
+                    s.tools.brush_gesture.clone(),
+                    s.tools.presets.clone(),
+                    s.journal.clone(),
+                    s.prefs().last_brush.clone(),
+                    disk.files.lock().unwrap().clone(),
+                )
+            };
+            let before = snapshot(&s);
+            let (command, params) = match mode {
+                "new" => ("brush.presets.save", json!({"name":"Rejected","brush":patch})),
+                "replace" => ("brush.presets.save", json!({"name":"keep","brush":patch})),
+                "current" => ("brush.presets.update", json!({"brush":patch})),
+                _ => ("brush.presets.update", json!({"name":"keep","brush":patch})),
+            };
+            assert!(s.execute(command, params).is_err(), "{mode}: an invalid brush must be rejected before storing it: {patch}");
+            assert!(snapshot(&s) == before, "{mode}: rejection must preserve presets, working state, journal and persisted bytes: {patch}");
+        }
+    }
+    // Reuse the existing shared limits, including inclusive maxima and inactive settings.
+    for patch in [
+        json!({"size":max_size,"scattering":{"enabled":true,"scatter":{"jitter":max_scatter}},"dualBrush":{"enabled":true,"size":max_size,"scatter":max_scatter}}),
+        json!({"size":0.5,"scattering":{"enabled":true,"scatter":{"jitter":0.0}},"dualBrush":{"enabled":true,"size":0.5,"scatter":0.0}}),
+        json!({"dualBrush":{"enabled":false,"size":max_size + 1.0,"scatter":max_scatter + 1.0},"scattering":{"enabled":false,"scatter":{"jitter":max_scatter + 1.0}}}),
+    ] {
+        let mut s = session(10, 10);
+        s.execute("brush.presets.save", json!({"name":"Boundary","brush":patch})).unwrap();
+        s.execute("tools.setBrush", json!({"preset":"Boundary"})).unwrap();
+        s.execute("brush.presets.update", json!({"brush":patch})).unwrap();
+        s.execute("tools.setBrush", json!({"preset":"Boundary"})).unwrap();
+        let mut replay = Session::new();
+        for (id, params) in &s.journal {
+            replay.execute(id, params.clone()).unwrap();
+        }
+        assert_eq!(replay.tools.brush, s.tools.brush);
+        assert_eq!(replay.tools.presets, s.tools.presets);
+    }
+}
+
+#[test]
 fn a_failed_set_brush_leaves_no_current_preset_behind() {
     let mut s = session(10, 10);
     let before = s.tools.brush.clone();

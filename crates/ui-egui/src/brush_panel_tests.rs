@@ -844,6 +844,17 @@ fn kit(name: &str, folder: &[&str]) -> paint::BrushPreset {
 }
 
 #[test]
+fn fresh_preset_names_use_the_same_identity_as_preset_lookup() {
+    let mut presets = vec![kit("brush 1", &[]), kit("BRUSH 2", &[]), kit("bRuSh 4", &[])];
+    assert_eq!(new_preset_name(&presets), "Brush 3", "skip differently cased names but keep the first gap");
+    presets.push(kit("BRush 3", &[]));
+    let name = new_preset_name(&presets);
+    assert_eq!(name, "Brush 5");
+    assert!(paint::presets::find(&presets, &name).is_none(), "a fresh name must not replace a saved preset");
+    assert_eq!(new_preset_name(&[]), "Brush 1");
+}
+
+#[test]
 fn folder_tree_nests_presets_in_panel_order() {
     use crate::brushes_tab::{MAX_VIEW_DEPTH, Node, folder_tree};
     let deep: Vec<&str> = vec!["d"; MAX_VIEW_DEPTH + 5];
@@ -1320,11 +1331,17 @@ fn brush_settings_hamburger_menu_actions() {
     assert!(h.query_all_by_label("Close").count() > 0);
     assert!(h.query_all_by_label("Close Tab Group").count() > 0);
 
-    // 2. New Brush Preset… saves a preset
+    // 2. New Brush Preset… opens the shared dialog; only confirming it saves.
     let count0 = h.state().session.tools.presets.len();
+    let journal0 = h.state().session.journal.len();
     h.get_by_label("New Brush Preset…").click();
     h.run_steps(2);
+    assert_eq!(h.state().session.tools.presets.len(), count0);
+    assert_eq!(h.state().session.journal.len(), journal0);
+    let id = h.state().ui.dialogs.iter().find(|d| crate::brush_preset_dialog::owns(&d.fields)).expect("New Brush Preset dialog").id;
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
     assert_eq!(h.state().session.tools.presets.len(), count0 + 1);
+    assert_eq!(h.state().session.journal.len(), journal0 + 1);
     assert_eq!(last_journal(h.state()).unwrap().0, "brush.presets.save");
 
     // 3. Clear Brush Controls resets dynamics, keeps locked sections and smoothing

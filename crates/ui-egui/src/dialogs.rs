@@ -597,6 +597,20 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
+    // Keep the New Brush Preset draft (name, capture choices and brush) until its save
+    // succeeds. Guide Layout retains its existing validation/dispatch precedence.
+    let brush_fields = app
+        .ui
+        .dialogs
+        .iter()
+        .find(|d| d.id == id)
+        .filter(|d| d.kind == DialogKind::Command && !crate::guide_layout_ui::owns(&d.fields) && crate::brush_preset_dialog::owns(&d.fields))
+        .map(|d| d.fields.clone());
+    if let Some(fields) = brush_fields {
+        let result = crate::brush_preset_dialog::confirm(app, &fields)?;
+        let _ = app.ui.close_dialog(id);
+        return Ok(result);
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -612,7 +626,6 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             r
         }
         DialogKind::Command if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
-        DialogKind::Command if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::pattern_fill_ui::owns(&d.fields) => crate::pattern_fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),

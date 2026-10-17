@@ -226,9 +226,9 @@ pub fn grouped_presets(presets: &[paint::BrushPreset]) -> Vec<(String, Vec<usize
     out
 }
 
-/// A fresh "Brush N" name.
+/// A fresh "Brush N" name, using the same identity as preset lookup and saving.
 pub(crate) fn new_preset_name(presets: &[paint::BrushPreset]) -> String {
-    (1..).map(|n| format!("Brush {n}")).find(|n| !presets.iter().any(|p| &p.name == n)).unwrap_or_else(|| "Brush".into())
+    (1..).map(|n| format!("Brush {n}")).find(|n| paint::presets::find(presets, n).is_none()).unwrap_or_else(|| "Brush".into())
 }
 
 pub(crate) fn run_or_status(app: &mut PhotocraftApp, id: &str, p: Value) {
@@ -460,12 +460,7 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 /// The Brush Settings panel menu actions (hamburger menu).
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.button(tl!("New Brush Preset…")).clicked() {
-        let name = new_preset_name(&app.session.tools.presets);
-        run_or_status(app, "brush.presets.save", json!({ "name": name }));
-        if app.session.tools.presets.iter().any(|p| p.name == name) {
-            app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: String::new() });
-            app.ui.brush_picker_list.renaming = Some(Renaming { group: false, name, folder: Vec::new(), text: String::new() });
-        }
+        crate::brush_preset_dialog::open(app, None);
         ui.close();
     }
     ui.separator();

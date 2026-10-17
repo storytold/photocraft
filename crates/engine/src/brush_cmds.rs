@@ -773,6 +773,7 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => s.tools.brush.clone(),
     };
+    validate_brush(&brush, cmd)?;
     // The New Brush Preset dialog's boxes; without them the preset captures what it always did.
     let captures = PresetCaptures { size: flag(p, "captureSize", true), tool_settings: flag(p, "toolSettings", true), color: flag(p, "color", false) };
     if captures.color {
@@ -816,6 +817,7 @@ fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => s.tools.brush.clone(),
     };
+    validate_brush(&brush, cmd)?;
     let pr = s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)).ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
     pr.brush = brush;
     pr.builtin = false;
