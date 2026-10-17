@@ -5,7 +5,9 @@ fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-print-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    d.to_string_lossy().into_owned()
+    // Spelt the way command results spell paths, so an expectation built with `/` matches on
+    // Windows too. Win32 takes `/` as a separator, so the directory is still usable as one.
+    d.to_string_lossy().replace('\\', "/")
 }
 
 fn session(mode: &str, depth: u32) -> Session {
@@ -254,7 +256,12 @@ fn package_copies_links_and_relinks() {
     let copied = format!("{dir}/pkg/Print Me/Links/art.png");
     assert_eq!(r["links"], json!([copied]));
     assert!(std::path::Path::new(&copied).is_file());
+    // Reported paths are `/`-spelt on every platform, not the native separator up to `dir` and
+    // `/` after it: a client hands them back to the control channel, which takes only `/`.
     let docp = r["document"].as_str().unwrap();
+    for p in [r["folder"].as_str().unwrap(), docp, r["links"][0].as_str().unwrap()] {
+        assert!(!p.contains('\\'), "{p}");
+    }
     assert!(docp.ends_with("Print Me/Print Me.pcraft"));
     let back = photocraft_io::import("Print Me.pcraft", &std::fs::read(docp).unwrap()).unwrap().document;
     let linked: Vec<String> = back

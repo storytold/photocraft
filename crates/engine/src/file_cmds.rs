@@ -242,6 +242,17 @@ pub fn same_file(a: &str, b: &str) -> bool {
     false
 }
 
+/// A path as command results report it: `/` between components, whatever the platform.
+///
+/// `join` already builds with `/`, but a directory from the caller or from `std::path::absolute`
+/// carries the native separator, which would leave a reported path mixed. The control channel
+/// takes `/` and rejects alternate separators (`AuthorizedWorkspace` in `crates/automation`), so
+/// a result spelt this way can be handed straight back to it. Verbatim and UNC prefixes keep
+/// theirs: Win32 does not accept `/` after a leading `\\`.
+pub(crate) fn forward_slashes(path: String) -> String {
+    if path.starts_with(r"\\") { path } else { path.replace('\\', "/") }
+}
+
 pub(crate) fn join(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_string()

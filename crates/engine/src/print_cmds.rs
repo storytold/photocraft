@@ -604,7 +604,10 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"dir\" (where to create the package folder)"))?;
     // The copies are relinked by absolute path: a relative one would be resolved against the
     // package document's folder, not the working directory `dir` is relative to.
+    // `folder`, `document` and `links` are built on it with `join`, so it is spelt the same way:
+    // `/` throughout, not a native prefix with `/` after it.
     let dir = std::path::absolute(dir).map_or_else(|_| dir.to_string(), |d| d.to_string_lossy().into_owned());
+    let dir = crate::file_cmds::forward_slashes(dir);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = (*d.doc).clone();
     let document = d.path.clone();
