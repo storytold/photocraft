@@ -210,6 +210,20 @@ fn num_field(p: &Value, key: &str) -> std::result::Result<Option<f64>, String> {
     }
 }
 
+/// A finite number that stays finite as `f32` (1e39 would turn into inf and silently reset
+/// rotation to 0° or zoom to 100%).
+fn f32_range(n: &f64) -> bool {
+    n.is_finite() && n.abs() <= f64::from(f32::MAX)
+}
+
+/// A `ui.set` numeric field the view stores as `f32`: `Ok(None)` when absent, else within `f32` range.
+fn f32_field(p: &Value, key: &str) -> std::result::Result<Option<f64>, String> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(v) => v.as_f64().filter(f32_range).map(Some).ok_or_else(|| format!("{key} must be a finite number within f32 range")),
+    }
+}
+
 /// A `ui.set` object field merged into the current state (e.g. `panels`): the patch's keys are
 /// merged into the serialized current value and parsed back, so a non-object value or an
 /// unknown nested key is an error — a nested typo must not reply ok while changing nothing.
@@ -571,9 +585,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
                 // Which chip the Color panel edits.
                 let color_panel = whole_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
-                let dock_width = num_field(p, "dockWidth")?;
-                let zoom = num_field(p, "zoom")?;
-                let rotation = num_field(p, "rotation")?;
+                let dock_width = f32_field(p, "dockWidth")?;
+                let zoom = f32_field(p, "zoom")?;
+                let rotation = f32_field(p, "rotation")?;
                 if rotation.is_some() && app.session.active_index().is_none() {
                     return Err("no document open".into());
                 }
@@ -586,6 +600,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         let (Some(x), Some(y)) = (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)) else {
                             return Err("center must be [x, y] of two numbers".into());
                         };
+                        if !f32_range(&x) || !f32_range(&y) {
+                            return Err("center must be finite numbers within f32 range".into());
+                        }
                         Some([x as f32, y as f32])
                     }
                     None => None,
@@ -2250,6 +2267,32 @@ mod tests {
         assert_eq!(serde_json::to_value(&app.ui.panels).unwrap_or_default(), panels_before, "nothing was applied");
         // Non-numeric brushSize keeps the API's historical silent no-op (see the dispatch test).
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushSize": "large"}))["ok"], true);
+    }
+
+    #[test]
+    fn ui_set_rejects_view_numbers_beyond_f32_range() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        let r = call(&mut app, &ctx, "ui.set", json!({"rotation": 30, "zoom": 2, "center": [3, 4], "dockWidth": 300}));
+        assert_eq!(r["ok"], true, "{r}");
+        let dock = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<f32>(crate::panels::dock_width_id()));
+        let (rotation, zoom, center) = (app.ui.views[0].rotation, app.ui.views[0].zoom, app.ui.views[0].center);
+        // Finite in f64 but infinite as f32: an error, not a silent reset to 0°, 100% or the minimum dock width.
+        for params in
+            [json!({"rotation": 1e39}), json!({"zoom": 1e39}), json!({"center": [1e39, 0]}), json!({"center": [0, -1e39]}), json!({"dockWidth": 1e39})]
+        {
+            let r = call(&mut app, &ctx, "ui.set", params.clone());
+            assert_eq!(r["ok"], false, "{params}: {r}");
+            assert_eq!(app.ui.views[0].rotation, rotation, "{params}");
+            assert_eq!(app.ui.views[0].zoom, zoom, "{params}");
+            assert_eq!(app.ui.views[0].center, center, "{params}");
+            assert_eq!(dock(&ctx), Some(300.0), "{params}");
+        }
+        // Huge but representable still clamps to the top zoom level.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"zoom": 1e38}))["ok"], true);
+        assert!(app.ui.views[0].zoom.is_finite() && app.ui.views[0].zoom > zoom, "{}", app.ui.views[0].zoom);
     }
 
     #[test]
