@@ -1321,3 +1321,6 @@ mod tests {
 
 #[cfg(test)]
 mod live_tests;
+
+#[cfg(test)]
+mod arabic_tests;

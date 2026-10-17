@@ -7,6 +7,7 @@ The repository's existing `docs/` directory remains authoritative for detailed d
 ## Start here
 
 - Users and evaluators: [Installation](getting-started/installation.md)
+- Arabic-speaking users: [دليل البداية](arabic/quick-start.md), [الأدوات بأمثلة](arabic/tools.md) and [قاموس المصطلحات](arabic/glossary.md)
 - Contributors: [Building](getting-started/building.md) and [Contributing](getting-started/contributing.md)
 - Architecture work: [Architecture overview](architecture/overview.md)
 - Agents and automation clients: [Automation overview](automation/overview.md)

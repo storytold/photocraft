@@ -1,10 +1,11 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (Spanish dynamic labels; previously minor: Serbian catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-15 · **Change:** minor (Arabic draft staged outside the language registry; native Arabic font fallback documented; readiness estimates unchanged) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
-[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md).
+[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md),
+[Arabic draft](localization-ar.md).
 
 **How measured.** `cargo xtask i18n-coverage` (`xtask/src/i18n_coverage.rs`) defines the key
 universe: `tl!("…")` literals and `trn(` plurals in `ui-egui` (tests excluded), menu-catalog
@@ -34,7 +35,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 | Simplified Chinese | `zh-hans` | 1,608 / 1,608 (100%) | 2,366 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
 | Spanish | `es` | 1,844 / 1,844 (100%) | 4,010 | as above; complete dynamic UI key set | Latin | no | partial | 6–10 h |
 | Hindi | `hi` | 0 (0%) | – | – | Devanagari shaping in the text engine (parley/HarfRust); no Devanagari fallback font (TYPE-218-3) | no | none | 20–30 h |
-| Arabic | `ar` | 0 (0%) | – | – | Arabic shaping and bidi in the text engine, Arabic fallback font; RTL shell layout but not inside panels, and UI labels in LTR word order (DIST-220-4), paragraph direction has no UI (TYPE-218-2), layer names as tofu (#1408, #1693) | no | none | 40–60 h |
+| Arabic | `ar` | 0 shipped (not registered) | review draft | common menus, tools and New Document draft only | Arabic shaping and bidi in the text engine; native installed-font fallback; RTL shell layout but not inside panels; UI word order and caret remain incomplete (DIST-220-4) | no | staged, not selectable | 40–60 h |
 | French | `fr` | 1,608 / 1,608 (100%) | 2,766 | as above | Latin | no | partial | 6–10 h |
 | Portuguese (Brazil) | `pt-br` | 1,608 / 1,608 (100%) | 2,788 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
 | Indonesian | `id` | 1,608 / 1,608 (100%) | 2,764 | as above | Latin | no | partial | 6–10 h |
@@ -66,10 +67,13 @@ engine localization or native review is complete.
 ## Cross-language gaps
 
 - Engine error, status and parameter-help messages are English in every language.
+- The initial Arabic catalog is staged outside `LANGUAGES` for review. It does not change
+  automatic locale matching or shipped coverage. See [Arabic notes](localization-ar.md).
 - Right-to-left UI layout is partial (2026-10-10): the shell mirrors for Arabic, Hebrew, Persian,
   Urdu and other right-to-left codes (`direction.rs`), but panel interiors, dialogs, menu rows,
-  submenus and document tabs stay left to right. UI labels also lack an Arabic fallback font, and
-  egui 0.36 joins letters within a word but orders a line's words left to right (no bidi).
+  submenus and document tabs stay left to right. Native UI labels can use installed Arabic
+  fallback fonts (`cjk_fonts.rs`, `photocraft_text::scripts`), but this does not supply web fonts
+  or bidi: egui 0.36 joins letters within a word but orders a line's words left to right.
 - Web build: no browser-locale detection, no CJK web fonts.
 - WebAssembly plug-ins disappear from Filter › Plug-ins when the UI isn't English (#2540).
 - A user couldn't find the language option (#2532): it is in Preferences › Interface.
@@ -78,6 +82,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Arabic catalog staged for review with parser and packing tests; no registry activation or readiness increase; native Arabic font fallback evidence corrected |
 | 2026-10-10 | major | First version, measured from the catalogs with the `i18n-coverage` rules |
 | 2026-10-10 | minor | Right-to-left shell layout (menu bar, title, options and status bars, toolbox and dock sides) |
 | 2026-10-11 | minor | Czech dynamic status/notice and hardware text, render labels and Navigator zoom context; engine messages remain English |

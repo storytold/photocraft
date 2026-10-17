@@ -100,9 +100,10 @@ title, options and status bars read from the right (`crates/ui-egui/src/directio
 direction follows the language code, so a catalog needs no extra setting.
 
 Not mirrored yet: panel interiors, dialogs, menu rows (shortcuts stay on the right), submenus
-(they open to the right), document tabs and the canvas. Before an Arabic catalog reads
-correctly, the UI also needs an Arabic fallback font (the bundled UI fonts have no Arabic
-glyphs) and bidirectional word order: egui 0.36 shapes each right-to-left word with HarfRust,
+(they open to the right), document tabs and the canvas. The bundled UI fonts have no Arabic
+glyphs, but native `cjk_fonts` now loads installed Arabic fonts through
+`photocraft_text::scripts`; that system-font path is unavailable on the web. Before an Arabic
+catalog reads correctly, the UI still needs bidirectional word order: egui 0.36 shapes each right-to-left word with HarfRust,
 so letters join, but lays a line's words out left to right, and its caret indexing is off in
 right-to-left text (emilk/egui#8576, #8577). Document text is laid out by the text engine.
 
@@ -113,6 +114,11 @@ and has no effect on the web build:
 ```sh
 PHOTOCRAFT_UI_DIRECTION=rtl cargo run -p photocraft-ui-egui --example snapshot -- --out rtl.png
 ```
+
+An initial Arabic review catalog is staged in `i18n/ar.tsv`, outside the language registry.
+It does not add a language choice or change automatic locale selection. See the
+[Arabic vocabulary and registration checklist](localization-ar.md) for scope and remaining
+rendering work.
 
 ## Fonts
 

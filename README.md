@@ -317,6 +317,8 @@ emerge --ask media-gfx/photocraft-bin
 
 Developer, architecture, automation, format, and security documentation is maintained in the [PhotoCraft documentation book](book/).
 
+Arabic help: [دليل البداية](book/src/arabic/quick-start.md) · [الأدوات بأمثلة](book/src/arabic/tools.md) · [قاموس المصطلحات](book/src/arabic/glossary.md).
+
 To self-host the browser version with Docker, see [Docker web hosting](packaging/web/README.md#docker).
 
 ## Security

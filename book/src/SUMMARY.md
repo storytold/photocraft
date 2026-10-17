@@ -8,6 +8,12 @@
 - [Building](getting-started/building.md)
 - [Contributing](getting-started/contributing.md)
 
+# العربية
+
+- [البداية مع PhotoCraft](arabic/quick-start.md)
+- [الأدوات بأمثلة](arabic/tools.md)
+- [قاموس المصطلحات](arabic/glossary.md)
+
 # Architecture
 
 - [Overview](architecture/overview.md)

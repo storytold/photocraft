@@ -1,0 +1,372 @@
+# Arabic (ar): initial partial catalog, written in Modern Standard Arabic.
+# Review draft, not selectable yet; see docs/localization-ar.md for release blockers.
+# Columns separated by TAB: context <TAB> English source <TAB> Arabic translation.
+# Empty context is a plain UI string; `document` disambiguates page orientation.
+# Missing entries intentionally fall back to English. This is not a complete localization.
+# Original contribution under MIT OR Apache-2.0, matching the PhotoCraft project license.
+# Clean-room: translations were written from the meaning of PhotoCraft's English source keys.
+# No proprietary translations, localization resources, or product string tables were used.
+# Preserve product names, {name} placeholders, escapes (\n, \t, \\), and dialog ellipses (…).
+# Glossary: Layer = طبقة; Mask = قناع; Selection = تحديد; Canvas = مساحة الرسم;
+# New Document = مستند جديد; Opacity = عتامة; Fill = تعبئة.
+# Count-sensitive messages are left for a later translation pass.
+
+# Main menus and common menu groups (menu_catalog.rs).
+	File	ملف
+	Edit	تحرير
+	Image	صورة
+	Layer	طبقة
+	Type	نص
+	Select	تحديد
+	Filter	مرشح
+	View	عرض
+	Window	نافذة
+	Help	مساعدة
+	Export	تصدير
+	Import	استيراد
+	Preferences	تفضيلات
+	Transform	تحويل
+	Adjustments	تعديلات
+	Mode	نمط
+	Image Rotation	تدوير الصورة
+	New	جديد
+	Delete	حذف
+	Layer Style	نمط الطبقة
+	Layer Mask	قناع الطبقة
+	Vector Mask	قناع متجهي
+	Smart Objects	عناصر ذكية
+	New Fill Layer	طبقة تعبئة جديدة
+	New Adjustment Layer	طبقة تعديل جديدة
+	Modify	تعديل
+	Blur	تمويه
+	Sharpen	زيادة الحدة
+	Noise	تشويش
+	Show	إظهار
+	Screen Mode	نمط الشاشة
+	Workspace	مساحة العمل
+	Arrange	ترتيب
+
+# File and everyday editing commands (menu_catalog.rs).
+	New…	جديد…
+	New from Clipboard	جديد من الحافظة
+	Open…	فتح…
+	Open As…	فتح بصيغة…
+	Close	إغلاق
+	Close All	إغلاق الكل
+	Close Others	إغلاق المستندات الأخرى
+	Save	حفظ
+	Save As…	حفظ باسم…
+	Save a Copy…	حفظ نسخة…
+	Revert	استعادة النسخة المحفوظة
+	Quick Export as PNG	تصدير سريع بصيغة PNG
+	Export As…	تصدير بصيغة…
+	Place Embedded…	إدراج مع تضمين…
+	Place Linked…	إدراج مع ربط…
+	File Info…	معلومات الملف…
+	Print…	طباعة…
+	Print One Copy	طباعة نسخة واحدة
+	Exit	خروج
+	Undo	تراجع
+	Redo	إعادة
+	Cut	قص
+	Copy	نسخ
+	Copy Merged	نسخ مدمج
+	Paste	لصق
+	Paste Special	لصق خاص
+	Paste in Place	لصق في الموضع نفسه
+	Paste Into	لصق داخل التحديد
+	Paste Outside	لصق خارج التحديد
+	Clear	مسح
+	Search…	بحث…
+	Fill…	تعبئة…
+	Stroke…	حدود…
+	Content-Aware Fill…	تعبئة بحسب المحتوى…
+	Free Transform	تحويل حر
+	Scale	تحجيم
+	Rotate	تدوير
+	Skew	إمالة
+	Distort	تشويه
+	Perspective	منظور
+	Warp	التواء
+	Rotate 180°	تدوير 180°
+	Rotate 90° Clockwise	تدوير 90° باتجاه عقارب الساعة
+	Rotate 90° Counter Clockwise	تدوير 90° بعكس عقارب الساعة
+	Flip Horizontal	قلب أفقي
+	Flip Vertical	قلب عمودي
+	Color Settings…	إعدادات الألوان…
+	Keyboard Shortcuts…	اختصارات لوحة المفاتيح…
+	Menus…	القوائم…
+	Toolbar…	شريط الأدوات…
+	Settings…	الإعدادات…
+	Interface…	الواجهة…
+	Workspace…	مساحة العمل…
+	Tools…	الأدوات…
+	Performance…	الأداء…
+	Type…	النص…
+
+# Image, layers, selection, and view commands (menu_catalog.rs).
+	Grayscale	تدرج رمادي
+	RGB Color	ألوان RGB
+	CMYK Color	ألوان CMYK
+	Lab Color	ألوان Lab
+	8 Bits/Channel	8 بت لكل قناة
+	16 Bits/Channel	16 بت لكل قناة
+	32 Bits/Channel	32 بت لكل قناة
+	Brightness/Contrast…	السطوع والتباين…
+	Levels…	المستويات…
+	Curves…	المنحنيات…
+	Exposure…	التعريض…
+	Hue/Saturation…	درجة اللون والتشبع…
+	Color Balance…	توازن الألوان…
+	Black & White…	أبيض وأسود…
+	Invert	عكس
+	Desaturate	إزالة التشبع
+	Auto Tone	درجات لونية تلقائية
+	Auto Contrast	تباين تلقائي
+	Auto Color	ألوان تلقائية
+	Image Size…	حجم الصورة…
+	Canvas Size…	حجم مساحة الرسم…
+	Flip Canvas Horizontal	قلب مساحة الرسم أفقيًا
+	Flip Canvas Vertical	قلب مساحة الرسم عموديًا
+	Crop	اقتصاص
+	Trim…	إزالة الحواف…
+	Reveal All	إظهار الكل
+	Duplicate…	تكرار…
+	Layer…	طبقة…
+	Group…	مجموعة…
+	Layer via Copy	طبقة بالنسخ
+	Layer via Cut	طبقة بالقص
+	Duplicate Layer…	تكرار الطبقة…
+	Hidden Layers	الطبقات المخفية
+	Rename Layer	إعادة تسمية الطبقة
+	Blending Options…	خيارات المزج…
+	Drop Shadow…	ظل خارجي…
+	Solid Color…	لون موحد…
+	Gradient…	تدرج لوني…
+	Pattern…	نقش…
+	Hide All	إخفاء الكل
+	Reveal Selection	إظهار التحديد
+	Hide Selection	إخفاء التحديد
+	From Transparency	من الشفافية
+	Apply	تطبيق
+	Enable Layer Mask	تفعيل قناع الطبقة
+	Link Layer Mask	ربط قناع الطبقة
+	Create Clipping Mask	إنشاء قناع قص
+	Convert to Smart Object	تحويل إلى عنصر ذكي
+	Edit Contents	تحرير المحتوى
+	All	الكل
+	Deselect	إلغاء التحديد
+	Reselect	إعادة التحديد
+	Inverse Selection	عكس التحديد
+	All Layers	كل الطبقات
+	Deselect Layers	إلغاء تحديد الطبقات
+	Color Range…	نطاق الألوان…
+	Subject	العنصر الرئيسي
+	Sky	السماء
+	Select and Mask…	التحديد والقناع…
+	Border…	إطار التحديد…
+	Smooth…	تنعيم…
+	Expand…	توسيع…
+	Contract…	تقليص…
+	Feather…	تليين الحواف…
+	Transform Selection	تحويل التحديد
+	Load Selection…	تحميل تحديد…
+	Save Selection…	حفظ التحديد…
+	Gaussian Blur…	تمويه غاوسي…
+	Zoom In	تكبير
+	Zoom Out	تصغير
+	Fit on Screen	ملاءمة للشاشة
+	Rulers	المساطر
+	Grid	شبكة
+	Guides	خطوط إرشاد
+	Layers	طبقات
+	Channels	قنوات
+	History	سجل التعديلات
+	Color	لون
+	Swatches	عينات الألوان
+	Paths	مسارات
+	Properties	خصائص
+	Brushes	فرش
+	Brush Settings	إعدادات الفرشاة
+
+# New Document dialog and its presets (new_doc_ui.rs, dialogs.rs).
+	New Document	مستند جديد
+	Create	إنشاء
+	Recent	الأخيرة
+	Saved	محفوظة
+	Photo	صور فوتوغرافية
+	Print	طباعة
+	Art & Illustration	الفن والرسم التوضيحي
+	Web	الويب
+	Mobile	الأجهزة المحمولة
+	Film & Video	الأفلام والفيديو
+	Default PhotoCraft Size	الحجم الافتراضي في PhotoCraft
+	Clipboard	الحافظة
+	Landscape, 6 x 4	أفقي، 6 x 4
+	Landscape, 7 x 5	أفقي، 7 x 5
+	Landscape, 10 x 8	أفقي، 10 x 8
+	Portrait, 4 x 6	عمودي، 4 x 6
+	Portrait, 5 x 7	عمودي، 5 x 7
+	Square, 5 x 5	مربع، 5 x 5
+	Square, 12 x 12	مربع، 12 x 12
+	Letter	ورق Letter
+	Legal	ورق Legal
+	Tabloid	ورق Tabloid
+	Poster	ملصق
+	Postcard	بطاقة بريدية
+	Comic Book	قصص مصورة
+	Web Most Common	مقاس الويب الأكثر شيوعًا
+	Web Minimum	الحد الأدنى لمقاس الويب
+	Web Large	مقاس ويب كبير
+	No saved presets yet.	لا توجد إعدادات مسبقة محفوظة بعد.
+	Save Preset…	حفظ إعداد مسبق…
+	Preset Name	اسم الإعداد المسبق
+	BLANK DOCUMENT PRESETS ({n})	إعدادات مسبقة لمستندات فارغة ({n})
+	PRESET DETAILS	تفاصيل الإعداد المسبق
+	Untitled-1	بلا عنوان-1
+	Width	العرض
+	Height	الارتفاع
+document	Orientation	اتجاه الصفحة
+	Portrait	عمودي
+	Landscape	أفقي
+	Resolution	الدقة
+	Pixels	بكسل
+	Inches	بوصة
+	Centimeters	سنتيمتر
+	Millimeters	مليمتر
+	Points	نقطة
+	Picas	بيكا
+	Pixels/Inch	بكسل لكل بوصة
+	Pixels/Centimeter	بكسل لكل سنتيمتر
+	Color Mode	نمط الألوان
+	8 bit	8 بت
+	16 bit	16 بت
+	32 bit (float)	32 بت (فاصلة عائمة)
+	Integer	عدد صحيح
+	Floating point	فاصلة عائمة
+	Background Contents	محتوى الخلفية
+	White	أبيض
+	Black	أسود
+	Background Color	لون الخلفية
+	Transparent	شفاف
+	Custom…	مخصص…
+	Custom	مخصص
+	Custom background color	لون خلفية مخصص
+
+# Preferences and common controls (prefs_ui.rs, dialogs.rs, generated preference labels).
+	OK	موافق
+	Cancel	إلغاء
+	Reset	إعادة ضبط
+	Reset Section	إعادة ضبط القسم
+	Restore Defaults	استعادة الإعدادات الافتراضية
+	General	عام
+	Interface	الواجهة
+	Tools	الأدوات
+	Options	الخيارات
+	Language	اللغة
+	Auto	تلقائي
+	Appearance	المظهر
+	Appearance Mode	نمط المظهر
+	Appearance Settings…	إعدادات المظهر…
+	Presentation	العرض والتنسيق
+	Sync with system	اتباع النظام
+	Dark	داكن
+	Light	فاتح
+	Theme	السمة
+	Dark Theme	السمة الداكنة
+	Light Theme	السمة الفاتحة
+	UI font size	حجم خط الواجهة
+	UI scale	مقياس الواجهة
+	Canvas color	لون مساحة الرسم
+	Canvas custom color	لون مخصص لمساحة الرسم
+	Canvas border	حد مساحة الرسم
+	Show tooltips	إظهار التلميحات
+	Show home recent files	إظهار الملفات الأخيرة في الشاشة الرئيسية
+	System title bar	شريط عنوان النظام
+	Auto Hide Notifications	إخفاء الإشعارات تلقائيًا
+	Notification Duration (seconds)	مدة الإشعارات (بالثواني)
+	Applies at next launch.	يسري عند التشغيل التالي.
+	Search settings…	البحث في الإعدادات…
+	No matching settings	لا توجد إعدادات مطابقة
+	Cancelled {label}	تم إلغاء {label}
+	{set} (modified)	{set} (معدّل)
+	These settings aren't available in PhotoCraft yet.	هذه الإعدادات غير متاحة في PhotoCraft بعد.
+	Search	بحث
+	Keyboard Shortcuts	اختصارات لوحة المفاتيح
+	Menus	القوائم
+	Toolbar	شريط الأدوات
+	Name:	الاسم:
+	Rename	إعادة تسمية
+	Opacity	عتامة
+	Fill	تعبئة
+	Selection	تحديد
+	Canvas	مساحة الرسم
+
+# Common tool names (state.rs: Tool::label).
+	Move Tool	أداة التحريك
+	Artboard Tool	أداة لوحة التصميم
+	Rectangular Marquee Tool	أداة التحديد المستطيل
+	Elliptical Marquee Tool	أداة التحديد البيضاوي
+	Single Row Marquee Tool	أداة تحديد صف واحد
+	Single Column Marquee Tool	أداة تحديد عمود واحد
+	Brush Tool	أداة الفرشاة
+	Pencil Tool	أداة القلم الرصاص
+	Mixer Brush Tool	أداة فرشاة المزج
+	Color Replacement Tool	أداة استبدال اللون
+	Eraser Tool	أداة الممحاة
+	Background Eraser Tool	أداة ممحاة الخلفية
+	Magic Eraser Tool	أداة الممحاة السحرية
+	Eyedropper Tool	أداة القطارة
+	Color Sampler Tool	أداة أخذ عينات الألوان
+	Ruler Tool	أداة المسطرة
+	Note Tool	أداة الملاحظات
+	Count Tool	أداة العد
+	Lasso Tool	أداة التحديد الحر
+	Polygonal Lasso Tool	أداة التحديد الحر المضلع
+	Magnetic Lasso Tool	أداة التحديد الحر المغناطيسي
+	Magic Wand Tool	أداة العصا السحرية
+	Crop Tool	أداة الاقتصاص
+	Perspective Crop Tool	أداة اقتصاص المنظور
+	Frame Tool	أداة الإطار
+	Slice Tool	أداة الشرائح
+	Slice Select Tool	أداة تحديد الشرائح
+	Gradient Tool	أداة التدرج اللوني
+	Paint Bucket Tool	أداة دلو التعبئة
+	Horizontal Type Tool	أداة النص الأفقي
+	Vertical Type Tool	أداة النص العمودي
+	Horizontal Type Mask Tool	أداة قناع النص الأفقي
+	Vertical Type Mask Tool	أداة قناع النص العمودي
+	Hand Tool	أداة اليد
+	Rotate View Tool	أداة تدوير العرض
+	Zoom Tool	أداة التكبير والتصغير
+	Remove Tool	أداة الإزالة
+	Spot Healing Brush Tool	أداة فرشاة إصلاح البقع
+	Healing Brush Tool	أداة فرشاة الإصلاح
+	Patch Tool	أداة الرقعة
+	Content-Aware Move Tool	أداة التحريك بحسب المحتوى
+	Red Eye Tool	أداة إزالة احمرار العين
+	Clone Stamp Tool	أداة ختم الاستنساخ
+	Pattern Stamp Tool	أداة ختم النقش
+	History Brush Tool	أداة فرشاة السجل
+	Blur Tool	أداة التمويه
+	Sharpen Tool	أداة زيادة الحدة
+	Smudge Tool	أداة التلطيخ
+	Dodge Tool	أداة التفتيح
+	Burn Tool	أداة التغميق
+	Sponge Tool	أداة الإسفنجة
+	Quick Selection Tool	أداة التحديد السريع
+	Object Selection Tool	أداة تحديد العناصر
+	Pen Tool	أداة القلم
+	Freeform Pen Tool	أداة القلم الحر
+	Curvature Pen Tool	أداة قلم المنحنيات
+	Add Anchor Point Tool	أداة إضافة نقطة ارتكاز
+	Delete Anchor Point Tool	أداة حذف نقطة ارتكاز
+	Convert Point Tool	أداة تحويل النقاط
+	Path Selection Tool	أداة تحديد المسار
+	Direct Selection Tool	أداة التحديد المباشر
+	Rectangle Tool	أداة المستطيل
+	Ellipse Tool	أداة الشكل البيضاوي
+	Triangle Tool	أداة المثلث
+	Polygon Tool	أداة المضلع
+	Line Tool	أداة الخط
+	Custom Shape Tool	أداة الشكل المخصص
