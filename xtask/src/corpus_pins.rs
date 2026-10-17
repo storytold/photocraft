@@ -243,24 +243,42 @@ pub const AFFINITY: PinnedCorpus = PinnedCorpus {
 pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF, &EXR, &AFFINITY];
 
 /// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
-/// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
-/// `photocraft-raw` supports, plus the packed-ORF known-unsupported oracle. Fetched as single
+/// domain / CC0 by their photographers; see ATTRIBUTION.md). Representative supported decode
+/// paths, plus the compressed-ORF known-unsupported oracle. Fetched as single
 /// files (the server 301-redirects `/data/` to `/download/`), verified against
 /// `xtask/pixls.sha256`.
-pub const PIXLS_BASE: &str = "https://raw.pixls.us/data/";
+pub const PIXLS_BASE: &str = "https://raw.pixls.us/";
 /// (url path, file name in `corpus/pixls`)
 pub const PIXLS_FILES: &[(&str, &str)] = &[
-    ("Canon/PowerShot%20SX50%20HS/IMG_4059.CR2", "IMG_4059.CR2"),
-    ("Canon/PowerShot%20SX50%20HS/CRW_4061.DNG", "CRW_4061.DNG"),
-    ("Nikon/D3/JD1_8203.NEF", "JD1_8203.NEF"),
+    ("data/Canon/PowerShot%20SX50%20HS/IMG_4059.CR2", "IMG_4059.CR2"),
+    ("data/Canon/PowerShot%20SX50%20HS/CRW_4061.DNG", "CRW_4061.DNG"),
+    ("data/Nikon/D3/JD1_8203.NEF", "JD1_8203.NEF"),
     // Modern lossy NEF curve: the encoded range is two bits smaller than the sensor ADUs.
-    ("Nikon/Z%206/DSC_0751.NEF", "DSC_0751.NEF"),
-    ("Nikon/Z%206/DSC_0754.NEF", "DSC_0754.NEF"),
+    ("data/Nikon/Z%206/DSC_0751.NEF", "DSC_0751.NEF"),
+    ("data/Nikon/Z%206/DSC_0754.NEF", "DSC_0754.NEF"),
     // Uncompressed packed NEF selected by maker-note mode, despite TIFF Compression 34713.
-    ("Nikon/Z%206/DSC_0750.NEF", "DSC_0750.NEF"),
-    ("Nikon/Z%206/DSC_0753.NEF", "DSC_0753.NEF"),
-    ("Sony/DSC-RX0/DSC00009.ARW", "DSC00009.ARW"),
-    ("Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
-    ("Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
-    ("Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
+    ("data/Nikon/Z%206/DSC_0750.NEF", "DSC_0750.NEF"),
+    ("data/Nikon/Z%206/DSC_0753.NEF", "DSC_0753.NEF"),
+    ("data/Sony/DSC-RX0/DSC00009.ARW", "DSC00009.ARW"),
+    ("data/Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
+    ("data/Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
+    ("data/Olympus/E-300/P1252148.ORF", "P1252148.ORF"),
+    ("data/Olympus/E-500/_1010010.ORF", "_1010010.ORF"),
+    ("data/Olympus/E-330/P3307182.ORF", "P3307182.ORF"),
+    ("data/Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
+    ("data/Olympus/E-M5%20Mark%20II/CB252215.ORF", "CB252215.ORF"),
+    ("data/Olympus/PEN-F/PenFHiRes.orf", "PenFHiRes.orf"),
+    (
+        "data/Olympus/C5060WZ/C5060WZ_5_7_22_8mm__27_110mm_equiv__F_2_8_8P4141018_cabo_de_gata.ORF",
+        "C5060WZ_5_7_22_8mm__27_110mm_equiv__F_2_8_8P4141018_cabo_de_gata.ORF",
+    ),
+    ("data/Olympus/C7070WZ/PC270085.ORF", "PC270085.ORF"),
+    ("data/Olympus/SP510UZ/PA210583.ORF", "PA210583.ORF"),
+    // SP550UZ: use its published catalog URL; the corresponding data/ mirror returns 404.
+    ("getfile.php/8609/nice/Olympus%20-%20SP550UZ%20-%2012bit%20%284%3A3%29.ORF", "PA030017.ORF"),
+    ("data/Olympus/SP565UZ/2019-09-26--10.03.53001.ORF", "2019-09-26--10.03.53001.ORF"),
+    ("data/Olympus/SP570UZ/P5110102.ORF", "P5110102.ORF"),
+    ("data/Olympus/XZ-2/p7166537.orf", "p7166537.orf"),
+    ("data/Olympus/XZ-10/P1240016.ORF", "P1240016.ORF"),
+    ("data/Olympus/SH-2/PC260009.ORF", "PC260009.ORF"),
 ];

@@ -1321,6 +1321,98 @@ fn shorts(v: &[u16]) -> Vec<u8> {
 /// maker note with ImageProcessing levels (black 64, WB 2.0 / 1.5, crop of a
 /// 2-pixel border) and CameraSettings pointing at a tiny preview JPEG.
 pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    orf_with_strip(width, height, data.iter().flat_map(|v| (v << 4).to_le_bytes()).collect(), 16)
+}
+
+/// Uncompressed ORF with ten 12-bit samples per 16-byte block and a zero final byte.
+/// Independently encoded from the byte-layout description in storytold/lightcraft#651.
+pub fn orf_padded12(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    assert_eq!(width % 10, 0);
+    assert_eq!(data.len(), width * height);
+    let mut strip = Vec::new();
+    for samples in data.as_chunks::<10>().0 {
+        let mut block = [0u8; 16];
+        for (sample, &value) in samples.iter().enumerate() {
+            assert!(value < 4096);
+            for bit in 0..12 {
+                let at = sample * 12 + bit;
+                block[at / 8] |= (((value >> bit) & 1) as u8) << (at % 8);
+            }
+        }
+        strip.extend_from_slice(&block);
+    }
+    orf_with_strip(width, height, strip, 12)
+}
+
+/// Exact 12-bit ORF: MSB-first samples stored in little-endian 32-bit words.
+/// This bit-by-bit encoder follows the layout measured on the CC0 XZ-2 file.
+pub fn orf_word_packed12(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    assert_eq!(width % 8, 0);
+    assert_eq!(data.len(), width * height);
+    let mut strip = vec![0u8; data.len() * 3 / 2];
+    for (sample, &value) in data.iter().enumerate() {
+        assert!(value < 4096);
+        for bit in 0..12 {
+            let at = sample * 12 + bit;
+            let byte = at / 8;
+            let stored_byte = (byte / 4) * 4 + 3 - byte % 4;
+            strip[stored_byte] |= (((value >> (11 - bit)) & 1) as u8) << (7 - at % 8);
+        }
+    }
+    orf_with_strip(width, height, strip, 12)
+}
+
+/// Two-field ORF from the public layout description in storytold/lightcraft#600.
+/// Rows are MSB-first packed, all even rows then odd rows, with a 20-byte gap
+/// between fields and one undeclared final row. One strip per row exercises
+/// strip tables longer than the RowsPerStrip grid.
+pub fn orf_two_field12(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    assert_eq!(width % 8, 0);
+    assert_eq!(height % 2, 1);
+    assert_eq!(data.len(), width * height);
+    let row_bytes = width * 3 / 2;
+    let mut t = TiffBuilder::default();
+    let mut strips = Vec::new();
+    let order: Vec<usize> = (0..height).step_by(2).chain((1..height).step_by(2)).collect();
+    for (stored_y, &y) in order.iter().enumerate() {
+        let mut bytes = vec![0u8; row_bytes];
+        for (x, &value) in data[y * width..(y + 1) * width].iter().enumerate() {
+            assert!(value < 4096);
+            for bit in 0..12 {
+                let at = x * 12 + bit;
+                bytes[at / 8] |= (((value >> (11 - bit)) & 1) as u8) << (7 - at % 8);
+            }
+        }
+        if stored_y + 1 == height.div_ceil(2) {
+            bytes.extend_from_slice(&[0xa5; 20]);
+        }
+        if stored_y + 1 == height {
+            bytes.resize(bytes.len() + row_bytes, 0);
+        }
+        strips.push(t.blob(bytes));
+    }
+    let mut note = b"OLYMP\0\x01\0".to_vec();
+    // The second values are unrelated metadata and must not be used as divisors.
+    note.extend_from_slice(&relative_ifd(&[(0x1017, 3, 2, shorts(&[512, 62])), (0x1018, 3, 2, shorts(&[384, 64]))], 8));
+    let exif = t.ifd(vec![(37500, Val::Undefined(note)), (41730, Val::Undefined(vec![2, 0, 2, 0, 2, 1, 1, 0]))]);
+    let ifd = t.ifd(vec![
+        (256, Val::Long(vec![width as u32])),
+        (257, Val::Long(vec![height as u32])),
+        (258, Val::Short(vec![12])),
+        (259, Val::Short(vec![1])),
+        (273, Val::Blobs(strips)),
+        (277, Val::Short(vec![1])),
+        (278, Val::Long(vec![2])),
+        (279, Val::Long(vec![row_bytes as u32; height])),
+        (34665, Val::Ifds(vec![exif])),
+    ]);
+    t.chain = vec![ifd];
+    let mut bytes = t.build();
+    bytes[2..4].copy_from_slice(b"RO");
+    bytes
+}
+
+fn orf_with_strip(width: usize, height: usize, data: Vec<u8>, bits: u16) -> Vec<u8> {
     let ip = relative_ifd(
         &[
             (0x0100, 3, 2, shorts(&[512, 384])),
@@ -1354,12 +1446,13 @@ pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
     note.extend_from_slice(&cs);
     note.extend_from_slice(&jpeg);
     let mut t = TiffBuilder::default();
-    let strip = t.blob(data.iter().flat_map(|v| (v << 4).to_le_bytes()).collect());
+    let byte_count = data.len() as u32;
+    let strip = t.blob(data);
     let exif = t.ifd(vec![(37500, Val::Undefined(note)), (41730, Val::Undefined(vec![2, 0, 2, 0, 1, 0, 2, 1]))]);
     let ifd0 = t.ifd(vec![
         (256, Val::Long(vec![width as u32])),
         (257, Val::Long(vec![height as u32])),
-        (258, Val::Short(vec![16])),
+        (258, Val::Short(vec![bits])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![1])),
         (271, Val::Ascii("OLYMPUS IMAGING CORP.".into())),
@@ -1367,7 +1460,7 @@ pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
         (273, Val::Blobs(vec![strip])),
         (277, Val::Short(vec![1])),
         (278, Val::Long(vec![height as u32])),
-        (279, Val::Long(vec![(data.len() * 2) as u32])),
+        (279, Val::Long(vec![byte_count])),
         (34665, Val::Ifds(vec![exif])),
     ]);
     t.chain = vec![ifd0];
