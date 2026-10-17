@@ -915,3 +915,65 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
+
+/// #6068: with one colour channel targeted, the Move tool moves that channel of the active
+/// layer; the other channels, the transparency and the layer's position stay. Where the channel
+/// moved away from takes the background colour's value for it, as Clear does (#2720).
+#[test]
+fn move_with_a_colour_channel_targeted_moves_only_that_channel() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    rect(&mut s, 0, 0, 4, 4, "replace");
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let gray = px(&s, 20, 10);
+    let red_block = px(&s, 1, 1);
+    let bounds = |s: &Session| {
+        let d = s.active().unwrap();
+        d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+    };
+    let before_bounds = bounds(&s);
+    let steps = s.active().unwrap().history.entries().len();
+    s.tools.background = [0.0, 0.0, 0.0, 1.0];
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+    // The block's red moved to (11, 6); its green and blue stayed where they were.
+    assert_eq!(px(&s, 11, 6), vec![red_block[0], gray[1], gray[2], 1.0]);
+    // Where the red came from it is the background colour's red (black: 0); green and blue stay.
+    assert_eq!(px(&s, 1, 1), vec![0.0, red_block[1], red_block[2], 1.0]);
+    // Elsewhere the red is the gray's, moved along from (10, 5).
+    assert_eq!(px(&s, 20, 10), gray);
+    assert_eq!(bounds(&s), before_bounds, "the layer itself does not move");
+    let entries = s.active().unwrap().history.entries();
+    assert_eq!(entries.len(), steps + 1);
+    assert!(entries.last().unwrap().to_string().contains("Move"), "{entries:?}");
+    // One undo puts the channel back.
+    s.undo();
+    assert_eq!(px(&s, 1, 1), red_block);
+    assert_eq!(px(&s, 11, 6), gray);
+    // With the composite targeted the Move tool moves the layer again.
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+    assert_eq!(px(&s, 11, 6), red_block);
+    assert_ne!(bounds(&s), before_bounds);
+}
+
+/// #6068: a channel can't move on a layer without pixels, or on a position-locked layer; the
+/// document stays as it was.
+#[test]
+fn move_with_a_colour_channel_targeted_refuses_layers_it_cannot_move() {
+    let mut s = session();
+    // The Background is position-locked.
+    s.execute("channel.target", json!({"channel": "green"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let err = s.execute("layer.translate", json!({"dx": 3, "dy": 0})).unwrap_err().to_string();
+    assert!(err.contains("position-locked"), "{err}");
+    assert_eq!(*s.active().unwrap().doc, *before);
+    // A fill layer has no pixels of its own.
+    s.execute("layer.newFillLayer.solidColor", json!({"color": "#336699"})).unwrap();
+    s.execute("channel.target", json!({"channel": "green"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("layer.translate", json!({"dx": 3, "dy": 0})).is_err());
+    assert_eq!(*s.active().unwrap().doc, *before);
+}

@@ -364,6 +364,13 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
+    // One colour channel targeted in the Channels panel (#6068): the Move tool moves that channel
+    // of the active layer, not the layer. A `"target"` param (the mask) still wins.
+    if p.get("target").is_none()
+        && let Some(k) = crate::channel_cmds::targeted_color(s)
+    {
+        return translate_color_channel(s, p, k, dx, dy);
+    }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => selected(s),
@@ -399,6 +406,28 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(ids)
     })?;
     note_damage(s, &before, &ids);
+    Ok(Value::Null)
+}
+
+/// `layer.translate` with colour channel `k` targeted: [`crate::channel_cmds::move_color_channel`]
+/// on the named or active layer, one "Move" step. Its linked layers stay put: a channel is the
+/// active layer's alone.
+fn translate_color_channel(s: &mut Session, p: &Value, k: usize, dx: i32, dy: i32) -> Result<Value> {
+    let id = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => id,
+        None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
+    };
+    let background = s.tools.background;
+    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    s.edit("Move", |doc, _| {
+        let locks = doc.effective_locks(id);
+        if locks.position || locks.all {
+            let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
+            return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
+        }
+        crate::channel_cmds::move_color_channel(doc, id, k, dx, dy, background)
+    })?;
+    note_damage(s, &before, &[id]);
     Ok(Value::Null)
 }
 

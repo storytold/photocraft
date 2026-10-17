@@ -115,18 +115,29 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         return None;
     };
     let mask_target = app.layer_mask_targeted();
+    let background = app.session.tools.background;
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
+    // One colour channel targeted (#6068): the drag moves that channel of the active layer, as
+    // `layer.translate` will on release, and the layer itself stays.
+    let channel = match st.channel_view.target {
+        photocraft_engine::channel_cmds::ChannelTarget::Color(k) if !mask_target => st.active_layer.map(|id| (id, k)),
+        _ => None,
+    };
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
-        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
+        let ids = match channel {
+            Some((id, _)) => vec![id],
+            None => photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers()),
+        };
         if ids.is_empty() {
             return None;
         }
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
-        let moving = with_descendants(&doc, &ids);
+        // A channel move leaves the layer (and its Layer Edges outline) where it is.
+        let moving = if channel.is_some() { Vec::new() } else { with_descendants(&doc, &ids) };
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
         app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
     }
@@ -136,7 +147,14 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
-        match photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target) {
+        let moved = match channel {
+            Some((id, k)) => {
+                let mut d = (*doc).clone();
+                photocraft_engine::channel_cmds::move_color_channel(&mut d, id, k, offset.0, offset.1, background).map(|()| d)
+            }
+            None => photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target),
+        };
+        match moved {
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
@@ -370,6 +388,37 @@ mod tests {
             let d = &app.session.active().unwrap().doc;
             assert_eq!(layer_moved(d), !alone, "commit, linked {linked} mask target {mask_target}");
         }
+    }
+
+    /// #6068: dragging with the Red channel targeted moves the red of the active layer alone, in
+    /// the live preview and on release; the layer and its green and blue stay where they are.
+    #[test]
+    fn dragging_with_a_colour_channel_targeted_moves_that_channel_alone() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+        app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        app.session.execute("select.deselect", json!({})).unwrap();
+        app.session.execute("channel.target", json!({"channel": "red"})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 16.0, pressure: 1.0 }, m);
+        let shown = super::display_doc(&mut app, 0).unwrap().0;
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let at = |d: &photocraft_doc::Document, x, y| d.layer(id).and_then(|l| l.surface()).map(|s| s.pixel(x, y)).unwrap();
+        // The white square's red is now at x 28..44; its green and blue stayed at x 8..24.
+        assert_eq!(at(&shown, 30, 16), vec![1.0, 0.0, 0.0, 1.0], "preview: red moved in");
+        assert_eq!(at(&shown, 12, 16)[1..], [1.0, 1.0, 1.0], "preview: green, blue and the layer stay");
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 16.0 }, m);
+        let d = &app.session.active().unwrap().doc;
+        assert_eq!(at(d, 30, 16), vec![1.0, 0.0, 0.0, 1.0], "commit: red moved in");
+        assert_eq!(at(d, 12, 16)[1..], [1.0, 1.0, 1.0], "commit: green, blue and the layer stay");
     }
 
     /// Mid-drag on a painted layer: is the layer shown at the pointer?
