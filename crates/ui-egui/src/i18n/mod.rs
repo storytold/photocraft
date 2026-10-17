@@ -891,6 +891,17 @@ mod tests {
         assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 1, 2, 2, 1]);
     }
 
+    /// Counted status messages read in Indonesian instead of falling back to English (they were
+    /// missing from the catalog).
+    #[test]
+    fn indonesian_counted_messages_are_translated() {
+        let lang = Lang::from_code("id").expect("id registered");
+        assert_eq!(trn(lang, 3, "Played {n} step", "Played {n} steps"), "3 langkah diputar");
+        let brushes = trn(lang, 2, "Imported {n} brush from {group}", "Imported {n} brushes from {group}");
+        assert_eq!(fmt(&brushes, &[("group", "Cat Air")]), "2 kuas diimpor dari Cat Air");
+        assert_eq!(trn(lang, 5, "{n} slice", "{n} slices"), "5 slice");
+    }
+
     #[test]
     fn czech_plural_rule() {
         let forms: Vec<usize> = [0, 1, 2, 3, 4, 5, 11, 12, 21, 22, 100, u64::MAX].into_iter().map(plural_cs).collect();
