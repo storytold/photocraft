@@ -69,7 +69,7 @@ fn gradient(p: &Value) -> Gradient {
         stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
-        scale: f(p, "scale", 100.0) / 100.0,
+        scale: (f(p, "scale", 100.0) / 100.0).clamp(0.1, 1.5),
         reverse: b(p, "reverse", false),
         ..Gradient::default()
     }
@@ -582,7 +582,7 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
         g.angle = x;
     }
     if let Some(x) = f_of(p, "scale") {
-        g.scale = (x / 100.0).clamp(0.01, 10.0);
+        g.scale = (x / 100.0).clamp(0.1, 1.5);
     }
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
@@ -1188,6 +1188,32 @@ mod tests {
         assert_eq!(effects(&s).len(), 2, "adds a second instance");
         s.execute("layer.layerStyle.dropShadow", json!({"blend": "normal", "distance": 12})).unwrap();
         assert!(matches!(&effects(&s)[2], Effect::DropShadow(sh) if sh.common.blend == BlendMode::Normal && sh.distance == 12.0));
+    }
+
+    /// The gradient overlay and the gradient stroke keep their scale in Photoshop's 10-150 %.
+    #[test]
+    fn gradient_overlay_and_stroke_scale_stay_in_range() {
+        let scale = |s: &Session| match &effects(s)[0] {
+            Effect::GradientOverlay { gradient, .. } => gradient.scale,
+            Effect::Stroke(st) => match &st.paint {
+                FxPaint::Gradient(g) => g.scale,
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        };
+        for (cmd, p, want) in [
+            ("gradientOverlay", json!({"scale": 1000}), 1.5),
+            ("gradientOverlay", json!({"scale": 1}), 0.1),
+            ("gradientOverlay", json!({"scale": 1e39}), 1.5),
+            ("gradientOverlay", json!({"scale": 80}), 0.8),
+            ("stroke", json!({"from": "#000000", "to": "#ffffff", "scale": -50}), 0.1),
+            ("stroke", json!({"from": "#000000", "to": "#ffffff", "scale": 0}), 0.1),
+            ("stroke", json!({"from": "#000000", "to": "#ffffff", "scale": 400}), 1.5),
+        ] {
+            let mut s = session();
+            s.execute(&format!("layer.layerStyle.{cmd}"), p.clone()).unwrap();
+            assert!((scale(&s) - want).abs() < 1e-6, "{cmd} {p}: {}", scale(&s));
+        }
     }
 
     #[test]
