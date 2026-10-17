@@ -16,6 +16,8 @@
 //!   selection tools do their own ⌘ handling in `canvas` (⌘ inside the selection cuts the
 //!   selected pixels, outside it moves the layer, #896), and the Hand, Zoom, Crop, Slice, Path
 //!   Selection, shape, Pen and Type tools keep ⌘ for themselves.
+//! - With the Hand tool, ⌘ (Ctrl off the Mac) held is Zoom In and ⌥ (Alt) Zoom Out, ⌘⌥ too
+//!   ([`hand_zoom_held`], #6434).
 //! - `~` (the backtick key) with the Brush or Pencil: a stroke started while it is held erases,
 //!   with that tool's own brush ([`erase_held`], #3439).
 //!
@@ -118,6 +120,23 @@ fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
     i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
 }
 
+/// The Hand tool's own temporary zoom (#6434): ⌘ held is Zoom In, ⌥ (with or without ⌘) Zoom Out,
+/// as in Photoshop. Not while a Free Transform keeps ⌘ for its handles, and not from the middle of
+/// a Hand drag: a modifier pressed while panning must not stop the pan.
+fn hand_zoom_held(app: &PhotocraftApp, i: &InputState) -> Option<Temporary> {
+    let panning = i.pointer.primary_down() && !i.pointer.primary_pressed();
+    if app.ui.tool != Tool::Hand || app.ui.transform.is_some() || panning {
+        return None;
+    }
+    if i.modifiers.alt {
+        Some(Temporary::ZoomOut)
+    } else if i.modifiers.command {
+        Some(Temporary::ZoomIn)
+    } else {
+        None
+    }
+}
+
 /// Is `id` a held temporary tool rather than a command?
 pub fn is_temporary(id: &str) -> bool {
     photocraft_engine::prefs::TEMPORARY_TOOLS.iter().any(|t| t.0 == id)
@@ -159,6 +178,7 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
     };
     let mut best: Option<(u8, Temporary, KeyboardShortcut)> = None;
     let mut cmd_move = false;
+    let mut hand_zoom = None;
     let mut alt = false;
     ctx.input(|i| {
         for t in Temporary::BOUND {
@@ -170,13 +190,14 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
             }
         }
         cmd_move = cmd_move_held(app, i);
+        hand_zoom = hand_zoom_held(app, i);
         alt = i.modifiers.alt;
     });
     // ⌥ turns a held Zoom In around, as it does the Zoom tool: ⌘⌥Space zooms out (and wins the
     // tie with ⌥Space), unless ⌥ is part of the Zoom In key itself.
     let held = best.map(|(_, t, sc)| if t == Temporary::ZoomIn && alt && !sc.modifiers.alt { Temporary::ZoomOut } else { t });
-    // A bound key (⌘Space is Zoom In) wins over ⌘ alone.
-    held.or(cmd_move.then_some(Temporary::Move))
+    // A bound key (⌘Space is Zoom In) wins over ⌘ or ⌥ alone.
+    held.or(cmd_move.then_some(Temporary::Move)).or(hand_zoom)
 }
 
 /// The binding id of the Brush and Pencil erase key (`prefs::TEMPORARY_TOOLS`).
