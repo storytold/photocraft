@@ -16,8 +16,15 @@ const BAND_BYTES: usize = 32 << 20;
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_flat_with(name, bytes, &photocraft_raster::Interrupt::NONE)
+}
+
+pub(crate) fn import_flat_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
+    if format == Some(Format::WebP) && codecs::webp_animation_info(bytes)?.is_some() {
+        return crate::webp_animation::import_document(name, bytes, ctl);
+    }
     if format == Some(Format::Tiff) {
         return import_tiff_page(name, bytes, None);
     }
@@ -525,10 +532,23 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
 /// [`export_flat`] reporting a coarse step through `ctl` once the composite is rendered; the
 /// encoder does the rest (#3389).
 pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    use photocraft_cms::{Builtin, Intent};
+    if format == Format::WebP && doc.file_encoding.webp_animation_loops.is_some() {
+        return crate::webp_animation::export_document(doc, opts, ctl);
+    }
     if let Some(r) = export_mode_specific(doc, format, opts)? {
         return Ok(r);
     }
+    let (img, warnings) = prepare_flat_image(doc, format, opts, ctl)?;
+    encode_image(&img, format, opts, warnings)
+}
+
+pub(crate) fn prepare_flat_image(
+    doc: &Document,
+    format: Format,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(Image, Vec<String>), IoError> {
+    use photocraft_cms::{Builtin, Intent};
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
@@ -574,7 +594,20 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
-    encode_image(&img, format, opts, warnings)
+    Ok((img, warnings))
+}
+
+/// Normalize a rendered animation frame to WebP's RGB8 storage before retaining it. Gray
+/// pixels first enter sGray through their actual profile, then expand into sRGB gray values.
+pub(crate) fn webp_frame_pixels(mut img: Image) -> Result<Image, IoError> {
+    if matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA) {
+        if let Some(gray) = convert_gray(&img, photocraft_cms::Builtin::SGray.profile(), CSample::U8)? {
+            img = gray;
+        }
+        img = img.convert(ChannelLayout::Rgba, CSample::U8);
+        img.icc = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
+    }
+    Ok(img.convert(ChannelLayout::Rgba, CSample::U8))
 }
 
 /// What Targa Options offers first, as Photoshop does: 32 bits per pixel when the document has an

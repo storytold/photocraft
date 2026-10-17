@@ -216,6 +216,9 @@ fn rasterize(s: &mut Session, _p: &Value) -> Result<Value> {
 /// Frames loaded from a file or an image sequence.
 struct Footage {
     frames: Vec<Surface>,
+    /// Exact WebP frame durations for naming editable frame layers. Other footage keeps its
+    /// existing names and timing policy.
+    webp_delays: Vec<Option<u32>>,
     /// The frame rate the footage itself implies (a single animated GIF's delays); `None` for
     /// stills and sequences, which carry none.
     fps: Option<f32>,
@@ -268,13 +271,27 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
     }
     let mut frames = Vec::with_capacity(files.len());
     let mut delays = Vec::new();
+    let mut webp_delays = Vec::new();
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
+        if photocraft_codecs::detect(&bytes) == Some(photocraft_codecs::Format::WebP)
+            && photocraft_codecs::webp_animation_info(&bytes).map_err(|e| EngineError::Other(e.to_string()))?.is_some()
+        {
+            photocraft_io::import_webp_frames(&name, &bytes, &mut |doc, delay_ms| {
+                frames.push(crate::file_cmds::flattened(&doc, fmt));
+                delays.push(delay_ms);
+                webp_delays.push(Some(delay_ms));
+                Ok(())
+            })
+            .map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
+            continue;
+        }
         if photocraft_codecs::detect(&bytes) == Some(photocraft_codecs::Format::Gif) {
             photocraft_io::import_gif_frames(&name, &bytes, &mut |doc, delay_ms| {
                 frames.push(crate::file_cmds::flattened(&doc, fmt));
                 delays.push(delay_ms);
+                webp_delays.push(None);
                 Ok(())
             })
             .map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
@@ -286,10 +303,11 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
             photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
         }
         frames.push(crate::file_cmds::flattened(&doc, fmt));
+        webp_delays.push(None);
     }
     // Only a lone GIF says how fast it plays; a sequence mixing files has no single rate.
     let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
-    Ok(Footage { frames, fps })
+    Ok(Footage { frames, fps, webp_delays })
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
@@ -299,7 +317,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.newVideoLayerFromFile".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let Footage { frames, fps: footage_fps } = load_frames(&path, fmt)?;
+    let Footage { frames, fps: footage_fps, .. } = load_frames(&path, fmt)?;
     // An explicit `fps` wins, then the rate the footage implies, then 30.
     let fps = p.get("fps").and_then(Value::as_f64).map(|f| f as f32).or(footage_fps).unwrap_or(30.0);
     let n = frames.len();
@@ -381,18 +399,27 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "file.import.videoFramesToLayers".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let frames = load_frames(&path, fmt)?.frames;
+    let Footage { frames, webp_delays, .. } = load_frames(&path, fmt)?;
     let n = frames.len();
     s.edit("Video Frames to Layers", |doc, active| {
         let mut above = *active;
+        let mut first = None;
         for (i, f) in frames.into_iter().enumerate() {
-            let mut l = Layer::raster(format!("Frame {}", i + 1), fmt);
+            let delay = webp_delays.get(i).copied().flatten();
+            let name = delay.map_or_else(|| format!("Frame {}", i + 1), |ms| format!("Frame{} ({ms} ms)", i + 1));
+            let mut l = Layer::raster(name, fmt);
+            if delay.is_some() {
+                l.visible = first.is_none();
+            }
             if let LayerContent::Raster(surf) = &mut l.content {
                 *surf = f;
             }
             above = Some(doc.insert_above(above, l));
+            if first.is_none() {
+                first = above;
+            }
         }
-        *active = above;
+        *active = if webp_delays.iter().any(Option::is_some) { first } else { above };
         Ok(())
     })?;
     Ok(json!({"layers": n}))

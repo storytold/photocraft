@@ -22,8 +22,8 @@ pub const MAX_GIF_FRAMES: usize = 100_000;
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimationFrame {
     pub image: Image,
-    /// On-screen time in milliseconds. GIF counts in hundredths of a second, so this is a
-    /// multiple of 10 (0 when the file gives none).
+    /// On-screen time in milliseconds (0 when the file gives none). GIF delays are multiples
+    /// of 10; WebP durations have millisecond precision.
     pub delay_ms: u32,
 }
 

@@ -256,7 +256,7 @@ impl DocState {
     }
 
     pub fn new(doc: Document, path: Option<String>) -> Self {
-        let active_layer = doc.top_layer();
+        let active_layer = if doc.file_encoding.webp_animation_loops.is_some() { doc.layers.first().map(|l| l.id) } else { doc.top_layer() };
         let mut history = History::default();
         history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
         Self {

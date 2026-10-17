@@ -128,8 +128,8 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   in an `ALPH` chunk and ICC/EXIF/XMP in their own chunks of the extended (`VP8X`) container. The
   encoder makes no rate-distortion decisions yet, and a side longer than 16383 px (the VP8 frame
   header's limit) is refused with `CodecError::Encode`. We read both lossy and lossless files.
-* **Animation and multi-page files** (APNG, animated GIF/WebP, multi-page TIFF): only the first
-  frame or page is decoded, and a single frame is written. `FormatCaps::animation` marks
+* **Animation and multi-page files** (APNG, animated GIF/WebP, multi-page TIFF): the ordinary
+  `decode` and `encode` APIs operate on one frame or page. `FormatCaps::animation` marks
   containers that can hold more frames. The decoded image then carries a
   `DecodeWarning::MoreFrames` / `MorePages` in `Image::warnings`, with the total when the file
   states it (frames and TIFF directories are counted without decoding them; reduced-resolution
@@ -138,6 +138,13 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   from `decode_gif_frames`: each frame composited onto the logical screen with the disposal
   methods applied, as RGBA8 with its delay in milliseconds, within `Limits` and
   `MAX_GIF_FRAMES`. The video-layer commands use it (`photocraft_io::import_gif_frames`).
+  `decode_webp_frames` returns a complete loop of composited RGBA8 frames with exact millisecond
+  delays and `loop_count` (`None` for a still, `Some(0)` for infinite looping). It applies frame
+  offsets, blending, disposal and EXIF orientation, and rejects incomplete animations. Retained
+  pixels/metadata plus decoder-buffer headroom must fit `Limits::max_alloc`; frame count is capped
+  by `MAX_WEBP_FRAMES` (100,000). `encode_webp_animation` writes full-canvas replacement frames,
+  using the existing lossless/lossy settings and metadata policy, without delta-frame optimization.
+  PhotoCraft I/O opens animated WebP as editable layers and writes them back as an animation.
 * **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
   `caps.exif = false` for TIFF, and a warning is raised.
 * **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and

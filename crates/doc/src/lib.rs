@@ -932,6 +932,10 @@ pub struct FileEncoding {
     /// Lossy WebP quality.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webp_quality: Option<u8>,
+    /// Some marks an editable WebP frame stack; zero loops forever. Frame order is the
+    /// layer order and durations are the trailing `(N ms)` in each frame layer's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webp_animation_loops: Option<u16>,
 }
 
 impl FileEncoding {

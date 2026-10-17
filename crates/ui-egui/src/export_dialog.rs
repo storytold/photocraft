@@ -259,6 +259,27 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     }
     let fmt = s_fmt(f);
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
+        if fmt == "webp" && doc.file_encoding.webp_animation_loops.is_some() {
+            // Turning transparency off must matte each animation frame, not flatten the
+            // editing visibility into a single still and lose all hidden frames.
+            let mut output = session.active().map(|d| (*d.doc).clone()).ok_or("export failed")?;
+            let template = output.clone();
+            for layer in &mut output.layers {
+                let mut frame = template.clone();
+                frame.file_encoding.webp_animation_loops = None;
+                let mut visible = layer.clone();
+                visible.visible = true;
+                frame.layers = vec![visible];
+                let mut single = photocraft_engine::Session::new();
+                single.add_document(frame, None);
+                single.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
+                let mut rendered = single.active().and_then(|d| d.doc.layers.first()).cloned().ok_or("frame export failed")?;
+                rendered.name = layer.name.clone();
+                rendered.visible = layer.visible;
+                *layer = rendered;
+            }
+            return Ok(output);
+        }
         session.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
     session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
@@ -998,6 +1019,31 @@ mod tests {
         assert_eq!(saved["format"], "webp");
         assert_eq!(saved["scale"], 50);
         assert!(saved.get("path").is_none() && saved.get("__w").is_none() && saved.get("__layer").is_none());
+    }
+
+    #[test]
+    fn webp_export_as_keeps_hidden_animation_frames_when_transparency_is_disabled() {
+        use photocraft_doc::{ColorMode, Layer, SampleType, Size};
+        let mut doc = Document::new("Animation", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+        doc.file_encoding.webp_animation_loops = Some(7);
+        for (i, color) in [[1.0, 0.0, 0.0, 0.5], [0.0, 0.0, 1.0, 0.5]].into_iter().enumerate() {
+            let mut layer = Layer::raster(format!("Frame{} (75 ms)", i + 1), doc.pixel_format());
+            layer.surface_mut().unwrap().fill_rect(doc.bounds(), &color);
+            layer.visible = i == 0;
+            doc.layers.push(layer);
+        }
+        for transparency in [true, false] {
+            let fields = json!({"format":"webp","scale":50,"transparency":transparency}).as_object().unwrap().clone();
+            let prepared = export_document(&doc, &fields, None).unwrap();
+            assert_eq!(prepared.layers.len(), 2);
+            assert_eq!(prepared.size, Size::new(4, 3));
+            let result = photocraft_io::export(&prepared, "animation.webp", &Default::default()).unwrap();
+            let animation = photocraft_codecs::decode_webp_frames(&result.bytes, &Default::default()).unwrap();
+            assert_eq!(animation.loop_count, Some(7));
+            assert_eq!(animation.frames.len(), 2);
+            let alpha = animation.frames[1].image.to_rgba8()[3];
+            assert_eq!(alpha, if transparency { 128 } else { 255 });
+        }
     }
 
     #[test]

@@ -23,7 +23,9 @@
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
-//! * Every other format goes through `photocraft-codecs` as a single layer
+//! * Animated WebP opens as frame layers (first at the bottom), named `Frame1 (100 ms)`;
+//!   saving WebP writes all frames, including hidden ones, with the original loop count.
+//! * Every other flat format goes through `photocraft-codecs` as a single layer
 //!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
 //!   image is opaque, a normal "Layer 0" when it has transparency.
 //!
@@ -76,8 +78,10 @@ pub use flat::{
     DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, tga_alpha_channel_to_transparency,
     tga_default_bits,
 };
+mod webp_animation;
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
+pub use webp_animation::import_webp_frames;
 
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
@@ -310,7 +314,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
-    flat::import_flat(name, bytes)
+    flat::import_flat_with(name, bytes, ctl)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
@@ -361,7 +365,10 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// export fails with [`IoError::Cancelled`]; otherwise the bytes are exactly [`export`]'s.
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = export_stages(doc, name_or_ext, opts, ctl)?;
+    let mut r = export_stages(doc, name_or_ext, opts, ctl)?;
+    if doc.file_encoding.webp_animation_loops.is_some() && !matches!(extension(name_or_ext).as_str(), "pcraft" | "webp") {
+        r.warnings.push("WebP animation identity and loop count are not preserved; save as .pcraft to retain the editable animation".into());
+    }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
