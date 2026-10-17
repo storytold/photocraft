@@ -46,6 +46,14 @@ impl PreviewTextures {
         Self { name, images: Mutex::new(vec![image]), base_uv, uploaded: Mutex::new(vec![Level { level: 0, nearest: false, tex, uv: base_uv }]) }
     }
 
+    /// Level 0's texel at (`x`, `y`) (tests).
+    #[cfg(test)]
+    pub fn texel(&self, x: usize, y: usize) -> Option<egui::Color32> {
+        let images = self.images.lock().ok()?;
+        let img = images.first()?;
+        img.pixels.get(y * img.size[0] + x).copied()
+    }
+
     /// Size of the full-resolution level in texels.
     pub fn size(&self) -> [usize; 2] {
         self.images.lock().unwrap_or_else(PoisonError::into_inner).first().map_or([0, 0], |i| i.size)

@@ -294,6 +294,65 @@ fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
     Ok((id, rect))
 }
 
+/// Warp of several layers at once (#3592): one warp over the shared frame (the union of each
+/// layer's [`warp_bounds`] unless `rect` is given), applied to every layer, one step.
+fn apply_many(s: &mut Session, p: &Value, cmd: &str, ids: Vec<LayerId>) -> Result<Value> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(l) = ids.iter().find(|&&id| crate::transform_cmds::locked_for_transform(&st.doc, id)).and_then(|&id| st.doc.layer(id)) {
+        return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+    }
+    let rect = match p.get("rect").and_then(Value::as_array) {
+        Some(r) if r.len() == 4 => {
+            let v: Vec<i32> = r.iter().map(|x| x.as_f64().unwrap_or(0.0).round() as i32).collect();
+            Rect::new(v[0], v[1], v[2], v[3])
+        }
+        _ => ids.iter().filter_map(|&id| st.doc.layer(id)).fold(Rect::EMPTY, |r, l| r.union(&warp_bounds(&st.doc, l))),
+    };
+    if rect.is_empty() {
+        return Err(bad(cmd, "nothing to warp"));
+    }
+    if rect.width() > MAX_WARP_SIDE || rect.height() > MAX_WARP_SIDE {
+        return Err(bad(cmd, format!("rect too large for warp: {} x {} (max {MAX_WARP_SIDE} per side)", rect.width(), rect.height())));
+    }
+    let w = warp_from_params(cmd, p, rect_f(rect))?;
+    let out = ids.iter().map(|l| l.0).collect::<Vec<_>>();
+    if w.is_identity() {
+        return Ok(json!({"layers": out, "changed": false}));
+    }
+    let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
+    let content_knots = p.get("mesh").is_some() && p.get("warp").is_none();
+    s.edit("Warp", |doc, _| {
+        let sel = doc.selection.clone();
+        let frames = content_knots.then(|| {
+            let mut f = Frames::new();
+            for &id in &ids {
+                if let Some(l) = doc.layer(id) {
+                    source_frames(doc, l, &mut f);
+                }
+            }
+            f
+        });
+        for &id in &ids {
+            let is_group = doc.layer(id).is_some_and(Layer::is_group);
+            let group = crate::transform_cmds::group_locks(doc, id);
+            crate::extra_cmds::background_to_layer(doc, id);
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            warp_layer(if is_group { None } else { sel.as_ref() }, group, l, &w, rect, interp, frames.as_ref())?;
+        }
+        let snapshot = doc.clone();
+        for &id in &ids {
+            if let Some(l) = doc.layer_mut(id) {
+                crate::transform_cmds::refresh_text(&snapshot, l);
+            }
+        }
+        if let Some(sel) = &doc.selection {
+            doc.selection = Some(warp_mesh_gray(sel, &|x, y| w.map(x, y), Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+        }
+        Ok(())
+    })?;
+    Ok(json!({"layers": out, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}))
+}
+
 /// The Warp Text settings a transform warp gives a type layer: a preset style (or none) keeps the
 /// type editable, as Photoshop's Edit › Transform › Warp on type does (#3004).
 fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWarp>> {
@@ -336,6 +395,27 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    if cmd == "edit.transform.warp"
+        && let Some(list) = p.get("layers").and_then(Value::as_array)
+    {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let ids: Vec<LayerId> = list.iter().filter_map(Value::as_u64).map(LayerId).collect();
+        let many = crate::transform_cmds::multi_targets(&st.doc, &ids);
+        if many.len() > 1 {
+            return apply_many(s, p, cmd, many);
+        }
+        if many.is_empty() {
+            return Err(bad(cmd, "nothing to warp"));
+        }
+        let mut p = p.clone();
+        if let Some(m) = p.as_object_mut() {
+            m.remove("layers");
+            if let Some(one) = many.first() {
+                m.insert("layer".into(), json!(one.0));
+            }
+        }
+        return apply(s, &p, cmd);
+    }
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;
     if matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Text(_))) {
@@ -546,7 +626,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"layers":[id]? (edit.transform.warp: several layers warped together over one shared box, one step; #3592),"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![
