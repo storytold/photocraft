@@ -130,7 +130,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
                 } else {
                     app.pcrop.clicks.clear();
                     let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
-                    app.ui.perspective_crop = Some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+                    // A straight drag has no area: no box (it could neither be committed nor
+                    // replaced by a new drag).
+                    app.ui.perspective_crop = (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
                 }
             }
             app.pcrop.drag = None;
@@ -298,6 +300,29 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+
+    /// A straight drag (no width or no height) leaves no zero-area box that only Esc could clear,
+    /// and a plain click still counts as a corner click.
+    #[test]
+    fn a_drag_without_area_leaves_no_quad() {
+        let doc = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(doc, None);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.ui.tool = Tool::PerspectiveCrop;
+        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));
+        for (x1, y1) in [(10.0, 60.0), (90.0, 10.0)] {
+            ev(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 });
+            ev(&mut app, ToolEvent::Move { x: x1, y: y1, pressure: 1.0 });
+            ev(&mut app, ToolEvent::Up { x: x1, y: y1 });
+            assert_eq!(app.ui.perspective_crop, None, "drag to ({x1}, {y1})");
+            assert!(app.pcrop.clicks.is_empty());
+        }
+        ev(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 });
+        assert_eq!(app.pcrop.clicks, vec![[30.0, 30.0]]);
+        assert_eq!(app.ui.perspective_crop, None);
+    }
 
     /// A box drag makes the quad, corners drag alone, and ↵'s commit crops the document to the
     /// quad's size; four clicks in any order make a quad in TL, TR, BR, BL order.
