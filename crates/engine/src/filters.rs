@@ -304,7 +304,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
             *surf = filter(surf, &fp, area, bounds, selection.as_ref(), doc_bounds.union(&content))?;
             if let Some(before) = &before {
-                keep_alpha(before, surf);
+                keep_alpha(before, surf, &|| ctx.cancelled())?;
             }
             Ok(fp)
         },
@@ -313,25 +313,56 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
 }
 
 /// Lock transparency: put the layer's alpha back after a filter, in the tiles it changed.
-fn keep_alpha(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface) {
+///
+/// The tiles are independent, so they are fixed in parallel, each in a scratch surface of its
+/// own, and `cancelled` is asked before each one: on a 24 MP layer (a Background, whose
+/// transparency is locked) a serial pass took about 400 ms that a cancelled job had to sit out
+/// (#6205). `Err(Cancelled)` leaves `new` holding all its tiles, some of them not yet fixed.
+fn keep_alpha(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<()> {
+    use photocraft_raster::Surface;
+    use rayon::prelude::*;
     if old.format() != new.format() || !new.format().alpha {
-        return;
+        return Ok(());
     }
     let mut coords: Vec<_> = new.tiles().filter(|(c, t)| old.tile(**c).is_none_or(|o| !std::sync::Arc::ptr_eq(o, t))).map(|(c, _)| *c).collect();
     coords.extend(old.tiles().filter(|(c, _)| new.tile(**c).is_none()).map(|(c, _)| *c));
-    let n = new.channels();
-    for c in coords {
-        let r = c.rect();
-        let o = old.read_region(r);
-        let mut v = new.read_region(r);
-        for (pn, po) in v.chunks_exact_mut(n).zip(o.chunks_exact(n)) {
-            if let (Some(a), Some(b)) = (pn.last_mut(), po.last()) {
-                *a = *b;
+    let (fmt, n) = (new.format(), new.channels());
+    let default = new.default_pixel();
+    // Each changed tile alone in a surface (a tile `new` lacks is taken as its default pixel, as
+    // `write_region` would create it).
+    let mut tiles: Vec<(photocraft_geom::Rect, Surface)> = coords
+        .iter()
+        .map(|c| {
+            let mut s = Surface::with_default(fmt, &default);
+            s.put_tiles(new.take_tiles(c.rect()));
+            (c.rect(), s)
+        })
+        .collect();
+    let fixed = tiles
+        .par_iter_mut()
+        .map(|(r, s)| {
+            if cancelled() {
+                return false;
             }
-        }
-        new.write_region(r, &v);
+            let o = old.read_region(*r);
+            let mut v = s.read_region(*r);
+            for (pn, po) in v.chunks_exact_mut(n).zip(o.chunks_exact(n)) {
+                if let (Some(a), Some(b)) = (pn.last_mut(), po.last()) {
+                    *a = *b;
+                }
+            }
+            s.write_region(*r, &v);
+            true
+        })
+        .reduce(|| true, |a, b| a && b);
+    for (_, s) in tiles {
+        new.put_tiles(s.tiles().map(|(c, t)| (*c, t.clone())));
+    }
+    if !fixed {
+        return Err(EngineError::Cancelled);
     }
     new.prune();
+    Ok(())
 }
 
 macro_rules! filter_cmd {
@@ -827,5 +858,75 @@ mod tests {
         assert_eq!(sm.smart_filters[0].command, "filter.blur.gaussianBlur");
         assert_eq!(sm.smart_filters[0].params["radius"], json!(2));
         assert!(sm.cache.as_ref().unwrap().pixel(10, 5)[3] > 0.0, "cache was blurred");
+    }
+
+    /// The serial `keep_alpha` before #6205, kept as the oracle for the parallel one.
+    fn keep_alpha_serial(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface) {
+        if old.format() != new.format() || !new.format().alpha {
+            return;
+        }
+        let mut coords: Vec<_> = new.tiles().filter(|(c, t)| old.tile(**c).is_none_or(|o| !std::sync::Arc::ptr_eq(o, t))).map(|(c, _)| *c).collect();
+        coords.extend(old.tiles().filter(|(c, _)| new.tile(**c).is_none()).map(|(c, _)| *c));
+        let n = new.channels();
+        for c in coords {
+            let r = c.rect();
+            let o = old.read_region(r);
+            let mut v = new.read_region(r);
+            for (pn, po) in v.chunks_exact_mut(n).zip(o.chunks_exact(n)) {
+                if let (Some(a), Some(b)) = (pn.last_mut(), po.last()) {
+                    *a = *b;
+                }
+            }
+            new.write_region(r, &v);
+        }
+        new.prune();
+    }
+
+    /// A layer before and after a filter: tiles the filter changed, one it left shared, one it
+    /// emptied (only in `old`) and one it added (only in `new`).
+    fn alpha_pair(sample: photocraft_color::SampleType) -> (photocraft_raster::Surface, photocraft_raster::Surface) {
+        use photocraft_geom::Rect;
+        use photocraft_raster::Surface;
+        let fmt = photocraft_color::PixelFormat { mode: photocraft_color::ColorMode::Rgb, sample, alpha: true };
+        let pattern = |r: Rect, k: f32| -> Vec<f32> {
+            (0..r.width() as usize * r.height() as usize * 4).map(|i| ((i as f32 * 0.37 + k).sin() * 0.5 + 0.5).clamp(0.0, 1.0)).collect()
+        };
+        let mut old = Surface::new(fmt);
+        let r = Rect::new(-40, -20, 700, 300);
+        old.write_region(r, &pattern(r, 0.0));
+        let mut new = old.clone();
+        let changed = Rect::new(-40, -20, 400, 300);
+        new.write_region(changed, &pattern(changed, 1.3));
+        let emptied = photocraft_geom::TileCoord::containing(600, 100).rect();
+        drop(new.take_tiles(emptied));
+        let added = Rect::new(800, 0, 900, 50);
+        new.write_region(added, &pattern(added, 2.1));
+        (old, new)
+    }
+
+    #[test]
+    fn keep_alpha_matches_the_serial_pass_at_every_depth() {
+        use photocraft_color::SampleType;
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let (old, new) = alpha_pair(sample);
+            let mut want = new.clone();
+            keep_alpha_serial(&old, &mut want);
+            let mut got = new.clone();
+            keep_alpha(&old, &mut got, &|| false).unwrap();
+            assert!(got == want, "{sample:?}: parallel keep_alpha differs from the serial pass");
+            assert_ne!(got, new, "{sample:?}: alpha was put back");
+        }
+    }
+
+    #[test]
+    fn keep_alpha_stops_when_cancelled_and_keeps_the_tiles() {
+        let (old, new) = alpha_pair(photocraft_color::SampleType::U8);
+        let mut got = new.clone();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2;
+        assert!(matches!(keep_alpha(&old, &mut got, &cancel), Err(EngineError::Cancelled)));
+        // The cancel was seen inside the pass (after some tiles), and no tile went missing.
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) > 2);
+        assert!(new.tiles().all(|(c, _)| got.tile(*c).is_some()));
     }
 }
