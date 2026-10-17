@@ -410,6 +410,87 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
     assert_eq!(size_at(h.state(), id, 0), 20.0);
 }
 
+fn options_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(900.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            ui.horizontal(|ui| super::options_bar(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h
+}
+
+/// Drags the options bar's "T" icon `dx` points to the right with `mods` held.
+fn scrub_size_icon(h: &mut Harness<'static, PhotocraftApp>, dx: f32, mods: Modifiers) {
+    let icon = h.get_by_label("Font size").rect().center();
+    h.hover_at(icon);
+    h.run_steps(1);
+    press(h, icon, true);
+    for k in 1..=5 {
+        h.event(egui::Event::ModifiersChanged(mods));
+        h.hover_at(icon + vec2(dx * k as f32 / 5.0, 0.0));
+        h.run_steps(1);
+    }
+    press(h, icon + vec2(dx, 0.0), false);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+fn history_len(h: &Harness<'static, PhotocraftApp>) -> usize {
+    h.state().session.active().unwrap().history.entries().len()
+}
+
+/// Photoshop's options bar "T" icon is a scrubby slider for the size beside it, like the
+/// Character panel's icons (#6437): a point per point dragged, the whole drag one undo step.
+#[test]
+fn options_bar_t_icon_scrubs_the_size_in_one_history_step() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = options_harness(app);
+    let steps = history_len(&h);
+    scrub_size_icon(&mut h, 30.0, Modifiers::NONE);
+    assert_eq!(size_at(h.state(), id, 0), 50.0, "30 points to the right: 20 pt → 50 pt");
+    assert_eq!(history_len(&h), steps + 1, "one history step for the whole drag");
+    assert!(h.state_mut().session.undo());
+    assert_eq!(size_at(h.state(), id, 0), 20.0);
+}
+
+/// While editing with characters selected, scrubbing the "T" icon sizes only the selection.
+#[test]
+fn options_bar_t_icon_scrubs_the_selected_characters_only() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello world", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 11,
+        anchor: 6,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let mut h = options_harness(app);
+    scrub_size_icon(&mut h, -8.0, Modifiers::NONE);
+    let sizes = [0, 5, 6, 10].map(|ci| size_at(h.state(), id, ci));
+    assert_eq!(sizes, [20.0, 20.0, 12.0, 12.0], "\"world\" goes 20 pt → 12 pt, \"Hello \" stays");
+}
+
+/// Scrubbing the "T" icon stops at the size field's limits: 1 pt and 1296 pt.
+#[test]
+fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = options_harness(app);
+    scrub_size_icon(&mut h, -60.0, Modifiers::NONE);
+    assert_eq!(size_at(h.state(), id, 0), 1.0, "60 points left of 20 pt stops at the minimum");
+    scrub_size_icon(&mut h, 200.0, Modifiers::SHIFT);
+    assert_eq!(size_at(h.state(), id, 0), 1296.0, "Shift (10 pt per point) past the top stops at the maximum");
+}
+
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
 /// column's centre line.
 fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32) -> Pos2 {

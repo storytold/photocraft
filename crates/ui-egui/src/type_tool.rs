@@ -1753,8 +1753,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             apply(app, ui.ctx(), json!({"fontStyle": style}));
         }
     }
-    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
+    let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
+    let icon = icon.on_hover_text(tl!("Font size"));
+    icon.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tl!("Font size")));
+    // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
+    crate::widgets::scrub_option_label(ui, &icon);
     let (unit, label) = type_unit(app);
     let mut display = size * unit;
     if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).changed() {
