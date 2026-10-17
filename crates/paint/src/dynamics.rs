@@ -27,6 +27,15 @@ const MIN_SPEED_STEP: f64 = 0.5;
 /// Maximum airbrush catch-up dabs for one input segment.
 const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 
+/// The dab centre of the pixel-grid cell holding `v` (see [`PathWalker::pixel_grid`]): the
+/// pixel's centre for `offset` 0.5, the nearest pixel corner for 0. A value within rounding
+/// noise of a cell boundary counts as on it, so a line lands on the same pixels both ways.
+fn grid_cell(v: f64, offset: f64) -> f64 {
+    let w = v - offset + 0.5;
+    let w = if (w - w.round()).abs() < 1e-7 { w.round() } else { w };
+    w.floor() + offset
+}
+
 #[inline]
 fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
     let ff = f as f32;
@@ -216,10 +225,14 @@ impl PathWalker {
     }
 
     /// Step pixel by pixel instead of by distance: one step per pixel along the segment's major
-    /// axis, on the line between the pixels holding its ends, each at the pixel's dab centre
-    /// (`offset` 0.5 for odd tip diameters, 0 for even ones, as `render::grid_center` snaps). A
-    /// small aliased tip (the Pencil) then draws a clean 8-connected staircase: stepping by
-    /// distance put two dabs in a row wherever the line crossed a pixel corner (#2139).
+    /// axis, each at the dab centre (`offset` 0.5 for odd tip diameters, 0 for even ones, as
+    /// `render::grid_center` snaps) of the pixel the segment's line crosses at that column (or
+    /// row, when steep). A small aliased tip (the Pencil) then draws a clean 8-connected
+    /// staircase: stepping by distance put two dabs in a row wherever the line crossed a pixel
+    /// corner (#2139). The line is sampled where it really runs, not between the pixels holding
+    /// the segment's ends, so a straight line split into pieces (by Smoothing, or the pointer
+    /// samples of a ⇧-drag) paints the pixels of the whole line, whichever end it starts from
+    /// (#6336).
     pub fn pixel_grid(mut self, offset: f64) -> Self {
         self.grid = Some(offset);
         self
@@ -228,19 +241,24 @@ impl PathWalker {
     /// Emits the pixel steps from `a` to `p` (see [`PathWalker::pixel_grid`]). False, emitting
     /// nothing, when the span is not finite or implausibly long: distance spacing takes over.
     fn grid_steps(&mut self, a: &StrokePoint, p: &StrokePoint, offset: f64, out: &mut impl FnMut(StepInput)) -> bool {
-        let cell = |v: f64| if offset > 0.0 { v.floor() } else { v.round() };
-        let (x0, y0) = (cell(a.x), cell(a.y));
-        let (dx, dy) = (cell(p.x) - x0, cell(p.y) - y0);
-        let n = dx.abs().max(dy.abs());
-        if !n.is_finite() || n > MAX_GRID_STEPS {
+        // The pieces of a 45° line differ in rounding noise: keep them all on one major axis.
+        let steep = (p.y - a.y).abs() > (p.x - a.x).abs() * (1.0 + 1e-9);
+        let (am, an, pm, pn) = if steep { (a.y, a.x, p.y, p.x) } else { (a.x, a.y, p.x, p.y) };
+        let (m0, m1) = (grid_cell(am, offset), grid_cell(pm, offset));
+        let (dm, dn) = (pm - am, pn - an);
+        let n = (m1 - m0).abs();
+        if !(n.is_finite() && dn.is_finite()) || n > MAX_GRID_STEPS || dm == 0.0 {
             return false;
         }
-        let steps = n as u64;
-        for i in 1..=steps {
-            let i = i as f64;
-            let mut q = lerp_pt(a, p, i / n);
-            q.x = x0 + (dx * i / n).round() + offset;
-            q.y = y0 + (dy * i / n).round() + offset;
+        let dir = (m1 - m0).signum();
+        for i in 1..=n as u64 {
+            let c = m0 + dir * i as f64;
+            // The last column's centre can sit up to half a pixel past `p`: the line goes on to
+            // it, so the next piece of a straight line picks up where this one left off.
+            let t = (c - am) / dm;
+            let mut q = lerp_pt(a, p, t.clamp(0.0, 1.0));
+            let cn = grid_cell(an + dn * t, offset);
+            (q.x, q.y) = if steep { (cn, c) } else { (c, cn) };
             self.emit(q, out);
         }
         true

@@ -189,26 +189,59 @@ fn pencil_dabs_sit_on_the_pixel_grid() {
 
 #[test]
 fn pencil_1px_line_is_a_clean_8_connected_staircase() {
-    // #2139: a 1 px Pencil line is one pixel per column (or row, when steep) on the ideal line
-    // between the end pixels: no doubled pixels at the steps.
+    // #2139: a 1 px Pencil line is one pixel per column (or row, when steep) on the line: no
+    // doubled pixels at the steps.
     let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
     let cases = [((2.5, 2.5), (22.5, 9.5)), ((3.5, 30.5), (10.5, 5.5)), ((1.2, 1.7), (25.8, 4.1)), ((5.5, 5.5), (17.5, 17.5)), ((20.3, 3.6), (4.9, 12.2))];
     for ((ax, ay), (bx, by)) in cases {
         let s = paint(&b, &[StrokePoint::new(ax, ay, 1.0), StrokePoint::new(bx, by, 1.0)], 40, 40);
         let painted: Vec<(i32, i32)> = (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
         let (a, e) = ((ax.floor(), ay.floor()), (bx.floor(), by.floor()));
-        let steep = (e.1 - a.1).abs() > (e.0 - a.0).abs();
+        let steep = (by - ay).abs() > (bx - ax).abs();
         let major = |p: (f64, f64)| if steep { (p.1, p.0) } else { (p.0, p.1) };
-        let ((m0, n0), (m1, n1)) = (major(a), major(e));
+        let ((m0, _), (m1, _)) = (major(a), major(e));
+        let ((am, an), (bm, bn)) = (major((ax, ay)), major((bx, by)));
         assert_eq!(painted.len() as f64, (m1 - m0).abs() + 1.0, "{a:?}->{e:?}: one pixel per step, got {painted:?}");
         for &(x, y) in &painted {
-            let (m, n) = major((f64::from(x), f64::from(y)));
-            let ideal = n0 + (n1 - n0) * (m - m0) / (m1 - m0);
-            assert!((n - ideal).abs() <= 0.5 + 1e-9, "{a:?}->{e:?}: ({x},{y}) is off the line");
+            if (f64::from(x), f64::from(y)) == a {
+                continue; // The pixel the stroke starts in.
+            }
+            // The pixel's centre is within half a pixel of the line where it crosses its column.
+            let (m, n) = major((f64::from(x) + 0.5, f64::from(y) + 0.5));
+            let on_line = an + (bn - an) * (m - am) / (bm - am);
+            assert!((n - on_line).abs() <= 0.5 + 1e-9, "{a:?}->{e:?}: ({x},{y}) is off the line");
         }
         let columns: std::collections::BTreeSet<i64> = painted.iter().map(|&(x, y)| major((f64::from(x), f64::from(y))).0 as i64).collect();
         assert_eq!(columns.len(), painted.len(), "{a:?}->{e:?}: a column holds two pixels");
     }
+}
+
+#[test]
+fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
+    // #6336: a ⇧-click line between pixel centres painted different pixels depending on which end
+    // it started from, and Smoothing (which splits it into pieces along the line) bent it.
+    let pixels = |a: (f64, f64), e: (f64, f64), amount: f32| {
+        let mut b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+        b.smoothing.amount = amount;
+        let s = paint(&b, &[StrokePoint::new(a.0, a.1, 1.0), StrokePoint::new(e.0, e.1, 1.0)], 24, 24);
+        (0..24).flat_map(|y| (0..24).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect::<Vec<_>>()
+    };
+    for (a, e) in [((3.5, 3.5), (4.5, 5.5)), ((3.5, 3.5), (8.5, 5.5)), ((2.5, 20.5), (9.5, 17.5)), ((1.5, 1.5), (20.5, 9.5))] {
+        let line = pixels(a, e, 0.0);
+        assert_eq!(line, pixels(e, a, 0.0), "{a:?}->{e:?} differs from {e:?}->{a:?}");
+        for amount in [0.1, 0.5, 0.9] {
+            assert_eq!(pixels(a, e, amount), line, "{a:?}->{e:?} at Smoothing {amount}");
+            assert_eq!(pixels(e, a, amount), line, "{e:?}->{a:?} at Smoothing {amount}");
+        }
+    }
+    // One right and two down: three pixels, one per row.
+    assert_eq!(pixels((3.5, 3.5), (4.5, 5.5), 0.1), vec![(3, 3), (4, 4), (4, 5)]);
+    // A straight line fed as many pointer samples along it paints the line's pixels.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let samples: Vec<StrokePoint> = (0..=37).map(|i| StrokePoint::new(1.5 + 19.0 * f64::from(i) / 37.0, 1.5 + 8.0 * f64::from(i) / 37.0, 1.0)).collect();
+    let s = paint(&b, &samples, 24, 24);
+    let sampled: Vec<(i32, i32)> = (0..24).flat_map(|y| (0..24).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
+    assert_eq!(sampled, pixels((1.5, 1.5), (20.5, 9.5), 0.0));
 }
 
 // ---------- spacing ----------
