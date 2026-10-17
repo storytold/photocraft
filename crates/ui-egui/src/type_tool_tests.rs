@@ -1439,6 +1439,43 @@ mod multi_layer_formatting {
     }
 
     #[test]
+    fn character_panel_preset_menus_edit_size_leading_and_tracking() {
+        let (app, ids) = fixture();
+        let untouched = style(&app, ids[2], 0);
+        let mut h = controls(app, true);
+
+        // The three chevrons are additional combo boxes after family and face.
+        // They use the same setStyle path as the adjacent editable fields.
+        h.get_all_by_role(Role::ComboBox).nth(2).expect("size presets").click();
+        h.run();
+        h.get_by_label("72 pt").click();
+        h.run();
+
+        h.get_all_by_role(Role::ComboBox).nth(3).expect("leading presets").click();
+        h.run();
+        h.get_by_label("Auto").click();
+        h.run();
+
+        h.get_all_by_role(Role::ComboBox).nth(5).expect("tracking presets").click();
+        h.run();
+        h.get_by_label("50").click();
+        h.run();
+
+        for id in &ids[..2] {
+            let c = style(h.state(), *id, 0);
+            assert_eq!(c.size_pt, 72.0);
+            assert_eq!(c.leading_pt, None, "Auto restores font-relative line spacing");
+            assert_eq!(c.tracking, 50.0);
+        }
+        assert_eq!(style(h.state(), ids[2], 0), untouched, "unselected type layers are unchanged");
+
+        // The numeric spin boxes must remain usable beside their preset chevrons.
+        number(&mut h, 0, "40");
+        assert_eq!(style(h.state(), ids[0], 0).size_pt, 40.0);
+        assert_eq!(style(h.state(), ids[1], 0).size_pt, 40.0);
+    }
+
+    #[test]
     fn options_font_family_preserves_peer_faces_and_batches_layer_flags() {
         let (app, ids) = fixture();
         let before = ids.map(|id| style(&app, id, 0));
