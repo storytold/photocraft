@@ -188,6 +188,42 @@ fn gradient_fill_angle_follows_the_canvas() {
     assert_eq!(map_angle(&Turn::Ccw90.affine(10.0, 20.0), 0.0), 90.0);
 }
 
+#[test]
+fn gradient_fill_offset_preserved_on_resize_and_mirrored_on_turns() {
+    let mut f = Fill::Gradient {
+        stops: vec![],
+        angle: 90.0,
+        scale: 1.0,
+        style: Default::default(),
+        reverse: false,
+        opacity_stops: vec![],
+        midpoints: vec![],
+        offset: (0.25, 0.0),
+        dither: false,
+        align: true,
+    };
+
+    // 2x uniform scaling preserves fractional offset.
+    let scale_2x = Affine { m: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] };
+    map_fill(&scale_2x, &mut f);
+    if let Fill::Gradient { offset, .. } = f {
+        assert!((offset.0 - 0.25).abs() < 1e-6 && offset.1.abs() < 1e-6, "offset after 2x scale: {offset:?}");
+    }
+
+    // 0.5x scaling preserves fractional offset.
+    let scale_half = Affine { m: [0.5, 0.0, 0.0, 0.5, 0.0, 0.0] };
+    map_fill(&scale_half, &mut f);
+    if let Fill::Gradient { offset, .. } = f {
+        assert!((offset.0 - 0.25).abs() < 1e-6 && offset.1.abs() < 1e-6, "offset after 0.5x scale: {offset:?}");
+    }
+
+    // Flip horizontal negates x offset.
+    map_fill(&Turn::FlipHorizontal.affine(100.0, 100.0), &mut f);
+    if let Fill::Gradient { offset, .. } = f {
+        assert!((offset.0 - -0.25).abs() < 1e-6 && offset.1.abs() < 1e-6, "offset after flip horizontal: {offset:?}");
+    }
+}
+
 fn type_and_shape_origin(d: &Document) -> ([f64; 6], [f64; 2]) {
     let mut t = None;
     let mut k = None;
