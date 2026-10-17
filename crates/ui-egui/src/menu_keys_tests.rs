@@ -210,3 +210,29 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
     h.run_steps(3);
     assert_ne!(h.state().ui.tool, tool, "off the bar, E picks the Eraser again");
 }
+
+/// The whole app: with the bar focused by an Alt tap, a command shortcut leaves the bar and runs
+/// in the same press (#6573); the bar's own keys still drive it.
+#[test]
+fn a_command_shortcut_leaves_the_bar_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.run_steps(2);
+    alt_tap(&mut h);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "Alt puts the keyboard on File");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(1), "→ still moves along the bar");
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘D deselects");
+    assert_eq!(Keys::current(&h.ctx).focus, None, "and takes the keyboard off the bar");
+    assert!(!crate::menu_keys::is_focused(&h.ctx));
+    assert!(!is_open(&h.ctx), "no menu opened");
+}
