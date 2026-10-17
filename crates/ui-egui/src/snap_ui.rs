@@ -44,7 +44,7 @@ pub struct ActiveSnap {
     pub gesture: Gesture,
     pub start: [f64; 2],
     pub targets: SnapTargets,
-    /// Layer alignments only (smart guides), used when View › Snap is off.
+    /// Layer alignments only (smart guides), when View › Snap and Smart Guides are on.
     pub smart: SnapTargets,
     pub disabled: bool,
 }
@@ -254,7 +254,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // A moving selection never snaps back to where it started.
         targets = targets.filtered(|k| k != SnapKind::Selection);
     }
-    let smart = if matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
+    let smart = if snap_on(app) && matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
 }
 
@@ -651,6 +651,19 @@ mod tests {
             crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
             assert_eq!(mover_bounds(&app).x0, 300, "{before}: snapped to the target's edge");
         }
+    }
+
+    #[test]
+    fn view_snap_off_blocks_smart_guide_snapping() {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Move;
+        app.ui.view.show.smart_guides = true;
+        app.ui.extras.snap = false;
+        app.ui.tool_options.move_auto_select = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
+        assert_eq!(mover_bounds(&app).x0, 303, "View › Snap off must not snap via smart guides");
     }
 
     #[test]
