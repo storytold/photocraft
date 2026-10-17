@@ -1687,6 +1687,19 @@ fn footer_id() -> egui::Id {
     egui::Id::new("paths-footer")
 }
 
+/// A Paths panel row being dragged, for a drop on the trash (#6553): its name and the command
+/// that deletes it.
+#[derive(Clone, Debug)]
+struct PathDrag {
+    name: String,
+    cmd: &'static str,
+    params: Value,
+}
+
+fn path_drag_key() -> egui::Id {
+    egui::Id::new("paths-drag")
+}
+
 fn ctx_data_footer(ctx: &egui::Context, r: Rect) {
     ctx.data_mut(|d| d.insert_temp(footer_id(), r));
 }
@@ -1748,6 +1761,13 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
     let mut stroke_dialog: Option<String> = None;
+    // A row dragged onto the trash is deleted (#6553); a drag that never saw its release must not
+    // outlive it.
+    let ctx = ui.ctx().clone();
+    if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+        ctx.data_mut(|d| d.remove::<PathDrag>(path_drag_key()));
+    }
+    let drag = ctx.data(|d| d.get_temp::<PathDrag>(path_drag_key()));
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = crate::widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
@@ -1759,12 +1779,26 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(tl!("Draw with the Pen tool (P) or make a work path from a selection.")).color(t.text_faint).size(11.5));
             }
             for PathEntry { name, path, kind } in &rows {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+                // What dropping the row on the trash runs; a shape layer's path is not dragged.
+                let delete = match kind {
+                    PathRow::Work => Some(("path.delete", json!({"name": "work"}))),
+                    PathRow::Saved => Some(("path.delete", json!({"name": name}))),
+                    PathRow::Layer if name.ends_with(" Vector Mask") => Some(("layer.vectorMask.delete", json!({}))),
+                    PathRow::Layer => None,
+                };
+                let sense = if delete.is_some() { Sense::click_and_drag() } else { Sense::click() };
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), sense);
                 let key = match kind {
                     PathRow::Work => "work".to_string(),
                     PathRow::Layer => "layer".to_string(),
                     PathRow::Saved => name.clone(),
                 };
+                if resp.drag_started()
+                    && let Some((cmd, params)) = delete
+                {
+                    let name = if *kind == PathRow::Work { tl!(name).to_string() } else { name.clone() };
+                    ui.ctx().data_mut(|d| d.insert_temp(path_drag_key(), PathDrag { name, cmd, params }));
+                }
                 // Rows are painted: name them for screen readers and UI tests.
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, name));
                 let sel = app.ui.selected_path.as_deref() == Some(key.as_str());
@@ -1832,6 +1866,12 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         },
     );
+    // The dragged row follows the cursor.
+    if let Some(drag) = &drag
+        && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
+    {
+        crate::layer_transfer::ghost(&ctx, p, &drag.name);
+    }
     let sel = app.ui.selected_path.clone().filter(|s| s != "layer" || has_layer_path).unwrap_or_else(|| "work".into());
     let buttons = crate::widgets::panel_footer(ui, |ui| {
         let fg = hex(app.session.tools.foreground);
@@ -1867,11 +1907,21 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     action = Some((cmd, p));
                 }
             }
+            // A row dropped on the trash deletes that row's path, selected or not (#6553).
+            if matches!(cmd, "path.delete" | "layer.vectorMask.delete")
+                && let Some(drag) = &drag
+                && crate::panels::dropped_on(ui, &b)
+            {
+                action = Some((drag.cmd, drag.params.clone()));
+            }
             buttons = buttons.union(b.rect);
         }
         buttons
     });
     ctx_data_footer(ui.ctx(), buttons);
+    if ctx.input(|i| i.pointer.any_released()) {
+        ctx.data_mut(|d| d.remove::<PathDrag>(path_drag_key()));
+    }
     if let Some(name) = stroke_dialog {
         crate::canvas_tool_menu::stroke_path_dialog(app, &name);
     }
@@ -2714,6 +2764,65 @@ mod tests {
         h.state_mut().run("layer.new.layer", json!({})).unwrap();
         h.run_steps(2);
         assert!(h.query_all(egui_kittest::kittest::by().label("Fill:").include_labels()).next().is_none());
+    }
+
+    /// #6553: a Paths row dragged onto the footer's trash is deleted, whichever row is selected,
+    /// and a shape layer's path row does not start a drag.
+    #[test]
+    fn path_rows_dragged_onto_the_trash_are_deleted() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        let path = json!({"subpaths": [{"closed": true, "knots": [
+            {"anchor": [10, 10], "in": [10, 10], "out": [10, 10]},
+            {"anchor": [80, 10], "in": [80, 10], "out": [80, 10]},
+            {"anchor": [80, 80], "in": [80, 80], "out": [80, 80]}
+        ]}]});
+        app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": path})).unwrap();
+        app.ui.selected_path = Some("work".into());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| paths_panel(app, ui), app);
+        h.run_steps(3);
+        let trash = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            let buttons: Vec<Rect> = h
+                .ctx
+                .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
+            buttons.into_iter().max_by(|a, b| a.center().x.total_cmp(&b.center().x)).unwrap().center()
+        };
+        let drag = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: Pos2, to: Pos2| {
+            h.event(egui::Event::PointerMoved(from));
+            h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            h.step();
+            for k in 1..=10 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 10.0)));
+                h.step();
+            }
+            h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+            h.run_steps(3);
+        };
+        // The saved path, while the work path is selected: only the dragged row goes.
+        let (row, to) = (h.get_by_label("Path 1").rect().center(), trash(&h));
+        drag(&mut h, row, to);
+        let doc = &h.state().session.active().unwrap().doc;
+        assert!(doc.paths.is_empty(), "the dragged saved path is deleted");
+        assert!(doc.work_path.is_some(), "the selected work path is kept");
+        // The work path.
+        let (row, to) = (h.get_by_label("Work Path").rect().center(), trash(&h));
+        drag(&mut h, row, to);
+        assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "the dragged work path is deleted");
+        // A drop elsewhere deletes nothing.
+        h.state_mut().run("path.set", json!({"name": "Path 2", "path": path})).unwrap();
+        h.run_steps(2);
+        let row = h.get_by_label("Path 2").rect().center();
+        drag(&mut h, row, row + vec2(0.0, 120.0));
+        assert_eq!(h.state().session.active().unwrap().doc.paths.len(), 1, "a drop off the trash keeps the path");
+        // A shape layer's path row is not dragged onto the trash (its deletion is #6552's).
+        h.state_mut().run("shape.create", json!({"kind": "ellipse", "rect": [20, 20, 100, 70]})).unwrap();
+        h.run_steps(2);
+        let layers = h.state().session.active().unwrap().doc.layers.len();
+        let (row, to) = (h.get_by_label("Ellipse 1 Shape Path").rect().center(), trash(&h));
+        drag(&mut h, row, to);
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
     }
 }
 
