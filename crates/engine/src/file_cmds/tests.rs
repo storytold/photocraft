@@ -532,6 +532,13 @@ fn fit_image_and_conditional_mode_change() {
     assert_eq!(r["changed"], false);
     s.execute("file.automate.fitImage", json!({"width": 1000, "height": 1000})).unwrap();
     assert_eq!(doc(&s).size.width, 1000);
+
+    // Zero or negative width or height leaves that side unconstrained.
+    let mut s2 = session(1000, 800, 8);
+    s2.execute("file.automate.fitImage", json!({"width": 0, "height": 400})).unwrap();
+    assert_eq!((doc(&s2).size.width, doc(&s2).size.height), (500, 400));
+    s2.execute("file.automate.fitImage", json!({"width": 250, "height": -10})).unwrap();
+    assert_eq!((doc(&s2).size.width, doc(&s2).size.height), (250, 200));
     let r = s.execute("file.automate.conditionalModeChange", json!({"from": ["cmyk"], "to": "grayscale"})).unwrap();
     assert_eq!(r["changed"], false);
     s.execute("file.automate.conditionalModeChange", json!({"from": ["rgb", "lab"], "to": "grayscale"})).unwrap();
