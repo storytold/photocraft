@@ -4,9 +4,9 @@
 //! (#4440). ↩ / Commit runs `edit.puppetWarp` with the pins.
 //!
 //! The preview is the layer texture on the deformed triangle mesh (an egui textured mesh, drawn
-//! by the GPU), re-solved with a few warm-started ARAP rounds per drag event (well under a
-//! millisecond with the banded Cholesky factor). When a drag ends the mesh is solved from scratch
-//! exactly like the engine, so what you see at rest is what Commit produces.
+//! by the GPU). Each changed pin position uses the engine's iteration count and rest-mesh
+//! initialization, reusing the cached solver factorization. Warm-starting from earlier drag
+//! previews made the result depend on pointer history and snap to a different shape on release.
 
 use std::sync::Arc;
 
@@ -116,16 +116,15 @@ impl PuppetSession {
         let src: Vec<[f64; 2]> = self.warp.pins.iter().map(|p| p.src).collect();
         let fixed: Vec<bool> = self.warp.pins.iter().map(|p| p.rotate.is_some()).collect();
         self.solver = Some(PuppetSolver::new(self.mesh.clone(), &src, &fixed));
-        self.solve(true);
+        self.solve();
     }
 
-    /// Solves the deformation: exactly like the engine (`exact`), or a few warm rounds.
-    fn solve(&mut self, exact: bool) {
+    /// Solves from rest, exactly like the engine, during dragging as well as at rest.
+    fn solve(&mut self) {
         let Some(solver) = &self.solver else { return };
         let dst: Vec<[f64; 2]> = self.warp.pins.iter().map(|p| p.dst).collect();
         let rot: Vec<Option<f64>> = self.warp.pins.iter().map(|p| p.rotate).collect();
-        let warm = (!exact && self.deformed.len() == self.mesh.verts.len()).then_some(self.deformed.as_slice());
-        let (v, _) = solver.solve(&dst, &rot, self.warp.mode, if exact { ITERATIONS } else { 6 }, warm);
+        let (v, _) = solver.solve(&dst, &rot, self.warp.mode, ITERATIONS, None);
         self.deformed = v;
         let src: Vec<[f64; 2]> = self.warp.pins.iter().map(|p| p.src).collect();
         let depths: Vec<i32> = self.warp.pins.iter().map(|p| p.depth).collect();
@@ -261,7 +260,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     if remesh {
         s.remesh_or_restore(density, expansion)?;
     } else {
-        s.solve(true);
+        s.solve();
     }
     Ok(s.describe())
 }
@@ -301,15 +300,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
                 && pin.dst != [x, y]
             {
                 pin.dst = [x, y];
-                s.solve(false);
+                s.solve();
             }
         }
         ToolEvent::Up { x, y } => {
             if let Some(i) = s.drag.take() {
-                if let Some(pin) = s.warp.pins.get_mut(i) {
+                // A release usually repeats the last Move, but can carry a new position.
+                if let Some(pin) = s.warp.pins.get_mut(i)
+                    && pin.dst != [x, y]
+                {
                     pin.dst = [x, y];
+                    s.solve();
                 }
-                s.solve(true);
                 if let Some(before) = s.drag_from.take() {
                     s.record(before);
                 }
@@ -436,7 +438,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else if rebind {
         s.rebind();
     } else if resolve {
-        s.solve(true);
+        s.solve();
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if crate::widgets::primary_button(ui, "✓", 32.0)
@@ -453,6 +455,106 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn long_puppet(ctx: &egui::Context, mode: PuppetMode, density: PuppetDensity) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 1000, "height": 300, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(40, 180, 960, 220), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        begin(&mut app, ctx, "edit.puppetWarp").unwrap();
+        for x in [70.0, 160.0, 930.0] {
+            pointer(&mut app, ToolEvent::Down { x, y: 200.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            pointer(&mut app, ToolEvent::Up { x, y: 200.0 }, egui::Modifiers::NONE);
+        }
+        let s = app.distort.puppet.as_mut().unwrap();
+        s.warp.mode = mode;
+        s.warp.density = density;
+        s.rebuild_mesh();
+        app
+    }
+
+    fn assert_same_mesh(a: &[[f64; 2]], b: &[[f64; 2]]) {
+        assert_eq!(a.len(), b.len());
+        let offset = a.iter().zip(b).map(|(a, b)| dist(*a, *b)).fold(0.0, f64::max);
+        assert!(offset < 1e-8, "mesh moved by {offset} px with unchanged pins");
+    }
+
+    #[test]
+    fn drag_preview_matches_release_history_and_committed_geometry() {
+        use photocraft_algo::puppet::{deform, render};
+        for mode in [PuppetMode::Rigid, PuppetMode::Normal, PuppetMode::Distort] {
+            for density in [PuppetDensity::Fewer, PuppetDensity::Normal, PuppetDensity::More] {
+                let ctx = egui::Context::default();
+                let mut app = long_puppet(&ctx, mode, density);
+                let rest = app.distort.puppet.as_ref().unwrap().deformed.clone();
+                let past = app.session.active().unwrap().history.past_len();
+                pointer(&mut app, ToolEvent::Down { x: 930.0, y: 200.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                for step in 1..=12 {
+                    let x = 930.0 - f64::from(step) * 20.0;
+                    let y = 200.0 - f64::from(step) * 10.0;
+                    pointer(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+                }
+                let s = app.distort.puppet.as_ref().unwrap();
+                let preview = s.deformed.clone();
+                let order = s.order.clone();
+                pointer(&mut app, ToolEvent::Up { x: 690.0, y: 80.0 }, egui::Modifiers::NONE);
+                let s = app.distort.puppet.as_mut().unwrap();
+                assert_same_mesh(&preview, &s.deformed);
+                assert_eq!(order, s.order);
+                let (_, canonical, _) = deform(&s.surface, s.bounds, &s.warp, ITERATIONS);
+                assert_same_mesh(&preview, &canonical);
+                assert!(s.undo());
+                assert_same_mesh(&rest, &s.deformed);
+                assert!(s.redo());
+                assert_same_mesh(&preview, &s.deformed);
+                // Use the engine's interpolation to isolate geometry from GPU texture sampling.
+                let expected = render(&s.surface, s.bounds, &s.mesh, &preview, &order, photocraft_algo::transform::Interp::Bicubic);
+                let layer = s.layer;
+                assert_eq!(app.session.active().unwrap().history.past_len(), past);
+                commit(&mut app);
+                let st = app.session.active().unwrap();
+                assert_eq!(st.history.past_len(), past + 1);
+                assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap(), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn drag_preview_is_independent_of_pointer_path_and_honors_release_coordinates() {
+        let ctx = egui::Context::default();
+        let mut app = long_puppet(&ctx, PuppetMode::Normal, PuppetDensity::More);
+        let s = app.distort.puppet.as_mut().unwrap();
+        s.warp.pins[0].rotate = Some(25.0);
+        s.rebind();
+        let pins = s.warp.pins.clone();
+        let paths = [
+            vec![[690.0, 80.0]],
+            vec![[870.0, 170.0], [810.0, 140.0], [750.0, 110.0], [690.0, 80.0]],
+            vec![[500.0, 30.0], [930.0, 200.0], [1000.0, 270.0], [690.0, 80.0]],
+        ];
+        let mut expected = None;
+        for path in paths {
+            app.distort.puppet.as_mut().unwrap().restore(pins.clone());
+            pointer(&mut app, ToolEvent::Down { x: 930.0, y: 200.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            for [x, y] in path {
+                pointer(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            let preview = &app.distort.puppet.as_ref().unwrap().deformed;
+            assert_same_mesh(expected.get_or_insert_with(|| preview.clone()), preview);
+            // The last pointer-up may carry a new position without a preceding move event.
+            pointer(&mut app, ToolEvent::Up { x: 720.0, y: 90.0 }, egui::Modifiers::NONE);
+            let s = app.distort.puppet.as_ref().unwrap();
+            assert_eq!(s.warp.pins[2].dst, [720.0, 90.0]);
+            let (_, canonical, _) = photocraft_algo::puppet::deform(&s.surface, s.bounds, &s.warp, ITERATIONS);
+            assert_same_mesh(&s.deformed, &canonical);
+        }
+    }
 
     /// #5092: a Puppet Warp session left open does not follow the user to a new document.
     #[test]
