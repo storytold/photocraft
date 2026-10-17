@@ -168,11 +168,12 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
 fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit("From Transparency", |doc, _| {
+        let depth = doc.depth;
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         // Masks are attached to layer coordinates, including pixels temporarily off-canvas.
         // Clipping to document bounds loses their alpha permanently when moved back (#3043).
         let r = surf.content_bounds();
-        let mut mask = LayerMask::hide_all();
+        let mut mask = crate::commands::mask_at_depth(LayerMask::hide_all(), depth)?;
         if !r.is_empty() {
             let mut px = read_rgba(surf, r);
             let alpha: Vec<f32> = px.iter().map(|q| q[3]).collect();
@@ -183,6 +184,7 @@ fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
             }
             write_rgba(surf, r, &px);
         }
+        crate::extra_cmds::background_to_layer_for_mask(doc, id);
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         Ok(Value::Null)
     })
@@ -198,7 +200,7 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
         for x in &mut v {
             *x = 1.0 - *x;
         }
-        let mut mask = LayerMask::reveal_all();
+        let mut mask = crate::commands::mask_at_depth(LayerMask::reveal_all(), doc.depth)?;
         mask.surface.write_region(bounds, &v);
         mask.surface.prune();
         for id in ids {
@@ -235,10 +237,11 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
     let region = region.ok_or_else(|| other("no objects were found"))?;
     let bbox = region.bbox;
     s.edit("Mask All Objects", |doc, _| {
-        let mut mask = LayerMask::hide_all();
+        let mut mask = crate::commands::mask_at_depth(LayerMask::hide_all(), doc.depth)?;
         let v: Vec<f32> = region.mask.iter().map(|m| f32::from(*m) / 255.0).collect();
         mask.surface.write_region(bbox, &v);
         mask.surface.prune();
+        crate::extra_cmds::background_to_layer_for_mask(doc, id);
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         Ok(())
     })?;

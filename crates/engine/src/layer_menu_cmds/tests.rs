@@ -505,6 +505,59 @@ fn mask_all_objects_masks_the_subject() {
     }
 }
 
+fn subject(x: i32, y: i32) -> [f32; 4] {
+    let inside = (((x - 20) * (x - 20) + (y - 15) * (y - 15)) as f32).sqrt() < 8.0;
+    if inside { [0.9, 0.2, 0.1, 1.0] } else { [0.95, 0.95, 0.95, 1.0] }
+}
+
+#[test]
+fn from_transparency_and_mask_all_objects_turn_the_background_into_a_layer() {
+    for cmd in ["layer.layerMask.fromTransparency", "layer.maskAllObjects", "layer.layerMask.hideSelection"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        assert!(doc(&s).is_background(id));
+        paint(&mut s, subject);
+        if cmd.ends_with("hideSelection") {
+            select_left_half(&mut s);
+        }
+        s.execute(cmd, json!({})).unwrap();
+        assert!(!doc(&s).is_background(id), "{cmd}: the Background became a layer");
+        assert_eq!(active(&s).name, "Layer 0", "{cmd}");
+        assert!(active(&s).mask.is_some(), "{cmd}");
+    }
+}
+
+#[test]
+fn layer_masks_are_built_at_the_document_depth() {
+    use photocraft_color::SampleType;
+    for (depth, sample, tol) in [(8, SampleType::U8, 1.0 / 255.0), (16, SampleType::U16, 1.0 / 65535.0), (32, SampleType::F32, 1e-6)] {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |_, _| [0.2, 0.4, 0.6, 0.5003]);
+        s.execute("layer.layerMask.fromTransparency", json!({})).unwrap();
+        let m = active(&s).mask.as_ref().unwrap();
+        assert_eq!(m.surface.format().sample, sample, "From Transparency at {depth}");
+        assert!((m.value(5, 5) - 0.5003).abs() < tol, "From Transparency at {depth}: {}", m.value(5, 5));
+        assert_eq!(m.value(-50, -50), 0.0, "outside the layer stays hidden at {depth}");
+
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |_, _| [0.2, 0.4, 0.6, 1.0]);
+        select_left_half(&mut s);
+        s.execute("layer.layerMask.hideSelection", json!({})).unwrap();
+        let m = active(&s).mask.as_ref().unwrap();
+        assert_eq!(m.surface.format().sample, sample, "Hide Selection at {depth}");
+        assert_eq!((m.value(5, 5), m.value(30, 5), m.value(500, 500)), (0.0, 1.0, 1.0), "Hide Selection at {depth}");
+
+        let mut s = session(depth, "rgb");
+        paint(&mut s, subject);
+        s.execute("layer.maskAllObjects", json!({})).unwrap();
+        let m = active(&s).mask.as_ref().unwrap();
+        assert_eq!(m.surface.format().sample, sample, "Mask All Objects at {depth}");
+        assert!(m.value(20, 15) > m.value(1, 1), "Mask All Objects at {depth}");
+        assert_eq!(m.value(500, 500), 0.0, "Mask All Objects at {depth}");
+    }
+}
+
 #[test]
 fn layer_masks_in_gray_cmyk_lab() {
     for mode in ["gray", "cmyk", "lab"] {
