@@ -730,6 +730,28 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
     assert_eq!(back, doc);
 }
 
+/// #4957: a directory save holds the bundle's lock for its whole transaction. While another
+/// writer holds it, a save waits, then fails without writing anything; once it is released the
+/// save goes ahead.
+#[test]
+fn directory_save_waits_for_the_bundle_lock() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let dir = temp_dir("lock");
+    let other = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("save.lock")).unwrap();
+    other.lock().unwrap();
+    let mut w = PcraftWriter::new();
+    w.set_lock_wait(std::time::Duration::from_millis(100));
+    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("in progress"), "{e}");
+    assert!(!dir.join("manifest.json").exists(), "nothing written while locked");
+    assert!(!dir.join("tiles").exists() || std::fs::read_dir(dir.join("tiles")).unwrap().count() == 0);
+    other.unlock().unwrap();
+    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert_eq!(load_path(&dir).unwrap(), doc);
+    drop(other);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn variables_follow_layer_id_remapping() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);

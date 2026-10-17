@@ -18,6 +18,10 @@ use crate::{FormatError, LoadOptions, Result, SaveOptions};
 pub(crate) const MANIFEST: &str = "manifest.json";
 pub(crate) const THUMB: &str = "thumb.png";
 pub(crate) const COMPOSITE: &str = "composite/preview.png";
+/// The file a directory save holds an exclusive lock on for its whole transaction (#4957).
+pub(crate) const SAVE_LOCK: &str = "save.lock";
+/// How long a directory save waits for another save of the same bundle to finish.
+const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn tile_path(h: &str) -> String {
     format!("tiles/{h}.zst")
@@ -366,11 +370,47 @@ pub struct PcraftWriter {
     compressed: HashMap<String, Arc<Vec<u8>>>,
     verified_directory: Option<DirectoryVerificationCache>,
     reverify_budget: u64,
+    /// How long [`Self::save_dir`] waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
+    lock_wait: std::time::Duration,
 }
 
 impl Default for PcraftWriter {
     fn default() -> Self {
-        Self { hash_cache: HashMap::new(), compressed: HashMap::new(), verified_directory: None, reverify_budget: DEFAULT_REVERIFY_BUDGET }
+        Self {
+            hash_cache: HashMap::new(),
+            compressed: HashMap::new(),
+            verified_directory: None,
+            reverify_budget: DEFAULT_REVERIFY_BUDGET,
+            lock_wait: SAVE_LOCK_WAIT,
+        }
+    }
+}
+
+/// Hold `dir`'s [`SAVE_LOCK`] for a directory save, so two writers (two stores, or two
+/// processes) can't interleave: each lists the existing objects, writes its own, publishes its
+/// manifest and removes what that manifest doesn't reference. Interleaved, one writer's cleanup
+/// could remove an object the other's winning manifest needs (#4957). The lock is the OS's
+/// advisory file lock, released when the returned file is dropped or the process ends, so a
+/// crash leaves no stale lock. Another save holding it is waited for up to `wait`; after that the
+/// save fails without writing anything. A file system without file locks (some network shares)
+/// saves unlocked, as before.
+fn lock_bundle(dir: &Path, wait: std::time::Duration) -> Result<Option<std::fs::File>> {
+    let path = dir.join(SAVE_LOCK);
+    validate_bundle_file(dir, &path)?;
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(FormatError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    format!("another save of {} is in progress; nothing was written", dir.display()),
+                )));
+            }
+            Err(std::fs::TryLockError::Error(_)) => return Ok(None),
+        }
     }
 }
 
@@ -725,6 +765,12 @@ impl PcraftWriter {
         self.reverify_budget = bytes;
     }
 
+    /// How long a directory save waits for another save of the same bundle to finish before
+    /// failing without writing anything (10 s by default; see [`Self::save_dir`]).
+    pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
+        self.lock_wait = wait;
+    }
+
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
@@ -801,10 +847,13 @@ impl PcraftWriter {
 
     /// Save into a directory bundle: reuses only valid existing objects,
     /// rewrites missing or damaged objects, then writes the manifest
-    /// atomically and removes unreferenced objects.
+    /// atomically and removes unreferenced objects. The whole save holds the bundle's
+    /// `save.lock`, so saves of one bundle from other writers or processes wait their turn.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
         let canonical_dir = bundle_root(dir)?;
         let dir = canonical_dir.as_path();
+        // Held until the end of the save: listing, writing, publishing and cleanup (#4957).
+        let _lock = lock_bundle(dir, self.lock_wait)?;
         let existing = list_objects(dir)?;
         // Reject a hostile existing entry before writing any object or manifest. This also
         // covers entries that this save would otherwise leave untouched or garbage-collect.
