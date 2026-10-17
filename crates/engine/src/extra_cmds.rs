@@ -757,6 +757,34 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
     Ok(true)
 }
 
+/// Run a compound command made of several history steps. When it fails after some of them were
+/// committed, take them back (and their journal entries), so the error leaves the document as it was
+/// instead of half rasterized. With nothing committed, the redo steps are kept.
+pub(crate) fn all_or_nothing<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
+    let journal = s.journal.len();
+    let before = s.active().map(|d| (d.doc.clone(), d.history.past_len()));
+    let r = f(s);
+    if r.is_err() {
+        s.journal.truncate(journal);
+        if let Some((doc, past)) = before {
+            // A full history drops its oldest state for each new one, so the count of new states
+            // can be 0 although a step was committed: undo until the document is the one we had.
+            let steps = s.active().map_or(0, |d| d.history.past_len().saturating_sub(past).max(1));
+            let mut undone = false;
+            for _ in 0..steps {
+                if s.active().is_none_or(|d| std::sync::Arc::ptr_eq(&d.doc, &doc)) || !s.undo() {
+                    break;
+                }
+                undone = true;
+            }
+            if let Some(st) = s.active_mut().filter(|_| undone) {
+                st.history.clear_redo();
+            }
+        }
+    }
+    r
+}
+
 /// Layer › Rasterize › Layer / Type / Shape / Fill Content / Smart Object. With a `layer` param,
 /// just that layer. Otherwise, as in Photoshop ("select the layer or layers you'd like to
 /// rasterize"), every selected layer the command applies to, in one history step.
@@ -764,12 +792,15 @@ pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) 
     let ids = crate::layer_multi_cmds::targets(s, p)?;
     let many = ids.len() > 1;
     let key = step_key(s, "rasterize");
-    let mut done = Vec::new();
-    for id in ids {
-        if rasterize_one(s, id, only, &key)? {
-            done.push(id.0);
+    let done = all_or_nothing(s, |s| {
+        let mut done = Vec::new();
+        for id in ids {
+            if rasterize_one(s, id, only, &key)? {
+                done.push(id.0);
+            }
         }
-    }
+        Ok(done)
+    })?;
     let Some(&first) = done.first() else {
         return Err(EngineError::Other(match (only, many) {
             (Some(k), false) => format!("the layer is not a {k} layer"),
@@ -785,13 +816,16 @@ pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) 
 pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
     let ids: Vec<LayerId> = s.active().map(|d| d.doc.walk().into_iter().map(|(_, _, l)| l.id).collect()).unwrap_or_default();
     let key = step_key(s, "rasterizeAll");
-    let mut n = 0;
-    for id in ids {
-        // Every sub-step shares one history entry via the coalescing key.
-        if rasterize_one(s, id, None, &key)? {
-            n += 1;
+    let n = all_or_nothing(s, |s| {
+        let mut n = 0;
+        for id in ids {
+            // Every sub-step shares one history entry via the coalescing key.
+            if rasterize_one(s, id, None, &key)? {
+                n += 1;
+            }
         }
-    }
+        Ok(n)
+    })?;
     Ok(json!({"rasterized": n}))
 }
 
@@ -1732,6 +1766,43 @@ mod tests {
         assert_eq!(s.execute("layer.rasterize.allLayers", json!({})).unwrap()["rasterized"], 1);
         assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
         assert!(doc(&s).walk().iter().all(|(_, _, l)| !matches!(l.content, LayerContent::Fill(_))));
+    }
+
+    #[test]
+    fn failed_compound_rasterize_leaves_nothing_committed() {
+        let mut s = session(8);
+        s.execute("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let journal = s.journal.len();
+        let key = step_key(&s, "rasterize");
+        let id = s.active().unwrap().active_layer.unwrap();
+        let r: Result<()> = all_or_nothing(&mut s, |s| {
+            assert!(rasterize_one(s, id, None, &key)?);
+            Err(EngineError::Other("later layer failed".into()))
+        });
+        assert!(r.is_err());
+        assert!(matches!(active(&s).content, LayerContent::Fill(_)));
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        assert!(!s.active().unwrap().history.can_redo());
+        assert_eq!(s.journal.len(), journal);
+    }
+
+    #[test]
+    fn failed_compound_rasterize_rolls_back_with_a_full_history() {
+        // A full history drops its oldest state for the new one, so its length does not grow.
+        let mut s = session(8);
+        s.execute("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        s.active_mut().unwrap().history.max_states = steps;
+        let key = step_key(&s, "rasterize");
+        let id = s.active().unwrap().active_layer.unwrap();
+        let r: Result<()> = all_or_nothing(&mut s, |s| {
+            assert!(rasterize_one(s, id, None, &key)?);
+            Err(EngineError::Other("later layer failed".into()))
+        });
+        assert!(r.is_err());
+        assert!(matches!(active(&s).content, LayerContent::Fill(_)));
+        assert!(!s.active().unwrap().history.can_redo());
     }
 
     #[test]
