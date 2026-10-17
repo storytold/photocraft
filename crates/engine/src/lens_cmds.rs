@@ -147,6 +147,9 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     cr.noise_luminance_detail = cr.noise_luminance_detail.clamp(0.0, 100.0);
     cr.noise_color = cr.noise_color.clamp(0.0, 100.0);
     cr.noise_color_detail = cr.noise_color_detail.clamp(0.0, 100.0);
+    // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
+    // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
+    cr.exposure = cr.exposure.clamp(-5.0, 5.0);
     Ok(cr)
 }
 
