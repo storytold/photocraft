@@ -502,13 +502,22 @@ pub fn layers_damage(before: &Document, after: &Document, ids: &[LayerId]) -> Op
         let canvas = d.bounds();
         for id in ids {
             // A layer gone from one side (never for a move) changes who knows what.
-            let b = photocraft_compose::change_bounds(d.layer(*id)?, canvas)?;
+            let (siblings, k) = siblings_of(d, *id)?;
+            let b = photocraft_compose::change_bounds_in(siblings, k, canvas)?;
             if !b.is_empty() {
                 out = if out.is_empty() { b } else { out.union(&b) };
             }
         }
     }
     Some(out)
+}
+
+/// The sibling list holding layer `id` in `doc` (bottom→top) and its index there.
+fn siblings_of(doc: &Document, id: LayerId) -> Option<(&[Layer], usize)> {
+    let path = doc.path_of(id)?;
+    let (&k, parent) = path.split_last()?;
+    let siblings = if parent.is_empty() { doc.layers.as_slice() } else { doc.layer_at(parent)?.children()? };
+    Some((siblings, k))
 }
 
 /// Report [`layers_damage`] as the active document's last change, so the canvas recomposites
@@ -801,6 +810,7 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                 // Both sides have the layer, in another order.
                 _ => return false,
             };
+            let (xk, yk) = (i, j);
             i += 1;
             j += 1;
             if x.video.is_some() || y.video.is_some() {
@@ -813,7 +823,9 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             }
             if !layer_pixels_equal(x, y) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
-                let (Some(bx), Some(by)) = (photocraft_compose::change_bounds(x, a.bounds()), photocraft_compose::change_bounds(y, b.bounds())) else {
+                // A clipped adjustment reaches as far as its base (#6535).
+                let (Some(bx), Some(by)) = (photocraft_compose::change_bounds_in(xs, xk, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, b.bounds()))
+                else {
                     return false;
                 };
                 *out = if out.is_empty() { bx.union(&by) } else { out.union(&bx).union(&by) };
@@ -834,10 +846,11 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
 }
 
 /// The pixels adding or removing `layers[k]` can change, when that is bounded: its change bounds
-/// (`photocraft_compose::change_bounds`: not for an adjustment, or a pass-through group holding
-/// one), provided it isn't the clipping base of clipped layers above it (they would change base),
-/// and neither it nor anything inside it is a video layer or excludes channels (both reach
-/// outside the layer's bounds, see [`step_damage`]).
+/// (`photocraft_compose::change_bounds_in`: not for an unclipped adjustment, or a pass-through
+/// group holding one; a clipped adjustment's are its base's), provided it isn't the clipping base
+/// of clipped layers above it (they would change base), and neither it nor anything inside it is
+/// a video layer or excludes channels (both reach outside the layer's bounds, see
+/// [`step_damage`]).
 fn one_sided_bounds(layers: &[Layer], k: usize, canvas: Rect) -> Option<Rect> {
     fn contained(l: &Layer, depth: usize) -> bool {
         depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
@@ -847,7 +860,7 @@ fn one_sided_bounds(layers: &[Layer], k: usize, canvas: Rect) -> Option<Rect> {
     if new_base || !contained(l, 0) {
         return None;
     }
-    photocraft_compose::change_bounds(l, canvas)
+    photocraft_compose::change_bounds_in(layers, k, canvas)
 }
 
 /// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
@@ -1778,6 +1791,71 @@ mod tests {
         plain.insert_above(None, Layer::raster("plain", plain.pixel_format()));
         assert_eq!(step_damage(&before, &plain), Some(Rect::EMPTY));
         assert_eq!(step_damage(&plain, &before), Some(Rect::EMPTY));
+    }
+
+    /// #6535: hiding or showing an adjustment clipped to a layer recomposites only that base's
+    /// area, also on undo and redo and inside a group, and recompositing just that area gives
+    /// the same canvas as a full recomposite.
+    #[test]
+    fn toggling_a_clipped_adjustment_damages_only_its_base() {
+        let all = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds());
+        // Recomposite only the reported damage over the previous canvas, as the view does.
+        let patched = |s: &Session, prev: &photocraft_compose::Buffer| {
+            let r = damage(s).expect("bounded damage");
+            let mut out = prev.clone();
+            if r.is_empty() {
+                return out;
+            }
+            let part = photocraft_compose::render(doc(s), r);
+            let w = out.rect.width() as usize;
+            for y in r.y0..r.y1 {
+                for x in r.x0..r.x1 {
+                    let i = (y - out.rect.y0) as usize * w + (x - out.rect.x0) as usize;
+                    let k = (y - r.y0) as usize * r.width() as usize + (x - r.x0) as usize;
+                    out.px[i] = part.px[k];
+                }
+            }
+            out
+        };
+        for grouped in [false, true] {
+            let mut s = session(16);
+            let base_rect = Rect::new(10, 10, 30, 25);
+            let base = rect_layer(&mut s, base_rect);
+            let adj = LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
+            s.execute("layer.createClippingMask", json!({"layer": adj.0})).unwrap();
+            assert!(doc(&s).layer(adj).unwrap().clipped);
+            if grouped {
+                s.execute("layer.select", json!({"layer": base.0})).unwrap();
+                s.execute("layer.select", json!({"layer": adj.0, "mode": "toggle"})).unwrap();
+                s.execute("layer.groupLayers", json!({})).unwrap();
+                assert!(doc(&s).path_of(adj).unwrap().len() == 2, "the pair sits in a group");
+            }
+            let shown = all(&s);
+            s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+            assert!(!doc(&s).layer(adj).unwrap().visible);
+            assert_eq!(damage(&s), Some(base_rect), "grouped: {grouped}");
+            let hidden = all(&s);
+            assert_ne!(hidden, shown);
+            assert_eq!(patched(&s, &shown), hidden);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(base_rect));
+            assert_eq!(patched(&s, &hidden), shown);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(base_rect));
+            assert_eq!(patched(&s, &shown), hidden);
+            s.execute("layer.showLayers", json!({"layer": adj.0})).unwrap();
+            assert_eq!(damage(&s), Some(base_rect));
+            assert_eq!(patched(&s, &hidden), shown);
+            // layer.setProps reports its own damage.
+            s.execute("layer.setProps", json!({"layer": adj.0, "visible": false})).unwrap();
+            assert_eq!(damage(&s), Some(base_rect));
+            assert_eq!(patched(&s, &shown), hidden);
+            // Unclipped, the adjustment still reaches the whole canvas.
+            s.execute("layer.setProps", json!({"layer": adj.0, "visible": true})).unwrap();
+            s.execute("layer.releaseClippingMask", json!({"layer": adj.0})).unwrap();
+            s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+            assert_eq!(damage(&s), None);
+        }
     }
 
     /// #2883 (P8/P9): a duplicate shares the source's tiles (no pixel copy) and recomposites only

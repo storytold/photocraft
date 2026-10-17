@@ -1168,6 +1168,23 @@ pub fn change_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
     composite_bounds(layer, canvas)
 }
 
+/// [`change_bounds`] of `layers[k]` in its sibling list (bottom→top), which also bounds a clipped
+/// adjustment layer: it changes only its clip base's pixels, so it reaches as far as showing,
+/// hiding or restyling that base does (#6535). Still `None` when there is no base below it (the
+/// compositor then draws it as an ordinary adjustment) or the base is an adjustment itself
+/// (layers clipped to one composite atop the adjusted backdrop, everywhere).
+pub fn change_bounds_in(layers: &[Layer], k: usize, canvas: Rect) -> Option<Rect> {
+    let layer = layers.get(k)?;
+    if layer.clipped && matches!(layer.content, LayerContent::Adjustment(_)) {
+        let base = layers.get(..k)?.iter().rev().find(|l| !l.clipped)?;
+        if matches!(base.content, LayerContent::Adjustment(_)) {
+            return None;
+        }
+        return change_bounds(base, canvas);
+    }
+    change_bounds(layer, canvas)
+}
+
 /// Whether the layer's content is transparent outside its bounds (every surface it draws from
 /// has a transparent default pixel), so its effects can't change pixels beyond its bounds grown
 /// by their reach.

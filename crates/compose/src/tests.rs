@@ -448,6 +448,58 @@ fn clipped_adjustment_only_affects_base() {
     assert!(close4(px(&d, 3, 0), [1.0; 4]), "background untouched (white)");
 }
 
+/// #6535: showing or hiding a clipped adjustment changes only its base's pixels, so its change
+/// bounds are the base's; it still reaches everywhere without a base, or clipped to an
+/// adjustment, or to a pass-through group whose adjustment it isolates.
+#[test]
+fn clipped_adjustment_changes_only_its_base() {
+    let canvas = Rect::new(0, 0, 8, 6);
+    let base_rect = Rect::new(2, 1, 5, 4);
+    let mut d = doc_white(8, 6);
+    d.layers.push(solid_layer("base", base_rect, [0.2, 0.4, 0.6, 1.0]));
+    let mut over = solid_layer("over", Rect::new(3, 2, 4, 3), [0.9, 0.1, 0.1, 1.0]);
+    over.clipped = true;
+    d.layers.push(over);
+    let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
+    adj.clipped = true;
+    d.layers.push(adj);
+    assert_eq!(change_bounds(&d.layers[3], canvas), None);
+    assert_eq!(change_bounds_in(&d.layers, 3, canvas), Some(base_rect));
+    // Every pixel the toggle changes lies inside those bounds.
+    let shown = render(&d, canvas);
+    d.layers[3].visible = false;
+    let hidden = render(&d, canvas);
+    let mut changed = Rect::EMPTY;
+    for (i, (a, b)) in shown.px.iter().zip(&hidden.px).enumerate() {
+        if !close4(*a, *b) {
+            let (x, y) = ((i % 8) as i32, (i / 8) as i32);
+            assert!(base_rect.contains(x, y), "pixel {x},{y} changed outside the base");
+            let p = Rect::from_xywh(x, y, 1, 1);
+            changed = if changed.is_empty() { p } else { changed.union(&p) };
+        }
+    }
+    assert_eq!(changed, base_rect);
+    // Other layers keep their own bounds.
+    assert_eq!(change_bounds_in(&d.layers, 2, canvas), Some(Rect::new(3, 2, 4, 3)));
+    assert_eq!(change_bounds_in(&d.layers, 9, canvas), None);
+
+    // Unclipped, or with no base beneath it, it reaches everything.
+    let mut free = d.layers.clone();
+    free[3].clipped = false;
+    assert_eq!(change_bounds_in(&free, 3, canvas), None);
+    let orphan = vec![d.layers[3].clone()];
+    assert_eq!(change_bounds_in(&orphan, 0, canvas), None);
+    // Clipped layers on an adjustment composite atop the adjusted backdrop.
+    let on_adj = vec![d.layers[0].clone(), Layer::new("lv", LayerContent::Adjustment(Adjustment::Invert)), d.layers[3].clone()];
+    assert_eq!(change_bounds_in(&on_adj, 2, canvas), None);
+    // A pass-through group holding an adjustment is isolated only while it has visible clipped
+    // layers, so they change whether its adjustment reaches the layers beneath.
+    let mut g = Layer::group("g", vec![solid_layer("in", base_rect, [0.2, 0.4, 0.6, 1.0]), Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
+    g.blend = BlendMode::PassThrough;
+    let on_group = vec![d.layers[0].clone(), g, d.layers[3].clone()];
+    assert_eq!(change_bounds_in(&on_group, 2, canvas), None);
+}
+
 #[test]
 fn threshold_posterize_levels_curves() {
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [0.3, 0.3, 0.3, 1.0]);
