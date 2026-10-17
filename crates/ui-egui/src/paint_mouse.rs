@@ -287,6 +287,34 @@ mod tests {
         assert!(alpha_at(&h, a + (b - a) * 0.5) > 0.9);
     }
 
+    /// A move after the release in the same frame (a pen hovering away, or Windows' late mouse
+    /// messages for a pen) is no part of the stroke: it ends where the button was released, not
+    /// with a tail out to the pointer's latest position.
+    #[test]
+    fn a_move_after_the_release_draws_no_tail() {
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        let (a, b, away) = (c - vec2(80.0, 0.0), c + vec2(80.0, 0.0), c + vec2(40.0, 90.0));
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        press(&mut h, a, PointerButton::Primary, true);
+        for i in 1..=8 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (i as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        // Both in one frame (`Harness::event` would run a frame per event).
+        let events = &mut h.input_mut().events;
+        events.push(egui::Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        events.push(egui::Event::PointerMoved(away));
+        h.run_steps(2);
+        let s = strokes(&h);
+        assert_eq!(s.len(), 1);
+        let ys: Vec<f64> = s[0]["points"].as_array().unwrap().iter().map(|p| p[1].as_f64().unwrap()).collect();
+        assert!(ys.windows(2).all(|w| (w[0] - w[1]).abs() < 0.5), "the stroke stays on its line: {ys:?}");
+        assert!(alpha_at(&h, b) > 0.9, "the stroke reaches the release point");
+        assert_eq!(alpha_at(&h, b + (away - b) * 0.5), 0.0, "no tail towards the later move");
+    }
+
     #[test]
     fn shift_click_connects_to_the_previous_brush_stroke() {
         use egui::{Event, Modifiers};
