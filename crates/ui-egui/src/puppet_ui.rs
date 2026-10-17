@@ -1,5 +1,6 @@
 //! Edit › Puppet Warp on the canvas: click on the mesh to add pins, drag pins to move them,
-//! ⌥-click a pin to remove it; the options bar sets mode, density, expansion, mesh visibility,
+//! Delete/Backspace removes the selected pin; ⌥-click removes a pin under the pointer.
+//! The options bar sets mode, density, expansion, mesh visibility,
 //! the selected pin's depth and rotation. ⌘Z / ⌘⇧Z undo and redo pin edits inside the session
 //! (#4440). ↩ / Commit runs `edit.puppetWarp` with the pins.
 //!
@@ -76,6 +77,22 @@ impl PuppetSession {
         let Some(pins) = self.redo.pop() else { return false };
         self.undo.push(std::mem::replace(&mut self.warp.pins, pins.clone()));
         self.restore(pins);
+        true
+    }
+
+    /// Removes the selected constraint and its deformation as one undoable pin edit.
+    pub fn delete_selected_pin(&mut self) -> bool {
+        let Some(i) = self.selected.filter(|i| *i < self.warp.pins.len()) else { return false };
+        // Finish an in-progress drag first, so undo can restore the pin, then undo its move.
+        if let Some(before) = self.drag_from.take() {
+            self.record(before);
+        }
+        let before = self.warp.pins.clone();
+        self.warp.pins.remove(i);
+        self.selected = None;
+        self.drag = None;
+        self.rebind();
+        self.record(before);
         true
     }
 
@@ -242,6 +259,10 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         s.redo();
         return Ok(s.describe());
     }
+    if ui.get("deleteSelectedPin").and_then(Value::as_bool) == Some(true) {
+        s.delete_selected_pin();
+        return Ok(s.describe());
+    }
     let mut remesh = false;
     let (density, expansion) = (s.warp.density, s.warp.expansion);
     if let Some(m) = ui.get("mode").and_then(Value::as_str) {
@@ -275,10 +296,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
             let before = s.warp.pins.clone();
             if let Some(i) = s.pin_at(p, tol) {
                 if mods.alt {
-                    s.warp.pins.remove(i);
-                    s.selected = None;
-                    s.rebind();
-                    s.record(before);
+                    s.selected = Some(i);
+                    s.delete_selected_pin();
                 } else {
                     s.selected = Some(i);
                     s.drag = Some(i);
@@ -453,6 +472,167 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn puppet_app(ctx: &egui::Context) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 30, 80, 50), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        begin(&mut app, ctx, "edit.puppetWarp").unwrap();
+        app
+    }
+
+    fn gesture(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
+        pointer(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(app, ToolEvent::Up { x: to[0], y: to[1] }, egui::Modifiers::NONE);
+    }
+
+    fn press(app: &mut PhotocraftApp, ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) {
+        let events = [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }).to_vec();
+        let input = egui::RawInput { events, ..Default::default() };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    }
+
+    #[test]
+    fn delete_keys_remove_selected_pin_and_restore_its_deformation_on_undo() {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let ctx = egui::Context::default();
+            let mut app = puppet_app(&ctx);
+            gesture(&mut app, [25.0, 40.0], [25.0, 40.0]);
+            gesture(&mut app, [75.0, 40.0], [75.0, 40.0]);
+            gesture(&mut app, [75.0, 40.0], [75.0, 30.0]);
+            gesture(&mut app, [25.0, 40.0], [25.0, 20.0]);
+            let s = app.distort.puppet.as_mut().unwrap();
+            // Rotation/depth are part of a deleted pin's state, not just its position.
+            let before = s.warp.pins.clone();
+            s.warp.pins[0].rotate = Some(15.0);
+            s.warp.pins[0].depth = 2;
+            s.rebind();
+            s.record(before);
+            let pins = s.warp.pins.clone();
+            let deformed = s.deformed.clone();
+            let order = s.order.clone();
+            let edits = s.undo.len();
+            let survivor = &pins[1];
+            let solver = PuppetSolver::new(s.mesh.clone(), &[survivor.src], &[survivor.rotate.is_some()]);
+            let expected = solver.solve(&[survivor.dst], &[survivor.rotate], s.warp.mode, ITERATIONS, None).0;
+            let past = app.session.active().unwrap().history.past_len();
+
+            press(&mut app, &ctx, key, egui::Modifiers::NONE);
+            let s = app.distort.puppet.as_ref().unwrap();
+            assert_eq!(s.warp.pins, pins[1..], "{key:?}: delete the selected first pin, not the last");
+            assert_eq!(s.selected, None);
+            assert_eq!(s.deformed, expected, "solve from rest without the deleted constraint");
+            assert_eq!(s.order, solver.draw_order(&[survivor.depth], &[survivor.src]));
+            assert_eq!(s.undo.len(), edits + 1);
+            press(&mut app, &ctx, key, egui::Modifiers::NONE);
+            assert_eq!(app.distort.puppet.as_ref().unwrap().undo.len(), edits + 1, "no selection: no edit");
+
+            press(&mut app, &ctx, egui::Key::Z, egui::Modifiers::COMMAND);
+            let s = app.distort.puppet.as_ref().unwrap();
+            assert_eq!(s.warp.pins, pins);
+            assert_eq!(s.deformed, deformed);
+            assert_eq!(s.order, order);
+            press(&mut app, &ctx, egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+            assert_eq!(app.distort.puppet.as_ref().unwrap().deformed, expected);
+            assert_eq!(app.session.active().unwrap().history.past_len(), past, "pin edits stay in the open session");
+
+            let original = app.session.active().unwrap().doc.clone();
+            commit(&mut app);
+            assert_eq!(app.session.active().unwrap().history.past_len(), past + 1);
+            let committed = app.session.active().unwrap().doc.clone();
+            assert_ne!(committed, original);
+            app.session.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc, original);
+            app.session.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc, committed);
+        }
+    }
+
+    #[test]
+    fn deleting_during_a_drag_settles_history_and_cannot_move_the_next_pin() {
+        let ctx = egui::Context::default();
+        let mut app = puppet_app(&ctx);
+        gesture(&mut app, [25.0, 40.0], [25.0, 40.0]);
+        gesture(&mut app, [75.0, 40.0], [75.0, 40.0]);
+        let original = app.distort.puppet.as_ref().unwrap().warp.pins.clone();
+        pointer(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Move { x: 25.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let moved = app.distort.puppet.as_ref().unwrap().warp.pins.clone();
+        press(&mut app, &ctx, egui::Key::Delete, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Move { x: 5.0, y: 5.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 5.0, y: 5.0 }, egui::Modifiers::NONE);
+        let s = app.distort.puppet.as_mut().unwrap();
+        assert_eq!(s.warp.pins, original[1..]);
+        assert!(s.drag.is_none() && s.drag_from.is_none());
+        assert!(s.undo());
+        assert_eq!(s.warp.pins, moved, "first undo restores the deleted pin at its moved position");
+        assert!(s.undo());
+        assert_eq!(s.warp.pins, original, "second undo reverts the preceding drag");
+        assert!(s.redo());
+        s.selected = Some(0);
+        control(&mut app, &json!({"deleteSelectedPin": true})).unwrap();
+        assert!(!app.distort.puppet.as_mut().unwrap().redo(), "a new deletion discards the redo branch");
+    }
+
+    #[test]
+    fn deleting_last_pin_restores_rest_mesh_and_empty_commit_is_not_an_edit() {
+        let ctx = egui::Context::default();
+        let mut app = puppet_app(&ctx);
+        gesture(&mut app, [25.0, 40.0], [25.0, 20.0]);
+        let past = app.session.active().unwrap().history.past_len();
+        let s = app.distort.puppet.as_mut().unwrap();
+        let pins = s.warp.pins.clone();
+        s.selected = Some(usize::MAX);
+        press(&mut app, &ctx, egui::Key::Delete, egui::Modifiers::NONE);
+        assert_eq!(app.distort.puppet.as_ref().unwrap().warp.pins, pins, "stale selection is harmless");
+        app.distort.puppet.as_mut().unwrap().selected = Some(0);
+        press(&mut app, &ctx, egui::Key::Backspace, egui::Modifiers::NONE);
+        let s = app.distort.puppet.as_ref().unwrap();
+        assert!(s.warp.pins.is_empty());
+        assert_eq!(s.deformed.len(), s.mesh.verts.len());
+        for (deformed, rest) in s.deformed.iter().zip(&s.mesh.verts) {
+            assert!(dist(*deformed, *rest) < 1e-8, "no constraints: the mesh returns to rest");
+        }
+        commit(&mut app);
+        assert!(app.distort.puppet.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), past);
+    }
+
+    #[test]
+    fn delete_keys_in_a_text_field_do_not_remove_pins() {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let ctx = egui::Context::default();
+            let mut app = puppet_app(&ctx);
+            gesture(&mut app, [25.0, 40.0], [25.0, 20.0]);
+            let mut text = "123".to_string();
+            ctx.run_ui(Default::default(), |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            })
+            .textures_delta
+            .clear();
+            let pins = app.distort.puppet.as_ref().unwrap().warp.pins.clone();
+            let input = egui::RawInput {
+                events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                assert!(ui.ctx().text_edit_focused());
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                ui.text_edit_singleline(&mut text);
+            })
+            .textures_delta
+            .clear();
+            assert_eq!(app.distort.puppet.as_ref().unwrap().warp.pins, pins);
+            assert_eq!(app.distort.puppet.as_ref().unwrap().undo.len(), 1);
+        }
+    }
 
     /// #5092: a Puppet Warp session left open does not follow the user to a new document.
     #[test]

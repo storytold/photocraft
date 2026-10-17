@@ -184,6 +184,8 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             p.redo();
         } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
             p.undo();
+        } else if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
+            p.delete_selected_pin();
         }
         return true;
     }
