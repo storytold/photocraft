@@ -439,6 +439,8 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 pub type WindowFrameFn = Box<dyn FnMut()>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
+/// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
+pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -522,6 +524,8 @@ pub struct Services {
     /// style and button layout). Read every frame, with the context to wake when it changes;
     /// `None` keeps Windows' buttons at the right end.
     pub caption_style: Option<CaptionStyleFn>,
+    /// Physical right mouse button or pen barrel button currently down.
+    pub right_button_down: Option<RightButtonDownFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.

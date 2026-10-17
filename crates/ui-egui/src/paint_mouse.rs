@@ -100,21 +100,32 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
-    let (mods, right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    let physical_right = app.services.right_button_down.as_ref().map_or(false, |f| f());
+    let (mods, mut right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    right_down |= physical_right;
+    let right_started = response.drag_started_by(PointerButton::Secondary) || (physical_right && response.drag_started());
+    let right_dragged = response.dragged_by(PointerButton::Secondary) || (physical_right && response.dragged());
+    let resizing = app.brush_resize.is_some_and(|r| r.secondary);
+    let right_stopped = response.drag_stopped_by(PointerButton::Secondary) || (resizing && response.drag_stopped());
+
+    if physical_right && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods)) {
+        app.alt_sampling = false;
+    }
+
     // Alt+right-drag resizes the brush (brush_resize.rs); its events reach `tool_event` like a
     // left drag's, and nothing paints. A resize whose release was missed ends here.
-    crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary));
+    crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary) || response.drag_stopped());
     let resize_start = crate::brush_resize::applies(tool)
         && app.drag.is_none()
         && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
-        && response.drag_started_by(PointerButton::Secondary);
+        && (right_started || (physical_right && response.dragged() && app.brush_resize.is_none()));
     let resizing = app.brush_resize.is_some_and(|r| r.secondary);
-    app.brush_resize_armed = resize_start;
+    app.brush_resize_armed = resize_start || (physical_right && resizing);
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
     let right_stroke = erase && app.drag.is_some();
-    let right_start = erase && response.drag_started_by(PointerButton::Secondary);
+    let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
     if right_click
         && !erase
@@ -129,8 +140,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_drag = right_stroke || resizing;
     Buttons {
         started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
-        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
+        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && right_dragged),
+        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && right_stopped),
         clicked: response.clicked() || erase_click,
     }
 }

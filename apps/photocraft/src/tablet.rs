@@ -19,13 +19,29 @@ use photocraft_tablet::Sample;
 use photocraft_ui_egui::stylus::{PenSample, StylusFeed};
 
 /// A tablet sample as the UI's pen sample.
+#[allow(dead_code)]
 pub fn pen_sample(s: Sample) -> PenSample {
     PenSample { pressure: s.pressure, tilt_x: s.tilt_x, tilt_y: s.tilt_y, rotation: s.rotation, eraser: s.eraser }.sanitized()
 }
 
 /// Writes tablet samples into `feed` (`None` = a mouse).
+#[allow(dead_code)]
 pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
     move |s| feed.set(s.map(pen_sample))
+}
+
+/// Physical right mouse button or stylus barrel button down check (Windows).
+#[cfg(target_os = "windows")]
+pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
+    photocraft_tablet::windows::install();
+    Some(Box::new(|| {
+        photocraft_tablet::windows::is_barrel_button_down() || winsafe::GetAsyncKeyState(winsafe::co::VK::RBUTTON)
+    }))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
+    None
 }
 
 /// Install the AppKit tablet monitor (main thread, once winit created the shared application:
