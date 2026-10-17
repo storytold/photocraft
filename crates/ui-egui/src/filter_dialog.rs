@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use photocraft_doc::Document;
+use photocraft_engine::installed_profiles::InstalledProfile;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -586,6 +587,29 @@ fn uses_logarithmic_slider(min: f32, max: f32) -> bool {
 /// Schema dialogs whose `profile` menu lists the installed profiles after the built-ins.
 const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile", "view.proofSetup"];
 
+/// Which installed profiles a menu of `cmd` lists after its built-ins, if it lists any: every
+/// destination profile for the `profile` menus of [`PROFILE_DIALOGS`], and for Color Settings'
+/// working spaces those of that space, as Photoshop lists them (#6323). An RGB working space is a
+/// display or colour-space profile, not a scanner's or a printer's.
+fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> bool> {
+    use photocraft_cms::{ColorSpace, ProfileClass};
+    match (cmd, key) {
+        (c, "profile") if PROFILE_DIALOGS.contains(&c) => Some(|_| true),
+        ("edit.colorSettings", "workingRgb") => {
+            Some(|i| i.color_space == ColorSpace::Rgb && matches!(i.class, ProfileClass::Display | ProfileClass::ColorSpace))
+        }
+        ("edit.colorSettings", "workingCmyk") => Some(|i| i.color_space == ColorSpace::Cmyk),
+        ("edit.colorSettings", "workingGray") => Some(|i| i.color_space == ColorSpace::Gray),
+        _ => None,
+    }
+}
+
+/// The `installed` profiles a menu of `cmd` lists (see [`installed_filter`]), by path and description.
+fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Vec<(String, String)> {
+    let Some(fits) = installed_filter(cmd, key) else { return Vec::new() };
+    installed.iter().filter(|i| i.is_destination() && fits(i)).map(|i| (i.path.clone(), i.description.clone())).collect()
+}
+
 /// Commands whose `angle` is a direction in document angles (counter-clockwise from three
 /// o'clock): a light or a blur direction, edited on a dial as in Photoshop's Motion Blur, Emboss
 /// and Global Light (#3152). Rotation amounts (Twirl, Rotate Arbitrary, Crop, Lens Correction,
@@ -711,14 +735,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let mut cur = f.get(&p.key).and_then(Value::as_str).unwrap_or(initial).to_string();
                     let labels: Vec<String> = options.iter().map(|o| choice_label(o)).collect();
                     let mut opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
-                    // Like Photoshop, the profile menus also list every profile installed in
-                    // the system (printer and paper profiles), by description.
-                    let installed = if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) {
-                        photocraft_engine::installed_profiles::installed().into_iter().filter(|i| i.is_destination()).collect()
-                    } else {
-                        Vec::new()
-                    };
-                    opts.extend(installed.iter().map(|i| (i.path.clone(), i.description.as_str())));
+                    // Like Photoshop, the profile menus also list the profiles installed in the
+                    // system (printer and paper profiles, press conditions), by description.
+                    let lists_installed = installed_filter(&cmd, &p.key).is_some();
+                    let installed =
+                        if lists_installed { installed_choices(&cmd, &p.key, &photocraft_engine::installed_profiles::installed()) } else { Vec::new() };
+                    opts.extend(installed.iter().map(|(path, description)| (path.clone(), description.as_str())));
                     // Assign Profile: only what the document's colour mode can take (#4951).
                     if p.key == "profile"
                         && let Some(allowed) = f.get("__profiles").and_then(Value::as_array)
@@ -728,7 +750,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     // A profile given by path that isn't listed (typed by an agent, or spelled with
                     // different case) still shows, by its file name, instead of a blank menu.
                     let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) && !opts.iter().any(|(v, _)| *v == cur) {
+                    if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
@@ -1018,6 +1040,31 @@ impl FilterPreviewKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
+        // #6323: a press condition installed in the system can be the CMYK working space, as in
+        // Photoshop's Color Settings; each working-space menu lists only profiles of its space.
+        use photocraft_cms::{ColorSpace, ProfileClass};
+        let p = |path: &str, class, color_space| InstalledProfile { path: path.into(), description: path.to_uppercase(), class, color_space };
+        let installed = [
+            p("gracol.icc", ProfileClass::Output, ColorSpace::Cmyk),
+            p("monitor.icc", ProfileClass::Display, ColorSpace::Rgb),
+            p("printer-rgb.icc", ProfileClass::Output, ColorSpace::Rgb),
+            p("scanner.icc", ProfileClass::Input, ColorSpace::Rgb),
+            p("gray.icc", ProfileClass::Output, ColorSpace::Gray),
+            p("link.icc", ProfileClass::DeviceLink, ColorSpace::Cmyk),
+        ];
+        let paths = |key: &str| installed_choices("edit.colorSettings", key, &installed).into_iter().map(|(path, _)| path).collect::<Vec<_>>();
+        assert_eq!(paths("workingCmyk"), ["gracol.icc"]);
+        assert_eq!(paths("workingRgb"), ["monitor.icc"]);
+        assert_eq!(paths("workingGray"), ["gray.icc"]);
+        assert!(paths("policyCmyk").is_empty() && paths("intent").is_empty());
+        assert_eq!(installed_choices("edit.colorSettings", "workingCmyk", &installed)[0].1, "GRACOL.ICC", "listed by description");
+        // The profile dialogs keep listing every destination profile.
+        assert_eq!(installed_choices("edit.convertToProfile", "profile", &installed).len(), 5);
+        assert!(installed_choices("filter.blur.gaussianBlur", "profile", &installed).is_empty());
+    }
 
     /// #5710: the seed field's Random button always gives a different seed the field can hold.
     #[test]
