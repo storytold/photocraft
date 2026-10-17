@@ -691,8 +691,8 @@ pub struct PlacedSpec<'a> {
 }
 
 /// Where the frame corners land (top-left, top-right, bottom-right, bottom-left), as x, y pairs.
-/// The frame is [`crate::blocks::placed_frame`] for an affine placement (the inverse of
-/// `parse_smart`), the source rect for a projective one (as `parse_smart_perspective` reads it).
+/// The frame is [`crate::blocks::placed_frame`], for an affine placement (the inverse of
+/// `parse_smart`) and a projective one (the inverse of `parse_smart_perspective`) alike.
 fn quad_points(s: &PlacedSpec<'_>) -> [f64; 8] {
     let (w, h) = s.size;
     let [a, b, c, d, e, f] = s.transform.m;
@@ -700,7 +700,7 @@ fn quad_points(s: &PlacedSpec<'_>) -> [f64; 8] {
         Some(p) => photocraft_algo::transform::Homography(*p).apply(x, y),
         None => (a * x + c * y + e, b * x + d * y + f),
     };
-    let [x0, y0, x1, y1] = if s.perspective.is_some() { [0.0, 0.0, w, h] } else { crate::blocks::placed_frame(s.warp, w, h) };
+    let [x0, y0, x1, y1] = crate::blocks::placed_frame(s.warp, w, h);
     let mut out = [0.0; 8];
     for (i, (x, y)) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().enumerate() {
         (out[2 * i], out[2 * i + 1]) = map(x, y);
@@ -725,15 +725,17 @@ fn enumv(t: &str, v: &str) -> Value {
     Value::Enumerated { type_id: Id::new(t), value: Id::new(v) }
 }
 
-/// The `warp` descriptor (also the `PlLd` warp). Multi-patch meshes have no 1 × 1 envelope and
-/// are written as no warp, with a message.
+/// The `warp` descriptor (also the `PlLd` warp). A split (multi-patch) mesh is a `quiltWarp`
+/// descriptor that also holds its grid size (`deformNumRows/Cols`) and patch boundaries
+/// (`quiltSliceX/Y`, in source pixels); a 1 × 1 mesh is written as before. A custom warp without a valid mesh is written as no warp, with a
+/// message.
 fn warp_desc(w: Option<&Warp>, size: (f64, f64), warnings: &mut Vec<String>) -> Value {
     let none = Warp::none([0.0, 0.0, size.0, size.1]);
     let mut w = w.unwrap_or(&none).clone();
     let mesh = match (&w.style, &w.mesh) {
-        (WarpStyle::Custom, Some(m)) if m.points.len() == 16 => Some(m.clone()),
+        (WarpStyle::Custom, Some(m)) if m.is_valid() => Some(m.clone()),
         (WarpStyle::Custom, _) => {
-            warnings.push("a custom warp with more than one patch was written to PSD without its warp".into());
+            warnings.push("a custom warp without a valid mesh was written to PSD without its warp".into());
             w = none.clone();
             None
         }
@@ -745,7 +747,8 @@ fn warp_desc(w: Option<&Warp>, size: (f64, f64), warnings: &mut Vec<String>) -> 
         .with("Left", Value::Double(x0))
         .with("Btom", Value::Double(y1))
         .with("Rght", Value::Double(x1));
-    let mut d = Descriptor::new("warp")
+    let split = mesh.as_ref().is_some_and(|m| m.us.len() > 2 || m.vs.len() > 2);
+    let mut d = Descriptor::new(if split { "quiltWarp" } else { "warp" })
         .with("warpStyle", enumv("warpStyle", w.style.psd_name()))
         .with("warpValue", Value::Double(w.bend))
         .with("warpPerspective", Value::Double(w.h_distort))
@@ -755,13 +758,25 @@ fn warp_desc(w: Option<&Warp>, size: (f64, f64), warnings: &mut Vec<String>) -> 
         .with("uOrder", Value::Integer(4))
         .with("vOrder", Value::Integer(4));
     if let Some(m) = mesh {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
         let body = Descriptor::new("rationalPoint")
             .with("Hrzn", Value::UnitFloats { unit: *b"#Pxl", values: m.points.iter().map(|p| p[0]).collect() })
             .with("Vrtc", Value::UnitFloats { unit: *b"#Pxl", values: m.points.iter().map(|p| p[1]).collect() });
-        d = d.with(
-            "customEnvelopeWarp",
-            Value::Descriptor(Descriptor::new("customEnvelopeWarp").with("meshPoints", Value::ObjectArray(ObjectArray { prefix: 16, body }))),
-        );
+        let mut env = Descriptor::new("customEnvelopeWarp");
+        if split {
+            d = d
+                .with("deformNumRows", Value::Integer(i32::try_from(m.ny()).unwrap_or(i32::MAX)))
+                .with("deformNumCols", Value::Integer(i32::try_from(m.nx()).unwrap_or(i32::MAX)));
+            let slices = |key: &str, knots: &[f64], a: f64, b: f64| {
+                let values = knots.iter().map(|k| a + k * (b - a)).collect();
+                Value::ObjectArray(ObjectArray {
+                    prefix: count(knots.len()),
+                    body: Descriptor::new("UntF").with(key, Value::UnitFloats { unit: *b"#Pxl", values }),
+                })
+            };
+            env = env.with("quiltSliceX", slices("quiltSliceX", &m.us, x0, x1)).with("quiltSliceY", slices("quiltSliceY", &m.vs, y0, y1));
+        }
+        d = d.with("customEnvelopeWarp", Value::Descriptor(env.with("meshPoints", Value::ObjectArray(ObjectArray { prefix: count(m.points.len()), body }))));
     }
     Value::Descriptor(d)
 }
@@ -781,7 +796,11 @@ fn pad4(mut v: Vec<u8>) -> Vec<u8> {
 /// the placed id (for a duplicate), transform (when it moved), warp and filter stack are rewritten;
 /// otherwise a fresh descriptor in Photoshop's key order.
 pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
-    let warp = warp_desc(s.warp, s.size, warnings);
+    // Photoshop keeps a split warp in `quiltWarp`, before a `warp` that says `warpNone`.
+    let (warp, quilt) = match warp_desc(s.warp, s.size, warnings) {
+        Value::Descriptor(q) if q.class_id.is("quiltWarp") => (warp_desc(None, s.size, warnings), Some(Value::Descriptor(q))),
+        w => (w, None),
+    };
     let d = match template {
         Some(t) => {
             let mut d = t.clone();
@@ -793,6 +812,14 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
                 set(&mut d, "nonAffineTransform", quad(s));
             }
             set(&mut d, "warp", warp);
+            match quilt {
+                Some(q) => match d.items.iter().position(|(k, _)| k.is("quiltWarp") || k.is("warp")) {
+                    Some(i) if d.items[i].0.is("quiltWarp") => d.items[i].1 = q,
+                    Some(i) => d.items.insert(i, (Id::new("quiltWarp"), q)),
+                    None => d.items.push((Id::new("quiltWarp"), q)),
+                },
+                None => d.items.retain(|(k, _)| !k.is("quiltWarp")),
+            }
             match &s.filter_fx {
                 Some(fx) => set(&mut d, "filterFX", Value::Descriptor(fx.clone())),
                 None => d.items.retain(|(k, _)| !k.is("filterFX")),
@@ -812,7 +839,11 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
                 .with("Annt", Value::Integer(16))
                 .with("Type", Value::Integer(2))
                 .with("Trnf", quad(s))
-                .with("nonAffineTransform", quad(s))
+                .with("nonAffineTransform", quad(s));
+            if let Some(q) = quilt {
+                d = d.with("quiltWarp", q);
+            }
+            d = d
                 .with("warp", warp)
                 .with("Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(s.size.0)).with("Hght", Value::Double(s.size.1))))
                 .with("Rslt", unit(b"#Rsl", s.dpi));
@@ -1417,13 +1448,16 @@ mod tests {
         let mut custom = BezierMesh::identity(bounds, 1, 1);
         custom.points[15] = [67.0, 30.0];
         let mut multi = Warp::preset(WarpStyle::Custom, 0.0, bounds);
-        multi.mesh = Some(BezierMesh::identity(bounds, 2, 2));
+        let mut split = BezierMesh::identity(bounds, 1, 1);
+        assert!(split.split_u(0.25) && split.split_u(0.7) && split.split_v(0.4));
+        split.points[5] = [21.0, -4.0];
+        multi.mesh = Some(split);
         let mut arc = Warp::preset(WarpStyle::Arc, 40.0, bounds);
         arc.vertical = true;
         arc.h_distort = 10.0;
         let mut c = Warp::preset(WarpStyle::Custom, 0.0, bounds);
         c.mesh = Some(custom);
-        for (w, back) in [(Some(arc.clone()), Some(arc)), (Some(c.clone()), Some(c)), (Some(multi), None), (None, None)] {
+        for (w, back) in [(Some(arc.clone()), Some(arc)), (Some(c.clone()), Some(c)), (Some(multi.clone()), Some(multi)), (None, None)] {
             let mut warnings = Vec::new();
             let spec = PlacedSpec {
                 idnt: "i",

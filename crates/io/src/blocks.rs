@@ -525,8 +525,8 @@ pub(crate) fn with_pattern_placement(mut d: Descriptor, angle: f32, link: bool, 
     )
 }
 
-/// The warp of a placed layer (`SoLd`/`SoLE` `warp` descriptor): style, bend, distortions,
-/// axis, bounds and, for `warpCustom`, the 4 × 4 `customEnvelopeWarp` mesh. Read-only: the raw
+/// The warp of a placed layer (`SoLd`/`SoLE` `quiltWarp` or `warp` descriptor): style, bend, distortions,
+/// axis, bounds and, for `warpCustom`, the `customEnvelopeWarp` mesh (split warps included). Read-only: the raw
 /// block is what gets written back. `None` when absent or `warpNone` with no mesh. A `PlLd`
 /// record keeps its warp elsewhere: see [`parse_plld_warp`].
 pub fn parse_placed_warp(key: &[u8; 4], data: &[u8]) -> Option<photocraft_geom::warp::Warp> {
@@ -534,12 +534,16 @@ pub fn parse_placed_warp(key: &[u8; 4], data: &[u8]) -> Option<photocraft_geom::
         return None;
     }
     let d = data.get(8..).and_then(parse_prefix_versioned)?;
+    // A split warp goes in its own `quiltWarp` key; `warp` next to it then says `warpNone`.
+    if let Some(Some(q)) = get_desc(&d, "quiltWarp").and_then(warp_of) {
+        return Some(q);
+    }
     warp_of(get_desc(&d, "warp")?).flatten()
 }
 
 /// A `warp` descriptor (the `SoLd` key, or the whole descriptor after a `PlLd` record's corners)
 /// as a warp: `Some(None)` for no warp (`warpNone`, or a warp that moves nothing), `None` when it
-/// can't be read (an unknown style, missing bounds, a mesh that isn't 4 × 4).
+/// can't be read (an unknown style, missing bounds, a malformed mesh).
 fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Warp>> {
     use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
     let style = enum_of(w, "warpStyle").and_then(|v| WarpStyle::parse(&String::from_utf8_lossy(v)))?;
@@ -555,20 +559,53 @@ fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Warp>> {
     warp.vertical = enum_of(w, "warpRotate") == Some(b"Vrtc");
     if style == WarpStyle::Custom {
         let env = get_desc(w, "customEnvelopeWarp")?;
-        let Some(Value::ObjectArray(arr)) = env.get("meshPoints") else { return None };
-        let vals = |k: &str| match arr.body.get(k) {
-            Some(Value::UnitFloats { values, .. }) => Some(values.clone()),
+        let floats = |v: Option<&Value>, k: &str| match v {
+            Some(Value::ObjectArray(arr)) => match arr.body.get(k) {
+                Some(Value::UnitFloats { values, .. }) => Some(values.clone()),
+                _ => None,
+            },
             _ => None,
         };
-        let (xs, ys) = (vals("Hrzn")?, vals("Vrtc")?);
-        if xs.len() != 16 || ys.len() != 16 {
+        let pts = env.get("meshPoints");
+        let (xs, ys) = (floats(pts, "Hrzn")?, floats(pts, "Vrtc")?);
+        // A split warp (Warp with grid lines) stores its control grid size as `deformNumCols` ×
+        // `deformNumRows` (3 per patch + 1) and its patch boundaries as `quiltSliceX/Y`, in source
+        // pixels from edge to edge. An unsplit warp may omit all of them: one patch, 4 × 4.
+        let count = |k: &str| match w.get(k) {
+            Some(Value::Integer(n)) => usize::try_from(*n).ok(),
+            None => Some(4),
+            _ => None,
+        };
+        let (nx, ny) = (count("deformNumCols")?, count("deformNumRows")?);
+        if nx < 4 || ny < 4 || (nx - 1) % 3 != 0 || (ny - 1) % 3 != 0 || xs.len() != nx * ny || ys.len() != nx * ny {
             return None;
         }
-        let mesh = BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points: xs.iter().zip(&ys).map(|(x, y)| [*x, *y]).collect() };
+        let us = quilt_knots(floats(env.get("quiltSliceX"), "quiltSliceX"), (nx - 1) / 3)?;
+        let vs = quilt_knots(floats(env.get("quiltSliceY"), "quiltSliceY"), (ny - 1) / 3)?;
+        let mesh = BezierMesh { us, vs, points: xs.iter().zip(&ys).map(|(x, y)| [*x, *y]).collect() };
         warp.mesh = mesh.is_valid().then_some(mesh);
         warp.mesh.as_ref()?;
     }
     Some((!warp.is_identity()).then_some(warp))
+}
+
+/// Patch boundaries (`0..=1`) for `patches` patches from a split warp's `quiltSlice` positions,
+/// which run from one source edge to the other (Photoshop writes them a fraction of a pixel past
+/// the edges). Missing slices mean evenly spaced patches; a count that doesn't match or slices
+/// that don't increase are unreadable.
+fn quilt_knots(slices: Option<Vec<f64>>, patches: usize) -> Option<Vec<f64>> {
+    let Some(s) = slices else {
+        return Some((0..=patches).map(|i| i as f64 / patches as f64).collect());
+    };
+    let (first, last) = (*s.first()?, *s.last()?);
+    if s.len() != patches + 1 || !s.iter().all(|v| v.is_finite()) || !s.windows(2).all(|w| w[1] > w[0]) {
+        return None;
+    }
+    let mut k: Vec<f64> = s.iter().map(|v| (v - first) / (last - first)).collect();
+    // Exact ends: the mesh's knots must start at 0 and end at 1.
+    k[0] = 0.0;
+    k[patches] = 1.0;
+    Some(k)
 }
 
 /// Text content and transform from a `TySh` block (best effort).
@@ -593,13 +630,12 @@ pub(crate) fn parse_prefix_versioned(data: &[u8]) -> Option<Descriptor> {
 }
 
 /// The source-space box Photoshop maps onto a placed layer's `Trnf` quad: the bounding box of a
-/// single-patch custom warp's 16 control points, which may spill past the source, else the source
+/// custom warp's control points, which may spill past the source, else the source
 /// rect `0..w × 0..h`. Mapping the source rect instead counts the overhang twice and stretches the
 /// placement. A degenerate or non-finite box falls back to the source rect.
 pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
     let rect = [0.0, 0.0, w, h];
-    let Some(m) = warp.filter(|wp| wp.style == photocraft_geom::warp::WarpStyle::Custom).and_then(|wp| wp.mesh.as_ref()).filter(|m| m.points.len() == 16)
-    else {
+    let Some(m) = warp.filter(|wp| wp.style == photocraft_geom::warp::WarpStyle::Custom).and_then(|wp| wp.mesh.as_ref()) else {
         return rect;
     };
     let inf = f64::INFINITY;
@@ -645,17 +681,17 @@ pub fn corners_affine(p: &[f64; 8], frame: [f64; 4]) -> Option<Affine> {
 
 /// The transform and (Distort/Perspective) projective placement of a `PlLd` record's corners `p`
 /// for a source of `size` warped by `warp`: the inverse of [`crate::smart_map::plld_bytes`]'s
-/// quad. As for `SoLd`'s `Trnf` (#3677), affine corners frame a single-patch custom warp's
-/// control-point box (which may spill past the source), else the source rect; projective corners
-/// frame the source rect, as `parse_smart_perspective` reads them. `PlLd` stores no source size:
+/// quad. As for `SoLd`'s `Trnf` (#3677), the corners frame a custom warp's control-point box
+/// (which may spill past the source), else the source rect; projective corners too, as
+/// `parse_smart_perspective` reads them. `PlLd` stores no source size:
 /// without the source file (`None`) the layer is taken as placed at 100 %, the edge lengths being
 /// its size (a custom warp's box needs no size); position and rotation stay right, only Replace
 /// Contents and re-renders depend on the scale. Import and export (which keeps an unedited record
 /// verbatim) both place a `PlLd` layer with this.
 pub fn plld_transform(p: &[f64; 8], size: Option<(f64, f64)>, warp: Option<&photocraft_geom::warp::Warp>) -> (Affine, Option<[f64; 9]>) {
     let (w, h) = size.unwrap_or_else(|| ((p[2] - p[0]).hypot(p[3] - p[1]), (p[6] - p[0]).hypot(p[7] - p[1])));
-    let perspective = corners_perspective([[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]], (w, h));
-    let frame = if perspective.is_some() { [0.0, 0.0, w, h] } else { placed_frame(warp, w, h) };
+    let frame = placed_frame(warp, w, h);
+    let perspective = corners_perspective_frame([[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]], frame);
     (corners_affine(p, frame).unwrap_or(Affine::IDENTITY), perspective)
 }
 
@@ -715,7 +751,10 @@ pub fn parse_plld_warp(data: &[u8]) -> PlldWarp {
 
 /// The projective placement of a `SoLd` / `SoLE` block whose corners aren't a parallelogram
 /// (Distort, Perspective): source pixels → document pixels, row-major 3×3. Read from
-/// `nonAffineTransform` (the placed corners), else `Trnf`. `None` for affine placements, which
+/// `nonAffineTransform` (the placed corners), else `Trnf`. The corners frame the warp's
+/// control-point box like the affine ones ([`placed_frame`]): Photoshop warps first, then
+/// distorts the warped box (a split warp on a football in perspective lands as Photoshop's only
+/// this way). `None` for affine placements, which
 /// [`parse_smart`]'s affine holds exactly.
 pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
     if key != b"SoLd" && key != b"SoLE" {
@@ -730,7 +769,17 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
         (p.len() == 8 && p.iter().all(|v| v.is_finite())).then(|| [[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]])
     };
     let q = quad("nonAffineTransform").or_else(|| quad("Trnf"))?;
-    corners_perspective(q, (w, h))
+    let frame = placed_frame(parse_placed_warp(key, data).as_ref(), w, h);
+    corners_perspective_frame(q, frame)
+}
+
+/// [`corners_perspective`] for a source box `frame` (left, top, right, bottom).
+pub fn corners_perspective_frame(q: [[f64; 2]; 4], frame: [f64; 4]) -> Option<[f64; 9]> {
+    let tol = 1e-6 * (1.0 + q.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs())));
+    if (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol) || frame[2] <= frame[0] || frame[3] <= frame[1] {
+        return None;
+    }
+    photocraft_algo::transform::Homography::rect_to_quad(frame, q).map(|m| m.0)
 }
 
 /// The projective placement of a `w` × `h` source onto corners `q` that aren't a parallelogram;
@@ -741,7 +790,7 @@ pub fn corners_perspective(q: [[f64; 2]; 4], (w, h): (f64, f64)) -> Option<[f64;
     if (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol) || w <= 0.0 || h <= 0.0 {
         return None;
     }
-    photocraft_algo::transform::Homography::rect_to_quad([0.0, 0.0, w, h], q).map(|m| m.0)
+    corners_perspective_frame(q, [0.0, 0.0, w, h])
 }
 
 /// `masterFXSwitch` from an `lfx2` block (defaults to `true`).
@@ -933,6 +982,90 @@ mod tests {
         assert_eq!(w.style, WarpStyle::Custom);
         assert_eq!(w.mesh.as_ref().unwrap().points[15], [67.0, 30.0]);
         assert!(parse_placed_warp(b"PlLd", &[0; 20]).is_none());
+    }
+
+    /// A split warp as Photoshop writes it: a `quiltWarp` key next to a `warpNone` `warp`, grid size
+    /// in `deformNumRows/Cols`, patch boundaries in `quiltSliceX/Y` (source pixels, a fraction past
+    /// the edges), the control points row by row.
+    #[test]
+    fn split_warp_is_read() {
+        use photocraft_geom::warp::WarpStyle;
+        use photocraft_psd::descriptor::ObjectArray;
+        let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+        let bounds = Descriptor::new("classFloatRect")
+            .with("Top ", Value::Double(0.0))
+            .with("Left", Value::Double(0.0))
+            .with("Btom", Value::Double(30.0))
+            .with("Rght", Value::Double(60.0));
+        let (nx, ny) = (7usize, 10usize); // 2 patches across, 3 down
+        let (mut xs, mut ys) = (Vec::new(), Vec::new());
+        for j in 0..ny {
+            for i in 0..nx {
+                xs.push(i as f64 * 10.0 + if (i, j) == (3, 4) { 5.0 } else { 0.0 });
+                ys.push(j as f64 * 30.0 / 9.0);
+            }
+        }
+        let arr = |key: &str, v: Vec<f64>| {
+            Value::ObjectArray(ObjectArray { prefix: v.len() as u32, body: Descriptor::new("UntF").with(key, Value::UnitFloats { unit: *b"#Pxl", values: v }) })
+        };
+        let warp = |cols: i32, slice_x: Vec<f64>| {
+            let pts = Descriptor::new("rationalPoint")
+                .with("Hrzn", Value::UnitFloats { unit: *b"#Pxl", values: xs.clone() })
+                .with("Vrtc", Value::UnitFloats { unit: *b"#Pxl", values: ys.clone() });
+            let env = Descriptor::new("customEnvelopeWarp")
+                .with("quiltSliceX", arr("quiltSliceX", slice_x))
+                .with("quiltSliceY", arr("quiltSliceY", vec![-0.6, 6.0, 18.0, 30.6]))
+                .with("meshPoints", Value::ObjectArray(ObjectArray { prefix: (nx * ny) as u32, body: pts }));
+            let w = Descriptor::new("quiltWarp")
+                .with("warpStyle", e("warpStyle", "warpCustom"))
+                .with("bounds", Value::Descriptor(bounds.clone()))
+                .with("deformNumRows", Value::Integer(ny as i32))
+                .with("deformNumCols", Value::Integer(cols))
+                .with("customEnvelopeWarp", Value::Descriptor(env));
+            let none = Descriptor::new("warp").with("warpStyle", e("warpStyle", "warpNone")).with("bounds", Value::Descriptor(bounds.clone()));
+            let mut v = b"soLD".to_vec();
+            v.extend_from_slice(&4u32.to_be_bytes());
+            let d = Descriptor::new("null").with("quiltWarp", Value::Descriptor(w)).with("warp", Value::Descriptor(none));
+            v.extend(VersionedDescriptor::new(d).to_bytes());
+            v
+        };
+        let w = parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 30.0, 60.6])).expect("split warp reads");
+        assert_eq!(w.style, WarpStyle::Custom);
+        let m = w.mesh.expect("mesh");
+        assert_eq!((m.nx(), m.ny()), (7, 10));
+        assert_eq!(m.us, [0.0, 0.5, 1.0]);
+        assert_eq!(m.vs.len(), 4);
+        assert!((m.vs[1] - 6.6 / 31.2).abs() < 1e-12 && (m.vs[2] - 18.6 / 31.2).abs() < 1e-12);
+        assert_eq!(m.point(3, 4), [35.0, 40.0 / 3.0]);
+        // Malformed: grid size that isn't 3 per patch + 1, or doesn't match the points; slices that
+        // don't match the patch count or don't increase.
+        assert!(parse_placed_warp(b"SoLd", &warp(6, vec![-0.6, 30.0, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(4, vec![-0.6, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 70.0, 60.6])).is_none());
+    }
+
+    /// Distort/Perspective corners frame the warp's control-point box, as the affine ones do: the
+    /// box's corners land on the stored quad, not the source rect's.
+    #[test]
+    fn perspective_corners_frame_the_warp_box() {
+        use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
+        let mut mesh = BezierMesh::identity([0.0, 0.0, 40.0, 20.0], 1, 1);
+        assert!(mesh.split_u(0.5));
+        mesh.points[0] = [-8.0, -4.0];
+        let mut warp = Warp::preset(WarpStyle::Custom, 0.0, [0.0, 0.0, 40.0, 20.0]);
+        warp.mesh = Some(mesh);
+        let frame = placed_frame(Some(&warp), 40.0, 20.0);
+        assert_eq!(frame, [-8.0, -4.0, 40.0, 20.0]);
+        let q = [[100.0, 100.0], [300.0, 120.0], [280.0, 220.0], [110.0, 200.0]];
+        let h = photocraft_algo::transform::Homography(corners_perspective_frame(q, frame).expect("projective"));
+        for ((x, y), c) in [(-8.0, -4.0), (40.0, -4.0), (40.0, 20.0), (-8.0, 20.0)].into_iter().zip(q) {
+            let (u, v) = h.apply(x, y);
+            assert!((u - c[0]).abs() < 1e-9 && (v - c[1]).abs() < 1e-9);
+        }
+        // The `PlLd` record reads the same corners the same way.
+        let p = [100.0, 100.0, 300.0, 120.0, 280.0, 220.0, 110.0, 200.0];
+        assert_eq!(plld_transform(&p, Some((40.0, 20.0)), Some(&warp)).1, Some(h.0));
     }
 
     #[test]
