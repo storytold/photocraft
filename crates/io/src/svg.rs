@@ -244,14 +244,47 @@ fn import_parsed(name: &str, parsed: Parsed, max_group_depth: usize) -> Result<I
 pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
     let tree = parse(bytes)?.tree;
     let cv = canvas(&tree, &mut Vec::new());
-    let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
+    let pixmap = render(&tree, cv.scale * scale.clamp(1.0 / 64.0, 64.0))?;
+    let rect = Rect::new(0, 0, pixmap.width() as i32, pixmap.height() as i32);
+    let px = pixmap.pixels().iter().map(|p| rgba(p.demultiply())).collect();
+    Ok(photocraft_compose::Buffer { rect, px })
+}
+
+/// The whole drawing at one pixel per SVG unit, scaled down to fit [`MAX_SIDE`] a side and
+/// [`MAX_RASTER_PIXELS`] in all: its width, height and straight-alpha RGBA8 pixels. Paste uses it
+/// for a drawing copied as SVG markup.
+pub fn rasterize_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), IoError> {
+    let tree = parse(bytes)?.tree;
+    let cv = canvas(&tree, &mut Vec::new());
+    let (w, h) = (f64::from(tree.size().width() * cv.scale), f64::from(tree.size().height() * cv.scale));
+    // The largest k ≤ 1 with (w·k + 2)(h·k + 2) ≤ the limit: `render` rounds each side up, and
+    // f32 rounding can add one more pixel.
+    let max = MAX_RASTER_PIXELS as f64;
+    let fit = if (w + 2.0) * (h + 2.0) <= max {
+        1.0
+    } else {
+        let (a, b) = (w * h, 2.0 * (w + h));
+        (-b + (b * b - 4.0 * a * (4.0 - max)).sqrt()) / (2.0 * a)
+    };
+    let pixmap = render(&tree, cv.scale * fit as f32)?;
+    let px = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    Ok((pixmap.width(), pixmap.height(), px))
+}
+
+/// `tree` drawn at `k` pixels per SVG unit on a transparent pixmap whose sides round up.
+fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
     let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
-    let rect = Rect::new(0, 0, w as i32, h as i32);
-    let px = pixmap.pixels().iter().map(|p| rgba(p.demultiply())).collect();
-    Ok(photocraft_compose::Buffer { rect, px })
+    resvg::render(tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+    Ok(pixmap)
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -791,5 +824,27 @@ mod tests {
         let cv = canvas(&tree, &mut w);
         assert_eq!((cv.size.width, cv.size.height), (MAX_SIDE, MAX_SIDE / 2));
         assert_eq!(w.len(), 1);
+    }
+
+    /// A pasted drawing is one pixel per SVG unit, and a drawing past the pixel limit is scaled
+    /// down to fit it, keeping its proportions, instead of failing.
+    #[test]
+    fn rgba8_renders_at_its_own_size_within_the_pixel_limit() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="20" height="20" fill="#ff0000"/></svg>"##;
+        let (w, h, px) = rasterize_rgba8(svg).unwrap();
+        assert_eq!((w, h, px.len()), (40, 20, 40 * 20 * 4));
+        assert_eq!(px[..4], [255, 0, 0, 255], "the rectangle");
+        assert_eq!(px[(10 * 40 + 30) * 4..][..4], [0, 0, 0, 0], "transparent beside it");
+        for (side_w, side_h) in [(10_000u32, 5_000u32), (20_000, 20_000), (20_000, 2_000)] {
+            let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side_w}\" height=\"{side_h}\"/>");
+            let (w, h, px) = rasterize_rgba8(svg.as_bytes()).unwrap();
+            let pixels = u64::from(w) * u64::from(h);
+            assert!(pixels <= MAX_RASTER_PIXELS && pixels > MAX_RASTER_PIXELS / 2, "{side_w} × {side_h} became {w} × {h}");
+            assert!(w <= MAX_SIDE && h <= MAX_SIDE, "{w} × {h}");
+            let (aspect, want) = (f64::from(w) / f64::from(h), f64::from(side_w) / f64::from(side_h));
+            assert!((aspect / want - 1.0).abs() < 0.01, "{w} × {h} keeps {side_w} × {side_h}");
+            assert_eq!(px.len() as u64, pixels * 4);
+        }
+        assert!(rasterize_rgba8(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect").is_err(), "malformed markup is an error");
     }
 }
