@@ -775,6 +775,21 @@ pub struct ProxyImage {
 
 const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
 
+/// Original destination pixel and selection/filter-mask coverage for a preview.
+/// Both the original and warped colour are premultiplied before mixing.
+#[derive(Clone, Copy, Debug)]
+pub struct PreviewBlend {
+    pub original: [f32; 4],
+    pub coverage: f32,
+}
+
+impl PreviewBlend {
+    fn mix(&self, warped: [f32; 4]) -> [f32; 4] {
+        let coverage = self.coverage.clamp(0.0, 1.0);
+        std::array::from_fn(|i| self.original[i] + (warped[i] - self.original[i]) * coverage)
+    }
+}
+
 impl ProxyImage {
     /// Box-downsamples `src` over `bounds` so the longer side is at most `max_side`.
     pub fn new(src: &Surface, bounds: Rect, max_side: usize) -> Self {
@@ -822,6 +837,15 @@ impl ProxyImage {
     /// Renders proxy pixels `r` (proxy coordinates) through the field into `out` (premultiplied
     /// RGBA8, `w × h`): bilinear field, bilinear source.
     pub fn render(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]]) {
+        self.render_blended(field, r, out, &[]);
+    }
+
+    /// Like `render`, with destination mask samples matching the proxy dimensions.
+    /// An empty blend slice preserves the unmasked path.
+    pub fn render_blended(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]], blend: &[PreviewBlend]) {
+        if !blend.is_empty() && blend.len() != self.px.len() {
+            return;
+        }
         let [x0, y0, x1, y1] = [r[0].min(self.w), r[1].min(self.h), r[2].min(self.w), r[3].min(self.h)];
         if x0 >= x1 || y0 >= y1 {
             return;
@@ -838,10 +862,9 @@ impl ProxyImage {
                 let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
                 let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
                 let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
-                *slot = std::array::from_fn(|k| {
-                    let v = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;
-                    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-                });
+                let warped = std::array::from_fn(|k| (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv);
+                let rgba = blend.get(y * self.w + x).map_or(warped, |b| b.mix(warped));
+                *slot = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
             }
         };
         let rows = &mut out[y0 * self.w..y1 * self.w];
@@ -867,11 +890,24 @@ impl ProxyImage {
         out: &mut [[u8; 4]],
         source_scratch: &mut Vec<[f32; 4]>,
     ) -> bool {
+        Self::render_full_resolution_blended(src, field, bounds, region, out, source_scratch, &[])
+    }
+
+    /// Full-resolution rendering with cached destination mask samples over `bounds`.
+    pub fn render_full_resolution_blended(
+        src: &Surface,
+        field: &LiquifyField,
+        bounds: Rect,
+        region: Rect,
+        out: &mut [[u8; 4]],
+        source_scratch: &mut Vec<[f32; 4]>,
+        blend: &[PreviewBlend],
+    ) -> bool {
         let bounds = bounds.intersect(&field.bounds);
         let region = region.intersect(&bounds);
         let (width, height) = (bounds.width() as usize, bounds.height() as usize);
         let Some(out_len) = width.checked_mul(height) else { return false };
-        if region.is_empty() || out.len() != out_len || width == 0 || height == 0 {
+        if region.is_empty() || out.len() != out_len || width == 0 || height == 0 || (!blend.is_empty() && blend.len() != out_len) {
             return false;
         }
 
@@ -964,6 +1000,8 @@ impl ProxyImage {
                     let p = [f64::from(x) + 0.5, f64::from(y) + 0.5];
                     let d = field.sample(p[0], p[1]);
                     let rgba = source_at(p[0] + d[0], p[1] + d[1]);
+                    let index = (first_y + offset) * width + x0 + offset_x;
+                    let rgba = blend.get(index).map_or(rgba, |b| b.mix(rgba));
                     *pixel = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
                 }
             }
@@ -1418,6 +1456,48 @@ mod tests {
         let r8 = apply_liquify(&sample(SampleType::U8), &a);
         let r32 = apply_liquify(&sample(SampleType::F32), &a);
         assert!(worst(&r8, &r32, bounds()) < 2.0 / 255.0 + 1e-4);
+    }
+
+    #[test]
+    fn masked_previews_mix_destination_pixels_before_quantizing() {
+        let canvas = Rect::new(0, 0, 12, 8);
+        let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        for y in 0..8 {
+            for x in 0..12 {
+                source.write_pixel(x, y, &[x as f32 / 12.0, 0.8, 0.3, if x % 2 == 0 { 0.0 } else { 0.6 }]);
+            }
+        }
+        let mut field = LiquifyField::new(canvas, 2.0);
+        field.d.fill([1.0, 0.0]);
+        let proxy = ProxyImage::new(&source, canvas, 12);
+        let blend: Vec<_> =
+            proxy.px.iter().enumerate().map(|(i, original)| PreviewBlend { original: *original, coverage: [0.0, 0.25, 0.5, 1.0][i % 4] }).collect();
+        let expected: Vec<_> = (0..8)
+            .flat_map(|y| (0..12).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let old = source.pixel(x, y);
+                let warped = source.pixel((x + 1).min(11), y);
+                let coverage = [0.0, 0.25, 0.5, 1.0][x as usize % 4];
+                std::array::from_fn(|c| {
+                    let a = if c == 3 { old[3] } else { old[c] * old[3] };
+                    let b = if c == 3 { warped[3] } else { warped[c] * warped[3] };
+                    ((a + (b - a) * coverage) * 255.0 + 0.5) as u8
+                })
+            })
+            .collect();
+        let mut out = vec![[0; 4]; 96];
+        proxy.render_blended(&field, [0, 0, 12, 8], &mut out, &blend);
+        assert_eq!(out, expected);
+        let mut scratch = Vec::new();
+        out.fill([17; 4]);
+        let dirty = Rect::new(3, 2, 9, 6);
+        assert!(ProxyImage::render_full_resolution_blended(&source, &field, canvas, dirty, &mut out, &mut scratch, &blend));
+        for y in 0..8 {
+            for x in 0..12 {
+                let i = y * 12 + x;
+                assert_eq!(out[i], if (3..9).contains(&x) && (2..6).contains(&y) { expected[i] } else { [17; 4] });
+            }
+        }
     }
 
     #[test]
