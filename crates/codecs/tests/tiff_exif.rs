@@ -166,3 +166,97 @@ fn no_exif_is_written_without_embed_metadata() {
     let tiff = encode(&img, Format::Tiff, &EncodeOptions { embed_metadata: false, ..Default::default() }).unwrap();
     assert_eq!(decode(&tiff).unwrap().meta.exif, None);
 }
+
+// ---------------------------------------------------------------------------
+// Bounded copying: an entry's value only has to lie inside the file, so a hostile file can have
+// many entries point at the same bytes.
+// ---------------------------------------------------------------------------
+
+/// A valid 1x1 gray TIFF whose Exif directory has `entries` UNDEFINED entries of `count` bytes
+/// that all point at the same `count` bytes: the file is about `count` bytes long and asks to
+/// copy `entries * count`.
+fn overlapping_tiff(entries: usize, count: u32) -> Vec<u8> {
+    let entry = |tag: u16, ty: u16, count: u32, value: u32| {
+        [tag.to_le_bytes().to_vec(), ty.to_le_bytes().to_vec(), count.to_le_bytes().to_vec(), value.to_le_bytes().to_vec()].concat()
+    };
+    let at_exif = 8 + 2 + 12 * 10 + 4;
+    let data_at = at_exif + 2 + 12 * entries + 4;
+    let mut out = b"II".to_vec();
+    out.extend(42u16.to_le_bytes());
+    out.extend(8u32.to_le_bytes());
+    out.extend(10u16.to_le_bytes());
+    for (tag, ty, value) in
+        [(256, 3, 1), (257, 3, 1), (258, 3, 8), (259, 3, 1), (262, 3, 1), (273, 4, 0), (277, 3, 1), (278, 3, 1), (279, 4, 1), (34665, 4, at_exif as u32)]
+    {
+        out.extend(entry(tag, ty, 1, value));
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend((entries as u16).to_le_bytes());
+    for i in 0..entries {
+        out.extend(entry(i as u16 + 1, 7, count, data_at as u32));
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend(vec![0x5A; count as usize]);
+    out
+}
+
+#[test]
+fn overlapping_field_values_are_bounded() {
+    // About 62 KB on disk; copied entry by entry it would be 1,000 x 50,000 bytes.
+    let tiff = overlapping_tiff(1000, 50_000);
+    assert!(tiff.len() < 64 * 1024);
+    let img = decode(&tiff).expect("the image itself is fine");
+    assert_eq!(img.dimensions(), (1, 1));
+    let exif = img.meta.exif.expect("the first entries are kept");
+    assert!(exif.len() <= 2 * tiff.len(), "{} bytes of EXIF from a {} byte file", exif.len(), tiff.len());
+}
+
+#[test]
+fn overlapping_field_values_in_an_exif_block_are_bounded_on_export() {
+    // The same block as an image's EXIF: the writer reads it with the same code.
+    let block = overlapping_tiff(1000, 50_000);
+    let mut img = Image::from_raw(2, 2, ChannelLayout::Gray, SampleType::U8, vec![0; 4]).unwrap();
+    img.meta.exif = Some(block.clone());
+    let tiff = encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+    assert!(tiff.len() <= 2 * block.len(), "a {} byte block wrote a {} byte file", block.len(), tiff.len());
+}
+
+/// An EXIF block with a maker note of `len` bytes, an exposure time and a GPS latitude reference.
+fn block_with_maker_note(le: bool, len: usize) -> Vec<u8> {
+    let b = Block { le };
+    b.build(
+        vec![(271, 2, 4, b"Cam\0".to_vec())],
+        vec![(33434, 5, 1, b.rational(1, 125)), (37500, 7, len as u32, (0..len).map(|i| (i * 7) as u8).collect())],
+        vec![(1, 2, 2, b"N\0".to_vec())],
+    )
+}
+
+#[test]
+fn large_maker_notes_still_survive() {
+    // Nikon maker notes run from 100 KB to nearly 1 MB.
+    for len in [200 * 1024, 1000 * 1024] {
+        let block = block_with_maker_note(true, len);
+        let mut img = Image::from_raw(4, 3, ChannelLayout::Rgb, SampleType::U8, vec![90; 36]).unwrap();
+        img.meta.exif = Some(block.clone());
+        let tiff = encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+        let back = decode(&tiff).unwrap().meta.exif.expect("EXIF read back");
+        let (ble, _, bexif, bgps) = dirs(&back);
+        let (ole, _, oexif, ogps) = dirs(&block);
+        assert_eq!(normalized(&bexif, ble), normalized(&oexif, ole), "{len} byte maker note");
+        assert_eq!(normalized(&bgps, ble), normalized(&ogps, ole));
+    }
+}
+
+#[test]
+fn a_field_beyond_the_cap_is_dropped_and_the_rest_kept() {
+    let block = block_with_maker_note(false, 6 * 1024 * 1024);
+    let mut img = Image::from_raw(2, 2, ChannelLayout::Gray, SampleType::U8, vec![0; 4]).unwrap();
+    img.meta.exif = Some(block);
+    let tiff = encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+    assert!(tiff.len() < 1024 * 1024, "{} bytes", tiff.len());
+    let back = decode(&tiff).unwrap().meta.exif.expect("EXIF read back");
+    let (_, ifd0, exif, gps) = dirs(&back);
+    assert_eq!(exif.iter().map(|e| e.0).collect::<Vec<_>>(), [33434], "the exposure time stays, the 6 MiB maker note goes");
+    assert_eq!(gps.iter().map(|e| e.0).collect::<Vec<_>>(), [1]);
+    assert_eq!(ifd0.iter().map(|e| e.0).collect::<Vec<_>>(), [271]);
+}
