@@ -23,8 +23,8 @@ fn busy() -> photocraft_engine::Session {
         s.execute("layer.layerStyle.dropShadow", json!({"layer": a})).unwrap();
         // #153: the vector mask thumbnail and both link chains take row width too.
         s.execute("layer.vectorMask.revealAll", json!({"layer": a})).unwrap();
-        s.execute("layer.setProps", json!({"layer": a, "blend": "Multiply", "locks": {"all": true}})).unwrap();
         s.execute("layer.layerMask.revealAll", json!({"layer": a})).unwrap();
+        s.execute("layer.setProps", json!({"layer": a, "blend": "Multiply", "locks": {"all": true}})).unwrap();
         let b = s.execute("layer.new.layer", json!({"name": format!("{LONG} b{depth}")})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.setProps", json!({"layer": b, "clipped": true})).unwrap();
         s.execute("layer.select", json!({"layer": a})).unwrap();

@@ -202,6 +202,7 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
         mask.surface.write_region(bounds, &v);
         mask.surface.prune();
         for id in ids {
+            crate::commands::check_all_unlocked(doc, id)?;
             crate::extra_cmds::background_to_layer_for_mask(doc, id);
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
         }
@@ -217,6 +218,7 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    crate::commands::check_all_unlocked(&doc, id)?;
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let region: Option<Region> = match layer.surface() {
         Some(surf) if matches!(layer.content, LayerContent::Raster(_)) => {

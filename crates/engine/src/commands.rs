@@ -80,7 +80,7 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
     }
 }
 
-fn check_all_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+pub(crate) fn check_all_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     let locks = doc.effective_locks(id);
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if locks.all {
@@ -413,6 +413,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         // The targeted layer mask (#780): ⌘I inverts it, as in Photoshop.
         let id = layer_param(s, &Value::Null)?;
         return s.edit(label, |doc, _| {
+            check_all_unlocked(doc, id)?;
             let sel = doc.selection.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             let mask = l.mask.as_mut().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
@@ -1598,6 +1599,7 @@ fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask
     s.edit(label, |doc, _| {
         let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
         for id in &ids {
+            check_all_unlocked(doc, *id)?;
             if mask.is_some() {
                 crate::extra_cmds::background_to_layer_for_mask(doc, *id);
             }
