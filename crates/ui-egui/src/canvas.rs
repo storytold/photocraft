@@ -2936,6 +2936,49 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
     app.session.color.hdr_preview(doc).map(|h| [h.exposure, h.gamma])
 }
 
+/// Between Polygonal Lasso clicks, reveal more of the image near or beyond the viewport edge.
+/// Only the view moves: fixed vertices stay in document coordinates, including while button-up.
+fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rect: Rect, view: &mut View, ppp: f32) {
+    if app.ui.polygon.is_empty()
+        || app.ui.tool != Tool::PolygonLasso
+        || app.session.active_index() != Some(idx)
+        || !app.ui.dialogs.is_empty()
+        || app.camera_raw.is_some()
+        || app.discard.is_some()
+        || app.drag.is_some()
+        || ctx.text_edit_focused()
+        || egui::Popup::is_any_open(ctx)
+        || crate::hold_keys::for_frame(app, ctx, false).is_some()
+    {
+        return;
+    }
+    let Some((pointer, dt)) = ctx.input(|i| (i.focused && !i.pointer.middle_down()).then(|| i.pointer.hover_pos().map(|p| (p, i.stable_dt))).flatten()) else {
+        return;
+    };
+    let zoom = view.zoom / ppp;
+    if !pointer.x.is_finite() || !pointer.y.is_finite() || !dt.is_finite() || dt <= 0.0 || !zoom.is_finite() || zoom <= 0.0 {
+        return;
+    }
+    // Moving over a neighbouring document is not a request to pan either tiled view.
+    if arranged_cells(app, app.last_canvas_rect).is_some_and(|cells| cells.iter().any(|(other, cell)| *other != idx && cell.contains(pointer))) {
+        return;
+    }
+    let edge = 32.0_f32.min(rect.width() * 0.25).min(rect.height() * 0.25);
+    if edge <= 0.0 {
+        return;
+    }
+    let speed = |p: f32, lo: f32, hi: f32| {
+        let direction = ((edge - (hi - p)) / edge).clamp(0.0, 1.0) - ((edge - (p - lo)) / edge).clamp(0.0, 1.0);
+        if direction == 0.0 { 0.0 } else { direction.signum() * (80.0 + 520.0 * direction.abs()) }
+    };
+    let velocity = vec2(speed(pointer.x, rect.left(), rect.right()), speed(pointer.y, rect.top(), rect.bottom()));
+    let velocity = velocity * (600.0 / velocity.length().max(600.0));
+    let xf = ViewXform { rect, zoom, center: view.center, flip: app.ui.view.flip_horizontal, rotation: view.rotation, aspect: app.ui.view.display_aspect() };
+    let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
+    view.center[0] += delta.x;
+    view.center[1] += delta.y;
+}
+
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
@@ -2979,8 +3022,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if view.fill_pending && rect.width() > 50.0 {
         fill_view(&mut view, &doc, rect.size(), ppp, aspect);
     }
+    let previous_center = view.center;
+    if primary {
+        polygon_cancel_stale(app);
+        polygon_edge_scroll(app, &ctx, idx, rect, &mut view, ppp);
+    }
     // Preferences › Tools › Overscroll off: clamp before anything is drawn (scrollbars.rs).
-    if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
+    if !app.session.prefs().tools.overscroll {
+        crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect);
+    }
+    if view.center != previous_center {
         ctx.request_repaint();
     }
     let flip = app.ui.view.flip_horizontal;
@@ -5939,6 +5990,7 @@ pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64
 /// first click fixes the selection mode; a new-selection polygon hides the old outline while it is
 /// drawn, and replaces it in one history step when it closes.
 fn polygon_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    polygon_cancel_stale(app);
     let close = app
         .ui
         .polygon
@@ -5969,6 +6021,7 @@ pub fn polygon_retract(app: &mut PhotocraftApp) -> bool {
     }
     if app.ui.polygon.is_empty() {
         app.ui.polygon_mode.clear();
+        app.ui.polygon_doc = None;
     }
     true
 }
@@ -5976,13 +6029,13 @@ pub fn polygon_retract(app: &mut PhotocraftApp) -> bool {
 /// The polygon in progress belongs to the document it was started on (`UiState::polygon_doc`):
 /// once another document becomes active it is dropped, so its outline doesn't show on (or get
 /// committed to) the other document, and the selection it would have replaced is shown again.
-/// Switching tools is handled in `PhotocraftApp::sync_views`. Like the Lasso's
+/// Runs before canvas input and shortcuts as well as in `PhotocraftApp::sync_views`. Like the Lasso's
 /// ([`crate::lasso_ui::cancel_stale`]) and the Magnetic Lasso's ([`crate::magnetic_lasso_ui::frame`]).
 pub fn polygon_cancel_stale(app: &mut PhotocraftApp) {
     let active = app.session.active().map(|st| st.doc.id);
     if app.ui.polygon.is_empty() {
         app.ui.polygon_doc = None;
-    } else if app.ui.polygon_doc.is_some_and(|d| Some(d) != active) {
+    } else if app.ui.tool != Tool::PolygonLasso || app.ui.polygon_doc.is_some_and(|d| Some(d) != active) {
         app.ui.polygon.clear();
         app.ui.polygon_mode.clear();
         app.ui.polygon_doc = None;
@@ -5997,8 +6050,10 @@ pub fn polygon_replaces_selection(app: &PhotocraftApp) -> bool {
 
 /// Close the polygonal lasso and make the selection in the mode it started in.
 pub fn commit_polygon(app: &mut PhotocraftApp) {
+    polygon_cancel_stale(app);
     let pts = std::mem::take(&mut app.ui.polygon);
     let mode = std::mem::take(&mut app.ui.polygon_mode);
+    app.ui.polygon_doc = None;
     if pts.len() >= 3 {
         let mode = if mode.is_empty() { selection_mode(app, egui::Modifiers::NONE).to_owned() } else { mode };
         let o = &app.ui.tool_options;
