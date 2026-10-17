@@ -184,6 +184,39 @@ fn the_reduced_document_scales_what_is_measured_in_document_pixels() {
     assert!(matches!(&doc.layers[1].effects.items[0], Effect::DropShadow(sh) if sh.size == 16.0));
 }
 
+#[test]
+fn the_reduced_picture_of_a_stroked_styled_shape_matches_the_full_one() {
+    // A stroked shape with an effect composites from its path (#5561 review): left at full
+    // size, the reduced picture showed it four times too large.
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    use photocraft_doc::{Effect, Fill};
+    use photocraft_geom::Size;
+    let mut doc = Document::with_background("shape", Size::new(256, 256), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut sh = ShapeLayer {
+        path: Path::new(vec![Subpath::polygon(&[(16.0, 16.0), (144.0, 16.0), (144.0, 144.0), (16.0, 144.0)])]),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        stroke: Some(ShapeStroke { width: 8.0, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..Default::default() }),
+        ..Default::default()
+    };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, doc.pixel_format(), doc.bounds()));
+    let mut layer = Layer::new("shape", LayerContent::Shape(sh));
+    layer.effects.items = vec![Effect::default_drop_shadow()];
+    doc.layers.push(layer);
+    let full = photocraft_compose::render(&doc, doc.bounds());
+    let p = preview_document(&doc, 4);
+    let reduced = photocraft_compose::render(&p, p.bounds());
+    // Every 4th pixel of the full picture, as the reduced one samples; only the anti-aliased
+    // and blurred edges may differ.
+    let differing = (0..64)
+        .flat_map(|y| (0..64).map(move |x| (x, y)))
+        .filter(|&(x, y)| reduced.px[y * 64 + x].iter().zip(&full.px[y * 4 * 256 + x * 4]).any(|(a, b)| (a - b).abs() > 0.1))
+        .count();
+    assert!(differing < 200, "{differing} of 4096 pixels differ");
+    assert_eq!(reduced.px[48 * 64 + 48], full.px[192 * 256 + 192], "outside the shape");
+    assert_eq!(reduced.px[20 * 64 + 20], full.px[80 * 256 + 80], "inside the shape");
+}
+
 struct Gpu {
     harness: egui_kittest::Harness<'static, PhotocraftApp>,
     observer: GpuCanvas,
