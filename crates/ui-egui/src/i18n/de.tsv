@@ -15,6 +15,10 @@
 # way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept. Plural rule: one|other (n != 1 -> other).
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Maskenoptionen…
+	Layer Mask Display Options…	Anzeigeoptionen für Ebenenmasken…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Kanalfarbe
 	Color Indicates:	Farbe kennzeichnet:

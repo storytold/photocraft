@@ -4067,6 +4067,10 @@ cameraRaw	Yellow	Sárga
 	set in Print Settings…	a nyomtatási beállításokban adható meg…
 	ICO is limited to 256 × 256 pixels	Az ICO legfeljebb 256 × 256 képpont lehet
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Maszkbeállítások…
+	Layer Mask Display Options…	Rétegmaszk megjelenítési beállításai…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Csatorna színe
 	Color Indicates:	A szín jelzése:

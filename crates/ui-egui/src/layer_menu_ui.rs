@@ -158,8 +158,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
 }
 
 /// The menu of `l`'s layer-mask thumbnail (#4575), in Photoshop's order. It acts on `l`, which it
-/// selects first like the row menu. Photoshop's Mask Options… (the overlay colour) has no
-/// command yet, so it is left out.
+/// selects first like the row menu.
 pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {
     let Some(mask) = &l.mask else { return };
     crate::widgets::menu_scroll(ui, |ui| {
@@ -187,6 +186,13 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
             actions.push(("ui.maskTarget".into(), json!(true)));
             actions.push(("select.selectAndMask".into(), Value::Null));
+            ui.close();
+        }
+        // Layer Mask Display Options: the rubylith's colour and opacity (`channel.options`).
+        if ui.button(tl!("Mask Options…")).clicked() {
+            actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+            actions.push(("ui.maskTarget".into(), json!(true)));
+            actions.push(("channel.options".into(), Value::Null));
             ui.close();
         }
     });
@@ -521,6 +527,15 @@ mod tests {
         assert!(sel.sample_channel(10, 30, 0) > 0.99, "the selection is kept");
         assert!(sel.sample_channel(80, 30, 0) > 0.99, "the clicked layer's mask is added");
         assert!(sel.sample_channel(40, 30, 0) < 0.01, "nothing else is selected");
+        // Mask Options…: Layer Mask Display Options (the rubylith's colour and opacity).
+        let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, masked.0).expect("mask thumbnail drawn");
+        let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
+        click(&mut h, at, PointerButton::Secondary);
+        let at = h.get_by_label("Mask Options…").rect().center();
+        click(&mut h, at, PointerButton::Primary);
+        let d = h.state().ui.dialogs.last().expect("Mask Options… opens a dialog");
+        assert!(crate::channel_options_ui::owns(&d.fields) && d.fields["channel"] == json!("mask"), "{:?}", d.fields);
+        assert_eq!(d.fields["__label"], json!("Layer Mask Display Options…"));
     }
 
     #[test]

@@ -451,7 +451,8 @@ fn mask_view(h: &Harness<'_, PhotocraftApp>) -> serde_json::Value {
 
 fn canvas_px(h: &Harness<'_, PhotocraftApp>) -> Option<Vec<egui::Color32>> {
     let st = h.state().session.active().unwrap();
-    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false, st.active_layer)
+    let look = crate::channel_view::Look::of(&h.state().session);
+    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, look, st.active_layer)
 }
 
 fn near(a: Rect, b: Rect) -> bool {
@@ -621,6 +622,9 @@ fn backslash_toggles_the_rubylith() {
     assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
     let px = canvas_px(&h).unwrap();
     assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    // Layer Mask Display Options: opaque green over what the mask hides instead.
+    h.state_mut().run("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 100})).unwrap();
+    assert_eq!(canvas_px(&h).unwrap()[50 * 200 + 50], egui::Color32::from_rgb(0, 255, 0));
     h.key_press(egui::Key::Backslash);
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");

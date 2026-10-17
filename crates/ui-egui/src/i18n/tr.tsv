@@ -3878,6 +3878,10 @@ cameraData	Lens	Lens
 	set in Print Settings…	Yazdırma Ayarlarında belirlenir…
 	ICO is limited to 256 × 256 pixels	ICO 256 × 256 piksel ile sınırlıdır
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Maske Seçenekleri…
+	Layer Mask Display Options…	Katman Maskesi Görüntüleme Seçenekleri…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Kanal Rengi
 	Color Indicates:	Rengin Gösterdiği:

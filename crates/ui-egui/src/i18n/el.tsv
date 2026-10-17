@@ -3,6 +3,10 @@
 # Original translations based on general Greek graphics/computing terminology.
 # Covers every source label the i18n coverage check lists.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Επιλογές μάσκας…
+	Layer Mask Display Options…	Επιλογές εμφάνισης μάσκας επιπέδου…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Χρώμα καναλιού
 	Color Indicates:	Το χρώμα υποδεικνύει:

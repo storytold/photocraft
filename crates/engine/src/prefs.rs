@@ -920,6 +920,37 @@ pub struct ToolbarCustomization {
     pub order: Vec<String>,
 }
 
+/// Layer Mask Display Options (double-click the layer mask's row in the Channels panel, or Mask
+/// Options… on its Layers thumbnail): the colour and opacity of the layer mask rubylith (`\`,
+/// ⇧⌥-click the thumbnail). As in Photoshop, one setting for every mask, kept across restarts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayerMaskOverlay {
+    /// `#rrggbb`.
+    pub color: String,
+    /// Percent, 0..=100.
+    pub opacity: f32,
+}
+
+impl Default for LayerMaskOverlay {
+    /// Photoshop's: red at 50 %.
+    fn default() -> Self {
+        Self { color: "#ff0000".into(), opacity: 50.0 }
+    }
+}
+
+impl LayerMaskOverlay {
+    /// The colour as 0..1 RGB; red if the stored value isn't a colour.
+    pub fn rgb(&self) -> [f32; 3] {
+        parse_hex(&self.color).unwrap_or([255, 0, 0]).map(|v| f32::from(v) / 255.0)
+    }
+
+    /// The opacity as a fraction (0..1); 50 % if the stored value isn't a number.
+    pub fn alpha(&self) -> f32 {
+        if self.opacity.is_finite() { self.opacity.clamp(0.0, 100.0) / 100.0 } else { 0.5 }
+    }
+}
+
 /// All preferences. JSON keys are the `edit.preferences.<section>` ids.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -991,6 +1022,8 @@ pub struct Preferences {
     pub view_extras: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
+    /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
+    pub layer_mask_overlay: LayerMaskOverlay,
 }
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -1122,6 +1155,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "unitsAndRulers.printResolution" | "unitsAndRulers.screenResolution" | "rawDefaults.resolution" => (1.0, 10_000.0),
         "guidesGridAndSlices.gridlineEvery" => (0.001, 10_000.0),
         "guidesGridAndSlices.subdivisions" => (1.0, 100.0),
+        "layerMaskOverlay.opacity" => (0.0, 100.0),
         "type.recentFonts" => (0.0, 50.0),
         "integrations.controlPort" => (0.0, 65535.0),
         _ => return None,
@@ -1132,6 +1166,9 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
 pub fn is_color(path: &str) -> bool {
     if choices(path).is_some() || path.starts_with("shortcuts.") || path.starts_with("alternateShortcuts.") || path.starts_with("menus.") {
         return false;
+    }
+    if path == "layerMaskOverlay.color" {
+        return true;
     }
     let leaf = path.rsplit('.').next().unwrap_or(path);
     matches!(

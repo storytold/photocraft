@@ -15,6 +15,10 @@
 # entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
 # stay as they are; the trailing "…" of dialog commands is kept.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Opções de máscara…
+	Layer Mask Display Options…	Opções de exibição de máscara de camada…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Cor do canal
 	Color Indicates:	A cor indica:

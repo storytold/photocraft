@@ -20,6 +20,10 @@
 # (`plural_none` in i18n/mod.rs).
 
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Tùy chọn mặt nạ…
+	Layer Mask Display Options…	Tùy chọn hiển thị mặt nạ lớp…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Màu kênh
 	Color Indicates:	Màu biểu thị:

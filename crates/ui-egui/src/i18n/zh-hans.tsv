@@ -11,6 +11,10 @@
 # Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	蒙版选项…
+	Layer Mask Display Options…	图层蒙版显示选项…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	通道颜色
 	Color Indicates:	色彩指示：

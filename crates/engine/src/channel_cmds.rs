@@ -1425,6 +1425,7 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let solidity = p.get("solidity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let kind = p.get("indicates").and_then(Value::as_str).map(str::to_string);
+    let display_only = name.is_none() && kind.is_none() && solidity.is_none();
     let apply = move |ch: &mut AlphaChannel| -> Result<()> {
         if let Some(n) = &name {
             ch.name = n.clone();
@@ -1493,7 +1494,31 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
                 })?;
             }
         }
-        _ => return Err(bad(cmd, "`channel` must be an alpha/spot channel or \"quickMask\"")),
+        ChanRef::LayerMask => {
+            // Layer Mask Display Options: only the rubylith's colour and opacity, for every mask.
+            if !display_only {
+                return Err(bad(cmd, "a layer mask's options are only `color` and `opacity`"));
+            }
+            // A preference, kept across restarts; not an undo step.
+            if color.is_some() || opacity.is_some() {
+                s.edit_prefs(|prefs| {
+                    let o = &mut prefs.layer_mask_overlay;
+                    if let Some(c) = color {
+                        o.color = crate::adjust_params::hex(c.to_rgb());
+                    }
+                    if let Some(a) = opacity {
+                        o.opacity = (a * 100.0).round();
+                    }
+                });
+            }
+            let o = serde_json::to_value(&s.prefs().layer_mask_overlay).unwrap_or(Value::Null);
+            let mut out = list(s);
+            if let Some(m) = out.as_object_mut() {
+                m.insert("layerMaskOverlay".into(), o);
+            }
+            return Ok(out);
+        }
+        _ => return Err(bad(cmd, "`channel` must be an alpha/spot channel, \"quickMask\" or \"mask\"")),
     }
     Ok(list(s))
 }
@@ -1890,7 +1915,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Options…",
             [],
             None,
-            r##"{"channel":index|name|"quickMask","name":str?,"indicates":"masked|selected|spot"?,"color":"#rrggbb"?,"opacity":0..100?,"solidity":0..100?}"##,
+            r##"{"channel":index|name|"quickMask"|"mask","name":str?,"indicates":"masked|selected|spot"?,"color":"#rrggbb"?,"opacity":0..100?,"solidity":0..100?} ("mask": Layer Mask Display Options, the rubylith's color and opacity for every layer mask, kept in the preferences as layerMaskOverlay; not an undo step; returns them as layerMaskOverlay)"##,
             has_doc,
             options
         ),

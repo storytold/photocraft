@@ -4219,6 +4219,10 @@ shape	Appearance	Izgled
 # ICO dimensions
 	ICO is limited to 256 × 256 pixels	ICO je ograničen na 256 × 256 piksela
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Opcije maske…
+	Layer Mask Display Options…	Opcije prikaza maske sloja…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Boja kanala
 	Color Indicates:	Boja označava:

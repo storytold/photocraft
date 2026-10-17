@@ -8,6 +8,10 @@
 # stay as they are; the trailing "…" of dialog commands is kept. UI text addresses the user
 # informally ("je") and uses sentence case.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Maskeropties…
+	Layer Mask Display Options…	Weergaveopties voor laagmasker…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Kanaalkleur
 	Color Indicates:	Kleur geeft aan:

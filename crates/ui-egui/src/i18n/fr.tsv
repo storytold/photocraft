@@ -19,6 +19,10 @@
 # ArtCraft, OpenType, Lab ...) stay as they are; RGB/CMYK read RVB/CMJN; the trailing "…" of
 # dialog commands is kept.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Options de masque…
+	Layer Mask Display Options…	Options d'affichage du masque de calque…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Couleur de la couche
 	Color Indicates:	La couleur indique :

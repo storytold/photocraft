@@ -439,13 +439,16 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": crate::stroke_ui::open(app)}))
         }
         // Channels › Channel Options… without params: the dialog on the targeted alpha/spot
-        // channel, or Quick Mask Options while in Quick Mask (with params: the engine directly).
+        // channel, Layer Mask Display Options on a targeted layer mask, or Quick Mask Options while
+        // in Quick Mask (with params: the engine directly).
         crate::channel_options_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let mask = app.layer_mask_targeted();
             let st = app.session.active().ok_or("no document is open")?;
             let channel = match st.channel_view.target {
                 _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) => json!(i),
-                _ => return Err("target an alpha or spot channel first".into()),
+                _ if mask => json!("mask"),
+                _ => return Err("target an alpha or spot channel, or a layer mask, first".into()),
             };
             let dialog = crate::channel_options_ui::open(app, &channel).ok_or("no such channel")?;
             Ok(json!({"dialog": dialog}))

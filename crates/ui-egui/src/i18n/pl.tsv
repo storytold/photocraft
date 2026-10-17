@@ -18,6 +18,10 @@
 # Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
 # Zapisz jako…), sentence case as in the English source. Quotes: „…”.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Opcje maski…
+	Layer Mask Display Options…	Opcje wyświetlania maski warstwy…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Kolor kanału
 	Color Indicates:	Kolor oznacza:

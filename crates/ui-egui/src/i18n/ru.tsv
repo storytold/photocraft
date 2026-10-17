@@ -17,6 +17,10 @@
 # letters; the trailing "…" of dialog commands is kept; the colon of a label ("Width:") becomes
 # the Russian typographic equivalent, with the space the source carries.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Параметры маски…
+	Layer Mask Display Options…	Параметры отображения маски слоя…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Цвет канала
 	Color Indicates:	Цветом обозначены:

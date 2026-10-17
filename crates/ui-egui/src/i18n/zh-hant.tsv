@@ -19,6 +19,10 @@
 # kept. Full-width punctuation (，。：) inside sentences; half-width parentheses and the " · "
 # separators as in the English.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	遮色片選項…
+	Layer Mask Display Options…	圖層遮色片顯示選項…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	色版顏色
 	Color Indicates:	色彩指示：

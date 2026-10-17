@@ -8,6 +8,10 @@
 # No proprietary translation resources were used.
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Параметри маски…
+	Layer Mask Display Options…	Параметри відображення маски шару…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Колір каналу
 	Color Indicates:	Кольором позначено:

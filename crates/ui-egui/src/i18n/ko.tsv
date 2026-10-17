@@ -7,6 +7,10 @@
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 # Product names and technology names retain their spelling.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	마스크 옵션…
+	Layer Mask Display Options…	레이어 마스크 표시 옵션…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	채널 색상
 	Color Indicates:	색상 표시 내용:

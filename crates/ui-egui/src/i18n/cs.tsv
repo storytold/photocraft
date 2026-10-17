@@ -19,6 +19,10 @@
 # (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin letters; the trailing "…" of
 # dialog commands is kept.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Možnosti masky…
+	Layer Mask Display Options…	Možnosti zobrazení masky vrstvy…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Barva kanálu
 	Color Indicates:	Barva označuje:

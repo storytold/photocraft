@@ -12,6 +12,10 @@
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Opsi Mask…
+	Layer Mask Display Options…	Opsi Tampilan Mask Layer…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Warna Saluran
 	Color Indicates:	Warna Menunjukkan:
