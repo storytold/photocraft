@@ -227,7 +227,15 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
 /// the selected pixels, applied to every channel.
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Equalize", p, |_, px, cover| {
+    if crate::adjust_cmds::adjust_as_smart_filter(s, "equalize", "Equalize", p)? {
+        return Ok(Value::Null);
+    }
+    map_pixels(s, "Equalize", p, |_, px, cover| equalize_pixels(px, cover))
+}
+
+/// [`equalize`] on straight RGBA pixels with a coverage weight each (also run as a smart filter).
+pub(crate) fn equalize_pixels(px: &mut [[f32; 4]], cover: &[f32]) {
+    {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -254,7 +262,7 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
                 *v = map(*v);
             }
         }
-    })
+    }
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
@@ -862,7 +870,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
+        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", crate::adjust_cmds::has_adjustable, equalize),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
