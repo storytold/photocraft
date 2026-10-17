@@ -41,6 +41,105 @@ fn place_embedded_enablement_does_not_require_native_doc() {
 }
 
 #[test]
+fn flip_horizontal_preserves_the_relevant_anchor_across_view_transforms() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(17.0, 31.0), vec2(900.0, 640.0));
+    for zoom in [0.35, 1.0, 2.4] {
+        for rotation in [0.0, 27.0, 90.0, -43.0] {
+            for aspect in [0.5, 1.0, 2.0] {
+                for flip in [false, true] {
+                    let xf = ViewXform { rect, zoom, center: [35.0, 91.0], flip, rotation, aspect };
+                    let size = [320, 180];
+                    let doc_center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
+                    let screen_before = xf.to_screen(doc_center[0], doc_center[1]);
+                    let next = !flip;
+                    let center = center_for_flipped_view(xf, size, next);
+                    let after = ViewXform { center, flip: next, ..xf };
+                    let screen_after = after.to_screen(doc_center[0], doc_center[1]);
+                    if canvas_coverage(xf, size) >= 0.5 {
+                        assert_eq!(
+                            center, xf.center,
+                            "zoomed-in view should retain the camera centre: zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}"
+                        );
+                    } else {
+                        assert!(
+                            screen_before.distance(screen_after) < 1e-3,
+                            "zoomed-out view should keep the image centre in place: zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}: {screen_before:?} -> {screen_after:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn flip_horizontal_keeps_the_viewed_region_when_canvas_covers_half_the_viewport() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 640.0));
+    let size = [320, 180];
+    let xf = ViewXform { rect, zoom: 2.4, center: [160.0, 90.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(canvas_coverage(xf, size) >= 0.5);
+    assert_eq!(center_for_flipped_view(xf, size, true), xf.center);
+}
+
+#[test]
+fn flip_horizontal_keeps_image_centre_when_zoomed_out() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 640.0));
+    let size = [320, 180];
+    let xf = ViewXform { rect, zoom: 0.35, center: [160.0, 90.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(canvas_coverage(xf, size) < 0.5);
+    let before = xf.to_screen(size[0] as f32 * 0.5, size[1] as f32 * 0.5);
+    let center = center_for_flipped_view(xf, size, true);
+    let after = ViewXform { center, flip: true, ..xf };
+    let after_point = after.to_screen(size[0] as f32 * 0.5, size[1] as f32 * 0.5);
+    assert!(before.distance(after_point) < 1e-3, "{before:?} -> {after_point:?}");
+}
+
+#[test]
+fn flip_horizontal_command_preserves_the_active_canvas_position() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let (mut app, ctx) = app_with(1);
+    app.last_canvas_rect = Rect::from_min_size(pos2(17.0, 31.0), vec2(900.0, 640.0));
+    app.ui.views[0].center = [35.0, 91.0];
+    app.ui.views[0].zoom = 2.4;
+    app.ui.views[0].rotation = 27.0;
+    app.ui.view.pixel_aspect_correction = true;
+
+    let before_xf = ViewXform::active(&app).unwrap();
+    let doc = app.session.active().unwrap();
+    let image_center = [doc.doc.size.width as f32 * 0.5, doc.doc.size.height as f32 * 0.5];
+    let before = before_xf.to_screen(image_center[0], image_center[1]);
+
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+
+    let after_xf = ViewXform::active(&app).unwrap();
+    let after = after_xf.to_screen(image_center[0], image_center[1]);
+    assert!(before.distance(after) < 1e-3, "{before:?} -> {after:?}");
+}
+
+#[test]
+fn flip_horizontal_does_not_change_document_history() {
+    let (mut app, ctx) = app_with(1);
+    let history = app.session.active().unwrap().history.past_len();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(!app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
     for id in [

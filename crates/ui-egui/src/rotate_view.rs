@@ -205,6 +205,14 @@ pub fn drag(ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, p
     true
 }
 
+/// Small top-left badge shown only while the view is mirrored.
+pub fn flip_indicator_rect(canvas: Rect) -> Rect {
+    const W: f32 = 34.0;
+    const H: f32 = 28.0;
+    const M: f32 = 10.0;
+    Rect::from_min_size(pos2(canvas.left() + M, canvas.top() + M), vec2(W, H))
+}
+
 /// Compass in the top-right of the canvas (north = document up). Hidden at 0°.
 pub fn compass_rect(canvas: Rect) -> Rect {
     const S: f32 = 36.0;
@@ -228,13 +236,20 @@ pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter
         view.rotation = 0.0;
         ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
     }
+    let t = Tokens::get(ctx);
+    // Keep this independent of the Rotate View compass: flipping is a persistent view state,
+    // even when the rotation is zero. The badge occupies the opposite corner from the compass.
+    if xf.flip {
+        let badge = flip_indicator_rect(xf.rect);
+        painter.rect_filled(badge, 6.0, t.chrome);
+        painter.text(badge.center(), Align2::CENTER_CENTER, "↔", egui::FontId::proportional(18.0), t.accent);
+    }
     if !compass_visible(view.rotation) {
         ctx.data_mut(|d| d.remove::<Rect>(compass_id()));
         return false;
     }
     let r = compass_rect(xf.rect);
     ctx.data_mut(|d| d.insert_temp(compass_id(), r));
-    let t = Tokens::get(ctx);
     let hover = response.hover_pos().is_some_and(|p| r.contains(p));
     painter.circle_filled(r.center(), r.width() * 0.5, if hover { t.hover } else { t.chrome });
     painter.circle_stroke(r.center(), r.width() * 0.5 - 0.5, Stroke::new(1.0, t.separator));
@@ -267,6 +282,17 @@ mod tests {
     use egui::{Event, PointerButton, pos2};
     use egui_kittest::Harness;
     use serde_json::json;
+
+    #[test]
+    fn flip_indicator_is_in_the_opposite_corner_from_the_compass() {
+        let canvas = Rect::from_min_size(pos2(20.0, 40.0), vec2(800.0, 600.0));
+        let flip = flip_indicator_rect(canvas);
+        let compass = compass_rect(canvas);
+        assert!(flip.left() >= canvas.left() && flip.top() >= canvas.top());
+        assert!(flip.right() < compass.left());
+        assert_eq!(flip.left(), canvas.left() + 10.0);
+        assert_eq!(flip.top(), canvas.top() + 10.0);
+    }
 
     #[test]
     fn wrap_deg_folds_huge_and_hostile_angles() {
