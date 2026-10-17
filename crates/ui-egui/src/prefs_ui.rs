@@ -15,7 +15,7 @@ use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 #[cfg(test)]
 use photocraft_engine::prefs::Theme;
 use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS, Theme as SavedTheme};
-use photocraft_engine::snap::{SnapLine, SnapTargets};
+use photocraft_engine::snap::{SnapLine, SnapOptions, SnapTargets};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -43,7 +43,7 @@ pub struct Runtime {
     /// Snapping state of the drag in progress (see `snap_ui`).
     pub(crate) snap: Option<crate::snap_ui::ActiveSnap>,
     pub(crate) snap_lines: Vec<SnapLine>,
-    pub(crate) guide_targets: Option<((DocId, u64), SnapTargets)>,
+    pub(crate) guide_targets: Option<((DocId, u64, SnapOptions), SnapTargets)>,
     /// Checkerboard colours the cached CPU checker texture was built with.
     pub(crate) checker_key: Option<[[u8; 3]; 2]>,
     /// Style last sent to the GPU canvas.

@@ -485,7 +485,8 @@ pub fn snap_guide(app: &mut PhotocraftApp, vertical: bool, pos: f64) -> f64 {
         return pos;
     }
     let Some(st) = app.session.active() else { return pos };
-    let key = (st.doc.id, st.revision);
+    // The Snap To options (grid, layers, document bounds, grid step) change the targets too.
+    let key = (st.doc.id, st.revision, options(app));
     if app.prefs_rt.guide_targets.as_ref().is_none_or(|(k, _)| *k != key) {
         let t = build(app, &[], false).filtered(|k| k != SnapKind::Guide);
         app.prefs_rt.guide_targets = Some((key, t));
@@ -1143,6 +1144,25 @@ mod tests {
         assert_eq!(snap_guide(&mut app, false, 170.0), 170.0);
         app.ui.extras.snap = false;
         assert_eq!(snap_guide(&mut app, true, 297.0), 297.0);
+    }
+
+    /// The cached ruler-guide targets follow the Snap To options, not just document edits.
+    #[test]
+    fn guide_targets_follow_snap_to_options() {
+        let mut app = app_with_box();
+        app.run(
+            "prefs.set",
+            json!({"values": {"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
+        )
+        .unwrap();
+        app.ui.extras.grid = false;
+        assert_eq!(snap_guide(&mut app, true, 23.0), 23.0, "grid hidden");
+        app.ui.extras.grid = true;
+        app.ui.view.snap_to.grid = true;
+        assert_eq!(snap_guide(&mut app, true, 23.0), 25.0, "grid shown");
+        app.ui.extras.grid = false;
+        app.ui.view.snap_to.layers = false;
+        assert_eq!(snap_guide(&mut app, true, 297.0), 297.0, "Snap To Layers off");
     }
 
     #[test]
