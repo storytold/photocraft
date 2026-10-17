@@ -731,11 +731,12 @@ async fn embedded_smart_objects_can_be_edited_saved_and_unpacked_without_file_au
     let client = connect(PhotocraftMcp::headless()).await;
     let run = async |id: &str, params: Value| json_of(&call(&client, "command_run", json!({"id": id, "params": params})).await);
     json_of(&call(&client, "doc_new", json!({"width": 16, "height": 12, "background": "white"})).await);
-    run("layer.smartObjects.convertToSmartObject", json!({})).await;
     let outer = run("layer.smartObjects.convertToSmartObject", json!({})).await["layer"].clone();
     // An explicit target works even with a regular pixel layer selected.
     run("layer.new.layer", json!({"name": "Other layer"})).await;
     assert_eq!(run("layer.smartObjects.editContents", json!({"layer": outer})).await["document"], 1);
+    // A smart object cannot be converted again, so nest one inside the contents instead.
+    run("layer.smartObjects.convertToSmartObject", json!({})).await;
     assert_eq!(run("layer.smartObjects.editContents", json!({})).await["document"], 2);
     run("layer.setProps", json!({"name": "Edited photo", "opacity": 0.5})).await;
     assert_eq!(run("layer.smartObjects.saveContents", json!({})).await["updated"], true);
