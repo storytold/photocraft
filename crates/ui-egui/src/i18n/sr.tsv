@@ -4283,3 +4283,5 @@ shape	Appearance	Izgled
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
 	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.
+	“{name}” already exists. Replace it?	„{name}“ već postoji. Zameniti?
+	The name in the save dialog was “{name}”.	Ime u dijalogu za čuvanje je bilo „{name}“.

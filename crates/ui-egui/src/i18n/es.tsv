@@ -4172,3 +4172,5 @@ navigator	Zoom	Zoom
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
 	{name} was changed by another app after it was opened or saved here.	Otra aplicación cambió {name} después de abrirlo o guardarlo aquí.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Reemplázalo con este documento, o cancela y usa Archivo › Guardar como para conservar ambos.
+	“{name}” already exists. Replace it?	«{name}» ya existe. ¿Reemplazarlo?
+	The name in the save dialog was “{name}”.	El nombre en el cuadro de diálogo Guardar era «{name}».

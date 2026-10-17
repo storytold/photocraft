@@ -173,6 +173,7 @@ pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
+pub mod replace_prompt;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
@@ -365,6 +366,8 @@ pub struct FileStamp {
 }
 /// The [`FileStamp`] of the file at a path, `None` when it can't be read.
 pub type FileStampFn = Box<dyn Fn(&str) -> Option<FileStamp>>;
+/// Whether two paths reach the same file on disk; false when either can't be read.
+pub type SameFileFn = Box<dyn Fn(&str, &str) -> bool>;
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
 /// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
@@ -465,6 +468,10 @@ pub struct Services {
     /// Size and modification time of a file (native); `None` on the web, where Save never
     /// writes back to a file.
     pub file_stamp: Option<FileStampFn>,
+    /// Whether two paths reach the same file (native): a save dialog's answer and the path the
+    /// save writes to after Lowercase Extension, on a file system that ignores letter case. A save
+    /// asks before replacing a file it finds different (`replace_prompt`).
+    pub same_file: Option<SameFileFn>,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
     /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
     pub save_file: Option<SaveFileFn>,

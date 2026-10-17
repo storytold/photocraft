@@ -442,6 +442,32 @@ mod tests {
         assert!(out[0].1.starts_with(b"ASEF"));
     }
 
+    /// The Linux save dialog shows the export's name without its extension, `Swatches`, and asks
+    /// only about that name. The export adds `.aco`, so with `Swatches.aco` in the folder it asks
+    /// before replacing it.
+    #[test]
+    fn export_asks_before_replacing_the_file_its_added_extension_names() {
+        use crate::file_dialog::FileDialogAnswer;
+        let written: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+        let w = written.clone();
+        let services = crate::Services {
+            file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("/swatches/Swatches".into()))]).0),
+            write: Some(Box::new(move |p: &str, _: &[u8]| {
+                w.borrow_mut().push(p.to_string());
+                Ok(())
+            })),
+            file_stamp: Some(Box::new(|p: &str| (p == "/swatches/Swatches.aco").then_some(crate::FileStamp { len: 1, modified: None }))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        export_dialog(&mut app, "aco").unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        let id = app.ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id).expect("the export asks first");
+        assert!(written.borrow().is_empty(), "nothing is written before the answer");
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!(*written.borrow(), ["/swatches/Swatches.aco"]);
+    }
+
     /// #3658: dragging a group header reorders the folders, and the new order sticks in the UI
     /// state (UI state is serde, so it saves and reloads with the rest of the panel state).
     #[test]

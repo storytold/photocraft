@@ -3212,3 +3212,5 @@ curves	Smooth	Glätten
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
+	“{name}” already exists. Replace it?	„{name}“ ist bereits vorhanden. Ersetzen?
+	The name in the save dialog was “{name}”.	Der Name im Speichern-Dialog war „{name}“.

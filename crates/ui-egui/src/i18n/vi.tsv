@@ -3697,3 +3697,5 @@ curves	Smooth	Làm mượt
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.
+	“{name}” already exists. Replace it?	“{name}” đã tồn tại. Thay thế?
+	The name in the save dialog was “{name}”.	Tên trong hộp thoại lưu là “{name}”.

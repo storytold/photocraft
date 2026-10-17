@@ -3910,3 +3910,5 @@ curves	Smooth	Згладити
 	Replace	Замінити
 	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замініть його цим документом або скасуйте й скористайтеся Файл › Зберегти як, щоб зберегти обидва.
+	“{name}” already exists. Replace it?	«{name}» уже існує. Замінити?
+	The name in the save dialog was “{name}”.	У вікні збереження було вказано назву «{name}».

@@ -2827,3 +2827,5 @@ curves	Smooth	平滑
 	Replace	替换
 	{name} was changed by another app after it was opened or saved here.	{name} 在此处打开或存储后已被其他应用更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	用此文档替换它，或取消并使用“文件 › 另存为”以保留两者。
+	“{name}” already exists. Replace it?	“{name}”已存在。要替换它吗？
+	The name in the save dialog was “{name}”.	存储对话框中的名称是“{name}”。

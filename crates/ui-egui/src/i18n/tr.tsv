@@ -3940,3 +3940,5 @@ cameraData	Lens	Lens
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
 	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.
+	“{name}” already exists. Replace it?	'{name}' zaten var. Değiştirilsin mi?
+	The name in the save dialog was “{name}”.	Kaydetme penceresindeki ad '{name}' idi.

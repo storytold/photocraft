@@ -298,6 +298,26 @@ fn write_atomic_progress(path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> R
     photocraft_format::atomic_write_progress(path, bytes, progress).map_err(|e| e.to_string())
 }
 
+/// Whether `a` and `b` reach the same file: the same device and inode on Unix, the same final path
+/// on Windows (where it holds the name's letter case as stored). False when either can't be read.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
     settings.io_options()
 }
@@ -511,6 +531,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let meta = std::fs::metadata(path).ok()?;
             Some(photocraft_ui_egui::FileStamp { len: meta.len(), modified: meta.modified().ok() })
         })),
+        same_file: Some(Box::new(|a: &str, b: &str| same_file(Path::new(a), Path::new(b)))),
         automation_read,
         automation_write,
         automation_open_pcraft,
@@ -886,6 +907,22 @@ mod tests {
             assert_eq!(dialog_file_name(name, true).as_deref(), Some(name));
         }
         assert_eq!(dialog_file_name("", true), None);
+    }
+
+    /// A name in another letter case reaches the same file where the file system ignores case
+    /// (Windows, and macOS by default), and only there. Two files with the same contents are two.
+    #[test]
+    fn same_file_follows_the_file_system() {
+        let dir = std::env::temp_dir().join(format!("photocraft-same-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (cat, dog, upper) = (dir.join("CAT.psd"), dir.join("dog.psd"), dir.join("CAT.PSD"));
+        std::fs::write(&cat, b"same").unwrap();
+        std::fs::write(&dog, b"same").unwrap();
+        assert!(same_file(&cat, &cat));
+        assert!(!same_file(&cat, &dog));
+        assert_eq!(same_file(&upper, &cat), upper.exists(), "the same file only where letter case is ignored");
+        assert!(!same_file(&dir.join("missing.psd"), &cat));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

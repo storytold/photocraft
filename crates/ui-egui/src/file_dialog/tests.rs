@@ -433,6 +433,108 @@ fn save_paths_without_an_extension_get_the_suggested_one() {
     assert_eq!(*written.borrow(), ["/pics/cat.psd", "/pics/dog.png"]);
 }
 
+/// The question whether to replace a file (`replace_prompt`), when one is open.
+fn replace_prompt(app: &PhotocraftApp) -> Option<u64> {
+    app.ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id)
+}
+
+/// File › Save As, answered with `path`.
+fn save_as(app: &mut PhotocraftApp, open: &Open, path: &str) {
+    let ctx = egui::Context::default();
+    menus::invoke(app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(open, Some(FileDialogAnswer::SaveTo(path.into())));
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// The save dialog asked only about `cat`. The extension added to it names a file that exists,
+/// so the save asks before replacing that file: Cancel writes nothing, Replace writes it.
+#[test]
+fn a_save_asks_before_replacing_the_file_its_added_extension_names() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = app();
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, "/pics/cat.psd");
+    save_as(&mut app, &open, "/pics/cat");
+    let id = replace_prompt(&app).expect("the save asks first");
+    let fields = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+    assert!(fields["message"].as_str().unwrap().contains("“cat.psd”"), "{fields:?}");
+    assert!(fields["detail"].as_str().unwrap().contains("“cat”"), "{fields:?}");
+    assert!(written.borrow().is_empty(), "nothing is written before the answer");
+    app.poll_file_dialog(&ctx, None);
+    assert!(app.file_dialog_open(), "the save waits for the answer");
+    assert!(written.borrow().is_empty());
+
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(written.borrow().is_empty(), "Cancel writes nothing");
+    assert!(!app.file_dialog_open() && !app.ui.status_error);
+    assert_eq!(app.session.active().unwrap().path, None);
+
+    // A question closed without an answer counts as Cancel.
+    save_as(&mut app, &open, "/pics/cat");
+    app.ui.close_dialog(replace_prompt(&app).expect("asked again"));
+    app.poll_file_dialog(&ctx, None);
+    assert!(written.borrow().is_empty() && !app.file_dialog_open());
+
+    // Replace answers with the save's failure.
+    save_as(&mut app, &open, "/pics/cat");
+    let write = app.services.write.replace(Box::new(|_: &str, _: &[u8]| Err("disk full".into())));
+    let id = replace_prompt(&app).expect("asked again");
+    let e = crate::dialogs::confirm(&mut app, id).unwrap_err();
+    assert!(e.contains("disk full") && app.ui.status_error, "{e}");
+    app.services.write = write;
+
+    save_as(&mut app, &open, "/pics/cat");
+    let id = replace_prompt(&app).expect("asked again");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(*written.borrow(), ["/pics/cat.psd"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/cat.psd"));
+    assert!(!app.file_dialog_open() && replace_prompt(&app).is_none());
+}
+
+/// Lowercase Extension changes `CAT.PSD` to `CAT.psd`. Where letter case tells two files apart
+/// (Linux), the dialog asked only about `CAT.PSD`; where it doesn't (Windows and macOS by
+/// default), both names reach the same file, which the dialog asked about.
+#[test]
+fn a_save_asks_before_replacing_the_file_its_lowercased_extension_names() {
+    {
+        // Two files, even with the same size and modification time.
+        let (mut app, open, written) = app();
+        let disk = on_disk(&mut app);
+        for name in ["/pics/CAT.psd", "/pics/CAT.PSD"] {
+            changed_by_another_app(&disk, name);
+        }
+        app.services.same_file = Some(Box::new(|a: &str, b: &str| a == b));
+        save_as(&mut app, &open, "/pics/CAT.PSD");
+        let id = replace_prompt(&app).expect("the save asks first");
+        assert!(written.borrow().is_empty());
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!(*written.borrow(), ["/pics/CAT.psd"]);
+    }
+    let (mut app, open, written) = app();
+    let disk = on_disk(&mut app);
+    for name in ["/pics/CAT.psd", "/pics/CAT.PSD"] {
+        changed_by_another_app(&disk, name);
+    }
+    app.services.same_file = Some(Box::new(|a: &str, b: &str| a.eq_ignore_ascii_case(b)));
+    save_as(&mut app, &open, "/pics/CAT.PSD");
+    assert!(replace_prompt(&app).is_none(), "the dialog asked about this file");
+    assert_eq!(*written.borrow(), ["/pics/CAT.psd"]);
+}
+
+/// The save dialog asked about the file it answered: a bare name with no file under the added
+/// extension, and a full name, are written at once.
+#[test]
+fn a_save_writes_at_once_when_the_dialog_asked_about_the_file() {
+    let (mut app, open, written) = app();
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, "/pics/dog.png");
+    save_as(&mut app, &open, "/pics/cat");
+    save_as(&mut app, &open, "/pics/dog.png");
+    assert!(replace_prompt(&app).is_none());
+    assert_eq!(*written.borrow(), ["/pics/cat.psd", "/pics/dog.png"]);
+}
+
 #[test]
 fn save_and_export_dialogs_start_beside_the_document() {
     let (mut app, open, _) = app();

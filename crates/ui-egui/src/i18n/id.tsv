@@ -3203,3 +3203,5 @@ curves	Smooth	Haluskan
 	Replace	Ganti
 	{name} was changed by another app after it was opened or saved here.	{name} diubah oleh aplikasi lain setelah dibuka atau disimpan di sini.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ganti dengan dokumen ini, atau batalkan dan gunakan Berkas › Simpan Sebagai untuk menyimpan keduanya.
+	“{name}” already exists. Replace it?	“{name}” sudah ada. Ganti?
+	The name in the save dialog was “{name}”.	Nama di dialog simpan adalah “{name}”.
