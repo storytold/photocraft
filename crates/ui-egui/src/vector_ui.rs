@@ -1697,8 +1697,9 @@ pub fn paths_footer(ctx: &egui::Context) -> Option<Rect> {
 }
 
 /// Commands offered by a Paths row's context menu. The row's path is passed explicitly so a
-/// right-click acts on that row even when another path is selected in the panel.
-fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str, &'static str, Value)> {
+/// right-click acts on that row even when another path is selected in the panel. `layer` is the
+/// layer a `PathRow::Layer` row belongs to (the active layer).
+fn path_context_actions(entry: &PathEntry, doc: &Document, layer: Option<photocraft_doc::LayerId>) -> Vec<(&'static str, &'static str, Value)> {
     let key = match entry.kind {
         PathRow::Work => "work".to_string(),
         PathRow::Layer => "layer".to_string(),
@@ -1733,6 +1734,9 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
         actions.push(("Delete Path", "path.delete", json!({"name": key})));
     } else if entry.name.ends_with(" Vector Mask") {
         actions.push(("Delete Vector Mask", "layer.vectorMask.delete", json!({})));
+    } else if let Some(id) = layer {
+        // A shape layer's path is the shape: Photoshop's Delete Path deletes the layer (#6552).
+        actions.push(("Delete Path", "layer.delete", json!({"layer": id.0})));
     }
     actions
 }
@@ -1744,7 +1748,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let doc = st.doc.clone();
-    let rows = path_rows(&doc, st.active_layer);
+    let st_layer = st.active_layer;
+    let rows = path_rows(&doc, st_layer);
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
     let mut stroke_dialog: Option<String> = None;
@@ -1807,7 +1812,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui.set_min_width(190.0);
                         let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
                         let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
-                        for (label, cmd, params) in path_context_actions(&entry, &doc) {
+                        for (label, cmd, params) in path_context_actions(&entry, &doc, st_layer) {
                             let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
                             if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
                                 if cmd == "path.stroke" {
@@ -1992,7 +1997,7 @@ mod tests {
         app.run("path.set", json!({"name": "Second", "path": path})).unwrap();
         let doc = &app.session.active().unwrap().doc;
         let first = path_rows(doc, None).into_iter().find(|r| r.name == "First").unwrap();
-        let entries = path_context_actions(&first, doc);
+        let entries = path_context_actions(&first, doc, None);
         assert_eq!(entries[0].1, "path.toSelection");
         assert_eq!(entries[0].2["name"], "First");
         assert!(entries.iter().all(|(_, id, _)| photocraft_engine::commands::find(id).is_some()));
@@ -2004,7 +2009,7 @@ mod tests {
         app.run("path.set", json!({"name": "First copy 1", "path": path})).unwrap();
         let doc = &app.session.active().unwrap().doc;
         let first = path_rows(doc, None).into_iter().find(|r| r.name == "First").unwrap();
-        let (_, _, duplicate) = path_context_actions(&first, doc).into_iter().find(|(_, id, _)| *id == "path.set").unwrap();
+        let (_, _, duplicate) = path_context_actions(&first, doc, None).into_iter().find(|(_, id, _)| *id == "path.set").unwrap();
         assert_eq!(duplicate["name"], "First copy 2", "duplicate must not overwrite an existing path");
     }
 
@@ -2015,12 +2020,33 @@ mod tests {
         app.run("path.set", json!({"name": "work", "path": path})).unwrap();
         let doc = &app.session.active().unwrap().doc;
         let work = path_rows(doc, None).into_iter().find(|r| r.kind == PathRow::Work).unwrap();
-        let entries = path_context_actions(&work, doc);
+        let entries = path_context_actions(&work, doc, None);
         assert!(entries.iter().any(|(_, id, _)| *id == "path.rename"));
         assert!(!entries.iter().any(|(_, id, _)| *id == "path.set"));
         let layer = PathEntry { kind: PathRow::Layer, ..work };
-        let entries = path_context_actions(&layer, doc);
+        let entries = path_context_actions(&layer, doc, None);
         assert!(!entries.iter().any(|(_, id, _)| *id == "path.delete"));
+    }
+
+    /// #6552: a shape layer's "<Layer> Shape Path" row offers Delete Path, and it deletes the
+    /// shape layer, as Photoshop's Delete Path does (measured: one "Delete Layer" step).
+    #[test]
+    fn shape_path_row_delete_path_deletes_the_shape_layer() {
+        let mut app = app();
+        app.run("shape.create", json!({"kind": "ellipse", "rect": [20, 20, 100, 70]})).unwrap();
+        let st = app.session.active().unwrap();
+        let (doc, shape) = (st.doc.clone(), st.active_layer);
+        let layers = doc.layers.len();
+        let row = path_rows(&doc, shape).into_iter().find(|r| r.kind == PathRow::Layer).unwrap();
+        assert!(row.name.ends_with(" Shape Path"), "{}", row.name);
+        let (_, id, params) =
+            path_context_actions(&row, &doc, shape).into_iter().find(|(label, _, _)| *label == "Delete Path").expect("Delete Path is offered");
+        app.run(id, params).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        assert_eq!(doc.layers.len(), layers - 1);
+        assert!(shape.and_then(|id| doc.layer(id)).is_none(), "the shape layer is gone");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(shape.and_then(|id| app.session.active().unwrap().doc.layer(id)).is_some(), "one undo step brings it back");
     }
 
     /// How many shapes the path overlay paints for `app` this frame.
