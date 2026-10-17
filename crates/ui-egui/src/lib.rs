@@ -1881,7 +1881,12 @@ impl eframe::App for PhotocraftApp {
             type_tool::commit(self);
         }
         if self.ui.pen.as_ref().is_some_and(|p| !p.drawn_with(self.ui.tool)) {
-            vector_ui::pen_commit(self, false);
+            if self.ui.pen_resumed.is_some() {
+                self.ui.pen = None;
+                self.ui.pen_resumed = None;
+            } else {
+                vector_ui::pen_commit(self, false);
+            }
         }
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);

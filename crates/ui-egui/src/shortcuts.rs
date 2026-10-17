@@ -473,9 +473,21 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
-        crate::vector_ui::pen_commit(app, false);
-        return;
+    // If resuming an existing open path, Esc cancels drafting without mutating the document.
+    if app.ui.pen.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            if app.ui.pen_resumed.is_some() {
+                app.ui.pen = None;
+                app.ui.pen_resumed = None;
+            } else {
+                crate::vector_ui::pen_commit(app, false);
+            }
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            crate::vector_ui::pen_commit(app, false);
+            return;
+        }
     }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.

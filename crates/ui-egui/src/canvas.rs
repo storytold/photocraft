@@ -3954,147 +3954,159 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if !resizing && !alt && !app.ui.shell.sticky_alt {
                 draw_clone_preview(app, &painter, &xf, xf.to_doc(p), output);
             }
-            let icon = match tool {
-                // Resizing the brush: the circle stays where the drag began (`brush_resize`).
-                t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
-                // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
-                // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
-                t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
-                    // While it samples (button held), the comparison ring replaces the cursor (#213).
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
+            let icon =
+                match tool {
+                    // Resizing the brush: the circle stays where the drag began (`brush_resize`).
+                    t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
+                    // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
+                    // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
+                    t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
+                        // While it samples (button held), the comparison ring replaces the cursor (#213).
+                        if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
+                            icon
+                        } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                            egui::CursorIcon::Crosshair
+                        } else {
+                            pipette_cursor(ui.ctx(), p)
+                        }
                     }
-                }
-                t if t.is_brushlike() || t == Tool::QuickSelection => {
-                    // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
-                    // full size), precise crosshair, or the standard pointer.
-                    use photocraft_engine::prefs::PaintingCursor;
-                    let cur = app.session.prefs().cursors.clone();
-                    // ⇪ forces the precise crosshair, whatever the cursor preference (#1758).
-                    if app.caps_lock {
-                        crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0)
-                    } else {
-                        let painting = app.drag.is_some();
-                        let brush = &app.session.tools.brush;
-                        let full = (brush.size / 2.0 * xf.zoom).max(1.0);
-                        match cur.painting {
-                            PaintingCursor::Standard => egui::CursorIcon::Default,
-                            PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
-                            _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
-                            // The Pencil (and the Eraser in Pencil mode): the outline of the
-                            // whole pixels its dab fills, on the pixel grid. A round tip is a
-                            // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                            // its square, 16 screen pixels at any zoom (#2770).
-                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                                let block = crate::eraser_ui::block_mode(app, tool);
-                                let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                                let ppp = painter.ctx().pixels_per_point();
-                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
-                                let px = 1.0 / ppp;
-                                let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                                if !block && pencil_tip_is_round(size) {
-                                    let r = sq.width() / 2.0;
-                                    painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                                    painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                                } else {
-                                    painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                                    painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+                    t if t.is_brushlike() || t == Tool::QuickSelection => {
+                        // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
+                        // full size), precise crosshair, or the standard pointer.
+                        use photocraft_engine::prefs::PaintingCursor;
+                        let cur = app.session.prefs().cursors.clone();
+                        // ⇪ forces the precise crosshair, whatever the cursor preference (#1758).
+                        if app.caps_lock {
+                            crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0)
+                        } else {
+                            let painting = app.drag.is_some();
+                            let brush = &app.session.tools.brush;
+                            let full = (brush.size / 2.0 * xf.zoom).max(1.0);
+                            match cur.painting {
+                                PaintingCursor::Standard => egui::CursorIcon::Default,
+                                PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
+                                _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
+                                // The Pencil (and the Eraser in Pencil mode): the outline of the
+                                // whole pixels its dab fills, on the pixel grid. A round tip is a
+                                // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
+                                // its square, 16 screen pixels at any zoom (#2770).
+                                _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
+                                    let block = crate::eraser_ui::block_mode(app, tool);
+                                    let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
+                                    let ppp = painter.ctx().pixels_per_point();
+                                    let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
+                                    let px = 1.0 / ppp;
+                                    let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+                                    if !block && pencil_tip_is_round(size) {
+                                        let r = sq.width() / 2.0;
+                                        painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+                                        painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+                                    } else {
+                                        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+                                        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+                                    }
+                                    // Too small to see where it is: the hotspot as well.
+                                    if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
+                                        crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
+                                    }
+                                    egui::CursorIcon::None
                                 }
-                                // Too small to see where it is: the hotspot as well.
-                                if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                                    crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
+                                // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
+                                // traces its outline, turned and flipped with the view; a plain round
+                                // tip keeps the circle.
+                                _ => {
+                                    let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
+                                    let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
+                                    crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                                 }
-                                egui::CursorIcon::None
-                            }
-                            // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                            // traces its outline, turned and flipped with the view; a plain round
-                            // tip keeps the circle.
-                            _ => {
-                                let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                                let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
-                                crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                             }
                         }
                     }
-                }
-                // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
-                // otherwise its pipette, or the crosshair for precise Other Cursors.
-                Tool::Eyedropper => {
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if precise_other_cursor(app) {
+                    // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
+                    // otherwise its pipette, or the crosshair for precise Other Cursors.
+                    Tool::Eyedropper => {
+                        if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
+                            icon
+                        } else if precise_other_cursor(app) {
+                            egui::CursorIcon::Crosshair
+                        } else {
+                            pipette_cursor(ui.ctx(), p)
+                        }
+                    }
+                    // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+                    Tool::ColorSampler => {
+                        if precise_other_cursor(app) {
+                            egui::CursorIcon::Crosshair
+                        } else {
+                            pipette_cursor(ui.ctx(), p)
+                        }
+                    }
+                    // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
+                    Tool::PaintBucket => {
+                        if precise_other_cursor(app) {
+                            egui::CursorIcon::Crosshair
+                        } else {
+                            paint_bucket_cursor(ui.ctx(), p)
+                        }
+                    }
+                    // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
+                    Tool::Pen | Tool::CurvaturePen
+                        if {
+                            let [x, y] = xf.to_doc(p);
+                            crate::vector_ui::closes_path_at(app, tool, x, y)
+                        } =>
+                    {
+                        crate::tool_cursor::close_path(&painter, p)
+                    }
+                    // The pen tools: their own icon with its nib on the point, or the crosshair for
+                    // precise Other Cursors (#4639).
+                    Tool::Pen => {
+                        if precise_other_cursor(app) {
+                            egui::CursorIcon::Crosshair
+                        } else {
+                            let badge = if crate::vector_ui::closes_path_at(app, Tool::Pen, xf.to_doc(p)[0], xf.to_doc(p)[1]) {
+                                crate::icons::PenBadge::Close
+                            } else if crate::vector_ui::can_resume_pen_path(app, xf.to_doc(p)) {
+                                crate::icons::PenBadge::Resume
+                            } else {
+                                crate::icons::PenBadge::None
+                            };
+                            crate::icons::pen_cursor(ui.ctx(), p, badge);
+                            egui::CursorIcon::None
+                        }
+                    }
+                    Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
+                        if precise_other_cursor(app) { egui::CursorIcon::Crosshair } else { pen_cursor(ui.ctx(), tool, p) }
+                    }
+                    // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
+                    Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+                        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
+                    {
                         egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
                     }
-                }
-                // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
-                Tool::ColorSampler => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
+                    // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
+                    // layer under it is marked by the hover outline, not by a different cursor.
+                    Tool::Move => egui::CursorIcon::Default,
+                    // Dragging is handled with the pan itself, above.
+                    Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
+                    Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
+                    Tool::Zoom => crate::tool_cursor::zoom(ui.ctx(), zoom_out(alt)),
+                    Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
+                    Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
+                    Tool::RedEye => {
+                        let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
+                        let r_doc = photocraft_algo::redeye::search_radius(pupil);
+                        let r = (r_doc * xf.zoom).max(2.0);
+                        painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+                        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+                        for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
+                            painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
+                            painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
+                        }
+                        egui::CursorIcon::None
                     }
-                }
-                // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
-                Tool::PaintBucket => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        paint_bucket_cursor(ui.ctx(), p)
-                    }
-                }
-                // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
-                Tool::Pen | Tool::CurvaturePen
-                    if {
-                        let [x, y] = xf.to_doc(p);
-                        crate::vector_ui::closes_path_at(app, tool, x, y)
-                    } =>
-                {
-                    crate::tool_cursor::close_path(&painter, p)
-                }
-                // The pen tools: their own icon with its nib on the point, or the crosshair for
-                // precise Other Cursors (#4639).
-                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pen_cursor(ui.ctx(), tool, p)
-                    }
-                }
-                // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
-                Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
-                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
-                {
-                    egui::CursorIcon::Crosshair
-                }
-                // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
-                // layer under it is marked by the hover outline, not by a different cursor.
-                Tool::Move => egui::CursorIcon::Default,
-                // Dragging is handled with the pan itself, above.
-                Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
-                Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => crate::tool_cursor::zoom(ui.ctx(), zoom_out(alt)),
-                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
-                Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
-                Tool::RedEye => {
-                    let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
-                    let r_doc = photocraft_algo::redeye::search_radius(pupil);
-                    let r = (r_doc * xf.zoom).max(2.0);
-                    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
-                    for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
-                        painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
-                        painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
-                    }
-                    egui::CursorIcon::None
-                }
-                _ => egui::CursorIcon::Crosshair,
-            };
+                    _ => egui::CursorIcon::Crosshair,
+                };
             let icon = visible_crosshair(icon, &painter, p, cfg!(not(target_arch = "wasm32")));
             ui.ctx().set_cursor_icon(icon);
             // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the

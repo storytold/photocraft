@@ -49,6 +49,47 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
     });
 }
 
+/// Cursor badge shown alongside the Pen tool nib (Photoshop-style).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PenBadge {
+    None,
+    Close,
+    Resume,
+}
+
+/// The Pen tool cursor with its nib hotspot at `(2.0, 2.0) / 24.0`, displaying Photoshop's
+/// "Close Path" loop indicator circle `○` or "Resume Path" connection slash `/` when hovering endpoints.
+pub fn pen_cursor(ctx: &egui::Context, p: egui::Pos2, badge: PenBadge) {
+    let hot = egui::vec2(2.0, 2.0) / 24.0;
+    let size = 20.0;
+    let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
+    let area = egui::Area::new(egui::Id::new("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    area.show(ctx, |ui| {
+        let outline = image("pen-tool", size, Color32::from_black_alpha(200));
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
+        }
+        image("pen-tool", size, Color32::WHITE).paint_at(ui, rect);
+
+        match badge {
+            PenBadge::Close => {
+                let circle_c = p + egui::vec2(14.0, 11.0);
+                let r = 3.2;
+                ui.painter().circle_stroke(circle_c, r, egui::Stroke::new(2.8, Color32::from_black_alpha(220)));
+                ui.painter().circle_stroke(circle_c, r, egui::Stroke::new(1.3, Color32::WHITE));
+            }
+            PenBadge::Resume => {
+                let c = p + egui::vec2(14.0, 11.0);
+                let h = 3.5;
+                let seg = [c + egui::vec2(-h, h), c + egui::vec2(h, -h)];
+                ui.painter().line_segment(seg, egui::Stroke::new(3.0, Color32::from_black_alpha(220)));
+                ui.painter().line_segment(seg, egui::Stroke::new(1.4, Color32::WHITE));
+            }
+            PenBadge::None => {}
+        }
+    });
+}
+
 /// A small icon beside the OS arrow pointer at `p` (Photoshop's cursor badges: scissors for
 /// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
 /// keeps the arrow (`CursorIcon::Default`).
