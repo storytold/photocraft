@@ -576,6 +576,88 @@ fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
 }
 
 #[test]
+fn transfer_minimum_window_edits_route_only_the_changed_field_and_coalesce_scrubs() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness(0, 6);
+    h.state_mut().ui.tool = crate::state::Tool::MixerBrush;
+    h.state_mut()
+        .session
+        .execute(
+            "tools.setBrush",
+            json!({"brush": {
+                "angle": -23, "roundness": 0.473, "flipX": true,
+                "transfer": {
+                    "enabled": true,
+                    "opacity": {"control": "penPressure", "jitter": 0.03, "minimum": 0.173, "fadeSteps": 37},
+                    "flow": {"control": "fade", "jitter": 0.07, "minimum": 0.283, "fadeSteps": 37},
+                    "wetness": {"control": "rotation", "jitter": 0.11, "minimum": 0.433, "fadeSteps": 37},
+                    "mix": {"control": "penTilt", "jitter": 0.13, "minimum": 0.643, "fadeSteps": 37}
+                }
+            }}),
+        )
+        .unwrap();
+    h.run_steps(3);
+    let mut expected = h.state().session.tools.brush.clone();
+    for (index, key, value) in [(0, "opacity", 17.0), (1, "flow", 28.0), (2, "wetness", 43.0), (3, "mix", 64.0)] {
+        h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap().scroll_to_me();
+        h.run_steps(3);
+        let n = h.state().session.journal.len();
+        h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap().click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(3);
+        let minimum = (value as f32 + 1.0) / 100.0;
+        match index {
+            0 => expected.transfer.opacity.minimum = minimum,
+            1 => expected.transfer.flow.minimum = minimum,
+            2 => expected.transfer.wetness.minimum = minimum,
+            _ => expected.transfer.mix.minimum = minimum,
+        }
+        assert_eq!(h.state().session.tools.brush, expected);
+        assert_eq!(h.state().session.journal.len(), n + 1);
+        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"], json!({"transfer": {key: {"minimum": minimum}}}));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+    }
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(29.0)).unwrap().scroll_to_me();
+    h.run_steps(3);
+    let at = h.query_all_by_label("Minimum").nth(1).unwrap().rect().center();
+    let n = h.state().session.journal.len();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.hover_at(at + vec2(11.0, 0.0));
+    h.run_steps(2);
+    h.hover_at(at + vec2(20.0, 0.0));
+    h.run_steps(2);
+    h.drop_at(at + vec2(20.0, 0.0));
+    h.run_steps(3);
+    expected.transfer.flow.minimum = 0.49;
+    assert_eq!(h.state().session.tools.brush, expected, "scrubbing retains units and all unrelated brush fields");
+    assert_eq!(h.state().session.journal.len(), n + 1, "one command for the whole scrub gesture");
+    let (id, params) = last_journal(h.state()).unwrap();
+    assert_eq!(id, "tools.setBrush");
+    assert_eq!(params["brush"], json!({"transfer": {"flow": {"minimum": 0.49_f32}}}));
+    assert!(params["coalesce"].is_string(), "the scrub uses the existing gesture id");
+
+    h.state_mut().session.execute("tools.setBrush", json!({"brush": {"transfer": {"flow": {"control": "off"}}}})).unwrap();
+    h.run_steps(3);
+    let before = h.state().session.tools.brush.clone();
+    let n = h.state().session.journal.len();
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(49.0)).unwrap();
+    assert!(field.accesskit_node().is_disabled());
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().session.tools.brush, before);
+    assert_eq!(h.state().session.journal.len(), n, "disabled input never dispatches a command");
+}
+
+#[test]
 fn hue_jitter_amount_edits_keep_percentage_units_and_command_routing() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::{NodeT, Queryable};

@@ -87,7 +87,14 @@ fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
     ui.horizontal(|ui| {
         dim(ui, tl!("Control:"));
         let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
-        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
+        // Fade's new response-curve button must not widen a narrow section and shift
+        // the Minimum numeric column below it.
+        let control_width = if d.control == Control::Fade && takes_curve(d.control, angle) {
+            (ui.available_width() - 56.0 - 22.0 - 2.0 * ui.spacing().item_spacing.x).clamp(0.0, 130.0)
+        } else {
+            130.0
+        };
+        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], control_width);
         if d.control == Control::Fade {
             let mut steps = d.fade_steps as f32;
             if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).on_hover_text(tl!("Fade steps")).changed() {
@@ -542,12 +549,25 @@ fn color_dynamics(ui: &mut egui::Ui, b: &mut BrushSettings) {
     signed_pct(ui, tl!("Purity"), &mut c.purity, -1.0, 1.0);
 }
 
+/// Transfer's Minimum is a compact row under its own Control, not another jitter block.
+fn transfer_dynamic(ui: &mut egui::Ui, id: &str, label: &str, d: &mut Dynamic) {
+    pct(ui, label, &mut d.jitter, 1.0);
+    control_row(ui, id, d, false);
+    ui.add_enabled_ui(d.control != Control::Off, |ui| {
+        let mut minimum = (d.minimum * 100.0).round();
+        if widgets::slider_row_inline(ui, tl!("Minimum"), &mut minimum, 0.0..=100.0, "%").changed() {
+            d.minimum = (minimum.round() / 100.0).clamp(0.0, 1.0);
+        }
+    });
+    ui.add_space(6.0);
+}
+
 fn transfer(ui: &mut egui::Ui, b: &mut BrushSettings) {
     let tr = &mut b.transfer;
-    dynamic(ui, "brush-opacity-ctl", tl!("Opacity Jitter"), &mut tr.opacity, 1.0, Some(tl!("Minimum")), false);
-    dynamic(ui, "brush-flow-ctl", tl!("Flow Jitter"), &mut tr.flow, 1.0, Some(tl!("Minimum")), false);
-    dynamic(ui, "brush-wet-ctl", tl!("Wetness Jitter"), &mut tr.wetness, 1.0, Some(tl!("Minimum")), false);
-    dynamic(ui, "brush-mix-ctl", tl!("Mix Jitter"), &mut tr.mix, 1.0, Some(tl!("Minimum")), false);
+    transfer_dynamic(ui, "brush-opacity-ctl", tl!("Opacity Jitter"), &mut tr.opacity);
+    transfer_dynamic(ui, "brush-flow-ctl", tl!("Flow Jitter"), &mut tr.flow);
+    transfer_dynamic(ui, "brush-wet-ctl", tl!("Wetness Jitter"), &mut tr.wetness);
+    transfer_dynamic(ui, "brush-mix-ctl", tl!("Mix Jitter"), &mut tr.mix);
 }
 
 /// The Mixer Brush options the brush carries (Photoshop shows them in the Mixer Brush's options
@@ -653,8 +673,12 @@ mod tests {
     }
 
     fn section_harness(section: usize, b: BrushSettings) -> Harness<'static, BrushSettings> {
+        section_harness_width(section, 340.0, b)
+    }
+
+    fn section_harness_width(section: usize, width: f32, b: BrushSettings) -> Harness<'static, BrushSettings> {
         let mut ready = false;
-        let mut h = Harness::builder().with_size(vec2(340.0, 1100.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(vec2(width, 1100.0)).build_ui_state(
             move |ui, b: &mut BrushSettings| {
                 if !ready {
                     crate::PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::ProMedium);
@@ -667,6 +691,175 @@ mod tests {
         );
         h.run_steps(3);
         h
+    }
+
+    fn transfer_minimum_fixture(control: Control) -> BrushSettings {
+        let mut b = BrushSettings { angle: -23.0, roundness: 0.473, flip_x: true, ..Default::default() };
+        b.transfer.enabled = true;
+        for (d, jitter, minimum) in [
+            (&mut b.transfer.opacity, 0.03, 0.173),
+            (&mut b.transfer.flow, 0.07, 0.283),
+            (&mut b.transfer.wetness, 0.11, 0.433),
+            (&mut b.transfer.mix, 0.13, 0.643),
+        ] {
+            *d = Dynamic { jitter, control, minimum, fade_steps: 37, ..Default::default() };
+        }
+        b
+    }
+
+    fn transfer_minimum_value(b: &mut BrushSettings, index: usize) -> &mut f32 {
+        match index {
+            0 => &mut b.transfer.opacity.minimum,
+            1 => &mut b.transfer.flow.minimum,
+            2 => &mut b.transfer.wetness.minimum,
+            _ => &mut b.transfer.mix.minimum,
+        }
+    }
+
+    fn transfer_minimum_track(h: &Harness<'static, BrushSettings>, label: egui::Rect) -> egui::Rect {
+        fn collect(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+            match shape {
+                egui::Shape::Rect(r) if (r.rect.height() - 3.0).abs() < 0.1 && r.rect.width() > 50.0 => out.push(r.rect),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut tracks = Vec::new();
+        for shape in &h.output().shapes {
+            collect(&shape.shape, &mut tracks);
+        }
+        tracks
+            .into_iter()
+            .filter(|r| r.center().y >= label.top() && r.center().y < label.bottom() + 30.0)
+            .min_by(|a, b| (a.center().y - label.center().y).abs().total_cmp(&(b.center().y - label.center().y).abs()))
+            .unwrap()
+    }
+
+    #[test]
+    fn transfer_minimum_layout_keeps_the_track_beside_its_label_in_all_themes() {
+        for kind in theme::ThemeKind::ALL {
+            for width in [280.0, 340.0] {
+                for control in [Control::Off, Control::Fade, Control::PenPressure] {
+                    let b = transfer_minimum_fixture(control);
+                    let mut h = section_harness_width(6, width, b.clone());
+                    crate::PhotocraftApp::setup_context(&h.ctx, kind);
+                    h.run_steps(3);
+                    let labels: Vec<_> = h.query_all_by_label("Minimum").map(|n| n.rect()).collect();
+                    let controls: Vec<_> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
+                    assert_eq!(labels.len(), 4);
+                    let curves: Vec<_> = h.query_all_by_label("Response curve").map(|n| n.rect()).collect();
+                    assert_eq!(curves.len(), if control == Control::Off { 0 } else { 4 });
+                    for curve in &curves {
+                        assert!(curve.right() <= width - 8.0, "{kind:?}, {width}, {control:?}: curve toggle fits the section");
+                    }
+                    if control == Control::Fade {
+                        let counts: Vec<_> = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().numeric_value() == Some(37.0)).collect();
+                        assert_eq!(counts.len(), 4);
+                        for (count, curve) in counts.iter().zip(&curves) {
+                            assert!(count.rect().right() < curve.left(), "Fade count and curve toggle do not overlap");
+                        }
+                    }
+                    for (i, value) in [17.0, 28.0, 43.0, 64.0].into_iter().enumerate() {
+                        let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap();
+                        let label = labels[i];
+                        let track = transfer_minimum_track(&h, label);
+                        assert!(
+                            track.left() > label.right() && track.right() < field.rect().left(),
+                            "{kind:?}, {width}, {control:?}: track belongs between the Minimum label and field"
+                        );
+                        // The shared numeric slot is deliberately 1 pt above the field box (widgets::value_field_box).
+                        assert!(
+                            (track.center().y - field.rect().center().y).abs() <= 1.5 && (label.center().y - field.rect().center().y).abs() < 2.0,
+                            "{kind:?}, {width}, {control:?}: one compact Minimum row: {label:?}, {track:?}, {:?}",
+                            field.rect()
+                        );
+                        let jitter =
+                            h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some([3.0, 7.0, 11.0, 13.0][i])).unwrap();
+                        assert!(
+                            (field.rect().right() - jitter.rect().right()).abs() < 0.5,
+                            "{kind:?}, {width}, {control:?}, {i}: Minimum retains the numeric column: {:?}, jitter {:?}",
+                            field.rect(),
+                            jitter.rect()
+                        );
+                        assert!(
+                            field.rect().top() >= controls[i].bottom() && field.rect().top() - controls[i].bottom() < 15.0,
+                            "Minimum stays attached to its own Control"
+                        );
+                        assert!(field.rect().right() < width && track.width() >= 60.0, "the compact row fits the panel");
+                        assert_eq!(field.accesskit_node().is_disabled(), control == Control::Off);
+                    }
+                    assert_eq!(h.state(), &b, "rendering preserves imported fractional values");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_minimum_edits_keep_percent_units_limits_and_other_dynamics() {
+        for index in 0..4 {
+            let mut b = transfer_minimum_fixture(Control::PenPressure);
+            let mut h = section_harness(6, b.clone());
+            let value = [17.0, 28.0, 43.0, 64.0][index];
+            let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap();
+            field.click();
+            h.key_press(egui::Key::ArrowUp);
+            h.run_steps(2);
+            *transfer_minimum_value(&mut b, index) = (value as f32 + 1.0) / 100.0;
+            assert_eq!(h.state(), &b, "only the edited dynamic changes");
+            h.key_press(egui::Key::Enter);
+            for (value, key) in [(0.0, egui::Key::ArrowDown), (1.0, egui::Key::ArrowUp)] {
+                *transfer_minimum_value(&mut b, index) = value;
+                *h.state_mut() = b.clone();
+                h.run_steps(2);
+                let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(f64::from(value * 100.0))).unwrap();
+                field.click();
+                h.key_press(key);
+                h.run_steps(2);
+                assert_eq!(h.state(), &b, "percentage stays within 0..100");
+                h.key_press(egui::Key::Enter);
+            }
+            *transfer_minimum_value(&mut b, index) = 0.5;
+            *h.state_mut() = b.clone();
+            h.run_steps(2);
+            let label = h.query_all_by_label("Minimum").nth(index).unwrap().rect();
+            let track = transfer_minimum_track(&h, label);
+            drag(&mut h, track.center(), track.right_center() + vec2(100.0, 0.0));
+            *transfer_minimum_value(&mut b, index) = 1.0;
+            assert_eq!(h.state(), &b, "slider drag keeps the same units and clamps at its end");
+            *transfer_minimum_value(&mut b, index) = 0.5;
+            *h.state_mut() = b.clone();
+            h.run_steps(2);
+            let label = h.query_all_by_label("Minimum").nth(index).unwrap().rect().center();
+            drag(&mut h, label, label + vec2(11.0, 0.0));
+            *transfer_minimum_value(&mut b, index) = 0.61;
+            assert_eq!(h.state(), &b, "the label retains scrubbing, one percent per point");
+        }
+    }
+
+    #[test]
+    fn transfer_minimum_off_ignores_input_and_restores_each_saved_value() {
+        let b = transfer_minimum_fixture(Control::Off);
+        let mut h = section_harness(6, b.clone());
+        for (index, value) in [17.0, 28.0, 43.0, 64.0].into_iter().enumerate() {
+            h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap().click();
+            h.key_press(egui::Key::ArrowUp);
+            h.event(egui::Event::Text("99".into()));
+            h.key_press(egui::Key::Enter);
+            let label = h.query_all_by_label("Minimum").nth(index).unwrap().rect();
+            let track = transfer_minimum_track(&h, label);
+            drag(&mut h, track.center(), track.right_center());
+            drag(&mut h, label.center(), label.center() + vec2(30.0, 0.0));
+            assert_eq!(h.state(), &b, "Off ignores field, track and scrub input");
+        }
+        h.state_mut().transfer.flow.control = Control::Fade;
+        h.run_steps(2);
+        for (index, value) in [17.0, 28.0, 43.0, 64.0].into_iter().enumerate() {
+            let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap();
+            assert_eq!(field.accesskit_node().is_disabled(), index != 1, "each minimum follows only its own Control");
+        }
+        let mut expected = b;
+        expected.transfer.flow.control = Control::Fade;
+        assert_eq!(h.state(), &expected, "reactivation retains exact saved values and Fade steps");
     }
 
     /// #3825: jitter is an amount, not a hue selector; it uses the themed amount track.

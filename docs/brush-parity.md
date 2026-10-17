@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (compact Transfer Minimum rows; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -26,6 +26,7 @@ tablets against Photoshop side by side.
 | Color Dynamics (FG/BG, hue/sat/brightness jitter, purity, per tip) | done | |
 | Hue Jitter uses a standard percentage-amount track instead of a hue spectrum | done | #3825 (Hue Jitter appearance only); rendered track checked in all 14 themes; numeric and pointer edits retain percentage units and engine command routing. |
 | Transfer (opacity/flow/wetness/mix jitter and controls) | done | |
+| Transfer Minimum: label, track and percent input share one row directly under the Control | done | #3825 (Transfer Minimum layout only); all four minima retain limits, fractional values, Off/activation, scrubbing and exact brush-command routing; all 14 themes at two panel widths. |
 | Shape Dynamics and Transfer minimum fields disabled when their Control is Off, retaining their values | done | #3825 (minimum-field interaction only); `brush_sections.rs` UI regressions cover all six fields, reactivation and disabled input |
 | Brush Pose (tilt, rotation, pressure overrides) | done | |
 | Noise, Wet Edges, Build-up, Protect Texture | done | |
@@ -116,6 +117,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Transfer Minimum controls use compact inline rows (#3825 partial); existing field, track and label gestures retained; no readiness percentage or estimate changed |
 | 2026-10-13 | minor | Stale "missing tool" row corrected against main: Color Replacement (`paint.colorReplacement`) is a live toolbar tool; no brush-feel estimate changed |
 | 2026-10-10 | major | First version, from a source audit and the open issues |
 | 2026-10-11 | minor | `~` held with the Brush or Pencil erases with that tool's brush, and Clear joins their Mode menus (#3439) |

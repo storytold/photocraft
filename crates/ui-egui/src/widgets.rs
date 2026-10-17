@@ -1077,6 +1077,31 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     resp
 }
 
+/// A compact labelled slider: label, thin track and value field on one row.
+/// Uses the same value field and scrubby-label gestures as [`slider_row`].
+pub fn slider_row_inline(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let r = ui
+        .horizontal(|ui| {
+            let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+            scrub_label_within(ui, &l, f32::INFINITY);
+            let width = (ui.available_width() - 74.0 - ui.spacing().item_spacing.x).max(60.0);
+            let mut r = ui
+                .allocate_ui_with_layout(vec2(width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| slider(ui, value, range.clone(), None))
+                .inner;
+            let v = value_field(ui, value, range, suffix, 74.0);
+            if v.changed() {
+                r.mark_changed();
+            }
+            use egui::response::Flags;
+            r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
+            r
+        })
+        .inner;
+    ui.add_space(4.0);
+    r
+}
+
 /// Labelled slider row: `Label ........ [value field]` above a full-width thin slider.
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
     slider_row_with(ui, label, value, range, suffix, gradient, RowGestures::default())
