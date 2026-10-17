@@ -410,7 +410,81 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
+    if flag(p, "fill", false) {
+        return fill_region(s, p, label, brush, pts);
+    }
     stroke_with(s, "paint.stroke", p, label, brush, pts, false)
+}
+
+/// `paint.stroke {fill: true}`: fill the region enclosed by `points` (their polygon) with the
+/// brush's colour and opacity, its edge anti-aliased and softened by the brush hardness, instead of
+/// stamping the outline. A closed gesture then paints a filled dab, not a ring (#3659).
+fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>) -> Result<Value> {
+    if clear_mode(p) {
+        // `clear` maps onto the eraser; a clear fill would erase the region the outline encloses,
+        // which a selection + delete does deliberately (#3659). Reject before the eraser check so
+        // the message names the real conflict.
+        return Err(bad("paint.stroke", "\"fill\" cannot be combined with \"mode\":\"clear\"; select the enclosed region and delete it instead"));
+    }
+    if brush.erase {
+        return Err(bad("paint.stroke", "\"fill\" does not support the Eraser"));
+    }
+    if pts.len() < 3 {
+        return Err(bad("paint.stroke", "\"fill\" needs at least three points (a closed region)"));
+    }
+    let (id, brush, _zoom) = stroke_target(s, p, brush)?;
+    // A hard brush (hardness 1) keeps the anti-aliased polygon edge; a soft one feathers it by half
+    // the brush width, the way its tip fades.
+    let feather_px = ((1.0 - brush.hardness.clamp(0.0, 1.0)) * brush.size * 0.5).max(0.0);
+    let (color, opacity, mode) = (brush.color, brush.opacity.clamp(0.0, 1.0), brush.mode);
+    let cmyk = doc_cmyk_space(s);
+    let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        s.edit(label, |doc, _| {
+            let sel = doc.selection.clone();
+            let canvas = doc.bounds();
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            // The polygon's whole-pixel bounds, grown by the feather so a soft edge is not clipped.
+            let (mut bx0, mut by0, mut bx1, mut by1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for sp in &pts {
+                if !(sp.x.is_finite() && sp.y.is_finite()) {
+                    return Err(bad("paint.stroke", "non-finite point in a fill"));
+                }
+                bx0 = bx0.min(sp.x);
+                by0 = by0.min(sp.y);
+                bx1 = bx1.max(sp.x);
+                by1 = by1.max(sp.y);
+            }
+            let ix = |v: f64| v.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+            let pad = (feather_px.ceil() as i64).clamp(0, i64::from(i32::MAX) / 4) as i32 + 2;
+            let bounds = Rect::new(
+                ix(bx0.floor()).saturating_sub(pad),
+                ix(by0.floor()).saturating_sub(pad),
+                ix(bx1.ceil()).saturating_add(pad),
+                ix(by1.ceil()).saturating_add(pad),
+            )
+            .intersect(&canvas);
+            if bounds.is_empty() {
+                return Ok(Rect::new(0, 0, 0, 0));
+            }
+            let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+            let xy: Vec<(f32, f32)> = pts.iter().map(|sp| (sp.x as f32, sp.y as f32)).collect();
+            let mut cov = photocraft_algo::selection::polygon(&xy, bounds, true);
+            if feather_px > 0.01 {
+                cov = photocraft_algo::selection::feather(&cov, w, h, feather_px);
+            }
+            if let Some(sel) = sel.as_ref() {
+                let mut sv = Vec::new();
+                sel.read_region_into(bounds, &mut sv);
+                for (c, s) in cov.iter_mut().zip(&sv) {
+                    *c *= s.clamp(0.0, 1.0);
+                }
+            }
+            let coverage = photocraft_algo::selection::mask_to_surface(&cov, bounds);
+            crate::fill_cmds::blend_color_mask(surf, bounds, color, &coverage, mode, opacity, lock)?;
+            Ok(bounds)
+        })
+    })?;
+    Ok(damage_json(s, dmg))
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas

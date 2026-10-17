@@ -32,6 +32,50 @@ fn stroke_backwards_compatible() {
 }
 
 #[test]
+fn fill_fills_the_enclosed_region_not_the_outline() {
+    // #3659: a closed gesture with `fill` paints the interior, not a ring.
+    let mut s = session(60, 60);
+    s.execute(
+        "paint.stroke",
+        json!({"points": [[10, 10], [50, 10], [50, 50], [10, 50]], "fill": true, "size": 4, "color": "#ff0000", "brush": {"hardness": 1.0}}),
+    )
+    .unwrap();
+    assert!(rgba(&s, 30, 30)[0] > 0.9 && rgba(&s, 30, 30)[3] > 0.9, "interior filled: {:?}", rgba(&s, 30, 30));
+    assert_eq!(rgba(&s, 5, 30)[3], 0.0, "outside untouched");
+    assert_eq!(rgba(&s, 30, 5)[3], 0.0, "outside untouched");
+    // A soft brush feathers the edge outside the polygon; a hard one keeps a crisp edge.
+    let mut soft = session(60, 60);
+    soft.execute(
+        "paint.stroke",
+        json!({"points": [[10, 10], [50, 10], [50, 50], [10, 50]], "fill": true, "size": 40, "color": "#ff0000", "brush": {"hardness": 0.0}}),
+    )
+    .unwrap();
+    assert!(rgba(&soft, 8, 30)[3] > 0.0, "a soft edge paints outside the polygon: {:?}", rgba(&soft, 8, 30));
+    // Graceful failures: fewer than three points, and the Eraser.
+    assert!(s.execute("paint.stroke", json!({"points": [[10, 10], [50, 10]], "fill": true})).is_err());
+    assert!(s.execute("paint.stroke", json!({"points": [[10, 10], [50, 10], [50, 50]], "fill": true, "erase": true})).is_err());
+    // One history step, like a normal stroke.
+    let before = s.active().unwrap().history.past_len();
+    s.execute("paint.stroke", json!({"points": [[12, 12], [48, 12], [48, 48], [12, 48]], "fill": true, "color": "#0000ff"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), before + 1, "fill is one history step");
+}
+
+#[test]
+fn fill_is_rejected_with_clear_mode() {
+    // #3659 review: `"mode":"clear"` maps onto the eraser, so a clear fill would erase the region
+    // the outline encloses. Reject it; a selection + delete does that deliberately.
+    let mut s = session(60, 60);
+    let poly = json!([[10, 10], [50, 10], [50, 50], [10, 50]]);
+    assert!(s.execute("paint.stroke", json!({"points": poly.clone(), "fill": true, "mode": "clear"})).is_err());
+    // `clear` without `fill` still erases along the outline (main's behaviour), unchanged.
+    s.execute("paint.stroke", json!({"points": poly, "fill": true, "size": 4, "color": "#ff0000"})).unwrap();
+    assert!(rgba(&s, 30, 30)[3] > 0.9, "the region is filled first");
+    s.execute("paint.stroke", json!({"points": [[30, 2], [30, 58]], "size": 10, "mode": "clear"})).unwrap();
+    assert!(rgba(&s, 30, 30)[3] < 0.01, "a clear stroke erased what it crossed");
+    assert!(rgba(&s, 12, 30)[3] > 0.9, "pixels the clear stroke missed remain");
+}
+
+#[test]
 fn stroke_accepts_full_points_brush_and_preset() {
     let mut s = session(200, 100);
     // 7-tuples plus a brush object with tilt-driven angle on a flat tip.
