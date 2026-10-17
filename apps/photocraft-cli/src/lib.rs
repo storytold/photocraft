@@ -444,11 +444,32 @@ fn is_input(p: &Path) -> bool {
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
 }
 
+/// Drops the Save and view steps the desktop records from `action` (Batch saves each result
+/// itself, #3143), keeping its unchecked and dialog flags on the steps that remain (#6860).
+fn strip_shell_steps(action: &mut Action) {
+    use photocraft_engine::actions_cmds::{shell_save_command, shell_view_command};
+    let (mut steps, mut disabled, mut dialogs) = (Vec::new(), std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    for (i, (id, p)) in std::mem::take(&mut action.steps).into_iter().enumerate() {
+        if shell_save_command(&id) || shell_view_command(&id) {
+            continue;
+        }
+        if action.disabled.contains(&i) {
+            disabled.insert(steps.len());
+        }
+        if action.dialogs.contains(&i) {
+            dialogs.insert(steps.len());
+        }
+        steps.push((id, p));
+    }
+    (action.steps, action.disabled, action.dialogs) = (steps, disabled, dialogs);
+}
+
 fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let actions_path = a.get("--actions").ok_or("batch needs --actions <file>")?;
     let in_dir = PathBuf::from(a.get("--in").ok_or("batch needs --in <dir>")?);
     let out_dir = PathBuf::from(a.get("--out").ok_or("batch needs --out <dir>")?);
-    let (actions, set, warnings) = load_actions_file(actions_path, a.get("--action"))?;
+    let (actions, mut set, warnings) = load_actions_file(actions_path, a.get("--action"))?;
+    set.iter_mut().for_each(strip_shell_steps);
     for w in &warnings {
         let _ = writeln!(err, "warning: {w}");
     }
@@ -748,6 +769,39 @@ mod batch_action_set_tests {
             assert_ne!(code, 0, "{stdout}");
             assert_eq!(stderr.matches("FAIL").count(), 2, "{stderr}");
             assert!(!dir.join(action).join("a.png").exists(), "a file whose called action failed is not saved");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Save and view steps recorded inside a batched action set are skipped, also in a called
+    /// action, and unchecked steps stay unchecked once they are gone (#6860).
+    #[test]
+    fn batch_skips_save_and_view_steps_inside_an_action_set() {
+        let dir = std::env::temp_dir().join(format!("photocraft-cli-action-set-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        std::fs::create_dir_all(dir.join("in")).unwrap();
+        let (code, _, stderr) = invoke(&["run", "--new", r#"{"width":8,"height":6}"#, "--out", &path("in/a.png")]);
+        assert_eq!(code, 0, "{stderr}");
+        let set = json!({"version": 1, "actions": [
+            {"name": "Outer", "steps": [["actions.play", {"action": "Rotate"}], ["file.saveAs", {}]]},
+            {"name": "Rotate", "steps": [
+                ["file.save", {}],
+                ["image.imageRotation.90cw", {}],
+                ["view.fitOnScreen", {}],
+                ["image.imageRotation.90cw", {}],
+                ["file.saveAs", {}],
+            ], "disabled": [3], "dialogs": [1]},
+        ]});
+        std::fs::write(dir.join("actions.json"), set.to_string()).unwrap();
+        for action in ["Outer", "Rotate"] {
+            let (code, stdout, stderr) =
+                invoke(&["batch", "--actions", &path("actions.json"), "--action", action, "--in", &path("in"), "--out", &path(action)]);
+            assert_eq!(code, 0, "{stdout}{stderr}");
+            let (code, info, stderr) = invoke(&["info", &path(&format!("{action}/a.png")), "--compact"]);
+            assert_eq!(code, 0, "{stderr}");
+            let info: Value = serde_json::from_str(&info).unwrap();
+            assert_eq!((info["width"].as_u64(), info["height"].as_u64()), (Some(6), Some(8)), "{action}: rotated once, the unchecked step skipped");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
