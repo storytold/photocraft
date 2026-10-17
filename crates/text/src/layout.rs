@@ -27,6 +27,8 @@ use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
 
+mod arabic_fallback;
+
 /// Photoshop synthesizes small caps for faces without an OpenType `smcp` table. Keep the same
 /// readable hierarchy for every font instead of silently rendering lowercase text unchanged.
 const SYNTHETIC_SMALL_CAPS_SCALE: f32 = 0.7;
@@ -772,6 +774,9 @@ impl Layouter {
                 // extent; in vertical type that is along the column. Optical kerning measures
                 // horizontal outlines, so it applies to rotated (Latin) glyphs only there.
                 let mut slots: Vec<KernSlot> = Vec::new();
+                // Glyph swaps for runs in fonts without Arabic positional features:
+                // (run index, first slot, horizontal scale, plan).
+                let mut arabic_plans: Vec<(usize, usize, f32, arabic_fallback::RunPlan)> = Vec::new();
                 let mut line_runs: Vec<usize> = Vec::new();
                 for item in line.items() {
                     let PositionedLayoutItem::GlyphRun(gr) = item else {
@@ -783,6 +788,21 @@ impl Layouter {
                     }
                     line_runs.push(run.index());
                     let hs = out.styles.get(gr.style().brush.0 as usize).map_or(1.0, |st| if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 });
+                    let base = slots.len();
+                    let cluster_ins: Vec<arabic_fallback::ClusterIn> = if vertical {
+                        Vec::new()
+                    } else {
+                        run.visual_clusters()
+                            .map(|c| arabic_fallback::ClusterIn {
+                                range: c.text_range(),
+                                glyphs: c.glyphs().count(),
+                                first_advance: c.glyphs().next().map_or(0.0, |g| g.advance),
+                            })
+                            .collect()
+                    };
+                    if let Some(plan) = arabic_fallback::plan_run(run.font(), run.normalized_coords(), run.font_size(), &ptext, &cluster_ins) {
+                        arabic_plans.push((run.index(), base, hs, plan));
+                    }
                     for c in run.visual_clusters() {
                         let mut gl = c.glyphs();
                         let first = gl.next().map(|g| g.id);
@@ -838,6 +858,14 @@ impl Layouter {
                         }
                     }
                     kern_px[j] = units / 1000.0 * a.size;
+                }
+                // The advance change of swapped Arabic glyphs moves what follows, like kerning.
+                for (_, base, hs, plan) in &arabic_plans {
+                    for (ci, delta) in plan.cluster_delta.iter().enumerate() {
+                        if let Some(k) = kern_px.get_mut(base + ci) {
+                            *k += delta * hs;
+                        }
+                    }
                 }
                 // Tabs: the "kerning" after a tab takes the pen to the next stop, measured from
                 // the anchor or the box edge as if the line were left-aligned (alignment then
@@ -960,7 +988,10 @@ impl Layouter {
                     };
                     let mut pen = gr.offset();
                     let mut cursor = cursors.iter_mut().find(|c| c.0 == run.index());
+                    let arabic = arabic_plans.iter().find(|p| p.0 == run.index()).map(|p| &p.3);
                     for g in gr.glyphs() {
+                        let glyph_index = cursor.as_deref().map_or(0, |c| c.2);
+                        let glyph_id = arabic.and_then(|p| p.glyph_ids.get(glyph_index).copied().flatten()).unwrap_or(g.id);
                         // Kerning of the clusters before this glyph's cluster.
                         if let Some(c) = cursor.as_deref_mut() {
                             if let Some(&slot) = c.1.get(c.2) {
@@ -973,7 +1004,7 @@ impl Layouter {
                         }
                         out.glyphs.push(PlacedGlyph {
                             face,
-                            id: g.id,
+                            id: glyph_id,
                             x: dx + pen + g.x + extra,
                             y: baseline + g.y,
                             style: si,

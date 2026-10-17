@@ -1781,6 +1781,41 @@ fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
     assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
 }
 
+/// Muna has no `init`/`medi`/`fina`/`isol` lookups, only presentation forms in its `cmap`: its
+/// letters must still join, and right-aligned text must stay on its anchor. Point
+/// `PHOTOCRAFT_TEST_MUNA_TTF` at the font (not committed); the test is skipped without it.
+#[test]
+fn arabic_joins_in_a_font_without_positional_features() {
+    use skrifa::MetadataProvider;
+    let Some(bytes) = std::env::var_os("PHOTOCRAFT_TEST_MUNA_TTF").and_then(|p| std::fs::read(p).ok()) else {
+        eprintln!("skipping: set PHOTOCRAFT_TEST_MUNA_TTF to the Muna font file");
+        return;
+    };
+    let mut e = TextEngine::new();
+    let Some(family) = e.fonts.register_font_data(bytes.clone()).first().cloned() else {
+        eprintln!("skipping: Muna did not register");
+        return;
+    };
+    let face = skrifa::FontRef::new(&bytes).unwrap();
+    let gid = |c: char| face.charmap().map(c).map(|g| g.to_u32()).unwrap();
+    let mut layout = |text: &str| {
+        let style = CharStyle { font_family: family.clone(), size_pt: 40.0, ..Default::default() };
+        let t = with_para(styled(text, style), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
+        e.layout(&t, 72.0)
+    };
+
+    let joined = layout("بحر");
+    let ids: Vec<u32> = joined.glyphs.iter().map(|g| g.id).collect();
+    assert_eq!(ids, [gid('\u{FEAE}'), gid('\u{FEA4}'), gid('\u{FE91}')], "reh final, hah medial, beh initial");
+    assert!(joined.lines[0].x1.abs() < 0.5, "right edge stays on the anchor: {}", joined.lines[0].x1);
+
+    let ligature = layout("بلا");
+    let ids: Vec<u32> = ligature.glyphs.iter().map(|g| g.id).collect();
+    assert!(ids.contains(&gid('\u{FEFC}')), "lam-alef final ligature in {ids:?}");
+    assert!(ligature.lines[0].x1.abs() < 0.5, "{}", ligature.lines[0].x1);
+    assert!(ligature.glyphs.iter().all(|g| g.x.is_finite()));
+}
+
 /// #1317: Photoshop keeps the last line of a text box whose baseline is inside the box even
 /// when its descenders hang below the bottom edge (three 35 pt lines of 25 pt type in a
 /// 91.3 pt box). A line whose baseline falls outside the box is still dropped.
