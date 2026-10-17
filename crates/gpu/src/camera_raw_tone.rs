@@ -1,14 +1,21 @@
-//! Shadows and Highlights for Camera Raw's GPU preview (#6916): the local Laplacian filter of
-//! `photocraft_algo::camera_raw::local_tone` as fragment passes (`camera_raw_tone.wgsl`), with no
-//! compute shaders, so the same passes can run on WebGL2.
+//! The spatial stages of Camera Raw's GPU preview (#6916) as fragment passes, with no compute
+//! shaders, so the same passes can run on WebGL2: Dehaze, Shadows and Highlights, Clarity and
+//! Texture, and the measurement of Whites and Blacks' points after them.
 //!
-//! Each [`TonePass`](photocraft_algo::camera_raw::TonePass) builds the Gaussian pyramid of its
-//! input, the remapped pyramids of up to [`MAX_REFS`] references (four per `Rgba32Float` tile, all
-//! tiles of a level in one atlas), and the output from coarse to fine, each coefficient
-//! interpolated between the two references around the input there. The quantiles the filter and
-//! Whites and Blacks read are exact order statistics, found on the GPU by narrowing an interval of
-//! keys in [`ROUNDS`] rounds of [`SPLITS`] thresholds, so nothing is read back before the
-//! per-pixel pass (`camera_raw.wgsl`) applies the change.
+//! Shadows and Highlights are the local Laplacian filter of
+//! `photocraft_algo::camera_raw::local_tone` (`camera_raw_tone.wgsl`). Each
+//! [`TonePass`](photocraft_algo::camera_raw::TonePass) builds the Gaussian pyramid of its input,
+//! the remapped pyramids of up to [`MAX_REFS`] references (four per `Rgba32Float` tile, all tiles
+//! of a level in one atlas), and the output from coarse to fine, each coefficient interpolated
+//! between the two references around the input there.
+//!
+//! Dehaze, Clarity and Texture (`camera_raw_filters.wgsl`, constants from
+//! `photocraft_algo::camera_raw::spatial`) are separable box and minimum filters and guided
+//! filters on small copies; `camera_raw.wgsl` applies their results per pixel.
+//!
+//! The quantiles the filters and Whites and Blacks read (including Dehaze's brightest cells) are
+//! exact order statistics, found on the GPU by narrowing an interval of keys in [`ROUNDS`] rounds
+//! of [`SPLITS`] thresholds, so nothing is read back before the per-pixel pass.
 //!
 //! The textures and the list of passes are built once per frame size and set of passes
 //! ([`ToneFrame`]); a develop only writes the settings uniform and records the passes.
@@ -16,12 +23,15 @@
 use std::collections::HashMap;
 
 use photocraft_algo::camera_raw::local_tone::{KNOTS, MAX_REFS, RANGE_QUANTILES, RANGE_SIDE, REF_LOW_QUANTILE, REF_STEP, TAPS};
-use photocraft_algo::camera_raw::{LocalTone, ToneKind, WhitesBlacksModel, quantile_rank};
+use photocraft_algo::camera_raw::spatial::{CLARITY_EPS, DEHAZE_AIR_FLOOR, DEHAZE_EPS, DEHAZE_OMEGA};
+use photocraft_algo::camera_raw::{LocalTone, PerPixel, ToneKind, WhitesBlacksModel, quantile_rank};
 
 use crate::Unsupported;
 
-/// The passes' WGSL source.
+/// The Shadows and Highlights passes' WGSL source.
 pub const CAMERA_RAW_TONE_SHADER: &str = include_str!("camera_raw_tone.wgsl");
+/// Dehaze, Clarity and Texture's passes, compiled after [`CAMERA_RAW_TONE_SHADER`] in one module.
+pub const CAMERA_RAW_FILTERS_SHADER: &str = include_str!("camera_raw_filters.wgsl");
 
 const PLANE: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const RGBA: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
@@ -56,9 +66,12 @@ const fn rounds() -> usize {
 
 /// Reference groups (four per tile).
 const GROUPS: u32 = MAX_REFS.div_ceil(4) as u32;
-/// Statistics slots: pass `i`'s input and output are `2i` and `2i + 1`; Whites and Blacks' points.
+/// Statistics slots: pass `i`'s input and output are `2i` and `2i + 1`; Whites and Blacks' points;
+/// Dehaze's darkest value among the brightest cells, then the last of those cells in its order.
 const WB_SLOT: u32 = 4;
-const SLOTS: u32 = 5;
+const HAZE_SLOT: u32 = 5;
+const TIE_SLOT: u32 = 6;
+const SLOTS: u32 = 7;
 /// Rows of `camera_raw.wgsl`'s table texture that hold the Whites and Blacks curves.
 pub(crate) const WB_ROW: u32 = 5;
 
@@ -120,11 +133,38 @@ enum Pipe {
     Reduce,
     Update,
     WbRows,
+    /// `fs_box` into an `Rgba32Float` target (guided filters) or an `R32Float` one (Texture).
+    Box,
+    BoxPlane,
+    Block,
+    /// `fs_min` into an `R32Float` target, or (its packing mode) an `Rgba32Float` one.
+    Min,
+    MinPack,
+    HazeRank,
+    Air,
 }
 
 impl Pipe {
-    const ALL: [Pipe; 11] =
-        [Pipe::Down, Pipe::DownRemap, Pipe::DownAtlas, Pipe::Lap, Pipe::Shift, Pipe::Cells, Pipe::Init, Pipe::Count, Pipe::Reduce, Pipe::Update, Pipe::WbRows];
+    const ALL: [Pipe; 18] = [
+        Pipe::Down,
+        Pipe::DownRemap,
+        Pipe::DownAtlas,
+        Pipe::Lap,
+        Pipe::Shift,
+        Pipe::Cells,
+        Pipe::Init,
+        Pipe::Count,
+        Pipe::Reduce,
+        Pipe::Update,
+        Pipe::WbRows,
+        Pipe::Box,
+        Pipe::BoxPlane,
+        Pipe::Block,
+        Pipe::Min,
+        Pipe::MinPack,
+        Pipe::HazeRank,
+        Pipe::Air,
+    ];
 
     fn entry(self) -> &'static str {
         match self {
@@ -139,12 +179,17 @@ impl Pipe {
             Pipe::Reduce => "fs_reduce",
             Pipe::Update => "fs_update",
             Pipe::WbRows => "fs_wb_rows",
+            Pipe::Box | Pipe::BoxPlane => "fs_box",
+            Pipe::Block => "fs_block",
+            Pipe::Min | Pipe::MinPack => "fs_min",
+            Pipe::HazeRank => "fs_haze_rank",
+            Pipe::Air => "fs_air",
         }
     }
 
     fn targets(self) -> &'static [wgpu::TextureFormat] {
         match self {
-            Pipe::DownRemap | Pipe::DownAtlas => &[RGBA],
+            Pipe::DownRemap | Pipe::DownAtlas | Pipe::Box | Pipe::Block | Pipe::MinPack | Pipe::Air => &[RGBA],
             Pipe::Init | Pipe::Update => &[UINT],
             Pipe::Count | Pipe::Reduce => &[UINT, UINT],
             _ => &[PLANE],
@@ -192,7 +237,7 @@ impl TonePipelines {
     pub(crate) fn build(device: &wgpu::Device) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pc_camera_raw_tone"),
-            source: wgpu::ShaderSource::Wgsl(CAMERA_RAW_TONE_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{CAMERA_RAW_TONE_SHADER}\n{CAMERA_RAW_FILTERS_SHADER}").into()),
         });
         let float = wgpu::TextureSampleType::Float { filterable: false };
         let uniform = |binding, dynamic, size| wgpu::BindGroupLayoutEntry {
@@ -277,7 +322,9 @@ impl TonePipelines {
     }
 
     /// Writes the settings uniform for `tone` and Whites and Blacks' sliders, and the model once.
-    pub(crate) fn write(&mut self, queue: &wgpu::Queue, tone: &LocalTone, whites_blacks: Option<[f32; 2]>) {
+    pub(crate) fn write(&mut self, queue: &wgpu::Queue, tone: Option<&LocalTone>, whites_blacks: Option<[f32; 2]>) {
+        let none = LocalTone { passes: Vec::new() };
+        let tone = tone.unwrap_or(&none);
         let m = photocraft_algo::camera_raw::whites_blacks_model();
         let rows = model_rows(&m);
         if !self.model_written {
@@ -429,6 +476,28 @@ impl Builder {
         self.ops.push(Pending::Draw { pipe, step, reads, targets: targets.iter().map(|v| (*v).clone()).collect(), viewport });
     }
 
+    /// A pass of `pipe` into `target` (`size` texels) reading `a` (`src` texels) and `b`.
+    #[allow(clippy::too_many_arguments)]
+    fn filter(&mut self, pipe: Pipe, size: [u32; 2], src: [u32; 2], misc: [u32; 4], a: &Tex, b: Option<&Tex>, target: &Tex) {
+        let mut step = Step::sized(size, src);
+        step.misc = misc;
+        self.draw(pipe, step, Reads { a: Some(a.view.clone()), b: b.map(|t| t.view.clone()), ..Default::default() }, &[&target.view], None);
+    }
+
+    /// Develop's `guided` (radius `r`, regularised by `eps`) on the (I, p, I·p, I·I) in `t[0]`
+    /// (`size` texels): the box means of its coefficients (a, b) in `t[0]`, or with `output`
+    /// a·I + b in `t[2]`.
+    fn guided(&mut self, size: [u32; 2], r: u32, eps: f32, t: &[Tex; 3], output: bool) {
+        self.filter(Pipe::Box, size, size, [0, r, 0, 0], &t[0], None, &t[1]);
+        self.filter(Pipe::Box, size, size, [1, r, 1, eps.to_bits()], &t[1], None, &t[2]);
+        self.filter(Pipe::Box, size, size, [0, r, 0, 0], &t[2], None, &t[1]);
+        if output {
+            self.filter(Pipe::Box, size, size, [1, r, 2, 0], &t[1], Some(&t[0]), &t[2]);
+        } else {
+            self.filter(Pipe::Box, size, size, [1, r, 0, 0], &t[1], None, &t[0]);
+        }
+    }
+
     /// Order statistics by bisection, into statistics slot `slot`: bank 0 of `source` (`size`
     /// texels; its red channel in all four, or with `channels` its four channels), bank 1 of the
     /// red channel of `second`, at `ranks` (0-based, below the counts).
@@ -539,28 +608,52 @@ impl TonePipelines {
     }
 }
 
-/// What a plan runs: the passes' kept quantiles (their bits), and whether Whites and Blacks
-/// measure the points.
+/// What a plan runs.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct PlanKey {
+    /// Dehaze: the minimum filter's and the guided filter's radii, the cells the light averages.
+    dehaze: Option<[u32; 3]>,
+    /// Shadows and Highlights: the passes' kept quantiles (their bits).
     keeps: Vec<u32>,
+    /// Clarity: the subsampling and the radius there.
+    clarity: Option<[u32; 2]>,
+    /// Texture: the blur's box radii (those of 0 left out).
+    texture: Vec<u32>,
+    /// Whether Whites and Blacks measure the points.
     whites_blacks: bool,
 }
 
 impl PlanKey {
-    fn new(tone: &LocalTone, whites_blacks: bool) -> Self {
-        PlanKey { keeps: tone.passes.iter().map(|p| p.keep.to_bits()).collect(), whites_blacks }
+    fn new(s: &PerPixel) -> Self {
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        PlanKey {
+            dehaze: s.dehaze.as_ref().map(|d| [n(d.radius), n(d.guide_radius), n(d.top)]),
+            keeps: s.local_tone.as_ref().map_or(Vec::new(), |t| t.passes.iter().map(|p| p.keep.to_bits()).collect()),
+            clarity: s.clarity.as_ref().map(|c| [n(c.subsample), n(c.sub_radius)]),
+            texture: s.texture.as_ref().map_or(Vec::new(), |t| t.radii.iter().filter(|r| **r > 0).map(|r| n(*r)).collect()),
+            whites_blacks: s.measure_whites_blacks.is_some(),
+        }
     }
 }
 
-/// The recorded passes for one [`PlanKey`].
+/// Where a plan's passes run among `camera_raw.wgsl`'s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Segment {
+    /// First: Dehaze's atmospheric light and transmission (before `fs_dehaze`).
+    Haze,
+    /// After `fs_log`: Shadows and Highlights.
+    Tone,
+    /// After `fs_luma`: Clarity's coefficients and Texture's blur.
+    Detail,
+    /// After `fs_points`: Whites and Blacks' points and curves.
+    WhitesBlacks,
+}
+
+/// The recorded passes for one [`PlanKey`], by [`Segment`].
 struct Plan {
     /// Holds the passes' uniform slots.
     _steps: wgpu::Buffer,
-    /// Shadows and Highlights.
-    tone: Vec<Op>,
-    /// Whites and Blacks' points and curves, after `camera_raw.wgsl`'s `fs_points`.
-    whites_blacks: Vec<Op>,
+    segments: [Vec<Op>; 4],
 }
 
 /// Pyramid level sizes down to about 2 pixels on the short side (`local_tone::depth`).
@@ -575,10 +668,9 @@ fn levels([w, h]: [u32; 2]) -> Vec<[u32; 2]> {
     out
 }
 
-/// The filter's textures for one frame size, and its plans.
-pub(crate) struct ToneFrame {
-    size: [u32; 2],
-    /// Pyramid level sizes, finest first (at least two).
+/// Shadows and Highlights' textures.
+struct Pyramid {
+    /// Level sizes, finest first (at least two).
     levels: Vec<[u32; 2]>,
     /// Atlas columns.
     cols: u32,
@@ -595,20 +687,13 @@ pub(crate) struct ToneFrame {
     /// The range's cells.
     cells: Tex,
     cells_size: [u32; 2],
-    /// Whites and Blacks' cells, which `fs_points` renders.
-    points: Tex,
-    points_size: [u32; 2],
-    points_edge: u32,
+    /// Selections over the whole frame.
     full: Chain,
-    small: Chain,
-    state: [Tex; 2],
-    stats: Tex,
-    plans: HashMap<PlanKey, Plan>,
 }
 
-impl ToneFrame {
+impl Pyramid {
     /// The textures for a `size` frame, or `Unsupported` where they don't fit the device.
-    pub(crate) fn new(device: &wgpu::Device, size: [u32; 2]) -> Result<Self, Unsupported> {
+    fn new(device: &wgpu::Device, size: [u32; 2]) -> Result<Self, Unsupported> {
         let levels = levels(size);
         let n = levels.len();
         let Some(&[w1, h1]) = levels.get(1) else {
@@ -621,15 +706,9 @@ impl ToneFrame {
         if cols * w1 > max || rows * h1 > max {
             return Err(Unsupported(format!("Shadows and Highlights' {}×{} atlas doesn't fit the GPU's {max} px textures", cols * w1, rows * h1)));
         }
-        let cells_of = |side: usize| {
-            let f = size[0].max(size[1]).div_ceil(side as u32).max(1);
-            ([size[0].div_ceil(f), size[1].div_ceil(f)], f)
-        };
-        let (cells_size, _) = cells_of(RANGE_SIDE);
-        let (points_size, points_edge) = cells_of(photocraft_algo::camera_raw::whites_blacks_model().points_side);
+        let (cells_size, _) = cells_of(size, RANGE_SIDE);
         let plane = |label: &str, s: [u32; 2]| Tex::target(device, label, s, PLANE);
-        Ok(ToneFrame {
-            size,
+        Ok(Pyramid {
             cols,
             log_in: plane("pc_camera_raw_log_in", size),
             input: plane("pc_camera_raw_tone_input", size),
@@ -642,33 +721,191 @@ impl ToneFrame {
             out: levels.iter().take(n - 1).map(|&s| plane("pc_camera_raw_tone_out", s)).collect(),
             cells: plane("pc_camera_raw_tone_cells", cells_size),
             cells_size,
+            full: Chain::new(device, size),
+            levels,
+        })
+    }
+}
+
+/// What Dehaze's copy was made from: the source's key and the white balance gains' bits.
+pub(crate) type CellsKey = (u64, Option<[u32; 3]>);
+
+/// Dehaze's textures: the copy's cells, the filters on them and the dehazed frame.
+struct Haze {
+    /// The copy's size.
+    size: [u32; 2],
+    /// The copy ([`Dehaze::cells`](photocraft_algo::camera_raw::Dehaze::cells), uploaded) and
+    /// what it was made from.
+    cells: Tex,
+    cells_key: Option<CellsKey>,
+    /// A minimum filter's rows.
+    min: Tex,
+    /// The dark channel.
+    dark: Tex,
+    /// The cells' order for the atmospheric light (`fs_haze_rank`).
+    order: Tex,
+    /// The light's sums per tile, and the light.
+    tiles: Tex,
+    tiles_size: [u32; 2],
+    air: Tex,
+    /// The transmission's guided filter: its input, then working textures; the transmission ends
+    /// in the last.
+    guide: [Tex; 3],
+    /// Selections over the copy.
+    chain: Chain,
+    /// Stages 1 and 2 at full size, which `fs_dehaze` renders.
+    dehazed: Tex,
+}
+
+impl Haze {
+    fn new(device: &wgpu::Device, size: [u32; 2], full: [u32; 2]) -> Self {
+        let tiles_size = [size[0].div_ceil(COUNT_TILE), size[1].div_ceil(COUNT_TILE)];
+        let rgba = |label: &str, s: [u32; 2]| Tex::target(device, label, s, RGBA);
+        let plane = |label: &str| Tex::target(device, label, size, PLANE);
+        Haze {
+            size,
+            cells: Tex::new(device, "pc_camera_raw_haze_cells", size, RGBA, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST),
+            cells_key: None,
+            min: plane("pc_camera_raw_haze_min"),
+            dark: plane("pc_camera_raw_haze_dark"),
+            order: plane("pc_camera_raw_haze_order"),
+            tiles: rgba("pc_camera_raw_haze_tiles", tiles_size),
+            tiles_size,
+            air: rgba("pc_camera_raw_haze_air", [1, 1]),
+            guide: [0, 1, 2].map(|_| rgba("pc_camera_raw_haze_guide", size)),
+            chain: Chain::new(device, size),
+            dehazed: rgba("pc_camera_raw_dehazed", full),
+        }
+    }
+}
+
+/// Clarity and Texture's textures.
+struct Detail {
+    /// The luminance clipped to 1, which `camera_raw.wgsl`'s `fs_luma` renders.
+    lc: Tex,
+    /// Texture's blur, back and forth; it ends in the second.
+    blur: Option<[Tex; 2]>,
+    /// Clarity's subsampled copy and guided filter (its size; the coefficients end in the first).
+    sub: Option<([u32; 2], [Tex; 3])>,
+}
+
+/// The cells of a `size` frame at most `side` across: their size and edge in pixels.
+fn cells_of(size: [u32; 2], side: usize) -> ([u32; 2], u32) {
+    let f = size[0].max(size[1]).div_ceil(u32::try_from(side).unwrap_or(u32::MAX)).max(1);
+    ([size[0].div_ceil(f), size[1].div_ceil(f)], f)
+}
+
+/// The spatial stages' textures for one frame size (made when a stage first needs them), and
+/// their plans.
+pub(crate) struct ToneFrame {
+    size: [u32; 2],
+    pyramid: Option<Pyramid>,
+    haze: Option<Haze>,
+    detail: Option<Detail>,
+    /// Whites and Blacks' cells, which `fs_points` renders.
+    points: Tex,
+    points_size: [u32; 2],
+    points_edge: u32,
+    small: Chain,
+    state: [Tex; 2],
+    stats: Tex,
+    plans: HashMap<PlanKey, Plan>,
+    /// The plan [`prepare`](Self::prepare) picked.
+    current: Option<PlanKey>,
+}
+
+impl ToneFrame {
+    /// The textures every plan of a `size` frame uses.
+    pub(crate) fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+        let (points_size, points_edge) = cells_of(size, photocraft_algo::camera_raw::whites_blacks_model().points_side);
+        ToneFrame {
+            size,
+            pyramid: None,
+            haze: None,
+            detail: None,
             points: Tex::target(device, "pc_camera_raw_wb_cells", points_size, RGBA),
             points_size,
             points_edge,
-            full: Chain::new(device, size),
             small: Chain::new(device, points_size),
             state: [0, 1].map(|_| {
                 let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC;
                 Tex::new(device, "pc_camera_raw_select", [2, 2], UINT, usage)
             }),
             stats: Tex::new(device, "pc_camera_raw_stats", [SLOTS, 2], UINT, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST),
-            levels,
             plans: HashMap::new(),
-        })
+            current: None,
+        }
     }
 
     pub(crate) fn size(&self) -> [u32; 2] {
         self.size
     }
 
-    /// The log luminance the first pass filters (`camera_raw.wgsl`'s `fs_log` renders it).
-    pub(crate) fn log_in(&self) -> &wgpu::TextureView {
-        &self.log_in.view
+    /// Makes the textures and the plan for `stages`, which [`record`](Self::record) then records.
+    /// `luts` is `camera_raw.wgsl`'s table texture, where Whites and Blacks' curves go. A frame too
+    /// small or too large for a stage's textures is `Unsupported`.
+    pub(crate) fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipes: &TonePipelines,
+        stages: &PerPixel,
+        luts: &wgpu::TextureView,
+    ) -> Result<(), Unsupported> {
+        let dim = |v: [usize; 2]| [u32::try_from(v[0]).unwrap_or(u32::MAX), u32::try_from(v[1]).unwrap_or(u32::MAX)];
+        let max = device.limits().max_texture_dimension_2d;
+        if stages.local_tone.is_some() && self.pyramid.is_none() {
+            self.pyramid = Some(Pyramid::new(device, self.size)?);
+        }
+        if let Some(d) = &stages.dehaze {
+            let size = dim(d.size);
+            if size[0] == 0 || size[1] == 0 || size[0] > max || size[1] > max {
+                return Err(Unsupported(format!("Dehaze's {}×{} copy doesn't fit the GPU's {max} px textures", size[0], size[1])));
+            }
+            if self.haze.as_ref().is_none_or(|h| h.size != size) {
+                self.haze = Some(Haze::new(device, size, self.size));
+                self.plans.clear();
+            }
+        }
+        if stages.clarity.is_some() || stages.texture.is_some() {
+            let full = self.size;
+            let detail = self.detail.get_or_insert_with(|| Detail { lc: Tex::target(device, "pc_camera_raw_luma", full, PLANE), blur: None, sub: None });
+            if stages.texture.is_some() && detail.blur.is_none() {
+                detail.blur = Some([0, 1].map(|_| Tex::target(device, "pc_camera_raw_texture", full, PLANE)));
+            }
+            if let Some(c) = &stages.clarity {
+                let size = dim(c.sub_size);
+                if size[0] == 0 || size[1] == 0 || size[0] > max || size[1] > max {
+                    return Err(Unsupported(format!("Clarity's {}×{} copy doesn't fit the GPU's {max} px textures", size[0], size[1])));
+                }
+                if detail.sub.as_ref().is_none_or(|(s, _)| *s != size) {
+                    detail.sub = Some((size, [0, 1, 2].map(|_| Tex::target(device, "pc_camera_raw_clarity", size, RGBA))));
+                    self.plans.clear();
+                }
+            }
+        }
+        let key = PlanKey::new(stages);
+        if !self.plans.contains_key(&key) {
+            let plan = self.plan(device, queue, pipes, &key, luts);
+            self.plans.insert(key.clone(), plan);
+        }
+        self.current = Some(key);
+        Ok(())
     }
 
-    /// The last pass's output, before its kept quantile is put back.
-    pub(crate) fn log_out(&self) -> &wgpu::TextureView {
-        &self.out[0].view
+    /// Records segment `seg` of the plan [`prepare`](Self::prepare) picked; results go into `stats`.
+    pub(crate) fn record(&self, encoder: &mut wgpu::CommandEncoder, pipes: &TonePipelines, seg: Segment) {
+        let ops = self.current.as_ref().and_then(|k| self.plans.get(k)).and_then(|p| p.segments.get(seg as usize));
+        if let Some(ops) = ops {
+            record(encoder, ops, pipes, &self.stats.texture);
+        }
+    }
+
+    /// Shadows and Highlights' input (which `camera_raw.wgsl`'s `fs_log` renders) and the last
+    /// pass's output, before its kept quantile is put back.
+    pub(crate) fn log(&self) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        let p = self.pyramid.as_ref()?;
+        Some((&p.log_in.view, &p.out.first()?.view))
     }
 
     pub(crate) fn stats(&self) -> &wgpu::TextureView {
@@ -680,110 +917,168 @@ impl ToneFrame {
         (&self.points.view, self.points_size, self.points_edge)
     }
 
+    /// Dehaze's transmission and atmospheric light, and the dehazed frame (which `fs_dehaze`
+    /// renders).
+    pub(crate) fn haze(&self) -> Option<[&wgpu::TextureView; 3]> {
+        let h = self.haze.as_ref()?;
+        Some([&h.guide[2].view, &h.air.view, &h.dehazed.view])
+    }
+
+    /// Uploads Dehaze's copy from `cells` unless the one there has the same `key` (`None` always
+    /// uploads).
+    pub(crate) fn upload_cells(&mut self, queue: &wgpu::Queue, key: Option<CellsKey>, cells: impl FnOnce() -> Vec<[f32; 3]>) -> Result<(), Unsupported> {
+        let Some(h) = self.haze.as_mut() else { return Err(Unsupported("no Dehaze textures".into())) };
+        if key.is_some() && h.cells_key == key {
+            return Ok(());
+        }
+        let cells = cells();
+        let [w, hh] = h.size;
+        if cells.len() as u64 != u64::from(w) * u64::from(hh) {
+            return Err(Unsupported(format!("{} Dehaze cells for {w}×{hh}", cells.len())));
+        }
+        let data: Vec<[f32; 4]> = cells.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &h.cells.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            bytemuck::cast_slice(&data),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(hh) },
+            wgpu::Extent3d { width: w, height: hh, depth_or_array_layers: 1 },
+        );
+        h.cells_key = key;
+        Ok(())
+    }
+
+    /// Forgets which copy Dehaze's texture holds (after a failed develop).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn forget_cells(&mut self) {
+        if let Some(h) = self.haze.as_mut() {
+            h.cells_key = None;
+        }
+    }
+
+    /// The clipped luminance (which `fs_luma` renders), Clarity's coefficients and Texture's blur.
+    pub(crate) fn detail(&self) -> Option<(&wgpu::TextureView, Option<&wgpu::TextureView>, Option<&wgpu::TextureView>)> {
+        let d = self.detail.as_ref()?;
+        Some((&d.lc.view, d.sub.as_ref().map(|(_, t)| &t[0].view), d.blur.as_ref().map(|t| &t[1].view)))
+    }
+
     /// The statistics slots of the last pass of `tone`: its input's and its output's.
     pub(crate) fn last_slots(tone: &LocalTone) -> [u32; 2] {
         let i = tone.passes.len().saturating_sub(1) as u32;
         [2 * i, 2 * i + 1]
     }
 
-    /// Records Shadows and Highlights on `log_in`: then `log_out` and `stats` hold the result.
-    /// `luts` is `camera_raw.wgsl`'s table texture, where Whites and Blacks' curves go.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_tone(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        pipes: &TonePipelines,
-        encoder: &mut wgpu::CommandEncoder,
-        tone: &LocalTone,
-        whites_blacks: bool,
-        luts: &wgpu::TextureView,
-    ) {
-        let key = PlanKey::new(tone, whites_blacks);
-        if !self.plans.contains_key(&key) {
-            let plan = self.plan(device, queue, pipes, &key, luts);
-            self.plans.insert(key.clone(), plan);
-        }
-        if let Some(plan) = self.plans.get(&key) {
-            record(encoder, &plan.tone, pipes, &self.stats.texture);
-        }
-    }
-
-    /// Records Whites and Blacks' points and curves (rows [`WB_ROW`] and the next of `luts`),
-    /// after `fs_points` rendered the cells.
-    pub(crate) fn encode_whites_blacks(&self, pipes: &TonePipelines, encoder: &mut wgpu::CommandEncoder, tone: &LocalTone) {
-        if let Some(plan) = self.plans.get(&PlanKey::new(tone, true)) {
-            record(encoder, &plan.whites_blacks, pipes, &self.stats.texture);
-        }
-    }
-
     fn plan(&self, device: &wgpu::Device, queue: &wgpu::Queue, pipes: &TonePipelines, key: &PlanKey, luts: &wgpu::TextureView) -> Plan {
         let mut b = Builder::default();
-        let n = self.levels.len();
+        let mut bounds = [0usize; 3];
         let full = self.size;
-        let count = full[0] * full[1];
-        let cells = self.cells_size[0] * self.cells_size[1];
         let rank = |len: u32, q: f32| (quantile_rank(len as usize, q) as u32).min(len.saturating_sub(1));
         let v = |t: &Tex| Some(t.view.clone());
-        for (i, keep) in key.keeps.iter().enumerate() {
-            let keep = f32::from_bits(*keep);
-            let i = i as u32;
-            let (slot_in, slot_out) = (2 * i, 2 * i + 1);
-            let input = if i == 0 { &self.log_in } else { &self.input };
-            let level = |l: usize| if l == 0 { input } else { &self.gauss[l] };
-            // The input's Gaussian pyramid.
-            for l in 0..n - 1 {
-                b.draw(
-                    Pipe::Down,
-                    Step::sized(self.levels[l + 1], self.levels[l]),
-                    Reads { a: v(level(l)), ..Default::default() },
-                    &[&self.gauss[l + 1].view],
-                    None,
-                );
-            }
-            // Its range, the lowest reference, the kept quantile and the highest reference.
-            let mut step = Step::sized(self.cells_size, full);
-            step.sizes2[3] = full[0].max(full[1]).div_ceil(RANGE_SIDE as u32).max(1);
-            b.draw(Pipe::Cells, step, Reads { a: v(input), ..Default::default() }, &[&self.cells.view], None);
-            let ranks = [
-                [rank(count, REF_LOW_QUANTILE), rank(count, keep), count - 1, count - 1],
-                [rank(cells, RANGE_QUANTILES[0]), rank(cells, RANGE_QUANTILES[1]), 0, 0],
-            ];
-            b.select(&input.view, full, false, Some((&self.cells.view, self.cells_size)), ranks, slot_in, &self.full, &self.state);
-            // The remapped pyramids.
-            let mut step = Step::sized(self.levels[1], full);
-            step.sizes2[2] = self.cols;
-            step.misc = [i, slot_in, 0, 0];
-            b.draw(Pipe::DownRemap, step, Reads { a: v(input), ..Default::default() }, &[&self.atlas[1].view], None);
-            for l in 1..n - 1 {
-                let mut step = Step::sized(self.levels[l + 1], self.levels[l]);
-                step.sizes2[2] = self.cols;
+        // Dehaze's atmospheric light and transmission, from the uploaded copy.
+        if let (Some([r, gr, top]), Some(hz)) = (key.dehaze, &self.haze) {
+            let s = hz.size;
+            let n = s[0] * s[1];
+            // The dark channel: each cell's darkest channel, minimum filtered.
+            b.filter(Pipe::Min, s, s, [0, r, 1, 0], &hz.cells, None, &hz.min);
+            b.filter(Pipe::Min, s, s, [1, r, 0, 0], &hz.min, None, &hz.dark);
+            // The light: the cells of its `top` largest values, ties in the cells' order, which a
+            // second selection over that order finds.
+            b.select(&hz.dark.view, s, false, None, [[n.saturating_sub(top), 0, 0, 0], [0; 4]], HAZE_SLOT, &hz.chain, &self.state);
+            b.filter(Pipe::HazeRank, s, s, [0, HAZE_SLOT, 0, 0], &hz.dark, None, &hz.order);
+            b.select(&hz.order.view, s, false, None, [[top.saturating_sub(1), 0, 0, 0], [0; 4]], TIE_SLOT, &hz.chain, &self.state);
+            let mut tiles = Step::sized(hz.tiles_size, s);
+            tiles.sizes2[3] = COUNT_TILE;
+            tiles.misc = [0, TIE_SLOT, 0, top];
+            b.draw(Pipe::Air, tiles, Reads { a: v(&hz.order), b: v(&hz.cells), ..Default::default() }, &[&hz.tiles.view], None);
+            b.filter(Pipe::Air, [1, 1], hz.tiles_size, [1, 0, 0, DEHAZE_AIR_FLOOR.to_bits()], &hz.tiles, None, &hz.air);
+            // The transmission: the dark channel of the cells over the light, minimum filtered,
+            // then guided by their luminance.
+            b.filter(Pipe::Min, s, s, [0, r, 2, 0], &hz.cells, Some(&hz.air), &hz.min);
+            b.filter(Pipe::MinPack, s, s, [1, r, 3, DEHAZE_OMEGA.to_bits()], &hz.min, Some(&hz.cells), &hz.guide[0]);
+            b.guided(s, gr, DEHAZE_EPS, &hz.guide, true);
+        }
+        bounds[0] = b.ops.len();
+        if let Some(py) = &self.pyramid {
+            let n = py.levels.len();
+            let count = full[0] * full[1];
+            let cells = py.cells_size[0] * py.cells_size[1];
+            for (i, keep) in key.keeps.iter().enumerate() {
+                let keep = f32::from_bits(*keep);
+                let i = i as u32;
+                let (slot_in, slot_out) = (2 * i, 2 * i + 1);
+                let input = if i == 0 { &py.log_in } else { &py.input };
+                let level = |l: usize| if l == 0 { input } else { &py.gauss[l] };
+                // The input's Gaussian pyramid.
+                for l in 0..n - 1 {
+                    b.draw(
+                        Pipe::Down,
+                        Step::sized(py.levels[l + 1], py.levels[l]),
+                        Reads { a: v(level(l)), ..Default::default() },
+                        &[&py.gauss[l + 1].view],
+                        None,
+                    );
+                }
+                // Its range, the lowest reference, the kept quantile and the highest reference.
+                let mut step = Step::sized(py.cells_size, full);
+                step.sizes2[3] = full[0].max(full[1]).div_ceil(RANGE_SIDE as u32).max(1);
+                b.draw(Pipe::Cells, step, Reads { a: v(input), ..Default::default() }, &[&py.cells.view], None);
+                let ranks = [
+                    [rank(count, REF_LOW_QUANTILE), rank(count, keep), count - 1, count - 1],
+                    [rank(cells, RANGE_QUANTILES[0]), rank(cells, RANGE_QUANTILES[1]), 0, 0],
+                ];
+                b.select(&input.view, full, false, Some((&py.cells.view, py.cells_size)), ranks, slot_in, &py.full, &self.state);
+                // The remapped pyramids.
+                let mut step = Step::sized(py.levels[1], full);
+                step.sizes2[2] = py.cols;
                 step.misc = [i, slot_in, 0, 0];
-                b.draw(Pipe::DownAtlas, step, Reads { fine: v(&self.atlas[l]), ..Default::default() }, &[&self.atlas[l + 1].view], None);
-            }
-            // The output, coarse to fine.
-            for l in (0..n - 1).rev() {
-                let mut step = Step::sized(self.levels[l], self.levels[l + 1]);
-                step.sizes2[2] = self.cols;
-                step.misc = [i, slot_in, u32::from(l == 0), 0];
-                let coarse = if l == n - 2 { &self.gauss[n - 1] } else { &self.out[l + 1] };
-                let reads = Reads {
-                    a: v(level(l)),
-                    b: v(coarse),
-                    fine: if l > 0 { v(&self.atlas[l]) } else { None },
-                    coarse: v(&self.atlas[l + 1]),
-                    ..Default::default()
-                };
-                b.draw(Pipe::Lap, step, reads, &[&self.out[l].view], None);
-            }
-            b.select(&self.out[0].view, full, false, None, [[rank(count, keep), 0, 0, 0], [0; 4]], slot_out, &self.full, &self.state);
-            if (i as usize) + 1 < key.keeps.len() {
-                let mut step = Step::sized(full, full);
-                step.misc = [i, slot_in, 0, slot_out];
-                b.draw(Pipe::Shift, step, Reads { a: v(&self.out[0]), ..Default::default() }, &[&self.input.view], None);
+                b.draw(Pipe::DownRemap, step, Reads { a: v(input), ..Default::default() }, &[&py.atlas[1].view], None);
+                for l in 1..n - 1 {
+                    let mut step = Step::sized(py.levels[l + 1], py.levels[l]);
+                    step.sizes2[2] = py.cols;
+                    step.misc = [i, slot_in, 0, 0];
+                    b.draw(Pipe::DownAtlas, step, Reads { fine: v(&py.atlas[l]), ..Default::default() }, &[&py.atlas[l + 1].view], None);
+                }
+                // The output, coarse to fine.
+                for l in (0..n - 1).rev() {
+                    let mut step = Step::sized(py.levels[l], py.levels[l + 1]);
+                    step.sizes2[2] = py.cols;
+                    step.misc = [i, slot_in, u32::from(l == 0), 0];
+                    let coarse = if l == n - 2 { &py.gauss[n - 1] } else { &py.out[l + 1] };
+                    let reads = Reads {
+                        a: v(level(l)),
+                        b: v(coarse),
+                        fine: if l > 0 { v(&py.atlas[l]) } else { None },
+                        coarse: v(&py.atlas[l + 1]),
+                        ..Default::default()
+                    };
+                    b.draw(Pipe::Lap, step, reads, &[&py.out[l].view], None);
+                }
+                b.select(&py.out[0].view, full, false, None, [[rank(count, keep), 0, 0, 0], [0; 4]], slot_out, &py.full, &self.state);
+                if (i as usize) + 1 < key.keeps.len() {
+                    let mut step = Step::sized(full, full);
+                    step.misc = [i, slot_in, 0, slot_out];
+                    b.draw(Pipe::Shift, step, Reads { a: v(&py.out[0]), ..Default::default() }, &[&py.input.view], None);
+                }
             }
         }
-        let split = b.ops.len();
+        bounds[1] = b.ops.len();
+        // Clarity's coefficients and Texture's blur, from the luminance of `fs_luma`.
+        if let Some(d) = &self.detail {
+            if let (Some([s, rs]), Some((size, sub))) = (key.clarity, &d.sub) {
+                let mut step = Step::sized(*size, full);
+                step.sizes2[3] = s;
+                b.draw(Pipe::Block, step, Reads { a: v(&d.lc), ..Default::default() }, &[&sub[0].view], None);
+                b.guided(*size, rs, CLARITY_EPS, sub, false);
+            }
+            if let Some(blur) = &d.blur {
+                let mut from = &d.lc;
+                for &r in &key.texture {
+                    b.filter(Pipe::BoxPlane, full, full, [0, r, 0, 0], from, None, &blur[0]);
+                    b.filter(Pipe::BoxPlane, full, full, [1, r, 0, 0], &blur[0], None, &blur[1]);
+                    from = &blur[1];
+                }
+            }
+        }
+        bounds[2] = b.ops.len();
         if key.whites_blacks {
             let points = self.points_size[0] * self.points_size[1];
             let q = photocraft_algo::camera_raw::whites_blacks_model().point_quantiles;
@@ -801,9 +1096,11 @@ impl ToneFrame {
             let rows = Some([0.0, WB_ROW as f32, photocraft_algo::camera_raw::WB_STEPS as f32, 2.0]);
             b.draw(Pipe::WbRows, step, Reads::default(), &[luts], rows);
         }
-        let (steps, mut tone) = b.finish(device, queue, pipes, &self.stats.view);
-        let whites_blacks = tone.split_off(split.min(tone.len()));
-        Plan { _steps: steps, tone, whites_blacks }
+        let (steps, mut ops) = b.finish(device, queue, pipes, &self.stats.view);
+        let whites_blacks = ops.split_off(bounds[2].min(ops.len()));
+        let detail = ops.split_off(bounds[1].min(ops.len()));
+        let tone = ops.split_off(bounds[0].min(ops.len()));
+        Plan { _steps: steps, segments: [ops, tone, detail, whites_blacks] }
     }
 }
 
