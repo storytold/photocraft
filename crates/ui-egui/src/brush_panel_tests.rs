@@ -562,6 +562,51 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[test]
+fn tip_geometry_edits_and_arrow_drag_route_only_changed_fields_through_the_brush_command() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    fn centre(shape: &egui::Shape) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Circle(c) if c.radius == 40.0 => Some(c.center),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(centre),
+            _ => None,
+        }
+    }
+    let mut h = harness(0, 0);
+    h.state_mut().run("tools.setBrush", json!({"brush": {"angle": -23.0, "roundness": 0.473, "hardness": 0.65, "spacing": 0.31, "flipX": true}})).unwrap();
+    h.run_steps(3);
+    let mut expected = h.state().session.tools.brush.clone();
+    let journal = h.state().session.journal.len();
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(-23.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    expected.angle = -22.0;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"angle": -22.0_f32}));
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(47.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    expected.roundness = 0.48;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"roundness": 0.48_f32}));
+    let c = h.output().shapes.iter().find_map(|shape| centre(&shape.shape)).unwrap();
+    let a = expected.angle.to_radians();
+    h.drag_at(c + vec2(a.cos(), -a.sin()) * 35.0);
+    h.run_steps(1);
+    h.hover_at(c + vec2(0.0, -35.0));
+    h.run_steps(2);
+    h.drop_at(c + vec2(0.0, -35.0));
+    h.run_steps(2);
+    expected.angle = 90.0;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"angle": 90.0_f32}));
+    assert_eq!(h.state().session.journal.len(), journal + 3, "one command per field edit and arrow gesture");
+}
+
 fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
     let brush = serde_json::to_value(&app.session.tools.brush).unwrap();
     let path = match section {
