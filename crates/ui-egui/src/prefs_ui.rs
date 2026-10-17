@@ -926,7 +926,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             Some(Ok(json!({"dialog": open_kind(app, "presets", "Preset Manager", json!({"kind": "brushes", "selected": 0, "newName": ""}))})))
         }
         "edit.presets.exportImportPresets" => Some(Ok(
-            json!({"dialog": open_kind(app, "presetsIO", "Export/Import Presets", json!({"action": "export", "brushes": true, "customShapes": true}))}),
+            json!({"dialog": open_kind(app, "presetsIO", "Export/Import Presets", json!({"action": "export", "brushes": true, "customShapes": true, "tools": true}))}),
         )),
         _ => None,
     }
@@ -2313,7 +2313,7 @@ fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             180.0,
         );
     });
-    for (k, label) in [("brushes", tl!("Brushes")), ("customShapes", tl!("Custom Shapes"))] {
+    for (k, label) in [("brushes", tl!("Brushes")), ("customShapes", tl!("Custom Shapes")), ("tools", tl!("Tool Presets"))] {
         let mut on = f.get(k).and_then(Value::as_bool).unwrap_or(true);
         crate::widgets::checkbox(ui, &mut on, label);
         f.insert(k.into(), json!(on));
@@ -2437,7 +2437,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         }
         "presets" => Ok(Value::Null),
         "presetsIO" => {
-            let kinds: Vec<&str> = ["brushes", "customShapes"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
+            let kinds: Vec<&str> = ["brushes", "customShapes", "tools"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
             if f.get("action").and_then(Value::as_str) == Some("import") {
                 app.pick_file_bytes(move |app, name, bytes| {
                     let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a preset file"))?;
@@ -3527,6 +3527,23 @@ mod tests {
         tick(&mut app2, &ctx);
         assert_eq!(app2.session.prefs().interface.theme, Theme::Classic);
         assert!(store2.lock().unwrap().as_ref().unwrap().contains("classic"));
+    }
+
+    #[test]
+    fn preset_export_dialog_offers_tool_presets() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let opened = crate::menus::invoke(&mut app, &ctx, "edit.presets.exportImportPresets", json!({})).unwrap();
+        let fields = app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap().fields.clone();
+        assert_eq!(fields["tools"], true);
+        let mut h = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(|ui, fields| presets_io_body(ui, fields), fields);
+        h.run_steps(2);
+        h.get_by_label("Tool Presets").click();
+        h.run_steps(2);
+        assert_eq!(h.state()["tools"], false);
+        assert_eq!(h.state()["brushes"], true);
+        assert_eq!(h.state()["customShapes"], true);
     }
 
     #[test]

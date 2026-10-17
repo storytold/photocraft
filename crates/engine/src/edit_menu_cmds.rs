@@ -1066,6 +1066,7 @@ pub struct PresetFile {
     pub version: u32,
     pub brushes: Vec<photocraft_paint::BrushPreset>,
     pub custom_shapes: Vec<CustomShape>,
+    pub tool_presets: Vec<crate::presets::tools::ToolPreset>,
 }
 
 pub const PRESET_FORMAT: &str = "photocraft-presets";
@@ -1076,7 +1077,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
         .get("kinds")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_else(|| ["brushes", "customShapes"].iter().map(|k| k.to_string()).collect());
+        .unwrap_or_else(|| ["brushes", "customShapes", "tools"].iter().map(|k| k.to_string()).collect());
     let want = |k: &str| kinds.iter().any(|x| x == k);
     match str_or(p, "action", "export") {
         "export" => {
@@ -1095,8 +1096,14 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     Vec::new()
                 },
                 custom_shapes: if want("customShapes") { s.edit_state.custom_shapes.clone() } else { Vec::new() },
+                tool_presets: if want("tools") {
+                    let builtins = crate::presets::tools::builtin();
+                    s.presets.tool_presets.iter().filter(|preset| bool_or(p, "includeBuiltins", false) || !builtins.contains(preset)).cloned().collect()
+                } else {
+                    Vec::new()
+                },
             };
-            Ok(json!({"data": file, "brushes": file.brushes.len(), "customShapes": file.custom_shapes.len()}))
+            Ok(json!({"data": file, "brushes": file.brushes.len(), "customShapes": file.custom_shapes.len(), "tools": file.tool_presets.len()}))
         }
         "import" => {
             let data = p.get("data").cloned().ok_or_else(|| bad(cmd, "missing `data` (an exported preset file)"))?;
@@ -1107,6 +1114,29 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
             let file: PresetFile = serde_json::from_value(data).map_err(|e| bad(cmd, format!("not a preset file: {e}")))?;
             if file.format != PRESET_FORMAT {
                 return Err(bad(cmd, format!("not a preset file (format `{}`)", file.format)));
+            }
+            // Validate the whole tool import before changing any preset library.
+            let mut tools = s.presets.tool_presets.clone();
+            let nt = if want("tools") { file.tool_presets.len() } else { 0 };
+            if nt > crate::presets::tools::MAX_PRESETS {
+                return Err(bad(cmd, "too many tool presets"));
+            }
+            if want("tools") {
+                for mut preset in file.tool_presets {
+                    preset.name = crate::presets::tools::checked_name(&preset.name, cmd)?;
+                    if preset.tool.trim().is_empty() || !preset.options.is_object() {
+                        return Err(bad(cmd, "tool presets require a non-empty tool and an options object"));
+                    }
+                    if let Some(old) = tools.iter_mut().find(|old| old.name == preset.name && old.tool.eq_ignore_ascii_case(&preset.tool)) {
+                        *old = preset;
+                    } else if tools.iter().any(|old| old.name == preset.name) {
+                        return Err(bad(cmd, "a preset of that name belongs to another tool; rename it before importing"));
+                    } else if tools.len() < crate::presets::tools::MAX_PRESETS {
+                        tools.push(preset);
+                    } else {
+                        return Err(bad(cmd, "too many tool presets"));
+                    }
+                }
             }
             let (mut nb, mut ns) = (0, 0);
             if want("brushes") {
@@ -1132,7 +1162,11 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     ns += 1;
                 }
             }
-            Ok(json!({"brushes": nb, "customShapes": ns}))
+            if want("tools") {
+                s.presets.tool_presets = tools;
+                s.presets_changed();
+            }
+            Ok(json!({"brushes": nb, "customShapes": ns, "tools": nt}))
         }
         other => Err(bad(cmd, format!("unknown action `{other}` (export|import)"))),
     }
@@ -1224,7 +1258,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export/Import Presets…",
             ["Edit", "Presets"],
             None,
-            r##"{"action":"export|import","kinds":["brushes","customShapes"]?,"data":json (import),"includeBuiltins":bool=false}"##,
+            r##"{"action":"export|import","kinds":["brushes","customShapes","tools"]?,"data":json (import),"includeBuiltins":bool=false}"##,
             always,
             export_import
         ),
