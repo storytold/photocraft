@@ -21,6 +21,11 @@
 
 
 # Channel Options and New Spot Channel (#3761)
+	Color Picker	Bộ chọn màu
+	Color opacity	Độ mờ màu
+	No recent colors	Không có màu gần đây
+	Recent Colors	Màu gần đây
+	Stop opacity	Độ mờ điểm dừng
 	Channel Color	Màu kênh
 	Color Indicates:	Màu biểu thị:
 	Solidity:	Độ đặc:
@@ -3427,6 +3432,12 @@ cameraData	Lens	Ống kính
 	Snowflakes	Bông tuyết
 	Softness	Độ mềm
 	Software	Phần mềm
+	Align Edges	Căn cạnh
+	Constrain Proportions	Giữ tỷ lệ
+	Path Options	Tùy chọn đường dẫn
+	Proportional	Theo tỷ lệ
+	Show Path	Hiển thị đường dẫn
+	Unconstrained	Không ràng buộc
 	Solid Color	Màu đặc
 	Solid Front Faces	Mặt trước kín
 	Source Layer	Lớp nguồn

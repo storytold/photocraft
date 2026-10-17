@@ -2204,6 +2204,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 xf.to_screen(x as f32, y as f32)
             },
             accent,
+            1.0,
         );
     }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
@@ -2525,6 +2526,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
                 xf.to_screen(x as f32, y as f32)
             },
             accent,
+            1.0,
         );
     }
     let line = Stroke::new(1.0, accent);

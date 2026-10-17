@@ -705,7 +705,7 @@ fn routed(id: &str) -> bool {
     id.starts_with("filter.")
         || id == "plugin.run"
         || id.starts_with("image.adjustments.")
-        || matches!(id, "paint.stroke" | "paint.pencil" | "paint.bucket" | "paint.gradient" | "paint.mixerBrush" | "edit.fill" | "image.applyImage")
+        || matches!(id, "paint.stroke" | "paint.pencil" | "paint.bucket" | "paint.gradient" | "paint.mixerBrush" | "edit.fill" | "image.applyImage" | "shape.drawPixels")
         || crate::fill_key_cmds::IDS.contains(&id)
         // Pasting into a targeted mask or channel (#1035); Copy takes a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")

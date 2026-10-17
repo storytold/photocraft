@@ -4734,7 +4734,7 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     if b.is_empty() {
         return None;
     }
-    let (dx, dy) = crate::move_ui::shown_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
+    let (dx, dy) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
     Some(b.translate(dx, dy))
 }
 
@@ -4848,7 +4848,7 @@ fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf:
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     for l in transform_controls_layers(app) {
         if let LayerContent::Shape(sh) = &l.content {
-            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent, 1.0);
         }
     }
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);

@@ -78,21 +78,31 @@ fn can_paste_shape_stroke(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn copy_shape_fill(s: &mut Session, _p: &Value) -> Result<Value> {
-    let fill = active_shape(s).map_err(EngineError::Other)?.fill.clone().ok_or_else(|| EngineError::Other("shape has no fill".into()))?;
+    let mut fill = active_shape(s).map_err(EngineError::Other)?.fill.clone().ok_or_else(|| EngineError::Other("shape has no fill".into()))?;
+    let pattern = clipboard_pattern(s, &fill, None)?;
+    set_clipboard_pattern_id(&mut fill, pattern.as_ref());
     s.path_fill_clipboard = Some(fill);
+    s.path_fill_pattern = pattern;
     Ok(Value::Null)
 }
 
 fn copy_shape_stroke(s: &mut Session, _p: &Value) -> Result<Value> {
-    let stroke = active_shape(s).map_err(EngineError::Other)?.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
+    let mut stroke = active_shape(s).map_err(EngineError::Other)?.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
+    let pattern = clipboard_pattern(s, &stroke.paint, None)?;
+    set_clipboard_pattern_id(&mut stroke.paint, pattern.as_ref());
     s.path_stroke_clipboard = Some(stroke);
+    s.path_stroke_pattern = pattern;
     Ok(Value::Null)
 }
 
 fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    let fill = s.path_fill_clipboard.clone().ok_or_else(|| EngineError::Other("no shape fill copied".into()))?;
+    let mut fill = s.path_fill_clipboard.clone().ok_or_else(|| EngineError::Other("no shape fill copied".into()))?;
+    let pattern = clipboard_pattern(s, &fill, s.path_fill_pattern.as_ref())?;
+    set_clipboard_pattern_id(&mut fill, pattern.as_ref());
+    let patterns: Vec<_> = pattern.into_iter().collect();
+    check_clipboard_pattern_collision(s, &patterns)?;
     let id = layer_id(s, p)?;
-    with_shape(s, id, "Paste Fill", |shape, _| {
+    with_shape_patterns(s, id, "Paste Fill", &patterns, |shape, _| {
         shape.fill = Some(fill);
         Ok(())
     })?;
@@ -100,13 +110,49 @@ fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let stroke = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let mut stroke = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let pattern = clipboard_pattern(s, &stroke.paint, s.path_stroke_pattern.as_ref())?;
+    set_clipboard_pattern_id(&mut stroke.paint, pattern.as_ref());
+    let patterns: Vec<_> = pattern.into_iter().collect();
+    check_clipboard_pattern_collision(s, &patterns)?;
     let id = layer_id(s, p)?;
-    with_shape(s, id, "Paste Complete Stroke", |shape, _| {
+    with_shape_patterns(s, id, "Paste Complete Stroke", &patterns, |shape, _| {
         shape.stroke = Some(stroke);
         Ok(())
     })?;
     shape_info(s, id)
+}
+
+fn set_clipboard_pattern_id(fill: &mut Fill, pattern: Option<&photocraft_doc::Pattern>) {
+    if let (Fill::Pattern { id, .. }, Some(pattern)) = (fill, pattern) {
+        *id = pattern.id.clone();
+    }
+}
+
+fn clipboard_pattern(s: &Session, fill: &Fill, snapshot: Option<&photocraft_doc::Pattern>) -> Result<Option<photocraft_doc::Pattern>> {
+    let Fill::Pattern { id, name, .. } = fill else { return Ok(None) };
+    let find = |patterns| photocraft_doc::pattern::find(patterns, id, name).cloned();
+    let pattern = snapshot
+        .and_then(|p| find(std::slice::from_ref(p)))
+        .or_else(|| s.active().and_then(|st| find(&st.doc.patterns)))
+        .or_else(|| find(&s.patterns.items))
+        .ok_or_else(|| EngineError::Other(format!("no copied pattern \"{name}\" (see pattern.list)")))?;
+    if pattern.is_empty() {
+        return Err(EngineError::Other("the copied pattern is empty".into()));
+    }
+    Ok(Some(pattern))
+}
+
+fn check_clipboard_pattern_collision(s: &Session, patterns: &[photocraft_doc::Pattern]) -> Result<()> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    for pattern in patterns {
+        if let Some(existing) = st.doc.patterns.iter().find(|p| p.id == pattern.id)
+            && (existing.width != pattern.width || existing.height != pattern.height || existing.surface != pattern.surface)
+        {
+            return Err(EngineError::Other("A different pattern with the copied pattern's id already exists in this document".into()));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
@@ -246,63 +292,211 @@ pub fn path_json(p: &Path) -> Value {
 
 fn fill_json(f: &Fill) -> Value {
     match f {
-        Fill::Solid(c) => json!(hex(c)),
-        Fill::Gradient { stops, angle, scale, style, reverse, .. } => json!({ "gradient": {
-            "stops": stops.iter().map(|(t, c)| json!([t, hex(c)])).collect::<Vec<_>>(),
-            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse } }),
-        Fill::Pattern { name, scale, .. } => json!({ "pattern": name, "scale": scale * 100.0 }),
+        Fill::Solid(c) => paint_color_json(c),
+        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => json!({ "gradient": {
+            "stops": stops.iter().map(|(t, c)| json!([t, paint_color_json(c)])).collect::<Vec<_>>(),
+            "angle": angle, "scale": f64::from(*scale) * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
+            "opacityStops": opacity_stops, "midpoints": midpoints, "offset": offset, "dither": dither, "align": align } }),
+        Fill::Pattern { name, scale, id, angle, link, phase } => json!({ "pattern": name, "scale": f64::from(*scale) * 100.0,
+            "id":id, "angle":angle, "link":link, "phase":phase }),
     }
 }
 
-/// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"],…],"angle","scale","style","reverse"}}` /
-/// `{"pattern":name,"scale"}`. `null` → `Ok(None)` (no fill).
+fn paint_color_json(c: &Color) -> Value {
+    if c.mode != photocraft_color::ColorMode::Rgb || c.c[3] != 0.0 {
+        return json!({"color":c});
+    }
+    if c.alpha == 1.0 && c.c.iter().take(3).all(|v| (0.0..=1.0).contains(v) && (v * 255.0).round() / 255.0 == *v) {
+        json!(hex(c))
+    } else {
+        json!([c.c[0], c.c[1], c.c[2], c.alpha])
+    }
+}
+
+fn fill_number(v: &Value, label: &str, lo: f64, hi: f64) -> std::result::Result<f32, String> {
+    v.as_f64()
+        .filter(|n| n.is_finite() && (lo..=hi).contains(n))
+        .map(|n| n as f32)
+        .ok_or_else(|| format!("{label} must be a finite number between {lo} and {hi}"))
+}
+
+fn fill_bool(v: &Value, key: &str, default: bool) -> std::result::Result<bool, String> {
+    v.get(key).map_or(Ok(default), |v| v.as_bool().ok_or_else(|| format!("{key} must be a boolean")))
+}
+
+fn fill_pair(v: &Value, key: &str) -> std::result::Result<(f32, f32), String> {
+    let Some(value) = v.get(key) else { return Ok((0.0, 0.0)) };
+    let Some(values) = value.as_array().filter(|a| a.len() == 2) else { return Err(format!("{key} must contain two numbers")) };
+    let mut values = values.iter();
+    let a = values.next().ok_or_else(|| format!("{key} needs an x value"))?;
+    let b = values.next().ok_or_else(|| format!("{key} needs a y value"))?;
+    Ok((fill_number(a, key, -1_000_000.0, 1_000_000.0)?, fill_number(b, key, -1_000_000.0, 1_000_000.0)?))
+}
+
+fn fill_scale(v: &Value) -> std::result::Result<f32, String> {
+    let Some(value) = v.get("scale") else { return Ok(1.0) };
+    let n = value.as_f64().filter(|n| n.is_finite() && *n > 0.0 && *n <= 1_000_000.0).ok_or("scale must be greater than 0 and at most 1000000 percent")?;
+    let scale = (n / 100.0) as f32;
+    if scale <= 0.0 {
+        return Err("scale is too small".into());
+    }
+    Ok(scale)
+}
+
+fn paint_color(v: &Value) -> std::result::Result<Color, String> {
+    let c = if let Some(raw) = v.get("color") {
+        serde_json::from_value::<Color>(raw.clone()).map_err(|e| format!("invalid model colour: {e}"))?
+    } else {
+        if let Some(values) = v.as_array() {
+            if !matches!(values.len(), 3 | 4) {
+                return Err("colour must contain three or four numbers".into());
+            }
+            for value in values.iter().take(3) {
+                fill_number(value, "colour component", -1_000_000.0, 1_000_000.0)?;
+            }
+            if let Some(alpha) = values.get(3) {
+                fill_number(alpha, "colour alpha", 0.0, 1.0)?;
+            }
+        }
+        color(v).ok_or("colour must be hex, RGB(A) numbers or a model colour object")?
+    };
+    if !c.c.iter().all(|n| n.is_finite() && n.abs() <= 1_000_000.0) || !c.alpha.is_finite() || !(0.0..=1.0).contains(&c.alpha) {
+        return Err("colour components must be finite and within ±1000000; alpha must be 0..1".into());
+    }
+    Ok(c)
+}
+
+/// Legacy colour/gradient/pattern forms plus complete geometry and opacity metadata.
+/// Gradient locations, opacity stops and midpoints are fractions; scale is percent.
 fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
     if v.is_null() {
         return Ok(None);
     }
-    if let Some(c) = color(v) {
-        return Ok(Some(Fill::Solid(c)));
+    if v.is_array() || v.is_string() || v.get("color").is_some() {
+        return Ok(Some(Fill::Solid(paint_color(v)?)));
     }
     if let Some(g) = v.get("gradient") {
-        let stops: Vec<(f32, Color)> = g
-            .get("stops")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|s| Some((s.get(0)?.as_f64()? as f32, color(s.get(1)?)?))).collect())
-            .unwrap_or_else(|| vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
-        let style = match g.get("style").and_then(Value::as_str).unwrap_or("linear") {
+        if !g.is_object() {
+            return Err("gradient must be an object".into());
+        }
+        let stops = match g.get("stops") {
+            None => vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
+            Some(Value::Array(stops)) if stops.len() <= 4096 => stops
+                .iter()
+                .map(|stop| {
+                    let values = stop.as_array().filter(|a| a.len() == 2).ok_or("gradient stop must contain a location and colour")?;
+                    let t = values.first().ok_or("missing stop location")?;
+                    let c = values.get(1).ok_or("missing stop colour")?;
+                    Ok((fill_number(t, "stop location", 0.0, 1.0)?, paint_color(c)?))
+                })
+                .collect::<std::result::Result<Vec<_>, String>>()?,
+            _ => return Err("gradient stops must contain at most 4096 location/colour pairs".into()),
+        };
+        let style = match g.get("style").map_or(Some("linear"), Value::as_str).ok_or("gradient style must be a string")? {
+            "linear" => GradientStyle::Linear,
             "radial" => GradientStyle::Radial,
             "angle" => GradientStyle::Angle,
             "reflected" => GradientStyle::Reflected,
             "diamond" => GradientStyle::Diamond,
-            _ => GradientStyle::Linear,
+            _ => return Err("unknown gradient style".into()),
         };
-        return Ok(Some(Fill::gradient(
+        let opacity_stops = match g.get("opacityStops") {
+            None => Vec::new(),
+            Some(Value::Array(stops)) if stops.len() <= 4096 => stops
+                .iter()
+                .map(|stop| {
+                    let values = stop.as_array().filter(|a| a.len() == 2).ok_or("opacity stop must contain a location and opacity")?;
+                    Ok((
+                        fill_number(values.first().ok_or("missing opacity location")?, "opacity location", 0.0, 1.0)?,
+                        fill_number(values.get(1).ok_or("missing opacity value")?, "opacity value", 0.0, 1.0)?,
+                    ))
+                })
+                .collect::<std::result::Result<Vec<_>, String>>()?,
+            _ => return Err("opacityStops must contain at most 4096 location/opacity pairs".into()),
+        };
+        let midpoints = match g.get("midpoints") {
+            None => Vec::new(),
+            Some(Value::Array(values)) if values.len() <= 4096 => {
+                values.iter().map(|v| fill_number(v, "midpoint", 0.0, 1.0)).collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            _ => return Err("midpoints must contain at most 4096 fractions".into()),
+        };
+        return Ok(Some(Fill::Gradient {
             stops,
-            f64p(g, "angle").unwrap_or(90.0) as f32,
-            f64p(g, "scale").unwrap_or(100.0) as f32 / 100.0,
+            angle: g.get("angle").map_or(Ok(90.0), |v| fill_number(v, "angle", -1_000_000.0, 1_000_000.0))?,
+            scale: fill_scale(g)?,
             style,
-            g.get("reverse").and_then(Value::as_bool).unwrap_or(false),
-        )));
-    }
-    if let Some(name) = v.get("pattern").and_then(Value::as_str) {
-        return Ok(Some(Fill::Pattern {
-            name: name.into(),
-            scale: f64p(v, "scale").unwrap_or(100.0) as f32 / 100.0,
-            id: String::new(),
-            angle: 0.0,
-            link: true,
-            phase: (0.0, 0.0),
+            reverse: fill_bool(g, "reverse", false)?,
+            opacity_stops,
+            midpoints,
+            offset: fill_pair(g, "offset")?,
+            dither: fill_bool(g, "dither", false)?,
+            align: fill_bool(g, "align", true)?,
         }));
     }
-    Err(format!("unrecognised fill {v}"))
+    if let Some(pattern) = v.get("pattern") {
+        let name = pattern.as_str().filter(|s| s.len() <= 65536).ok_or("pattern must be a string of at most 65536 bytes")?;
+        let id = v.get("id").map_or(Some(""), Value::as_str).filter(|s| s.len() <= 65536).ok_or("pattern id must be a string of at most 65536 bytes")?;
+        return Ok(Some(Fill::Pattern {
+            name: name.into(),
+            scale: fill_scale(v)?,
+            id: id.into(),
+            angle: v.get("angle").map_or(Ok(0.0), |v| fill_number(v, "angle", -1_000_000.0, 1_000_000.0))?,
+            link: fill_bool(v, "link", true)?,
+            phase: fill_pair(v, "phase")?,
+        }));
+    }
+    Err("unrecognised fill".into())
 }
 
 fn stroke_json(s: &ShapeStroke) -> Value {
     json!({
-        "width": s.width, "fill": fill_json(&s.paint), "opacity": s.opacity * 100.0,
+        "width": s.width, "fill": fill_json(&s.paint), "opacity": f64::from(s.opacity) * 100.0,
         "align": format!("{:?}", s.align).to_ascii_lowercase(), "cap": format!("{:?}", s.cap).to_ascii_lowercase(),
         "join": format!("{:?}", s.join).to_ascii_lowercase(), "miterLimit": s.miter_limit, "dashes": s.dashes, "dashOffset": s.dash_offset,
     })
+}
+
+/// Shape-tool creation uses the paint displayed for the active shape, including gradients.
+pub fn shape_paint_params(fill: Option<&Fill>, stroke: Option<&ShapeStroke>) -> Value {
+    json!({"fill":fill.map_or(Value::Null,fill_json),"stroke":stroke.map_or(Value::Null,stroke_json)})
+}
+
+fn pattern_for_fill(s: &Session, fill: &mut Fill) -> Result<Option<photocraft_doc::Pattern>> {
+    let Fill::Pattern { name, id, .. } = fill else { return Ok(None) };
+    let pattern = if id.is_empty() {
+        crate::pattern_cmds::resolve(s, name)
+    } else {
+        let by_id = s.active().and_then(|st| st.doc.patterns.iter().find(|p| p.id == *id)).or_else(|| s.patterns.items.iter().find(|p| p.id == *id));
+        let by_name = s
+            .active()
+            .and_then(|st| photocraft_doc::pattern::find(&st.doc.patterns, "", name))
+            .or_else(|| photocraft_doc::pattern::find(&s.patterns.items, "", name));
+        if let (Some(a), Some(b)) = (by_id, by_name)
+            && a.id != b.id
+        {
+            return Err(EngineError::Other("pattern id and name refer to different tiles".into()));
+        }
+        by_id.or(by_name).cloned()
+    }
+    .ok_or_else(|| EngineError::Other(format!("no pattern \"{name}\" (see pattern.list)")))?;
+    if pattern.width == 0 || pattern.height == 0 {
+        return Err(EngineError::Other("the pattern is empty".into()));
+    }
+    if id.is_empty() {
+        *name = pattern.name.clone();
+    }
+    *id = pattern.id.clone();
+    Ok(Some(pattern))
+}
+
+/// Validate a shape paint without changing the document, resolving catalog pattern references.
+pub fn shape_fill(s: &Session, value: &Value) -> Result<Option<Fill>> {
+    let mut fill = parse_fill(value).map_err(EngineError::Other)?;
+    if let Some(fill) = &mut fill {
+        pattern_for_fill(s, fill)?;
+    }
+    Ok(fill)
 }
 
 /// Applies stroke keys onto `base` (`null` → no stroke).
@@ -441,6 +635,11 @@ pub fn shape_path(p: &Value) -> Result<Path> {
     Ok(vector::shapes::live_path(&live_from_params("shape.create", kind, p, None)?))
 }
 
+/// Live geometry shared by the shape-tool path mode's editing cache.
+pub fn shape_live(p: &Value) -> Result<LiveShape> {
+    live_from_params("shape.create", p.get("kind").and_then(Value::as_str).unwrap_or("rect"), p, None)
+}
+
 fn live_kind(l: &LiveShape) -> &'static str {
     match l {
         LiveShape::Rect { radii, .. } if radii.iter().any(|r| *r > 0.0) => "roundedRect",
@@ -454,7 +653,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
 
 /// Re-renders a shape layer's cache for `doc` (canvas-clipped, document pixel format).
 pub fn refresh_shape(doc: &Document, sh: &mut ShapeLayer) {
-    sh.cache = Some(vector::render_shape(sh, doc.pixel_format(), doc.bounds()));
+    sh.cache = Some(vector::render_shape_with_patterns(sh, doc.pixel_format(), doc.bounds(), &doc.patterns));
 }
 
 /// A staged stroke edit rendered with the same validation and cache refresh as `shape.edit`.
@@ -607,6 +806,16 @@ fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
 }
 
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
+    with_shape_patterns(s, id, label, &[], f)
+}
+
+fn with_shape_patterns<R>(
+    s: &mut Session,
+    id: LayerId,
+    label: &str,
+    patterns: &[photocraft_doc::Pattern],
+    f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>,
+) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
         if locks.all || locks.pixels {
@@ -614,6 +823,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         }
     }
     s.edit(label, |doc, _| {
+        for pattern in patterns {
+            crate::pattern_cmds::ensure_in_doc(doc, pattern);
+        }
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if !matches!(l.content, LayerContent::Shape(_)) {
@@ -655,14 +867,25 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-    let fill = match p.get("fill") {
+    let mut fill = match p.get("fill") {
         Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
         None => Some(Fill::Solid(fgc)),
     };
-    let stroke = match p.get("stroke") {
+    let mut stroke = match p.get("stroke") {
         Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
         None => None,
     };
+    let mut patterns = Vec::new();
+    if let Some(fill) = &mut fill
+        && let Some(pattern) = pattern_for_fill(s, fill)?
+    {
+        patterns.push(pattern);
+    }
+    if let Some(stroke) = &mut stroke
+        && let Some(pattern) = pattern_for_fill(s, &mut stroke.paint)?
+    {
+        patterns.push(pattern);
+    }
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
@@ -683,6 +906,9 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
+        for pattern in &patterns {
+            crate::pattern_cmds::ensure_in_doc(doc, pattern);
+        }
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
         let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
@@ -698,7 +924,21 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    with_shape(s, id, "Edit Shape", |sh, layer| {
+    let fill = p.get("fill").map(|value| shape_fill(s, value)).transpose()?;
+    let base = s.active().and_then(|st| st.doc.layer(id)).and_then(|l| if let LayerContent::Shape(sh) = &l.content { sh.stroke.clone() } else { None });
+    let mut stroke = p.get("stroke").map(|value| parse_stroke(value, base, fgc).map_err(|e| bad(CMD, e))).transpose()?;
+    let mut patterns = Vec::new();
+    if let Some(Some(mut fill)) = fill.clone()
+        && let Some(pattern) = pattern_for_fill(s, &mut fill)?
+    {
+        patterns.push(pattern);
+    }
+    if let Some(Some(stroke)) = &mut stroke
+        && let Some(pattern) = pattern_for_fill(s, &mut stroke.paint)?
+    {
+        patterns.push(pattern);
+    }
+    with_shape_patterns(s, id, "Edit Shape", &patterns, |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;
@@ -738,11 +978,11 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(r) = p.get("fillRule").and_then(Value::as_str) {
             sh.path.fill_rule = if r.eq_ignore_ascii_case("evenodd") { FillRule::EvenOdd } else { FillRule::NonZero };
         }
-        if let Some(v) = p.get("fill") {
-            sh.fill = parse_fill(v).map_err(|e| bad(CMD, e))?;
+        if let Some(fill) = fill {
+            sh.fill = fill;
         }
-        if let Some(v) = p.get("stroke") {
-            sh.stroke = parse_stroke(v, sh.stroke.clone(), fgc).map_err(|e| bad(CMD, e))?;
+        if let Some(stroke) = stroke {
+            sh.stroke = stroke;
         }
         if let Some(n) = name {
             layer.name = n;
@@ -1167,13 +1407,14 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
         let lock = locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Fill Path needs a pixel layer".into()))?;
         paint_coverage(surf, area, &cov, src, opacity, mode, lock);
+        surf.prune();
         Ok(())
     })?;
     Ok(Value::Null)
 }
 
 /// Composites `src` × coverage onto a surface over `area` (any pixel format).
-fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
+pub(crate) fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
     let fmt = surf.format();
     let ch = fmt.channels();
     let mut vals = surf.read_region(area);
@@ -1189,7 +1430,6 @@ fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32]
         photocraft_raster::from_rgba_into(&fmt, out, px);
     }
     surf.write_region(area, &vals);
-    surf.prune();
 }
 
 /// Stroke Path's brush-based tools besides the Brush, Pencil and Eraser it renders itself: each
@@ -1676,7 +1916,7 @@ pub(crate) fn leak(s: String) -> &'static str {
 
 pub fn specs() -> Vec<CommandSpec> {
     let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
-    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool}}|{"pattern":name}|null (no fill)"##;
+    let fill = r##""fill":"#rrggbb[aa]"|[r,g,b,a]|{"color":{mode,c:[4 channels],alpha}}|{"gradient":{"stops":[[0..1,colour]],"angle":deg,"scale":%>0,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"opacityStops":[[0..1,0..1]],"midpoints":[0..1],"offset":[fractionX,fractionY],"dither":bool,"align":bool}}|{"pattern":name|id,"id":str?,"scale":%>0,"angle":deg,"link":bool,"phase":[px,px]}|null (no fill)"##;
     vec![
         spec!(
             "shape.create",

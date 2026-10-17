@@ -1,7 +1,10 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
 use super::*;
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_doc::ShapeLayer;
 
 fn app(mode: &str, depth: u32) -> PhotocraftApp {
@@ -10,6 +13,17 @@ fn app(mode: &str, depth: u32) -> PhotocraftApp {
     app.ui.tool = Tool::Rectangle;
     app.sync_views();
     app
+}
+
+/// Set the independent Shape paint through the same validated control API as the options bar.
+fn set_default_paint(app: &mut PhotocraftApp, stroke: bool, color: Option<[f32; 4]>) {
+    let mut params = json!({});
+    params[if stroke { "shapeStrokePaint" } else { "shapeFillPaint" }] = json!(color);
+    let (request, _) = crate::control::ControlRequest::new("ui.set", params);
+    let crate::control::Outcome::Done(response) = crate::control::handle(app, &egui::Context::default(), &request) else {
+        panic!("paint defaults are synchronous")
+    };
+    assert_eq!(response["ok"], true, "{response}");
 }
 
 fn shape(app: &PhotocraftApp) -> &ShapeLayer {
@@ -62,6 +76,31 @@ fn pointer(h: &mut Harness<'_, PhotocraftApp>, pos: Pos2, pressed: bool) {
     h.step();
 }
 
+fn set_spin_value(h: &mut Harness<'_, PhotocraftApp>, from: f64, to: &str) {
+    h.get_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|node| node.accesskit_node().numeric_value() == Some(from))
+        .unwrap_or_else(|| panic!("spin button with value {from} not found"))
+        .click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text(to.to_string()));
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+}
+
+fn change_swatch_color(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(4);
+    h.get_by_label("Color Picker").click();
+    h.run_steps(4);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("ff8800".into()));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+}
+
 #[test]
 fn fill_and_stroke_swatches_open_with_pointer_and_keyboard_without_changing_paint() {
     for label in ["Fill color", "Stroke color"] {
@@ -95,31 +134,53 @@ fn fill_and_stroke_swatches_open_with_pointer_and_keyboard_without_changing_pain
 }
 
 #[test]
-fn picking_tool_colours_enables_paint_and_reaches_the_next_shape() {
+fn picking_independent_tool_colours_enables_paint_and_reaches_the_next_shape() {
     let mut app = app("rgb", 32);
-    let mut picks = std::collections::VecDeque::from([[0.91, 0.17, 0.32], [0.12, 0.68, 0.93]]);
+    let foreground = [0.123456, 0.345678, 0.567891, 0.372819];
+    let background = [0.891234, 0.234567, 0.456789, 0.618237];
+    app.run("tools.setColors", json!({"foreground": foreground, "background": background})).unwrap();
+    // Screen captures contain byte RGB; the existing float alpha belongs to the paint.
+    let pixels: [[u8; 3]; 2] = [[232, 43, 82], [31, 173, 237]];
+    let sampled = pixels.map(|rgb| rgb.map(|v| f32::from(v) / 255.0));
+    let mut picks = std::collections::VecDeque::from(sampled);
     app.services.screen_pick = Some(Box::new(move |_| {
         let (tx, receiver) = std::sync::mpsc::channel();
         tx.send(Ok(crate::screen_picker::Capture::Color(picks.pop_front()))).unwrap();
         crate::screen_picker::Pending { receiver, cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) }
     }));
     app.ui.tool_options.shape_fill = false;
+    let globals = (app.session.tools.foreground, app.session.tools.background);
+    let original = app.session.active().unwrap().doc.clone();
+    let fill = solid_paint([sampled[0][0], sampled[0][1], sampled[0][2], foreground[3]]);
+    let stroke = solid_paint([sampled[1][0], sampled[1][1], sampled[1][2], background[3]]);
     let mut h = harness(app, false);
-    for label in ["Fill color", "Stroke color"] {
+    for (i, label) in ["Fill color", "Stroke color"].into_iter().enumerate() {
         h.get_by_label(label).click();
         h.run_steps(3);
+        h.get_by_label("Color Picker").click();
+        h.run_steps(3);
+        assert!(crate::shape_paint_ui::color_dialog_open(&h.ctx));
         h.get_by_label("Pick screen color").click();
         h.run_steps(4);
+        assert_eq!(h.state().ui.tool_options.shape_fill, i == 1, "sampling stays local until OK");
+        assert_eq!(h.state().ui.tool_options.stroke_width, 0.0);
+        assert_eq!((h.state().session.tools.foreground, h.state().session.tools.background), globals);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(!crate::shape_paint_ui::color_dialog_open(&h.ctx));
         h.key_press(Key::Escape);
         h.run_steps(2);
     }
     assert!(h.state().ui.tool_options.shape_fill);
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0);
-    assert_eq!(h.state().session.tools.foreground, [0.91, 0.17, 0.32, 1.0]);
-    assert_eq!(h.state().session.tools.background, [0.12, 0.68, 0.93, 1.0]);
+    assert_eq!((h.state().session.tools.foreground, h.state().session.tools.background), globals);
+    assert_eq!(h.state().ui.tool_options.shape_fill_paint, Some(fill.clone()));
+    assert_eq!(h.state().ui.tool_options.shape_stroke_paint, Some(stroke.clone()));
+    assert_eq!(h.state().session.active().unwrap().doc, original);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
     finish_shape(h.state_mut(), Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
-    assert_eq!(shape(h.state()).fill, Some(solid_paint([0.91, 0.17, 0.32, 1.0])));
-    assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, solid_paint([0.12, 0.68, 0.93, 1.0]));
+    assert_eq!(shape(h.state()).fill, Some(fill));
+    assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, stroke);
 }
 
 #[test]
@@ -130,14 +191,14 @@ fn no_colour_and_solid_choices_are_explicit_live_tool_defaults() {
     h.get_by_label("No Color").click();
     h.run_steps(2);
     assert!(!h.state().ui.tool_options.shape_fill);
-    h.get_by_label("Solid").click();
+    h.get_by_label("Solid Color").click();
     h.run_steps(2);
     assert!(h.state().ui.tool_options.shape_fill);
     h.key_press(Key::Escape);
     h.run_steps(2);
     h.get_by_label("Stroke color").click();
     h.run_steps(3);
-    h.get_by_label("Solid").click();
+    h.get_by_label("Solid Color").click();
     h.run_steps(2);
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0, "choosing unchanged white enables a stroke");
     h.get_by_label("No Color").click();
@@ -153,8 +214,8 @@ fn float_paints_match_preview_creation_native_roundtrip_and_document_depth() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 16), ("cmyk", 8), ("lab", 16)] {
         for tool in [Tool::Rectangle, Tool::Triangle, Tool::EllipseShape] {
             let mut app = app(mode, depth);
-            set_tool_paint(&mut app, false, PaintChange::Color(foreground)).unwrap();
-            set_tool_paint(&mut app, true, PaintChange::Color(background)).unwrap();
+            set_default_paint(&mut app, false, Some(foreground));
+            set_default_paint(&mut app, true, Some(background));
             app.ui.tool_options.shape_stroke.cap = photocraft_doc::LineCap::Round;
             app.ui.tool_options.shape_stroke.dashes = vec![0.0, 2.0];
             let preview = shape_preview(&app, tool, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE).unwrap();
@@ -184,9 +245,10 @@ fn float_paints_match_preview_creation_native_roundtrip_and_document_depth() {
 #[test]
 fn transparent_and_absent_paints_remain_distinct_and_open_pen_keeps_foreground() {
     let mut app = app("rgb", 32);
+    let raster = app.session.active().unwrap().active_layer.unwrap();
     let transparent = [0.124578, 0.564321, 0.765432, 0.0];
-    set_tool_paint(&mut app, false, PaintChange::Color(transparent)).unwrap();
-    set_tool_paint(&mut app, true, PaintChange::Color(transparent)).unwrap();
+    set_default_paint(&mut app, false, Some(transparent));
+    set_default_paint(&mut app, true, Some(transparent));
     let preview = shape_preview(&app, Tool::Rectangle, [20.0, 20.0], [80.0, 70.0], Modifiers::NONE).unwrap();
     assert_eq!(preview.fill, Some(solid_paint(transparent)));
     assert_eq!(preview.stroke.as_ref().unwrap().paint, solid_paint(transparent));
@@ -194,8 +256,10 @@ fn transparent_and_absent_paints_remain_distinct_and_open_pen_keeps_foreground()
     assert_eq!(shape(&app).fill, preview.fill);
     assert_eq!(shape(&app).stroke, preview.stroke);
     assert_eq!(shape(&app).cache.as_ref().unwrap().pixel(40, 40), vec![0.0; 4]);
-    set_tool_paint(&mut app, false, PaintChange::None).unwrap();
-    set_tool_paint(&mut app, true, PaintChange::None).unwrap();
+    // Selecting the original raster makes the toolbar's defaults the next shape's source.
+    app.run("layer.select", json!({"layer": raster.0})).unwrap();
+    set_default_paint(&mut app, false, None);
+    set_default_paint(&mut app, true, None);
     finish_shape(&mut app, Tool::Triangle, [20.0, 20.0], [80.0, 70.0], Modifiers::NONE);
     assert!(shape(&app).fill.is_none() && shape(&app).stroke.is_none());
     let foreground = [0.836521, 0.125468, 0.745632, 0.438271];
@@ -210,39 +274,110 @@ fn transparent_and_absent_paints_remain_distinct_and_open_pen_keeps_foreground()
 
 #[test]
 fn selected_shape_style_is_available_when_absent_and_dismissal_does_not_enable_it() {
+    for properties in [false, true] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20,20,80,60], "stroke": null})).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let mut h = harness(app, properties);
+        h.get_by_label("Stroke Options").click();
+        h.run_steps(3);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc, doc);
+        h.get_by_label("Stroke Options").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Dotted").click();
+        h.run_steps(3);
+        assert_eq!(shape(h.state()).stroke.as_ref().unwrap().width, 3.0);
+        assert_eq!(shape(h.state()).stroke.as_ref().unwrap().dashes, [0.0, 2.0]);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert!(shape(h.state()).stroke.is_none());
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(shape(h.state()).stroke.as_ref().unwrap().dashes, [0.0, 2.0]);
+    }
+}
+
+#[test]
+fn properties_gradient_scale_focus_sessions_keep_separate_undo_steps() {
     let mut app = app("rgb", 8);
-    app.run("shape.create", json!({"rect": [20,20,80,60], "stroke": null})).unwrap();
-    let doc = app.session.active().unwrap().doc.clone();
+    let gradient = photocraft_doc::Fill::gradient(
+        vec![(0.0, photocraft_doc::Color::BLACK), (1.0, photocraft_doc::Color::WHITE)],
+        0.0,
+        1.0,
+        photocraft_doc::GradientStyle::Linear,
+        false,
+    );
+    let fill = photocraft_engine::vector_cmds::shape_paint_params(Some(&gradient), None)["fill"].clone();
+    app.run("shape.create", json!({"rect": [20, 20, 80, 60], "fill": fill})).unwrap();
+    let original = app.session.active().unwrap().doc.clone();
     let history = app.session.active().unwrap().history.past_len();
     let mut h = harness(app, true);
-    h.get_by_label("Stroke Options").click();
+
+    h.get_by_label("Set shape fill type").click();
     h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().doc, original, "opening paint popup does not edit the shape");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert_eq!(h.state().session.active().unwrap().doc, doc);
-    h.get_by_label("Stroke Options").click();
+    assert_eq!(h.state().session.active().unwrap().doc, original, "dismissing unchanged popup does not edit the shape");
+
+    h.get_by_label("Set shape fill type").click();
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Dotted").click();
-    h.run_steps(3);
-    assert_eq!(shape(h.state()).stroke.as_ref().unwrap().width, 3.0);
-    assert_eq!(shape(h.state()).stroke.as_ref().unwrap().dashes, [0.0, 2.0]);
+    set_spin_value(&mut h, 100.0, "101");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
-    h.key_press(Key::Escape);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
     h.run_steps(2);
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|node| node.accesskit_node().numeric_value() == Some(101.0))
+            .is_some_and(|node| node.is_focused())
+    );
+    set_spin_value(&mut h, 101.0, "102");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2);
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert!(shape(h.state()).stroke.is_none());
-    h.state_mut().run("edit.redo", json!({})).unwrap();
-    assert_eq!(shape(h.state()).stroke.as_ref().unwrap().dashes, [0.0, 2.0]);
+    let Some(photocraft_doc::Fill::Gradient { scale, .. }) = &shape(h.state()).fill else { panic!("gradient fill preserved") };
+    assert!((*scale - 1.01).abs() < 1e-5, "undo returns 102% to 101%, got {}%", *scale * 100.0);
+}
+
+#[test]
+fn choosing_shape_stroke_paint_enables_only_nonpositive_widths_in_both_editors() {
+    for properties in [true, false] {
+        for width in [0.0, 0.25] {
+            let mut app = app("rgb", 8);
+            let id = app.run("shape.create", json!({"rect": [20, 20, 80, 60]})).unwrap()["layer"].as_u64().unwrap();
+            app.run("shape.edit", json!({"layer": id, "stroke": {"width": width, "color": "#114488"}})).unwrap();
+            let original = shape(&app).stroke.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let mut h = harness(app, properties);
+            change_swatch_color(&mut h, if properties { "Set shape stroke type" } else { "Stroke color" });
+            let stroke = shape(h.state()).stroke.as_ref().unwrap();
+            assert_eq!(stroke.width, if width <= 0.0 { 3.0 } else { width }, "properties={properties}, width={width}");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "properties={properties}, width={width}");
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(shape(h.state()).stroke, original, "properties={properties}, width={width}");
+        }
+    }
 }
 
 fn popup_rect(h: &Harness<'_, PhotocraftApp>) -> Rect {
     h.ctx
-        .memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
+        .memory(|m| {
+            m.areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|l| l.order == egui::Order::Foreground)
+                .filter_map(|l| m.area_rect(l.id))
+                .find(|r| r.width() > 500.0 && r.width() < 900.0)
+        })
         .expect("colour picker is open")
 }
 
 #[test]
-fn selected_shape_colour_drags_apply_live_coalesce_per_gesture_and_keep_tool_defaults() {
+fn selected_shape_colour_dialog_drags_apply_per_confirmation_and_keep_tool_defaults() {
     let mut app = app("rgb", 32);
     app.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#3270c0", "stroke": {"width": 5, "color": "#ee3355"}})).unwrap();
     let original = shape(&app).clone();
@@ -252,6 +387,8 @@ fn selected_shape_colour_drags_apply_live_coalesce_per_gesture_and_keep_tool_def
     h.get_by_label("Set shape fill type").click();
     h.run_steps(4);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    h.get_by_label("Color Picker").click();
+    h.run_steps(4);
     let rect = popup_rect(&h);
     let start = rect.min + vec2(55.0, rect.height() * 0.5);
     h.hover_at(start);
@@ -263,10 +400,19 @@ fn selected_shape_colour_drags_apply_live_coalesce_per_gesture_and_keep_tool_def
     }
     pointer(&mut h, start + vec2(30.0, 6.0), false);
     h.run_steps(2);
+    assert_eq!(shape(h.state()).fill, original.fill, "a colour dialog drag remains a local draft");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
     let first = shape(h.state()).clone();
     assert_ne!(first.fill, original.fill);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
-    let next = start + vec2(60.0, 15.0);
+    h.get_by_label("Set shape fill type").click();
+    h.run_steps(3);
+    h.get_by_label("Color Picker").click();
+    h.run_steps(4);
+    let rect = popup_rect(&h);
+    let next = rect.min + vec2(115.0, rect.height() * 0.5 + 15.0);
     h.hover_at(next);
     h.step();
     pointer(&mut h, next, true);
@@ -274,6 +420,11 @@ fn selected_shape_colour_drags_apply_live_coalesce_per_gesture_and_keep_tool_def
     h.step();
     pointer(&mut h, next + vec2(12.0, 4.0), false);
     h.run_steps(2);
+    assert_eq!(shape(h.state()).fill, first.fill);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_ne!(shape(h.state()).fill, first.fill);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2);
     h.key_press(Key::Escape);
     h.run_steps(2);
@@ -299,6 +450,8 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     let mut h = harness(app, false);
     h.get_by_label("Fill color").click();
     h.run_steps(4);
+    h.get_by_label("Color Picker").click();
+    h.run_steps(4);
     let rect = popup_rect(&h);
     let start = rect.min + vec2(55.0, rect.height() * 0.5);
     h.hover_at(start);
@@ -308,9 +461,13 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     h.step();
     pointer(&mut h, start + vec2(30.0, 6.0), false);
     h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
     let edited = shape(h.state()).clone();
     assert_ne!(edited.fill, original.fill, "the Fill swatch recoloured the shape");
-    assert_eq!(edited.fill.as_ref().and_then(color_of), Some(h.state().session.tools.foreground), "and the next shape's fill");
+    let next = crate::shape_options::fill_color(h.state());
+    let next = photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(next[0], next[1], next[2], next[3]));
+    assert_eq!(edited.fill.as_ref(), Some(&next), "and the next shape's fill");
     assert_eq!(edited.stroke, original.stroke, "the stroke is untouched");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
     h.state_mut().run("edit.undo", json!({})).unwrap();

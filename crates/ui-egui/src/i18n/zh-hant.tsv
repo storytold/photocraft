@@ -1323,6 +1323,7 @@
 	Offset	位移
 	Only Web Colors	僅限網頁色彩
 	Opacity	不透明度
+	Stop opacity	色標不透明度
 	Opacity Jitter	不透明度快速變換
 	Opacity:	不透明度：
 	Open a document to define variables.	請開啟文件以定義變數。
@@ -2608,6 +2609,18 @@ cameraData	Lens	鏡頭
 	Add New Artboard	新增工作區域
 	W	寬
 	H	高
+	Constrain Proportions	維持比例
+	Path Options	路徑選項
+	Show Path	顯示路徑
+	Align Edges	對齊邊緣
+	Unconstrained	不受限制
+	Proportional	比例
+	Mask	遮色片
+	Solid Color	純色
+	Color Picker	色彩選擇器
+	Recent Colors	最近使用的顏色
+	No recent colors	尚無最近使用的顏色
+	Color opacity	顏色不透明度
 	Freeform Pen Tool	自由筆型工具
 	Curvature Pen Tool	曲線筆工具
 	Curve Fit:	曲線擬合：

@@ -1523,7 +1523,7 @@ fn shape_parts(layer: &Layer, clipped: &[Layer], rect: Rect, cx: &Ctx) -> Option
 fn split_parts(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<(Buffer, Buffer, Option<Vec<f32>>)> {
     let LayerContent::Shape(sh) = &layer.content else { return None };
     sh.stroke.as_ref()?;
-    let (fs, ss) = shape_split::split(sh, cx.canvas, cx.depth)?;
+    let (fs, ss) = shape_split::split_with_patterns(sh, cx.canvas, cx.depth, cx.patterns.source(), cx.mode)?;
     Some((surface_to_buffer(&fs, rect), surface_to_buffer(&ss, rect), mask_vals(layer, rect, cx)))
 }
 

@@ -217,7 +217,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         let radii = now.copied().unwrap_or(t.radii);
         if now.is_some() {
             let path = photocraft_vector::shapes::rounded_rect(t.rect[0], t.rect[1], t.rect[2], t.rect[3], radii);
-            crate::vector_ui::draw_outline(painter, &path, to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &path, to_scr, accent, crate::shape_modes::path_display(app, painter.ctx()).1);
         }
         for i in 0..4 {
             let p = to_scr(widget(t.rect, radii, i, z));

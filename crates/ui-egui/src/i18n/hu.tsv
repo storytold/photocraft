@@ -16,6 +16,10 @@
 # letters; the trailing "…" of dialog commands is kept. Plural rule: a count is followed by the
 # singular noun in Hungarian, so every @plural entry has a single form.
 
+	Color opacity	Szín átlátszatlansága
+	No recent colors	Nincsenek legutóbbi színek
+	Recent Colors	Legutóbbi színek
+	Stop opacity	Pont átlátszatlansága
 # Plural messages and command id overrides
 # Custom paper dimensions in Print Settings.
 	Paper Width	Papír szélessége
@@ -1331,6 +1335,12 @@
 	Snap to Origin	Illesztés az origóhoz
 	Soft	Lágy
 	Solid	Folytonos
+	Align Edges	Élek igazítása
+	Path Options	Útvonal beállításai
+	Proportional	Arányos
+	Show Path	Útvonal megjelenítése
+	Unconstrained	Korlátozás nélkül
+	Constrain Proportions	Arányok megtartása
 	Solid Color	Egyszínű
 	Space After	Térköz utána
 	Space Before	Térköz előtte

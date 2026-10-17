@@ -73,6 +73,14 @@ style enables a 3 px stroke. Colours, borders and selection treatments come from
 These tool defaults are serde state, but are not restored across app restarts. See
 [`shape-strokes.md`](shape-strokes.md) for geometry, colour-management and persistence limits.
 
+Shape Fill and Stroke paint popups share compact colour and gradient preset grids. Recent
+colours stay above the scrollable colour library. Gradient paints show a single style dropdown
+beside the angle, with scale and placement options below. Select an upper gradient stop to edit
+its opacity; the field is disabled for colour stops and midpoints. Opacity edits preserve the
+selected stop, the other paint and the global swatches, and one focused numeric edit is one
+undo step. Toolbar paint frames sit inside their allocated bounds so transparent previews keep
+their lower edge when clipped by the options bar.
+
 While editing type, hold Ctrl (Windows/Linux) or Command (macOS) for an oriented transform
 frame. Drag inside to move, a corner to scale (Shift keeps proportions; Alt/Option scales about
 the reference point), a middle handle to skew, or just outside the frame to rotate (Shift snaps

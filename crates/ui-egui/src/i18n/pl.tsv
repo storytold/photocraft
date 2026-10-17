@@ -1311,6 +1311,7 @@
 	Offset	Przesunięcie
 	Only Web Colors	Tylko kolory internetowe
 	Opacity	Krycie
+	Stop opacity	Krycie punktu
 	Opacity Jitter	Rozrzut krycia
 	Opacity:	Krycie:
 	Open a document to define variables.	Otwórz dokument, aby zdefiniować zmienne.
@@ -3079,6 +3080,12 @@ cameraRaw	Roughness	Chropowatość
 	Duplicate Layer	Duplikuj warstwę
 	Global Light	Światło globalne
 	Scale Effects	Skaluj efekty
+	Constrain Proportions	Zachowaj proporcje
+	Path Options	Opcje ścieżki
+	Show Path	Pokaż ścieżkę
+	Align Edges	Wyrównaj krawędzie
+	Unconstrained	Bez ograniczeń
+	Proportional	Proporcjonalny
 	Solid Color	Jednolity kolor
 	Convert to Linked	Konwertuj na połączony
 	Replace Contents	Zamień zawartość
@@ -3585,6 +3592,10 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Color Picker	Próbnik kolorów
+	Recent Colors	Ostatnio używane kolory
+	No recent colors	Brak ostatnio używanych kolorów
+	Color opacity	Krycie koloru
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Kliknij pierwszy punkt lub naciśnij {key}, aby zamknąć · {del} usuwa punkt · Esc anuluje
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Kliknij i prowadź wzdłuż krawędzi · kliknij, aby przypiąć punkt · {alt}-klik dla prostego odcinka · kliknij dwukrotnie, aby zamknąć
 	Fill Screen	Wypełnij ekran

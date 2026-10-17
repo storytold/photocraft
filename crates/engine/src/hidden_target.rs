@@ -33,6 +33,7 @@ const GATED: &[&str] = &[
     "paint.smudge",
     "paint.historyBrush",
     "layer.translate",
+    "shape.drawPixels",
 ];
 
 /// Is the layer shown: it and every group around it visible.

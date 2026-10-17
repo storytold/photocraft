@@ -854,6 +854,7 @@ mod tests {
                 | "filter.render.flame"
                 | "shape.create"
                 | "shape.edit"
+                | "shape.drawPixels"
                 | "shape.info"
                 | "shape.presets.list"
                 | "shape.presets.new"

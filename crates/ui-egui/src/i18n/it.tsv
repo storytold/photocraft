@@ -1312,6 +1312,7 @@
 	Offset	Scostamento
 	Only Web Colors	Solo colori web
 	Opacity	Opacità
+	Stop opacity	Opacità del punto
 	Opacity Jitter	Variazione opacità
 	Opacity:	Opacità:
 	Open a document to define variables.	Apri un documento per definire variabili.
@@ -3164,6 +3165,9 @@ layerLabel	No Color	Nessun colore
 	Clipping Mask	Maschera di ritaglio
 	Tool Options	Opzioni strumento
 	Color Picker	Selettore colore
+	Recent Colors	Colori recenti
+	No recent colors	Nessun colore recente
+	Color opacity	Opacità del colore
 	Color Swatches	Campioni colore
 	Linear Dodge	Scherma lineare
 	Preview Image	Anteprima immagine
@@ -3868,6 +3872,12 @@ layerLabel	No Color	Nessun colore
 	Smart Blur	Sfocatura avanzata
 	Smart Sharpen	Contrasto intelligente
 	Smudge Stick	Bastoncino sfumino
+	Constrain Proportions	Mantieni proporzioni
+	Path Options	Opzioni tracciato
+	Show Path	Mostra tracciato
+	Align Edges	Allinea bordi
+	Unconstrained	Senza vincoli
+	Proportional	Proporzionale
 	Solid Color	Colore pieno
 	Spherize	Sferizza
 	Spin Blur	Sfocatura rotazione

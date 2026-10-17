@@ -1297,6 +1297,7 @@
 	Offset	Décalage
 	Only Web Colors	Couleurs Web uniquement
 	Opacity	Opacité
+	Stop opacity	Opacité du point
 	Opacity Jitter	Variation de l'opacité
 	Opacity:	Opacité :
 	Open a document to define variables.	Ouvrez un document pour définir des variables.
@@ -2989,6 +2990,17 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Constrain Proportions	Conserver les proportions
+	Path Options	Options de tracé
+	Show Path	Afficher le tracé
+	Align Edges	Aligner les contours
+	Unconstrained	Sans contrainte
+	Proportional	Proportionnel
+	Solid Color	Couleur unie
+	Color Picker	Sélecteur de couleurs
+	Recent Colors	Couleurs récentes
+	No recent colors	Aucune couleur récente
+	Color opacity	Opacité de la couleur
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Cliquez sur le premier point ou appuyez sur {key} pour fermer · {del} supprime un point · Échap annule
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Cliquez, puis suivez un contour · cliquez pour fixer un point · {alt}-clic pour un segment droit · double-cliquez pour fermer
 	Follows only edges this close to the pointer ([ and ] change it)	Ne suit que les contours aussi proches du pointeur ([ et ] le modifient)

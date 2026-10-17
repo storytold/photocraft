@@ -398,7 +398,7 @@ fn drawn_rect(app: &PhotocraftApp, d: &crate::canvas::Drag) -> Option<[f64; 4]> 
     let (a, b) = match d.tool {
         Tool::RectMarquee | Tool::EllipseMarquee => crate::canvas::marquee_corners(&app.ui.tool_options, d, last),
         Tool::ObjectSelection => (d.start, last),
-        t if crate::vector_ui::is_shape_tool(t) => return crate::vector_ui::shape_bounds(&app.ui.tool_options, t, d.start, last, d.live),
+        t if crate::vector_ui::is_shape_tool(t) => return crate::vector_ui::shape_bounds(app, t, d.start, last, d.live),
         _ => return None,
     };
     Some([a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])])

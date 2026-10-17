@@ -23,6 +23,10 @@
 # out of noun agreement ("Broj: {n}", "slojeva: {n}") so every number reads correctly.
 
 # Guide layout dialog
+	Color opacity	Neprozirnost boje
+	No recent colors	Nema nedavnih boja
+	Recent Colors	Nedavne boje
+	Stop opacity	Neprozirnost tačke
 	Rows	Redovi
 	Number	Broj
 	Margin	Margina
@@ -3845,6 +3849,12 @@ layerLabel	No Color	Bez boje
 	Smart Blur	Pametno zamućenje
 	Smart Sharpen	Pametno izoštravanje
 	Smudge Stick	Štapić za razmazivanje
+	Align Edges	Poravnaj ivice
+	Constrain Proportions	Zadrži proporcije
+	Path Options	Opcije putanje
+	Proportional	Proporcionalno
+	Show Path	Prikaži putanju
+	Unconstrained	Bez ograničenja
 	Solid Color	Puna boja
 	Spherize	Sferizacija
 	Spin Blur	Rotaciono zamućenje

@@ -152,6 +152,7 @@
 	Duplicate	Δημιουργία αντιγράφου
 	Rename	Μετονομασία
 	Opacity	Αδιαφάνεια
+	Stop opacity	Αδιαφάνεια σημείου
 	Fill	Γέμισμα
 	Layers	Επίπεδα
 	Channels	Κανάλια
@@ -3082,6 +3083,12 @@
 	Soft	Απαλό
 	Software	Λογισμικό
 	Solarize	Ηλιακή έκθεση
+	Constrain Proportions	Διατήρηση αναλογιών
+	Path Options	Επιλογές διαδρομής
+	Show Path	Εμφάνιση διαδρομής
+	Align Edges	Ευθυγράμμιση άκρων
+	Unconstrained	Χωρίς περιορισμούς
+	Proportional	Αναλογικό
 	Solid Color	Συμπαγές χρώμα
 	Source	Προέλευση
 	Source: not set ({key}-click with Clone Stamp)	Πηγή: δεν έχει οριστεί ({key}-κλικ με Clone Stamp)
@@ -3716,6 +3723,9 @@ cameraData	Lens	Φακός
 	Add New Artboard	Προσθήκη νέου πίνακα σχεδίασης
 	W	Π
 	H	Υ
+	Recent Colors	Πρόσφατα χρώματα
+	No recent colors	Δεν υπάρχουν πρόσφατα χρώματα
+	Color opacity	Αδιαφάνεια χρώματος
 	Freeform Pen Tool	Πένα ελεύθερης σχεδίασης
 	Curvature Pen Tool	Πένα καμπυλότητας
 	Curve Fit:	Προσαρμογή καμπύλης:
