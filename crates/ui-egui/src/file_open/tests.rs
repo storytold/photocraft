@@ -189,6 +189,31 @@ fn pcraft_documents_save_in_place_but_flat_files_ask() {
     assert!(!app.ui.status_error);
 }
 
+/// #5733: like Photoshop's Save, a flat file still holding the whole document (one plain layer
+/// it can store) is written back in place; once it would lose something (a second layer, or
+/// transparency a JPEG can't keep) Save goes through Save As.
+#[test]
+fn a_flat_file_that_keeps_the_document_saves_in_place() {
+    let (mut app, written) = app_with(vec![None, None]);
+    let ctx = egui::Context::default();
+    app.open_file("/pics/flat.png", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(r["path"], "/pics/flat.png", "{r}");
+    assert_eq!(written.borrow().len(), 1);
+    // A second layer: PNG can't keep it, so Save asks (cancelled).
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+    // A JPEG with one transparent-capable layer that isn't the Background: JPEG has no alpha.
+    app.open_file("/pics/photo.jpg", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+}
+
 #[test]
 fn templates_open_as_new_untitled_documents() {
     let (mut app, written) = app_with(Vec::new());
