@@ -17,7 +17,7 @@ id = "TOOL-213-2"
 target = "Mixer Brush tool on the toolbar"
 status = "done"
 issue = 213
-note = "Tool::MixerBrush in the Brush (B) flyout; Wet/Load/Mix/Flow/Sample All Layers options, command/control dispatch and selection-clipping tests"
+note = "Tool::MixerBrush in the Brush (B) flyout; Wet/Load/Mix/Flow/Sample All Layers options, the Current Brush Load swatch with Load Brush and Clean Brush (brush.mixer.load, brush.mixer.clean) and the automatic Load and Clean toggles; command/control dispatch and selection-clipping tests"
 
 [[item]]
 id = "TOOL-213-3"

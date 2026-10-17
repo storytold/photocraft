@@ -1000,6 +1000,11 @@
 	Mix	Змішування
 	Auto Clean Brush	Автоматично очищувати пензель
 	Wet	Вологість
+	Current Brush Load	Поточне завантаження пензля
+	Load Brush	Завантажити пензель
+	Clean Brush	Очистити пензель
+	Load the brush after each stroke	Завантажувати пензель після кожного штриха
+	Clean the brush after each stroke	Очищати пензель після кожного штриха
 	Rate	Частота
 	Airbrush: keeps depositing paint while the pointer rests.	Аерограф: продовжує наносити фарбу, коли вказівник нерухомий.
 	Pulled String Mode	Режим натягнутої нитки

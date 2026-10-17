@@ -2219,6 +2219,11 @@ cameraRaw	Blending	混合
 	Apply the pen's tilt and rotation to the tip shape	将笔的倾斜和旋转应用于笔尖形状
 	Mixer Brush	混合器画笔
 	Wet	湿润
+	Current Brush Load	当前画笔载入
+	Load Brush	载入画笔
+	Clean Brush	清理画笔
+	Load the brush after each stroke	每次描边后载入画笔
+	Clean the brush after each stroke	每次描边后清理画笔
 	Mix	混合
 	Wetness Jitter	湿润度抖动
 	Mix Jitter	混合抖动

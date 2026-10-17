@@ -1078,6 +1078,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         brush_preset_chip(ui, b, &mut app.ui);
                         crate::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
+                        mixer_load_swatch(app, ui);
+                        let m = &mut b.mixer;
+                        for (icon, on, tip) in [
+                            ("brush", &mut m.load_after_stroke, tl!("Load the brush after each stroke")),
+                            ("brush-cleaning", &mut m.clean_after_stroke, tl!("Clean the brush after each stroke")),
+                        ] {
+                            if icons::button(ui, icon, 24.0, *on, tip).clicked() {
+                                *on = !*on;
+                            }
+                        }
+                        widgets::vline(ui, 22.0);
                         for (label, value) in [
                             (tl!("Wet"), &mut b.mixer.wet),
                             (tl!("Load"), &mut b.mixer.load),
@@ -3904,6 +3915,47 @@ fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings
         widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
         widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
     });
+}
+
+/// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
+/// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
+fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(40.0, 26.0), Sense::hover());
+    let resp = ui.interact(r, ui.id().with("mixer-brush-load"), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, t.radius_sm, t.hover);
+    }
+    let chip = Rect::from_min_size(pos2(r.left() + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
+    let p = ui.painter();
+    match app.session.tools.mixer.next_load(app.session.tools.foreground) {
+        Some(c) => {
+            p.rect_filled(chip, 2.0, c32(c));
+        }
+        None => {
+            p.rect_filled(chip, 2.0, t.field);
+            p.line_segment([chip.left_bottom(), chip.right_top()], Stroke::new(1.0, t.text_faint));
+        }
+    }
+    p.rect_stroke(chip, 2.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Current Brush Load")));
+    let resp = resp.on_hover_text(tl!("Current Brush Load"));
+    let mut run = None;
+    egui::Popup::menu(&resp).show(|ui| {
+        if ui.button(tl!("Load Brush")).clicked() {
+            run = Some("brush.mixer.load");
+        }
+        if ui.button(tl!("Clean Brush")).clicked() {
+            run = Some("brush.mixer.clean");
+        }
+    });
+    if let Some(id) = run
+        && let Err(e) = app.run(id, json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
 }
 
 /// Options-bar brush chip: a click shows or hides Photoshop's Brush Preset picker below it (size,

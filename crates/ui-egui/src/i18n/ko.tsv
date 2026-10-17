@@ -2112,6 +2112,11 @@
 	Apply the pen's tilt and rotation to the tip shape	펜의 기울기와 회전을 브러시 끝 모양에 적용
 	Mixer Brush	혼합 브러시
 	Wet	젖음
+	Current Brush Load	현재 브러시 물감
+	Load Brush	브러시 채우기
+	Clean Brush	브러시 세척
+	Load the brush after each stroke	획마다 브러시 채우기
+	Clean the brush after each stroke	획마다 브러시 세척
 	Mix	혼합
 	Wetness Jitter	젖음 지터
 	Mix Jitter	혼합 지터

@@ -1023,6 +1023,11 @@
 	Mix	Смешивание
 	Auto Clean Brush	Автоочистка кисти
 	Wet	Влага
+	Current Brush Load	Текущая загрузка кисти
+	Load Brush	Загрузить кисть
+	Clean Brush	Очистить кисть
+	Load the brush after each stroke	Загружать кисть после каждого штриха
+	Clean the brush after each stroke	Очищать кисть после каждого штриха
 	Rate	Скорость
 	Airbrush: keeps depositing paint while the pointer rests.	Аэрограф: продолжает наносить краску, пока курсор неподвижен.
 	Pulled String Mode	Режим натянутой нити
