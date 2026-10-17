@@ -3752,6 +3752,12 @@ curves	Smooth	Wygładź
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+
+# Custom shape set import
+	Import Shapes…	Importuj kształty…
+	Choose a custom shape file (.csh).	Wybierz plik kształtów własnych (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Liczba kształtów zaimportowanych z {file}: {n}|Liczba kształtów zaimportowanych z {file}: {n}|Liczba kształtów zaimportowanych z {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Liczba kształtów zaimportowanych z {group}: {n}|Liczba kształtów zaimportowanych z {group}: {n}|Liczba kształtów zaimportowanych z {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Użyj osadzonego profilu ({profile})
 	Convert to the working space ({profile})	Konwertuj na przestrzeń roboczą ({profile})

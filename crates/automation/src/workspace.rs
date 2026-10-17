@@ -363,7 +363,13 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
-        "actions.load" | "brush.presets.importAbr" | "brush.presets.importImage" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
+        "actions.load"
+        | "brush.presets.importAbr"
+        | "brush.presets.importImage"
+        | "gradient.presets.importGrd"
+        | "shape.presets.importCsh"
+        | "plugin.install"
+        | "swatches.import" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
@@ -814,6 +820,24 @@ mod tests {
             authorize_engine_command("prefs.set", &serde_json::json!({"values": {"interface.language": "fr", "historyLog.filePath": "/outside/log"}})).is_err()
         );
         assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "interface.language", "value": "fr"})).is_ok());
+    }
+
+    #[test]
+    fn csh_import_requires_inline_data_in_automation() {
+        let id = "shape.presets.importCsh";
+        for path in ["/outside/set.csh", "set.csh", "../set.csh", ""] {
+            let params = serde_json::json!({"path": path});
+            assert!(authorize_engine_command(id, &params).is_err(), "{path}");
+            assert!(authorize_desktop_engine_command(id, &params).is_err(), "{path}");
+        }
+        // The importer gives inline data precedence, even when a path is also supplied.
+        for params in [serde_json::json!({"data": "QUJD"}), serde_json::json!({"data": "QUJD", "path": "/outside/set.csh"})] {
+            assert!(authorize_engine_command(id, &params).is_ok());
+            assert!(authorize_desktop_engine_command(id, &params).is_ok());
+        }
+        let mut headless = crate::headless::Headless::new();
+        let error = headless.command_run(id, serde_json::json!({"path": "/outside/set.csh"})).unwrap_err();
+        assert!(error.to_string().contains("uses ambient filesystem paths and is disabled"), "{error}");
     }
 
     #[test]

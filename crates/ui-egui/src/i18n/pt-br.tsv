@@ -3944,6 +3944,12 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+
+# Custom shape set import
+	Import Shapes…	Importar formas…
+	Choose a custom shape file (.csh).	Escolha um arquivo de formas personalizadas (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Quantidade de formas importadas de {file}: {n}|Quantidade de formas importadas de {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Quantidade de formas importadas de {group}: {n}|Quantidade de formas importadas de {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usar o perfil incorporado ({profile})
 	Convert to the working space ({profile})	Converter para o espaço de trabalho ({profile})

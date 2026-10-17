@@ -871,6 +871,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 // ------------------------------------------------------------------ Shapes
 
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if ui.button(tl!("Import Shapes…")).clicked() {
+        crate::preset_files_ui::import_shapes_dialog(app);
+    }
     let src = photocraft_engine::presets::shapes::all_groups(&app.session);
     let groups: Vec<GroupView> = src
         .iter()

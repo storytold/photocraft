@@ -3145,6 +3145,12 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+
+# Custom shape set import
+	Import Shapes…	Impor Bentuk…
+	Choose a custom shape file (.csh).	Pilih berkas bentuk khusus (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Jumlah bentuk yang diimpor dari {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Jumlah bentuk yang diimpor dari {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Pakai profil tertanam ({profile})
 	Convert to the working space ({profile})	Konversi ke working space ({profile})

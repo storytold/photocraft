@@ -2766,6 +2766,12 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+
+# Custom shape set import
+	Import Shapes…	导入形状…
+	Choose a custom shape file (.csh).	请选择自定义形状文件 (.csh)。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	从 {file} 导入的形状数量：{n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	从 {group} 导入的形状数量：{n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	使用嵌入的配置文件（{profile}）
 	Convert to the working space ({profile})	转换到工作空间（{profile}）

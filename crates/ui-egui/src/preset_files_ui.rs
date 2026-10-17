@@ -15,7 +15,7 @@ use crate::PhotocraftApp;
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
 /// `.psp` is Photoshop's live `Keyboard Shortcuts.psp` (the same XML as a `.kys`); other `.psp`
 /// settings files are refused with a clear message.
-pub const PRESET_EXTS: &[&str] = &["abr", "grd", "pat", "aco", "ase", "kys", "psp"];
+pub const PRESET_EXTS: &[&str] = &["abr", "grd", "pat", "aco", "ase", "kys", "psp", "csh"];
 
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
@@ -83,12 +83,30 @@ fn source(name: &str, bytes: &[u8]) -> Value {
     json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
+/// Import a custom-shape set from the Shapes panel using the normal preset route.
+pub(crate) fn import_shapes_dialog(app: &mut PhotocraftApp) {
+    let result = app.pick_file_bytes_filtered(&["csh"], |app, name, bytes| {
+        if ext(&name) != "csh" {
+            return Err(tl!("Choose a custom shape file (.csh).").into());
+        }
+        open(app, &name, &bytes).ok_or_else(|| tl!("Choose a custom shape file (.csh).").to_string())??;
+        Ok(Value::Null)
+    });
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+}
+
 /// Import a preset file; `None` when `name` isn't one.
 pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
     let (cmd, what) = match ext(name).as_str() {
         "abr" => ("brush.presets.importAbr", "brushes"),
         "grd" => ("gradient.presets.importGrd", "gradients"),
         "pat" => ("pattern.import", "patterns"),
+        "csh" => ("shape.presets.importCsh", "shapes"),
         "aco" | "ase" => return Some(crate::swatches_ui::import_bytes(app, name, bytes, false).map(|_| ())),
         "kys" | "psp" => return Some(crate::kys_import::open_bytes(app, name, bytes).map(|_| ())),
         _ => return None,
@@ -113,6 +131,7 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         let (one, other) = match what {
             "brushes" => ("Imported {n} brush from {file}", "Imported {n} brushes from {file}"),
             "patterns" => ("Imported {n} pattern from {file}", "Imported {n} patterns from {file}"),
+            "shapes" => ("Imported {n} shape from {file}", "Imported {n} shapes from {file}"),
             _ => ("Imported {n} gradient from {file}", "Imported {n} gradients from {file}"),
         };
         let imported = crate::i18n::fmt(&crate::i18n::trn(crate::i18n::current(), n, one, other), &[("file", &stem)]);
@@ -128,12 +147,20 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;
         }
+        if what == "shapes" {
+            app.ui.presets_ui.shapes = true;
+        }
     }))
 }
 
 #[cfg(test)]
+#[path = "../../psd/tests/common/csh_fixture.rs"]
+mod csh_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     #[test]
     fn recognises_preset_files() {
@@ -142,8 +169,61 @@ mod tests {
         assert!(is_preset_file("Brand.ACO"));
         assert!(is_preset_file("exchange.ase"));
         assert!(is_preset_file("Debaser-ColourLibrary-Part6.PAT"));
+        assert!(is_preset_file("Original.CSH"));
         assert!(!is_preset_file("photo.psd"));
         assert!(!is_preset_file("abr"));
+    }
+
+    #[test]
+    fn csh_open_imports_presets_and_shows_shapes_without_opening_a_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        open(&mut app, "Original.CSH", &csh_fixture::triangle_csh()).unwrap().unwrap();
+        assert!(app.session.active().is_none());
+        assert!(app.ui.presets_ui.shapes);
+        assert!(!app.ui.status_error);
+        let imported = app.session.presets.shapes.iter().find(|g| g.name == "Original").unwrap();
+        assert_eq!(imported.items.len(), 1);
+        assert_eq!(imported.items[0].name, "Triangle");
+    }
+
+    #[test]
+    fn malformed_csh_open_preserves_the_library() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let before = app.session.presets.to_json(&app.session);
+        assert!(open(&mut app, "broken.csh", b"cush").unwrap().is_err());
+        assert_eq!(app.session.presets.to_json(&app.session), before);
+        assert!(app.session.active().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter; renders the CSH import workflow for visual inspection"]
+    fn csh_panel_import_visual_evidence() {
+        let _guard = photocraft_testkit::gpu_lock();
+        let (dialog, requests) =
+            crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Contents("Original.csh".into(), csh_fixture::triangle_csh()))]);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let services = crate::Services { file_dialog: Some(dialog), ..Default::default() };
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            app.set_wgpu(cc.wgpu_render_state.as_ref().unwrap().clone());
+            app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
+            // A user-cleared library makes the one imported fixture visible without scrolling.
+            app.session.presets.shapes.clear();
+            app.ui.presets_ui.shapes = true;
+            app
+        });
+        h.run_steps(8);
+        let destination = std::env::var("PHOTOCRAFT_CSH_EVIDENCE").unwrap_or_else(|_| "csh-evidence".into());
+        std::fs::create_dir_all(&destination).unwrap();
+        h.render().unwrap().save(std::path::Path::new(&destination).join("before-import.png")).unwrap();
+        h.get_by_label("Import Shapes…").click();
+        h.run_steps(12);
+        assert!(matches!(requests.borrow().first(), Some(crate::file_dialog::FileDialogRequest::Open { extensions: Some(exts), .. }) if exts == &["csh"]));
+        assert_eq!(h.state().session.presets.shapes[0].items[0].name, "Triangle");
+        assert!(!h.state().ui.status_error);
+        h.state_mut().run("shape.presets.place", json!({"preset": "Triangle", "rect": [60, 60, 280, 180], "fill": "#d85a32"})).unwrap();
+        h.run_steps(8);
+        h.render().unwrap().save(std::path::Path::new(&destination).join("imported-triangle.png")).unwrap();
     }
 
     /// Import Brushes… with a PNG: the image becomes the current brush's tip (TOOL-213-12).

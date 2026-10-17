@@ -3158,6 +3158,12 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+
+# Custom shape set import
+	Import Shapes…	Importer des formes…
+	Choose a custom shape file (.csh).	Choisissez un fichier de formes personnalisées (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Nombre de formes importées depuis {file} : {n}|Nombre de formes importées depuis {file} : {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Nombre de formes importées depuis {group} : {n}|Nombre de formes importées depuis {group} : {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Utiliser le profil incorporé ({profile})
 	Convert to the working space ({profile})	Convertir vers l'espace de travail ({profile})

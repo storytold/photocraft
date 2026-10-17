@@ -3853,6 +3853,12 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+
+# Custom shape set import
+	Import Shapes…	Імпортувати фігури…
+	Choose a custom shape file (.csh).	Виберіть файл довільних фігур (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Кількість фігур, імпортованих із {file}: {n}|Кількість фігур, імпортованих із {file}: {n}|Кількість фігур, імпортованих із {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Кількість фігур, імпортованих із {group}: {n}|Кількість фігур, імпортованих із {group}: {n}|Кількість фігур, імпортованих із {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Використати вбудований профіль ({profile})
 	Convert to the working space ({profile})	Перетворити в робочий простір ({profile})

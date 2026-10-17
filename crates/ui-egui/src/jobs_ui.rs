@@ -490,6 +490,16 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     match e.outcome {
+        JobOutcome::Done(v) if e.command == "shape.presets.importCsh" => {
+            let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
+            let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
+            app.ui.status = crate::i18n::fmt(
+                &crate::i18n::trn(crate::i18n::current(), n, "Imported {n} shape from {group}", "Imported {n} shapes from {group}"),
+                &[("group", group)],
+            );
+            app.ui.status_error = false;
+            app.ui.presets_ui.shapes = true;
+        }
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();

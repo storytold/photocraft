@@ -4073,6 +4073,12 @@ cameraRaw	Yellow	Sárga
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
 	Redrawing	Újrarajzolás
+
+# Custom shape set import
+	Import Shapes…	Alakzatok importálása…
+	Choose a custom shape file (.csh).	Válasszon egy egyéni alakzatfájlt (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	A(z) {file} forrásból importált alakzatok száma: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	A(z) {group} forrásból importált alakzatok száma: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	A beágyazott profil használata ({profile})
 	Convert to the working space ({profile})	Átalakítás a munkaszíntérbe ({profile})

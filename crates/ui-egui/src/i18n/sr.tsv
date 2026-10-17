@@ -4225,6 +4225,12 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+
+# Custom shape set import
+	Import Shapes…	Uvezi oblike…
+	Choose a custom shape file (.csh).	Izaberite datoteku prilagođenih oblika (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}
 	Response curve	Kriva odziva
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Koristi ugrađeni profil ({profile})

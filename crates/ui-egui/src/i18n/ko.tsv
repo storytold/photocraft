@@ -3329,6 +3329,12 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+
+# Custom shape set import
+	Import Shapes…	모양 가져오기…
+	Choose a custom shape file (.csh).	사용자 정의 모양 파일 (.csh)을 선택하세요.
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	{file}에서 가져온 모양 수: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	{group}에서 가져온 모양 수: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	포함된 프로파일 사용({profile})
 	Convert to the working space ({profile})	작업 색상 공간으로 변환({profile})

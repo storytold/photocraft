@@ -3762,6 +3762,12 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+
+# Custom shape set import
+	Import Shapes…	Importovat tvary…
+	Choose a custom shape file (.csh).	Vyberte soubor vlastních tvarů (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Počet tvarů importovaných z {file}: {n}|Počet tvarů importovaných z {file}: {n}|Počet tvarů importovaných z {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Počet tvarů importovaných z {group}: {n}|Počet tvarů importovaných z {group}: {n}|Počet tvarů importovaných z {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Použít vložený profil ({profile})
 	Convert to the working space ({profile})	Převést do pracovního prostoru barev ({profile})

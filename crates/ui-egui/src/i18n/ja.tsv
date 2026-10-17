@@ -3832,6 +3832,12 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+
+# Custom shape set import
+	Import Shapes…	シェイプを読み込み…
+	Choose a custom shape file (.csh).	カスタムシェイプファイル (.csh) を選択してください。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	{file} から読み込んだシェイプ数: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	{group} から読み込んだシェイプ数: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	埋め込みプロファイルを使用 ({profile})
 	Convert to the working space ({profile})	作業用スペースに変換 ({profile})

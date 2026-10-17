@@ -4115,6 +4115,12 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+
+# Custom shape set import
+	Import Shapes…	Importar formas…
+	Choose a custom shape file (.csh).	Selecciona un archivo de formas personalizadas (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Cantidad de formas importadas de {file}: {n}|Cantidad de formas importadas de {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Cantidad de formas importadas de {group}: {n}|Cantidad de formas importadas de {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usar el perfil incrustado ({profile})
 	Convert to the working space ({profile})	Convertir al espacio de trabajo ({profile})

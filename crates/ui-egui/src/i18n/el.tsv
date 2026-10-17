@@ -3852,6 +3852,12 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+
+# Custom shape set import
+	Import Shapes…	Εισαγωγή σχημάτων…
+	Choose a custom shape file (.csh).	Επιλέξτε ένα αρχείο προσαρμοσμένων σχημάτων (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Αριθμός σχημάτων που εισήχθησαν από {file}: {n}|Αριθμός σχημάτων που εισήχθησαν από {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Αριθμός σχημάτων που εισήχθησαν από {group}: {n}|Αριθμός σχημάτων που εισήχθησαν από {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Χρήση ενσωματωμένου προφίλ ({profile})
 	Convert to the working space ({profile})	Μετατροπή στον χώρο εργασίας ({profile})

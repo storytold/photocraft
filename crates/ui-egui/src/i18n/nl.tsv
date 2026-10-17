@@ -3914,6 +3914,12 @@ curves	Smooth	Vloeiend maken
 	Sent to {printer}	Verzonden naar {printer}
 	set in Print Settings…	instellen in de afdrukinstellingen…
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
+
+# Custom shape set import
+	Import Shapes…	Vormen importeren…
+	Choose a custom shape file (.csh).	Kies een bestand met aangepaste vormen (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Aantal uit {file} geïmporteerde vormen: {n}|Aantal uit {file} geïmporteerde vormen: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Aantal uit {group} geïmporteerde vormen: {n}|Aantal uit {group} geïmporteerde vormen: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Het ingesloten profiel gebruiken ({profile})
 	Convert to the working space ({profile})	Omzetten naar de werkruimte ({profile})

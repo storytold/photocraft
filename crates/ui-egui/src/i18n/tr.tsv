@@ -3884,6 +3884,12 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+
+# Custom shape set import
+	Import Shapes…	Şekilleri İçe Aktar…
+	Choose a custom shape file (.csh).	Özel şekil dosyası (.csh) seçin.
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	{file} kaynağından içe aktarılan şekil sayısı: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	{group} kaynağından içe aktarılan şekil sayısı: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Gömülü profili kullanın ({profile})
 	Convert to the working space ({profile})	Çalışma alanına dönüştürün ({profile})

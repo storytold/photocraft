@@ -3123,6 +3123,12 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+
+# Custom shape set import
+	Import Shapes…	Импортировать фигуры…
+	Choose a custom shape file (.csh).	Выберите файл произвольных фигур (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Количество фигур, импортированных из {file}: {n}|Количество фигур, импортированных из {file}: {n}|Количество фигур, импортированных из {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Количество фигур, импортированных из {group}: {n}|Количество фигур, импортированных из {group}: {n}|Количество фигур, импортированных из {group}: {n}
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Использовать встроенный профиль ({profile})
 	Convert to the working space ({profile})	Преобразовать в рабочее пространство ({profile})
