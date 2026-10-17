@@ -65,6 +65,8 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
 photocraft-cms = { workspace = true }
+# The print portal's PDF: a private (0600) temporary file, removed when the dialog is done.
+tempfile = "3"
 x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
 # Clipboard images in types other than PNG on Wayland (`services.rs`, #2546): arboard asks for
 # image/png only. Already in Cargo.lock (arboard's wayland-data-control); pinned exactly.

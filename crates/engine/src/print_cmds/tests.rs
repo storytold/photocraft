@@ -360,7 +360,7 @@ fn spool_transport_streams_pdf_and_propagates_refusal() {
         let printed = &s.documents().iter().find(|st| st.doc.id == source).unwrap().doc;
         assert_eq!((printed.size.width, printed.size.height), (150, 300), "print hook ran on the source document");
         assert_eq!(out["sent"], true);
-        assert_eq!(out["spooler"], "request id is Office-42");
+        assert_eq!((out["spooler"].as_str(), out["backend"].as_str()), (Some("request id is Office-42"), Some("lp")));
         assert!(out["pdf"].is_null(), "spool-only printing leaves no diagnostic PDF");
         let pdf = std::fs::read(format!("{dir}/received.pdf")).unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
@@ -432,5 +432,294 @@ fn printers_lists_the_spooler_destinations_without_a_document() {
     match r["default"].as_str() {
         Some(d) => assert!(list.iter().any(|p| p["name"] == d && p["default"] == true)),
         None => assert!(list.iter().all(|p| p["default"] == false)),
+    }
+}
+
+/// Spooling tests run in a child process: `disable_printing` is process-wide and a test above
+/// sets it, and CI sets `PHOTOCRAFT_NO_PRINT` for the whole shell. True in the child, which runs
+/// the test body; the parent starts the child and checks that it passed.
+fn in_child(test: &str, envs: &[(&str, &str)]) -> bool {
+    const CHILD: &str = "PHOTOCRAFT_TEST_PRINT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return true;
+    }
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", test, "--nocapture"]).env(CHILD, "1").env_remove("PHOTOCRAFT_NO_PRINT");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    // Bounded: a child stuck in a printer dialog or a driver must not hang the suite.
+    let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        status.is_some_and(|s| s.success()),
+        "{}\nstdout: {}\nstderr: {}",
+        if status.is_none() { "the child did not finish within 120 s and was killed" } else { "the child failed" },
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    false
+}
+
+/// A spooler that keeps every job it gets.
+fn recording_spooler(preferred: bool, seen: &std::sync::Arc<std::sync::Mutex<Vec<PrintJob>>>) -> Spooler {
+    let seen = std::sync::Arc::clone(seen);
+    Spooler {
+        name: "test",
+        preferred,
+        run: std::sync::Arc::new(move |job: &PrintJob| {
+            seen.lock().unwrap().push(job.clone());
+            Ok("queued".into())
+        }),
+    }
+}
+
+#[test]
+fn a_preferred_app_spooler_takes_the_job() {
+    if !in_child("print_cmds::tests::a_preferred_app_spooler_takes_the_job", &[]) {
+        return;
+    }
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = session("rgb", 8);
+    s.print_spooler = Some(recording_spooler(true, &seen));
+    let r = s.execute("file.print", json!({"copies": 2, "paper": "a4", "orientation": "landscape"})).unwrap();
+    assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("test"), Some("queued")));
+    assert!(r["pdf"].is_null(), "{r}");
+    let jobs = seen.lock().unwrap();
+    let job = &jobs[0];
+    assert!(job.pdf.starts_with(b"%PDF-1.4"));
+    assert_eq!((job.copies, job.title.as_str(), job.printer.as_deref(), job.landscape), (2, "Print Me.psd", None, true));
+    assert!((job.paper.0 - 841.89).abs() < 0.01 && (job.paper.1 - 595.28).abs() < 0.01);
+    drop(jobs);
+    // A named print server asks for the IPP route, preferred spooler or not.
+    let e = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+    assert!(e.contains("no print server at 127.0.0.1:1") || e.contains("not available on Windows"), "{e}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    // "output" keeps the file and does not spool unless asked.
+    let out = format!("{}/out.pdf", tmp("output"));
+    let r = s.execute("file.print", json!({"output": out})).unwrap();
+    assert_eq!((r["sent"].as_bool(), r["pdf"].as_str()), (Some(false), Some(out.as_str())));
+    assert!(std::path::Path::new(&out).exists());
+}
+
+#[cfg(not(target_os = "windows"))]
+mod cups {
+    use super::*;
+    use photocraft_ipp::{
+        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Printer, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
+    };
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::mpsc;
+
+    fn printer(name: &str, is_default: bool) -> Printer {
+        Printer { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
+    }
+
+    #[test]
+    fn the_printer_is_the_requested_one_else_the_default_else_the_only_one() {
+        let two = [printer("Office", false), printer("Lab", true)];
+        assert_eq!(resolve_printer(None, Some("Lab"), &two).ok(), Some("Lab".into()));
+        assert_eq!(resolve_printer(Some("office"), Some("Lab"), &two).ok(), Some("Office".into()));
+        assert_eq!(resolve_printer(None, None, &two[..1]).ok(), Some("Office".into()));
+        match resolve_printer(None, None, &two) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("no default printer") && e.contains("Office, Lab"), "{e}"),
+            _ => panic!("several printers and no default must fail"),
+        }
+        match resolve_printer(Some("Nope"), Some("Lab"), &two) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("`Nope`") && e.contains("Office, Lab"), "{e}"),
+            _ => panic!("an unknown printer must fail"),
+        }
+        match resolve_printer(None, None, &[]) {
+            Err(SpoolError::NoRoute(e)) => assert!(e.contains("no printer is set up"), "{e}"),
+            _ => panic!("no printers is no route"),
+        }
+        // A printer asked for by name on a server without any is a failure, not a missing route.
+        match resolve_printer(Some("Office"), None, &[]) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("`Office`") && e.contains("none"), "{e}"),
+            _ => panic!("a named printer never falls through"),
+        }
+        // A stale default that the server no longer lists falls through to the only printer.
+        assert_eq!(resolve_printer(None, Some("Gone"), &two[..1]).ok(), Some("Office".into()));
+    }
+
+    /// What the fake received per request: op, attributes, document.
+    type Seen = (u16, Vec<Attribute>, Vec<u8>);
+
+    /// A fake CUPS on a TCP port: lists `printers` and `classes`, names `default`, accepts jobs
+    /// as id 42. Answers for as long as the test process lives.
+    fn fake_cups(printers: &'static [&'static str], classes: &'static [&'static str], default: Option<&'static str>) -> (String, mpsc::Receiver<Seen>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut reader = BufReader::new(stream);
+                let (mut first, mut line, mut len) = (String::new(), String::new(), 0usize);
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if first.is_empty() {
+                        first = line.clone();
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                if first.is_empty() {
+                    continue; // a reachability probe
+                }
+                let mut body = vec![0u8; len];
+                reader.read_exact(&mut body).unwrap();
+                let (op, attrs, doc) = photocraft_ipp::parse_request(&body).unwrap();
+                let list = |names: &[&str]| {
+                    if names.is_empty() {
+                        return Request::new(0x0406, 1).end();
+                    }
+                    let mut r = Request::new(0, 1);
+                    for p in names {
+                        r.group(TAG_PRINTER_GROUP);
+                        r.attr(TAG_NAME, "printer-name", p.as_bytes());
+                    }
+                    r.end()
+                };
+                let reply = match op {
+                    OP_CUPS_GET_PRINTERS => list(printers),
+                    OP_CUPS_GET_CLASSES => list(classes),
+                    OP_CUPS_GET_DEFAULT => match default {
+                        Some(d) => {
+                            let mut r = Request::new(0, 1);
+                            r.group(TAG_PRINTER_GROUP);
+                            r.attr(TAG_NAME, "printer-name", d.as_bytes());
+                            r.end()
+                        }
+                        None => Request::new(0x0406, 1).end(),
+                    },
+                    OP_PRINT_JOB => {
+                        let mut r = Request::new(0, 1);
+                        r.group(TAG_JOB_GROUP);
+                        r.integer("job-id", 42);
+                        r.end()
+                    }
+                    _ => Request::new(0x0501, 1).end(),
+                };
+                let _ = tx.send((op, attrs, doc));
+                let mut out = reader.into_inner();
+                let _ = out.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes());
+                let _ = out.write_all(&reply);
+                let _ = out.flush();
+            }
+        });
+        (server, rx)
+    }
+
+    #[test]
+    fn a_named_server_is_printed_to_over_ipp() {
+        if !in_child("print_cmds::tests::cups::a_named_server_is_printed_to_over_ipp", &[]) {
+            return;
+        }
+        let (server, rx) = fake_cups(&["Office"], &["Lab"], Some("Lab"));
+        let mut s = session("rgb", 8);
+        let r = s.execute("file.print", json!({"printServer": server, "copies": 3})).unwrap();
+        assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("ipp"), Some("job 42 on Lab")));
+        assert!(r["pdf"].is_null());
+        let job = std::iter::from_fn(|| rx.try_recv().ok()).find(|(op, _, _)| *op == OP_PRINT_JOB).expect("a Print-Job request");
+        let attr = |name: &str| job.1.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert!(attr("printer-uri").text().ends_with("/classes/Lab"), "{}", attr("printer-uri").text());
+        assert_eq!(
+            (attr("copies").int(), attr("job-name").text().as_str(), attr("document-format").text().as_str()),
+            (Some(3), "Print Me.psd", "application/pdf")
+        );
+        assert!(job.2.starts_with(b"%PDF-1.4"));
+        // The requested printer, in any case; an unknown one names the choices.
+        let r = s.execute("file.print", json!({"printServer": server, "printer": "office"})).unwrap();
+        assert_eq!(r["spooler"], "job 42 on Office");
+        let job = std::iter::from_fn(|| rx.try_recv().ok()).filter(|(op, _, _)| *op == OP_PRINT_JOB).last().expect("the second Print-Job");
+        assert!(job.1.iter().any(|a| a.name == "printer-uri" && a.text().ends_with("/printers/Office")));
+        let e = s.execute("file.print", json!({"printServer": server, "printer": "Nope"})).unwrap_err().to_string();
+        assert!(e.contains("`Nope`") && e.contains("Office, Lab"), "{e}");
+        // Printers can be listed.
+        let r = s.execute("file.printers", json!({"printServer": server})).unwrap();
+        let names: Vec<&str> = r["printers"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert_eq!((names, r["default"].as_str()), (vec!["Office", "Lab"], Some("Lab")));
+        assert_eq!(
+            (r["printers"][1]["default"].as_bool(), r["printers"][1]["class"].as_bool(), r["printers"][0]["class"].as_bool()),
+            (Some(true), Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn without_a_printer_the_app_spooler_takes_over() {
+        if !in_child("print_cmds::tests::cups::without_a_printer_the_app_spooler_takes_over", &[]) {
+            return;
+        }
+        let (server, _rx) = fake_cups(&[], &[], None);
+        let mut s = session("gray", 8);
+        let e = s.execute("file.print", json!({"printServer": server})).unwrap_err().to_string();
+        assert!(e.contains("no printer is set up"), "{e}");
+        // Asking for a printer by name never falls through to another route.
+        let e = s.execute("file.print", json!({"printServer": server, "printer": "Office"})).unwrap_err().to_string();
+        assert!(e.contains("`Office`"), "{e}");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        s.print_spooler = Some(recording_spooler(false, &seen));
+        let r = s.execute("file.print", json!({"printServer": server})).unwrap();
+        assert_eq!((r["backend"].as_str(), r["spooler"].as_str()), (Some("test"), Some("queued")));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        // An unreachable named server is a failure, not a missing route.
+        let e = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+        assert!(e.contains("no print server at"), "{e}");
+        let r = s.execute("file.printers", json!({"printServer": "127.0.0.1:1"})).unwrap();
+        assert!(r["printers"].as_array().unwrap().is_empty() && r["note"].as_str().unwrap().contains("no print server"));
+    }
+
+    /// The Flatpak case: no `lp` on the path, so the job goes to the system's CUPS over IPP
+    /// (`CUPS_SERVER` names it here), and with no print server at all to the app's spooler.
+    /// Runs in a child process, since the path is process-wide.
+    #[test]
+    fn without_lp_the_job_goes_over_ipp_then_to_the_app_spooler() {
+        const CHILD: &str = "PHOTOCRAFT_TEST_PRINT_NO_LP";
+        if std::env::var_os(CHILD).is_some() {
+            let mut s = session("rgb", 8);
+            let r = s.execute("file.print", json!({"copies": 2})).unwrap();
+            assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("ipp"), Some("job 42 on Office")));
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            s.print_spooler = Some(recording_spooler(false, &seen));
+            // The IPP route first, then the app's spooler only when there is no server.
+            let r = s.execute("file.print", json!({})).unwrap();
+            assert_eq!(r["backend"], "ipp");
+            assert!(seen.lock().unwrap().is_empty());
+            // (CUPS_SERVER is read per job; an unreachable one is no route.)
+            let r = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+            assert!(r.contains("no print server at"), "{r}");
+            println!("child ok");
+            return;
+        }
+        let (server, rx) = fake_cups(&["Office"], &[], Some("Office"));
+        let no_lp = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "print_cmds::tests::cups::without_lp_the_job_goes_over_ipp_then_to_the_app_spooler", "--nocapture"])
+            .env(CHILD, "1")
+            .env("PATH", no_lp.path())
+            .env("CUPS_SERVER", &server)
+            .env_remove("PHOTOCRAFT_NO_PRINT")
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && stdout.contains("child ok"), "stdout: {stdout}\nstderr: {stderr}");
+        let jobs = std::iter::from_fn(|| rx.try_recv().ok()).filter(|(op, _, _)| *op == OP_PRINT_JOB).count();
+        assert_eq!(jobs, 2, "both prints reached the fake CUPS");
     }
 }
