@@ -368,9 +368,11 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // The picked preset is recorded by name (`brush.presets.setCurrent`, identity, so
                 // look-alike duplicates stay distinct), since the engine can't infer it from the
                 // brush afterwards.
-                ui.add_enabled_ui(on, |ui| section_body(ui, &mut b, section, &app.session.tools.presets, app.session.tools.current_preset.as_deref()))
-                    .inner
-                    .inspect(|name| run_or_status(app, "brush.presets.setCurrent", json!({ "name": name })));
+                ui.add_enabled_ui(on, |ui| {
+                    section_body(ui, &mut b, section, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), app.ui.tool)
+                })
+                .inner
+                .inspect(|name| run_or_status(app, "brush.presets.setCurrent", json!({ "name": name })));
             });
         });
     });

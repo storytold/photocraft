@@ -562,6 +562,65 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[test]
+fn transfer_mixer_edits_use_the_brush_command_and_survive_real_tool_swaps() {
+    use crate::state::Tool;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness(0, 6);
+    let a = h.state_mut();
+    a.ui.tool = Tool::Brush;
+    a.session.tools.brush.transfer.enabled = true;
+    a.session.tools.brush.transfer.wetness =
+        paint::Dynamic { jitter: 0.41, minimum: 0.43, control: Control::PenPressure, fade_steps: 339, ..Default::default() };
+    a.session.tools.brush.transfer.mix = paint::Dynamic { jitter: 0.63, minimum: 0.67, control: Control::PenPressure, fade_steps: 449, ..Default::default() };
+    crate::paint_mouse::sync_tool_brush(a);
+    a.ui.tool = Tool::MixerBrush;
+    crate::paint_mouse::sync_tool_brush(a);
+    h.run_steps(2);
+    h.hover_at(h.get_by_label("Opacity Jitter").rect().center());
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -250.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(20);
+    let journal = h.state().session.journal.len();
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(41.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert!((h.state().session.tools.brush.transfer.wetness.jitter - 0.42).abs() < 1e-6);
+    assert_eq!(h.state().session.journal.len(), journal + 1);
+    let (id, params) = last_journal(h.state()).unwrap();
+    assert_eq!(id, "tools.setBrush");
+    assert_eq!(params["brush"], json!({"transfer": {"wetness": {"jitter": 0.42_f32}}}));
+    let mixer = h.state().session.tools.brush.clone();
+
+    let a = h.state_mut();
+    a.ui.tool = Tool::Brush;
+    crate::paint_mouse::sync_tool_brush(a);
+    h.run_steps(2);
+    let brush = h.state().session.tools.brush.clone();
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(41.0)).unwrap();
+    assert!(field.accesskit_node().is_disabled());
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush, brush);
+    assert_eq!(h.state().session.journal.len(), journal + 1, "inactive edits and tool swaps add no brush command");
+    let a = h.state_mut();
+    a.ui.tool = Tool::MixerBrush;
+    crate::paint_mouse::sync_tool_brush(a);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush, mixer, "the Mixer Brush keeps its own edited settings");
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .any(|node| node.accesskit_node().numeric_value() == Some(42.0) && !node.accesskit_node().is_disabled())
+    );
+}
+
 fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
     let brush = serde_json::to_value(&app.session.tools.brush).unwrap();
     let path = match section {
