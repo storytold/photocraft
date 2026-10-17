@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (adjustment clipping stays visible in compact Properties, #5231; Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -218,6 +218,7 @@ Paragraph; the rest open as in-app floating windows.
 | Themes: Photoshop's four greys | partial | five themes; #2661 |
 | Document tabs: overflow, context menu, reorder | done | UI-217-6; middle-click close #2570 |
 | Layers panel: wheel steps blend modes, drop on New/Trash | partial | UI-217-14 |
+| Adjustment scope: clipping control visible above tall Properties editors in a compact dock | done (2026-10-17) | `panels.rs`, `clipping_indicator_tests.rs`; #5231; stack-wide default retained |
 | Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name and Mode; the other six missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
 | Smart filter rows: click selects, drag onto another smart object moves, ⌥-drag copies, drag onto Delete removes | done | `smart_ui.rs`, `layer.smartFilter.transfer` (#4271) |
 | Layers panel: Clip Thumbnails to Layer Bounds (panel menu, `interface.clipThumbnailsToLayerBounds`) | done (2026-10-12) | `layer_thumb_bounds_tests.rs`; #4281. Thumbnail size and the Panel Options dialog to come |
@@ -227,6 +228,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Adjustment clipping moved above Properties editors to remain visible in compact docks (#5231); scope, undo/redo and 8/16/32-bit pixel regressions; readiness estimate unchanged |
 | 2026-10-13 | minor | Menu bar from the keyboard: Alt / F10 focus, Alt+letter, underlined mnemonics (#4988) |
 | 2026-10-13 | minor | Layers panel filter row: Kind is a real dropdown with Kind, Name and Mode filters, drivable by `ui.set {layerFilter}` (#5048); row added as partial |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |

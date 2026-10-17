@@ -3446,20 +3446,20 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
+    // Keep the scope reachable before tall editors and within a compact dock (#5231).
+    // Adjustment layers affect the stack by default; clipping limits them to their base.
+    if let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
+        && widgets::toggle(ui, &mut clip, tl!("Clip to layer below")).changed()
+    {
+        let _ = app.run("layer.setProps", json!({"layer": id.0, "clipped": clip}));
+    }
+    ui.add_space(6.0);
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);
-    let layer = app.session.active().and_then(|s| s.doc.layer(id).map(|l| (l.visible, l.clipped)));
-    if let Some((visible, clipped)) = layer {
-        ui.horizontal(|ui| {
-            let mut vis = visible;
-            if widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed() {
-                let _ = app.run("layer.setProps", json!({"layer": id.0, "visible": vis}));
-            }
-            let mut clip = clipped;
-            if widgets::toggle(ui, &mut clip, tl!("Clip to layer below")).changed() {
-                let _ = app.run("layer.setProps", json!({"layer": id.0, "clipped": clip}));
-            }
-        });
+    if let Some(mut vis) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.visible))
+        && widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed()
+    {
+        let _ = app.run("layer.setProps", json!({"layer": id.0, "visible": vis}));
     }
     ui.add_space(6.0);
     if widgets::secondary_button(ui, tl!("Reset to defaults"), ui.available_width()).clicked() {
