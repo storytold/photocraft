@@ -515,6 +515,26 @@ fn reveal_follows_linked_paths_like_the_link_and_passes_paths_as_paths() {
     }
 }
 
+/// `xdg-open` launches a file it is given, so Reveal hands it the link's folder only when that is a
+/// folder: a link stored as `tool.jar/a.png` names a file, not a folder, as its parent.
+#[test]
+fn reveal_on_linux_never_hands_xdg_open_a_file() {
+    let dir = std::env::temp_dir().join(format!("photocraft-reveal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("tool.jar");
+    std::fs::write(&file, b"not a folder").unwrap();
+    let (program, args) = reveal_command_on("linux", &file.join("a.png").to_string_lossy()).unwrap();
+    assert_eq!(args, vec![file.to_string_lossy().into_owned()]);
+    let err = ensure_folder(program, &args).unwrap_err();
+    assert!(err.to_string().contains("is not a folder"), "{err}");
+    let (program, args) = reveal_command_on("linux", &dir.join("a.png").to_string_lossy()).unwrap();
+    ensure_folder(program, &args).unwrap();
+    assert!(ensure_folder("xdg-open", &[]).is_err());
+    // Finder and Explorer select the file itself, whatever it is.
+    ensure_folder("open", &["-R".into(), "--".into(), file.to_string_lossy().into_owned()]).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn mask_all_objects_masks_the_subject() {
     let mut s = session(8, "rgb");

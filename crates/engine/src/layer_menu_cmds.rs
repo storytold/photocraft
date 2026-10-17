@@ -387,8 +387,22 @@ pub(crate) fn reveal(path: &str, dry_run: bool) -> Result<Value> {
     if dry_run {
         return Ok(json!({"program": program, "args": args}));
     }
+    ensure_folder(program, &args)?;
     spawn(program, &args)?;
     Ok(json!({"path": path}))
+}
+
+/// `xdg-open` opens whatever it is given in its default application, so it only gets a folder: a
+/// linked path such as `tool.jar/a.png` would otherwise launch `tool.jar` instead of showing it.
+fn ensure_folder(program: &str, args: &[String]) -> Result<()> {
+    if program != "xdg-open" {
+        return Ok(());
+    }
+    match args.first() {
+        Some(dir) if std::path::Path::new(dir).is_dir() => Ok(()),
+        Some(dir) => Err(other(format!("{dir} is not a folder, so it can't be shown in the file manager"))),
+        None => Err(other("no folder to show in the file manager")),
+    }
 }
 
 /// The file-manager invocation that selects `path` on this platform.
