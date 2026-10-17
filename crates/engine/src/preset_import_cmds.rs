@@ -25,8 +25,8 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Largest accepted file (Photoshop's biggest bundled sets are well under this).
-pub const MAX_FILE_BYTES: u64 = 512 << 20;
+/// Largest accepted file (~1.5 GB).
+pub const MAX_FILE_BYTES: u64 = 1536 << 20;
 
 /// File bytes from `data` (base64) or `path`, plus a default group name.
 pub(crate) fn file_bytes(p: &Value, cmd: &str, what: &str) -> Result<(Vec<u8>, String)> {
@@ -410,6 +410,27 @@ mod tests {
             assert!(s.execute("brush.presets.importAbr", p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.tools.presets.len(), n);
+    }
+
+    #[test]
+    fn import_rejects_file_over_size_limit() {
+        let mut s = Session::new();
+        let limit = super::MAX_FILE_BYTES;
+
+        // Base64 expands by approximately 4/3.
+        let oversized_len = (limit as usize / 3 * 4) + 100;
+        let oversized_b64 = "A".repeat(oversized_len);
+
+        let p = json!({"data": oversized_b64, "group": "TooBig"});
+        assert!(s.execute("brush.presets.importAbr", p).is_err());
+
+        // Also test importImage path.
+        let p2 = json!({"data": oversized_b64, "fileName": "big.png"});
+        assert!(s.execute("brush.presets.importImage", p2).is_err());
+
+        // And gradient import.
+        let p3 = json!({"data": oversized_b64, "group": "TooBig"});
+        assert!(s.execute("gradient.presets.importGrd", p3).is_err());
     }
 
     #[test]

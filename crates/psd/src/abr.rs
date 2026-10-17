@@ -43,8 +43,8 @@ use crate::patterns::{PatternBudget, PsdPattern, parse_pattern_block_with, write
 pub const MAX_EDGE: u32 = 8192;
 /// Most brushes read from one file.
 pub const MAX_BRUSHES: usize = 20_000;
-/// Cap on decoded sample bytes over the whole file.
-pub const MAX_TOTAL_BYTES: usize = 512 << 20;
+/// Cap on decoded sample bytes over the whole file (~1.5 GB).
+pub const MAX_TOTAL_BYTES: usize = 1536 << 20;
 
 /// A sampled tip: one grayscale plane where the maximum value is full paint.
 #[derive(Debug, Clone, PartialEq)]
@@ -779,6 +779,14 @@ mod tests {
         }
         // A huge declared count with no data is an error, not an allocation.
         assert!(parse(&[0, 2, 0xff, 0xff]).is_err());
+        // Samples exceeding MAX_TOTAL_BYTES are rejected. 1.5 GB = ~1,610,612,736 bytes.
+        // Use multiple MAX_EDGE (8192) samples to exceed the budget. 8192² × 8-bit = 67 MB each; ~24 needed.
+        let max_sample = sample("$max", MAX_EDGE, MAX_EDGE, 8);
+        let samples: Vec<_> = (0..30).map(|i| AbrSample { id: format!("${i}"), ..max_sample.clone() }).collect();
+        let presets: Vec<_> = (0..30).map(|i| named(&format!("B{i}"))).collect();
+        let big_abr = write_v6(2, &samples, &[], &presets, true).unwrap();
+        let err = parse(&big_abr).unwrap_err();
+        assert!(format!("{err}").contains("MAX_TOTAL_BYTES") || format!("{err}").contains("limit"), "{err}");
     }
 
     fn named(n: &str) -> Descriptor {
