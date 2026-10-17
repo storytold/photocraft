@@ -14,6 +14,8 @@
 //! All pixel data here is the surface's *native* channels as normalised `f32` (any depth, any colour
 //! model); colour-space-specific work happens in the callbacks.
 
+use std::convert::Infallible;
+
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
@@ -112,6 +114,16 @@ pub fn footprint(d: &Dab, index: usize, hardness: f32) -> Footprint {
             cov.push(dab_coverage(dist, d.radius, hardness) * d.alpha);
         }
     }
+    Footprint { dab: *d, index, rect, cov }
+}
+
+/// One dab's footprint over just the part of its rectangle inside `clip`: what
+/// [`BrushContext::footprint`](crate::BrushContext::footprint) gives, without rasterising the rest.
+/// Coverage is computed pixel by pixel, so the two agree wherever both have a value.
+pub fn footprint_within(ctx: &crate::BrushContext, d: &Dab, index: usize, clip: Rect) -> Footprint {
+    let rect = ctx.dab_rect(d, false).intersect(&clip);
+    let mut cov = Vec::new();
+    ctx.rasterize(d, false, rect, &mut cov);
     Footprint { dab: *d, index, rect, cov }
 }
 
@@ -220,29 +232,67 @@ pub fn apply_coverage(
 ///
 /// The working copy covers the stroke bounds grown by `halo` pixels so neighbourhood effects (blur,
 /// sharpen) can read around each dab; only the stroke bounds are written back. With
-/// `lock_transparency`, alpha is preserved. Returns the damaged rectangle.
+/// `lock_transparency`, alpha is preserved. Returns the damaged rectangle. Nothing is clipped: see
+/// [`apply_dab_stroke_clipped`] to keep the stroke to the canvas.
 pub fn apply_dab_stroke(
     target: &mut Surface,
     stroke: &Stroke,
     selection: Option<&Surface>,
     lock_transparency: bool,
     halo: i32,
-    mut effect: impl FnMut(&mut Region, &Footprint),
+    effect: impl FnMut(&mut Region, &Footprint),
 ) -> Rect {
+    // A clip no dab reaches past keeps every rectangle exactly what it was before the clip existed.
+    let everywhere = Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let Ok(damage) = apply_dab_stroke_clipped(target, stroke, selection, lock_transparency, halo, everywhere, |_| Ok::<(), Infallible>(()), effect);
+    damage
+}
+
+/// [`apply_dab_stroke`] that changes only the pixels inside `clip` (the canvas). The working copy
+/// covers the dabs grown by `halo`, but never more than `clip` grown by `halo`, so a brush far
+/// larger than the canvas costs what the canvas does (#5633): unclipped, one soft 5000 px dab
+/// copies about 8,600 × 8,600 px several times over, whatever the image size. The halo ring past
+/// `clip` is read and edited like the rest, so a neighbourhood effect still sees pixels beyond the
+/// edge, but it is never written back.
+///
+/// `admit` gets the working rectangle before anything is allocated; its error ends the stroke with
+/// `target` untouched (the caller's memory budget). Returns the damaged rectangle, inside `clip`.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_dab_stroke_clipped<E>(
+    target: &mut Surface,
+    stroke: &Stroke,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    halo: i32,
+    clip: Rect,
+    admit: impl FnOnce(Rect) -> Result<(), E>,
+    mut effect: impl FnMut(&mut Region, &Footprint),
+) -> Result<Rect, E> {
     let ds = dabs(stroke);
     if ds.is_empty() {
-        return Rect::EMPTY;
+        return Ok(Rect::EMPTY);
     }
     let ctx = crate::BrushContext::new(&stroke.brush);
-    let bounds = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
-    let outer = Rect::new(bounds.x0 - halo, bounds.y0 - halo, bounds.x1 + halo, bounds.y1 + halo);
+    let reach = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
+    let bounds = reach.intersect(&clip);
+    if bounds.is_empty() {
+        // Nothing to change, and no working copy for an effect to read: Smudge clamps into it.
+        return Ok(Rect::EMPTY);
+    }
+    let outer = reach.inflate(halo).intersect(&clip.inflate(halo));
+    admit(outer)?;
     let orig = Region::read(target, outer);
     let mut work = orig.clone();
     for (i, d) in ds.iter().enumerate() {
-        effect(&mut work, &ctx.footprint(d, i));
+        // A dab off the canvas does nothing, as in the live preview: a Smudge stroke started past
+        // the edge picks up paint where it first touches the canvas.
+        if ctx.dab_rect(d, false).intersect(&clip).is_empty() {
+            continue;
+        }
+        effect(&mut work, &footprint_within(&ctx, d, i, outer));
     }
     mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
-    bounds
+    Ok(bounds)
 }
 
 /// Mix a sequential-dab stroke's working pixels `work` back over the original `orig` at
@@ -483,6 +533,146 @@ mod tests {
         assert!(seen.windows(2).all(|w| w[1] == w[0] + 1));
         assert!(s.pixel(20, 10)[0] > 0.1, "dabs accumulate");
         assert_eq!(s.pixel(40, 10)[0], 0.0, "outside the selection untouched");
+    }
+
+    /// A neighbourhood effect for the clip tests: a 3 × 3 mean, reading clamped to the working
+    /// copy, laid down at the dab's coverage.
+    fn box_blur(work: &mut Region, fp: &Footprint) {
+        let (r, wr, n) = (fp.rect.intersect(&work.rect), work.rect, work.ch);
+        let src = work.clone();
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let k = fp.at(x, y);
+                let mut mean = vec![0.0; n];
+                for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                    let p = src.px((x + dx).clamp(wr.x0, wr.x1 - 1), (y + dy).clamp(wr.y0, wr.y1 - 1));
+                    mean.iter_mut().zip(p).for_each(|(m, v)| *m += v / 9.0);
+                }
+                work.px_mut(x, y).iter_mut().zip(&mean).for_each(|(v, m)| *v += (m - *v) * k);
+            }
+        }
+    }
+
+    /// A 64 × 48 canvas of `fmt` with a pattern in every channel.
+    fn patterned(fmt: PixelFormat) -> Surface {
+        let mut s = Surface::new(fmt);
+        let n = fmt.channels();
+        let data: Vec<f32> = (0..64 * 48 * n).map(|i| ((i * 37) % 101) as f32 / 100.0).collect();
+        s.write_region(Rect::new(0, 0, 64, 48), &data);
+        s
+    }
+
+    #[test]
+    fn clipped_dab_stroke_works_inside_the_clip_plus_halo() {
+        // #5633: a 300 px soft tip on a 32 × 24 canvas reaches about 260 px past every edge.
+        let clip = Rect::new(0, 0, 32, 24);
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(clip, &[0.2, 0.4, 0.6, 1.0]);
+        s.fill_rect(Rect::new(0, 0, 16, 24), &[0.9, 0.1, 0.1, 1.0]);
+        let tiles = s.tile_bounds();
+        let st = stroke(&[(4.0, 6.0), (28.0, 18.0)], 300.0, 0.0);
+        let (mut admitted, mut seen) = (None, Vec::new());
+        let dmg = apply_dab_stroke_clipped(
+            &mut s,
+            &st,
+            None,
+            false,
+            13,
+            clip,
+            |area| {
+                admitted = Some(area);
+                Ok::<(), ()>(())
+            },
+            |work, fp| {
+                seen.push((work.rect, fp.rect));
+                box_blur(work, fp);
+            },
+        )
+        .unwrap();
+        assert!(admitted.is_some_and(|a| clip.inflate(13).contains_rect(&a)), "{admitted:?}");
+        assert!(!seen.is_empty() && seen.iter().all(|(w, f)| clip.inflate(13).contains_rect(w) && w.contains_rect(f)), "{seen:?}");
+        assert_eq!(dmg, clip);
+        assert_eq!(s.tile_bounds(), tiles, "nothing written off the clip");
+        assert!(s.pixel(16, 12)[0] < 0.85, "the stroke blurred the canvas");
+    }
+
+    #[test]
+    fn clipped_dab_stroke_matches_the_unclipped_one_inside_the_clip() {
+        // Dabs and halo inside the clip: clipping changes nothing, in any format.
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAYA8, PixelFormat::CMYKA8] {
+            let st = stroke(&[(24.0, 20.0), (40.0, 28.0)], 10.0, 0.5);
+            let mut clipped = patterned(fmt);
+            let mut unclipped = clipped.clone();
+            let ok = apply_dab_stroke_clipped(&mut clipped, &st, None, false, 2, Rect::new(0, 0, 64, 48), |_| Ok::<(), ()>(()), box_blur);
+            let want = apply_dab_stroke(&mut unclipped, &st, None, false, 2, box_blur);
+            assert_eq!(ok, Ok(want), "{fmt:?}");
+            let around = Rect::new(-64, -64, 128, 112);
+            assert!(clipped.read_region(around) == unclipped.read_region(around), "{fmt:?}");
+        }
+    }
+
+    #[test]
+    fn footprint_within_is_the_full_footprint_cut_to_the_clip() {
+        // Hard and soft tips (the vectorised round path), noise (the per-pixel path) and a tiny
+        // tip (the supersampled path).
+        let brushes = [
+            BrushSettings { size: 30.0, hardness: 1.0, ..Default::default() },
+            BrushSettings { size: 30.0, hardness: 0.0, ..Default::default() },
+            BrushSettings { size: 30.0, hardness: 0.3, noise: true, ..Default::default() },
+            BrushSettings { size: 3.0, hardness: 0.8, ..Default::default() },
+        ];
+        for b in brushes {
+            let ctx = crate::BrushContext::new(&b);
+            let d = Dab::round(Point::new(20.3, 17.6), b.size / 2.0, 0.9);
+            let full = ctx.footprint(&d, 4);
+            for clip in [Rect::new(17, 3, 70, 19), Rect::new(-40, -40, 21, 18), Rect::new(200, 200, 210, 210)] {
+                let part = footprint_within(&ctx, &d, 4, clip);
+                assert_eq!((part.rect, part.index), (full.rect.intersect(&clip), 4), "size {} clip {clip:?}", b.size);
+                assert_eq!(part.cov.len(), part.rect.width() as usize * part.rect.height() as usize);
+                for y in part.rect.y0..part.rect.y1 {
+                    for x in part.rect.x0..part.rect.x1 {
+                        assert_eq!(part.at(x, y).to_bits(), full.at(x, y).to_bits(), "size {} ({x},{y})", b.size);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_dab_stroke_off_the_clip_paints_nothing() {
+        // No dab touches the clip: no working copy, no effect call, no admit, so Smudge (which
+        // clamps into the working copy) never sees an empty one.
+        let mut s = patterned(PixelFormat::RGBA8);
+        let before = s.clone();
+        let st = stroke(&[(200.0, 200.0), (260.0, 210.0)], 10.0, 1.0);
+        let mut sm = Smudge::new(0.8, None, 10.0);
+        let mut admitted = false;
+        let dmg = apply_dab_stroke_clipped(
+            &mut s,
+            &st,
+            None,
+            false,
+            0,
+            Rect::new(0, 0, 64, 48),
+            |_| {
+                admitted = true;
+                Ok::<(), ()>(())
+            },
+            |w, fp| sm.dab(w, fp),
+        );
+        assert_eq!(dmg, Ok(Rect::EMPTY));
+        assert!(!admitted && s.tile_bounds() == before.tile_bounds() && s.read_region(Rect::new(0, 0, 64, 48)) == before.read_region(Rect::new(0, 0, 64, 48)));
+    }
+
+    #[test]
+    fn refused_clipped_dab_stroke_leaves_the_target_untouched() {
+        let mut s = patterned(PixelFormat::RGBA16);
+        let before = s.read_region(Rect::new(0, 0, 64, 48));
+        let st = stroke(&[(10.0, 10.0), (50.0, 30.0)], 12.0, 0.5);
+        let mut called = false;
+        let r = apply_dab_stroke_clipped(&mut s, &st, None, false, 2, Rect::new(0, 0, 64, 48), |_| Err("over budget"), |_, _| called = true);
+        assert_eq!(r, Err("over budget"));
+        assert!(!called && s.read_region(Rect::new(0, 0, 64, 48)) == before);
     }
 
     #[test]

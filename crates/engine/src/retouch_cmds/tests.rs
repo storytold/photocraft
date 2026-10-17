@@ -1,5 +1,6 @@
 use super::*;
 use photocraft_color::ColorMode;
+use photocraft_paint::retouch::apply_dab_stroke;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 
@@ -2053,4 +2054,278 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
             assert!(error <= tolerance, "depth={depth}, brush={brush}, max native-channel error={error}");
         }
     }
+}
+
+// #5633: the sequential-dab tools copy and edit the canvas, not the whole dab. A soft 5000 px Blur
+// dab reaches about 8,600 × 8,600 px, and its working copy, footprint and write-back used to span
+// all of it, mostly off the canvas: about 5 GB at once, whatever the image size.
+
+/// Blur, Sharpen, Smudge, Dodge, Burn and Sponge share one dab path; each with settings strong
+/// enough that its effect shows.
+fn dab_tools() -> [(&'static str, Value); 6] {
+    [
+        ("paint.blur", json!({"strength": 100})),
+        ("paint.sharpen", json!({"strength": 100})),
+        ("paint.smudge", json!({"strength": 80})),
+        ("paint.dodge", json!({"exposure": 80})),
+        ("paint.burn", json!({"exposure": 80})),
+        ("paint.sponge", json!({"mode": "saturate", "vibrance": false})),
+    ]
+}
+
+/// `base` with the keys of `extra` added.
+fn with_params(mut base: Value, extra: &Value) -> Value {
+    if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+        b.extend(e.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    base
+}
+
+fn active_surface(s: &Session) -> &Surface {
+    let d = s.active().unwrap();
+    d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap()
+}
+
+fn damage_rect(r: &Value) -> Rect {
+    let v: Vec<i32> = serde_json::from_value(r["damage"].clone()).unwrap();
+    Rect::new(v[0], v[1], v[0] + v[2], v[1] + v[3])
+}
+
+/// The stroke as paint's unclipped `apply_dab_stroke` paints it, every dab tool's path before
+/// #5633: the reference the canvas-clipped commands are held to.
+fn unclipped_dab_stroke(s: &Session, cmd: &str, p: &Value) -> Vec<f32> {
+    let (stroke, id) = parse_brush(s, p, cmd).unwrap();
+    let (tool, _) = DabTool::parse(s, cmd, p, &stroke).unwrap();
+    // The surface, selection and transparency lock exactly as `run_stroke` takes them (a new
+    // document's Background layer has its transparency locked).
+    let mut doc = (*s.active().unwrap().doc).clone();
+    let (canvas, sel) = (doc.bounds(), doc.selection.clone());
+    let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p).unwrap();
+    let mut effect = tool.effect(surf.format(), stroke.brush.spacing);
+    apply_dab_stroke(surf, &stroke, sel.as_ref(), lock, tool.halo(), |w, fp| effect(w, fp));
+    surf.read_region(canvas)
+}
+
+#[test]
+fn huge_brush_on_a_small_canvas_stays_inside_the_canvas() {
+    for (cmd, extra) in dab_tools() {
+        let mut s = session(32, 24, 8, "rgb");
+        paint_layer(&mut s, texture);
+        let canvas = s.active().unwrap().doc.bounds();
+        let tiles = active_surface(&s).tile_bounds();
+        let r = s.execute(cmd, with_params(json!({"points": [[4, 6], [28, 18]], "size": 300, "hardness": 0}), &extra)).unwrap();
+        let dmg = damage_rect(&r);
+        assert!(!dmg.is_empty() && canvas.contains_rect(&dmg), "{cmd}: damage {dmg:?} reaches past the canvas {canvas:?}");
+        assert_eq!(active_surface(&s).tile_bounds(), tiles, "{cmd}: pixels were written off the canvas");
+    }
+}
+
+#[test]
+fn live_dab_regions_stay_within_the_canvas_plus_halo() {
+    let mut s = session(32, 24, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let canvas = s.active().unwrap().doc.bounds();
+    let p = json!({"points": [[4, 6], [28, 18]], "size": 300, "hardness": 0});
+    // Every working copy a dab's effect gets, through a probe effect with Blur's widest halo.
+    let halo = 13;
+    let (stroke, id) = parse_brush(&s, &p, "paint.blur").unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let probe = seen.clone();
+    let mut live = LiveDab::with_effect(&s, "paint.blur", &p, stroke, id, halo, move |_| {
+        Box::new(move |work: &mut Region, fp: &Footprint| probe.borrow_mut().push((work.rect, fp.rect)))
+    })
+    .unwrap();
+    live.push(&[StrokePoint::new(30.0, 4.0, 1.0)]).unwrap();
+    assert!(!seen.borrow().is_empty());
+    for (work, fp) in seen.borrow().iter() {
+        assert!(canvas.inflate(halo).contains_rect(work), "working copy {work:?} past the canvas plus halo");
+        assert!(work.contains_rect(fp), "footprint {fp:?} outside its working copy {work:?}");
+    }
+    // Each tool's own preview shows, and changes, the canvas only.
+    for (cmd, extra) in dab_tools() {
+        let mut live = LiveDab::begin(&s, cmd, &with_params(p.clone(), &extra)).unwrap();
+        let step = live.push(&[StrokePoint::new(30.0, 4.0, 1.0)]).unwrap();
+        assert!(canvas.contains_rect(&live.bounds()) && canvas.contains_rect(&step), "{cmd}: {:?}, step {step:?}", live.bounds());
+        let shown = live.doc.layer(id.unwrap()).unwrap().surface().unwrap();
+        assert_eq!(shown.tile_bounds(), active_surface(&s).tile_bounds(), "{cmd}: the preview wrote off the canvas");
+    }
+}
+
+#[test]
+fn dab_stroke_over_the_pixel_budget_is_refused_and_leaves_the_document() {
+    // Tests use a 2²⁰ px budget (the real one is Free Transform's 2³⁰). A stroke across this canvas
+    // needs a working copy of the whole 1500 × 1000 canvas; the preview's first step, which brush
+    // smoothing holds a few dabs short of the end, still shows well over the budget.
+    let mut s = session(1500, 1000, 8, "rgb");
+    let p = json!({"points": [[0, 0], [1500, 1000]], "size": 100, "hardness": 100, "exposure": 80});
+    let before = (s.active().unwrap().revision, rgba(&s, 750, 500));
+    let err = s.execute("paint.dodge", p.clone()).unwrap_err().to_string();
+    assert!(err.contains("Dodge Tool") && err.contains("the document was not changed"), "{err}");
+    assert_eq!((s.active().unwrap().revision, rgba(&s, 750, 500)), before);
+    assert!(LiveDab::begin(&s, "paint.dodge", &p).is_err(), "the live preview is refused too");
+}
+
+#[test]
+fn dab_stroke_allocation_failure_is_an_error_not_an_abort() {
+    let mut s = session(40, 30, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let p = json!({"points": [[5, 15], [35, 15]], "size": 12});
+    let before = (s.active().unwrap().revision, rgba(&s, 20, 15));
+    crate::allocation::fail_next_for_test();
+    let err = s.execute("paint.blur", p.clone()).unwrap_err().to_string();
+    assert!(err.contains("not enough memory"), "{err}");
+    assert_eq!((s.active().unwrap().revision, rgba(&s, 20, 15)), before);
+    crate::allocation::fail_next_for_test();
+    assert!(LiveDab::begin(&s, "paint.blur", &p).is_err(), "the live preview fails the same way");
+}
+
+#[test]
+fn dab_tools_paint_as_before_away_from_the_canvas_edge() {
+    // The dabs (about 13 px reach) and Blur's 4 px halo stay inside the canvas, so clipping must
+    // change nothing at all, at any depth.
+    for depth in DEPTHS {
+        for (cmd, extra) in dab_tools() {
+            let mut s = session(96, 64, depth, "rgb");
+            paint_layer(&mut s, texture);
+            let p = with_params(json!({"points": [[30, 24], [50, 40], [66, 30]], "size": 16, "hardness": 40, "spacing": 10}), &extra);
+            let want = unclipped_dab_stroke(&s, cmd, &p);
+            s.execute(cmd, p).unwrap();
+            assert!(active_surface(&s).read_region(s.active().unwrap().doc.bounds()) == want, "depth {depth}: {cmd} changed");
+        }
+    }
+}
+
+#[test]
+fn smudge_paints_as_before_up_to_the_canvas_edge() {
+    // Smudge carries paint from dab to dab. A hard 20 px tip covers 13 px either side of its centre
+    // (plus a pixel of slack), so this stroke's dabs reach up to the canvas edge, the last one
+    // exactly onto it, and lose nothing to the clip.
+    for depth in DEPTHS {
+        let mut s = session(64, 40, depth, "rgb");
+        paint_layer(&mut s, texture);
+        let p = json!({"points": [[14, 14], [40, 20], [50, 26]], "size": 20, "hardness": 100, "strength": 80, "spacing": 10});
+        let want = unclipped_dab_stroke(&s, "paint.smudge", &p);
+        s.execute("paint.smudge", p).unwrap();
+        assert!(active_surface(&s).read_region(s.active().unwrap().doc.bounds()) == want, "depth {depth}");
+    }
+}
+
+#[test]
+fn per_pixel_dab_tools_paint_as_before_across_the_canvas_edge() {
+    // Dodge, Burn and Sponge change each pixel on its own, so even a stroke that runs off the
+    // canvas paints the canvas exactly as before.
+    for depth in DEPTHS {
+        for (cmd, extra) in dab_tools().into_iter().filter(|(c, _)| matches!(*c, "paint.dodge" | "paint.burn" | "paint.sponge")) {
+            let mut s = session(96, 64, depth, "rgb");
+            paint_layer(&mut s, texture);
+            let p = with_params(json!({"points": [[-20, 10], [40, 30], [110, 54]], "size": 40, "hardness": 20, "spacing": 10}), &extra);
+            let want = unclipped_dab_stroke(&s, cmd, &p);
+            s.execute(cmd, p).unwrap();
+            assert!(active_surface(&s).read_region(s.active().unwrap().doc.bounds()) == want, "depth {depth}: {cmd} changed");
+        }
+    }
+}
+
+#[test]
+fn blur_and_sharpen_stay_close_to_before_across_the_canvas_edge() {
+    // Across the edge the working copy now ends one halo past the canvas, so a later dab reads halo
+    // pixels an earlier dab blurred against that boundary, not against the off-canvas pixels beyond.
+    // On this stroke that moves the canvas by at most 0.000046 (0.012 of an 8-bit level, which 8-bit
+    // rounds away) within 8 px of the edge. The bounds leave room for other platforms' rounding: one
+    // 8-bit level at 8-bit (the smallest change it can show), 1e-4 deeper, 16 px from the edge.
+    for depth in DEPTHS {
+        for cmd in ["paint.blur", "paint.sharpen"] {
+            let mut s = session(96, 64, depth, "rgb");
+            paint_layer(&mut s, texture);
+            let p = json!({"points": [[-20, 10], [40, 30], [110, 54], [60, 70]], "size": 40, "hardness": 20, "spacing": 10, "strength": 100});
+            let want = unclipped_dab_stroke(&s, cmd, &p);
+            s.execute(cmd, p).unwrap();
+            let canvas = s.active().unwrap().doc.bounds();
+            let got = active_surface(&s).read_region(canvas);
+            let (w, n) = (canvas.width() as usize, active_surface(&s).channels());
+            let (mut worst, mut reach) = (0.0f32, 0i32);
+            for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+                let d = (a - b).abs();
+                if d > 0.0 {
+                    let (x, y) = (((i / n) % w) as i32, ((i / n) / w) as i32);
+                    reach = reach.max(x.min(y).min(canvas.x1 - 1 - x).min(canvas.y1 - 1 - y));
+                }
+                worst = worst.max(d);
+            }
+            let tol = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 1e-4 };
+            assert!(worst <= tol, "{cmd} depth {depth}: off by {worst}");
+            assert!(reach <= 16, "{cmd} depth {depth}: changed {reach} px in from the edge");
+        }
+    }
+}
+
+#[test]
+fn smudge_from_off_the_canvas_drags_in_the_edge_colour() {
+    // The working copy ends at the canvas, and Smudge's first pick-up clamps to it, so a stroke
+    // started past the edge carries the canvas's edge colour in. Before #5633 it carried the layer's
+    // off-canvas pixels, which wore the edge away.
+    let mut s = session(64, 32, 8, "rgb");
+    paint_layer(&mut s, |_, _| [0.9, 0.2, 0.1, 1.0]);
+    s.execute("paint.smudge", json!({"points": [[-30, 16], [40, 16]], "size": 20, "hardness": 100, "strength": 90})).unwrap();
+    for x in [0, 4, 12] {
+        let p = rgba(&s, x, 16);
+        assert!(p[3] > 0.99 && (p[0] - 0.9).abs() < 0.02 && (p[1] - 0.2).abs() < 0.02, "x {x}: {p:?}");
+    }
+}
+
+#[test]
+fn max_size_soft_blur_on_a_small_image_works_on_the_canvas_only() {
+    // #5633's repro at its real size: a soft 5000 px Blur on a small image.
+    let mut s = session(64, 48, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let canvas = s.active().unwrap().doc.bounds();
+    let p = json!({"points": [[10, 10], [54, 38]], "size": 5000, "hardness": 0});
+    let (stroke, id) = parse_brush(&s, &p, "paint.blur").unwrap();
+    let (tool, _) = DabTool::parse(&s, "paint.blur", &p, &stroke).unwrap();
+    let halo = tool.halo();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let probe = seen.clone();
+    let mut live = LiveDab::with_effect(&s, "paint.blur", &p, stroke, id, halo, move |_| {
+        Box::new(move |work: &mut Region, fp: &Footprint| probe.borrow_mut().push((work.rect, fp.rect)))
+    })
+    .unwrap();
+    live.push(&[StrokePoint::new(60.0, 4.0, 1.0)]).unwrap();
+    for (work, fp) in seen.borrow().iter() {
+        assert!(canvas.inflate(halo).contains_rect(work) && work.contains_rect(fp), "{work:?} {fp:?}");
+    }
+    let r = s.execute("paint.blur", p).unwrap();
+    assert!(canvas.contains_rect(&damage_rect(&r)));
+}
+
+#[test]
+fn live_smudge_from_off_the_canvas_matches_the_commit() {
+    // The preview and the commit both skip the dabs that don't reach the canvas, so the preview's
+    // carry starts where the commit's does. 32-bit, so the live working copy isn't quantised
+    // between dabs.
+    let mut s = session(64, 32, 32, "rgb");
+    paint_layer(&mut s, texture);
+    let all = [[-30.0, 16.0], [10.0, 12.0], [40.0, 20.0]];
+    let opts = |p: &[[f64; 2]]| json!({"points": p, "size": 20, "hardness": 100, "strength": 80});
+    let mut live = LiveDab::begin(&s, "paint.smudge", &opts(&all[..1])).unwrap();
+    live.push(&all[1..].iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>()).unwrap();
+    let shown = live.doc.clone();
+    // The commit also lays the stroke's finishing dabs (brush smoothing catching up with the last
+    // point), which the preview shows only on release: leave out what they cover.
+    let (stroke, _) = parse_brush(&s, &opts(&all), "paint.smudge").unwrap();
+    let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
+    let release_only: Vec<Rect> = photocraft_paint::dabs(&stroke)[live.done..].iter().map(|d| ctx.dab_rect(d, false)).collect();
+    s.execute("paint.smudge", opts(&all)).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let (a, b) = (shown.layer(id).unwrap().surface().unwrap(), active_surface(&s));
+    let (mut changed, mut worst) = (false, 0.0f32);
+    for y in 0..32 {
+        for x in 0..64 {
+            let (got, want) = (a.rgba(x, y), b.rgba(x, y));
+            changed |= (want[0] - texture(x, y)[0]).abs() > 0.02;
+            if !release_only.iter().any(|r| r.contains(x, y)) {
+                worst = (0..4).map(|c| (got[c] - want[c]).abs()).fold(worst, f32::max);
+            }
+        }
+    }
+    assert!(changed && worst < 2e-4, "changed {changed}, worst {worst}");
 }

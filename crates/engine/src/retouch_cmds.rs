@@ -15,7 +15,7 @@ use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen,
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke, stroke_coverage};
+use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke_clipped, footprint_within, stroke_coverage};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -1012,12 +1012,47 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let fmt = surf.format();
         let mut effect = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        Ok(apply_dab_stroke(surf, &stroke, sel, lock, tool.halo(), |work, fp| match &mut sampler {
+        // Only the canvas changes, and only it (plus the halo the effect reads) is copied, so a
+        // brush far larger than the image costs what the image does (#5633). The copy is priced
+        // before it is made.
+        let what = format!("the {label} stroke");
+        let admit = |area: Rect| {
+            check_dab_area(area, &what)?;
+            crate::allocation::checkpoint(&what)
+        };
+        apply_dab_stroke_clipped(surf, &stroke, sel, lock, tool.halo(), pre.bounds(), admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
-        }))
+        })
     })?;
     Ok(json!({ "damage": damage_json(dmg) }))
+}
+
+/// Tests use a far lower budget, so proving a refusal never comes near allocating the real one.
+#[cfg(not(test))]
+const DAB_BUDGET: u64 = crate::transform_cmds::MAX_TRANSFORM_PIXELS;
+#[cfg(test)]
+const DAB_BUDGET: u64 = 1 << 20;
+
+/// Refuse a sequential-dab working copy over the engine's per-operation pixel budget (Free
+/// Transform's and Puppet Warp's), before it is allocated. Clipped to the canvas, a single dab stays
+/// far below it (a soft 5000 px tip covers about 75 megapixels), so only a stroke across a huge
+/// canvas reaches it.
+fn check_dab_area(area: Rect, what: &str) -> Result<()> {
+    let (w, h) = (u64::from(area.width()), u64::from(area.height()));
+    if w.saturating_mul(h) > DAB_BUDGET {
+        let detail = format!("it would work on {w} x {h} px at once, more than the {DAB_BUDGET} px limit");
+        return Err(crate::allocation::error(what, &detail));
+    }
+    Ok(())
+}
+
+/// A live dab stroke's copy of `rect` of `s`: refused over the pixel budget, and an error rather
+/// than an abort when the allocator can't supply it.
+fn dab_region(s: &Surface, rect: Rect) -> Result<Region> {
+    const WHAT: &str = "a live stroke preview";
+    check_dab_area(rect, WHAT)?;
+    Ok(Region { rect, ch: s.channels(), data: crate::allocation::read_region(s, rect, WHAT)? })
 }
 
 /// A Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke shown while it is drawn: each new dab
@@ -1028,7 +1063,10 @@ pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
     cmd: String,
-    renderer: photocraft_paint::StrokeRenderer,
+    /// The stroke's dabs and tip. Not a `StrokeRenderer`: that would also rasterise every dab,
+    /// unclipped, into a coverage map nothing here reads (about 0.5 GB for one soft 5000 px dab).
+    dabs: photocraft_paint::dynamics::DabGenerator,
+    ctx: photocraft_paint::BrushContext,
     done: usize,
     effect: DabEffect,
     halo: i32,
@@ -1079,11 +1117,12 @@ impl LiveDab {
         let pre_surf = surf.clone();
         let effect = effect(&pre_surf);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
-        let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
+        let (dabs, ctx) = (photocraft_paint::dynamics::DabGenerator::new(&stroke.brush, 1.0), photocraft_paint::BrushContext::new(&stroke.brush));
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             cmd: cmd.into(),
-            renderer,
+            dabs,
+            ctx,
             done: 0,
             effect,
             halo,
@@ -1118,17 +1157,21 @@ impl LiveDab {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
-        self.renderer.push(pts);
-        let ctx = self.renderer.ctx.clone();
-        let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
+        let mut new = Vec::new();
+        self.dabs.push(pts, &mut new, &mut Vec::new());
+        let ctx = self.ctx.clone();
+        // As on release (`apply_dab_stroke_clipped`): only the canvas changes, and each dab copies
+        // only its part of the canvas plus the halo the effect reads (#5633).
+        let canvas = self.doc.bounds();
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
-            let r = ctx.dab_rect(d, false);
+            let r = ctx.dab_rect(d, false).intersect(&canvas);
             if r.is_empty() {
                 continue;
             }
-            let mut region = Region::read(&self.work, r.inflate(self.halo));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+            let read = r.inflate(self.halo);
+            let mut region = dab_region(&self.work, read)?;
+            (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
             region.crop(r).write(&mut self.work);
             dmg = dmg.union(&r);
         }
@@ -1136,12 +1179,14 @@ impl LiveDab {
         // The finishing dabs, run on a scratch copy of the working pixels.
         let mut tail = None;
         if self.preview_tail {
-            let ds = self.renderer.tail_dabs();
-            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
+            let mut ds = Vec::new();
+            self.dabs.clone().finish(&mut ds, &mut Vec::new());
+            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false))).intersect(&canvas);
             if !r.is_empty() {
-                let mut region = Region::read(&self.work, r.inflate(self.halo));
+                let read = r.inflate(self.halo);
+                let mut region = dab_region(&self.work, read)?;
                 for (k, d) in ds.iter().enumerate() {
-                    (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+                    (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
                 }
                 tail = Some((r, region.crop(r)));
             }
@@ -1156,11 +1201,11 @@ impl LiveDab {
         self.bounds = self.bounds.union(&dmg).union(&tail_rect);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         if !shown.is_empty() {
-            let (orig, work) = (Region::read(&self.pre_surf, shown), Region::read(&self.work, shown));
+            let (orig, work) = (dab_region(&self.pre_surf, shown)?, dab_region(&self.work, shown)?);
             photocraft_paint::retouch::mix_back(surf, &orig, &work, shown, self.opacity, self.sel.as_ref(), self.lock);
         }
         if let Some((r, work)) = tail {
-            photocraft_paint::retouch::mix_back(surf, &Region::read(&self.pre_surf, r), &work, r, self.opacity, self.sel.as_ref(), self.lock);
+            photocraft_paint::retouch::mix_back(surf, &dab_region(&self.pre_surf, r)?, &work, r, self.opacity, self.sel.as_ref(), self.lock);
             self.tail = r;
         }
         Ok(shown.union(&tail_rect))
