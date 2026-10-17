@@ -2827,3 +2827,19 @@ curves	Smooth	平滑
 	Replace	替换
 	{name} was changed by another app after it was opened or saved here.	{name} 在此处打开或存储后已被其他应用更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	用此文档替换它，或取消并使用“文件 › 另存为”以保留两者。
+
+# Counted status and panel messages
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	已将 {n} 个色板导出到 {file}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	已从 {file} 导入 {n} 个色板
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	已从 {group} 导入 {n} 个画笔
+@plural	Played {n} step|Played {n} steps	已播放 {n} 个步骤
+@plural	{n} step|{n} steps	{n} 个步骤
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	已存储为 Web 所用格式：{n} 个文件
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	已更新 {n} 个在磁盘上更改过的链接智能对象
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	此图层复合记录的 {n} 个图层已被删除。请更新图层复合，或清除警告。
+@plural	{n} plane|{n} planes	{n} 个平面
+@plural	{n} preset|{n} presets	{n} 个预设
+@plural	{n} sample point removed|{n} sample points removed	已移除 {n} 个取样点
+@plural	{n} slice|{n} slices	{n} 个切片
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning}（另有 {n} 条画笔预设警告）
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}，含 {n} 条警告
