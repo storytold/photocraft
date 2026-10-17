@@ -572,13 +572,20 @@ pub(crate) fn strokes_live(tool: Tool) -> bool {
     ) || live_retouch_command(tool).is_some()
 }
 
-/// The retouching tools drawn live (`LiveRetouch`), by the command their live stroke previews.
-/// The Healing Brush shows its texture while drawing; the blend comes on release.
+/// The Spot Healing Brush's stroke while dragging: Photoshop shows the area it will heal as a
+/// semi-opaque dark overlay (an image overlay, the same in every UI theme) and heals on release.
+pub(crate) const SPOT_HEALING_TRAIL: Color32 = Color32::from_black_alpha(128);
+
+/// The retouching tools drawn live (`LiveRetouch`; the Background Eraser's and an Impressionist
+/// Pattern Stamp's dabs are laid one by one, `LiveDab`), by the command their live stroke
+/// previews. The Healing Brush shows its texture while drawing; the blend comes on release.
 fn live_retouch_command(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::CloneStamp => Some("paint.cloneStamp"),
         Tool::Healing => Some("paint.healingBrush"),
         Tool::HistoryBrush => Some("paint.historyBrush"),
+        Tool::PatternStamp => Some("paint.patternStamp"),
+        Tool::BackgroundEraser => Some("paint.backgroundEraser"),
         _ => None,
     }
 }
@@ -697,6 +704,20 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         EngineStroke::Dab(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?)
+    } else if d.tool == Tool::PatternStamp {
+        // The params `retouch_ui::finish_stroke` commits.
+        let mut p = crate::retouch_ui::pattern_stamp_params(app, &d.points);
+        p["points"] = json!(d.points);
+        p["target"] = paint_target(app);
+        if app.ui.tool_options.pattern_stamp_impressionist {
+            EngineStroke::Dab(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?)
+        } else {
+            EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, "paint.patternStamp", &p).ok()?)
+        }
+    } else if d.tool == Tool::BackgroundEraser {
+        // The params `eraser_ui::finish_stroke` commits (layer pixels only).
+        let p = crate::eraser_ui::background_eraser_params(app, &d.points);
+        EngineStroke::Dab(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?)
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { json!({}) } else { crate::retouch_ui::clone_params(app)? };
@@ -4910,6 +4931,9 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
                 Tool::QuickSelection => Color32::from_white_alpha(40),
                 // The Remove Tool tints what it will remove, like Photoshop's.
                 Tool::Remove => crate::theme::Tokens::get(painter.ctx()).danger.gamma_multiply(0.45),
+                // The Spot Healing Brush darkens the area it will heal, as Photoshop's does while
+                // dragging; the heal itself is computed on release.
+                Tool::SpotHealing => SPOT_HEALING_TRAIL,
                 _ => Color32::from_white_alpha(60),
             };
             let Some(st) = app.session.active() else { return };

@@ -52,7 +52,7 @@ id = "TOOL-213-7"
 target = "Live stroke preview for every brush-based retouch tool"
 status = "partial"
 issue = 213
-note = "Live (canvas.rs strokes_live): Brush, Pencil, Eraser, Blur, Sharpen, Smudge, Dodge, Burn, Sponge, Clone Stamp, Healing Brush, History Brush (#1026, #1040); the release commits the live stroke's pixels (P32). Not yet live: Spot Healing Brush, Mixer Brush, Background Eraser, Pattern Stamp"
+note = "Live (canvas.rs strokes_live): Brush, Pencil, Eraser, Color Replacement, Blur, Sharpen, Smudge, Dodge, Burn, Sponge, Clone Stamp, Healing Brush, History Brush (#1026, #1040), Pattern Stamp (aligned and Impressionist) and Background Eraser (#3754); the release commits the live stroke's pixels (P32) or, for the retouch tools, the same pixels the live stroke showed (tested equal at 8 and 16 bits). Spot Healing Brush shows the area it heals as a dark overlay and heals on release, as Photoshop does. Not yet live: Mixer Brush (in PR #3627)"
 
 [[item]]
 id = "TOOL-213-8"
