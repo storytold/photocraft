@@ -3597,6 +3597,12 @@ curves	Smooth	Làm mượt
 	Remove after each stroke	Xóa sau mỗi nét vẽ
 	Apply the removal ({key})	Áp dụng việc xóa ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Nét vẽ cần xóa: {n} (Enter áp dụng, Esc hủy)
+	Load Contours…	Tải đường viền…
+	Replace Contours…	Thay thế đường viền…
+	Save Contours…	Lưu đường viền…
+	Delete Contour	Xóa đường viền
+	Loaded contours from {file}	Đã tải đường viền từ {file}
+	Saved contours to {file}	Đã lưu đường viền vào {file}
 	Show home recent files	Hiện tệp gần đây trên màn hình chính
 	Clear Brush Controls	Xóa điều khiển cọ
 	Reset All Locked Settings	Đặt lại tất cả cài đặt đã khóa

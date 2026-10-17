@@ -3113,6 +3113,12 @@ curves	Smooth	Glätten
 	Remove after each stroke	Nach jedem Strich entfernen
 	Apply the removal ({key})	Entfernen anwenden ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Striche zum Entfernen: {n} (Eingabe wendet an, Esc bricht ab)
+	Load Contours…	Konturen laden…
+	Replace Contours…	Konturen ersetzen…
+	Save Contours…	Konturen speichern…
+	Delete Contour	Kontur löschen
+	Loaded contours from {file}	Konturen aus {file} geladen
+	Saved contours to {file}	Konturen in {file} gespeichert
 	Show home recent files	Zuletzt geöffnete Dateien auf dem Startbildschirm anzeigen
 	Clear Brush Controls	Pinselsteuerungen löschen
 	Reset All Locked Settings	Alle gesperrten Einstellungen zurücksetzen

@@ -3290,6 +3290,12 @@ curves	Smooth	매끄럽게
 	Remove after each stroke	획마다 제거
 	Apply the removal ({key})	제거 적용 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	제거할 획: {n} (Enter 적용, Esc 취소)
+	Load Contours…	윤곽선 불러오기…
+	Replace Contours…	윤곽선 바꾸기…
+	Save Contours…	윤곽선 저장…
+	Delete Contour	윤곽선 삭제
+	Loaded contours from {file}	{file}에서 윤곽선을 불러왔습니다
+	Saved contours to {file}	윤곽선을 {file}에 저장했습니다
 	Show home recent files	홈 화면에 최근 파일 표시
 	Clear Brush Controls	브러시 제어 지우기
 	Reset All Locked Settings	모든 잠긴 설정 재설정

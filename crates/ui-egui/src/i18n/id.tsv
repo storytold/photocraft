@@ -3105,6 +3105,12 @@ curves	Smooth	Haluskan
 	Remove after each stroke	Hapus setelah setiap goresan
 	Apply the removal ({key})	Terapkan penghapusan ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Goresan untuk dihapus: {n} (Enter menerapkan, Esc membatalkan)
+	Load Contours…	Muat kontur…
+	Replace Contours…	Ganti kontur…
+	Save Contours…	Simpan kontur…
+	Delete Contour	Hapus kontur
+	Loaded contours from {file}	Kontur dimuat dari {file}
+	Saved contours to {file}	Kontur disimpan ke {file}
 	Show home recent files	Tampilkan file terbaru di layar beranda
 	Clear Brush Controls	Hapus Kontrol Kuas
 	Reset All Locked Settings	Atur Ulang Semua Pengaturan Terkunci

@@ -460,16 +460,27 @@ pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
 
 /// An `.shc` file holding `contour` (Contour Editor › Save…).
 pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
-    let (name, points) = match contour {
-        Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
-        Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
-    };
-    let points = points
+    contour_to_shc_all(&[contour])
+}
+
+/// An `.shc` file holding every contour of `list` (Save Contours…).
+pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
+    let file: Vec<photocraft_psd::shc::ShcContour> = list
         .iter()
-        .enumerate()
-        .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+        .map(|contour| {
+            let (name, points) = match contour {
+                Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
+                Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
+            };
+            let points = points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .collect();
+            photocraft_psd::shc::ShcContour { name, points }
+        })
         .collect();
-    photocraft_psd::shc::write(&[photocraft_psd::shc::ShcContour { name, points }]).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).

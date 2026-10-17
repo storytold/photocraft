@@ -30,6 +30,7 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod comps_cmds;
+pub mod contour_lib_cmds;
 mod crop_fill;
 pub mod cutout_cmds;
 pub mod display_color;

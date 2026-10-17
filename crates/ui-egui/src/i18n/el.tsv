@@ -3813,6 +3813,12 @@ curves	Smooth	Εξομάλυνση
 	Remove after each stroke	Αφαίρεση μετά από κάθε πινελιά
 	Apply the removal ({key})	Εφαρμογή της αφαίρεσης ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Πινελιές προς αφαίρεση: {n} (Enter εφαρμόζει, Esc ακυρώνει)
+	Load Contours…	Φόρτωση περιγραμμάτων…
+	Replace Contours…	Αντικατάσταση περιγραμμάτων…
+	Save Contours…	Αποθήκευση περιγραμμάτων…
+	Delete Contour	Διαγραφή περιγράμματος
+	Loaded contours from {file}	Φορτώθηκαν περιγράμματα από {file}
+	Saved contours to {file}	Τα περιγράμματα αποθηκεύτηκαν στο {file}
 	Show home recent files	Εμφάνιση πρόσφατων αρχείων στην αρχική οθόνη
 	Clear Brush Controls	Απαλοιφή στοιχείων ελέγχου πινέλου
 	Reset All Locked Settings	Επαναφορά όλων των κλειδωμένων ρυθμίσεων

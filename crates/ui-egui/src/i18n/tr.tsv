@@ -3829,6 +3829,12 @@ cameraData	Lens	Lens
 @plural	{n} step|{n} steps	{n} adım
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} fırça ön ayarı uyarısı daha)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} uyarı ile
+	Load Contours…	Konturları yükle…
+	Replace Contours…	Konturları değiştir…
+	Save Contours…	Konturları kaydet…
+	Delete Contour	Konturu sil
+	Loaded contours from {file}	Konturlar {file} dosyasından yüklendi
+	Saved contours to {file}	Konturlar {file} dosyasına kaydedildi
 	Response curve	Yanıt eğrisi
 	Show home recent files	Ana ekranda son dosyaları göster
 	Clear Brush Controls	Fırça Denetimlerini Temizle

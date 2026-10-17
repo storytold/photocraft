@@ -4017,6 +4017,12 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
+	Load Contours…	Kontúrok betöltése…
+	Replace Contours…	Kontúrok cseréje…
+	Save Contours…	Kontúrok mentése…
+	Delete Contour	Kontúr törlése
+	Loaded contours from {file}	Kontúrok betöltve: {file}
+	Saved contours to {file}	Kontúrok mentve: {file}
 	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
 	Response curve	Válaszgörbe
 	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn

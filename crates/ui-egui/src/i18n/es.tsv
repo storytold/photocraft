@@ -2801,6 +2801,12 @@ curves	Smooth	Suavizar
 	Remove after each stroke	Eliminar después de cada trazo
 	Apply the removal ({key})	Aplicar la eliminación ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Trazos por eliminar: {n} (Intro aplica, Esc cancela)
+	Load Contours…	Cargar contornos…
+	Replace Contours…	Reemplazar contornos…
+	Save Contours…	Guardar contornos…
+	Delete Contour	Eliminar contorno
+	Loaded contours from {file}	Contornos cargados de {file}
+	Saved contours to {file}	Contornos guardados en {file}
 # Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
 # other catalogs already translate
 @id	select.all	Seleccionar todo

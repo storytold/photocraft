@@ -2726,6 +2726,12 @@ curves	Smooth	平滑
 	Remove after each stroke	每次描边后移除
 	Apply the removal ({key})	应用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描边：{n}（Enter 应用，Esc 取消）
+	Load Contours…	载入等高线…
+	Replace Contours…	替换等高线…
+	Save Contours…	存储等高线…
+	Delete Contour	删除等高线
+	Loaded contours from {file}	已从 {file} 载入等高线
+	Saved contours to {file}	已将等高线存储到 {file}
 	Show home recent files	在主屏幕上显示最近的文件
 	Clear Brush Controls	清除画笔控件
 	Reset All Locked Settings	复位所有锁定的设置

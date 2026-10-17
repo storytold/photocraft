@@ -3063,6 +3063,12 @@ curves	Smooth	Сгладить
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)
+	Load Contours…	Загрузить контуры…
+	Replace Contours…	Заменить контуры…
+	Save Contours…	Сохранить контуры…
+	Delete Contour	Удалить контур
+	Loaded contours from {file}	Контуры загружены из {file}
+	Saved contours to {file}	Контуры сохранены в {file}
 	Show home recent files	Показывать недавние файлы на домашнем экране
 	Clear Brush Controls	Очистить параметры кисти
 	Reset All Locked Settings	Сбросить все заблокированные параметры

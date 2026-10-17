@@ -3726,6 +3726,12 @@ curves	Smooth	スムーズ
 	Remove after each stroke	ストロークごとに削除
 	Apply the removal ({key})	削除を適用 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n}（Enter で適用、Esc で取り消し）
+	Load Contours…	カーブを読み込み…
+	Replace Contours…	カーブを置き換え…
+	Save Contours…	カーブを保存…
+	Delete Contour	カーブを削除
+	Loaded contours from {file}	{file} からカーブを読み込みました
+	Saved contours to {file}	カーブを {file} に保存しました
 	Show home recent files	ホーム画面に最近使ったファイルを表示
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps

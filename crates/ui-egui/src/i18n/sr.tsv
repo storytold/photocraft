@@ -3090,6 +3090,12 @@ curves	Smooth	Izgladi
 	Remove after each stroke	Ukloni posle svakog poteza
 	Apply the removal ({key})	Primeni uklanjanje ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Potezi za uklanjanje: {n} (Enter primenjuje, Esc otkazuje)
+	Load Contours…	Učitaj konture…
+	Replace Contours…	Zameni konture…
+	Save Contours…	Sačuvaj konture…
+	Delete Contour	Obriši konturu
+	Loaded contours from {file}	Konture učitane iz {file}
+	Saved contours to {file}	Konture sačuvane u {file}
 
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	The current gradient (pick one in Window › Gradients)	Tekući gradijent (izaberite ga u Prozor › Gradijenti)

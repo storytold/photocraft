@@ -1044,7 +1044,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             }
                         });
                     }
-                    P::Contour(aa) => contour::row(ui, f, &selected, key, label, aa, &mut disp),
+                    P::Contour(aa) => contour::row(app, ui, f, &selected, key, label, aa, &mut disp),
                     P::Check => {
                         let mut b = disp.get(key).and_then(Value::as_bool).unwrap_or(false);
                         if widgets::checkbox(ui, &mut b, label).changed() {

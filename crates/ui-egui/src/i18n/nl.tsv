@@ -3875,6 +3875,12 @@ curves	Smooth	Vloeiend maken
 	Remove after each stroke	Verwijderen na elke streek
 	Apply the removal ({key})	Verwijdering toepassen ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Streken om te verwijderen: {n} (Enter past toe, Esc annuleert)
+	Load Contours…	Contouren laden…
+	Replace Contours…	Contouren vervangen…
+	Save Contours…	Contouren opslaan…
+	Delete Contour	Contour verwijderen
+	Loaded contours from {file}	Contouren geladen uit {file}
+	Saved contours to {file}	Contouren opgeslagen in {file}
 	Show home recent files	Recente bestanden tonen op het startscherm
 	Clear Brush Controls	Penseelbesturing wissen
 	Reset All Locked Settings	Alle vergrendelde instellingen opnieuw instellen

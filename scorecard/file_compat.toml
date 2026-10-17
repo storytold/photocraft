@@ -108,7 +108,7 @@ id = "FILE-215-15"
 target = "Layer Style contour picker, curve editor, presets, .shc import/export"
 status = "partial"
 issue = 2912
-note = "Layer Style dialog: contour thumbnail + preset picker (12 standard shapes, own control points) and Anti-aliased on Drop/Inner Shadow, Outer/Inner Glow, Satin, Bevel Gloss Contour and Contour element; Contour Editor (add/drag/delete, Corner, Input/Output, Preset, Load…/Save… .shc per Adobe's public spec, psd shc.rs); corner points render (compose contour_curve_lut) and map to PSD Cnty. Missing: a user contour library (New…, picker Load/Save/Replace Contours), Anti-aliased doesn't change the render yet, .shc not yet checked against a Photoshop-written file"
+note = "Layer Style dialog: contour thumbnail + preset picker (12 standard shapes, own control points) and Anti-aliased on Drop/Inner Shadow, Outer/Inner Glow, Satin, Bevel Gloss Contour and Contour element; Contour Editor (add/drag/delete, Corner, Input/Output, Preset, Load…/Save… .shc per Adobe's public spec, psd shc.rs); corner points render (compose contour_curve_lut) and map to PSD Cnty. User contour library: Contour Editor New… saves the curve under a name (layer.layerStyle.contours.new/list/delete/load/save, kept with the preferences), the picker lists user contours after the standard ones and has Load/Replace/Save Contours… (.shc). Missing: Anti-aliased doesn't change the render yet, .shc not yet checked against a Photoshop-written file"
 
 [[item]]
 id = "FILE-215-16"
