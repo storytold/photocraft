@@ -978,7 +978,15 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
     painter.circle_filled(handle, 3.0, accent);
 }
 
-/// Work path / active shape path outlines, anchors, and the pen path in progress.
+/// The saved path selected in the Paths panel: Photoshop's target path, drawn on the canvas with
+/// any tool (#6550). `None` when the panel selects the work path, a layer's path or nothing.
+pub(crate) fn selected_saved_path(app: &PhotocraftApp) -> Option<&Path> {
+    let sel = app.ui.selected_path.as_deref().filter(|s| !matches!(*s, "work" | "layer"))?;
+    app.session.active()?.doc.paths.iter().find(|p| p.name == sel).map(|p| &p.path)
+}
+
+/// Work path / active shape path / selected saved path outlines, anchors, and the pen path in
+/// progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
@@ -998,6 +1006,10 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
         if paths {
+            // The selected saved path shows too, though Direct Selection doesn't edit it yet.
+            if let Some(p) = selected_saved_path(app) {
+                draw_path(p, true);
+            }
             crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
         }
     } else if paths {
@@ -1005,6 +1017,10 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         // Selection has its own overlay above.
         if let Some(wp) = &doc.work_path {
             draw_path(wp, tool == Tool::PathSelection);
+        }
+        // The saved path selected in the Paths panel is the target path (#6550).
+        if let Some(p) = selected_saved_path(app) {
+            draw_path(p, tool == Tool::PathSelection);
         }
         let st = app.session.active();
         if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
@@ -2070,6 +2086,44 @@ mod tests {
         app.ui.pen = Some(PenPath { knots: vec![[[20.0, 20.0]; 3], [[60.0, 40.0]; 3]], ..Default::default() });
         toggle(&mut app, "view.show.targetPath");
         assert!(overlay_shapes(&app, &ctx) > 0, "the pen path in progress is still drawn");
+    }
+
+    #[test]
+    fn the_saved_path_selected_in_the_paths_panel_is_drawn() {
+        // #6550: selecting a saved path in the Paths panel drew nothing on the canvas.
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let tri = |o: f64| {
+            json!({"subpaths": [{"closed": true, "knots": [
+                {"anchor": [20.0 + o, 20], "in": [20.0 + o, 20], "out": [20.0 + o, 20]},
+                {"anchor": [90.0 + o, 20], "in": [90.0 + o, 20], "out": [90.0 + o, 20]},
+                {"anchor": [90.0 + o, 90], "in": [90.0 + o, 90], "out": [90.0 + o, 90]}
+            ]}]})
+        };
+        app.run("path.set", json!({"name": "Path 1", "path": tri(0.0)})).unwrap();
+        app.run("path.set", json!({"name": "Path 2", "path": tri(10.0)})).unwrap();
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+        for tool in [Tool::Move, Tool::Brush, Tool::Pen, Tool::PathSelection, Tool::DirectSelection] {
+            app.ui.tool = tool;
+            app.ui.selected_path = None;
+            assert_eq!(overlay_shapes(&app, &ctx), 0, "{tool:?}: nothing selected, nothing drawn");
+            app.ui.selected_path = Some("Path 1".into());
+            assert_eq!(selected_saved_path(&app).map(|p| p.subpaths[0].knots[0].anchor.x), Some(20.0));
+            assert!(overlay_shapes(&app, &ctx) > 0, "{tool:?}: the selected saved path is drawn");
+            app.ui.selected_path = Some("Path 2".into());
+            assert_eq!(selected_saved_path(&app).map(|p| p.subpaths[0].knots[0].anchor.x), Some(30.0));
+            app.ui.selected_path = Some("Gone".into());
+            assert_eq!(overlay_shapes(&app, &ctx), 0, "{tool:?}: a missing path draws nothing");
+            app.ui.selected_path = Some("Path 1".into());
+            app.ui.view.show.target_path = false;
+            assert_eq!(overlay_shapes(&app, &ctx), 0, "{tool:?}: View > Show > Target Path off");
+            app.ui.view.show.target_path = true;
+        }
+        // Path Selection adds its anchor squares (the outline plus three anchors, two shapes each).
+        app.ui.tool = Tool::Move;
+        let plain = overlay_shapes(&app, &ctx);
+        app.ui.tool = Tool::PathSelection;
+        assert!(overlay_shapes(&app, &ctx) > plain);
     }
 
     #[test]
