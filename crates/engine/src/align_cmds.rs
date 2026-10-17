@@ -178,13 +178,21 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc: std::sync::Arc<Document> = st.doc.clone();
-    let mut area = Rect::EMPTY;
+    let mut union = Rect::EMPTY;
+    let mut content_px = 0u64;
+    let px_of = |r: &Rect| u64::from(r.width()) * u64::from(r.height());
     for id in &ids {
         if let Some(b) = doc.layer(*id).and_then(|l| l.surface()).map(|s| s.content_bounds()) {
-            area = area.union(&b);
+            union = union.union(&b);
+            content_px = content_px.saturating_add(px_of(&b));
         }
     }
-    let area = area.intersect(&doc.bounds());
+    // The whole layers, past the canvas too (#5745): Auto-Align leaves a panorama's layers
+    // partly off the canvas, and Photoshop masks and blends all of each layer, so Reveal All
+    // shows the whole panorama and the seams know where each layer really extends the picture.
+    // Layers so far apart that their bounds are mostly empty keep to the canvas.
+    let canvas = doc.bounds();
+    let area = if px_of(&union) <= content_px.max(px_of(&canvas)).saturating_mul(2) { union } else { union.intersect(&canvas) };
     if area.is_empty() {
         return Err(EngineError::Other("the selected layers are empty".into()));
     }
@@ -225,7 +233,9 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         let surfs: Vec<Surface> =
             ids.iter().map(|id| doc.layer(*id).and_then(|l| l.surface()).cloned().ok_or(EngineError::NoLayer(*id))).collect::<Result<_>>()?;
         let order = seam_order(&surfs, 0);
-        let b = seam_blend(&surfs, area, &order, seamless, false, None);
+        // Seamless Tones and Colors also evens out exposure and colour between the layers (gain
+        // compensation over their overlaps), as in Photomerge.
+        let b = seam_blend(&surfs, area, &order, seamless, seamless, None);
         let weights: Vec<Vec<f32>> = b.layers.iter().map(|(_, m)| m.read_region(area)).collect();
         let blended = seamless.then(|| b.composite.read_region(area));
         (weights, blended)
@@ -258,6 +268,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let label = "Auto-Blend Layers";
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (id, wt) in ids.iter().zip(&weights) {
+            // The Background can't have a mask: it becomes a normal layer first, as in Photoshop.
+            crate::extra_cmds::background_to_layer_for_mask(doc, *id);
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
             mask.surface.write_region(area, wt);
@@ -415,6 +427,57 @@ mod tests {
             assert!((px[2] - 0.8).abs() < 0.02, "{px:?}");
             s.undo();
             assert!(s.active().unwrap().doc.layer(left).unwrap().mask.is_none());
+        }
+    }
+
+    /// #5745: two photos in one document, the second moved by Auto-Align so it hangs off the
+    /// canvas's right edge, 10% brighter. The bottom (the Background) covers the whole canvas,
+    /// so cropped to the canvas the top layer was all overlap: it got an all-black mask and the
+    /// picture didn't change. Now the top layer shows on its side of the seam, off the canvas
+    /// too, and Seamless Tones and Colors evens out the exposure.
+    #[test]
+    fn auto_blend_panorama_of_a_layer_hanging_off_the_canvas() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 200, "height": 60, "depth": depth, "background": "white"})).unwrap();
+            let bg = s.active().unwrap().doc.background().unwrap().id;
+            // The same scene in both layers, so they agree where they overlap (x 120..200).
+            let scene = |x: i32, gain: f32| [(0.2 + 0.6 * x as f32 / 320.0) * gain, 0.4 * gain, 0.5 * gain, 1.0];
+            s.edit("left", |doc, _| {
+                let surf = doc.layer_mut(bg).unwrap().surface_mut().unwrap();
+                for x in 0..200 {
+                    surf.fill_rect(Rect::new(x, 0, x + 1, 60), &scene(x, 1.0));
+                }
+                Ok(())
+            })
+            .unwrap();
+            s.execute("layer.new.layer", json!({"name": "right"})).unwrap();
+            s.edit("right", |doc, active| {
+                let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for x in 120..320 {
+                    surf.fill_rect(Rect::new(x, 0, x + 1, 60), &scene(x, 1.1));
+                }
+                Ok(())
+            })
+            .unwrap();
+            let right = s.active().unwrap().active_layer.unwrap();
+            select(&mut s, &[bg, right]);
+            let r = s.execute("edit.autoBlendLayers", json!({"method": "panorama"})).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert!(!doc.is_background(bg), "depth {depth}: the Background became a layer to take its mask");
+            let ml = doc.layer(bg).unwrap().mask.as_ref().unwrap();
+            let mr = doc.layer(right).unwrap().mask.as_ref().unwrap();
+            assert_eq!((ml.value(10, 30), mr.value(10, 30)), (1.0, 0.0), "depth {depth}");
+            assert_eq!((ml.value(300, 30), mr.value(300, 30)), (0.0, 1.0), "depth {depth}: off the canvas");
+            for x in 0..320 {
+                assert_eq!(ml.value(x, 30) + mr.value(x, 30), 1.0, "depth {depth}: x {x} shows one layer");
+            }
+            // The merged layer covers the off-canvas part too, with the exposures matched: the
+            // flat blue channel reads the same on both sides (0.5 vs 0.55 before).
+            let blended = doc.layer(LayerId(r["blended"].as_u64().unwrap())).unwrap().surface().unwrap();
+            let (a, b) = (blended.pixel(40, 30), blended.pixel(300, 30));
+            assert_eq!(b[3], 1.0, "depth {depth}");
+            assert!((a[2] - b[2]).abs() < 0.015, "depth {depth}: {a:?} {b:?}");
         }
     }
 

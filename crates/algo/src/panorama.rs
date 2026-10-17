@@ -897,11 +897,31 @@ pub fn seam_labels(w: usize, h: usize, luma: &[Vec<f32>], cover: &[Vec<bool>], o
                 label[i] = img as i32;
             }
         }
-        if no == 0 || nn == no {
+        if no == 0 {
             continue;
         }
-        let (ox, oy) = (sx / no as f64, sy / no as f64);
         let (cx, cy) = (nx / nn as f64, ny / nn as f64);
+        let (ox, oy) = if nn == no {
+            // Wholly inside the composite (#5745: two photos in one document, the second moved
+            // by Auto-Align so the canvas crops it to the part over the first). Its side of the
+            // seam is the one it lies towards from the composite's centre; an image centred on
+            // the composite has no side, and the earlier images keep it.
+            let (mut px, mut py, mut pn) = (0.0f64, 0.0f64, 0usize);
+            for (i, l) in label.iter().enumerate() {
+                if *l >= 0 {
+                    px += (i % w) as f64;
+                    py += (i / w) as f64;
+                    pn += 1;
+                }
+            }
+            let (px, py) = (px / pn.max(1) as f64, py / pn.max(1) as f64);
+            if (cx - px).abs() < 0.5 && (cy - py).abs() < 0.5 {
+                continue;
+            }
+            (px, py)
+        } else {
+            (sx / no as f64, sy / no as f64)
+        };
         let vertical = (cx - ox).abs() >= (cy - oy).abs();
         // Image on the increasing side along the seam's cross axis?
         let positive = if vertical { cx > ox } else { cy > oy };
@@ -1540,6 +1560,30 @@ mod tests {
         let max_jump = row.windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0f32, f32::max);
         assert!(max_jump < 0.1, "max step {max_jump}");
         assert!(cov.iter().all(|c| *c == 1.0));
+    }
+
+    #[test]
+    fn an_image_wholly_inside_the_composite_still_gets_its_side() {
+        // #5745: the first image covers the whole 120×40 grid, the second only its right part
+        // (x ≥ 70), all of it overlap. It used to be skipped, so the first image kept everything.
+        let (w, h) = (120usize, 40usize);
+        let luma = vec![vec![0.5f32; w * h], vec![0.5f32; w * h]];
+        let cover: Vec<Vec<bool>> = vec![vec![true; w * h], (0..w * h).map(|i| i % w >= 70).collect()];
+        let labels = seam_labels(w, h, &luma, &cover, &[0, 1]);
+        for y in 0..h {
+            assert_eq!(labels[y * w + 5], 0, "row {y}");
+            assert_eq!(labels[y * w + w - 1], 1, "row {y}");
+            // The second image's region is one run at the right of its seam.
+            let row = &labels[y * w..(y + 1) * w];
+            let first = row.iter().position(|l| *l == 1).unwrap();
+            assert!(first >= 70 && row[first..].iter().all(|l| *l == 1), "row {y}: {row:?}");
+        }
+        // An image centred on the composite has no side: the first image keeps the overlap.
+        let centred: Vec<Vec<bool>> = vec![vec![true; w * h], (0..w * h).map(|i| (20..100).contains(&(i % w))).collect()];
+        assert!(seam_labels(w, h, &luma, &centred, &[0, 1]).iter().all(|l| *l == 0));
+        // Two images covering the same cells, likewise.
+        let same = vec![vec![true; w * h]; 2];
+        assert!(seam_labels(w, h, &luma, &same, &[0, 1]).iter().all(|l| *l == 0));
     }
 }
 
