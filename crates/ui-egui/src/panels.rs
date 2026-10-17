@@ -45,12 +45,14 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
 ];
 
 /// The tool a slot shows: the current tool if it belongs to the slot, else the last one used.
+/// Stored persisted so the sub-tool survives a restart (#3569) — otherwise closing and
+/// relaunching with e.g. Paint Bucket active came back on the slot's default Gradient tool.
 fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool {
     if slot.contains(&current) {
-        ui.data_mut(|d| d.insert_temp(key, current));
+        ui.data_mut(|d| d.insert_persisted(key, current));
         return current;
     }
-    ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
+    ui.data_mut(|d| d.get_persisted::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
 }
 
 /// [`TOOL_SECTIONS`] without the tools hidden in Edit › Toolbar (`hidden` holds tool names: the
@@ -5588,6 +5590,45 @@ mod toolbar_tests {
             assert!(!h.state().ui.panels.toolbar_double, "{theme:?}");
             assert_eq!(left(&h), single, "{theme:?}");
         }
+    }
+
+    /// #3569: once a sub-tool was picked from a slot's flyout (Paint Bucket inside the Gradient
+    /// slot, Polygonal Lasso inside the Lasso slot), relaunching the app brought back the slot's
+    /// first tool (Gradient, Lasso) instead of what the user had been using. The sub-tool is now
+    /// written to egui's persisted-data store, so a fresh context with the same data restores it.
+    #[test]
+    fn slot_remembers_its_sub_tool_across_a_restart() {
+        fn render(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        toolbar(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+            h.run_steps(4);
+            h
+        }
+        // 1. Launch, pick Paint Bucket (second tool in the Gradient slot). Rendering writes the
+        //    slot's choice into egui's persisted data store.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = Tool::PaintBucket;
+        let h = render(app);
+        let data = h.ctx.data(|d| d.clone());
+        // 2. Simulate a restart: a fresh app (default tool = Brush) in a fresh context seeded with
+        //    the previous session's persisted data (eframe does this through `ui.ron`).
+        let app2 = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert_ne!(app2.ui.tool, Tool::PaintBucket, "a fresh app starts on the default tool, not Paint Bucket");
+        let mut h2 = render(app2);
+        h2.ctx.data_mut(|d| *d = data);
+        h2.run_steps(4);
+        // 3. The Gradient slot now reports Paint Bucket as its remembered sub-tool.
+        let gradient_slot_index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::PaintBucket)).unwrap();
+        let key = egui::Id::new(("tool-slot", gradient_slot_index));
+        let remembered = h2.ctx.data_mut(|d| d.get_persisted::<Tool>(key));
+        assert_eq!(remembered, Some(Tool::PaintBucket), "the slot restored its last-used sub-tool from persisted data");
     }
 
     fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
