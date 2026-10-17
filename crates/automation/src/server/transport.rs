@@ -1,6 +1,11 @@
 //! Recover malformed JSON lines before passing valid messages to rmcp.
 use super::*;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::time::{Duration, timeout};
+
+/// Inactive MCP stdio processes must not live forever after their client disappears (#3660).
+/// A live client can reconnect/restart the process; clean EOF still closes it immediately.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 use crate::security::MAX_REQUEST_BYTES;
 
@@ -42,12 +47,28 @@ impl PhotocraftMcp {
         input: impl tokio::io::AsyncRead + Unpin + Send + 'static,
         output: impl tokio::io::AsyncWrite + Unpin + Send + 'static,
     ) -> Result<(), AutomationError> {
+        self.serve_io_with_idle(input, output, IDLE_TIMEOUT).await
+    }
+
+    async fn serve_io_with_idle(
+        self,
+        input: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+        output: impl tokio::io::AsyncWrite + Unpin + Send + 'static,
+        idle: Duration,
+    ) -> Result<(), AutomationError> {
         let (mut to_service, service_in) = tokio::io::duplex(1 << 20);
         let (service_out, from_service) = tokio::io::duplex(1 << 20);
         let (errors, mut error_rx) = tokio::sync::mpsc::channel::<String>(16);
         let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(input);
-            while let Some(line) = bounded_line(&mut lines, MAX_REQUEST_BYTES).await? {
+            loop {
+                // EOF may never arrive if a dead client leaves a pipe open. Count time
+                // between incoming requests, not time since the process launched.
+                let line = match timeout(idle, bounded_line(&mut lines, MAX_REQUEST_BYTES)).await {
+                    Ok(Ok(Some(line))) => line,
+                    Ok(Ok(None)) | Err(_) => break,
+                    Ok(Err(error)) => return Err(error),
+                };
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -89,6 +110,73 @@ impl PhotocraftMcp {
         }
         writer.await.map_err(|e| AutomationError::Other(e.to_string()))?.map_err(|e| AutomationError::Io(e.to_string()))?;
         result
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    async fn initialise(client: &mut tokio::io::DuplexStream, replies: &mut tokio::io::Lines<BufReader<tokio::io::DuplexStream>>) {
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}
+        }});
+        client.write_all(format!("{init}\n").as_bytes()).await.unwrap();
+        let reply = timeout(Duration::from_secs(2), replies.next_line()).await.unwrap().unwrap().unwrap();
+        let reply: Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["id"], 1);
+        assert!(reply["result"]["serverInfo"]["name"].is_string(), "{reply}");
+        client.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn orphaned_client_pipe_exits_after_inactivity() {
+        // Keep the client end open: the server cannot depend on stdin EOF to exit.
+        let (mut client, input) = tokio::io::duplex(4096);
+        let (output, responses) = tokio::io::duplex(4096);
+        let server = tokio::spawn(PhotocraftMcp::headless().serve_io_with_idle(input, output, Duration::from_millis(250)));
+        let mut replies = BufReader::new(responses).lines();
+        initialise(&mut client, &mut replies).await;
+        let exit = timeout(Duration::from_secs(3), server).await;
+        assert!(matches!(&exit, Ok(Ok(Ok(())))), "MCP server did not exit cleanly after inactivity: {exit:?}");
+    }
+
+    #[tokio::test]
+    async fn incomplete_request_times_out_without_dispatching_its_valid_prefix() {
+        let (mut client, input) = tokio::io::duplex(4096);
+        let (output, responses) = tokio::io::duplex(4096);
+        let mcp = PhotocraftMcp::headless();
+        let observer = mcp.clone();
+        let server = tokio::spawn(mcp.serve_io_with_idle(input, output, Duration::from_millis(250)));
+        let mut replies = BufReader::new(responses).lines();
+        initialise(&mut client, &mut replies).await;
+        let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"doc_new","arguments":{"width":8,"height":8}}});
+        client.write_all(call.to_string().as_bytes()).await.unwrap();
+        let exit = timeout(Duration::from_secs(3), server).await;
+        assert!(matches!(&exit, Ok(Ok(Ok(())))), "incomplete request did not expire cleanly: {exit:?}");
+        let documents = observer.headless_op(|h| Ok(h.session.documents().len())).await.unwrap().unwrap();
+        assert_eq!(documents, 0, "an incomplete request must not execute at idle timeout");
+    }
+
+    #[tokio::test]
+    async fn incoming_lines_reset_the_idle_deadline() {
+        let (mut client, input) = tokio::io::duplex(4096);
+        let (output, responses) = tokio::io::duplex(4096);
+        let server = tokio::spawn(PhotocraftMcp::headless().serve_io_with_idle(input, output, Duration::from_millis(300)));
+        let mut replies = BufReader::new(responses).lines();
+        initialise(&mut client, &mut replies).await;
+
+        // Even malformed requests count as traffic and still receive a parse error.
+        for _ in 0..3 {
+            client.write_all(b"not-json\n").await.unwrap();
+            let reply = timeout(Duration::from_secs(2), replies.next_line()).await.unwrap().unwrap().unwrap();
+            let reply: Value = serde_json::from_str(&reply).unwrap();
+            assert_eq!(reply["error"]["code"], -32700);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!server.is_finished(), "active transport shut down before its idle deadline");
+        }
+        let exit = timeout(Duration::from_secs(3), server).await;
+        assert!(matches!(&exit, Ok(Ok(Ok(())))), "MCP server did not close after requests stopped: {exit:?}");
     }
 }
 

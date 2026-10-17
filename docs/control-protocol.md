@@ -292,6 +292,14 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 
 ## MCP bridge
 
+An MCP stdio server exits after 30 minutes without an incoming request, even if its
+client leaves stdin open after a crash. Normal client EOF still exits immediately.
+This prevents abandoned `photocraft-cli mcp` processes accumulating forever (#3660).
+Clients that need an indefinitely open session should issue periodic requests and
+restart the MCP process after an idle disconnect. A request that itself takes more
+than 30 minutes can also hit this limit; do not blindly retry edits without checking
+the document state.
+
 `photocraft-automation` provides an MCP server built on the official Rust SDK (`rmcp`). It runs in one of two modes:
 
 - **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window.
