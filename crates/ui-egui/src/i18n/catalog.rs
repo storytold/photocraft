@@ -61,9 +61,12 @@ pub fn parse_entries(text: &str) -> (Vec<Entry>, Vec<String>) {
 }
 
 impl Catalog {
-    pub fn parse(text: &str) -> Catalog {
+    /// Parse a catalog. A right-to-left language's translations are stored in visual order
+    /// (`bidi.rs`) — the order egui draws its runs in — so the lookups read right to left.
+    pub fn parse(text: &str, rtl: bool) -> Catalog {
         let mut c = Catalog::default();
         for (ctx, src, tr) in parse_entries(text).0 {
+            let tr = if rtl { super::bidi::visual_rtl(&tr) } else { tr };
             match ctx.as_str() {
                 "" => {
                     c.plain.insert(src, tr);
