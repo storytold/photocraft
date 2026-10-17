@@ -279,6 +279,40 @@ jobs:
           cargo nextest run --profile ci --workspace --locked --features heif --lib --bins --tests
           -E 'package(photocraft-text) | package(photocraft-io) | package(photocraft-ui-egui)'
 
+  # Keep clipboard regressions runnable when an unrelated workspace test fails.
+  clipboard:
+    name: clipboard regressions (${{ matrix.os }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Linux system dependencies (egui/winit/rfd)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: test
+          save-if: false
+      - name: Clipboard state and regression tests
+        run: cargo test -p photocraft-ui-egui --locked --lib 'clipboard_tests::'
+      - name: Native Windows clipboard contention
+        if: runner.os == 'Windows'
+        run: cargo test -p photocraft --locked --bin photocraft services::tests::busy_native_clipboard_preserves_copied_shape -- --ignored --exact --test-threads=1
+
   corpus:
     timeout-minutes: 30
     # Real-file corpus tests (cargo feature `corpus`), on every PR and on main. The corpora are

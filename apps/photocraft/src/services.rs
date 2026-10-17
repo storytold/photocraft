@@ -538,23 +538,35 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         clipboard_get_image: Some({
             let clip = clip.clone();
             Box::new(move || {
-                let mut slot = clip.try_borrow_mut().ok()?;
+                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
                 let cb = match slot.as_mut() {
                     Some(c) => c,
-                    None => slot.insert(arboard::Clipboard::new().ok()?),
+                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
                 };
                 // Copied files first: Finder also puts the file's icon on the clipboard as an
                 // image, which would otherwise paste instead of the file.
-                if let Some(img) = cb.get().file_list().ok().and_then(|paths| image_from_files(&paths)) {
-                    return Some(img);
+                match cb.get().file_list() {
+                    Ok(paths) => {
+                        if let Some(img) = image_from_files(&paths) {
+                            return Ok(Some(img));
+                        }
+                    }
+                    Err(error @ arboard::Error::ClipboardOccupied) => return Err(error.to_string()),
+                    Err(_) => {}
                 }
-                if let Ok(img) = cb.get_image() {
-                    return Some((img.width as u32, img.height as u32, img.bytes.into_owned()));
+                match cb.get_image() {
+                    Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
+                    Err(error) => {
+                        #[cfg(target_os = "linux")]
+                        if let Some(image) = wayland_clipboard_image() {
+                            return Ok(Some(image));
+                        }
+                        match error {
+                            arboard::Error::ContentNotAvailable => Ok(None),
+                            _ => Err(error.to_string()),
+                        }
+                    }
                 }
-                #[cfg(target_os = "linux")]
-                return wayland_clipboard_image();
-                #[cfg(not(target_os = "linux"))]
-                None
             })
         }),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
@@ -693,6 +705,57 @@ mod tests {
         }
         // No type picked: the name as typed.
         assert_eq!(with_chosen_type(Path::new("/pics/art.psd"), opened, &[]), PathBuf::from("/pics/art.psd"));
+    }
+
+    /// Regression using the real clipboard on an isolated Windows CI runner.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires exclusive use of the Windows clipboard"]
+    fn busy_native_clipboard_preserves_copied_shape() {
+        for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace"] {
+            let mut native = native(None);
+            let services = Services {
+                clipboard_set_image: native.clipboard_set_image.take(),
+                clipboard_get_image: native.clipboard_get_image.take(),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+            app.run("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+            app.run("edit.copy", json!({})).unwrap();
+            assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+            assert!(app.services.clipboard_get_image.as_mut().unwrap()().unwrap().is_some(), "native export succeeded");
+            app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+
+            // Another thread holds the OS clipboard open beyond arboard's bounded retry window.
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let holder = std::thread::spawn(move || {
+                // A non-null window distinguishes this owner from arboard's null-window opens.
+                let guard = winsafe::HWND::GetDesktopWindow().OpenClipboard().unwrap();
+                ready_tx.send(()).unwrap();
+                release_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+                drop(guard);
+            });
+            ready_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            let contention = arboard::Clipboard::new().unwrap().get_image().err();
+            let first = app.run(id, json!({}));
+            release_tx.send(()).unwrap();
+            holder.join().unwrap();
+            assert!(matches!(contention, Some(arboard::Error::ClipboardOccupied)), "diagnostic must actually occupy the clipboard: {contention:?}");
+            eprintln!("paste while clipboard occupied: {first:?}");
+            assert!(first.is_err(), "report contention rather than a successful no-op");
+            assert!(
+                app.session.clipboard.as_ref().is_some_and(|clip| clip.layers.is_some()),
+                "a temporary OS read failure must not discard the copied editable shape"
+            );
+            app.run(id, json!({})).unwrap();
+            let state = app.session.active().unwrap();
+            assert!(
+                matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Shape(_)),
+                "retry keeps the shape editable"
+            );
+        }
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

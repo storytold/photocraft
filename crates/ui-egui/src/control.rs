@@ -1707,7 +1707,7 @@ mod tests {
         let image = clipboard.clone();
         let mut app = PhotocraftApp::new(
             photocraft_engine::Session::new(),
-            crate::Services { clipboard_get_image: Some(Box::new(move || image.lock().ok()?.clone())), ..Default::default() },
+            crate::Services { clipboard_get_image: Some(Box::new(move || Ok(image.lock().unwrap().clone()))), ..Default::default() },
         );
         let ctx = egui::Context::default();
         let opened = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"newDocument"}));
