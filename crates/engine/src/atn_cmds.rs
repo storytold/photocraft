@@ -2344,7 +2344,13 @@ fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
 fn crop_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     if let Some(t) = get_obj(d, "To  ") {
-        let (Some(top), Some(left), Some(bottom), Some(right)) = (get_num(t, "Top "), get_num(t, "Left"), get_num(t, "Btom"), get_num(t, "Rght")) else {
+        // Pixels only, like Canvas Size: a side in percent or points needs the document's size
+        // or resolution and must not be played as pixels.
+        let side = |k: &str| match t.get(k) {
+            Some(D::UnitFloat { unit: PX, value }) if value.is_finite() => Some(*value),
+            _ => None,
+        };
+        let (Some(top), Some(left), Some(bottom), Some(right)) = (side("Top "), side("Left"), side("Btom"), side("Rght")) else {
             return Mapped::Unsupported { harmless: false };
         };
         p.insert("x".into(), left.round().into());

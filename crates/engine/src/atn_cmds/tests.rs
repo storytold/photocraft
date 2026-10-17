@@ -480,6 +480,20 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
 }
 
 #[test]
+fn crop_sides_in_other_units_are_refused_not_played_as_pixels() {
+    let rect = |unit: [u8; 4]| {
+        let side = |v: f64| D::UnitFloat { unit, value: v };
+        desc("null")
+            .with("To  ", D::Descriptor(desc("Rctn").with("Top ", side(10.0)).with("Left", side(10.0)).with("Btom", side(90.0)).with("Rght", side(90.0))))
+    };
+    for unit in [PCT, *b"#Rlt"] {
+        assert!(matches!(crop_from(&rect(unit)), Mapped::Unsupported { harmless: false }), "{}", String::from_utf8_lossy(&unit));
+    }
+    let Mapped::Steps(steps) = crop_from(&rect(PX)) else { panic!("a crop in pixels maps") };
+    assert_eq!(steps, [("image.crop".to_string(), json!({"x": 10.0, "y": 10.0, "width": 80.0, "height": 80.0}))]);
+}
+
+#[test]
 fn step_commands_and_bad_params_fail_gracefully() {
     let mut s = Session::new();
     for p in [
