@@ -546,6 +546,29 @@ fn mouse_drag_inside_the_selection_moves_it() {
     assert_eq!(selection(&h), Rect::new(120, 90, 220, 170), "moved by (20, 10)");
 }
 
+/// #6290: with a fresh app's View › Snap To, a selection moved through the real canvas snaps its
+/// edges to a guide and the document bounds. Layers' targets were clipped to the selection, so
+/// it snapped back to its own starting edges and centre (shown as layer alignments) instead.
+#[test]
+fn a_moved_selection_snaps_to_guides_and_the_document_not_its_start() {
+    for (to, want) in [
+        // Right edge 3 px left of the guide at x = 200; 3 px down stays put (not back to y = 52).
+        ([145.0, 103.0], Rect::new(100, 55, 200, 105)),
+        // 5 and 7 px from the document's top-left corner (its centre was 3 px off its start).
+        ([53.0, 55.0], Rect::new(0, 0, 100, 50)),
+    ] {
+        let mut h = harness(Tool::RectMarquee);
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 200})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 52, "y": 52, "width": 100, "height": 50})).unwrap();
+        h.run_steps(2);
+        drag_to(&mut h, [100.0, 100.0], to);
+        let up = screen(&h, to[0], to[1]);
+        button(&mut h, up, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert_eq!(selection(&h), want, "dragged to {to:?}");
+    }
+}
+
 /// #5646: the Move tool keeps Photoshop's arrow pointer instead of the 4-way move cursor (the
 /// hover outline still marks the layer under the pointer).
 #[test]

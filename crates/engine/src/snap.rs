@@ -89,10 +89,21 @@ pub fn layer_rect(doc: &Document, id: LayerId) -> Option<[f64; 4]> {
 }
 
 fn rect_of(doc: &Document, l: &photocraft_doc::Layer) -> Option<[f64; 4]> {
-    if l.is_group() || (matches!(l.content, LayerContent::Adjustment(_)) && l.mask.is_none()) {
-        return None;
-    }
-    let b = crate::transform_cmds::transform_bounds(doc, l);
+    snappable(l).then(|| crate::transform_cmds::transform_bounds(doc, l)).and_then(to_rect)
+}
+
+/// Bounds of a layer as a Snap To Layers target: all of its content, whatever the selection
+/// holds of it (#6290: clipped to the selection, every layer's edges and centre were the
+/// selection's, so a moved selection snapped back to where it started).
+fn target_rect_of(l: &photocraft_doc::Layer) -> Option<[f64; 4]> {
+    snappable(l).then(|| crate::transform_cmds::whole_layer_bounds(l)).and_then(to_rect)
+}
+
+fn snappable(l: &photocraft_doc::Layer) -> bool {
+    !(l.is_group() || (matches!(l.content, LayerContent::Adjustment(_)) && l.mask.is_none()))
+}
+
+fn to_rect(b: photocraft_geom::Rect) -> Option<[f64; 4]> {
     (!b.is_empty()).then_some([b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64])
 }
 
@@ -121,7 +132,7 @@ impl SnapTargets {
                 if !l.visible || exclude.contains(&l.id) {
                     continue;
                 }
-                if let Some(r) = rect_of(doc, l) {
+                if let Some(r) = target_rect_of(l) {
                     t.add_rect(r, SnapKind::LayerEdge, SnapKind::LayerCenter);
                 }
             }
@@ -365,6 +376,17 @@ mod tests {
         let t = SnapTargets::from_document(&doc, &SnapOptions { guides: false, ..opts }, &[id]);
         assert!(!t.x.iter().any(|t| t.kind == SnapKind::Guide || (t.kind == SnapKind::LayerEdge && t.pos == 30.0)));
         assert_eq!(layer_rect(&doc, id), Some([10.0, 20.0, 30.0, 60.0]));
+        // #6290: a selection doesn't move the layers' targets onto its own bounds.
+        let mut sel = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        sel.fill_rect(photocraft_geom::Rect::new(64, 66, 124, 86), &[1.0]);
+        doc.selection = Some(sel);
+        let t = SnapTargets::from_document(&doc, &SnapOptions { selection: false, ..opts }, &[]);
+        assert!(t.x.iter().any(|t| t.kind == SnapKind::LayerEdge && t.pos == 30.0));
+        assert!(
+            !t.x.iter()
+                .chain(&t.y)
+                .any(|t| matches!(t.kind, SnapKind::LayerEdge | SnapKind::LayerCenter) && [64.0, 66.0, 76.0, 86.0, 94.0, 124.0].contains(&t.pos))
+        );
         assert_eq!(union([[0.0, 0.0, 1.0, 1.0], [2.0, -1.0, 3.0, 0.5]]), Some([0.0, -1.0, 3.0, 1.0]));
     }
 }
