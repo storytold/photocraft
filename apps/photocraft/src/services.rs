@@ -443,6 +443,135 @@ fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Ve
     })
 }
 
+/// Decode a Windows CF_DIB or CF_DIBV5 clipboard image. DIB has no BMP file header, so add one
+/// before passing the bytes through our bounded image decoder. BITMAPV4/V5 headers carry masks
+/// inline; BITMAPINFOHEADER BI_BITFIELDS masks and optional color tables follow the header.
+/// Some 32-bit BI_RGB producers use the reserved high byte for alpha, so promote it only when
+/// the bytes contain non-trivial alpha.
+#[cfg(any(target_os = "windows", test))]
+fn image_from_cf_dib(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    const MAX_DIB_BYTES: usize = 256 * 1024 * 1024;
+    const FILE_HEADER: usize = 14;
+    const INFO_HEADER_SIZE: usize = 40;
+    const V3_HEADER_SIZE: usize = 56;
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+
+    if dib.len() < INFO_HEADER_SIZE || dib.len() > MAX_DIB_BYTES {
+        return None;
+    }
+    let read_u16 = |offset: usize| -> Option<u16> { Some(u16::from_le_bytes(dib.get(offset..offset.checked_add(2)?)?.try_into().ok()?)) };
+    let read_u32 = |offset: usize| -> Option<u32> { Some(u32::from_le_bytes(dib.get(offset..offset.checked_add(4)?)?.try_into().ok()?)) };
+    let header_size = usize::try_from(read_u32(0)?).ok()?;
+    let width = i32::from_le_bytes(dib.get(4..8)?.try_into().ok()?);
+    let height = i32::from_le_bytes(dib.get(8..12)?.try_into().ok()?);
+    let planes = read_u16(12)?;
+    let bit_count = read_u16(14)?;
+    let compression = read_u32(16)?;
+    if !matches!(header_size, 40 | 52 | 56 | 108 | 124)
+        || header_size > dib.len()
+        || width <= 0
+        || height == 0
+        || planes != 1
+        || !matches!(bit_count, 16 | 24 | 32)
+        || !matches!(compression, BI_RGB | BI_BITFIELDS)
+        || (compression == BI_BITFIELDS && !matches!(bit_count, 16 | 32))
+    {
+        return None;
+    }
+    let (width, rows) = (u32::try_from(width).ok()?, height.unsigned_abs());
+    let row_bytes = usize::try_from(width).ok()?.checked_mul(usize::from(bit_count / 8))?;
+    let stride = row_bytes.checked_add(3)? & !3;
+    let pixel_bytes = stride.checked_mul(usize::try_from(rows).ok()?)?;
+    let colors_used = usize::try_from(read_u32(32)?).ok()?;
+    let external_masks = if compression == BI_BITFIELDS && header_size == INFO_HEADER_SIZE { 12 } else { 0 };
+    let color_table_bytes = colors_used.checked_mul(4)?;
+    let pixel_offset = header_size.checked_add(external_masks)?.checked_add(color_table_bytes)?;
+    let pixel_end = pixel_offset.checked_add(pixel_bytes)?;
+    if pixel_end > dib.len() {
+        return None;
+    }
+
+    let has_v5_alpha = header_size == 124 && bit_count == 32 && read_u32(52)? != 0;
+    let has_alpha = if has_v5_alpha {
+        true
+    } else if bit_count == 32 && compression == BI_RGB && header_size == INFO_HEADER_SIZE {
+        let pixels = dib.get(pixel_offset..pixel_end)?;
+        let (mut saw_nonzero, mut saw_transparent) = (false, false);
+        for row in pixels.chunks_exact(stride) {
+            for pixel in row.get(..row_bytes)?.as_chunks::<4>().0 {
+                let alpha = pixel[3];
+                saw_nonzero |= alpha > 0;
+                saw_transparent |= alpha < 255;
+            }
+        }
+        saw_nonzero && saw_transparent
+    } else {
+        false
+    };
+
+    // CF_DIBV5 can set an explicit alpha mask while still declaring BI_RGB. Normalize that
+    // combination for the BMP decoder and supply the conventional RGB masks when they are absent.
+    let v5_rgb_masks_missing = header_size == 124 && read_u32(40)? == 0 && read_u32(44)? == 0 && read_u32(48)? == 0;
+    let promote_bi_rgb_alpha = bit_count == 32 && compression == BI_RGB && has_alpha && header_size == INFO_HEADER_SIZE;
+    let promoted_header = promote_bi_rgb_alpha;
+    let bitmap_header_size = if promoted_header { V3_HEADER_SIZE } else { header_size };
+    let promoted_mask_bytes = if promoted_header { 16 } else { 0 };
+    let bmp_size = FILE_HEADER.checked_add(dib.len())?.checked_add(promoted_mask_bytes)?;
+    let file_size = u32::try_from(bmp_size).ok()?;
+    let bmp_pixel_offset = u32::try_from(FILE_HEADER.checked_add(bitmap_header_size)?.checked_add(external_masks)?.checked_add(color_table_bytes)?).ok()?;
+
+    let mut bmp = Vec::with_capacity(bmp_size);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&bmp_pixel_offset.to_le_bytes());
+    bmp.extend_from_slice(dib.get(..header_size)?);
+    if promoted_header {
+        bmp.get_mut(FILE_HEADER..FILE_HEADER + 4)?.copy_from_slice(&56u32.to_le_bytes());
+        bmp.get_mut(FILE_HEADER + 16..FILE_HEADER + 20)?.copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+        bmp.extend_from_slice(&0x00ff_0000u32.to_le_bytes());
+        bmp.extend_from_slice(&0x0000_ff00u32.to_le_bytes());
+        bmp.extend_from_slice(&0x0000_00ffu32.to_le_bytes());
+        bmp.extend_from_slice(&0xff00_0000u32.to_le_bytes());
+    } else if has_v5_alpha {
+        bmp.get_mut(FILE_HEADER + 16..FILE_HEADER + 20)?.copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+        if v5_rgb_masks_missing {
+            bmp.get_mut(FILE_HEADER + 40..FILE_HEADER + 44)?.copy_from_slice(&0x00ff_0000u32.to_le_bytes());
+            bmp.get_mut(FILE_HEADER + 44..FILE_HEADER + 48)?.copy_from_slice(&0x0000_ff00u32.to_le_bytes());
+            bmp.get_mut(FILE_HEADER + 48..FILE_HEADER + 52)?.copy_from_slice(&0x0000_00ffu32.to_le_bytes());
+        }
+    }
+    bmp.extend_from_slice(dib.get(header_size..)?);
+
+    let image = photocraft_codecs::decode(&bmp).ok()?;
+    Some((image.width(), image.height(), image.to_rgba8()))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn prefer_image_with_transparency(primary: Option<(u32, u32, Vec<u8>)>, fallback: Option<(u32, u32, Vec<u8>)>) -> Option<(u32, u32, Vec<u8>)> {
+    let fallback_has_alpha = fallback.as_ref().is_some_and(|(_, _, pixels)| pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] < 255));
+    let primary_has_alpha = primary.as_ref().is_some_and(|(_, _, pixels)| pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] < 255));
+    if fallback_has_alpha && !primary_has_alpha { fallback } else { primary.or(fallback) }
+}
+
+#[cfg(target_os = "windows")]
+fn image_from_windows_cf_dib() -> Option<(u32, u32, Vec<u8>)> {
+    let _clipboard = clipboard_win::Clipboard::new().ok()?;
+    for format in [clipboard_win::formats::CF_DIBV5, clipboard_win::formats::CF_DIB] {
+        if !clipboard_win::raw::is_format_avail(format) {
+            continue;
+        }
+        let mut dib = Vec::new();
+        if clipboard_win::raw::get_vec(format, &mut dib).is_ok()
+            && let Some(image) = image_from_cf_dib(&dib)
+        {
+            return Some(image);
+        }
+    }
+    None
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -548,13 +677,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 if let Some(img) = cb.get().file_list().ok().and_then(|paths| image_from_files(&paths)) {
                     return Some(img);
                 }
-                if let Ok(img) = cb.get_image() {
-                    return Some((img.width as u32, img.height as u32, img.bytes.into_owned()));
-                }
+                let image = cb.get_image().ok().map(|img| (img.width as u32, img.height as u32, img.bytes.into_owned()));
+                #[cfg(target_os = "windows")]
+                return prefer_image_with_transparency(image, image_from_windows_cf_dib());
                 #[cfg(target_os = "linux")]
-                return wayland_clipboard_image();
-                #[cfg(not(target_os = "linux"))]
-                None
+                return image.or_else(wayland_clipboard_image);
+                #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+                image
             })
         }),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
@@ -1079,6 +1208,97 @@ mod tests {
         let (w, h, px) = image_from_files(&[png]).unwrap();
         assert_eq!((w, h), (3, 2));
         assert_eq!(px, [255u8, 0, 0, 255].repeat(6));
+    }
+
+    fn dib_header(width: i32, height: i32, bit_count: u16) -> Vec<u8> {
+        let mut dib = vec![0; 40];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&width.to_le_bytes());
+        dib[8..12].copy_from_slice(&height.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&bit_count.to_le_bytes());
+        dib[16..20].copy_from_slice(&0u32.to_le_bytes());
+        dib
+    }
+
+    #[test]
+    fn windows_cf_dib_32_bit_alpha_is_preserved() {
+        let mut dib = dib_header(1, 1, 32);
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 255, 128]); // BGRA, half-transparent red
+
+        let (width, height, rgba) = image_from_cf_dib(&dib).unwrap();
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(rgba, [255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn windows_cf_dib_ignores_unused_zero_alpha_byte() {
+        let mut dib = dib_header(1, 1, 32);
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 255, 0]); // BI_RGB defines this byte as unused
+
+        let (width, height, rgba) = image_from_cf_dib(&dib).unwrap();
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(rgba, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn windows_cf_dib_decodes_24_bit_rows_and_rejects_malformed_data() {
+        let mut dib = dib_header(1, 1, 24);
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 255, 0]); // BGR + row padding
+        assert_eq!(image_from_cf_dib(&dib), Some((1, 1, vec![255, 0, 0, 255])));
+
+        assert!(image_from_cf_dib(&dib[..39]).is_none());
+        let mut compressed = dib;
+        compressed[16..20].copy_from_slice(&1u32.to_le_bytes());
+        assert!(image_from_cf_dib(&compressed).is_none());
+    }
+
+    #[test]
+    fn windows_cf_dib_skips_bitfield_masks_and_declared_color_table() {
+        let mut dib = dib_header(1, 1, 32);
+        dib[16..20].copy_from_slice(&3u32.to_le_bytes()); // BI_BITFIELDS
+        dib[32..36].copy_from_slice(&1u32.to_le_bytes()); // one unused color-table entry
+        dib.extend_from_slice(&0x00ff_0000u32.to_le_bytes());
+        dib.extend_from_slice(&0x0000_ff00u32.to_le_bytes());
+        dib.extend_from_slice(&0x0000_00ffu32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 0, 0]); // declared color table precedes pixels
+        dib.extend_from_slice(&[0, 0, 255, 0]); // BGRX red
+
+        assert_eq!(image_from_cf_dib(&dib), Some((1, 1, vec![255, 0, 0, 255])));
+    }
+
+    #[test]
+    fn windows_cf_dibv5_alpha_mask_is_preserved() {
+        let mut dib = vec![0; 124];
+        dib[0..4].copy_from_slice(&124u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&1i32.to_le_bytes());
+        dib[8..12].copy_from_slice(&1i32.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+        dib[16..20].copy_from_slice(&0u32.to_le_bytes()); // BI_RGB with V5 masks
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        dib[40..44].copy_from_slice(&0x00ff_0000u32.to_le_bytes());
+        dib[44..48].copy_from_slice(&0x0000_ff00u32.to_le_bytes());
+        dib[48..52].copy_from_slice(&0x0000_00ffu32.to_le_bytes());
+        dib[52..56].copy_from_slice(&0xff00_0000u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 255, 128]); // BGRA, half-transparent red
+
+        assert_eq!(image_from_cf_dib(&dib), Some((1, 1, vec![255, 0, 0, 128])));
+    }
+
+    #[test]
+    fn windows_cf_dib_transparency_wins_over_opaque_primary_image() {
+        let primary = Some((1, 1, vec![255, 0, 0, 255]));
+        let dib = Some((1, 1, vec![255, 0, 0, 128]));
+        assert_eq!(prefer_image_with_transparency(primary, dib), Some((1, 1, vec![255, 0, 0, 128])));
+
+        let primary = Some((1, 1, vec![255, 0, 0, 255]));
+        let dib = Some((1, 1, vec![0, 0, 0, 255]));
+        assert_eq!(prefer_image_with_transparency(primary.clone(), dib), primary);
+        assert_eq!(prefer_image_with_transparency(None, Some((1, 1, vec![0, 0, 0, 255]))), Some((1, 1, vec![0, 0, 0, 255])));
     }
 
     #[test]
