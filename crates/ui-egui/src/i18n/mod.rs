@@ -115,6 +115,21 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// Arabic: 0 → zero, 1 → one, 2 → two, 3–10 (mod 100) → few, 11–99 (mod 100) → many,
+/// everything else (100, 101, 102, 200, ...) → other. Six forms, in that order.
+fn plural_arabic(n: u64) -> usize {
+    match n {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => match n % 100 {
+            3..=10 => 3,
+            11..=99 => 4,
+            _ => 5,
+        },
+    }
+}
+
 /// A catalog file as packed by build.rs (`pack_catalogs`; the binary would otherwise carry ~2.2 MB
 /// of translations, which the web build's size gate can't afford). See [`unpack`].
 macro_rules! catalog {
@@ -187,7 +202,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 21] = [
+pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -220,6 +235,9 @@ pub static LANGUAGES: [LangInfo; 21] = [
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Arabic (right-to-left, see `dir_for_code`); `ar`, `ar-EG`, `ar-SA` and other `ar-*` locales
+    // resolve here. It has six plural forms (see `plural_arabic`).
+    LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -586,6 +604,30 @@ mod tests {
         }
         assert_eq!(tr_ctx(hu, "layerLabel", "Red"), "Piros");
         assert_eq!(tr(hu, "Red"), "Vörös");
+    }
+
+    #[test]
+    fn arabic_plural_rule() {
+        let forms: Vec<usize> = [0, 1, 2, 3, 10, 11, 99, 100, 101, 102, 103, 111, 200, 1000].into_iter().map(plural_arabic).collect();
+        assert_eq!(forms, [0, 1, 2, 3, 3, 4, 4, 5, 5, 5, 3, 4, 5, 5]);
+    }
+
+    #[test]
+    fn arabic_resolves_pluralises_and_is_right_to_left() {
+        let ar = Lang::from_code("ar").expect("ar registered");
+        for tag in ["ar", "ar-EG", "ar_SA.UTF-8", "ar-AE"] {
+            assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+        }
+        assert!(ar.complete_menus());
+        assert_eq!(ar.name(), "العربية");
+        assert_eq!(dir_for_code("ar-EG"), Dir::Rtl);
+        assert_eq!(tr(ar, "Layer"), "طبقة");
+        assert_eq!(tr(ar, "All"), "الكل");
+        assert_eq!(tr_id(ar, "select.all", "All"), "تحديد الكل", "an id override wins over the plain label");
+        assert_eq!(tr_ctx(ar, "layerLabel", "Red"), "أحمر");
+        for (n, expected) in [(0, "0 عنصر"), (1, "1 عنصر"), (2, "2 عنصران"), (3, "3 عناصر"), (11, "11 عنصرًا"), (100, "100 عنصر")] {
+            assert_eq!(trn(ar, n, "{n} item", "{n} items"), expected, "{n}");
+        }
     }
 
     #[test]
