@@ -680,6 +680,7 @@ fn edits_mask(id: &str) -> bool {
         || id == "edit.fill"
         // Copying a targeted mask (#2928).
         || id == "edit.copy"
+        || id == "image.applyImage"
         || crate::fill_key_cmds::IDS.contains(&id)
 }
 
@@ -1669,11 +1670,12 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let area = doc.bounds();
         let selection = doc.selection.as_ref().map(|m| sel::mask_from_surface(Some(m), area));
         let weight = |i: usize| opacity * mask.as_ref().map_or(1.0, |m| m[i]) * selection.as_ref().map_or(1.0, |m| m[i]);
-        if is_channel_target(p) {
+        if is_channel_target(p) || target_of(p) == Target::Mask {
             // A grayscale target gets the luminosity of a colour source (one plane).
             let srcp =
                 if src.len() == 1 { src[0].clone() } else { (0..src[0].len()).map(|i| src.iter().map(|pl| pl[i]).sum::<f32>() / src.len() as f32).collect() };
-            let (surf, _) = target_surface(doc, None, p)?;
+            let (surf, _) = target_surface(doc, layer, p)?;
+            materialize(surf, area);
             let base = read_plane(surf, area);
             let out: Vec<f32> = base.iter().enumerate().map(|(i, &b)| b + (blending.apply(b, srcp[i]) - b) * weight(i)).collect();
             *surf = plane_surface(&out, area, surf.format());
@@ -1956,6 +1958,9 @@ fn has_apply_target(s: &Session) -> std::result::Result<(), String> {
     }
     let d = s.active().ok_or("no document open")?;
     let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    if d.channel_view.target == ChannelTarget::LayerMask && l.mask.is_some() {
+        return Ok(());
+    }
     if matches!(l.content, LayerContent::Raster(_)) {
         Ok(())
     } else {

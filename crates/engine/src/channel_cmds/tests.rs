@@ -593,6 +593,22 @@ fn apply_image_into_alpha_channel() {
 }
 
 #[test]
+fn apply_image_with_layer_mask_targeted_updates_mask_not_layer_pixels() {
+    let mut s = session();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    s.execute("image.applyImage", json!({"source": {"channel": "composite"}, "blending": "normal"})).unwrap();
+
+    let p = px(&s, 3, 3);
+    assert!((p[0] - 1.0).abs() < 0.003 && p[1].abs() < 0.003 && p[2].abs() < 0.003, "layer pixels stay red: {p:?}");
+
+    let d = s.active().unwrap();
+    let mask_val = d.doc.layer(d.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(3, 3, 0);
+    assert!((mask_val - 0.299).abs() < 0.02, "mask was written with composite: {mask_val}");
+}
+
+#[test]
 fn calculations_results() {
     let mut s = session();
     rect(&mut s, 0, 0, 20, 20, "replace");
