@@ -989,7 +989,8 @@ impl Surface {
 
     /// Composite-friendly RGBA read (converts from the surface's model).
     pub fn rgba(&self, x: i32, y: i32) -> [f32; 4] {
-        let p = self.pixel(x, y);
+        let mut p = [0.0f32; 5];
+        self.read_pixel(x, y, &mut p);
         to_rgba(&self.format, &p)
     }
 }

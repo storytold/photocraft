@@ -175,6 +175,33 @@ pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
     SOURCE_CACHE.lock().ok().and_then(|c| c.iter().find(|e| e.key == key).map(|e| e.decodes)).unwrap_or(0)
 }
 
+pub(crate) fn take_caches(layers: &mut [Layer]) -> Vec<(LayerId, Surface)> {
+    let mut out = Vec::new();
+    for l in layers {
+        match &mut l.content {
+            LayerContent::Smart(sm) => out.extend(sm.cache.take().map(|c| (l.id, c))),
+            LayerContent::Group(g) => out.extend(take_caches(&mut g.children)),
+            _ => {}
+        }
+    }
+    out
+}
+
+pub(crate) fn restore_unrendered<E>(
+    doc: &mut Document,
+    taken: Vec<(LayerId, Surface)>,
+    mut fallback: impl FnMut(&Surface) -> std::result::Result<Surface, E>,
+) -> std::result::Result<(), E> {
+    for (id, cache) in taken {
+        if let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content)
+            && sm.cache.is_none()
+        {
+            sm.cache = Some(fallback(&cache)?);
+        }
+    }
+    Ok(())
+}
+
 fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surface {
     let n = fmt.channels();
     let mut data = vec![0.0f32; buf.px.len() * n];

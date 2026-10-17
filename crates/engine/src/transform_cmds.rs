@@ -679,13 +679,17 @@ fn transform_doc(
     // Photoshop turns the Background into a normal layer before transforming it.
     crate::extra_cmds::background_to_layer(doc, id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    transform_layer_with(if is_group { None } else { sel.as_ref() }, group, l, h, affine, interp, ctl)?;
+    let layer_sel = if is_group { None } else { sel.as_ref() };
+    check_layer_budget(layer_sel, l, h)?;
+    let taken = if h.is_identity() { Vec::new() } else { crate::smart_cmds::take_caches(std::slice::from_mut(l)) };
+    apply_transform(layer_sel, group, l, h, affine, interp, ctl)?;
     if !h.is_identity() {
         // Type layers re-render from their new transform.
         let snapshot = doc.clone();
         if let Some(l) = doc.layer_mut(id) {
             refresh_text(&snapshot, l);
         }
+        crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
             doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
