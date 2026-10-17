@@ -8,7 +8,9 @@ use exr::prelude::{
     WritableImage,
 };
 use photocraft_codecs::f16;
-use photocraft_codecs::{ChannelLayout, DecodeOptions, DecodeWarning, Format, Limits, SampleType, decode, decode_as_with, decode_exr_part, exr_info};
+use photocraft_codecs::{
+    ChannelLayout, DecodeOptions, DecodeWarning, Format, Limits, SampleType, decode, decode_as_with, decode_exr_part, exr_info, probe_size,
+};
 
 fn layer_f32(name: &str, comp: Compression, chans: &[(&str, Vec<f32>)]) -> Layer<AnyChannels<FlatSamples>> {
     let n = chans.iter().find(|(_, v)| !v.is_empty()).map_or(0, |(_, v)| v.len());
@@ -225,4 +227,108 @@ fn decoding_one_part_does_not_decode_the_others() {
     let img = decode_exr_part(&bytes, 1, &DecodeOptions::default()).expect("part 1 decodes on its own");
     assert_eq!((img.width(), img.height()), (4, 4));
     assert!(img.to_normalized().iter().all(|v| near(*v, 0.75)), "wrong pixels");
+}
+
+fn channel_group_file(channels: &[(&str, f32)]) -> Vec<u8> {
+    let channels: Vec<_> = channels.iter().map(|(name, value)| (*name, vec![*value; 4])).collect();
+    write_image(vec![layer_f32("groups", Compression::ZIP1, &channels)])
+}
+
+fn assert_channel_group(bytes: &[u8], layout: ChannelLayout, expected: &[f32]) {
+    assert_eq!(exr_info(bytes, &Limits::default()).unwrap()[0].color_rank(), expected.len() as u8);
+    assert_eq!(probe_size(bytes).unwrap(), (2, 2));
+    for img in [decode(bytes).unwrap(), decode_exr_part(bytes, 0, &DecodeOptions::default()).unwrap()] {
+        assert_eq!(img.layout(), layout);
+        assert_eq!(img.to_normalized(), expected.repeat(4));
+    }
+}
+
+#[test]
+fn flat_decode_keeps_rgb_channels_in_one_group() {
+    // A partial group sorts before the nested beauty layer, but cannot donate its R.
+    let bytes = channel_group_file(&[("aaa.R", 9.0), ("beauty.diffuse.R", 0.25), ("beauty.diffuse.G", 0.5), ("beauty.diffuse.B", 2.0)]);
+    assert_channel_group(&bytes, ChannelLayout::Rgb, &[0.25, 0.5, 2.0]);
+}
+
+#[test]
+fn flat_decode_does_not_borrow_another_groups_alpha() {
+    for alpha in ["A", "aaa.A", "beauty.other.A"] {
+        let bytes = channel_group_file(&[(alpha, 0.125), ("beauty.R", 0.25), ("beauty.G", 0.5), ("beauty.B", 2.0)]);
+        assert_channel_group(&bytes, ChannelLayout::Rgb, &[0.25, 0.5, 2.0]);
+        let bytes = channel_group_file(&[(alpha, 0.125), ("beauty.Y", 0.5)]);
+        assert_channel_group(&bytes, ChannelLayout::Gray, &[0.5]);
+    }
+}
+
+#[test]
+fn flat_decode_rejects_rgb_split_between_groups() {
+    for channels in [
+        [("aaa.R", 0.25), ("bbb.G", 0.5), ("ccc.B", 2.0)],
+        [("beauty.R", 0.25), ("beauty.diffuse.G", 0.5), ("beauty.diffuse.B", 2.0)],
+        [(".R", 0.25), ("G", 0.5), ("B", 2.0)],
+    ] {
+        let bytes = channel_group_file(&channels);
+        assert_eq!(exr_info(&bytes, &Limits::default()).unwrap()[0].color_rank(), 0);
+        assert!(probe_size(&bytes).is_err());
+        assert!(decode(&bytes).is_err());
+        assert!(decode_exr_part(&bytes, 0, &DecodeOptions::default()).is_err());
+    }
+}
+
+#[test]
+fn auto_pick_and_probe_skip_incoherent_rgb_parts() {
+    let bytes = write_image(vec![
+        layer_f32("split", Compression::ZIP1, &[("aaa.R", vec![9.0; 4]), ("bbb.G", vec![8.0; 4]), ("ccc.B", vec![7.0; 4])]),
+        layer_f32("luminance", Compression::ZIP1, &[("Y", vec![0.5; 16]), ("A", vec![0.75; 16])]),
+    ]);
+    let parts = exr_info(&bytes, &Limits::default()).unwrap();
+    assert_eq!(parts.iter().map(|part| part.color_rank()).collect::<Vec<_>>(), [0, 2]);
+    assert_eq!(probe_size(&bytes).unwrap(), (4, 4));
+    let img = decode(&bytes).unwrap();
+    assert_eq!((img.width(), img.height(), img.layout()), (4, 4, ChannelLayout::GrayA));
+    assert_eq!(img.to_f32_samples().unwrap(), [0.5, 0.75].repeat(16));
+}
+
+#[test]
+fn flat_decode_prefers_the_highest_ranked_complete_group() {
+    let bytes =
+        channel_group_file(&[("aaa.R", 9.0), ("aaa.G", 8.0), ("aaa.B", 7.0), ("beauty.R", 0.25), ("beauty.G", 0.5), ("beauty.B", 2.0), ("beauty.A", 0.75)]);
+    assert_channel_group(&bytes, ChannelLayout::Rgba, &[0.25, 0.5, 2.0, 0.75]);
+    let bytes = channel_group_file(&[("aaa.Y", 9.0), ("beauty.Y", 0.5), ("beauty.A", 0.75)]);
+    assert_channel_group(&bytes, ChannelLayout::GrayA, &[0.5, 0.75]);
+}
+
+#[test]
+fn flat_decode_breaks_group_ties_by_prefix() {
+    let bytes = channel_group_file(&[("z.R", 9.0), ("z.G", 8.0), ("z.B", 7.0), ("beauty.R", 0.25), ("beauty.G", 0.5), ("beauty.B", 2.0)]);
+    assert_channel_group(&bytes, ChannelLayout::Rgb, &[0.25, 0.5, 2.0]);
+    // Even a prefix that sorts before the unprefixed channel names loses a rank tie.
+    let bytes = channel_group_file(&[("0.R", 9.0), ("0.G", 8.0), ("0.B", 7.0), ("R", 0.25), ("G", 0.5), ("B", 2.0)]);
+    assert_channel_group(&bytes, ChannelLayout::Rgb, &[0.25, 0.5, 2.0]);
+}
+
+#[test]
+fn flat_decode_preserves_luminance_and_lone_channel_fallbacks() {
+    for prefix in ["", "beauty."] {
+        let y = format!("{prefix}Y");
+        let a = format!("{prefix}A");
+        assert_channel_group(&channel_group_file(&[(&y, 2.0), (&a, 0.75)]), ChannelLayout::GrayA, &[2.0, 0.75]);
+        assert_channel_group(&channel_group_file(&[(&y, 2.0)]), ChannelLayout::Gray, &[2.0]);
+    }
+    for name in ["depth.Z", "A", "beauty.A"] {
+        // A lone alpha is one grayscale channel, not the same samples duplicated as YA.
+        assert_channel_group(&channel_group_file(&[(name, 9.0)]), ChannelLayout::Gray, &[9.0]);
+    }
+}
+
+#[test]
+fn half_float_group_does_not_use_unrelated_float_channels() {
+    let mut layer = layer_f32("mixed", Compression::ZIP1, &[("aaa.R", vec![9.0; 4]), ("aaa.A", vec![0.125; 4])]);
+    for (name, value) in [("beauty.R", 0.25), ("beauty.G", 0.5), ("beauty.B", 2.0), ("beauty.A", 0.75)] {
+        layer.channel_data.list.push(AnyChannel::new(name, FlatSamples::F16(vec![f16::from_f32(value); 4])));
+    }
+    layer.channel_data = AnyChannels::sort(layer.channel_data.list);
+    let bytes = write_image(vec![layer]);
+    assert_channel_group(&bytes, ChannelLayout::Rgba, &[0.25, 0.5, 2.0, 0.75]);
+    assert_eq!(decode(&bytes).unwrap().sample_type(), SampleType::F16);
 }
