@@ -593,6 +593,25 @@ fn apply_image_into_alpha_channel() {
 }
 
 #[test]
+fn apply_image_into_targeted_layer_mask_leaves_the_pixels() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    // The green channel of the red composite is black: it lands in the mask, not the layer.
+    s.execute("image.applyImage", json!({"source": {"channel": "green"}, "blending": "normal"})).unwrap();
+    let d = s.active().unwrap();
+    let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    let m = &l.mask.as_ref().unwrap().surface;
+    assert!(m.sample_channel(3, 3, 0) < 0.01, "mask {}", m.sample_channel(3, 3, 0));
+    // Outside the canvas the mask keeps revealing.
+    assert!(m.sample_channel(-5, -5, 0) > 0.99, "mask outside {}", m.sample_channel(-5, -5, 0));
+    let p = px(&s, 3, 3);
+    assert!(p[0] > 0.99 && p[1] < 0.01 && p[2] < 0.01 && p[3] > 0.99, "layer pixels {p:?}");
+}
+
+#[test]
 fn calculations_results() {
     let mut s = session();
     rect(&mut s, 0, 0, 20, 20, "replace");
