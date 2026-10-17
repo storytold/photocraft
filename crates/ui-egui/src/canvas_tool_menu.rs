@@ -179,18 +179,17 @@ pub fn cycle_canvas_color(app: &mut PhotocraftApp, backward: bool) -> Result<(),
     app.run("prefs.set", json!({"values": {"interface.canvasColor": name}})).map(|_| ())
 }
 
-/// The Zoom and Hand tools' context menu: the zoom steps and fixed zooms of the View menu, plus
-/// the Hand tool's Fill Screen.
+/// The Zoom and Hand tools' context menu: the fixed zooms of the View menu (plus the Hand tool's
+/// Fill Screen), then the zoom steps last, in Photoshop's order (#6005).
 pub const VIEW_MENU: &[Row] = &[
-    Some(("Zoom In", "view.zoomIn")),
-    Some(("Zoom Out", "view.zoomOut")),
-    None,
     Some(("Fit on Screen", "view.fitOnScreen")),
     Some(("Fill Screen", FILL_SCREEN)),
-    None,
     Some(("100%", "view.actualPixels")),
     Some(("200%", "view.twoHundredPercent")),
     Some(("Print Size", "view.printSize")),
+    None,
+    Some(("Zoom In", "view.zoomIn")),
+    Some(("Zoom Out", "view.zoomOut")),
 ];
 
 /// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
@@ -1307,11 +1306,13 @@ mod tests {
         assert_eq!(app.session.journal.len(), before);
     }
 
+    /// Photoshop's Zoom tool menu is Fit on Screen, 100%, 200%, Print Size, then Zoom In and Zoom
+    /// Out after a separator (#6005); Fill Screen (the Hand tool's) keeps its place by Fit on Screen.
     #[test]
     fn view_menu_follows_photoshop_order() {
         assert_eq!(
             labels(VIEW_MENU),
-            vec![Some("Zoom In"), Some("Zoom Out"), None, Some("Fit on Screen"), Some("Fill Screen"), None, Some("100%"), Some("200%"), Some("Print Size")]
+            vec![Some("Fit on Screen"), Some("Fill Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]
         );
         // Every row but Fill Screen (the Hand tool's options-bar button) is a View menu command.
         let app = app();

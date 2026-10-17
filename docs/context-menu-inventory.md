@@ -21,7 +21,7 @@ The shared rule is **Command/Ctrl + right-click** on opaque document pixels → 
 | Type | No plain secondary action | Command/Ctrl opens layer list | Test text edit versus non-edit context, spelling, type options, and selection behavior. |
 | Pen, Path Selection | No plain secondary action | Command/Ctrl opens layer list | High-priority path-point context contract: add/delete/convert point, close path, make selection, fill/stroke path, path operations when applicable. |
 | Rectangle, Ellipse Shape, Triangle, Polygon, Line, Custom Shape | No plain secondary action | Command/Ctrl opens layer list | Define shape versus path context, point edit, fill/stroke, and transform entries. |
-| Hand, Zoom | View menu: Zoom In, Zoom Out, Fit on Screen, Fill Screen, 100%, 200%, Print Size (`canvas_tool_menu.rs`, #3242) | Command/Ctrl opens layer list | Confirm the row order against a dated Photoshop capture. |
+| Hand, Zoom | View menu: Fit on Screen, Fill Screen, 100%, 200%, Print Size, separator, Zoom In, Zoom Out (`canvas_tool_menu.rs`, #3242, #6005) | Command/Ctrl opens layer list | Confirm the row order against a dated Photoshop capture. |
 
 Canvas invariant: secondary click must not accidentally start a paint stroke, commit a crop, or edit the document; every mutating menu action dispatches a command. Escape/outside click closes a popup. Existing `ui.pointer` supports a secondary button; UI tests should exercise both native and control-driven gestures.
 
