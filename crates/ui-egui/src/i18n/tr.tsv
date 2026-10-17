@@ -2019,6 +2019,8 @@
 	Collapse	Daralt
 	Collapse All Groups	Tüm Grupları Daralt
 	Collapse Panel Group	Panel Grubunu Daralt
+	Collapse to Icons	Simgelere Daralt
+	Expand Panels	Panelleri Genişlet
 	Collapse group  ({key}-click: all groups)	Grubu daralt ({key}-tıklama: tüm gruplar)
 	Create new brush from the current settings	Mevcut ayarlardan yeni fırça oluştur
 	Create new brush from these settings	Bu ayarlardan yeni fırça oluşturun

@@ -79,6 +79,7 @@ pub mod disk_change_prompt;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
+pub mod dock_icons;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod egui_fonts;

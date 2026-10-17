@@ -2076,6 +2076,8 @@
 	Collapse	折りたたむ
 	Collapse All Groups	すべてのグループを折りたたむ
 	Collapse Panel Group	パネルグループを折りたたむ
+	Collapse to Icons	アイコンに折りたたみ
+	Expand Panels	パネルを展開
 	Collapse group  ({key}-click: all groups)	グループを折りたたむ ({key}+クリック: すべてのグループ)
 	Create new brush from the current settings	現在の設定から新規ブラシを作成
 	Create new brush from these settings	この設定から新規ブラシを作成

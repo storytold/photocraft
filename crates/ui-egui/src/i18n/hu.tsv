@@ -1739,6 +1739,8 @@ layerLabel	Magenta	Bíbor
 	Clone source {n} ({key}-click with Clone Stamp to set)	Klónozási forrás: {n} (beállítás: {key}+kattintás a klónozó bélyegzővel)
 	Close Tab Group	Lapcsoport bezárása
 	Collapse Panel Group	Panelcsoport összecsukása
+	Collapse to Icons	Összecsukás ikonokká
+	Expand Panels	Panelek kibontása
 	Color & Swatches	Szín és színminták
 	Conform	Nyújtás
 	Create a new group	Új csoport létrehozása

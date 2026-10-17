@@ -186,6 +186,12 @@ pub struct DockLayout {
     /// follow it in their default order. Anything unreadable falls back to the defaults.
     #[serde(rename = "tabOrder", alias = "tab_order", deserialize_with = "lenient_tab_order")]
     pub tab_order: BTreeMap<Group, Vec<String>>,
+    /// The column collapsed to an icon strip (Collapse to Icons, #4059): each panel shows as an
+    /// icon that opens it in a flyout beside the strip; see [`crate::dock_icons`].
+    pub iconic: bool,
+    /// The group open as a flyout beside the icon strip (transient).
+    #[serde(skip)]
+    pub flyout: Option<Group>,
 }
 
 /// Read `tabOrder` keeping what makes sense: unknown groups, non-list values and non-string names
@@ -400,6 +406,10 @@ pub fn reveal(app: &mut PhotocraftApp, g: Group) {
     let pro = app.ui.theme.is_pro();
     app.ui.dock.show_tab(g, selected, pro);
     app.ui.dock.set_collapsed(g, false);
+    // A column collapsed to icons shows the panel in its flyout.
+    if app.ui.dock.iconic {
+        app.ui.dock.flyout = Some(g);
+    }
 }
 
 /// Icon rail click: a hidden group is shown, a collapsed one expanded and an expanded one
@@ -411,6 +421,10 @@ pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
         reveal(app, g);
     } else if !docked {
         *g.shown_mut(&mut app.ui.panels) = false;
+    } else if app.ui.dock.iconic {
+        // On a column collapsed to icons the group opens and closes as a flyout.
+        app.ui.dock.flyout = if app.ui.dock.flyout == Some(g) { None } else { Some(g) };
+        app.ui.dock.set_collapsed(g, false);
     } else {
         let collapse = !app.ui.dock.is_collapsed(g);
         app.ui.dock.set_collapsed(g, collapse);
@@ -424,6 +438,7 @@ enum Action {
     CloseTab(Group, usize),
     Move(Group, Option<Group>),
     MoveTab(Group, usize, Option<usize>),
+    ToggleIconic,
 }
 
 /// Rects of the groups drawn last frame (screen points), for tests and automation.
@@ -627,6 +642,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 actions.push(Action::ToggleCollapse(g));
                 ui.close();
             }
+            if ui.button(crate::dock_icons::toggle_label(app.ui.dock.iconic)).clicked() {
+                actions.push(Action::ToggleIconic);
+                ui.close();
+            }
             let pos = order.iter().position(|x| *x == g).unwrap_or(0);
             if ui.add_enabled(!locked && pos > 0, egui::Button::new(tl!("Move Group Up"))).clicked() {
                 actions.push(Action::Move(g, order.get(pos.saturating_sub(1)).copied()));
@@ -709,6 +728,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 }
             }
             Action::MoveTab(g, tab, before) => app.ui.dock.move_tab(g, tab, before, t.pro),
+            Action::ToggleIconic => crate::dock_icons::set_iconic(app, !app.ui.dock.iconic),
             Action::Move(g, before) => {
                 if before != Some(g) {
                     app.ui.dock.move_group(g, before);

@@ -2038,6 +2038,8 @@
 	Collapse	접기
 	Collapse All Groups	모든 그룹 접기
 	Collapse Panel Group	패널 그룹 접기
+	Collapse to Icons	아이콘으로 축소
+	Expand Panels	패널 확장
 	Collapse group  ({key}-click: all groups)	그룹 접기  ({key} 키를 누른 채 클릭: 모든 그룹)
 	Create new brush from the current settings	현재 설정으로 새 브러시 만들기
 	Create new brush from these settings	이 설정으로 새 브러시 만들기

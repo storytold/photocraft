@@ -1744,6 +1744,11 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
     .into_iter()
     .filter_map(|(g, on)| on.then_some(g))
     .collect();
+    // Collapse to Icons (#4059): the column becomes a strip of panel icons with flyouts.
+    if app.ui.dock.iconic {
+        crate::dock_icons::iconic_column(app, ui, &shown, dock_body);
+        return;
+    }
     if shown.is_empty() {
         return;
     }
@@ -1753,6 +1758,7 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
         panel = panel.exact_size(w);
     }
     panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
+        crate::dock_icons::column_bar(app, ui);
         // Groups keep their heights whatever they show (#88): see `dock`.
         crate::dock::show(app, ui, &shown, dock_body);
     });

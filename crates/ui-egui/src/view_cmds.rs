@@ -635,7 +635,10 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);
-        let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
+        // On a column collapsed to icons a panel whose flyout is closed counts as collapsed (#4059).
+        let iconic =
+            |g: crate::dock::Group| app.ui.dock.iconic && app.ui.dock.flyout != Some(g) && (app.ui.theme.is_pro() || g != crate::dock::Group::Properties);
+        let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g) || iconic(g));
         let (vis, cur) = panel_state(app, panel);
         let requested = match p.get("show").or_else(|| p.get("on")) {
             None => None,
