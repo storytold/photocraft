@@ -145,6 +145,12 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth:
             open_editor(app, ui.ctx(), l.id.0, sm, i);
         }
     }
+    // Every row of `l` is drawn, so a filter of it selected (now, after this pass's clicks) is on
+    // screen: see [`forget_hidden`].
+    if ui.ctx().data(|d| d.get_temp::<FilterDrag>(selected_key(doc))).is_some_and(|(layer, _)| layer == l.id.0) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(drawn_key(doc), pass));
+    }
 }
 
 /// Smart filter rows being dragged: the smart object and the filter index (`None` = the Smart
@@ -160,10 +166,20 @@ fn selected_key(doc: photocraft_doc::DocId) -> egui::Id {
     egui::Id::new(("smart-filter-selected", doc))
 }
 
-/// The selected smart filter row, while its smart object is active and the filter still exists.
+/// The pass in which the selected smart filter row of a document was last drawn.
+fn drawn_key(doc: photocraft_doc::DocId) -> egui::Id {
+    egui::Id::new(("smart-filter-selected-drawn", doc))
+}
+
+/// The selected smart filter row, while its smart object is active, the filter still exists and
+/// its row is on screen (drawn this pass or the last: the Layers panel may be closed).
 pub(crate) fn selected(ctx: &egui::Context, doc: &Document, active: Option<LayerId>) -> Option<FilterDrag> {
     let (layer, filter) = ctx.data(|d| d.get_temp::<FilterDrag>(selected_key(doc.id)))?;
     if active != Some(LayerId(layer)) {
+        return None;
+    }
+    let drawn = ctx.data(|d| d.get_temp::<u64>(drawn_key(doc.id)))?;
+    if drawn + 1 < ctx.cumulative_pass_nr() {
         return None;
     }
     let LayerContent::Smart(sm) = &doc.layer(LayerId(layer))?.content else { return None };
@@ -178,6 +194,17 @@ pub(crate) fn selected(ctx: &egui::Context, doc: &Document, active: Option<Layer
 /// was deleted (its index would now name the next one).
 pub(crate) fn deselect(ctx: &egui::Context, doc: photocraft_doc::DocId) {
     ctx.data_mut(|d| d.remove::<FilterDrag>(selected_key(doc)));
+}
+
+/// Forgets the selected smart filter row when the Layers panel didn't draw it this pass (its smart
+/// object is in a closed group, filtered out or isolated away): Delete must never remove a filter
+/// nobody sees highlighted.
+pub(crate) fn forget_hidden(ctx: &egui::Context, doc: photocraft_doc::DocId) {
+    let picked = ctx.data(|d| d.get_temp::<FilterDrag>(selected_key(doc)));
+    let drawn = ctx.data(|d| d.get_temp::<u64>(drawn_key(doc)));
+    if picked.is_some() && drawn != Some(ctx.cumulative_pass_nr()) {
+        deselect(ctx, doc);
+    }
 }
 
 /// While smart filters are dragged: their name by the pointer, and the copy cursor while ⌥ is held.
@@ -273,6 +300,36 @@ pub(crate) fn trash_action((layer, filter): FilterDrag) -> (String, Value) {
         Some(i) => ("layer.smartFilter.delete".into(), json!({"layer": layer, "index": i})),
         None => ("layer.smartFilter.clearSmartFilters".into(), json!({"layer": layer})),
     }
+}
+
+/// Delete or Backspace with no modifiers while a filter's row is selected removes that filter (the
+/// Smart Filters row: all of them), as the panel's Delete button does (#4751), instead of
+/// deleting the smart object or reaching Edit › Clear.
+pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use crate::shortcut_dispatch::Focus;
+    // Text fields and widgets that delete with these keys themselves keep them (#1534).
+    if app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    let Some(picked) = selected(ctx, &st.doc, st.active_layer) else { return false };
+    let doc = st.doc.id;
+    // Only where the key would delete the smart object: Quick Mask, a single channel, a targeted
+    // mask or a selection keep their own Delete.
+    if crate::shortcut_dispatch::delete_key_command(app, "edit.clear".into()) != "layer.delete" {
+        return false;
+    }
+    let mods = ctx.input(|i| i.modifiers);
+    if !mods.is_none() || !ctx.input_mut(|i| i.consume_key(mods, egui::Key::Delete) || i.consume_key(mods, egui::Key::Backspace)) {
+        return false;
+    }
+    let (command, params) = trash_action(picked);
+    deselect(ctx, doc);
+    if let Err(e) = app.run(&command, params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
 }
 
 /// Re-opens a smart filter's dialog with its recorded parameters; OK runs
