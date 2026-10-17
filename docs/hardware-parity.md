@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version: GPU, pen tablets, displays, gestures per platform against Photoshop 2026) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (GPU, Wayland and monitor-profile rows refreshed against main; previously major: first version: GPU, pen tablets, displays, gestures per platform against Photoshop 2026) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -18,17 +18,17 @@ HDR display to verify.
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
 | GPU canvas, zoom/pan, rotate view | Metal (macOS), DirectX/OpenCL (Windows) | wgpu 30: Metal, Vulkan, DX12, GL; backend selectable | done |
-| GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel and > texture-limit regions fall back to CPU | done (ahead in places) |
+| GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel documents and patterns larger than the texture limit fall back to CPU | done (ahead in places) |
 | GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects | partial |
-| Documents larger than the GPU texture limit | yes (tiled) | CPU fallback; tiling in progress (#49) | partial |
+| Documents larger than the GPU texture limit | yes (tiled) | paged GPU residency, composited page cell by page cell (`crates/gpu/src/lib.rs`, #49 closed) | done |
 | CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
-| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020) | partial |
+| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859); the Rgba32Float panic is fixed (#2020) | partial |
 
 ## Pen tablets
 
 | Feature | Photoshop | macOS | Windows | Linux X11 | Linux Wayland | Web |
 |---|---|---|---|---|---|---|
-| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
+| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622); KDE fixed in 0.6.0 (#2297, #1070) | yes |
 | Tilt | yes | yes | **no** | yes | no | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no | partial | no | yes (twist) |
 | Eraser end | yes | yes | no (#2285) | partial | no | partial |
@@ -40,7 +40,7 @@ HDR display to verify.
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
 | Colour-managed canvas (document → monitor profile) | yes | yes, folded into the GPU 3D LUT | done |
-| Monitor profile detection | per display, live | macOS per display at launch; others sRGB or a chosen .icc | partial |
+| Monitor profile detection | per display, live | macOS and Linux X11 (per XRandR output, #2962) per display, following each window's display (#591); Windows and Wayland: sRGB or a chosen .icc | partial |
 | HDR / EDR output for 32-bit and HDR images | yes ("Precise Color Management for HDR Display") | no; 8-bit sRGB-encoded canvas texture | missing |
 | High-DPI, physical 100% | yes | yes (#1943) | done |
 | Multiple monitors: documents in separate OS windows | yes | yes (`extra_windows`) | done |
@@ -62,3 +62,4 @@ HDR display to verify.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | First version |
+| 2026-10-12 | minor | GPU rows (documents past the texture limit, Rgba32Float panic), Wayland KDE pen and monitor-profile detection refreshed against main |

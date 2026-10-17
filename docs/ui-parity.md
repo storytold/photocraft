@@ -50,7 +50,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Toolbar behaviour | Status | Evidence |
 |---|---|---|
 | Letter shortcuts, ⇧+letter cycles the group, "Use Shift Key for Tool Switch" (on by default, as in Photoshop) | done | `shortcuts.rs:413` |
-| Group remembers the last tool used | partial | L always resets to Lasso (#2608) |
+| Group remembers the last tool used | done | a tool key brings back its group's last-used tool (#2608, #2625) |
 | Press-and-hold or click-drag opens the flyout | missing | right-click only (#2301) |
 | Edit Toolbar customization | done | `edit.toolbar` |
 | Last selected tool restored after quitting and relaunching; temporary tool switches excluded | done | `tool_memory.rs`; `prefs_ui::tests::selected_tool_survives_a_restart_without_option_changes`, `selected_tool_excludes_temporary_switches` |
@@ -70,19 +70,19 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | With a selection, the box is the selection's rectangle and the marching ants follow the box live | done | `transform_frame`, `transform_tool.rs` (`draw_selection`): move, scale, rotate, skew, distort, perspective and warp, before the transform is applied; also the Move tool's Show Transform Controls (#5297) |
 | Options bar H/V skew fields | done | `transform_tool.rs` (`Parts`, `skew_about_pivot`): W/H, angle and skew read as Photoshop decomposes the box; `skew_fields_lean_the_box_about_the_reference_point` |
 | Interpolation in the options bar | partial | Bicubic/Bilinear/Nearest; no Bicubic Smoother/Sharper/Automatic, Preserve Details |
-| Commit/cancel buttons in the options bar | missing | #2442 |
-| Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | missing | TOOL-214-5 |
+| Commit/cancel buttons in the options bar | done | `transform_tool.rs` ("Commit transform", "Cancel transform"); #2442 |
+| Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | done | TOOL-214-5 (`canvas_tool_menu.rs`) |
 | Arrow keys nudge the box 1 px, ⇧ 10 px | done | `move_mods.rs` |
-| Preview keeps layer order, blend mode and mask | partial | mask yes (BUG-205-2); order/blend not (#2439) |
+| Preview keeps layer order, blend mode and mask | partial | mask yes (BUG-205-2); plain Normal layers above keep their place (#2439, #2480), adjustment layers and other blend modes still draw under the box |
 | Preview clipped to the canvas, follows edits while open | done | #2201, #2099 |
-| Hand (space) mid-transform doesn't interrupt it | partial | #2302 |
+| Hand (space) mid-transform doesn't interrupt it | done | `transform_undo_tests.rs::holding_space_still_pans_while_transforming`; the selected Hand no longer steals a resize drag (#2302, #2327) |
 | Blend mode / opacity edits while transforming | missing | #1384 |
-| Locked layer refused before the drag | missing | fails only at commit (#2585) |
+| Locked layer refused before the drag | done | #2585, #2609 |
 | Transform a copy (⌥⌘T), step and repeat (⌥⇧⌘T) | done | 2026-10-07 |
-| Transform a targeted alpha channel | missing | BUG-207-4 |
+| Transform a targeted alpha channel | done | BUG-207-4 (`edit.transform` follows the targeted channel) |
 | Smart object perspective (non-affine) | done | FILE-215-6; #579 fixed by #426: Distort / Perspective keep a projective placement, re-rendered from the source, read and written as the PSD `nonAffineTransform` |
 | Type-layer transform while editing (⌘ held), no ⌘-corner distort on type | done | `ui-design.md` |
-| Puppet Warp mesh follows the outline | missing | block grid (TOOL-214-6) |
+| Puppet Warp mesh follows the outline | done | TOOL-214-6 (`algo/puppet.rs` `build_mesh`, #3105) |
 
 ## Move tool and nudging
 
@@ -92,15 +92,15 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Arrow nudge of a selection outline (selection tools) | done | #1502 |
 | Arrow nudge of the crop box, X swaps orientation | done | TOOL-214-19 |
 | Arrow nudge of path points with Direct Selection | missing | no arrow handling in `direct_select.rs` |
-| ⌘-arrow nudges the layer from any tool | missing | #2474 |
+| ⌘-arrow nudges the layer from any tool | done | #2474, #2556 |
 | ⌥-drag duplicates, ⇧ constrains to 45° | done | `move_mods.rs` |
-| Auto-Select with hover outline, box-select layers, double-click fit | missing | TOOL-214-4 |
-| Auto-Select bounding box and snapping follow the picked layer | partial | follow the previous layer (#2666) |
+| Auto-Select with hover outline, box-select layers, double-click fit | partial | hover outline and box-select done; double-click fit and drag to a tab open (TOOL-214-4) |
+| Auto-Select bounding box and snapping follow the picked layer | done | #2666, #2675 |
+| ⌘-drag temporary Move shows the box and snaps | done | #2681, #2684 |
 | Several layers selected (⇧-click adds, box-select): Show Transform Controls frames them all, with every selected shape's outline | partial: the shared frame has no handles, since Free Transform works on one layer (`canvas.rs` `transform_controls_layers`, `several_selected_layers_share_one_frame_without_handles`; `move_auto_select_tests.rs`) | |
-| ⌘-drag temporary Move shows the box and snaps | partial | #2681 |
 | ⌘-right-click layer list under the pointer | done | `layer_pick_ui.rs` |
 | Double-click type to edit it (caret at the pointer, Type tool) | done | #1132, `type_tool::edit_at` |
-| Moving a selection on a mask moves the mask, not the pixels | partial | #2468 |
+| Moving a selection on a mask moves the mask, not the pixels | done | #2468, #2486 |
 
 ## Selection modifiers
 
@@ -109,10 +109,10 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | ⇧ square/circle, ⌥ from centre, live W × H readout (marquee) | done | `marquee_tests.rs` |
 | ⇧ add, ⌥ subtract, ⇧⌥ intersect from modifiers at press | partial | works; only a badge test (BUG-208-4) |
 | Space repositions the marquee while dragging | done | `hold_keys.rs` |
-| Polygonal Lasso ⇧ snaps to 45° | missing | #2352 |
+| Polygonal Lasso ⇧ snaps to 45° | done | #2352, #2396 |
 | Autoscroll at the window edge while selecting | missing | #2231 |
-| Single-pixel rows and columns kept on release | partial | #2391 |
-| Esc deselects / ⌘Z undoes the last selection | partial | #2674, #1432 |
+| Single-pixel rows and columns kept on release | done | #2391, #2562 |
+| Esc deselects / ⌘Z undoes the last selection | partial | Esc deselects when nothing else needs cancelling (#2674, #2765); ⌘Z of a selection step not re-checked (#1432 was closed with a Pen-anchor answer) |
 | Select › Modify live preview | missing | #1752 |
 
 ## Pen, paths and shapes
@@ -120,14 +120,14 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Behaviour | Status | Evidence |
 |---|---|---|
 | Click corner, drag smooth, ⌥ breaks a handle, ⌘ direct-selects, ⇧ 45° | done | TOOL-214-10; `vector_ui.rs` (#3751) |
-| Handle on the last point, close-drag handle | partial | #1482 |
+| Handle on the last point, close-drag handle | done | `vector_ui.rs` (#1601, #3314); the rest of #1482 is a Make Selection dialog for paths |
 | Pen Auto Add/Delete: click a segment of the active path, or of the path being drawn, to add, an anchor to delete; ⇧ suspends it | done | #4144, #6140 |
 | Curvature Pen edits the active path with no modifier: drag an anchor (the curve reflows), click a segment to add an anchor, double-click smooth ↔ corner; cursor badge + on segments, four arrows on anchors | done: `direct_select.rs` (`curvature_press`, `curvature_hover`), `path.moveAnchors`/`path.convertPoint` with `curvature`, `direct_select_tests.rs` | |
 | Path operations in the options bar (combine, subtract, intersect, exclude) | partial | `layer.combineShapes.*`; Pen options #1397 |
 | On-canvas corner-radius handles on live shapes | done: every selected live rectangle shows a widget at each arc centre with Path Selection, the Rectangle tool and Move with Show Transform Controls; a drag rounds every corner of every selected rectangle to the same radius, ⌥ that corner on each, with the corner radius cursor and an `R:` readout, previewed and committed as one history step (`corner_radius.rs`, `corner_radius_tests.rs`) | TOOL-214-12 |
 | Shape stroke controls (dash, caps, joins, align) | done | TOOL-1053-1, [`shape-strokes.md`](shape-strokes.md) |
-| Rotated shape selection hints correct | partial | #2512 |
-| Curved shape bounds exact | partial | one pixel too wide (#2537) |
+| Rotated shape selection hints correct | done | #2512, #2732 |
+| Curved shape bounds exact | done | #2537, #2641 |
 
 ## Crop
 
@@ -142,7 +142,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Crop shield, Show Cropped Area (H) | done | TOOL-214-22 |
 | Default mode: the image turns and moves behind an upright box; Auto Center Preview; Use Classic Mode | done | TOOL-214-23 |
 | W × H × Resolution with units, built-in size presets, Front Image | done | TOOL-214-9 (`crop_size.rs`) |
-| Saved custom crop presets | missing | TOOL-214-9 |
+| Saved custom crop presets | done | TOOL-214-9 (New / Delete Crop Preset) |
 | Fill: Content-Aware Fill: a turned or extending crop fills the uncovered corners and strips from the image (each piece with its own sampling window), on the Background or else the active pixel layer, in the crop's one undo step; Generative Expand not offered | done | `tests/crop_content_aware.rs`, `crop_ui.rs::commit_passes_the_fill_choice` (#3823, 2026-10-12) |
 | Delete Cropped Pixels off | partial | |
 
@@ -156,11 +156,11 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Smart guide distance and spacing labels | missing | |
 | Ruler units px/in/cm/mm/pt/pica/% | done | |
 | ⇧-drag a guide out of a ruler: it lands on the nearest ruler tick | done | `rulers.rs` `snap_to_tick` (#3770) |
-| Status bar follows the ruler unit | partial | #2602 |
-| Ruler corner and gaps drawn as Photoshop | partial | #2600, #2601, #2551 |
-| Guides stored as f64 | missing | `Vec<f32>` (UI-217-20) |
+| Status bar follows the ruler unit | done | #2602, #2618 |
+| Ruler corner and gaps drawn as Photoshop | partial | corner overlap fixed (#2600, #2617); the gap above the rulers is open (#2601, #2551) |
+| Guides stored as f64 | done | `Vec<f64>`, kept through .pcraft and PSD (UI-217-20) |
 | Geometry precision | partial | `geom::Point` f64, paths f64; paint internals mostly f32 |
-| Numeric fields: arithmetic, scrubby labels | partial | units in expressions and double-click reset missing (UI-217-13) |
+| Numeric fields: arithmetic, scrubby labels | done | arithmetic with units, scrubby labels, double-click reset (UI-217-13, #3099) |
 
 ## Navigation
 
@@ -171,13 +171,13 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Scrubby zoom | done | `zoom_tool.rs` |
 | Flick panning | done | `flick_pan.rs` (Preferences › Tools › Enable Flick Panning) |
 | Animated zoom | missing | unread pref; #566 |
-| Double-click Zoom tool = 100%, double-click Hand = fit | partial | Zoom missing (#2508) |
+| Double-click Zoom tool = 100%, double-click Hand = fit | done | #2508, #2527; `panels.rs::double_clicking_the_hand_tool_fits_on_screen` |
 | ⌥-wheel zoom in gentle steps | missing | UI-217-18 |
 | Wheel, smooth scrolling and pinch as in Photoshop | partial | #2485, #2463, #1989 |
 | Trackpad rotate drives Rotate View | done | `rotate_view.rs:136` |
 | Zoom levels to 3200% and beyond | partial | #1813 |
 | Physical 100% at any display scale | done | #1943 |
-| ⌃Tab / ⌃⇧Tab switch document tabs | missing | #2340 |
+| ⌃Tab / ⌃⇧Tab switch document tabs | done | #2340, #2353 |
 
 ## Keyboard shortcuts
 
@@ -206,8 +206,8 @@ Paragraph; the rest open as in-app floating windows.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
-| Drag panels to reorder and regroup | partial | #2272, #2305 |
-| Docked resize pushes the neighbour | partial | #2573 |
+| Drag panels to reorder and regroup | partial | dock tabs reorder within their group (#2272, #2774); regrouping open (#2305) |
+| Docked resize pushes the neighbour | done | #2573, #2624 |
 | Color panel wheel and RGB/HSB/CMYK/Lab sliders | missing | UI-217-17, #2569 |
 | Window size and dock width remembered | done | UI-217-2 |
 | Command palette with recents | done | UI-217-7 |
@@ -215,9 +215,9 @@ Paragraph; the rest open as in-app floating windows.
 | Every preference takes effect | partial | 46 of 149 do nothing (scorecard) |
 | UI scale presets | missing | UI-217-9, #2492 |
 | History snapshots: camera button, snapshot rows (click returns and selects, rename, delete; the trash deletes the selected snapshot, and a snapshot or state dragged onto it, #5324), `history.*Snapshot` commands | partial | `history_cmds.rs`, `snapshot_rows` in `panels.rs`; New Snapshot dialog, first snapshot and History Options to come (#2966) |
-| Themes: Photoshop's four greys | partial | five themes; #2661 |
+| Themes: Photoshop's four greys | done | `theme.rs` `Pro`, `ProMedium`, `ProLightGray`, `ProLight` (#2661, #2892) |
 | Document tabs: overflow, context menu, reorder | done | UI-217-6; middle-click close #2570 |
-| Layers panel: wheel steps blend modes, drop on New/Trash | partial | UI-217-14 |
+| Layers panel: wheel steps blend modes, drop on New/Trash | done | UI-217-14 |
 | Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name and Mode; the other six missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
 | Smart filter rows: click selects, drag onto another smart object moves, ⌥-drag copies, drag onto Delete removes | done | `smart_ui.rs`, `layer.smartFilter.transfer` (#4271) |
 | Layers panel: Clip Thumbnails to Layer Bounds (panel menu, `interface.clipThumbnailsToLayerBounds`) | done (2026-10-12) | `layer_thumb_bounds_tests.rs`; #4281. Thumbnail size and the Panel Options dialog to come |
@@ -251,6 +251,7 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-12 | minor | Layers panel: Clip Thumbnails to Layer Bounds frames each layer's pixels instead of the canvas (#4281) |
 | 2026-10-12 | minor | Guides: ⌥-click turns a guide through the click; double-click opens Preferences › Guides, Grid & Slices |
 | 2026-10-13 | minor | Smart filter rows can be dragged up or down their stack to reorder the filters |
+| 2026-10-12 | minor | Rows refreshed against main (scorecard ids and merged PRs cited per row): transform commit/cancel, right-click menu, locked layer, alpha channel and Puppet Warp; Move, selection, Pen, Crop preset, ruler, numeric-field, navigation, dock and theme rows; the last-used tool per group |
 | 2026-10-13 | minor | On-canvas corner radius widgets on live rectangles (TOOL-214-12) |
 | 2026-10-13 | minor | Curvature Pen edits the active path: drag anchors, click a segment to add, double-click smooth/corner, cursor badges |
 | 2026-10-11 | minor | Pen ⇧ 45° done: ⇧-click puts the next anchor on the nearest 45° ray, ⇧-drag turns its handles in 45° steps (TOOL-214-10 done, #3751) |
