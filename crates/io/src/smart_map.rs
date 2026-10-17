@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 16] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -154,6 +154,8 @@ const KNOWN: [Known; 14] = [
     Known { class: "HghP", filter_id: code(b"HghP"), name: "High Pass...", command: "filter.other.highPass" },
     Known { class: "Mxm ", filter_id: code(b"Mxm "), name: "Maximum...", command: "filter.other.maximum" },
     Known { class: "Mnm ", filter_id: code(b"Mnm "), name: "Minimum...", command: "filter.other.minimum" },
+    Known { class: "Ofst", filter_id: code(b"Ofst"), name: "Offset...", command: "filter.other.offset" },
+    Known { class: "Cstm", filter_id: code(b"Cstm"), name: "Custom...", command: "filter.other.custom" },
     Known { class: "Msc ", filter_id: code(b"Msc "), name: "Mosaic...", command: "filter.pixelate.mosaic" },
     Known { class: "Embs", filter_id: code(b"Embs"), name: "Emboss...", command: "filter.stylize.emboss" },
     Known { class: "Lvls", filter_id: code(b"Lvls"), name: "Levels...", command: "image.adjustments.levels" },
@@ -258,6 +260,32 @@ fn curves_params(f: &Descriptor) -> Option<J> {
     Some(J::Object(out))
 }
 
+/// Offset › Undefined Areas: the `FlMd` enum (`Fl  `) and our `undefinedAreas`. On a layer
+/// Photoshop labels `Bckg` "Set to Transparent"; a smart object is always a layer.
+const OFFSET_FILL: [(&str, &str); 3] = [("Wrp ", "wrap"), ("Rpt ", "repeat"), ("Bckg", "transparent")];
+
+/// Custom's ranges in Photoshop's dialog: matrix cells, Scale, Offset.
+const CUSTOM_CELL: (i32, i32) = (-999, 999);
+const CUSTOM_SCALE: (i32, i32) = (1, 9999);
+const CUSTOM_OFFSET: (i32, i32) = (-9999, 9999);
+
+fn int_in(v: Option<i32>, (lo, hi): (i32, i32)) -> Option<i32> {
+    v.filter(|v| (lo..=hi).contains(v))
+}
+
+/// `filter.other.custom` params for a `Cstm` filter: `Mtrx` is 25 longs, row-major 5 × 5. Values
+/// outside Photoshop's ranges are not modelled (the filter stays verbatim).
+fn custom_params(f: &Descriptor) -> Option<J> {
+    let Some(Value::List(m)) = f.get("Mtrx") else { return None };
+    if m.len() != 25 {
+        return None;
+    }
+    let kernel: Option<Vec<J>> = m.iter().map(|v| int_in(int_value(v), CUSTOM_CELL).map(|v| json!(v))).collect();
+    let scale = int_in(int(f, "Scl "), CUSTOM_SCALE)?;
+    let offset = int_in(int(f, "Ofst"), CUSTOM_OFFSET)?;
+    Some(json!({"kernel": kernel?, "scale": scale, "offset": offset}))
+}
+
 /// Our command and parameters for a known Photoshop filter; `None` when the filter (or one of its
 /// settings) is not modelled.
 fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)> {
@@ -282,6 +310,11 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
         }
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
+        ("Ofst", Some(f)) => {
+            let fill = OFFSET_FILL.iter().find(|(psd, _)| enum_of(f, "Fl  ") == Some(psd.as_bytes()))?.1;
+            json!({"horizontal": int(f, "Hrzn")?, "vertical": int(f, "Vrtc")?, "undefinedAreas": fill})
+        }
+        ("Cstm", Some(f)) => custom_params(f)?,
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
         _ => return None,
@@ -520,6 +553,15 @@ fn pi(p: &J, key: &str, default: f64) -> Value {
     Value::Integer(pf(p, key, default).round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32)
 }
 
+/// A whole-number setting as a long, clamped to `range` like the engine clamps it; a fraction
+/// has no PSD equivalent (Photoshop stores these as integers).
+fn whole(v: f64, (lo, hi): (i32, i32), what: &str) -> Result<Value, String> {
+    if v.fract() != 0.0 {
+        return Err(format!("{what} ({v}) is not a whole number"));
+    }
+    Ok(Value::Integer(v.clamp(f64::from(lo), f64::from(hi)) as i32))
+}
+
 fn channel_ref(code: &[u8; 4]) -> Value {
     Value::Reference(vec![ReferenceItem::Enumerated {
         class: Class { name: UnicodeString::new_nul(""), class_id: Id::new("Chnl") },
@@ -595,6 +637,24 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
+        "Ofst" => {
+            // As the engine reads it: anything but repeat / transparent wraps.
+            let ours = p.get("undefinedAreas").and_then(J::as_str).unwrap_or("wrap");
+            let fill = OFFSET_FILL.iter().find(|(_, o)| *o == ours).map_or("Wrp ", |(psd, _)| *psd);
+            d.with("Hrzn", pi(p, "horizontal", 0.0)).with("Vrtc", pi(p, "vertical", 0.0)).with("Fl  ", enumv("FlMd", fill))
+        }
+        "Cstm" => {
+            // The engine's identity kernel when none is given; missing cells are 0.
+            let kernel = p.get("kernel").and_then(J::as_array);
+            let cell = |i: usize| match kernel {
+                Some(a) => a.get(i).and_then(J::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+                None => f64::from(u8::from(i == 12)),
+            };
+            let m = (0..25).map(|i| whole(cell(i), CUSTOM_CELL, "a kernel value")).collect::<Result<Vec<_>, _>>()?;
+            d.with("Scl ", whole(pf(p, "scale", 1.0), CUSTOM_SCALE, "Scale")?)
+                .with("Ofst", whole(pf(p, "offset", 0.0), CUSTOM_OFFSET, "Offset")?)
+                .with("Mtrx", Value::List(m))
+        }
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
         "adaptCorrect" => {
@@ -1063,6 +1123,8 @@ mod tests {
             sf("filter.other.minimum", json!({"radius": 2.0})),
             sf("filter.pixelate.mosaic", json!({"cellSize": 8.0})),
             sf("filter.stylize.emboss", json!({"angle": 135, "height": 3, "amount": 100})),
+            sf("filter.other.offset", json!({"horizontal": 12, "vertical": -7, "undefinedAreas": "transparent"})),
+            sf("filter.other.custom", json!({"kernel": SHARPEN, "scale": 1, "offset": 0})),
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
             sf("image.adjustments.shadowsHighlights", json!({})),
@@ -1077,6 +1139,170 @@ mod tests {
             let bytes = d.to_bytes();
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
+        }
+    }
+
+    /// Photoshop's default Custom kernel: a 3 × 3 sharpen centred in the 5 × 5.
+    const SHARPEN: [i32; 25] = [0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, -1, 5, -1, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0];
+
+    /// A `filterFXList` item as measured in Photoshop (applied through Action Manager to a smart
+    /// object, saved, `filterFX` read back).
+    fn measured_item(id: &[u8; 4], name: &str, fltr: Descriptor) -> Descriptor {
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+            .with("blendOptions", blend_options(&sf("", J::Null)))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(0.0))
+            .with("BckC", rgbc(255.0))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(code(id)))
+    }
+
+    fn offset_fltr(h: Value, v: Value, fill: Value) -> Descriptor {
+        Descriptor::new("Ofst").with("Hrzn", h).with("Vrtc", v).with("Fl  ", fill)
+    }
+
+    fn custom_fltr(scale: Value, offset: Value, m: Vec<Value>) -> Descriptor {
+        Descriptor::new("Cstm").with("Scl ", scale).with("Ofst", offset).with("Mtrx", Value::List(m))
+    }
+
+    fn longs(m: &[i32]) -> Vec<Value> {
+        m.iter().map(|v| Value::Integer(*v)).collect()
+    }
+
+    #[test]
+    fn offset_round_trips_every_fill_mode() {
+        for (fill, ours) in [("Wrp ", "wrap"), ("Rpt ", "repeat"), ("Bckg", "transparent")] {
+            for (h, v) in [(0, 0), (12, -7), (5, 3), (i32::MIN, i32::MAX)] {
+                let f = sf("filter.other.offset", json!({"horizontal": h, "vertical": v, "undefinedAreas": ours}));
+                let d = item_for_filter(&f).unwrap();
+                let fltr = get_desc(&d, "Fltr").unwrap();
+                assert_eq!(*fltr, offset_fltr(Value::Integer(h), Value::Integer(v), enumv("FlMd", fill)));
+                assert_eq!(int(&d, "filterID"), Some(1_332_114_292));
+                assert_eq!(filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap()), f);
+            }
+        }
+    }
+
+    /// The measured descriptors (Wrap 0/0, Set to Background 12/−7, Repeat 5/3) open as Offset.
+    #[test]
+    fn offset_measured_descriptors_open_as_offset() {
+        for (h, v, fill, ours) in [(0, 0, "Wrp ", "wrap"), (12, -7, "Bckg", "transparent"), (5, 3, "Rpt ", "repeat")] {
+            let item = measured_item(b"Ofst", "Offset...", offset_fltr(Value::Integer(h), Value::Integer(v), enumv("FlMd", fill)));
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, "filter.other.offset");
+            assert_eq!(f.params, json!({"horizontal": h, "vertical": v, "undefinedAreas": ours}));
+            // Written back exactly as measured.
+            assert_eq!(item_for_filter(&f).unwrap(), item);
+        }
+    }
+
+    #[test]
+    fn offset_written_with_engine_defaults() {
+        // No params: 0, 0, Wrap Around (the engine's defaults); fractional pixels round.
+        let d = item_for_filter(&sf("filter.other.offset", json!({}))).unwrap();
+        assert_eq!(*get_desc(&d, "Fltr").unwrap(), offset_fltr(Value::Integer(0), Value::Integer(0), enumv("FlMd", "Wrp ")));
+        let d = item_for_filter(&sf("filter.other.offset", json!({"horizontal": 2.6, "vertical": 3e12, "undefinedAreas": "bogus"}))).unwrap();
+        assert_eq!(*get_desc(&d, "Fltr").unwrap(), offset_fltr(Value::Integer(3), Value::Integer(i32::MAX), enumv("FlMd", "Wrp ")));
+    }
+
+    #[test]
+    fn malformed_offset_is_kept_verbatim() {
+        let i = Value::Integer;
+        for fltr in [
+            offset_fltr(i(1), i(2), enumv("FlMd", "Xxxx")),
+            offset_fltr(i(1), i(2), Value::Integer(1)),
+            offset_fltr(Value::Double(1.5), i(2), enumv("FlMd", "Wrp ")),
+            offset_fltr(i(1), unit(b"#Pxl", f64::NAN), enumv("FlMd", "Wrp ")),
+            Descriptor::new("Ofst").with("Hrzn", i(1)).with("Fl  ", enumv("FlMd", "Wrp ")),
+            Descriptor::new("Ofst"),
+        ] {
+            let item = measured_item(b"Ofst", "Offset...", fltr);
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{item:?}");
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes(), "kept byte for byte");
+        }
+        let bare = Descriptor::new("filterFX").with("filterID", Value::Integer(code(b"Ofst")));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
+    }
+
+    #[test]
+    fn custom_round_trips() {
+        let edge: Vec<i32> = (0..25)
+            .map(|i| {
+                if i == 12 {
+                    8
+                } else if (6..=18).contains(&i) && i % 5 != 0 && i % 5 != 4 {
+                    -1
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let full: Vec<i32> = (0..25).map(|i| i * 83 - 999).collect();
+        for (kernel, scale, offset) in [(SHARPEN.to_vec(), 1, 0), (edge, 2, 10), (full, 9999, -9999), (vec![999; 25], 1, 9999)] {
+            let f = sf("filter.other.custom", json!({"kernel": kernel, "scale": scale, "offset": offset}));
+            let d = item_for_filter(&f).unwrap();
+            assert_eq!(*get_desc(&d, "Fltr").unwrap(), custom_fltr(Value::Integer(scale), Value::Integer(offset), longs(&kernel)));
+            assert_eq!(int(&d, "filterID"), Some(1_131_639_917));
+            assert_eq!(filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap()), f);
+        }
+    }
+
+    /// The measured descriptors (the default sharpen; a blur at Scale 2, Offset 10) open as Custom.
+    #[test]
+    fn custom_measured_descriptors_open_as_custom() {
+        let blur = [0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 2, 4, 2, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0];
+        for (kernel, scale, offset) in [(SHARPEN, 1, 0), (blur, 2, 10)] {
+            let item = measured_item(b"Cstm", "Custom...", custom_fltr(Value::Integer(scale), Value::Integer(offset), longs(&kernel)));
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, "filter.other.custom");
+            assert_eq!(f.params, json!({"kernel": kernel, "scale": scale, "offset": offset}));
+            assert_eq!(item_for_filter(&f).unwrap(), item);
+        }
+    }
+
+    #[test]
+    fn custom_written_like_the_engine_reads_it() {
+        let fltr = |p: J| get_desc(&item_for_filter(&sf("filter.other.custom", p)).unwrap(), "Fltr").cloned().unwrap();
+        // No kernel: the engine's identity; short kernels pad with 0; out-of-range values clamp.
+        let mut id = [0; 25];
+        id[12] = 1;
+        assert_eq!(fltr(json!({})), custom_fltr(Value::Integer(1), Value::Integer(0), longs(&id)));
+        let mut short = [0; 25];
+        short[0] = 3;
+        short[1] = -999;
+        assert_eq!(fltr(json!({"kernel": [3, -5000], "scale": 0, "offset": 20000})), custom_fltr(Value::Integer(1), Value::Integer(9999), longs(&short)));
+        // Fractions have no PSD equivalent.
+        for p in [json!({"kernel": [0.5]}), json!({"scale": 1.5}), json!({"offset": -0.25})] {
+            assert!(item_for_filter(&sf("filter.other.custom", p.clone())).is_err(), "{p}");
+        }
+    }
+
+    #[test]
+    fn malformed_custom_is_kept_verbatim() {
+        let i = Value::Integer;
+        let mut wrong_type = longs(&SHARPEN);
+        wrong_type[3] = Value::Double(1.0);
+        for fltr in [
+            custom_fltr(i(1), i(0), longs(&SHARPEN[..24])),
+            custom_fltr(i(1), i(0), longs(&[0; 26])),
+            custom_fltr(i(1), i(0), wrong_type),
+            custom_fltr(i(1), i(0), longs(&[1000; 25])),
+            custom_fltr(i(0), i(0), longs(&SHARPEN)),
+            custom_fltr(i(10_000), i(0), longs(&SHARPEN)),
+            custom_fltr(i(1), i(-10_000), longs(&SHARPEN)),
+            custom_fltr(Value::Double(f64::NAN), i(0), longs(&SHARPEN)),
+            custom_fltr(i(1), unit(b"#Pxl", 1.0), longs(&SHARPEN)),
+            Descriptor::new("Cstm").with("Scl ", i(1)).with("Ofst", i(0)).with("Mtrx", i(5)),
+            Descriptor::new("Cstm").with("Scl ", i(1)).with("Mtrx", Value::List(longs(&SHARPEN))),
+            Descriptor::new("Cstm"),
+        ] {
+            let item = measured_item(b"Cstm", "Custom...", fltr);
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{item:?}");
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes(), "kept byte for byte");
         }
     }
 
