@@ -213,6 +213,9 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             floating: true,
         });
     }
+    if offset == (0, 0) && app.move_preview.as_ref().is_none_or(|p| p.offsets.is_empty()) {
+        return None;
+    }
     let st = app.session.documents().get(idx)?;
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);
     if shown {
@@ -534,5 +537,21 @@ mod tests {
         app.session.execute("select.deselect", json!({})).unwrap();
         drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
         assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 58, 16) == 1.0, "the whole layer moved");
+    }
+
+    #[test]
+    fn floating_selection_does_not_snap_to_its_own_starting_outline_or_preview_at_zero() {
+        let (mut app, _id) = selected_pixels(8);
+        app.ui.extras.snap = true;
+        app.ui.view.snap_to.document_bounds = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+        assert!(super::display_doc(&mut app, 0).is_none(), "no preview composite at offset (0, 0) before the pointer moves");
+        // A small 2 px move within the snap radius must move immediately instead of snapping back to (0, 0).
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 18.0, y: 17.0, pressure: 1.0 }, m);
+        assert_eq!(super::floating_offset(&app), Some((2, 1)), "small drag moves without snapping to own selection bounds");
+        assert!(super::display_doc(&mut app, 0).is_some(), "preview is shown once offset is non-zero");
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 18.0, y: 17.0 }, m);
+        assert_eq!(offset(&app), Some((2, 1)));
     }
 }

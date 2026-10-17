@@ -239,15 +239,20 @@ pub(crate) fn try_fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], sel
     let fmt = s.format();
     // Coverage 1 of an opaque colour replaces the colour (and the alpha, unless it is kept).
     let opaque = color[3] == 1.0 && (!lock_transparency || !fmt.alpha) && selection.is_none_or(|m| m.format().sample != photocraft_color::SampleType::F32);
-    let solid = opaque.then(|| {
-        let mut enc = [0.0f32; 8];
-        let n = photocraft_raster::from_rgba_into(&fmt, [color[0], color[1], color[2], 1.0], &mut enc);
-        s.solid_tile(enc.get(..n).unwrap_or(&[]))
-    });
+    let mut enc = [0.0f32; 8];
+    let enc_len = opaque.then(|| photocraft_raster::from_rgba_into(&fmt, [color[0], color[1], color[2], 1.0], &mut enc));
+    let solid = enc_len.map(|n| s.solid_tile(enc.get(..n).unwrap_or(&[])));
     let whole = |full: bool| solid.as_ref().filter(|_| full).map(|t| TileEdit::Put(t.clone()));
     edit_tiles(s, area, selection, "filling pixels", whole, |k, px| {
         if k <= 0.0 {
             return false;
+        }
+        if k >= 1.0
+            && let Some(m) = enc_len
+            && let Some(src) = enc.get(..px.len().min(m))
+        {
+            px.copy_from_slice(src);
+            return true;
         }
         fill_pixel(&fmt, px, color, k, lock_transparency);
         true
@@ -294,9 +299,7 @@ pub(crate) fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&
             px.fill(0.0);
         }
         true
-    })?;
-    s.prune();
-    Ok(())
+    })
 }
 
 /// A whole-tile shortcut of [`edit_tiles`].
@@ -331,6 +334,7 @@ fn edit_tiles(
     coords.extend(area.tiles());
     // Untouched pixels read as the default where the surface has no tile.
     let blank = if coords.iter().any(|&tc| s.tile(tc).is_none()) { Some(s.try_default_tile().map_err(oom)?) } else { None };
+    let dp = s.default_bytes();
     let surf = &*s;
     let edits = coords
         .into_par_iter()
@@ -371,7 +375,11 @@ fn edit_tiles(
                     }
                 }
             }
-            Ok(out.map(|t| (tc, Some(Arc::new(t)))))
+            Ok(match out {
+                Some(t) if bpp > 0 && t.bytes().chunks_exact(bpp).all(|p| p == dp) => current.map(|_| (tc, None)),
+                Some(t) => Some((tc, Some(Arc::new(t)))),
+                None => None,
+            })
         })
         .collect::<crate::Result<Vec<_>>>()?;
     for (tc, tile) in edits.into_iter().flatten() {

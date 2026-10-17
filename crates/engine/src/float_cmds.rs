@@ -32,6 +32,7 @@ pub struct CutParts {
     pub layer: LayerId,
     rest: Surface,
     piece: Surface,
+    piece_bounds: photocraft_geom::Rect,
     /// The pieces are the layer's mask (`"target":"mask"`), not its pixels.
     mask: bool,
 }
@@ -55,41 +56,27 @@ impl CutParts {
         };
         let fmt = surf.format();
         let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let full = if fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
         // A mask has no alpha: it keeps its format, and the cut leaves background colour.
-        let mut rest = if mask { surf.clone() } else { full.clone() };
+        let base = if mask || fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
+        let mut rest = base.clone();
         let mut piece = Surface::new(with_alpha);
         let fill = !copy && (mask || doc.is_background(layer));
         // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
-        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { surf.content_bounds() });
+        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.content_bounds() });
         if !b.is_empty() {
-            let n = with_alpha.channels();
-            let a = n - 1;
-            let mut rp = full.read_region(b);
-            let mut pp = rp.clone();
-            let w = b.width() as usize;
-            for (i, (p, r)) in pp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
-                let k = sel.sample_channel(b.x0 + (i % w) as i32, b.y0 + (i / w) as i32, 0);
-                if k <= 0.0 {
-                    p.fill(0.0);
-                } else {
-                    p[a] *= k;
-                }
-                if !copy && !fill {
-                    r[a] *= 1.0 - k;
-                }
-            }
-            if !mask {
-                rest.write_region(b, &rp);
-            }
+            piece = cut_piece(&base, sel, b, with_alpha)?;
             if fill {
-                crate::pixels::try_fill_surface(&mut rest, b, background, Some(sel), true)?;
+                let opaque_bg = [background[0], background[1], background[2], 1.0];
+                crate::pixels::try_fill_surface(&mut rest, b, opaque_bg, Some(sel), false)?;
+                if mask {
+                    rest.prune();
+                }
+            } else if !copy && !mask {
+                crate::pixels::try_clear_surface(&mut rest, b, Some(sel))?;
             }
-            rest.prune();
-            piece.write_region(b, &pp);
-            piece.prune();
         }
-        Ok(Self { layer, rest, piece, mask })
+        let piece_bounds = piece.content_bounds();
+        Ok(Self { layer, rest, piece, piece_bounds, mask })
     }
 
     /// `doc` with the piece moved by whole pixels (dx, dy) over the cut-out layer.
@@ -107,16 +94,114 @@ impl CutParts {
         } else {
             l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
         };
+        if self.piece_bounds.is_empty() {
+            *surf = self.rest.clone();
+            return Ok(());
+        }
         let mut out = self.rest.clone();
-        let piece = photocraft_algo::resample::translate_surface(&self.piece, dx, dy);
+        let piece = self.piece.translated(dx, dy, self.piece_bounds);
         if self.mask {
-            crate::fill_cmds::composite_over(&mut out, &piece, piece.content_bounds(), None)?;
+            crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {
             crate::transform_cmds::composite_over(&mut out, &piece);
         }
         *surf = out;
         Ok(())
     }
+}
+
+/// Extract the selected pixels of `base` over `b` into a `with_alpha` surface, tile by tile in
+/// parallel. Fully selected tiles on an alpha surface share `base`'s `Arc<Tile>` directly.
+fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha: PixelFormat) -> Result<Surface> {
+    use photocraft_color::{SampleType, read_sample};
+    use photocraft_geom::{TILE_SIZE, TileCoord};
+    use photocraft_raster::Tile;
+    use rayon::prelude::*;
+
+    let mut piece = Surface::new(with_alpha);
+    let src_fmt = base.format();
+    let same_fmt = src_fmt == with_alpha;
+    let n = with_alpha.channels();
+    let a = n - 1;
+    let dst_bpp = with_alpha.bytes_per_pixel();
+    let src_bpp = src_fmt.bytes_per_pixel();
+    let sb = with_alpha.sample.bytes();
+    let alpha_off = dst_bpp - sb;
+    let src_empty_default = same_fmt && base.default_bytes().iter().all(|&v| v == 0);
+    let oom = |e| EngineError::Other(format!("not enough memory while floating selection ({e}); the document was not changed"));
+    let mut coords = crate::allocation::capacity(b.tiles().count(), "floating selection")?;
+    coords.extend(b.tiles());
+    let tiles = coords
+        .into_par_iter()
+        .map(|tc| -> Result<Option<(TileCoord, Arc<Tile>)>> {
+            let tr = tc.rect().intersect(&b);
+            let mask = crate::fill_cmds::Mask::of(sel, tc);
+            if mask.empty(tr) {
+                return Ok(None);
+            }
+            let src_tile = base.tile(tc);
+            if same_fmt && src_tile.is_none() && src_empty_default {
+                return Ok(None);
+            }
+            if same_fmt
+                && tr == tc.rect()
+                && mask.full(tr)
+                && let Some(t) = src_tile
+            {
+                return Ok(Some((tc, t.clone())));
+            }
+            let src_bytes = src_tile.map_or(base.default_bytes(), |t| t.bytes());
+            let mut out = piece.try_default_tile().map_err(oom)?;
+            let out_bytes = out.bytes_mut();
+            let mut px = [0.0f32; 8];
+            let mut has_content = false;
+            for y in tr.y0..tr.y1 {
+                let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize;
+                for x in tr.x0..tr.x1 {
+                    let k = mask.at(x, y);
+                    if k <= 0.0 {
+                        continue;
+                    }
+                    let idx = row + (x - tc.tx * TILE_SIZE) as usize;
+                    let dst_i = idx * dst_bpp;
+                    let Some(dst_px) = out_bytes.get_mut(dst_i..dst_i + dst_bpp) else { continue };
+                    let src_i = if src_bytes.len() == src_bpp { 0 } else { idx * src_bpp };
+                    let Some(src_px) = src_bytes.get(src_i..src_i + src_bpp) else { continue };
+                    if same_fmt && k >= 1.0 {
+                        if src_px.iter().any(|&v| v != 0) {
+                            dst_px.copy_from_slice(src_px);
+                            has_content = true;
+                        }
+                        continue;
+                    }
+                    if same_fmt {
+                        for (c, v) in px.iter_mut().enumerate().take(n) {
+                            *v = read_sample(src_px, src_fmt.sample, c);
+                        }
+                        px[a] *= k;
+                    } else {
+                        for (c, v) in px.iter_mut().enumerate().take(a) {
+                            *v = read_sample(src_px, src_fmt.sample, c);
+                        }
+                        px[a] = k;
+                    }
+                    if px[a] <= 0.0 {
+                        continue;
+                    }
+                    photocraft_raster::encode_pixel(&with_alpha, &px[..n], dst_px);
+                    let non_zero = match with_alpha.sample {
+                        SampleType::U8 => dst_px.get(alpha_off) != Some(&0) || dst_px.iter().any(|&v| v != 0),
+                        SampleType::U16 => dst_px.get(alpha_off..dst_bpp) != Some(&[0, 0]) || dst_px.iter().any(|&v| v != 0),
+                        SampleType::F32 => dst_px.iter().any(|&v| v != 0),
+                    };
+                    has_content |= non_zero;
+                }
+            }
+            Ok(has_content.then(|| (tc, Arc::new(out))))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    piece.put_tiles(tiles.into_iter().flatten());
+    Ok(piece)
 }
 
 /// A piece floating `offset` whole pixels from where it was cut, over document `revision`.

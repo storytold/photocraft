@@ -1593,9 +1593,9 @@ fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible:
         damage = Some(crate::adjust_preview::switch_damage(app, raw_key, r, visible));
     }
     let preview_key = raw_key ^ display_key;
-    // The Navigator may draw this texture only while it holds the plain document (no live
-    // preview, which can be composited only where the view is).
-    if raw_key == 0 {
+    // The Navigator may draw this texture while it holds the plain document or a drag preview
+    // that updates the full texture (not an adjustment preview composited only where the view is).
+    if raw_key == 0 || navigator_waits_for_drag(app, idx) {
         app.navigator_plain.insert(id);
     } else {
         app.navigator_plain.remove(&id);

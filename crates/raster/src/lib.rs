@@ -122,19 +122,18 @@ pub struct Surface {
 #[derive(Default)]
 struct UniformTiles {
     /// Per source tile (by address): the index of its value's tile in `canonical`, or `None`.
-    of: std::collections::HashMap<*const Tile, Option<usize>>,
+    of: std::collections::HashMap<usize, Option<usize>>,
     canonical: Vec<Arc<Tile>>,
 }
 
 impl UniformTiles {
     /// The tile to share for a target reading window `r` of `s`, when every tile under it holds
     /// one and the same pixel value (`r` must lie on existing tiles).
-    fn window(&mut self, s: &Surface, r: Rect) -> Option<Arc<Tile>> {
-        let bpp = s.format.bytes_per_pixel();
+    fn window(&self, s: &Surface, r: Rect) -> Option<Arc<Tile>> {
         let mut found = None;
         for c in r.tiles() {
             let t = s.tiles.get(&c)?;
-            let k = self.value_of(t, bpp)?;
+            let k = (*self.of.get(&(Arc::as_ptr(t) as usize))?)?;
             if found.is_some_and(|f| f != k) {
                 return None;
             }
@@ -144,7 +143,8 @@ impl UniformTiles {
     }
 
     fn value_of(&mut self, t: &Arc<Tile>, bpp: usize) -> Option<usize> {
-        if let Some(k) = self.of.get(&Arc::as_ptr(t)) {
+        let key = Arc::as_ptr(t) as usize;
+        if let Some(k) = self.of.get(&key) {
             return *k;
         }
         let mut px = t.data.chunks_exact(bpp);
@@ -155,7 +155,7 @@ impl UniformTiles {
                 self.canonical.len() - 1
             }
         });
-        self.of.insert(Arc::as_ptr(t), k);
+        self.of.insert(key, k);
         k
     }
 }
@@ -769,6 +769,9 @@ impl Surface {
         let moved = content.translate(dx, dy);
         let targets: std::collections::BTreeSet<TileCoord> = sources().flat_map(|(c, _)| c.rect().translate(dx, dy).intersect(&moved).tiles()).collect();
         let mut uniform = UniformTiles::default();
+        for (_, t) in sources() {
+            uniform.value_of(t, bpp);
+        }
         // The fill row: one tile row of the default pixel, so the regions a shift vacates
         // fill with bulk copies (empty when the default is zero — the tile starts zeroed).
 
@@ -785,7 +788,7 @@ impl Surface {
 
         // One tile row of the default pixel, to compare a finished tile with a row at a time.
         let default_row = self.default_pixel.repeat(TILE_SIZE.unsigned_abs() as usize);
-        for dc in targets {
+        let build_target = |dc: TileCoord| -> Option<(TileCoord, Arc<Tile>)> {
             let dr = dc.rect();
             let sr = dr.translate(dx.saturating_neg(), dy.saturating_neg());
             // Every pixel of the target comes from a source tile (none from the default pixel).
@@ -797,10 +800,7 @@ impl Surface {
                 && sr.tiles().all(|sc| self.tiles.contains_key(&sc));
             if covered && let Some(shared) = uniform.window(self, sr) {
                 // A tile of only the default pixel is left out, as `prune` would.
-                if shared.data.get(..bpp) != Some(&*self.default_pixel) {
-                    out.tiles.insert(dc, shared);
-                }
-                continue;
+                return (shared.data.get(..bpp) != Some(&*self.default_pixel)).then_some((dc, shared));
             }
 
             let mut tile = Tile { data: vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * bpp].into_boxed_slice() };
@@ -882,9 +882,16 @@ impl Surface {
             }
             // A target that got only default pixels isn't stored, as `prune` would drop it. Checked
             // after the copy, a row at a time: a tile with content stops at its first such row.
-            if tile.data.chunks(default_row.len()).any(|row| row != default_row) {
-                out.tiles.insert(dc, Arc::new(tile));
-            }
+            tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| (dc, Arc::new(tile)))
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            out.tiles = targets.into_par_iter().filter_map(build_target).collect();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            out.tiles = targets.into_iter().filter_map(build_target).collect();
         }
         out
     }

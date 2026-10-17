@@ -189,3 +189,63 @@ fn cutting_an_untouched_part_of_the_mask_moves_it_and_leaves_the_background_colo
     assert!((mask_at(&s, 12, 12) - 0.5).abs() < 0.01, "the hole takes the background colour");
     assert_eq!(mask_at(&s, 40, 12), 0.0);
 }
+
+#[test]
+fn float_shares_interior_tiles_on_cut_and_place() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1024, "height": 1024})).unwrap();
+    s.tools.background = [0.2, 0.4, 0.8, 1.0];
+    let id = s.active().unwrap().active_layer.unwrap();
+    // Paint non-uniform pixels so original tiles are distinct.
+    s.edit("pattern", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        for ty in 0..4 {
+            for tx in 0..4 {
+                surf.write_pixel(tx * 256 + 5, ty * 256 + 5, &[tx as f32 * 0.25, ty as f32 * 0.25, 0.5, 1.0]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    // Select (100..900)^2, which fully covers interior tiles (1, 1) and (2, 2).
+    s.execute("select.rect", json!({"x": 100, "y": 100, "width": 800, "height": 800})).unwrap();
+    s.execute("select.float", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let orig = st.doc.layer(id).unwrap().surface().unwrap();
+    let parts = &floating(st).unwrap().parts;
+    let tc1 = photocraft_geom::TileCoord { tx: 1, ty: 1 };
+    let tc2 = photocraft_geom::TileCoord { tx: 2, ty: 2 };
+    // Interior tiles of `piece` share the original layer's Arc<Tile>.
+    assert!(Arc::ptr_eq(orig.tile(tc1).unwrap(), parts.piece.tile(tc1).unwrap()));
+    assert!(Arc::ptr_eq(orig.tile(tc2).unwrap(), parts.piece.tile(tc2).unwrap()));
+    // Interior tiles of the Background hole in `rest` share one solid fill Arc<Tile>.
+    assert!(Arc::ptr_eq(parts.rest.tile(tc1).unwrap(), parts.rest.tile(tc2).unwrap()));
+    // Moving by a whole tile (256, 0) shares the interior tile directly in the preview document.
+    let shown = displayed(st, (256, 0)).unwrap();
+    let shown_surf = shown.layer(id).unwrap().surface().unwrap();
+    let moved_tc = photocraft_geom::TileCoord { tx: 2, ty: 1 };
+    assert!(Arc::ptr_eq(orig.tile(tc1).unwrap(), shown_surf.tile(moved_tc).unwrap()));
+}
+
+#[test]
+fn float_feathered_selection_preserves_partial_alpha_across_depths() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 80, "background": "transparent", "depth": depth})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 55, 80), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 30, "height": 30, "feather": 4.0})).unwrap();
+        s.execute("select.float", json!({"dx": 40, "dy": 0})).unwrap();
+        s.execute("select.drop", json!({})).unwrap();
+        let surf = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+        // Center of moved piece is opaque red; center of hole is transparent; feathered edge has partial alpha.
+        assert!(surf.rgba(75, 35)[3] > 0.95, "{depth}-bit moved center");
+        assert!(surf.rgba(35, 35)[3] < 0.05, "{depth}-bit hole center");
+        let edge_a = surf.rgba(60, 35)[3];
+        assert!(edge_a > 0.1 && edge_a < 0.9, "{depth}-bit feathered edge alpha={edge_a}");
+    }
+}

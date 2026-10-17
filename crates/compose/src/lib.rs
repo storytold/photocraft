@@ -480,11 +480,33 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
         Ok(())
     });
     debug_assert!(ok.is_ok());
-    for (i, p) in acc.iter_mut().enumerate() {
-        let ((x0, x1), (y0, y1)) = (span(ox0 + i % ow, fw, w), span(oy0 + i / ow, fh, h));
-        let n = ((y1 - y0) * (x1 - x0)).max(1) as f32;
-        let a = p[3];
-        *p = if a > 0.0 { [p[0] / a, p[1] / a, p[2] / a, a / n] } else { [0.0; 4] };
+    let col_w: Vec<usize> = (0..ow)
+        .map(|x| {
+            let (x0, x1) = span(ox0 + x, fw, w);
+            (x1 - x0).max(1)
+        })
+        .collect();
+    let norm_row = |row: usize, out: &mut [[f32; 4]]| {
+        let (y0, y1) = span(oy0 + row, fh, h);
+        let rh = (y1 - y0).max(1);
+        for (p, &cw) in out.iter_mut().zip(&col_w) {
+            let a = p[3];
+            if a > 0.0 {
+                let n = (rh * cw) as f32;
+                *p = [p[0] / a, p[1] / a, p[2] / a, a / n];
+            } else {
+                *p = [0.0; 4];
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        acc.par_chunks_mut(ow).enumerate().for_each(|(row, out)| norm_row(row, out));
+    }
+    #[cfg(target_arch = "wasm32")]
+    for (row, out) in acc.chunks_mut(ow).enumerate() {
+        norm_row(row, out);
     }
     Buffer { rect: out, px: acc }
 }
@@ -1466,6 +1488,27 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
             p[3] *= mask_k(&mask, i);
         }
         blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, 1.0);
+        return;
+    }
+    if !matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
+        && let Some(s) = layer.surface()
+        && layer.blend == BlendMode::Normal
+        && opacity >= 1.0
+        && !clipped.iter().any(|c| c.visible)
+        && layer.mask.is_none()
+        && layer.vector_mask.is_none()
+        && text_gamma(layer) == 1.0
+        && !psblend::LAB_MIX.with(|l| l.get())
+        && backdrop.px.iter().all(|p| p[3] <= 0.0)
+    {
+        s.read_rgba_into(rect, &mut backdrop.px);
+        for p in &mut backdrop.px {
+            if p[3] <= 0.0 {
+                *p = [0.0; 4];
+            } else if p[3] < 1.0 {
+                *p = psblend::composite_normal_rgb([0.0; 4], *p, 1.0);
+            }
+        }
         return;
     }
     let Some(mut content) = render_content(layer, rect, cx) else { return };

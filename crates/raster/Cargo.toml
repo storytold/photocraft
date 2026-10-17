@@ -12,5 +12,8 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 serde = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
