@@ -82,6 +82,7 @@ fn selection(h: &Harness) -> Option<[i32; 4]> {
 
 #[test]
 fn marquee_dragged_past_the_right_edge_scrolls_and_selects_beyond_the_view() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     setup(&mut h, "rectMarquee");
     let start = xf(&h);
@@ -121,6 +122,7 @@ fn marquee_dragged_past_the_right_edge_scrolls_and_selects_beyond_the_view() {
 
 #[test]
 fn a_drag_inside_the_canvas_does_not_scroll() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     setup(&mut h, "rectMarquee");
     let start = xf(&h);
@@ -139,6 +141,7 @@ fn a_drag_inside_the_canvas_does_not_scroll() {
 
 #[test]
 fn rotated_marquee_scrolls_on_the_axis_that_is_visibly_clipped() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness_with_size(egui::vec2(1200.0, 640.0)) else { return };
     setup(&mut h, "rectMarquee");
     let rect = xf(&h).rect;

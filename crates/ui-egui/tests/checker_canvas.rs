@@ -278,6 +278,7 @@ fn grid_line_contrast_over_grey(h: &mut Harness, grey: u8) -> i32 {
 
 #[test]
 fn pixel_grid_does_not_flip_colour_across_mid_tones() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(4);
     // 0x87 and 0x90 sit either side of luma 0.55, where the line used to switch from a full white

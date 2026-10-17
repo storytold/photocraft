@@ -52,6 +52,7 @@ fn near(a: [u8; 3], b: [u8; 3]) -> bool {
 
 #[test]
 fn pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     let app = h.state_mut();
     app.run("file.new", json!({"width": 200, "height": 100, "mode": "rgb", "depth": 8})).expect("new");

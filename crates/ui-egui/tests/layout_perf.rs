@@ -220,6 +220,7 @@ fn the_move_preview_is_what_the_move_commits() {
 
 #[test]
 fn layout_document_composites_on_the_gpu_like_the_cpu() {
+    let _gpu = photocraft_testkit::gpu_lock();
     use eframe::wgpu;
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
