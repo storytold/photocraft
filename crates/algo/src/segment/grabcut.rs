@@ -139,8 +139,8 @@ pub const OBJECT_AT_WORK_PX: usize = 60_000;
 /// A heuristic, not a semantic segmenter (that is #2788): on a working-resolution copy of the
 /// canvas the area around the point is grown over pixels of similar colour (CIELAB, bounded both
 /// by the distance to the seed's running mean and by the local edge step), so it stops at the
-/// object's outline. A region that grows over most of the canvas is the background: nothing is
-/// found. Otherwise GrabCut refines it inside its padded bounding box (the grown area probable
+/// object's outline. A region covering most of the canvas boundary is treated as background.
+/// Otherwise GrabCut refines it inside its padded bounding box (the grown area probable
 /// foreground, the cursor definite foreground, outside the box definite background), the part
 /// connected to the cursor is kept and the boundary is re-cut at full resolution, as the
 /// rectangle mode does.
@@ -164,8 +164,9 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
     let sy = (((py - canvas.y0) as usize) / step).min(h - 1);
     let grown = grow_similar(&lab, w, h, sx, sy);
     let count = grown.iter().filter(|g| **g).count();
-    // Background (or a flat image): no single object under the cursor.
-    if count * 10 > w * h * 6 || count < 4 {
+    let boundary = grown.iter().enumerate().filter(|(i, on)| **on && (i % w == 0 || i % w + 1 == w || i / w == 0 || i / w + 1 == h)).count();
+    // shortcut: cropped objects covering most of the frame need a semantic segmenter (#2788).
+    if boundary * 2 >= 2 * w + 2 * h - 4 || count < 4 {
         return None;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);

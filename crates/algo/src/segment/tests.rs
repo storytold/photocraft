@@ -752,6 +752,38 @@ fn object_at_finds_the_disc_under_the_cursor() {
 }
 
 #[test]
+fn object_at_keeps_large_foregrounds_but_not_the_surrounding_background() {
+    let (w, h) = (400, 300);
+    for margin in [30, 20, 8] {
+        let inside = |x: usize, y: usize| x >= margin && x < w - margin && y >= margin && y < h - margin;
+        let img = RgbImage::from_fn(w, h, |x, y| {
+            let noise = ((x * 13 + y * 7) % 17) as f32 / 850.0;
+            if inside(x, y) { [0.8 + noise, 0.2, 0.1] } else { [0.1, 0.2, 0.8 + noise] }
+        });
+        let truth: Vec<_> = (0..w * h).map(|i| inside(i % w, i / w)).collect();
+        let sampler = ImageSampler { img: &img, origin: (-40, 25) };
+        let canvas = Rect::new(-40, 25, w as i32 - 40, h as i32 + 25);
+        let region = grabcut::object_at(&sampler, canvas, 160.0, 175.0, grabcut::OBJECT_AT_WORK_PX)
+            .unwrap_or_else(|| panic!("missing large foreground with margin {margin}"));
+        let local = Region { bbox: region.bbox.translate(40, -25), mask: region.mask };
+        assert!(iou(&local, &truth, w, h) > 0.95, "margin {margin}");
+        assert!(grabcut::object_at(&sampler, canvas, -39.0, 26.0, grabcut::OBJECT_AT_WORK_PX).is_none(), "background margin {margin}");
+    }
+}
+
+#[test]
+fn object_at_allows_a_foreground_touching_one_edge_but_rejects_a_flat_image() {
+    let img = RgbImage::from_fn(400, 300, |x, y| if x < 360 && (20..280).contains(&y) { [0.8, 0.2, 0.1] } else { [0.1, 0.2, 0.8] });
+    let sampler = ImageSampler { img: &img, origin: (0, 0) };
+    let canvas = Rect::new(0, 0, 400, 300);
+    let region = grabcut::object_at(&sampler, canvas, 200.0, 150.0, grabcut::OBJECT_AT_WORK_PX).unwrap();
+    assert!(region.at(0, 150) > 0.9 && region.at(350, 150) > 0.9);
+    assert!(region.at(380, 150) < 0.1 && region.at(200, 5) < 0.1);
+    let flat = RgbImage::from_fn(400, 300, |_, _| [0.5; 3]);
+    assert!(grabcut::object_at(&ImageSampler { img: &flat, origin: (0, 0) }, canvas, 200.0, 150.0, grabcut::OBJECT_AT_WORK_PX).is_none());
+}
+
+#[test]
 fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     let (img, _) = disc_scene(320, 240, 160.0, 120.0, 70.0, 7);
     let s = ImageSampler { img: &img, origin: (0, 0) };

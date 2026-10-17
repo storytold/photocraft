@@ -697,6 +697,22 @@ mod tests {
     }
 
     #[test]
+    fn object_selection_finds_a_large_foreground_at_each_depth_and_undoes() {
+        for depth in [8, 16, 32] {
+            let inside = |x: i32, y: i32| (10..190).contains(&x) && (8..152).contains(&y);
+            let mut s = session_with(200, 160, depth, |x, y| if inside(x as i32, y as i32) { [0.8, 0.2, 0.1] } else { [0.1, 0.2, 0.8] });
+            let r = s.execute("select.object", json!({"point": [100, 80]})).unwrap();
+            assert_eq!(r["changed"], true, "depth {depth}");
+            assert!(sel_iou(&s, 200, 160, inside) > 0.95, "depth {depth}");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(s.active().unwrap().doc.selection.is_none());
+            let r = s.execute("select.object", json!({"point": [1, 1]})).unwrap();
+            assert_eq!(r["changed"], false, "background at depth {depth}");
+            assert!(s.active().unwrap().doc.selection.is_none());
+        }
+    }
+
+    #[test]
     fn object_selection_point_honours_the_modes() {
         let (mut s, _) = disc(8);
         s.execute("select.all", json!({})).unwrap();
