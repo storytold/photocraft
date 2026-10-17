@@ -1,6 +1,7 @@
 //! Document ⇄ manifest conversion. Binary data is routed through a
 //! [`Sink`] (save) or [`Fetch`] (load) keyed by BLAKE3 hash.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
@@ -547,25 +548,32 @@ impl Loader<'_> {
     }
 
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
+        // Validate the whole layer tree before decoding payloads or allocating ids. Remapping
+        // cannot repair duplicates: layer comp and slice targets would still be ambiguous.
+        fn check_ids(layers: &[LayerM], depth: usize, seen: &mut HashSet<u64>, max: &mut u64) -> Result<()> {
+            if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
+                return Err(too_deep());
+            }
+            for l in layers {
+                if !seen.insert(l.id) {
+                    return Err(FormatError::corrupt(format!("duplicate layer id {}", l.id)));
+                }
+                *max = (*max).max(l.id);
+                match &l.content {
+                    ContentM::Group { children, .. } => check_ids(children, depth + 1, seen, max)?,
+                    // Contents identities intentionally repeat for shared smart objects; embedded
+                    // documents are opaque blobs with their own layer identity namespace.
+                    ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        let mut max = m.id;
+        check_ids(&m.layers, 0, &mut HashSet::new(), &mut max)?;
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
         if self.preserve_ids {
-            fn max_ids(layers: &[LayerM], depth: usize, max: &mut u64) -> Result<()> {
-                if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
-                    return Err(too_deep());
-                }
-                for l in layers {
-                    *max = (*max).max(l.id);
-                    match &l.content {
-                        ContentM::Group { children, .. } => max_ids(children, depth + 1, max)?,
-                        ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
-                        _ => {}
-                    }
-                }
-                Ok(())
-            }
-            let mut max = m.id;
-            max_ids(&m.layers, 0, &mut max)?;
             self.preserve_ids = reserve_ids_through(max);
         }
         let layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
