@@ -17,12 +17,15 @@ fn right_to_left_scripts_by_language_code() {
     for code in ["en", "ja", "zh-hans", "pt-br", "ku", "arn", ""] {
         assert_eq!(i18n::dir_for_code(code), Dir::Ltr, "{code}");
     }
-    // No right-to-left catalog is registered yet, so the shell stays as it was.
+    // Registered languages follow their script: Arabic is right-to-left, the rest left-to-right.
     for lang in Lang::all() {
-        assert_eq!(lang.dir(), Dir::Ltr, "{}", lang.code());
+        let expected = match lang.code() {
+            "ar" => Dir::Rtl,
+            _ => Dir::Ltr,
+        };
+        assert_eq!(lang.dir(), expected, "{}", lang.code());
     }
 }
-
 #[test]
 fn direction_follows_the_language_unless_forced() {
     let _lang = i18n::language_scope(Lang::EN);

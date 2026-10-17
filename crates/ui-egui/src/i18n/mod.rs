@@ -115,6 +115,17 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// Arabic (CLDR): 0 → zero, 1 → one, 2 → two, 3–10 → few, 11–99 → many, 100+ → other.
+fn plural_arabic(n: u64) -> usize {
+    match n {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3..=10 => 3,
+        11..=99 => 4,
+        _ => 5,
+    }
+}
 /// A catalog file as packed by build.rs (`pack_catalogs`; the binary would otherwise carry ~2.2 MB
 /// of translations, which the web build's size gate can't afford). See [`unpack`].
 macro_rules! catalog {
@@ -189,6 +200,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 /// The registry. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; 21] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new(),},
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`

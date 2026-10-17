@@ -219,10 +219,10 @@
 	Lab Color	Laboratuvar Rengi
 	Multichannel	Çok kanallı
 	8 Bits/Channel	8 Bit/Kanal
-	8 bit	8 bitlik
+	8 bit	8 Bit
 	Integer	Tamsayı
 	16 Bits/Channel	16 Bit/Kanal
-	16 bit	16 bitlik
+	16 bit	16 Bit
 	32 Bits/Channel	32 Bit/Kanal
 	32 bit (float)	32 bitlik (kayan noktalı)
 	Floating point	Kayan nokta
@@ -3834,6 +3834,8 @@ cameraData	Lens	Lens
 	Clear Brush Controls	Fırça Denetimlerini Temizle
 	Reset All Locked Settings	Tüm Kilitli Ayarları Sıfırla
 	Copy Texture to Other Tools	Dokuyu Diğer Araçlara Kopyala
+
+
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Eylemleri Yükle…
