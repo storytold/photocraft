@@ -3880,13 +3880,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(&xf, vertical));
         } else if let Some(p) = response.hover_pos()
-            && let Some(c) = crate::transform_tool::cursor(app, &xf, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command))
+            && let Some(c) = {
+                let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+                crate::transform_tool::cursor(app, &xf, xf.to_doc(p), mods)
+            }
         {
             ui.ctx().set_cursor_icon(c);
             // CursorIcon::None hides the pointer; the curved arrow has to be drawn or the
             // rotate zone looks like a plain cursor (#4050).
             let d = xf.to_doc(p);
-            if let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d) {
+            let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+            if !mods.command && let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d) {
                 let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
                 crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
             }
