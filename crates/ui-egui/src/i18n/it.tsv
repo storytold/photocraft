@@ -2705,6 +2705,23 @@ cameraData	Lens	Obiettivo
 	Snap to Origin	Aggancia all'origine
 	Search settings…	Cerca impostazioni…
 	No matching settings	Nessuna impostazione corrispondente
+	Animation Options	Opzioni animazione
+	Entire Document	Documento intero
+	Filter Options	Opzioni filtro
+	Layer Bounds	Limiti livello
+	Layers Panel Options	Opzioni pannello Livelli
+	New Artboard…	Nuova tavola da disegno…
+	New Group…	Nuovo gruppo…
+	Prevent Auto-Nesting	Impedisci annidamento automatico
+	Show Layers	Mostra livelli
+	Thumbnail Contents	Contenuto miniature
+	Thumbnail Size	Dimensione miniature
+	Use Default Masks on Fill Layers	Usa maschere predefinite sui livelli di riempimento
+	Expand New Effects	Espandi nuovi effetti
+	Add “copy” to Copied Layers and Groups	Aggiungi «copia» ai livelli e ai gruppi duplicati
+	Preview on canvas when reordering layers	Anteprima sulla tela durante il riordino dei livelli
+	Show layer mask badges	Mostra distintivi delle maschere di livello
+
 	Loading fonts…	Caricamento font…
 	Response curve	Curva di risposta
 	Tool	Strumento

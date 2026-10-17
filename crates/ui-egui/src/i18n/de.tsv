@@ -2675,6 +2675,26 @@ cameraData	Lens	Objektiv
 	Snap to Origin	An Ursprung ausrichten
 	Search settings…	Einstellungen durchsuchen…
 	No matching settings	Keine passenden Einstellungen
+	Animation Options	Animationsoptionen
+	Entire Document	Gesamtes Dokument
+	Filter Options	Filteroptionen
+	Layer Bounds	Ebenenbegrenzungen
+	Layers Panel Options	Optionen des Ebenenbedienfelds
+	Lock Layers	Ebenen sperren
+	New Artboard…	Neue Zeichenfläche…
+	New Group…	Neue Gruppe…
+	New Layer…	Neue Ebene…
+	Panel Options…	Bedienfeldoptionen…
+	Prevent Auto-Nesting	Automatisches Verschachteln verhindern
+	Show Layers	Ebenen einblenden
+	Thumbnail Contents	Miniaturinhalt
+	Thumbnail Size	Miniaturgröße
+	Use Default Masks on Fill Layers	Standardmasken für Füllebenen verwenden
+	Expand New Effects	Neue Effekte aufklappen
+	Add “copy” to Copied Layers and Groups	„Kopie“ zu kopierten Ebenen und Gruppen hinzufügen
+	Preview on canvas when reordering layers	Vorschau auf der Arbeitsfläche beim Neuanordnen von Ebenen
+	Show layer mask badges	Ebenenmasken-Abzeichen anzeigen
+
 	Loading fonts…	Schriften werden geladen…
 	Response curve	Reaktionskurve
 	Tool	Werkzeug

@@ -3722,6 +3722,23 @@ cameraData	Lens	Об'єктив
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+	Animation Options	Параметри анімації
+	Entire Document	Увесь документ
+	Filter Options	Параметри фільтрів
+	Layer Bounds	Межі шару
+	Layers Panel Options	Параметри панелі «Шари»
+	New Artboard…	Нова монтажна область…
+	New Group…	Нова група…
+	Prevent Auto-Nesting	Заборонити автоматичне вкладення
+	Show Layers	Показати шари
+	Thumbnail Contents	Вміст мініатюр
+	Thumbnail Size	Розмір мініатюр
+	Use Default Masks on Fill Layers	Використовувати типові маски для шарів заливки
+	Expand New Effects	Розгортати нові ефекти
+	Add “copy” to Copied Layers and Groups	Додавати «копія» до скопійованих шарів і груп
+	Preview on canvas when reordering layers	Попередній перегляд на полотні під час зміни порядку шарів
+	Show layer mask badges	Показувати позначки масок шарів
+
 	Loading fonts…	Завантаження шрифтів…
 	Response curve	Крива відгуку
 	Simulate Pressure	Імітувати натиск

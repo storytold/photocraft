@@ -2717,6 +2717,26 @@ cameraData	Lens	Objetivo
 	Snap to Origin	Ajustar a origen
 	Search settings…	Buscar ajustes…
 	No matching settings	No hay ajustes que coincidan
+	Animation Options	Opciones de animación
+	Entire Document	Documento entero
+	Filter Options	Opciones de filtro
+	Layer Bounds	Límites de capa
+	Layers Panel Options	Opciones del panel Capas
+	Lock Layers	Bloquear capas
+	New Artboard…	Nueva mesa de trabajo…
+	New Group…	Nuevo grupo…
+	New Layer…	Nueva capa…
+	Panel Options…	Opciones de panel…
+	Prevent Auto-Nesting	Impedir anidación automática
+	Show Layers	Mostrar capas
+	Thumbnail Contents	Contenido de miniaturas
+	Thumbnail Size	Tamaño de miniaturas
+	Use Default Masks on Fill Layers	Usar máscaras predeterminadas en capas de relleno
+	Expand New Effects	Expandir nuevos efectos
+	Add “copy” to Copied Layers and Groups	Añadir «copia» a las capas y grupos duplicados
+	Preview on canvas when reordering layers	Previsualizar en el lienzo al reordenar capas
+	Show layer mask badges	Mostrar insignias de máscaras de capa
+
 	Loading fonts…	Cargando fuentes…
 	Response curve	Curva de respuesta
 	Tool	Herramienta
@@ -2806,7 +2826,6 @@ curves	Smooth	Suavizar
 @id	select.all	Seleccionar todo
 	Delete Smart Filters	Eliminar filtros inteligentes
 	Enable Smart Filters	Activar filtros inteligentes
-	New Layer…	Nueva capa…
 	Delete Layer…	Eliminar capa…
 	Select Similar Colors	Seleccionar colores similares
 	Canvas rotation	Rotación del lienzo
@@ -2883,7 +2902,6 @@ curves	Smooth	Suavizar
 	Automatically Create New Snapshot When Saving	Crear automáticamente una instantánea nueva al guardar
 	Show New Snapshot Dialog by Default	Mostrar de forma predeterminada el cuadro de diálogo Nueva instantánea
 	Clear History	Borrar historial
-	Panel Options…	Opciones de panel…
 	View menu	Menú Vista
 	Keep view in sync	Mantener la vista sincronizada
 	{zoom}%	{zoom}%
@@ -3794,7 +3812,6 @@ layerLabel	No Color	Sin color
 	Lens Flare	Destello
 	Lighting Effects	Efectos de iluminación
 	Liquify	Licuar
-	Lock Layers	Bloquear capas
 	Lum	Lum
 	Match Color	Igualar color
 	Merge to HDR Pro	Combinar en HDR Pro

@@ -2641,6 +2641,27 @@ cameraData	Lens	Objektiv
 	Snap to Origin	Přichytit k počátku
 	Search settings…	Hledat nastavení…
 	No matching settings	Žádná odpovídající nastavení
+	Animation Options	Možnosti animace
+	Entire Document	Celý dokument
+	Filter Options	Možnosti filtrování
+	Layer Bounds	Hranice vrstvy
+	Layers Panel Options	Možnosti panelu Vrstvy
+	Lock Layers	Zamknout vrstvy
+	New Artboard…	Nové kreslicí plátno…
+	New Group	Nová skupina
+	New Group…	Nová skupina…
+	New Layer…	Nová vrstva…
+	Panel Options…	Možnosti panelu…
+	Prevent Auto-Nesting	Zabránit automatickému vnoření
+	Show Layers	Zobrazit vrstvy
+	Thumbnail Contents	Obsah miniatur
+	Thumbnail Size	Velikost miniatur
+	Use Default Masks on Fill Layers	Používat výchozí masky u vrstev výplně
+	Expand New Effects	Rozbalovat nové efekty
+	Add “copy” to Copied Layers and Groups	Přidávat „kopie“ ke kopírovaným vrstvám a skupinám
+	Preview on canvas when reordering layers	Zobrazovat náhled na plátně při změně pořadí vrstev
+	Show layer mask badges	Zobrazovat odznaky masek vrstev
+
 
 # Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
 # choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
@@ -3066,7 +3087,6 @@ cameraData	Lens	Objektiv
 	Liquify	Zkapalnit
 	List	Seznam
 	Load Selection	Načíst výběr
-	Lock Layers	Zamknout vrstvy
 	Locked	Zamčeno
 	Long Lines	Dlouhé čáry
 	Long Strokes	Dlouhé tahy
@@ -3115,11 +3135,9 @@ cameraData	Lens	Objektiv
 	Neon Glow	Neonová záře
 	Neutralize	Neutralizovat
 	New Channel	Nový kanál
-	New Group	Nová skupina
 	New Guide	Nové vodítko
 	New Guide Layout	Nové rozvržení vodítek
 	New Layer Comp	Nová kompozice vrstev
-	New Layer…	Nová vrstva…
 	New Video Layer from File	Nová video vrstva ze souboru
 	New document	Nový dokument
 	New document…     ⌘N	Nový dokument…     ⌘N

@@ -3219,6 +3219,26 @@ cameraData	Lens	렌즈
 	Snap to Origin	원점에 스냅
 	Search settings…	설정 검색…
 	No matching settings	일치하는 설정 없음
+	Animation Options	애니메이션 옵션
+	Entire Document	전체 문서
+	Filter Options	필터 옵션
+	Layer Bounds	레이어 경계
+	Layers Panel Options	레이어 패널 옵션
+	New Artboard…	새 아트보드…
+	New Group	새 그룹
+	New Group…	새 그룹…
+	New Layer…	새 레이어…
+	Panel Options…	패널 옵션…
+	Prevent Auto-Nesting	자동 중첩 방지
+	Show Layers	레이어 표시
+	Thumbnail Contents	축소판 내용
+	Thumbnail Size	축소판 크기
+	Use Default Masks on Fill Layers	칠 레이어에 기본 마스크 사용
+	Expand New Effects	새 효과 펼치기
+	Add “copy” to Copied Layers and Groups	복사한 레이어 및 그룹에 “복사” 추가
+	Preview on canvas when reordering layers	레이어 순서 변경 시 캔버스에서 미리보기
+	Show layer mask badges	레이어 마스크 배지 표시
+
 	Loading fonts…	글꼴 불러오는 중…
 	Response curve	응답 곡선
 	Simulate Pressure	압력 시뮬레이션

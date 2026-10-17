@@ -537,6 +537,35 @@ fn press_drag_release_on_the_fx_button_opens_that_style() {
     assert!(effects.iter().any(|e| e["kind"] == json!("dropShadow")), "on Drop Shadow: {effects:?}");
 }
 
+/// Integration regression: a display preference must resize the *actual painted*
+/// thumbnails and row hitboxes, not only its Preview dialog.
+#[test]
+fn panel_thumbnail_sizes_change_real_row_geometry() {
+    use crate::state::LayerThumbnailSize;
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    session.execute("layer.new.layer", json!({"name": "Photo"})).unwrap();
+    session.execute("edit.fill", json!({"color": "#9acb32"})).unwrap();
+    let layer = session.active().unwrap().active_layer.unwrap();
+    let mut h = harness(session, 1.0, "promedium", 290.0);
+    for (size, expected_thumb, expected_row) in [
+        (LayerThumbnailSize::None, 0.0, 23.0),
+        (LayerThumbnailSize::Small, 18.0, 32.0),
+        (LayerThumbnailSize::Medium, 24.0, 32.0),
+        (LayerThumbnailSize::Large, 48.0, 56.0),
+    ] {
+        h.state_mut().ui.layers_panel_options.thumbnail_size = size;
+        h.run_steps(5);
+        let found = recorded(&h.ctx).into_iter().find(|r| r.layer == layer.0).expect("visible layer row");
+        assert!((found.row.height() - expected_row).abs() < 0.1, "{size:?}: row {}", found.row.height());
+        match found.thumbnail {
+            Some(rect) => assert!((rect.width() - expected_thumb).abs() < 0.1, "{size:?}: thumbnail {}", rect.width()),
+            None => assert_eq!(expected_thumb, 0.0, "{size:?} should display a thumbnail"),
+        }
+        assert!(found.name.is_some(), "{size:?}: layer name still visible");
+    }
+}
+
 /// One layer per lock, each with only that lock set (#4158).
 fn one_lock_each() -> (photocraft_engine::Session, Vec<(&'static str, u64)>) {
     let mut s = photocraft_engine::Session::new();

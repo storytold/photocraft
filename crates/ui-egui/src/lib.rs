@@ -122,6 +122,7 @@ pub mod layer_row_ui;
 pub mod layer_style;
 mod layer_transfer;
 pub mod layer_tree_ui;
+pub mod layers_panel_ui;
 mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
@@ -596,6 +597,10 @@ pub struct PhotocraftApp {
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
     pub(crate) blend_preview: Option<blend_preview::BlendPreview>,
+    /// Layers panel drag: temporary reordered document displayed until mouse release.
+    pub(crate) reorder_preview: Option<layers_panel_ui::ReorderPreview>,
+    /// Whether the currently dragged layer is over a valid destination this frame.
+    pub(crate) reorder_preview_hit: bool,
     /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
@@ -857,6 +862,8 @@ impl PhotocraftApp {
             move_hover: None,
             object_finder: None,
             blend_preview: None,
+            reorder_preview: None,
+            reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
             magnetic: Default::default(),
@@ -967,6 +974,7 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        layers_panel_ui::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -1139,13 +1147,24 @@ impl PhotocraftApp {
             jobs_ui::run(self, id, params)
         };
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
-        if r.is_ok() && (ADDS_LAYER_MASK.contains(&id) || creates_adjustment_or_fill) {
-            // Adding a layer mask targets it, as in Photoshop (#2166).
+        if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
+            // Adding an explicit mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
-            // Properties still shows the new adjustment or fill layer's settings, not its mask,
-            // as in Photoshop (#3369): clicking the mask thumbnail switches it to the mask.
-            self.ui.properties_layer = if creates_adjustment_or_fill { self.session.active().and_then(|st| st.active_layer).map(|l| l.0) } else { None };
+            self.ui.properties_layer = None;
+        } else if r.is_ok() && creates_adjustment_or_fill {
+            // Panel Options may suppress a fill layer's default mask. Never target a
+            // nonexistent mask; an active path creates a vector mask instead.
+            let masks = self
+                .session
+                .active()
+                .and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id)))
+                .map(|layer| (layer.mask.is_some(), layer.vector_mask.is_some()))
+                .unwrap_or((false, false));
+            self.ui.mask_target = masks.0;
+            self.ui.vector_mask_target = !masks.0 && masks.1;
+            // Keep Properties on the new layer contents, as on main (#3369).
+            self.ui.properties_layer = self.session.active().and_then(|st| st.active_layer).map(|l| l.0);
         }
         if r.is_ok() && creates_adjustment_or_fill {
             // Properties comes to the front, shown and expanded, so the new layer's settings can
@@ -2041,6 +2060,7 @@ impl eframe::App for PhotocraftApp {
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        layers_panel_ui::show_dialog(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);

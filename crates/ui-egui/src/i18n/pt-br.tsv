@@ -3054,6 +3054,23 @@ cameraData	Lens	Lente
 	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
+	Animation Options	Opções de animação
+	Entire Document	Documento inteiro
+	Filter Options	Opções de filtro
+	Layer Bounds	Limites da camada
+	Layers Panel Options	Opções do painel Camadas
+	New Artboard…	Nova prancheta…
+	New Group…	Novo grupo…
+	Prevent Auto-Nesting	Impedir aninhamento automático
+	Show Layers	Mostrar camadas
+	Thumbnail Contents	Conteúdo das miniaturas
+	Thumbnail Size	Tamanho das miniaturas
+	Use Default Masks on Fill Layers	Usar máscaras padrão nas camadas de preenchimento
+	Expand New Effects	Expandir novos efeitos
+	Add “copy” to Copied Layers and Groups	Adicionar “cópia” às camadas e grupos copiados
+	Preview on canvas when reordering layers	Pré-visualizar na tela ao reordenar camadas
+	Show layer mask badges	Mostrar emblemas de máscaras de camada
+
 	Loading fonts…	Carregando fontes…
 	Response curve	Curva de resposta
 	Tool	Ferramenta

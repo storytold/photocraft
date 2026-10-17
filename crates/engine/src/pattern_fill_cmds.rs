@@ -124,7 +124,8 @@ pub fn preview(s: &Session, cmd: &str, p: &Value) -> Result<Document> {
         CREATE => {
             let pat = crate::pattern_cmds::resolve_param(s, CREATE, p)?;
             let mut active = st.active_layer;
-            crate::pattern_cmds::insert_fill_layer(&mut doc, &mut active, &pat, p)?;
+            let default_mask = crate::commands::layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+            crate::pattern_cmds::insert_fill_layer(&mut doc, &mut active, &pat, p, default_mask)?;
         }
         other => return Err(EngineError::BadParams { cmd: other.into(), msg: "no Pattern Fill preview for this command".into() }),
     }
@@ -214,6 +215,38 @@ mod tests {
         assert_eq!(photocraft_compose::render(&shown, all).px, photocraft_compose::render(&s.active().unwrap().doc, all).px);
         assert_eq!(shown.layers.len(), s.active().unwrap().doc.layers.len());
         assert!(preview(&s, "edit.fill", &json!({})).is_err());
+    }
+
+    #[test]
+    fn create_preview_and_commit_honor_default_masks_option() {
+        for depth in [8, 16, 32] {
+            for default_mask in [false, true] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
+                s.edit_prefs(|prefs| {
+                    prefs.dialogs.insert("ui.layersPanelOptions".into(), json!({"useDefaultMasksOnFillLayers": default_mask}));
+                });
+                let before = s.active().unwrap().doc.clone();
+                let count = s.active().unwrap().history.entries().len();
+                let p = json!({"pattern": "Grid", "scale": 50});
+                let shown = preview(&s, CREATE, &p).unwrap();
+                assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                assert_eq!(s.active().unwrap().history.entries().len(), count);
+                let previewed = shown.layers.iter().find(|l| matches!(l.content, LayerContent::Fill(Fill::Pattern { .. }))).unwrap();
+                assert_eq!(previewed.mask.is_some(), default_mask);
+                if let Some(mask) = &previewed.mask {
+                    assert_eq!(mask.surface.format(), photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, shown.depth, false));
+                }
+                let id = LayerId(s.execute(CREATE, p).unwrap()["layer"].as_u64().unwrap());
+                let committed = s.active().unwrap().doc.layer(id).unwrap();
+                assert_eq!(committed.mask, previewed.mask);
+                assert_eq!(committed.content, previewed.content);
+                s.undo();
+                assert_eq!(*s.active().unwrap().doc, *before);
+                s.redo();
+                assert_eq!(s.active().unwrap().doc.layer(id).unwrap().mask.is_some(), default_mask);
+            }
+        }
     }
 
     #[test]

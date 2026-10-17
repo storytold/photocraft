@@ -3038,6 +3038,24 @@ cameraData	Lens	Lensa
 	Snap to Origin	Jepret ke Titik Asal
 	Search settings…	Cari pengaturan…
 	No matching settings	Tidak ada pengaturan yang cocok
+	Animation Options	Opsi Animasi
+	Entire Document	Seluruh Dokumen
+	Filter Options	Opsi Filter
+	Layer Bounds	Batas Lapisan
+	Layers Panel Options	Opsi Panel Lapisan
+	Lock Layers	Kunci Lapisan
+	New Artboard…	Artboard Baru…
+	New Group…	Grup Baru…
+	Prevent Auto-Nesting	Cegah Pengelompokan Otomatis
+	Show Layers	Tampilkan Lapisan
+	Thumbnail Contents	Isi Gambar Mini
+	Thumbnail Size	Ukuran Gambar Mini
+	Use Default Masks on Fill Layers	Gunakan Masker Default pada Lapisan Isian
+	Expand New Effects	Perluas Efek Baru
+	Add “copy” to Copied Layers and Groups	Tambahkan “salinan” ke Lapisan dan Grup yang Disalin
+	Preview on canvas when reordering layers	Pratinjau pada kanvas saat mengurutkan ulang lapisan
+	Show layer mask badges	Tampilkan Lencana Masker Lapisan
+
 	Loading fonts…	Memuat font…
 	Response curve	Kurva respons
 	Tool	Alat

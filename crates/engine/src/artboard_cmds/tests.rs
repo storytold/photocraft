@@ -585,3 +585,23 @@ fn add_beside_places_a_board_on_each_side_and_alt_duplicates_contents() {
     assert_eq!(doc(&s).size, before);
     assert!(s.execute("layer.artboard.addBeside", json!({"side": "diagonal"})).is_err());
 }
+
+#[test]
+fn add_beside_duplicate_honors_panel_copy_name_preference() {
+    for add_copy in [false, true] {
+        let mut s = session(8);
+        let id = board_with_square(&mut s);
+        let name = doc(&s).layer(id).unwrap().name.clone();
+        s.edit_prefs(|prefs| {
+            prefs.dialogs.insert("ui.layersPanelOptions".into(), json!({"addCopyToCopiedLayersAndGroups": add_copy}));
+        });
+        let before = doc(&s).clone();
+        let result = s.execute("layer.artboard.addBeside", json!({"layer": id.0, "side": "bottom", "duplicate": true})).unwrap();
+        let copy = LayerId(result["layer"].as_u64().unwrap());
+        let expected = if add_copy { before.copy_name(&name) } else { name };
+        assert_eq!(doc(&s).layer(copy).unwrap().name, expected);
+        assert!(red_at(&s, 15, 155), "the copied artboard retains its contents");
+        s.undo();
+        assert_eq!(doc(&s), &before);
+    }
+}

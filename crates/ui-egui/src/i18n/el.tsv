@@ -3731,6 +3731,23 @@ cameraData	Lens	Φακός
 	Snap to Origin	Προσκόλληση στην αρχή
 	Search settings…	Αναζήτηση ρυθμίσεων…
 	No matching settings	Δεν βρέθηκαν ρυθμίσεις
+	Animation Options	Επιλογές κίνησης
+	Entire Document	Ολόκληρο έγγραφο
+	Filter Options	Επιλογές φίλτρου
+	Layer Bounds	Όρια επιπέδου
+	Layers Panel Options	Επιλογές πίνακα επιπέδων
+	New Artboard…	Νέος πίνακας σχεδίασης…
+	New Group…	Νέα ομάδα…
+	Prevent Auto-Nesting	Αποτροπή αυτόματης ένθεσης
+	Show Layers	Εμφάνιση επιπέδων
+	Thumbnail Contents	Περιεχόμενο μικρογραφιών
+	Thumbnail Size	Μέγεθος μικρογραφιών
+	Use Default Masks on Fill Layers	Χρήση προεπιλεγμένων μασκών σε επίπεδα γεμίσματος
+	Expand New Effects	Ανάπτυξη νέων εφέ
+	Add “copy” to Copied Layers and Groups	Προσθήκη «αντίγραφο» σε αντιγραμμένα επίπεδα και ομάδες
+	Preview on canvas when reordering layers	Προεπισκόπηση στον καμβά κατά την αναδιάταξη επιπέδων
+	Show layer mask badges	Εμφάνιση σημάτων μασκών επιπέδου
+
 	Loading fonts…	Φόρτωση γραμματοσειρών…
 	Response curve	Καμπύλη απόκρισης
 	Simulate Pressure	Προσομοίωση πίεσης

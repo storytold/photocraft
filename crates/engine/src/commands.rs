@@ -370,12 +370,18 @@ fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
     Ok(mask)
 }
 
+/// Options from the Layers Panel flyout live in preferences so headless/keyboard commands
+/// behave exactly like pointer-triggered commands. Old preferences preserve Photoshop defaults.
+pub(crate) fn layer_panel_option(s: &Session, key: &str, fallback: bool) -> bool {
+    s.prefs().dialogs.get("ui.layersPanelOptions").and_then(|v| v.get(key)).and_then(Value::as_bool).unwrap_or(fallback)
+}
+
 /// Mask a fill or adjustment layer being created, as Photoshop does: the path selected in the
 /// Paths panel (`"path"`: `"work"`, a saved path's name or a path object) becomes its vector
 /// mask, which makes a Solid Color fill a shape (#1419); without one, the selection becomes its
 /// layer mask ([`selection_mask`]); without either, a white mask reveals the whole layer (#1768).
 /// A path that isn't there is an error.
-pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str) -> Result<()> {
+pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str, default_mask: bool) -> Result<()> {
     let path = match p.get("path") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) if crate::vector_cmds::is_work(Some(n)) => Some(doc.work_path.clone().ok_or_else(|| bad(cmd, "no work path"))?),
@@ -386,7 +392,9 @@ pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str
     };
     match path {
         Some(path) => l.vector_mask = Some(photocraft_doc::VectorMask::new(path)),
-        None => l.mask = Some(mask_at_depth(selection_mask(doc)?.unwrap_or_else(LayerMask::reveal_all), doc.depth)?),
+        None => {
+            l.mask = selection_mask(doc)?.or_else(|| default_mask.then(LayerMask::reveal_all)).map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
+        }
     }
     Ok(())
 }
@@ -400,7 +408,7 @@ fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Res
     let name = adj.label().to_string();
     let id = s.edit(&label, |doc, active| {
         let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Adjustment(adj));
-        mask_new_layer(doc, &mut l, p, cmd)?;
+        mask_new_layer(doc, &mut l, p, cmd, true)?;
         let id = doc.insert_above(*active, l);
         *active = Some(id);
         Ok(id)
@@ -713,9 +721,10 @@ fn build() -> Vec<CommandSpec> {
                     return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
                 }
                 let id = layer_param(s, p)?;
+                let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
                 let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 let nid = s.edit("Duplicate Layer", |doc, active| {
-                    let mut dup = layer_copy(doc, id)?;
+                    let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = &name {
                         dup.name.clone_from(name);
                     }
@@ -992,10 +1001,11 @@ fn build() -> Vec<CommandSpec> {
             has_doc,
             |s, p| {
                 let c = color_param(p, "color", s.tools.foreground);
+                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
                     let fill = Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor")?;
+                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
                     let id = doc.insert_above(*active, l);
                     *active = Some(id);
                     Ok(id)
@@ -1016,6 +1026,7 @@ fn build() -> Vec<CommandSpec> {
                 let angle = f32_or(p, "angle", 90.0);
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
+                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
                     let fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
@@ -1026,7 +1037,7 @@ fn build() -> Vec<CommandSpec> {
                     )
                     .in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient")?;
+                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = doc.insert_above(*active, l);
                     *active = Some(id);
                     Ok(id)
@@ -1658,12 +1669,14 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
 /// A copy of layer `id` as Layer › Duplicate Layer makes it, not yet in the document: a fresh id,
 /// "… copy" appended to the name, and a copy of the Background layer is an ordinary, unlocked
 /// layer (Photoshop).
-pub(crate) fn layer_copy(doc: &Document, id: LayerId) -> Result<Layer> {
+pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool) -> Result<Layer> {
     let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
     let from_background = doc.is_background(id);
     let mut dup = src.duplicate();
-    dup.name = doc.copy_name(&dup.name);
+    if add_copy {
+        dup.name = doc.copy_name(&dup.name);
+    }
     if from_background {
         dup.locks = Default::default();
     }
