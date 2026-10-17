@@ -735,7 +735,13 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let vals: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
         surf.write_region(doc.bounds(), &vals);
         surf.prune();
-        doc.layers = vec![Layer::new("Background", LayerContent::Raster(surf))];
+        // As Photoshop: a source with a Background gives one (opaque, locked); otherwise a plain
+        // "Layer 1" that keeps the composite's transparency.
+        let has_background = doc.background().is_some();
+        let mut merged = Layer::new(if has_background { "Background" } else { "Layer 1" }, LayerContent::Raster(surf));
+        merged.locks.transparency = has_background;
+        merged.locks.position = has_background;
+        doc.layers = vec![merged];
         // A merged-only copy has no original layers for saved comps to restore.
         // Don't carry dangling comp state into a single-layer flattened document.
         doc.layer_comps.clear();
@@ -1488,6 +1494,22 @@ mod tests {
         assert_eq!(s.active().unwrap().revision, revision, "an unchanged bit depth must preserve the history branch");
         assert!(s.redo(), "selecting the current depth must not discard the undone conversion");
         assert_eq!(doc(&s).depth, SampleType::U8);
+    }
+
+    /// Duplicate › Merged Layers Only gives one locked Background when the source has one and a
+    /// plain "Layer 1" (keeping transparency) when it doesn't, as Photoshop does.
+    #[test]
+    fn merged_duplicate_is_a_background_only_when_the_source_has_one() {
+        let mut s = session();
+        s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
+        let d = doc(&s);
+        assert!(d.is_background(d.layers[0].id), "source has a Background: the merged copy is one");
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+        s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
+        let d = doc(&s);
+        assert!(d.background().is_none(), "transparent source: no Background in the copy");
+        assert_eq!(d.layers[0].name, "Layer 1");
     }
 
     #[test]
