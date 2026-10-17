@@ -28,6 +28,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
+| Български | `bg` | one / other |
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels; tests enforce that coverage. Vietnamese (`vi`) is
