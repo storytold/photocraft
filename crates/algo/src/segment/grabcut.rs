@@ -126,7 +126,9 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
     }
     let (fg, bg) = grabcut(&img, &mut trimap, 8)?;
     let low: Vec<bool> = trimap.iter().map(|t| is_fg(*t)).collect();
-    let low = super::clean_mask(&low, lw, lh, 0.1, 0.002);
+    let low = super::clean_mask(&low, lw, lh, 0.1, 0.0);
+    // Every enclosed hole, however small, fills only when it looks like the object, so background seen through it stays open.
+    let low = super::fill_holes_by_model(&low, &img, &fg, &bg, 0.0, 0.05);
     super::finish_region(sampler, window, step, &low, lw, lh, Some((&fg, &bg)))
 }
 
@@ -209,7 +211,9 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
     let mut seeds = vec![false; w * h];
     seeds[sy * w + sx] = true;
     let low = super::keep_seeded(&low, &seeds, w, h);
-    let low = super::clean_mask(&low, w, h, 0.1, 0.01);
+    let low = super::clean_mask(&low, w, h, 0.1, 0.0);
+    // As in the rectangle mode: enclosed holes fill only when they look like the object.
+    let low = super::fill_holes_by_model(&low, &img, &fg, &bg, 0.0, 0.05);
     if !low.iter().any(|v| *v) {
         return None;
     }
