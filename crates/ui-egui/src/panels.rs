@@ -1948,11 +1948,13 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     // The Navigator has its own zoom target: an unmodified wheel over the preview
     // should zoom even when the document canvas is configured to scroll on wheel.
-    // Use the canvas wheel classifier to honour one ×1.1 step per notch without
-    // applying egui's smoothed wheel tail a second time.
+    // Use the canvas wheel classifier to honour one ×1.1 step per notch,
+    // eased over its frames or instant as General › Animated Zoom says.
     let pinch_zooms = app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch;
+    let animated_zoom = app.session.prefs().general.animated_zoom;
     if resp.hovered()
-        && let Some(crate::wheel_nav::Wheel::Zoom(factor)) = crate::wheel_nav::read(&ctx, true, pinch_zooms, egui::Id::new("pc-navigator-wheel"), true)
+        && let Some(crate::wheel_nav::Wheel::Zoom(factor)) =
+            crate::wheel_nav::read(&ctx, true, pinch_zooms, animated_zoom, egui::Id::new("pc-navigator-wheel"), true)
     {
         let view = &mut app.ui.views[idx];
         let next = crate::zoom_levels::clamp(view.zoom * factor, view.doc_size);
@@ -2070,6 +2072,8 @@ mod navigator_wheel_tests {
         app.sync_views();
         app.ui.views[0].zoom = 1.0;
         app.ui.views[0].fit_pending = false;
+        // Animated Zoom off: a notch is one instant step, so one frame shows the whole ×1.1.
+        app.session.edit_prefs(|p| p.general.animated_zoom = false);
         let ctx = egui::Context::default();
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         crate::wheel_nav::configure(&ctx);

@@ -1,7 +1,7 @@
 //! Mouse wheel and trackpad navigation over the canvas (#293, #635), as in Photoshop:
 //!
 //! - The wheel scrolls up and down; ⇧ or ⌘/Ctrl + wheel scrolls sideways.
-//! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch, applied the frame it arrives.
+//! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch (eased or instant, see below).
 //!   ⇧/Shift + ⌥/Alt + wheel snaps to the next zoom ladder level instead.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls; ⇧/Shift + wheel snaps to the next zoom ladder level.
@@ -17,11 +17,18 @@
 //! before egui sees them, so Ctrl + a notched mouse wheel scrolls sideways and the pinch still
 //! zooms.
 //!
-//! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
-//! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
-//! frames, so zooming reads the wheel events themselves and ignores that smoothed tail; panning
-//! keeps the smoothed delta. The Alt state is taken from the wheel events and kept until the next
-//! wheel event: releasing Alt while the tail is still settling must not turn it into a pan.
+//! Either way a wheel notch zooms by exactly ×1.1 in total. How that step is spread over frames
+//! is set by Preferences › General › Animated Zoom (`general.animatedZoom`, on by default):
+//!
+//! - On: the zoom is eased. egui smooths a wheel notch over several frames and zooming follows
+//!   that smoothed delta, so the factors of the frames of one notch multiply to ×1.1.
+//! - Off: one instant ×1.1 step per notch, applied the frame it arrives with no easing in between
+//!   (the Photoshop behaviour, measured frame by frame on a screen recording). Zooming reads the
+//!   wheel events themselves and ignores egui's smoothed tail.
+//!
+//! In both modes panning keeps the smoothed delta, and ⇧/Shift snap zoom reads the wheel events
+//! and stays instant. The Alt state is taken from the wheel events and kept until the next wheel
+//! event: releasing Alt while the tail is still settling must not turn it into a pan.
 
 use egui::{Context, Event, Id, Modifiers, MouseWheelUnit, RawInput, Vec2};
 
@@ -46,10 +53,10 @@ pub enum Wheel {
 /// Inputs of one frame's wheel gesture.
 #[derive(Clone, Copy, Debug)]
 pub struct Input {
-    /// Smoothed scroll delta (points, content direction); what panning uses.
+    /// Smoothed scroll delta (points, content direction); what panning and the eased zoom use.
     pub scroll: Vec2,
     /// This frame's wheel events for the gesture in progress, unsmoothed (points, content
-    /// direction); what zooming uses.
+    /// direction); what the instant zoom and the snap zoom use.
     pub raw: Vec2,
     /// egui's pinch zoom factor (1 = none).
     pub zoom_delta: f32,
@@ -61,6 +68,9 @@ pub struct Input {
     pub zoom_with_wheel: bool,
     /// Preferences › Enhanced Controls › Zoom with Trackpad Pinch.
     pub pinch_zooms: bool,
+    /// Preferences › General › Animated Zoom: the wheel zoom follows the smoothed delta (`scroll`)
+    /// across frames; off, it is one instant step from this frame's wheel events (`raw`).
+    pub animated_zoom: bool,
     /// Points per wheel notch (egui's `line_scroll_speed`).
     pub notch: f32,
 }
@@ -88,17 +98,21 @@ pub fn classify(i: Input) -> Option<Wheel> {
         let steps = n.clamp(-10.0, 10.0).round() as i32;
         if steps == 0 { None } else { Some(Wheel::SnapZoom(steps)) }
     };
+    let scroll_finite = i.scroll.x.is_finite() && i.scroll.y.is_finite();
     match (i.alt, i.zoom_with_wheel) {
         // ⇧ + ⌥ + scroll: snap to the zoom ladder instead of continuous ×1.1.
         (true, false) if i.shift => snap(i.raw.y + i.raw.x),
-        // ⌥ + scroll: continuous ×1.1 zoom. The smoothed tail of a notch is ignored.
-        (true, false) => step(i.raw.y + i.raw.x),
+        // ⌥ + scroll: continuous ×1.1 zoom. Animated Zoom on: follow the smoothed delta across frames.
+        (true, false) if i.animated_zoom && scroll_finite => step(i.scroll.y + i.scroll.x),
+        // Animated Zoom off: one instant step from the wheel events. The smoothed tail is ignored.
+        (true, false) if !i.animated_zoom => step(i.raw.y + i.raw.x),
         // ⇧ + scroll wheel with the preference on: snap to the zoom ladder.
         // Some systems deliver Shift+wheel as horizontal (delta in x, y = 0).
         (false, true) if i.shift => snap(i.raw.y + i.raw.x),
         // ⌘/Ctrl folds the wheel into x: those still scroll sideways.
-        (false, true) if i.raw.y != 0.0 || i.scroll.y != 0.0 => step(i.raw.y),
-        _ if !(i.scroll.x.is_finite() && i.scroll.y.is_finite()) || i.scroll == Vec2::ZERO => None,
+        (false, true) if i.animated_zoom && scroll_finite && i.scroll.y != 0.0 => step(i.scroll.y),
+        (false, true) if !i.animated_zoom && (i.raw.y != 0.0 || i.scroll.y != 0.0) => step(i.raw.y),
+        _ if !scroll_finite || i.scroll == Vec2::ZERO => None,
         _ => Some(Wheel::Pan(i.scroll)),
     }
 }
@@ -197,14 +211,16 @@ const SNAP_IDLE_TIMEOUT: f64 = 0.5;
 /// states of the gesture follow the latest wheel event. `owner` scopes the snap-zoom
 /// accumulator per viewport. `hovered` gates accumulation: only the viewport receiving
 /// navigation may add raw input to the snap residual.
-pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner: Id, hovered: bool) -> Option<Wheel> {
-    read_with(ctx, zoom_with_wheel, pinch_zooms, owner, hovered, true)
+pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zoom: bool, owner: Id, hovered: bool) -> Option<Wheel> {
+    read_with(ctx, zoom_with_wheel, pinch_zooms, animated_zoom, owner, hovered, true)
 }
 
 /// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
 /// smoothed delta); off, as with Interface › Enable Animations off, the view moves the whole notch
 /// in the frame the wheel turns and stops there (#5721), as scroll areas already do.
-pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner: Id, hovered: bool, smooth: bool) -> Option<Wheel> {
+/// `animated_zoom` is Preferences › General › Animated Zoom: on, the wheel zoom is eased over the
+/// frames of a notch; off, a notch is one instant ×1.1 step.
+pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zoom: bool, owner: Id, hovered: bool, smooth: bool) -> Option<Wheel> {
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
 
     // --- Modifier tracking (always runs for all callers) ---
@@ -325,7 +341,7 @@ pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner:
         }
         // Unsmoothed, a plain scroll pans by this frame's own wheel events (none: no tail).
         let scroll = if smooth || alt || shift { scroll } else { raw };
-        classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, notch })
+        classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch })
     }
 }
 
@@ -336,7 +352,7 @@ mod tests {
     use super::*;
 
     fn input(scroll: Vec2, alt: bool) -> Input {
-        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, shift: false, zoom_with_wheel: false, pinch_zooms: true, notch: 40.0 }
+        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, shift: false, zoom_with_wheel: false, pinch_zooms: true, animated_zoom: true, notch: 40.0 }
     }
 
     fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -348,7 +364,13 @@ mod tests {
 
     /// Feed `events` through an egui context set up like the app's (`legacy`: the Windows pinch
     /// fold on) and add up what the wheel did to the view over the following second.
+    ///
+    /// `gesture` runs with Animated Zoom off (a notch is one instant step); see [`gesture_with`].
     fn gesture(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool) -> (Vec2, f32, i32) {
+        gesture_with(frames, zoom_with_wheel, legacy, false)
+    }
+
+    fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, animated_zoom: bool) -> (Vec2, f32, i32) {
         let owner = Id::new("test-gesture");
         let ctx = Context::default();
         configure(&ctx);
@@ -360,7 +382,7 @@ mod tests {
             if legacy {
                 fold_legacy_pinch(&ctx, &mut raw);
             }
-            let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel, true, owner, true) {
+            let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel, true, animated_zoom, owner, true) {
                 Some(Wheel::Pan(d)) => pan += d,
                 Some(Wheel::Zoom(f)) => zoom *= f,
                 Some(Wheel::SnapZoom(n)) => snaps += n,
@@ -393,7 +415,7 @@ mod tests {
                     let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
                     let mut pan = Vec2::ZERO;
                     let mut out = ctx.run_ui(raw, |ui| {
-                        if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, owner, true, smooth) {
+                        if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, true, owner, true, smooth) {
                             pan = d;
                         }
                     });
@@ -432,17 +454,126 @@ mod tests {
         assert!((f - 1.21).abs() < 1e-4, "{f}");
     }
 
+    /// Animated Zoom off: a notch is one instant step, and egui's smoothed tail does nothing.
     #[test]
     fn a_notch_zooms_the_frame_it_arrives_and_its_smoothed_tail_does_nothing() {
         // egui keeps feeding a smoothed delta for several frames after the wheel event. Zooming
         // must not follow it (that would ease the zoom), nor turn it into a pan.
+        let off = |i: Input| Input { animated_zoom: false, ..i };
+        let tail = off(Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), true) });
+        assert_eq!(classify(tail), None);
+        let tail = off(Input { raw: Vec2::ZERO, zoom_with_wheel: true, ..input(Vec2::new(0.0, 12.0), false) });
+        assert_eq!(classify(tail), None);
+        // The frame the notch arrives carries it whole, whatever the smoothed delta is.
+        let arrival = off(Input { scroll: Vec2::new(0.0, 12.0), raw: Vec2::new(0.0, 40.0), ..input(Vec2::ZERO, true) });
+        assert!(matches!(classify(arrival), Some(Wheel::Zoom(f)) if (f - 1.1).abs() < 1e-5));
+        // Plain scrolling without the preference still pans from the smoothed delta.
+        let pan = off(Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), false) });
+        assert_eq!(classify(pan), Some(Wheel::Pan(Vec2::new(0.0, 12.0))));
+    }
+
+    /// Animated Zoom on: the zoom follows egui's smoothed delta over the frames of a notch, and
+    /// never turns that tail into a pan.
+    #[test]
+    fn animated_zoom_follows_the_smoothed_tail_of_a_notch() {
         let tail = Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), true) };
-        assert_eq!(classify(tail), None);
+        assert!(matches!(classify(tail), Some(Wheel::Zoom(f)) if f > 1.0));
         let tail = Input { raw: Vec2::ZERO, zoom_with_wheel: true, ..input(Vec2::new(0.0, 12.0), false) };
-        assert_eq!(classify(tail), None);
+        assert!(matches!(classify(tail), Some(Wheel::Zoom(f)) if f > 1.0));
+        // The size of the step comes from the smoothed delta, not the raw one.
+        let part = Input { scroll: Vec2::new(0.0, 20.0), raw: Vec2::new(0.0, 40.0), ..input(Vec2::ZERO, true) };
+        assert!(matches!(classify(part), Some(Wheel::Zoom(f)) if (f - 1.1f32.powf(0.5)).abs() < 1e-5));
         // Plain scrolling without the preference still pans from the smoothed delta.
         let pan = Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), false) };
         assert_eq!(classify(pan), Some(Wheel::Pan(Vec2::new(0.0, 12.0))));
+        // ⇧ + snap zoom stays on the wheel events and instant, in both modes.
+        for animated_zoom in [false, true] {
+            let tail = Input { shift: true, zoom_with_wheel: true, raw: Vec2::ZERO, animated_zoom, ..input(Vec2::new(12.0, 0.0), false) };
+            assert_eq!(classify(tail), None, "animated_zoom {animated_zoom}");
+            let snap = Input { shift: true, zoom_with_wheel: true, raw: Vec2::new(0.0, 40.0), animated_zoom, ..input(Vec2::new(0.0, 12.0), false) };
+            assert_eq!(classify(snap), Some(Wheel::SnapZoom(1)), "animated_zoom {animated_zoom}");
+        }
+    }
+
+    /// The factor of every frame of one notch, through a real egui context (60 frames at 60 fps).
+    fn zoom_frames(modifiers: Modifiers, zoom_with_wheel: bool, animated_zoom: bool) -> Vec<f32> {
+        let owner = Id::new("test-zoom-frames");
+        let ctx = Context::default();
+        configure(&ctx);
+        (0..60)
+            .map(|n| {
+                let events = if n == 0 { vec![wheel(Vec2::new(0.0, 1.0), modifiers)] } else { Vec::new() };
+                let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+                let mut factor = 1.0;
+                let mut out = ctx.run_ui(raw, |ui| {
+                    if let Some(Wheel::Zoom(f)) = read(ui.ctx(), zoom_with_wheel, true, animated_zoom, owner, true) {
+                        factor = f;
+                    }
+                });
+                out.textures_delta.clear();
+                factor
+            })
+            .collect()
+    }
+
+    /// The property the eased zoom relies on: however egui spreads a notch over frames, the
+    /// factors of those frames multiply to exactly ×1.1 (and ×1/1.1 for a notch the other way).
+    #[test]
+    fn the_eased_frames_of_one_notch_multiply_to_ten_percent() {
+        for (modifiers, zoom_with_wheel) in [(Modifiers::ALT, false), (Modifiers::NONE, true)] {
+            let frames = zoom_frames(modifiers, zoom_with_wheel, true);
+            assert!(frames.iter().all(|f| f.is_finite() && *f >= 1.0), "{frames:?}");
+            assert!(frames.iter().filter(|f| **f != 1.0).count() > 1, "eased over several frames: {frames:?}");
+            let product: f32 = frames.iter().product();
+            assert!((product - NOTCH).abs() < 1e-4, "{modifiers:?} zoom_with_wheel {zoom_with_wheel}: {product} from {frames:?}");
+        }
+        // The other way round: ×1/1.1.
+        let owner = Id::new("test-zoom-frames-out");
+        let ctx = Context::default();
+        configure(&ctx);
+        let mut product = 1.0f32;
+        for n in 0..60 {
+            let events = if n == 0 { vec![wheel(Vec2::new(0.0, -1.0), Modifiers::ALT)] } else { Vec::new() };
+            let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                if let Some(Wheel::Zoom(f)) = read(ui.ctx(), false, true, true, owner, true) {
+                    product *= f;
+                }
+            });
+            out.textures_delta.clear();
+        }
+        assert!((product - 1.0 / NOTCH).abs() < 1e-4, "{product}");
+    }
+
+    /// Animated Zoom changes the pacing of a notch, never its size: off, the whole ×1.1 lands in
+    /// the frame the notch arrives and nothing follows; on, that frame carries only part of it.
+    #[test]
+    fn animated_zoom_changes_the_pacing_of_a_notch_not_its_size() {
+        for (modifiers, zoom_with_wheel) in [(Modifiers::ALT, false), (Modifiers::NONE, true)] {
+            let instant = zoom_frames(modifiers, zoom_with_wheel, false);
+            assert!((instant[0] - NOTCH).abs() < 1e-5, "the whole notch at once: {:?}", &instant[..4]);
+            assert!(instant[1..].iter().all(|f| *f == 1.0), "no tail after it: {instant:?}");
+            let eased = zoom_frames(modifiers, zoom_with_wheel, true);
+            assert!(eased[0] > 1.0 && eased[0] < NOTCH - 1e-3, "the first frame carries only part of it: {:?}", &eased[..4]);
+            assert!(eased[1..].iter().any(|f| *f > 1.0), "and the rest follows");
+        }
+    }
+
+    /// Animated Zoom is only about the wheel zoom: ⇧ snap zoom and plain scrolling are the same
+    /// in both modes.
+    #[test]
+    fn animated_zoom_leaves_snap_zoom_and_panning_alone() {
+        let notch = Vec2::new(0.0, 1.0);
+        let shift_alt = Modifiers { shift: true, alt: true, ..Modifiers::NONE };
+        for animated_zoom in [false, true] {
+            let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, shift_alt)]], false, false, animated_zoom);
+            assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 1, "⇧ + ⌥: {pan:?} {zoom} {snaps}");
+            let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, Modifiers::NONE)]], false, false, animated_zoom);
+            assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0, "plain wheel pans: {pan:?} {zoom} {snaps}");
+            // A notch zooms ×1.1 in total in either mode.
+            let (pan, zoom, _) = gesture_with(vec![vec![wheel(notch, Modifiers::ALT)]], false, false, animated_zoom);
+            assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "animated_zoom {animated_zoom}: {pan:?} {zoom}");
+        }
     }
 
     #[test]
@@ -654,7 +785,7 @@ mod tests {
         for s in [f32::NAN, f32::INFINITY, -f32::INFINITY, 1e30, -1e30] {
             for alt in [false, true] {
                 for notch in [0.0, -1.0, f32::NAN, 40.0] {
-                    for zd in [f32::NAN, 0.0, -1.0, f32::INFINITY, 1.0] {
+                    for (zd, animated_zoom) in [f32::NAN, 0.0, -1.0, f32::INFINITY, 1.0].into_iter().flat_map(|zd| [(zd, false), (zd, true)]) {
                         let i = Input {
                             scroll: Vec2::new(0.0, s),
                             raw: Vec2::new(0.0, s),
@@ -663,6 +794,7 @@ mod tests {
                             shift: false,
                             zoom_with_wheel: !alt,
                             pinch_zooms: true,
+                            animated_zoom,
                             notch,
                         };
                         if let Some(Wheel::Zoom(f)) = classify(i) {
@@ -679,6 +811,7 @@ mod tests {
                                 shift: false,
                                 zoom_with_wheel: true,
                                 pinch_zooms: true,
+                                animated_zoom,
                                 notch,
                             }
                         };
@@ -707,7 +840,7 @@ mod tests {
         for n in 0..60 {
             let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events: frames.next().unwrap_or_default(), ..Default::default() };
             let mut out = ctx.run_ui(raw, |ui| {
-                if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), zoom_with_wheel, true, owner, true) {
+                if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), zoom_with_wheel, true, true, owner, true) {
                     snaps += s;
                 }
             });
@@ -812,10 +945,10 @@ mod tests {
         let raw =
             RawInput { time: Some(0.0), predicted_dt: 1.0 / 60.0, events: vec![wheel_point(Vec2::new(0.0, 30.0), Modifiers::SHIFT)], ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_a, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_a, true) {
                 snaps_a += s;
             }
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_b, false) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_b, false) {
                 snaps_b += s;
             }
         });
@@ -830,10 +963,10 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_a, false) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_a, false) {
                 snaps_a += s;
             }
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_b, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_b, true) {
                 snaps_b += s;
             }
         });
@@ -848,8 +981,8 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(raw, |ui| {
-                let _ = read(ui.ctx(), true, true, owner_a, false);
-                if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_b, true) {
+                let _ = read(ui.ctx(), true, true, true, owner_a, false);
+                if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_b, true) {
                     snaps_b += s;
                 }
             });
@@ -864,10 +997,10 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner_a, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner_a, true) {
                 snaps_a += s;
             }
-            let _ = read(ui.ctx(), true, true, owner_b, false);
+            let _ = read(ui.ctx(), true, true, true, owner_b, false);
         });
         out.textures_delta.clear();
         assert_eq!(snaps_a, 0, "A: fresh start after switch, 30 points, no snap yet");
@@ -882,10 +1015,10 @@ mod tests {
         let raw =
             RawInput { time: Some(0.0), predicted_dt: 1.0 / 60.0, events: vec![wheel_point(Vec2::new(0.0, 20.0), Modifiers::SHIFT)], ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner, true) {
                 total_snaps += s;
             }
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner, true) {
                 total_snaps += s;
             }
         });
@@ -899,7 +1032,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, owner, true) {
+            if let Some(Wheel::SnapZoom(s)) = read(ui.ctx(), true, true, true, owner, true) {
                 total_snaps += s;
             }
         });

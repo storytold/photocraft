@@ -98,7 +98,14 @@ struct ZoomCapture {
 
 /// One capture shared with the colour sampler. Space/middle drag always pans; S takes
 /// precedence over the persistent Zoom/Hand tool, so a sampler click never zooms.
-pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, sampler: &mut bool) -> (Rect, Response, bool, Option<Rect>) {
+pub(crate) fn interact(
+    ui: &mut Ui,
+    state: &mut CameraRawPreviewState,
+    viewport: Rect,
+    size: Vec2,
+    sampler: &mut bool,
+    animated_zoom: bool,
+) -> (Rect, Response, bool, Option<Rect>) {
     let sampling = *sampler;
     let response = ui.interact(viewport, ui.id().with("cr-sample-preview"), Sense::click_and_drag());
     let modifiers = ui.input(|i| i.modifiers);
@@ -111,7 +118,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
     // Reuse the canvas wheel policy: retain the modifiers of the wheel event while egui
     // smooths it, even if Alt is released before the final part of the notch arrives.
     let cr_hovered = response.hovered();
-    let wheel = crate::wheel_nav::read(ui.ctx(), false, true, ui.id().with("cr-wheel"), cr_hovered);
+    let wheel = crate::wheel_nav::read(ui.ctx(), false, true, animated_zoom, ui.id().with("cr-wheel"), cr_hovered);
     if cr_hovered {
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
         match wheel {
