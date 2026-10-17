@@ -310,6 +310,23 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
+    // A .psd/.psb-named file that lacks the 8BPS signature and is not a recognised
+    // image format would otherwise fail deep in the codec layer as the unhelpful
+    // "unrecognized image format". Name the missing signature so the user can act on
+    // it (a corrupt, truncated or mislabeled file). A real known raster that is merely
+    // mislabeled .psd still opens: its magic is detected above and wins over the suffix.
+    // (#5258)
+    if (has_extension(name, "psd") || has_extension(name, "psb"))
+        && photocraft_codecs::detect(bytes).is_none()
+    {
+        let found = [
+            bytes.first().copied().unwrap_or(0),
+            bytes.get(1).copied().unwrap_or(0),
+            bytes.get(2).copied().unwrap_or(0),
+            bytes.get(3).copied().unwrap_or(0),
+        ];
+        return Err(PsdError::InvalidSignature { expected: "8BPS", found }.into());
+    }
     flat::import_flat(name, bytes)
 }
 

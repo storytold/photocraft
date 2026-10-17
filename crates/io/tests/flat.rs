@@ -347,6 +347,20 @@ fn garbage_import_errors() {
 }
 
 #[test]
+fn psd_named_unknown_magic_reports_missing_signature() {
+    // A .psd-named file with no PSD signature and no known image magic must not fail as a
+    // generic "unrecognized image format"; it should name the missing 8BPS signature so the
+    // user can act on it (#5258).
+    let err = import("doc.psd", b"definitely not a photo or psd").unwrap_err();
+    assert!(
+        matches!(err, IoError::Psd(photocraft_psd::PsdError::InvalidSignature { .. })),
+        "expected an invalid-PSD-signature error, got: {err}"
+    );
+    let msg = format!("{err}");
+    assert!(msg.contains("8BPS"), "error should name the 8BPS signature: {msg}");
+}
+
+#[test]
 fn extension_forms() {
     let d = single(ColorMode::Rgb, SampleType::U8, false);
     for e in ["png", ".png", "a/b/c.PNG", "C:\\x\\y.png"] {
