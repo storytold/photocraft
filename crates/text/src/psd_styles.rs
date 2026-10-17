@@ -187,7 +187,8 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
         rd.set("ParagraphSheetSet", E::Array(pset));
         rd.set("TheNormalStyleSheet", E::Int(0));
         rd.set("TheNormalParagraphSheet", E::Int(0));
-        rd.set("FontSet", E::Array(fonts.iter().map(|f| crate::psd::font_entry(f)).collect()));
+        let fontset = crate::psd::font_set(&fonts, rd.get("FontSet"));
+        rd.set("FontSet", fontset);
     }
     let char_fonts = e.path(&["ResourceDict", "FontSet"]).or_else(|| e.path(&["DocumentResources", "FontSet"])).map(|f| names(Some(f))).unwrap_or_default();
     let char_ix = |id: Option<u32>| id.and_then(|id| styles.character.iter().position(|d| d.id == id)).map(|i| i as i64 + 1);

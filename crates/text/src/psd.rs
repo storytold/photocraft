@@ -904,6 +904,22 @@ pub(crate) fn font_entry(name: &str) -> E {
     E::Dict(vec![("Name".into(), E::String(name.into())), ("Script".into(), E::Int(0)), ("FontType".into(), E::Int(1)), ("Synthetic".into(), E::Int(0))])
 }
 
+/// Keep imported font metadata while retaining the requested font indices. New fonts use
+/// the normal defaults; same-name duplicates retain their own positional records.
+pub(crate) fn font_set(names: &[String], original: Option<&E>) -> E {
+    let entries = original.and_then(E::as_array).unwrap_or_default();
+    E::Array(
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let matches = |entry: &&E| entry.get("Name").and_then(E::as_str) == Some(name.as_str());
+                entries.get(i).filter(matches).or_else(|| entries.iter().find(matches)).cloned().unwrap_or_else(|| font_entry(name))
+            })
+            .collect(),
+    )
+}
+
 /// The `Txt2` auto-kern mode of a style: 0 manual, 1 metrics, 2 optical — the values
 /// [`apply_txt2`] maps back to [`Kerning`]. EngineData's `AutoKerning` can't say Metrics from
 /// Optical, so the mode only lives in `Txt2`.
@@ -1153,7 +1169,6 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         )]));
         plens.push(E::Int(n));
     }
-    let fontset = E::Array(fonts.iter().map(|f| font_entry(f)).collect());
 
     let Some(dict) = e.get_mut("EngineDict") else {
         return fresh();
@@ -1234,7 +1249,8 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
             continue;
         }
         let Some(rd) = e.get_mut(key) else { continue };
-        rd.set("FontSet", fontset.clone());
+        let fontset = font_set(&fonts, rd.get("FontSet"));
+        rd.set("FontSet", fontset);
         if rd.get("StyleSheetSet").is_none() {
             let base = runs.first().map(|r| r.style.clone()).unwrap_or_default();
             rd.set(
