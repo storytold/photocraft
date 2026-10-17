@@ -3,6 +3,7 @@
 mod common;
 
 use common::*;
+use photocraft_codecs::{DecodeOptions, Format, Limits};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_io::*;
 
@@ -56,6 +57,167 @@ codec_rt!(fits_rgb32, "fits", ColorMode::Rgb, SampleType::F32, false, 0.0);
 codec_rt!(dpx_gray8, "dpx", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(dpx_rgb16, "dpx", ColorMode::Rgb, SampleType::U16, false, 0.0);
 codec_rt!(dpx_rgba16, "dpx", ColorMode::Rgb, SampleType::U16, true, 0.0);
+
+// JPEG 2000. The default options mean the reversible 5/3 wavelet, so these round trips are
+// exact: that is the reason to reach for JPEG 2000, and it must hold at every layout and depth.
+/// `lossy` is the irreversible 9/7 wavelet with a rate target, so pixels move but the document's
+// geometry, mode and depth do not.
+fn lossy(quality: u8) -> ExportOptions {
+    ExportOptions { encode: photocraft_codecs::EncodeOptions { jp2_quality: Some(quality), ..Default::default() }, ..Default::default() }
+}
+
+macro_rules! codec_rt_opts {
+    ($name:ident, $ext:expr, $mode:expr, $depth:expr, $alpha:expr, $tol:expr, $opts:expr) => {
+        #[test]
+        fn $name() {
+            let d = single($mode, $depth, $alpha);
+            let r = export(&d, $ext, &$opts).expect("export");
+            let back = import(concat!("x.", $ext), &r.bytes).expect("import").document;
+            assert_eq!(back.size, d.size);
+            assert_eq!(back.mode, d.mode, "mode");
+            assert_eq!(back.depth, d.depth, "depth");
+            pixels_eq(&d, &back, $tol);
+        }
+    };
+}
+
+codec_rt_opts!(jp2_rgba8, "jp2", ColorMode::Rgb, SampleType::U8, true, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_rgb8_opaque, "jp2", ColorMode::Rgb, SampleType::U8, false, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_rgba16, "jp2", ColorMode::Rgb, SampleType::U16, true, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_rgb16, "jp2", ColorMode::Rgb, SampleType::U16, false, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_gray8, "jp2", ColorMode::Grayscale, SampleType::U8, false, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_graya8, "jp2", ColorMode::Grayscale, SampleType::U8, true, 0.0, ExportOptions::default());
+codec_rt_opts!(jp2_graya16, "jp2", ColorMode::Grayscale, SampleType::U16, true, 0.0, ExportOptions::default());
+// Below quality 100 the pixels move a little but everything else is unchanged.
+codec_rt_opts!(jp2_rgb8_lossy90, "jp2", ColorMode::Rgb, SampleType::U8, true, 0.02, lossy(90));
+codec_rt_opts!(jp2_gray8_lossy50, "jp2", ColorMode::Grayscale, SampleType::U8, false, 0.06, lossy(50));
+
+// A raw J2K codestream: the same bitstream without the JP2 boxes, so no ICC and no `colr`.
+codec_rt_opts!(j2k_rgba8, "j2k", ColorMode::Rgb, SampleType::U8, true, 0.0, ExportOptions::default());
+codec_rt_opts!(j2k_rgb8_opaque, "j2k", ColorMode::Rgb, SampleType::U8, false, 0.0, ExportOptions::default());
+codec_rt_opts!(j2k_gray16, "j2k", ColorMode::Grayscale, SampleType::U16, false, 0.0, ExportOptions::default());
+codec_rt_opts!(j2k_rgb8_lossy75, "j2k", ColorMode::Rgb, SampleType::U8, false, 0.08, lossy(75));
+
+// The Part 2 containers carry a Part 1 codestream, so a save writes that container.
+codec_rt_opts!(jpx_rgba8, "jpx", ColorMode::Rgb, SampleType::U8, true, 0.0, ExportOptions::default());
+codec_rt_opts!(jpx_rgb8_opaque, "jpx", ColorMode::Rgb, SampleType::U8, false, 0.0, ExportOptions::default());
+codec_rt_opts!(jpf_rgba8, "jpf", ColorMode::Rgb, SampleType::U8, true, 0.0, ExportOptions::default());
+codec_rt_opts!(jpf_rgb8_opaque, "jpf", ColorMode::Rgb, SampleType::U8, false, 0.0, ExportOptions::default());
+
+/// Part 6 (`.jpm`, multi-page compound) and Part 3 (`.mj2`, motion) are recognised by their
+/// `ftyp` brands: this crate decodes their first page / frame and reports the rest with a
+/// `MorePages`/`MoreFrames` warning, but never writes the compound container. A file that names
+/// one of these brands without holding any page or frame is a malformed error, not a refusal and
+/// never a panic.
+#[test]
+fn jpeg2000_containers_are_detected_first_page_frame_only() {
+    // A real JPEG 2000 file opens with the Part 1 signature box; the `ftyp` box that follows
+    // names the container.
+    let header = |brand: &[u8; 4]| {
+        let mut ftyp = vec![0, 0, 0, 0x14];
+        ftyp.extend_from_slice(b"ftyp");
+        ftyp.extend_from_slice(brand);
+        ftyp.extend_from_slice(&[0, 0, 0, 0]);
+        ftyp.extend_from_slice(brand);
+        let signature = [0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+        signature.iter().chain(&ftyp).copied().collect::<Vec<u8>>()
+    };
+    assert_eq!(photocraft_codecs::detect(&header(b"jpm ")), Some(Format::Jpm));
+    assert_eq!(photocraft_codecs::from_extension("deck.jpm"), Some(Format::Jpm));
+    assert_eq!(photocraft_codecs::detect(&header(b"mjp2")), Some(Format::Mj2));
+    assert_eq!(photocraft_codecs::from_extension("clip.mj2"), Some(Format::Mj2));
+
+    for (bytes, format) in [(header(b"jpm "), Format::Jpm), (header(b"mjp2"), Format::Mj2)] {
+        // Readable (first page / frame), never written.
+        assert!(photocraft_codecs::caps(format).read, "{format:?} must claim to read");
+        assert!(!photocraft_codecs::caps(format).write, "{format:?} must not claim to write");
+        // No page / frame at all: a clear malformed error, never a panic.
+        let err = photocraft_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap_err();
+        assert!(matches!(err, photocraft_codecs::CodecError::Malformed { .. }), "{format:?} said {err}");
+        // Writing is refused with guidance toward JP2/J2K.
+        let d = single(ColorMode::Rgb, SampleType::U8, false);
+        let ext = format.extensions()[0];
+        let e = export(&d, ext, &ExportOptions::default()).unwrap_err();
+        assert!(e.to_string().contains("JP2 or J2K"), "{format:?} write said {e}");
+    }
+}
+
+/// Every JPEG 2000 extension we write round trips and is detected from its own bytes, not its
+/// name; `.jpm` and `.mj2` are recognised and readable (first page / frame only, see above) but
+/// not written.
+#[test]
+fn jpeg2000_files_are_recognised_by_their_magic() {
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    for ext in ["jp2", "j2k", "jpx", "jpf"] {
+        let r = export(&d, ext, &ExportOptions::default()).unwrap_or_else(|e| panic!("export {ext}: {e}"));
+        let named = format!("x.{ext}");
+        assert!(photocraft_codecs::is_jpeg2000(photocraft_codecs::from_extension(&named).unwrap_or(Format::Jp2)), "{ext} is a JPEG 2000 extension");
+        let by_magic = photocraft_codecs::detect(&r.bytes).unwrap_or_else(|| panic!("{ext} bytes are not recognised"));
+        assert!(photocraft_codecs::is_jpeg2000(by_magic), "{ext} detected as {by_magic:?}");
+        // `.j2k` is the one bare codestream; the rest are JP2-shaped files.
+        assert_eq!(by_magic == Format::J2k, ext == "j2k", "{ext} container shape");
+        let back = import(&named, &r.bytes).unwrap_or_else(|e| panic!("import {ext}: {e}")).document;
+        assert_eq!(back.size, d.size, "{ext} size");
+    }
+}
+
+/// An embedded ICC profile travels in the JP2 `colr` box; a raw codestream has nowhere to
+/// put one, so the export reports it dropped instead of pretending.
+#[test]
+fn jpeg2000_carries_the_icc_profile_but_a_codestream_cannot() {
+    let mut d = single(ColorMode::Rgb, SampleType::U8, false);
+    d.icc_profile = Some(std::sync::Arc::new(b"fake-icc-profile-bytes".to_vec()));
+
+    let jp2 = export(&d, "jp2", &ExportOptions::default()).expect("jp2 export");
+    // Only the resolution is dropped: this codec writes no `res ` box.
+    assert!(!jp2.warnings.iter().any(|w| w.contains("ICC")), "the profile should be embedded: {:?}", jp2.warnings);
+    let back = import("x.jp2", &jp2.bytes).expect("jp2 import").document;
+    assert_eq!(back.icc_profile.as_deref().map(|p| p.as_slice()), d.icc_profile.as_deref().map(|p| p.as_ref()), "jp2 keeps the profile");
+
+    let j2k = export(&d, "j2k", &ExportOptions::default()).expect("j2k export");
+    assert!(j2k.warnings.iter().any(|w| w.contains("ICC")), "a codestream must report the dropped profile: {:?}", j2k.warnings);
+}
+
+/// Part 1's colour box names only sRGB, greyscale and sYCC, so a CMYK document is converted
+/// rather than written with a colour declaration nothing can interpret.
+#[test]
+fn jpeg2000_converts_cmyk_and_says_so() {
+    let d = single(ColorMode::Cmyk, SampleType::U8, false);
+    let r = export(&d, "jp2", &ExportOptions::default()).expect("export");
+    assert!(r.warnings.iter().any(|w| w.contains("CMYK")), "the conversion must be reported: {:?}", r.warnings);
+    let back = import("x.jp2", &r.bytes).expect("import").document;
+    assert_eq!(back.mode, ColorMode::Rgb);
+}
+
+/// JPEG 2000 is chosen for lossless archiving, so an export that has not been asked for a
+/// smaller file must be exact and must not report lossy compression.
+#[test]
+fn jpeg2000_defaults_to_the_reversible_wavelet() {
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    let r = export(&d, "jp2", &ExportOptions::default()).expect("export");
+    assert!(!r.warnings.iter().any(|w| w.contains("lossy")), "a default JPEG 2000 export must be reversible: {:?}", r.warnings);
+    pixels_eq(&d, &import("x.jp2", &r.bytes).expect("import").document, 0.0);
+}
+
+/// A hostile or truncated codestream is an error, never a panic: the header is read before
+/// any buffer is sized, and both paths are bounded by `Limits`.
+#[test]
+fn jpeg2000_rejects_bad_input_without_panicking() {
+    let tiny = Limits { max_pixels: 4, ..Limits::default() };
+    // A JP2 signature box with no codestream behind it.
+    let header = [0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+    assert!(photocraft_codecs::decode_with(&header, &DecodeOptions { limits: tiny, ..Default::default() }).is_err());
+
+    let d = single(ColorMode::Rgb, SampleType::U8, true);
+    let good = export(&d, "jp2", &ExportOptions::default()).expect("export").bytes;
+    // Truncated at every length: every prefix must be an error, never a crash.
+    for cut in [1, 2, 8, 24, 40, good.len() / 2, good.len().saturating_sub(1)] {
+        let prefix = &good[..cut.min(good.len())];
+        let _ = photocraft_codecs::decode_with(prefix, &DecodeOptions::default());
+    }
+    // And an image larger than the limits allows.
+    assert!(photocraft_codecs::decode_with(&good, &DecodeOptions { limits: tiny, ..Default::default() }).is_err());
+}
 
 fn indexed_bmp_8() -> Vec<u8> {
     const FILE_HEADER_SIZE: usize = 14;

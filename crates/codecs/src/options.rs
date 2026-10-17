@@ -169,6 +169,12 @@ pub struct EncodeOptions {
     pub webp_lossless: bool,
     /// Lossy WebP quality 0..=100 (the source application's scale; 75–85 is typical for photos).
     pub webp_quality: u8,
+    /// JPEG 2000 quality 1..=100, where 100 is the reversible 5/3 wavelet and the file is exact.
+    /// `None` (the default) keeps that reversible path: JPEG 2000 is chosen for lossless
+    /// archival, so a caller that has not asked for a smaller file must not silently get a
+    /// lossy one. Any value below 100 switches to the irreversible 9/7 wavelet with a rate
+    /// target scaled to the image's precision, as Photoshop's JPEG 2000 Quality slider does.
+    pub jp2_quality: Option<u8>,
     pub tiff_compression: TiffCompression,
     /// Always write TIFF as BigTIFF (8-byte offsets). Without it a TIFF is written as BigTIFF
     /// only when it could pass the 4 GiB a classic TIFF can address.
@@ -191,6 +197,7 @@ impl Default for EncodeOptions {
             png_interlaced: false,
             webp_lossless: true,
             webp_quality: 80,
+            jp2_quality: None,
             tiff_compression: TiffCompression::None,
             tiff_bigtiff: false,
             exr_compression: ExrCompression::Zip16,

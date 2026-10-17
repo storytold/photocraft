@@ -1988,6 +1988,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
+name = "fearless_simd"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3296eb97d869113eaf148a6bdf01884e90b3828ad7ae2340b0f93362fc158611"
+
+[[package]]
 name = "filetime"
 version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3073,6 +3079,63 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "j2k"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5dcb93d62c580930297896f25933b034bf665534568626787dbf0f03027e7b0"
+dependencies = [
+ "j2k-core",
+ "j2k-native",
+ "j2k-types",
+ "moxcms",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "j2k-codec-math"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a38b1ddbaa04c07213dba6180ed1168f0e96bfa35890542c414d872cea0c7d58"
+dependencies = [
+ "j2k-types",
+]
+
+[[package]]
+name = "j2k-core"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae969eb19e9b3a8d65c4342f9921717be407571cc0fbc44e4379daa0b588d01c"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "j2k-native"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "971da314ca1501363f686b6796d309ebbda7d2f88d34671c38d79132f7cb59ff"
+dependencies = [
+ "fearless_simd 1.1.0",
+ "j2k-codec-math",
+ "j2k-profile",
+ "j2k-types",
+ "libm",
+ "rayon",
+]
+
+[[package]]
+name = "j2k-profile"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c1c0cc7e85f2ab1cc85c9a6d2bad3680319c0cdf558f3be14b4ccdbd6917fca"
+
+[[package]]
+name = "j2k-types"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "716edd556741a415294d955121f76d41b7d8d650554fb09f30d0654b15127ac9"
 
 [[package]]
 name = "jni"
@@ -4731,6 +4794,8 @@ dependencies = [
  "half",
  "image",
  "image-webp",
+ "j2k",
+ "j2k-core",
  "jpeg-encoder",
  "photocraft-heif",
  "png 0.18.1",
@@ -7479,7 +7544,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2e9aed918117e8152c9eddfd8362d73c465c23f26c44786aa331707b8a64fa2"
 dependencies = [
  "bytemuck",
- "fearless_simd",
+ "fearless_simd 0.4.1",
  "guillotiere",
  "log",
  "peniko",

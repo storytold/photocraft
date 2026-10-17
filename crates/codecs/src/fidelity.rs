@@ -65,6 +65,10 @@ impl FidelityWarning {
     }
 }
 
+/// The JPEG 2000 family (JP2, J2K, JPX, JPF): one codec, four containers. See
+/// [`crate::format::is_jpeg2000`].
+pub(crate) use crate::format::is_jpeg2000;
+
 fn depth_name(s: SampleType) -> &'static str {
     match s {
         SampleType::U8 => "8-bit",
@@ -79,7 +83,13 @@ impl fmt::Display for FidelityWarning {
         use FidelityWarning::*;
         match self {
             WriteUnsupported { format } => {
-                write!(f, "{} cannot be written in this build", format.name())
+                // Name the way out when there is one: the JPEG 2000 containers we only
+                // recognise have a sibling we do write.
+                match format {
+                    Format::Jpm => write!(f, "{} cannot be written in this build; save as JP2 or J2K instead", format.name()),
+                    Format::Mj2 => write!(f, "{} cannot be written in this build; save as JP2 or J2K instead", format.name()),
+                    _ => write!(f, "{} cannot be written in this build", format.name()),
+                }
             }
             DepthReduced { from, to } => write!(f, "{} will be reduced to {}", depth_name(*from), depth_name(*to)),
             RangeClipped => write!(f, "HDR values outside 0..1 will be clipped"),
@@ -227,7 +237,11 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     // Compression
     if format == Format::Gif {
         w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) {
+    } else if c.lossy
+        || (format == Format::WebP && !opts.webp_lossless)
+        // JPEG 2000 is reversible unless a quality below 100 asks for the irreversible wavelet.
+        || (is_jpeg2000(format) && opts.jp2_quality.is_some_and(|q| q < 100))
+    {
         w.push(W::LossyCompression);
     }
 

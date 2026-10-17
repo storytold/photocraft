@@ -48,6 +48,8 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | FITS | yes | yes | U8, U16, F32 | Gray, RGB | no | no | no | no | no | yes (header cards) | no | built in |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | **no** | U16 (10-bit code values) | Gray, RGB | no | no | no | no | no | no | n/a | built in |
+| JPEG 2000 (JP2, J2K, JPX, JPF) | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes (JP2 `cdef`) | yes (method-2 `colr`) | no | no | no | no | yes (below `jp2_quality` 100) | `j2k` |
+| JPEG 2000 JPM / Motion JPEG 2000 | yes (first page / first frame) | **no** | U8, U16 | Gray, GrayA, RGB, RGBA | yes (component count) | no | no | no | no | no | n/a | `j2k` |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
@@ -103,6 +105,50 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   reference points are a log-conversion choice and are not applied. A depth other than 10 bits or
   a channel count other than 1/3 returns `CodecError::Unsupported`; truncation errors rather than
   panicking. There is no Cineon writer (`ASYMMETRIC_EXCEPTIONS`); save as DPX, TIFF or EXR.
+
+* **JPEG 2000** (ISO/IEC 15444-1, with the Part 2 JPX/JPF containers) is decoded and encoded
+  through the pure-Rust `j2k` crate: no C, no build script, so it builds for wasm with the rest of
+  the crate. `Jp2`, `J2k`, `Jpx` and `Jpf` are separate `Format` values because they are separate
+  file types, but one codec serves them all and `is_jpeg2000(format)` asks whether a format
+  belongs to the family.
+  * Reading takes the dimensions, component count, precision and signedness from the codestream's
+    SIZ marker and the colour model from the JP2 `colr` box (an enumerated method-1 box, or an
+    embedded ICC profile, which is kept as the image's profile). Samples arrive as one plane per
+    component and are interleaved here, because `j2k`'s interleaved `PixelFormat` has no
+    gray+alpha or four-colour variant. A component count the map does not cover returns
+    `Unsupported` rather than guessing, and so does more than 16 bits per sample.
+  * The opacity channel is written with a `cdef` box carrying one entry per component (readers
+    reject a box that names only the alpha channel), and gray+alpha with no ICC profile is written
+    with an enumerated sGray `colr` beside it.
+  * `EncodeOptions::jp2_quality` chooses the wavelet: `None` (the default) or 100 is the reversible
+    5/3 integer transform, which is exact. Below 100 it is the irreversible 9/7 with a
+    bits-per-pixel rate target scaled to the image's precision — ordinary Part 1, not HTJ2K, so
+    the file stays a `.jp2` any Part 1 reader opens. JPEG 2000 is reached for lossless archival,
+    so a caller that has not asked for a smaller file must not silently get a lossy one.
+  * CMYK and Lab are converted to RGB on save with `CmykConverted` / `LabConverted`, because Part
+    1's enumerated colour box names only sRGB, greyscale and sYCC and this crate cannot read an
+    ICC profile to say otherwise (it is standalone and may not depend on `photocraft-cms`). A
+    third-party CMYK or CMYK+alpha codestream still opens as CMYK, because its colour space says
+    so; one that says only "ICC" is read as gray or RGB by its component count.
+  * `.jpx` and `.jpf` open like `.jp2` — a Part 2 file's basic codestream is a Part 1 one — but a
+    save writes the Part 1 container, so File › Save As offers only `.jp2` and `.j2k`.
+  * **Multi-image containers: first page or frame, read-only.** `Format::Jpm` (Part 6, the
+    multi-page compound file) and `Format::Mj2` (Part 3, Motion JPEG 2000) are read, not written.
+    A `.jpm` holds `mhdr` + `pcol` + a `page` box per page and bare `jp2c` codestreams (no `jp2h`
+    header at all), and an `.mj2` holds its frame headers in `moov` with the codestreams in
+    `mdat`. The decoder opens the first page (or first frame) — a Part 1 codestream like any
+    other, so it reads the same depths and layouts as `.j2k` — and appends
+    `DecodeWarning::MorePages`/`MoreFrames` when more pages or frames exist; a single-page or
+    single-frame file decodes with no warning. `caps` marks both readable and unwritable, so
+    opening one works and saving returns `Unsupported` (whitelisted by `ASYMMETRIC_EXCEPTIONS`
+    with a pointer to JP2/J2K). MJ2 sample-offset handling is best-effort: it tries the ISO
+    absolute `stco` offset first, then common `mdat`-relative interpretations; it has been checked
+    against the real-world `Speedway.mj2` sample as well as synthetic regression fixtures. `detect`
+    reads their brands from the `ftyp` box that follows the Part 1 signature box, which is where a
+    real file puts it.
+  * Not kept: the `res ` resolution box, EXIF, XMP and the JPX Part 2 features (opacity channel,
+    channel definitions beyond our own `cdef`, arbitrary tiling). The resolution is reported as a
+    dropped DPI by `fidelity_warnings`.
 
 * **Camera raw files** (DNG, CR2, NEF, ARW… which are TIFF-structured) are recognised and refused
   with `CodecError::Unsupported`: they are sensor data, not flat images. `photocraft-raw` decodes

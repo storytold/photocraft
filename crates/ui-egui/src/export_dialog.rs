@@ -13,7 +13,13 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+const FORMATS: [(&str, &str); 7] = [("png", "PNG"), ("jpg", "JPG"), ("jp2", "JPEG 2000"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+
+/// JPEG 2000's Quality slider starts at 100, the reversible wavelet that makes the format exact,
+/// because that is what it is reached for; JPEG and WebP start at their remembered quality.
+fn default_quality(fmt: &str) -> f64 {
+    if fmt == "jp2" { 100.0 } else { 85.0 }
+}
 
 /// Preferences ▸ remembered dialog settings: Export As writes the settings it was used with
 /// last under its command id and seeds the next dialog from them, as Fill, Liquify and the
@@ -356,6 +362,11 @@ fn set_format_defaults(f: &mut Map<String, Value>, fmt: &str, prefs: &photocraft
         "jpg" => {
             f.insert("quality".into(), json!(prefs.jpeg_quality));
         }
+        // JPEG 2000 has no preference of its own: it starts exact and becomes lossy only when
+        // the slider is moved.
+        "jp2" => {
+            f.insert("quality".into(), json!(100));
+        }
         "webp" => {
             f.insert("quality".into(), json!(prefs.webp_quality));
             f.insert("lossless".into(), json!(prefs.webp_lossless));
@@ -381,12 +392,14 @@ fn tga_bits(f: &Map<String, Value>) -> Option<photocraft_io::TgaBits> {
 
 fn settings(f: &Map<String, Value>) -> ExportSettings {
     let fmt = s_fmt(f);
-    let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
+    let quality = n(f, "quality", default_quality(&fmt)).clamp(1.0, 100.0) as u8;
     let metadata = s(f, "metadata");
     ExportSettings {
         jpeg_quality: (fmt == "jpg").then_some(quality),
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
+        // 100 is the reversible wavelet, so leaving the slider alone keeps JPEG 2000 exact.
+        jp2_quality: (fmt == "jp2").then_some(quality),
         xmp_all: metadata == "all",
         tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
         embed_icc: f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
@@ -616,7 +629,7 @@ fn preset_settings(f: &Map<String, Value>) -> Value {
     let scale = if scale.is_finite() { scale.clamp(1.0, 1000.0) } else { 100.0 };
     json!({
         "format": s_fmt(f),
-        "quality": n(f, "quality", 85.0).clamp(1.0, 100.0).round(),
+        "quality": n(f, "quality", default_quality(&s_fmt(f))).clamp(1.0, 100.0).round(),
         "lossless": lossless(f),
         "transparency": f.get("transparency").and_then(Value::as_bool).unwrap_or(true),
         "scale": scale,
@@ -724,8 +737,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::checkbox(ui, &mut ll, tl!("Lossless"));
                 f.insert("lossless".into(), json!(ll));
             }
-            if fmt == "jpg" || (fmt == "webp" && !lossless(f)) {
-                let mut q = n(f, "quality", 85.0) as f32;
+            if fmt == "jpg" || fmt == "jp2" || (fmt == "webp" && !lossless(f)) {
+                let mut q = n(f, "quality", default_quality(&fmt)) as f32;
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
             }
@@ -786,7 +799,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let sig = format!(
                 "{}{}{}{}{}{}{}{}{}{}{}{}",
                 s_fmt(f),
-                n(f, "quality", 85.0),
+                n(f, "quality", default_quality(&s_fmt(f))),
                 lossless(f),
                 f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
                 n(f, "scale", 100.0),
@@ -1160,6 +1173,49 @@ mod tests {
         set_format_defaults(&mut fields, "webp", &photocraft_engine::prefs::Export::default());
         assert!(settings(&fields).webp_lossless, "default WebP Quick Export mode is lossless");
         assert_eq!(settings(&fields).webp_quality, None);
+    }
+
+    /// JPEG 2000 is in the Format list and starts exact: picking it seeds Quality at 100, the
+    /// reversible wavelet, and the slider alone decides whether the file is lossy.
+    #[test]
+    fn jpeg2000_is_offered_and_starts_lossless() {
+        assert!(FORMATS.iter().any(|(ext, _)| *ext == "jp2"), "JPEG 2000 must be in the Format dropdown");
+        let prefs = photocraft_engine::prefs::Export { jpeg_quality: 43, ..Default::default() };
+        let mut fields = Map::new();
+        set_format_defaults(&mut fields, "jp2", &prefs);
+        assert_eq!(fields["quality"], 100, "picking JPEG 2000 seeds the reversible quality, not the JPEG one");
+        assert_eq!(settings(&fields).jp2_quality, Some(100));
+        assert_eq!(settings(&fields).jpeg_quality, None, "the JPEG quality must not leak into JPEG 2000");
+        assert_eq!(settings(&fields).io_options().encode.jp2_quality, Some(100));
+        // Moving the slider down asks for a smaller, lossy file, and only then.
+        fields.insert("quality".into(), json!(60));
+        assert_eq!(settings(&fields).jp2_quality, Some(60));
+        assert_eq!(settings(&fields).io_options().encode.jp2_quality, Some(60));
+        assert_eq!(settings(&fields).io_options().encode.jpeg_quality, 90, "JPEG keeps its own default");
+        // Another format says nothing about JPEG 2000, which leaves the codec's exact default.
+        let mut other = Map::new();
+        other.insert("format".into(), json!("png"));
+        assert_eq!(settings(&other).jp2_quality, None);
+        assert_eq!(settings(&other).io_options().encode.jp2_quality, None);
+        // The codec default is the reversible wavelet, so the file it writes is exact.
+        assert_eq!(photocraft_codecs::EncodeOptions::default().jp2_quality, None);
+    }
+
+    /// The remembered-dialog seeding accepts JPEG 2000 as a format and keeps its quality.
+    #[test]
+    fn jpeg2000_survives_the_remembered_dialog_settings() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let mut fields = Map::new();
+        fields.insert("format".into(), json!("jp2"));
+        fields.insert("quality".into(), json!(70));
+        remember(&mut app, &fields);
+
+        let id = open(&mut app).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!(f["format"], "jp2");
+        assert_eq!(f["quality"], 70.0);
+        assert_eq!(settings(f).jp2_quality, Some(70));
     }
 
     #[test]

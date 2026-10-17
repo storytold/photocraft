@@ -88,7 +88,7 @@ pub struct ExportLayersParams {
     /// Export only the layers that are visible (default true).
     #[serde(default, rename = "visible_only")]
     pub visible_only: Option<bool>,
-    /// Encoder quality, 0..12, for the formats that take one.
+    /// Encoder quality, 0..12, for the formats that take one (JPEG, WebP, JPEG 2000).
     #[serde(default)]
     pub quality: Option<f64>,
 }
@@ -157,7 +157,8 @@ pub struct SaveParams {
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
-    /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
+    /// JPEG, WebP or JPEG 2000 quality 1..100. A WebP or a JPEG 2000 saved with a quality below
+    /// 100 is lossy; without one both stay lossless.
     #[serde(default)]
     pub quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
@@ -1036,6 +1037,8 @@ impl PhotocraftMcp {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
                     opts.encode.webp_quality = q.clamp(1, 100);
                     opts.encode.webp_lossless = false;
+                    // JPEG 2000 is exact by default; below 100 it becomes irreversible.
+                    opts.encode.jp2_quality = Some(q.clamp(1, 100));
                 }
                 let path = p.path.map(PathBuf::from);
                 h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)

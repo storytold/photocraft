@@ -18,7 +18,8 @@ USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
-      --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
+      --quality sets the JPEG, WebP or JPEG 2000 quality; a WebP or JPEG 2000 written with a
+      quality below 100 is lossy, without one WebP stays lossless and JPEG 2000 stays lossless.
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
       its alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24.
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
@@ -211,6 +212,8 @@ fn export_opts(a: &Args) -> Result<ExportOptions, String> {
         // Asking for a quality asks for a lossy WebP; the default WebP stays lossless.
         o.encode.webp_quality = q;
         o.encode.webp_lossless = false;
+        // JPEG 2000 is lossless without one; below 100 it is irreversible.
+        o.encode.jp2_quality = Some(q);
     }
     if let Some(b) = a.get("--tga-bits") {
         o.tga_bits = Some(b.parse().ok().and_then(photocraft_io::TgaBits::from_bits).ok_or_else(|| format!("bad --tga-bits `{b}`: expected 24 or 32"))?);

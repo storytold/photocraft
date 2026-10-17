@@ -53,6 +53,7 @@ fn main() {
             if let Some(q) = settings.webp_quality {
                 opts.encode.webp_quality = q;
             }
+            opts.encode.jp2_quality = settings.jp2_quality;
             opts.tga_bits = settings.tga_bits;
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),

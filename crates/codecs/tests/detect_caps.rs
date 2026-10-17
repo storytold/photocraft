@@ -60,6 +60,10 @@ fn default_build_formats_all_symmetric() {
         Format::Hdr,
         Format::Fits,
         Format::Dpx,
+        Format::Jp2,
+        Format::J2k,
+        Format::Jpx,
+        Format::Jpf,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -102,7 +106,10 @@ fn caps_are_internally_consistent() {
         let c = caps(f);
         assert!(!c.depths.is_empty() && !c.layouts.is_empty(), "{f:?}");
         assert_eq!(c.alpha, c.layouts.iter().any(|l| l.has_alpha()), "{f:?} alpha flag vs layouts");
-        assert!(!f.extensions().is_empty() && !f.name().is_empty() && f.mime_type().starts_with("image/"));
+        assert!(!f.extensions().is_empty() && !f.name().is_empty(), "{f:?}");
+        // Every still-image format declares an `image/` type. The one container that is not a
+        // still image declares the registered `video/` type instead.
+        assert!(f.mime_type().starts_with("image/") || (f == Format::Mj2 && f.mime_type() == "video/mjp2"), "{f:?}: {}", f.mime_type());
     }
 }
 
@@ -122,8 +129,46 @@ fn detect_encoded_output_of_every_format() {
     for f in writable_formats() {
         let img = test_image(ChannelLayout::Rgba, SampleType::U8);
         let bytes = encode(&img, f, &EncodeOptions::default()).unwrap();
-        assert_eq!(detect(&bytes), Some(f));
+        // The Part 2 and Part 6 wrappers are written as the Part 1 container, so their bytes
+        // read back as JP2; a raw codestream keeps its own marker.
+        let expected = if matches!(f, Format::Jpx | Format::Jpf | Format::Jpm) { Format::Jp2 } else { f };
+        assert_eq!(detect(&bytes), Some(expected), "{f:?}");
     }
+}
+
+/// JPEG 2000 identifies itself from its own bytes, and its extensions each resolve back to the
+/// format that handles them — including the two containers we only recognise.
+#[test]
+fn jpeg2000_extensions_and_magic_agree() {
+    for (ext, expected, family) in [
+        ("jp2", Format::Jp2, true),
+        ("j2k", Format::J2k, true),
+        ("jpx", Format::Jpx, true),
+        ("jpf", Format::Jpf, true),
+        ("jpm", Format::Jpm, false),
+        ("mj2", Format::Mj2, false),
+    ] {
+        assert_eq!(from_extension(ext), Some(expected), ".{ext}");
+        assert_eq!(from_extension(&format!("photo.{ext}")), Some(expected), "photo.{ext}");
+        assert_eq!(from_extension(&ext.to_uppercase()), Some(expected), ".{ext} uppercase");
+        assert_eq!(is_jpeg2000(expected), family, ".{ext} is not in the right family");
+    }
+    assert_eq!(from_extension("j2c"), Some(Format::J2k), ".j2c is the codestream alias");
+    // The Part 1 signature box opens the file, then `ftyp` names the container.
+    let signature = [0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+    let file = |brand: &[u8; 4]| {
+        let mut ftyp = 0x14u32.to_be_bytes().to_vec();
+        ftyp.extend_from_slice(b"ftyp");
+        ftyp.extend_from_slice(brand);
+        ftyp.extend_from_slice(&0u32.to_be_bytes());
+        ftyp.extend_from_slice(brand);
+        signature.iter().chain(&ftyp).copied().collect::<Vec<u8>>()
+    };
+    assert_eq!(detect(&signature), Some(Format::Jp2), "a signature box with no ftyp is a Part 1 file");
+    for (brand, want) in [(b"jp2 ", Format::Jp2), (b"jpx ", Format::Jp2), (b"jpf ", Format::Jp2), (b"jpm ", Format::Jpm), (b"mjp2", Format::Mj2)] {
+        assert_eq!(detect(&file(brand)), Some(want), "{brand:?}");
+    }
+    assert_eq!(detect(&[0xFF, 0x4F, 0xFF, 0x51]), Some(Format::J2k));
 }
 
 #[test]
