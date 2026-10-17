@@ -809,6 +809,63 @@ fn every_section_draws_without_issuing_commands() {
     }
 }
 
+/// Both size rows use the same reset affordance and the existing command path.
+#[test]
+fn size_restore_routes_the_active_tip_once_and_respects_disabled_dual_brush() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for section in [0, 4] {
+        let mut h = harness(0, section);
+        let mut brush = h.state().session.tools.brush.clone();
+        brush.dual_brush.enabled = true;
+        let tip = TipShape::Sampled(GrayTile::from_fn(20, 12, |x, y| ((x + y) % 2) as f32));
+        if section == 0 {
+            brush.tip = tip;
+            brush.size = 37.25;
+            brush.dual_brush.size = 74.5; // An enabled secondary tip stays twice the primary size.
+        } else {
+            brush.dual_brush.tip = tip;
+            brush.dual_brush.size = 37.25;
+        }
+        h.state_mut().session.tools.brush = brush.clone();
+        let presets = h.state().session.tools.presets.clone();
+        let journal = h.state().session.journal.len();
+        h.run_steps(3);
+        assert_eq!(h.state().session.tools.brush, brush);
+        assert_eq!(h.state().session.journal.len(), journal);
+        h.get_by_label("Restore original size").click();
+        h.run_steps(3);
+        let mut expected = brush;
+        if section == 0 {
+            expected.size = 20.0;
+            expected.dual_brush.size = 40.0; // The engine preserves the 2:1 ratio on primary restore.
+        } else {
+            expected.dual_brush.size = 20.0;
+        }
+        assert_eq!(h.state().session.tools.brush, expected);
+        assert_eq!(h.state().session.tools.presets, presets, "restoring never overwrites a saved preset");
+        assert_eq!(h.state().session.journal.len(), journal + 1);
+        let (command, params) = h.state().session.journal.last().unwrap();
+        assert_eq!(command, "tools.setBrush");
+        assert_eq!(params["brush"], if section == 0 { json!({"size":20.0}) } else { json!({"dualBrush":{"size":20.0}}) });
+        assert!(h.get_by_label("Restore original size").accesskit_node().is_disabled());
+        h.get_by_label("Restore original size").click();
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().session.journal.len(), journal + 1, "no redundant command at the original size");
+        if section == 4 {
+            h.state_mut().session.tools.brush.dual_brush.size = 37.25;
+            h.state_mut().session.tools.brush.dual_brush.enabled = false;
+            let disabled = h.state().session.tools.brush.clone();
+            h.run_steps(2);
+            assert!(h.get_by_label("Restore original size").accesskit_node().is_disabled());
+            h.get_by_label("Restore original size").click();
+            h.run_steps(3);
+            assert_eq!(h.state().session.tools.brush, disabled);
+            assert_eq!(h.state().session.journal.len(), journal + 1);
+        }
+    }
+}
+
 #[test]
 fn brushes_panel_groups_collapse_and_filter() {
     let mut h = harness(1, 0);

@@ -134,10 +134,15 @@ fn size_row(ui: &mut egui::Ui, label: &str, size: &mut f32, max: f32, restore: O
             if widgets::value_field(ui, &mut s, 1.0..=max, "px", 74.0).changed() {
                 *size = s.round().clamp(1.0, max);
             }
-            if let Some(orig) = restore
-                && crate::icons::button(ui, "undo-2", 22.0, false, tl!("Restore original size")).clicked()
+            // Keep the affordance in place for computed tips too; only offer a real edit.
+            let restore = restore.map(|orig| orig.clamp(1.0, max));
+            let reset = ui
+                .add_enabled_ui(restore.is_some_and(|orig| orig != *size), |ui| crate::icons::button(ui, "undo-2", 22.0, false, tl!("Restore original size")))
+                .inner;
+            if reset.clicked()
+                && let Some(orig) = restore
             {
-                *size = orig.clamp(1.0, max);
+                *size = orig;
             }
         });
     });
@@ -631,6 +636,10 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
     }
     None
 }
+
+#[cfg(test)]
+#[path = "brush_size_restore_tests.rs"]
+mod size_restore_tests;
 
 #[cfg(test)]
 mod tests {
