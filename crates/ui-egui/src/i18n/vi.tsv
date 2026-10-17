@@ -1590,6 +1590,8 @@ cameraRaw	Shadows	Vùng tối
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft đang dùng bộ kết hợp ảnh CPU. Cửa sổ vẫn có thể dùng bộ điều hợp đồ họa của bạn.
 	Retry GPU	Thử lại GPU
 	Retry GPU requires a restart. Save your work first.	Thử lại GPU cần khởi động lại. Hãy lưu công việc trước.
+	Retry GPU tries the graphics processor again now.	Thử lại GPU sẽ thử lại bộ xử lý đồ họa ngay bây giờ.
+	GPU acceleration resumed.	Đã tiếp tục tăng tốc GPU.
 	Keep Using CPU	Tiếp tục dùng CPU
 
 # Phase 4.3 — Keyboard Shortcuts and Menus editor

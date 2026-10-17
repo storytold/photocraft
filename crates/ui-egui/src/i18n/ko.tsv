@@ -2204,6 +2204,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	GPU 가속을 계속할 수 없습니다. 문서는 변경되지 않았습니다.
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft가 CPU로 이미지를 합성하고 있습니다. 창 표시에는 그래픽 어댑터를 계속 사용할 수 있습니다.
 	Retry GPU requires a restart. Save your work first.	GPU를 다시 사용하려면 다시 시작해야 합니다. 먼저 작업을 저장하세요.
+	Retry GPU tries the graphics processor again now.	GPU 다시 사용을 누르면 바로 그래픽 프로세서를 다시 시도합니다.
+	GPU acceleration resumed.	GPU 가속을 다시 사용합니다.
 	Keep Using CPU	CPU 계속 사용
 	Retry GPU	GPU 다시 사용
 	Advanced	고급

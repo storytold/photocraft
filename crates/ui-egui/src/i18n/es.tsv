@@ -2320,6 +2320,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	La aceleración GPU no pudo continuar. Los documentos no han cambiado.
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft compone las imágenes en la CPU. La ventana aún puede usar el adaptador gráfico.
 	Retry GPU requires a restart. Save your work first.	Reintentar la GPU requiere reiniciar. Guarde primero su trabajo.
+	Retry GPU tries the graphics processor again now.	Reintentar la GPU vuelve a probar el procesador gráfico ahora.
+	GPU acceleration resumed.	Se reanudó la aceleración GPU.
 	Keep Using CPU	Seguir usando CPU
 	Retry GPU	Reintentar GPU
 	Advanced	Avanzado

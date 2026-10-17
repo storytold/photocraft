@@ -784,6 +784,11 @@ pub struct PhotocraftApp {
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped
     /// for the rest of the session when the device is lost (see `gpu_status`).
     gpu: Option<gpu_canvas::GpuCanvas>,
+    /// The render state the GPU canvas was built on, kept after it is dropped so Retry GPU can
+    /// build a new one on the same device (see `gpu_status::choose_recovery`, #6577).
+    gpu_render_state: Option<eframe::egui_wgpu::RenderState>,
+    /// Why the GPU canvas was dropped (see `gpu_status::fall_back`).
+    gpu_fault: Option<photocraft_gpu::Fault>,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
@@ -945,6 +950,8 @@ impl PhotocraftApp {
             doc_hist: None,
             hist_job: None,
             gpu: None,
+            gpu_render_state: None,
+            gpu_fault: None,
             started: None,
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
@@ -982,6 +989,7 @@ impl PhotocraftApp {
         let tile = self.session.prefs().performance.cache_tile_size;
         // Escaped driver/setup panics must leave the session and CPU canvas alive.
         self.perf.gpu_info.set_adapter(&rs.adapter.get_info());
+        self.gpu_render_state = Some(rs.clone());
         let gpu = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu_canvas::GpuCanvas::with_tile(&rs, Some(tile)))) {
             Ok(gpu) => gpu,
             Err(payload) => {

@@ -3499,6 +3499,8 @@ cameraRaw	Yellow	Sárga
 	Restore	Előző méret
 	Retry GPU	GPU újrapróbálása
 	Retry GPU requires a restart. Save your work first.	A GPU újrapróbálásához újraindítás kell. Előbb mentsd a munkádat.
+	Retry GPU tries the graphics processor again now.	A GPU újrapróbálása most újra megpróbálja a grafikus processzort.
+	GPU acceleration resumed.	A GPU-gyorsítás újra működik.
 	Rgb	RGB
 	Ridges	Hullámgerincek
 	Right	Jobbra

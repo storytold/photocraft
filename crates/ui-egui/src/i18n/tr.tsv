@@ -2246,6 +2246,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	GPU hızlandırması devam edemedi. Belgeleriniz değişmedi.
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft, CPU görüntü düzenleyicisini kullanıyor. Pencere hala grafik bağdaştırıcınızı kullanıyor olabilir.
 	Retry GPU requires a restart. Save your work first.	GPU'yu yeniden dene, yeniden başlatma gerektirir. Öncelikle çalışmanızı kaydedin.
+	Retry GPU tries the graphics processor again now.	GPU'yu yeniden dene, grafik işlemciyi hemen yeniden dener.
+	GPU acceleration resumed.	GPU hızlandırması sürdürüldü.
 	Keep Using CPU	CPU'yu Kullanmaya Devam Edin
 	Retry GPU	GPU'yu yeniden dene
 	Advanced	Gelişmiş

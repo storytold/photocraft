@@ -2228,6 +2228,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	GPU アクセラレーションを継続できませんでした。ドキュメントは変更されていません。
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft は CPU で画像を合成しています。ウィンドウは引き続きグラフィックスアダプターを使用する場合があります。
 	Retry GPU requires a restart. Save your work first.	GPU の再試行には再起動が必要です。先に作業を保存してください。
+	Retry GPU tries the graphics processor again now.	GPU を再試行すると、すぐにグラフィックプロセッサーをもう一度試します。
+	GPU acceleration resumed.	GPU アクセラレーションを再開しました。
 	Keep Using CPU	CPU を使い続ける
 	Retry GPU	GPU を再試行
 	Advanced	詳細設定

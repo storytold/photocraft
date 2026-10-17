@@ -2511,6 +2511,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	Ускорение GPU остановлено. Документы не изменены.
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft обрабатывает изображения на CPU. Окно может продолжать использовать графический адаптер.
 	Retry GPU requires a restart. Save your work first.	Для повтора GPU нужен перезапуск. Сначала сохраните работу.
+	Retry GPU tries the graphics processor again now.	Повторить GPU — сразу снова попробовать графический процессор.
+	GPU acceleration resumed.	Ускорение GPU возобновлено.
 	Keep Using CPU	Продолжить с CPU
 	Retry GPU	Повторить GPU
 	GPU Backend	Бэкенд GPU
