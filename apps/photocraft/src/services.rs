@@ -581,10 +581,14 @@ fn platform_beep() {
     {
         let _ = winsafe::MessageBeep(winsafe::co::MBP::OK);
     }
-    #[cfg(not(target_os = "windows"))]
+    // The user's alert sound, at the alert volume set in System Settings ▸ Sound. The terminal
+    // bell below is silent for an app started from the Finder or the Dock.
+    #[cfg(target_os = "macos")]
+    objc2_app_kit::NSBeep();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // No beep API among this app's other platforms' dependencies: write the terminal bell
-        // (audible when launched from a terminal, which is the same cue macOS terminals use).
+        // No beep API among the other platforms' dependencies: write the terminal bell (audible
+        // when launched from a terminal).
         use std::io::Write as _;
         let _ = std::io::stdout().write_all(b"\x07").and_then(|()| std::io::stdout().flush());
     }
