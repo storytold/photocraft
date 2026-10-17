@@ -292,6 +292,27 @@ fn count_groups_markers_and_undo() {
 }
 
 #[test]
+fn deleting_an_earlier_count_group_keeps_the_active_group() {
+    let mut s = session(100, 100, 8);
+    s.execute("count.add", json!({"x": 10, "y": 10})).unwrap();
+    for _ in 0..3 {
+        s.execute("count.newGroup", json!({})).unwrap();
+    }
+    s.execute("count.setGroup", json!({"group": 2})).unwrap();
+    let r = s.execute("count.deleteGroup", json!({"group": 0})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][1]["name"], "Count Group 3");
+    // A later group leaves the active index alone.
+    let r = s.execute("count.deleteGroup", json!({"group": 2})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][1]["name"], "Count Group 3");
+    // Deleting the active last group selects the new last group.
+    let r = s.execute("count.deleteGroup", json!({})).unwrap();
+    assert_eq!(r["activeGroup"], 0);
+    assert_eq!(r["groups"][0]["name"], "Count Group 2");
+}
+
+#[test]
 fn log_delete_and_csv_export() {
     let mut s = session(10, 10, 8);
     assert!(!s.is_enabled("measurementLog.delete"));

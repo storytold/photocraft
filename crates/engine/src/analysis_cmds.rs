@@ -856,7 +856,9 @@ fn count_delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Delete Count Group", |d, _| {
         d.measurement.count_groups.remove(g);
         let n = d.measurement.count_groups.len();
-        d.measurement.active_count_group = d.measurement.active_count_group.min(n.saturating_sub(1));
+        // Removing a group before the active one shifts it down a slot.
+        let a = d.measurement.active_count_group;
+        d.measurement.active_count_group = (if g < a { a - 1 } else { a }).min(n.saturating_sub(1));
         Ok(())
     })?;
     Ok(count_json(doc(s)?.as_ref()))
