@@ -130,6 +130,39 @@ fn load_maps_events_keeps_flags_and_plays() {
     assert_eq!(s.actions.list[2].set.as_deref(), Some("Other"));
 }
 
+/// Renames that chain ("A" becomes "A 2" while the file's own "A 2" becomes "A 2 2") rewrite
+/// each Play and Conditional target once, to the renamed copy of the action it named.
+#[test]
+fn load_renames_each_play_target_once() {
+    let mut s = Session::new();
+    let mut mine = Action::new("A", vec![]);
+    mine.set = Some("Mine".into());
+    s.actions.list.push(mine);
+    let a = Action::new("A", vec![("actions.conditional".into(), json!({"if": "always", "then": "A", "else": "A 2"}))]);
+    let a2 = Action::new("A 2", vec![("actions.play".into(), json!({"action": "A"}))]);
+    let keys = [("A".to_string(), "F4".to_string())];
+    let (bytes, _) = export("File", &[&a, &a2], &keys, false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    assert_eq!(r["actions"], json!(["A 2", "A 2 2"]));
+    let get = |n: &str| s.actions.list.iter().find(|a| a.name == n && a.set.as_deref() == Some("File")).unwrap();
+    assert_eq!(get("A 2 2").steps[0].1["action"], "A 2", "plays the file's A, not its A 2");
+    let cond = &get("A 2").steps[0].1;
+    assert_eq!((&cond["then"], &cond["else"]), (&json!("A 2"), &json!("A 2 2")), "{cond}");
+    assert_eq!(r["functionKeys"], json!([{"action": "A 2", "key": "F4"}]));
+
+    // Adding to a set of the same name leaves the Play steps already in it alone.
+    let mut s = Session::new();
+    for (name, steps) in [("A", vec![]), ("B", vec![("actions.play".to_string(), json!({"action": "A"}))])] {
+        let mut a = Action::new(name, steps);
+        a.set = Some("File".into());
+        s.actions.list.push(a);
+    }
+    let (bytes, _) = export("File", &[&Action::new("A", vec![])], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes), "replace": false})).unwrap();
+    assert_eq!(r["actions"], json!(["A 2"]));
+    assert_eq!(s.actions.list[1].steps[0].1, json!({"action": "A"}), "B still plays the A it had");
+}
+
 #[test]
 fn save_round_trips_through_photoshop_events() {
     let mut s = Session::new();

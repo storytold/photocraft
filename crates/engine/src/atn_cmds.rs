@@ -3129,31 +3129,39 @@ fn load(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut taken: Vec<String> = s.actions.list.iter().map(|a| a.name.clone()).collect();
     let mut names = Vec::with_capacity(imp.actions.len());
-    let mut renamed = Vec::new();
+    // The file's name of each action that had to be renamed, and its new name.
+    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut steps = 0usize;
+    let mut added = Vec::with_capacity(imp.actions.len());
     for mut a in imp.actions {
         let name = unique(&a.name, &taken);
         if name != a.name {
-            renamed.push((a.name.clone(), name.clone()));
+            renamed.entry(a.name.clone()).or_insert_with(|| name.clone());
         }
         a.name = name.clone();
         taken.push(name.clone());
         steps = steps.saturating_add(a.steps.len());
         names.push(name);
-        s.actions.list.push(a);
+        added.push(a);
     }
-    // A Play step calls its action by name: follow renames within the set.
-    for (from, to) in &renamed {
-        for a in s.actions.list.iter_mut().filter(|a| a.set.as_deref() == Some(imp.set.as_str())) {
-            for (id, params) in &mut a.steps {
-                if id == "actions.play" && params.get("action").and_then(Value::as_str) == Some(from) {
-                    params["action"] = json!(to);
+    // Play and Conditional steps call actions by name: follow the renames in the actions just
+    // loaded, each target looked up once by the name the file gave it.
+    for a in &mut added {
+        for (id, params) in &mut a.steps {
+            let keys: &[&str] = match id.as_str() {
+                "actions.play" => &["action"],
+                "actions.conditional" => &["then", "else"],
+                _ => &[],
+            };
+            for key in keys {
+                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed.get(n)) {
+                    params[*key] = json!(to);
                 }
             }
         }
     }
-    let keys: Vec<(String, String)> =
-        imp.function_keys.into_iter().map(|(n, k)| (renamed.iter().find(|(f, _)| f == &n).map_or(n, |(_, t)| t.clone()), k)).collect();
+    s.actions.list.extend(added);
+    let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
             for (name, key) in &keys {
