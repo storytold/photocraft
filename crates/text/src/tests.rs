@@ -472,6 +472,32 @@ fn styles_change_pixels() {
     assert!(hrect.width() as f32 > prect.width() as f32 * 1.7);
 }
 
+/// #5645: superscript and subscript runs are drawn at 58.3% of their size, raised or lowered by
+/// 33.3% of it, as Photoshop draws them; they used to be drawn as plain text.
+#[test]
+fn superscript_and_subscript_shrink_and_shift_the_run() {
+    use photocraft_doc::text::FontBaseline;
+    let mut e = TextEngine::new();
+    let base = CharStyle { size_pt: 60.0, ..Default::default() };
+    let rect = |e: &mut TextEngine, baseline: FontBaseline| {
+        let (_, r) =
+            e.render(&TextLayer { transform: Affine::translate(5.0, 100.0), ..styled("H", CharStyle { baseline, ..base.clone() }) }, 72.0, PixelFormat::RGBA8);
+        r.rect
+    };
+    let plain = rect(&mut e, FontBaseline::Normal);
+    let sup = rect(&mut e, FontBaseline::Superscript);
+    let sub = rect(&mut e, FontBaseline::Subscript);
+    // Scripts render at 58.3% of the size. The pixel-snapped bounds of the antialiased glyph land
+    // within 2 px of the exact scaled height (measured: +2.2 / +1.2 px at 46 px plain height).
+    let expect = plain.height() as f32 * 0.583;
+    for r in [&sup, &sub] {
+        assert!((r.height() as f32 - expect).abs() <= 2.5, "plain {plain:?}, scripted {r:?}");
+    }
+    // The cap's foot sits on the shifted baseline: 20 px (33.3% of 60) above or below.
+    assert!((plain.y1 - sup.y1 - 20).abs() <= 2, "plain {plain:?}, superscript {sup:?}");
+    assert!((sub.y1 - plain.y1 - 20).abs() <= 2, "plain {plain:?}, subscript {sub:?}");
+}
+
 /// #4130: Faux bold at 72 dpi looked pixelated because the offset copies were summed into one
 /// coverage buffer, saturating every antialiased edge pixel. Edges must stay antialiased and the
 /// ink must grow only by the dilation (about perimeter x radius), not by edge saturation.

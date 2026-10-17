@@ -11,7 +11,9 @@
 
 use photocraft_color::{Color, ColorMode};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{AntiAlias, Caps, CharStyle, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextRun, TextShape, TextWarp};
+use photocraft_doc::text::{
+    AntiAlias, Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextRun, TextShape, TextWarp,
+};
 use photocraft_geom::{Affine, Point};
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D, VersionedDescriptor};
 
@@ -626,6 +628,11 @@ pub(crate) fn char_style(base: Option<&E>, d: &E, fonts: &[String], k: f32) -> C
         Some(2) => Caps::AllCaps,
         _ => Caps::Normal,
     };
+    s.baseline = match g("FontBaseline").and_then(E::as_i64) {
+        Some(1) => FontBaseline::Superscript,
+        Some(2) => FontBaseline::Subscript,
+        _ => FontBaseline::Normal,
+    };
     if let Some(c) = g("FillColor") {
         // Positions matter (alpha, then the channels): a non-finite entry voids the colour.
         let v: Vec<f64> = c.get("Values").and_then(E::as_array).map(|a| a.iter().filter_map(E::as_f64).collect()).unwrap_or_default();
@@ -859,6 +866,14 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
                 Caps::Normal => 0,
                 Caps::SmallCaps => 1,
                 Caps::AllCaps => 2,
+            }),
+        ),
+        (
+            "FontBaseline".into(),
+            E::Int(match s.baseline {
+                FontBaseline::Normal => 0,
+                FontBaseline::Superscript => 1,
+                FontBaseline::Subscript => 2,
             }),
         ),
         ("Underline".into(), E::Bool(s.underline)),
@@ -1363,6 +1378,19 @@ mod nonfinite_tests {
         assert_eq!(para_style(None, &d, 1.0).start_indent_pt, 0.0);
         let d = parse(b"<< /FontSize 24.0 >>").unwrap();
         assert_eq!(char_style(None, &d, &[], 1.0).size_pt, 24.0);
+    }
+
+    /// #5645: `FontBaseline` (1 superscript, 2 subscript) is read and written back.
+    #[test]
+    fn font_baseline_round_trips() {
+        use photocraft_doc::text::FontBaseline;
+        let d = parse(b"<< /FontBaseline 2 >>").unwrap();
+        assert_eq!(char_style(None, &d, &[], 1.0).baseline, FontBaseline::Subscript);
+        let d = parse(b"<< /FontBaseline 1 >>").unwrap();
+        assert_eq!(char_style(None, &d, &[], 1.0).baseline, FontBaseline::Superscript);
+        let s = CharStyle { baseline: FontBaseline::Subscript, ..Default::default() };
+        let back = char_style(None, &style_sheet_data(&s, 0, 1.0), &[], 1.0);
+        assert_eq!(back.baseline, FontBaseline::Subscript);
     }
 
     #[test]

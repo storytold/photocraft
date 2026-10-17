@@ -214,6 +214,29 @@ fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
 }
 
 #[test]
+fn text_run_baseline_roundtrips() {
+    use photocraft_doc::text::FontBaseline;
+    let mut doc = Document::new("scripts", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new(
+        "Text",
+        LayerContent::Text(TextLayer {
+            text: "H2O2".into(),
+            runs: vec![
+                TextRun { len: 1, style: CharStyle::default() },
+                TextRun { len: 1, style: CharStyle { baseline: FontBaseline::Subscript, ..Default::default() } },
+                TextRun { len: 1, style: CharStyle::default() },
+                TextRun { len: 1, style: CharStyle { baseline: FontBaseline::Superscript, ..Default::default() } },
+            ],
+            ..Default::default()
+        }),
+    ));
+    let loaded = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let LayerContent::Text(text) = &loaded.layers.last().unwrap().content else { panic!("text layer must roundtrip") };
+    let baselines: Vec<FontBaseline> = text.char_runs().iter().map(|r| r.style.baseline).collect();
+    assert_eq!(baselines, [FontBaseline::Normal, FontBaseline::Subscript, FontBaseline::Normal, FontBaseline::Superscript]);
+}
+
+#[test]
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();

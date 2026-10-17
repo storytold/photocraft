@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use photocraft_color::Color;
 use photocraft_doc::text::{
-    AntiAlias, Caps, CharStyle, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape,
+    AntiAlias, Caps, CharStyle, FontBaseline, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection,
+    TextRun, TextShape,
 };
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
@@ -333,6 +334,14 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
             "small" | "smallCaps" => Caps::SmallCaps,
             "all" | "allCaps" => Caps::AllCaps,
             _ => Caps::Normal,
+        };
+        hit(true);
+    }
+    if let Some(v) = p.get("baseline").and_then(Value::as_str) {
+        s.baseline = match v {
+            "superscript" => FontBaseline::Superscript,
+            "subscript" => FontBaseline::Subscript,
+            _ => FontBaseline::Normal,
         };
         hit(true);
     }
@@ -785,7 +794,7 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
     Ok(t)
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
