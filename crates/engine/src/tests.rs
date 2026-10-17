@@ -159,6 +159,31 @@ fn file_new_keeps_defaults_and_supported_modes_and_depths() {
 }
 
 #[test]
+fn file_new_tags_the_document_with_the_chosen_profile() {
+    // #321: New Document › Color Profile, as in Photoshop: another profile than the working space.
+    let desc = |s: &Session| {
+        let bytes = s.active().unwrap().doc.icc_profile.clone();
+        bytes.map(|b| photocraft_cms::Profile::parse(&b).unwrap().description)
+    };
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "profile": "adobe-rgb-compat"})).unwrap();
+    assert_eq!(desc(&s).as_deref(), Some(photocraft_cms::Builtin::AdobeRgbCompat.description()));
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "profile": "coated-cmyk"})).unwrap();
+    assert!(desc(&s).is_some());
+    // The working space (the default, or asked for) leaves it as before.
+    for p in [json!({"width": 4, "height": 4}), json!({"width": 4, "height": 4, "profile": "working"})] {
+        s.execute("file.new", p).unwrap();
+        assert_eq!(desc(&s), None);
+    }
+    // A profile that doesn't suit the mode, an unknown one or a wrong type opens nothing.
+    let open = s.documents().len();
+    for bad in [json!("coated-cmyk"), json!("no-such-profile"), json!(""), json!(7), json!(null)] {
+        assert!(s.execute("file.new", json!({"width": 4, "height": 4, "profile": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(s.documents().len(), open);
+}
+
+#[test]
 fn file_new_variants() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 10, "height": 5, "background": "transparent"})).unwrap();
