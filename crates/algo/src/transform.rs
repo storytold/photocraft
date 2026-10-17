@@ -231,14 +231,37 @@ pub fn quad_to_rect(q: &[[f64; 2]; 4], w: f64, h: f64) -> Option<Homography> {
 
 /// The destination rectangle [`warp_surface`] fills for `src_rect` under `h`: the warped corners
 /// plus a pixel for filter support, each side clamped to ±2²⁰. `None` when a corner maps to
-/// infinity (the result is then empty). Lets a caller price a warp before allocating it.
+/// infinity (the result is then empty). Use [`warp_output_size`] to price the full result before
+/// admitting a transform: clipping these bounds must not hide an excessive scale.
 pub fn warp_output_bounds(src_rect: Rect, h: &Homography) -> Option<Rect> {
+    corner_bounds(&warp_corners(src_rect, h)?)
+}
+
+/// Unclipped output dimensions, including the same filter support as [`warp_output_bounds`].
+/// Position does not affect the price, so translating a small layer far away stays cheap.
+/// Unrepresentable or non-finite dimensions saturate at `u64::MAX`, allowing a caller to refuse
+/// the warp with a saturating pixel-budget comparison. Empty and singular inputs have no output.
+pub fn warp_output_size(src_rect: Rect, h: &Homography) -> Option<(u64, u64)> {
+    let corners = warp_corners(src_rect, h)?;
+    if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite()) {
+        return Some((u64::MAX, u64::MAX));
+    }
+    let x0 = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor();
+    let y0 = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor();
+    let x1 = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil();
+    let y1 = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil();
+    // Float-to-integer casts saturate, including when the finite endpoints' difference overflows.
+    Some((((x1 - x0) as u64).saturating_add(2), ((y1 - y0) as u64).saturating_add(2)))
+}
+
+fn warp_corners(src_rect: Rect, h: &Homography) -> Option<[(f64, f64); 4]> {
     if src_rect.is_empty() || h.inverse().is_none() {
         return None;
     }
-    let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
-        .map(|(x, y)| h.apply(x as f64, y as f64));
-    corner_bounds(&corners)
+    Some(
+        [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
+            .map(|(x, y)| h.apply(x as f64, y as f64)),
+    )
 }
 
 fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
@@ -509,6 +532,31 @@ fn warp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_size_prices_the_unclipped_extent_independently_of_position() {
+        let src = Rect::new(0, 0, 24, 16);
+        for dx in [0.0, 900_000.0, 10_000_000.0] {
+            let h = Homography([1.0, 0.0, dx, 0.0, 1.0, -dx, 0.0, 0.0, 1.0]);
+            assert_eq!(warp_output_size(src, &h), Some((26, 18)));
+        }
+        for sx in [1e7, -1e7] {
+            let h = Homography([sx, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(warp_output_size(src, &h), Some((240_000_002, 18)));
+        }
+    }
+
+    #[test]
+    fn output_size_saturates_overflows_and_preserves_filter_support() {
+        let src = Rect::new(0, 0, 24, 16);
+        let fractional = Homography([0.5, 0.0, 0.25, 0.0, 1.0, 0.75, 0.0, 0.0, 1.0]);
+        let bounds = warp_output_bounds(src, &fractional).unwrap();
+        assert_eq!(warp_output_size(src, &fractional), Some((u64::from(bounds.width()), u64::from(bounds.height()))));
+        let huge = Homography([1e308, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(warp_output_size(src, &huge), Some((u64::MAX, u64::MAX)));
+        assert_eq!(warp_output_size(Rect::EMPTY, &Homography::IDENTITY), None);
+        assert_eq!(warp_output_size(src, &Homography([0.0; 9])), None);
+    }
 
     #[test]
     fn the_interruptible_warp_reports_progress_and_stops_when_cancelled() {

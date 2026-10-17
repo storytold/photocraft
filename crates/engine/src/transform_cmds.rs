@@ -1,6 +1,6 @@
 //! Edit › Free Transform / Transform: projective transforms of layers (and the selection).
 
-use photocraft_algo::transform::{Homography, Interp, warp_output_bounds, warp_surface, warp_surface_with};
+use photocraft_algo::transform::{Homography, Interp, warp_output_size, warp_surface, warp_surface_with};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks};
 use photocraft_geom::{Affine, Rect};
@@ -273,10 +273,13 @@ const BUDGET: u64 = 1 << 20;
 /// Refuse a warp of the content inside `src` by `h` whose result would exceed the pixel budget,
 /// before anything is built. `what` names the surface in the message.
 pub(crate) fn check_budget(src: Rect, h: &Homography, what: &str) -> Result<()> {
-    let Some(b) = warp_output_bounds(src, h) else { return Ok(()) };
-    let (w, ht) = (u64::from(b.width()), u64::from(b.height()));
-    if w.saturating_mul(ht) > BUDGET {
-        let detail = format!("the transformed {what} would be {w} x {ht} px, more than the {BUDGET} px limit");
+    check_budget_with_limit(src, h, what, BUDGET)
+}
+
+fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, budget: u64) -> Result<()> {
+    let Some((w, ht)) = warp_output_size(src, h) else { return Ok(()) };
+    if w.saturating_mul(ht) > budget {
+        let detail = format!("the transformed {what} would be {w} x {ht} px, more than the {budget} px limit");
         return Err(crate::allocation::error("transforming pixels", &detail));
     }
     Ok(())
@@ -734,6 +737,24 @@ mod tests {
     }
 
     // ---- Pixel budget (#3773). Tests run with a 2²⁰ px budget, so nothing here comes near the real one. ----
+
+    #[test]
+    fn huge_transform_scales_exceed_the_production_budget_before_clipping() {
+        let src = Rect::new(0, 0, 24, 16);
+        for scale in [1e7, 1e28, 1e306] {
+            for (sx, sy) in [(scale, 1.0), (1.0, scale), (-scale, 1.0)] {
+                let h = Homography([sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0]);
+                assert!(check_budget_with_limit(src, &h, "layer", MAX_TRANSFORM_PIXELS).is_err(), "{sx} x {sy} must be refused");
+            }
+        }
+    }
+
+    #[test]
+    fn an_ordinary_transform_remains_within_the_production_budget() {
+        let src = Rect::new(0, 0, 24, 16);
+        let h = Homography([10_000.0, 0.0, 900_000.0, 0.0, 1.0, -900_000.0, 0.0, 0.0, 1.0]);
+        assert!(check_budget_with_limit(src, &h, "layer", MAX_TRANSFORM_PIXELS).is_ok());
+    }
 
     /// A 16 x 16 document whose active layer is a 1 x 8 column at x = 10.
     fn column() -> Session {
