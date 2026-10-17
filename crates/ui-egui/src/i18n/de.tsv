@@ -2811,6 +2811,9 @@ curves	Smooth	Glätten
 # Document Info and color profiles
 	Author Title	Position des Urhebers
 	Copyright Status	Urheberrechtsstatus
+	Copyright Info URL	URL für Urheberrechtsinfo
+	Copyright Notice	Urheberrechtsvermerk
+	Document Title	Dokumenttitel
 	Unknown	Unbekannt
 	Copyrighted	Urheberrechtlich geschützt
 	Public Domain	Gemeinfrei

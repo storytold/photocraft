@@ -1067,6 +1067,23 @@ mod form_reset_tests {
     }
 }
 
+/// Display order of a `__form` dialog's field keys. `__order` lists them the way Photoshop
+/// shows them (e.g. File Info); keys it omits keep their catalogue order after it.
+pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
+    let mut keys: Vec<String> = f
+        .get("__order")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|k| !k.starts_with("__") && f.contains_key(*k))
+        .map(str::to_string)
+        .collect();
+    let rest: Vec<String> = f.keys().filter(|k| !k.starts_with("__") && !keys.contains(k)).cloned().collect();
+    keys.extend(rest);
+    keys
+}
+
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
@@ -1074,7 +1091,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
     let label = |k: &str| labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string);
-    let keys: Vec<String> = f.keys().filter(|k| !k.starts_with("__")).cloned().collect();
+    let keys = form_keys(f);
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
@@ -1253,7 +1270,23 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
             let kw = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
             dialog(
                 app,
-                json!({"title": info["title"], "author": info["author"], "authorTitle": info["authorTitle"], "description": info["description"], "keywords": kw, "copyright": info["copyright"], "copyrightStatus": info["copyrightStatus"], "copyrightUrl": info["copyrightUrl"], "__camera": info["camera"]}),
+                json!({
+                    "title": info["title"],
+                    "author": info["author"],
+                    "authorTitle": info["authorTitle"],
+                    "description": info["description"],
+                    "keywords": kw,
+                    "copyrightStatus": info["copyrightStatus"],
+                    "copyright": info["copyright"],
+                    "copyrightUrl": info["copyrightUrl"],
+                    "__order": ["title", "author", "authorTitle", "description", "keywords", "copyrightStatus", "copyright", "copyrightUrl"],
+                    "__labels": {
+                        "title": tl!("Document Title"),
+                        "copyright": tl!("Copyright Notice"),
+                        "copyrightUrl": tl!("Copyright Info URL"),
+                    },
+                    "__camera": info["camera"]
+                }),
                 json!({"copyrightStatus": ["unknown", "copyrighted", "publicDomain"]}),
             )
         }
