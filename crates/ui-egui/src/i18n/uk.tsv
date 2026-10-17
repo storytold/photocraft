@@ -2604,6 +2604,8 @@ cameraRaw	Roughness	Шорсткість
 	Add to Swatches	Додати до зразків кольорів
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Накладати, якщо:
+	Current Layer:	Поточний шар:
+	Underlying Layer:	Нижній шар:
 	Channels:	Канали:
 	Knockout	Вибивання
 	Apply At Canvas Bounds	Застосувати на межах полотна
@@ -2701,6 +2703,9 @@ fontWeight	Italic	Курсивний
 # Additional shell controls, dynamic dialog fields and command labels.
 	(coming soon)	(незабаром)
 	Add a layer style	Додати стиль шару
+	Move effect up	Перемістити ефект вгору
+	Move effect down	Перемістити ефект вниз
+	Delete effect	Видалити ефект
 	Add a mask  (from the selection; {key} inverts)	Додати маску  (із виділення; {key} інвертує)
 	Add an adjustment	Додати корекцію
 	Add space after paragraph	Додати інтервал після абзацу

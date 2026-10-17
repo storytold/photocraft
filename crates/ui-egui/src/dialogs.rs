@@ -108,11 +108,42 @@ fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> bool {
     fields.contains_key("__web") || crate::prefs_ui::is_preferences(fields)
 }
 
+/// How far the title band reaches past the title into the frame's padding (#1921).
+const TITLE_REACH: f32 = 7.0;
+
+/// The size of a dialog whose body fills the size it is given, rather than setting it.
+struct Sizing {
+    /// Where egui keeps the size.
+    id: egui::Id,
+    /// At most the window, less a margin.
+    default: egui::Vec2,
+    /// Also the floor on a window smaller than that.
+    min: egui::Vec2,
+    /// A grip in the bottom-right corner resizes it.
+    resizable: bool,
+    /// Outline the sized area.
+    stroke: bool,
+}
+
+/// The dialogs sized here: the web page viewer and Preferences (resizable), and Layer Style, which
+/// keeps one size on every page like Photoshop's (not resizable there either); its effect list and
+/// settings page scroll when they are taller, so OK and Cancel stay on a short screen.
+fn sizing_of(d: &Dialog, id: egui::Id) -> Option<Sizing> {
+    let id = id.with("resize");
+    if resizable_dialog(&d.fields) {
+        Some(Sizing { id, default: egui::vec2(960.0, 900.0), min: egui::vec2(560.0, 400.0), resizable: true, stroke: true })
+    } else if d.kind == DialogKind::LayerStyle {
+        // Photoshop's shape: wide and short, with OK and Cancel in a column on the right.
+        Some(Sizing { id, default: egui::vec2(800.0, 550.0), min: egui::vec2(640.0, 360.0), resizable: false, stroke: false })
+    } else {
+        None
+    }
+}
+
 fn show_modal<T>(
     modal: egui::Modal,
     ctx: &egui::Context,
-    id: egui::Id,
-    resizable: bool,
+    sizing: Option<&Sizing>,
     interactive: bool,
     contents: impl FnOnce(&mut egui::Ui) -> T,
 ) -> egui::ModalResponse<T> {
@@ -121,14 +152,17 @@ fn show_modal<T>(
         if !interactive {
             ui.disable();
         }
-        if resizable {
-            let max = (ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(560.0, 400.0));
-            egui::Resize::default()
-                .id(id.with("resize"))
-                .default_size(egui::vec2(960.0, 900.0).min(max))
-                .min_size(egui::vec2(560.0, 400.0))
-                .max_size(max)
-                .show(ui, contents)
+        if let Some(s) = sizing {
+            let max = (ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(s.min);
+            let resize = egui::Resize::default().id(s.id).with_stroke(s.stroke);
+            let resize =
+                if s.resizable { resize.default_size(s.default.min(max)).min_size(s.min).max_size(max) } else { resize.fixed_size(s.default.min(max)) };
+            resize.show(ui, |ui| {
+                // The Resize clips to its area, which cut off the title band's reach into the
+                // frame's margin (#1921): only the title band is drawn or hit there.
+                ui.set_clip_rect(ui.clip_rect().expand(TITLE_REACH + 1.0));
+                contents(ui)
+            })
         } else {
             contents(ui)
         }
@@ -207,7 +241,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let web = fields.contains_key("__web");
         let web_popup_open = web && egui::Popup::is_any_open(ctx);
-        let modal = show_modal(modal, ctx, id, resizable_dialog(&fields), interactive, |ui| {
+        let resize = sizing_of(&d, id);
+        let modal = show_modal(modal, ctx, resize.as_ref(), interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
             // A dialog of a few short fields (`__compact`, Fit Image) is narrower (#4673): the title
@@ -234,7 +269,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 800.0
             } else if about_tabs {
                 700.0
-            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+            } else if d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
                 600.0
             } else if compact {
                 260.0
@@ -246,6 +281,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if web {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
+            } else if d.kind == DialogKind::LayerStyle {
+                // Its fixed width (`sizing_of`); the body fills the height (`layer_style::body`).
+                ui.set_max_width(available.x);
+                ui.set_min_width(available.x);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
@@ -266,8 +305,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // The close box (#5496) sits at the band's right end and is left out of the drag area:
             // egui would let a drag that starts on a button move the dialog.
             let close_rect = CLOSE_BOX.then(|| close_box_rect(ui.max_rect().right(), t.center().y));
-            let bar_right = close_rect.map_or(ui.max_rect().right() + 7.0, |r| r.left());
-            let bar = egui::Rect::from_min_max(t.min - egui::vec2(7.0, 7.0), egui::pos2(bar_right, t.bottom() + 4.0));
+            let bar_right = close_rect.map_or(ui.max_rect().right() + TITLE_REACH, |r| r.left());
+            let bar = egui::Rect::from_min_max(t.min - egui::vec2(TITLE_REACH, TITLE_REACH), egui::pos2(bar_right, t.bottom() + 4.0));
             drag = ui.interact(bar, id.with("title"), egui::Sense::drag()).drag_delta();
             if let Some(r) = close_rect {
                 close_clicked = close_box(ui, r);
@@ -371,13 +410,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::new_guide_ui::owns(&fields) => crate::new_guide_ui::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
-                DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
+                DialogKind::LayerStyle => outcome = crate::layer_style::body(app, ui, &mut fields, interactive),
                 DialogKind::Error => {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
             crate::field_tab::end(ui.ctx(), tab);
-            if crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+            if crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) || d.kind == DialogKind::LayerStyle {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -481,7 +520,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
         shown.push(if color_picker { modal.response.rect } else { modal.inner });
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (web || pinned.is_none() || drag != egui::Vec2::ZERO) {
+        if !sizing && (resize.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO) {
             let screen = ctx.content_rect();
             // Keep the whole dialog (and so its title bar) on screen.
             let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
@@ -917,7 +956,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
         PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
         harness.state_mut().ui.open_dialog(DialogKind::LayerStyle, serde_json::Map::new());
         harness.run_steps(3);
@@ -938,6 +977,112 @@ mod tests {
         let moved = harness.get_by_label("Layer Style").rect().min - before.min;
         assert!((moved - egui::vec2(-120.0, 80.0)).length() < 1.0, "dialog moved by {moved:?}");
         assert_eq!(harness.state().ui.dialogs.len(), 1, "dragging must not close the dialog");
+    }
+
+    /// Layer Style open on Bevel & Emboss (its tallest page) for a pixel layer.
+    fn layer_style_on_bevel(size: egui::Vec2) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::layer_style::open(h.state_mut(), Some("bevelEmboss")).expect("Layer Style opens");
+        h.run_steps(4);
+        assert!(h.query_by_label("Gloss Contour").is_some(), "the Bevel & Emboss page is showing");
+        h
+    }
+
+    fn frame(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Rect {
+        rects(&h.ctx).first().copied().expect("the dialog is drawn")
+    }
+
+    /// Layer Style keeps one size on every page, as Photoshop's does (it used to grow and shrink
+    /// with each page), and has no resize grip: Photoshop's isn't resizable either.
+    #[test]
+    fn layer_style_keeps_one_size_on_every_page() {
+        let mut h = layer_style_on_bevel(egui::vec2(1400.0, 900.0));
+        let size = frame(&h).size();
+        let dialog = h.state().ui.dialogs[0].id;
+        for page in ["blendingOptions", "styles"] {
+            h.state_mut().ui.dialog_mut(dialog).expect("still open").fields.insert("selected".into(), json!(page));
+            h.run_steps(3);
+            assert_eq!(frame(&h).size(), size, "{page}");
+        }
+        let grip = egui::Id::new(("dialog", dialog)).with("resize").with("__resize_corner");
+        assert!(h.ctx.read_response(grip).is_none(), "no resize grip");
+    }
+
+    /// On a short screen Layer Style fits, its page scrolling, so OK and Cancel stay reachable
+    /// (the Bevel & Emboss page used to push them off the bottom).
+    #[test]
+    fn layer_style_fits_a_short_screen() {
+        use egui_kittest::kittest::Queryable;
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1366.0, 640.0));
+        let h = layer_style_on_bevel(screen.size());
+        assert!(screen.contains_rect(frame(&h)), "{:?} fits on {screen:?}", frame(&h));
+        for button in ["OK", "Cancel"] {
+            assert!(screen.contains_rect(h.get_by_label(button).rect()), "{button} is on screen");
+        }
+    }
+
+    /// Layer Style is laid out like Photoshop's: wide and short, the effect list on the left, the
+    /// page in the middle and OK, Cancel, New Style…, Preview in a column on the right.
+    #[test]
+    fn layer_style_is_laid_out_like_photoshops() {
+        use egui_kittest::kittest::Queryable;
+
+        let h = layer_style_on_bevel(egui::vec2(1400.0, 900.0));
+        let at = |label: &str| h.get_by_label(label).rect();
+        let frame = frame(&h);
+        assert!(frame.width() > frame.height() * 1.3, "wide and short: {:?}", frame.size());
+        // The list's rows are painted; its bar's fx button marks the column.
+        let (list, page) = (at("Add a layer style"), at("Depth"));
+        let [ok, cancel, new_style, preview] = ["OK", "Cancel", "New Style…", "Preview"].map(at);
+        assert!(list.right() < page.left(), "the list is left of the page");
+        for (name, r) in [("OK", ok), ("Cancel", cancel), ("New Style…", new_style), ("Preview", preview)] {
+            assert!(r.left() > page.right(), "{name} is right of the page");
+        }
+        assert!(ok.top() < cancel.top() && cancel.top() < new_style.top() && new_style.top() < preview.top(), "top to bottom");
+    }
+
+    /// The right-hand column's OK applies the style and Cancel drops it; Enter is OK.
+    #[test]
+    fn layer_style_ok_cancel_and_enter() {
+        let bevels = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            let st = h.state().session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            layer.effects.items.iter().filter(|e| matches!(e, photocraft_doc::Effect::BevelEmboss { .. })).count()
+        };
+        for (how, applied) in [("OK", 1), ("Cancel", 0), ("Enter", 1)] {
+            use egui_kittest::kittest::Queryable;
+
+            let mut h = layer_style_on_bevel(egui::vec2(1400.0, 900.0));
+            if how == "Enter" {
+                h.key_press(egui::Key::Enter);
+            } else {
+                h.get_by_label(how).click();
+            }
+            h.run_steps(3);
+            assert!(h.state().ui.dialogs.is_empty(), "{how} closes the dialog");
+            assert_eq!(bevels(&h), applied, "{how}");
+        }
+    }
+
+    /// The bin under the effect list deletes the selected effect from the dialog.
+    #[test]
+    fn layer_style_bin_deletes_the_selected_effect() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut h = layer_style_on_bevel(egui::vec2(1400.0, 900.0));
+        let effects = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().ui.dialogs[0].fields["effects"].as_array().map_or(0, Vec::len);
+        assert_eq!(effects(&h), 1);
+        h.get_by_label("Delete effect").click();
+        h.run_steps(3);
+        assert_eq!(effects(&h), 0, "Bevel & Emboss is gone from the list");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "the dialog stays open");
     }
 
     /// #4872: an alert (Error, About) closes with ↩ as with OK, but not on the ↩ that raised it.

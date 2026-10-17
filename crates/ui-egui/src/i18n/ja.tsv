@@ -828,6 +828,9 @@
 	Add Layer Mask	レイヤーマスクを追加
 	Add Stop	分岐点を追加
 	Add a layer style	レイヤースタイルを追加
+	Move effect up	効果を上へ移動
+	Move effect down	効果を下へ移動
+	Delete effect	効果を削除
 	Add a mask  (from the selection; {key} inverts)	マスクを追加(選択範囲から。{key} で反転)
 	Add an adjustment	色調補正を追加
 	Add disk	ディスクを追加
@@ -3811,7 +3814,7 @@ curves	Smooth	スムーズ
 	Dark Gray	ダークグレー
 	Medium Gray	ミディアムグレー
 	Select Custom Color…	カスタムカラーを選択…
-	This Layer:	現在のレイヤー:
+	Current Layer:	現在のレイヤー:
 	Underlying Layer:	下のレイヤー:
 	Blend Interior Effects as Group	内部効果をまとめて描画
 	Blend Clipped Layers as Group	クリップされたレイヤーをまとめて描画

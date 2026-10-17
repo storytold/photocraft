@@ -832,6 +832,9 @@
 	Add Layer Mask	添加图层蒙版
 	Add Stop	添加色标
 	Add a layer style	添加图层样式
+	Move effect up	上移效果
+	Move effect down	下移效果
+	Delete effect	删除效果
 	Add a mask  (from the selection; ⌥ inverts)	添加蒙版  （基于选区；⌥ 反相）
 	Add an adjustment	添加调整
 	Add disk	添加磁盘
@@ -2376,6 +2379,8 @@ cameraRaw	Blending	混合
 	Add to Swatches	添加到色板
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	混合颜色带:
+	Current Layer:	当前图层:
+	Underlying Layer:	下一图层:
 	Channels:	通道:
 	Knockout	挖空
 	Apply At Canvas Bounds	应用画布边界的效果

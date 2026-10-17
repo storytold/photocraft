@@ -825,6 +825,9 @@
 	Add Layer Mask	Aggiungi maschera di livello
 	Add Stop	Aggiungi punto
 	Add a layer style	Aggiungi uno stile livello
+	Move effect up	Sposta effetto in alto
+	Move effect down	Sposta effetto in basso
+	Delete effect	Elimina effetto
 	Add a mask  (from the selection; {key} inverts)	Aggiungi una maschera (dalla selezione; {key} inverte)
 	Add an adjustment	Aggiungi una regolazione
 	Add disk	Aggiungi disco
@@ -3969,7 +3972,7 @@ layerLabel	No Color	Nessun colore
 	Layer Mask Hides Effects	La maschera di livello nasconde gli effetti
 	Vector Mask Hides Effects	La maschera vettoriale nasconde gli effetti
 	General Blending	Fusione generale
-	This Layer:	Questo livello:
+	Current Layer:	Livello corrente:
 	Underlying Layer:	Livello sottostante:
 	Nothing to paste: the clipboard holds no image	Niente da incollare: gli appunti non contengono un'immagine
 	Preferences saved	Preferenze salvate

@@ -803,6 +803,9 @@
 	Add Layer Mask	레이어 마스크 추가
 	Add Stop	색상 정지점 추가
 	Add a layer style	레이어 스타일 추가
+	Move effect up	효과 위로 이동
+	Move effect down	효과 아래로 이동
+	Delete effect	효과 삭제
 	Add a mask  (from the selection; {key} inverts)	마스크 추가  (선택 영역에서 만들기; {key} 키로 반전)
 	Add an adjustment	조정 추가
 	Add disk	디스크 추가
@@ -2953,6 +2956,8 @@ cameraRaw	Color	색상
 	Add to Swatches	색상 견본에 추가
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	혼합 조건:
+	Current Layer:	현재 레이어:
+	Underlying Layer:	아래 레이어:
 	Channels:	채널:
 	Knockout	녹아웃
 	Apply At Canvas Bounds	캔버스 경계에 효과 적용

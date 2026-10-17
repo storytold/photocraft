@@ -810,6 +810,9 @@
 	Add Layer Mask	Tambah Mask Layer
 	Add Stop	Tambah Stop
 	Add a layer style	Tambah gaya layer
+	Move effect up	Pindahkan efek ke atas
+	Move effect down	Pindahkan efek ke bawah
+	Delete effect	Hapus efek
 	Add a mask  (from the selection; {key} inverts)	Tambah mask  (dari seleksi; {key} membalik)
 	Add an adjustment	Tambah penyesuaian
 	Add disk	Tambah disk
@@ -2774,6 +2777,8 @@ cameraRaw	Blending	Pembauran
 	Add to Swatches	Tambahkan ke Swatch
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Blend If:
+	Current Layer:	Layer Saat Ini:
+	Underlying Layer:	Layer di Bawah:
 	Channels:	Channel:
 	Knockout	Knockout
 	Apply At Canvas Bounds	Terapkan efek di batas kanvas

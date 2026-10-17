@@ -796,6 +796,9 @@
 	Add Layer Mask	Katman Maskesi Ekle
 	Add Stop	Durak Ekle
 	Add a layer style	Katman stili ekleme
+	Move effect up	Efekti yukarı taşı
+	Move effect down	Efekti aşağı taşı
+	Delete effect	Efekti sil
 	Add a mask  (from the selection; {key} inverts)	Bir maske ekleyin (seçimden; {key} tersine çevirir)
 	Add an adjustment	Düzenleme ekle
 	Add disk	Disk ekle
@@ -2344,6 +2347,8 @@
 	Reset Swatches	Renk Örneklerini Sıfırla
 	Add to Swatches	Renk Örneklerine Ekle
 	Blend If:	Eğer Karışım:
+	Current Layer:	Geçerli Katman:
+	Underlying Layer:	Alttaki Katman:
 	Channels:	Kanallar:
 	Knockout	Nakavt
 	Apply At Canvas Bounds	Kanvas Sınırlarında Uygula

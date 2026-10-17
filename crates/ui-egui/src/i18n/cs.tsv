@@ -841,6 +841,9 @@
 	Add Layer Mask	Přidat masku vrstvy
 	Add Stop	Přidat zarážku
 	Add a layer style	Přidat styl vrstvy
+	Move effect up	Posunout efekt nahoru
+	Move effect down	Posunout efekt dolů
+	Delete effect	Odstranit efekt
 	Add a mask  (from the selection; {key} inverts)	Přidat masku  (z výběru; {key} invertuje)
 	Add an adjustment	Přidat korekci
 	Add disk	Přidat disk
@@ -3577,7 +3580,7 @@ curves	Smooth	Vyhladit
 	Layer Mask Hides Effects	Maska vrstvy skrývá efekty
 	Vector Mask Hides Effects	Vektorová maska skrývá efekty
 	General Blending	Obecné prolnutí
-	This Layer:	Tato vrstva:
+	Current Layer:	Aktuální vrstva:
 	Underlying Layer:	Podkladová vrstva:
 
 # Status messages and notices

@@ -827,6 +827,9 @@
 	Add Layer Mask	Dodaj maskę warstwy
 	Add Stop	Dodaj punkt
 	Add a layer style	Dodaj styl warstwy
+	Move effect up	Przesuń efekt w górę
+	Move effect down	Przesuń efekt w dół
+	Delete effect	Usuń efekt
 	Add a mask  (from the selection; {key} inverts)	Dodaj maskę  (z zaznaczenia; {key} odwraca)
 	Add an adjustment	Dodaj korektę
 	Add disk	Dodaj dysk
@@ -3414,6 +3417,8 @@ cameraRaw	Roughness	Chropowatość
 	Reset Swatches	Resetuj próbki
 	Add to Swatches	Dodaj do próbek
 	Blend If:	Mieszaj, jeśli:
+	Current Layer:	Bieżąca warstwa:
+	Underlying Layer:	Warstwa pod spodem:
 	Channels:	Kanały:
 	Knockout	Wycięcie
 	New Brush Preset…	Nowe ustawienie wstępne pędzla…

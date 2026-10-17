@@ -810,6 +810,9 @@
 	Add Layer Mask	Adicionar máscara de camada
 	Add Stop	Adicionar parada
 	Add a layer style	Adicionar um estilo de camada
+	Move effect up	Mover efeito para cima
+	Move effect down	Mover efeito para baixo
+	Delete effect	Excluir efeito
 	Add a mask  (from the selection; {key} inverts)	Adicionar uma máscara  (a partir da seleção; {key} inverte)
 	Add an adjustment	Adicionar um ajuste
 	Add disk	Adicionar disco
@@ -2790,6 +2793,8 @@ cameraRaw	Whites	Brancos
 	Add to Swatches	Adicionar às amostras
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Mesclar se:
+	Current Layer:	Camada atual:
+	Underlying Layer:	Camada subjacente:
 	Channels:	Canais:
 	Knockout	Vazado
 	Apply At Canvas Bounds	Aplicar efeito nos limites da tela

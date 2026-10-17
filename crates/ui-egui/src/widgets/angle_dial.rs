@@ -9,12 +9,25 @@ use super::*;
 /// the field accepts the whole of `range` (Motion Blur takes -360..=360, so a typed or
 /// remembered 270° stays 270°).
 pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
+    angle_dial_line(ui, label, None, angle, range)
+}
+
+/// [`angle_dial_row`] with its label right-aligned in a `label_w` column ([`row_label`]) when
+/// given, lined up with the [`slider_line`] rows around it (Layer Style).
+pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
     let t = Tokens::get(ui.ctx());
     // The dial clamps with max/min, not `f32::clamp`, which panics if a malformed spec
     // reverses the range.
     let (lo, hi) = (*range.start(), *range.end());
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        match label_w {
+            Some(w) => {
+                row_label(ui, label, w);
+            }
+            None => {
+                ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+            }
+        }
         let (rect, mut dial) = ui.allocate_exact_size(vec2(42.0, 42.0), Sense::click_and_drag());
         dial.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), tl!(label)));
         if (dial.clicked() || dial.dragged())

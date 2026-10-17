@@ -808,6 +808,9 @@
 	Intersect Mask with Selection	Presek maske i selekcije
 	Add Stop	Dodaj tačku
 	Add a layer style	Dodaj stil sloja
+	Move effect up	Pomeri efekat nagore
+	Move effect down	Pomeri efekat nadole
+	Delete effect	Obriši efekat
 	Add a mask  (from the selection; {key} inverts)	Dodaj masku  (iz selekcije; {key} invertuje)
 	Add an adjustment	Dodaj korekciju
 	Add disk	Dodaj disk
@@ -3946,7 +3949,7 @@ layerLabel	No Color	Bez boje
 	Layer Mask Hides Effects	Maska sloja skriva efekte
 	Vector Mask Hides Effects	Vektorska maska skriva efekte
 	General Blending	Opšte stapanje
-	This Layer:	Ovaj sloj:
+	Current Layer:	Tekući sloj:
 	Underlying Layer:	Sloj ispod:
 	Nothing to paste: the clipboard holds no image	Nema šta da se nalepi: u ostavi nema slike
 	Preferences saved	Podešavanja su sačuvana

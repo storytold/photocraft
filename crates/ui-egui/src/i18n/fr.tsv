@@ -817,6 +817,9 @@
 	Add Layer Mask	Ajouter un masque de calque
 	Add Stop	Ajouter un point
 	Add a layer style	Ajouter un style de calque
+	Move effect up	Monter l'effet
+	Move effect down	Descendre l'effet
+	Delete effect	Supprimer l'effet
 	Add a mask  (from the selection; {key} inverts)	Ajouter un masque  (d'après la sélection ; {key} l'inverse)
 	Add an adjustment	Ajouter un ajustement
 	Add disk	Ajouter un disque
@@ -2787,6 +2790,8 @@ cameraRaw	Blending	Fusion
 	Add to Swatches	Ajouter au nuancier
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Fusion si :
+	Current Layer:	Calque actif :
+	Underlying Layer:	Calque sous-jacent :
 	Channels:	Couches :
 	Knockout	Masquage
 	Apply At Canvas Bounds	Appliquer l’effet aux limites de la zone de travail

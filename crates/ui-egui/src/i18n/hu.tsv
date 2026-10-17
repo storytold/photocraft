@@ -1671,7 +1671,7 @@ fontWeight	Thin	Hajszálvékony
 	Subtract	Kivonás
 	The document is closed	A dokumentum be van zárva
 	The document or selected layers changed. Please request deletion again.	A dokumentum vagy a kijelölt rétegek megváltoztak. Kérd újra a törlést.
-	This Layer:	Ez a réteg:
+	Current Layer:	Jelenlegi réteg:
 	To	Végszín
 	Toggle visibility	Láthatóság váltása
 	Transparency Shapes Layer	Az átlátszóság alakítja a réteget
@@ -1708,6 +1708,9 @@ layerLabel	Magenta	Bíbor
 	80%	80%
 	A save to {name} is still running; try again when it finishes	Még tart egy mentés ide: {name}; próbáld újra, ha befejeződött
 	Add a layer style	Rétegstílus hozzáadása
+	Move effect up	Effektus feljebb mozgatása
+	Move effect down	Effektus lejjebb mozgatása
+	Delete effect	Effektus törlése
 	Add a mask  (from the selection; {key} inverts)	Maszk hozzáadása  (a kijelölésből; {key}: invertálás)
 	Add an adjustment	Korrekció hozzáadása
 	Add to selection  ({key})	Hozzáadás a kijelöléshez  ({key})

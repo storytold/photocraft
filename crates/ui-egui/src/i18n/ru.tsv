@@ -2635,6 +2635,8 @@ cameraRaw	Roughness	Неровность
 	Add to Swatches	Добавить в образцы
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Изображение если:
+	Current Layer:	Текущий слой:
+	Underlying Layer:	Подлежащий слой:
 	Channels:	Каналы:
 	Knockout	Просвечивание
 	Apply At Canvas Bounds	Применить эффект на границах холста
@@ -2854,6 +2856,9 @@ fontWeight	Italic	Курсив
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
 	Add a layer style	Добавить стиль слоя
+	Move effect up	Переместить эффект вверх
+	Move effect down	Переместить эффект вниз
+	Delete effect	Удалить эффект
 	Add a mask  (from the selection; {key} inverts)	Добавить маску  (из выделения; {key} инвертирует)
 	Add an adjustment	Добавить коррекцию
 	Add to selection  ({key})	Добавить к выделению  ({key})

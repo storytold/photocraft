@@ -2685,7 +2685,7 @@ fn footer_menu_button(ui: &mut egui::Ui, icon: &str, size: f32, tip: &str) -> eg
 }
 
 /// Photoshop's italic "fx" footer button (no icon-font equivalent).
-fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
+pub(crate) fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     if resp.hovered() {

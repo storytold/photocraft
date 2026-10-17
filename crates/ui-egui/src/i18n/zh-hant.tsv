@@ -837,6 +837,9 @@
 	Add Layer Mask	新增圖層遮色片
 	Add Stop	新增色標
 	Add a layer style	新增圖層樣式
+	Move effect up	上移效果
+	Move effect down	下移效果
+	Delete effect	刪除效果
 	Add a mask  (from the selection; {key} inverts)	新增遮色片 (依選取範圍；{key} 反轉)
 	Add an adjustment	新增調整
 	Add disk	新增磁碟
@@ -2346,6 +2349,8 @@ cameraRaw	Blending	混合
 	Add to Swatches	加入色票
 # Layer Style > Blending Options (Advanced Blending)
 	Blend If:	混合範圍:
+	Current Layer:	目前圖層:
+	Underlying Layer:	下一圖層:
 	Channels:	色版:
 	Knockout	去底色
 	Apply At Canvas Bounds	套用效果至版面邊界
