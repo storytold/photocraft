@@ -855,3 +855,42 @@ fn size_readout_follows_the_ruler_unit() {
     ur.rulers = Unit::Millimeters;
     assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "579.97 mm");
 }
+
+/// Fixed Size needs no motion: exercise real pointer clicks, both marquee shapes and undo.
+#[test]
+fn fixed_size_marquee_single_click_creates_selection() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        let mut h = harness(tool);
+        h.state_mut().ui.extras.snap = false;
+        let o = &mut h.state_mut().ui.tool_options;
+        o.marquee_style = "fixedSize".into();
+        o.marquee_width = 64.0;
+        o.marquee_height = 32.0;
+        move_to(&mut h, 40.0, 50.0);
+        let p = screen(&h, 40.0, 50.0);
+        button(&mut h, p, true, Modifiers::NONE);
+        button(&mut h, p, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert_eq!(selection(&h), Rect::new(40, 50, 104, 82), "{tool:?}: click places the configured size");
+        h.state_mut().session.undo();
+        assert_eq!(selection(&h), Rect::EMPTY, "{tool:?}: one undo removes the selection");
+        h.state_mut().session.redo();
+        assert_eq!(selection(&h), Rect::new(40, 50, 104, 82));
+    }
+}
+
+#[test]
+fn fixed_size_marquee_click_preserves_add_and_subtract_modes() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.ui.extras.snap = false;
+    app.ui.tool_options.marquee_style = "fixedSize".into();
+    app.ui.tool_options.marquee_width = 20.0;
+    app.ui.tool_options.marquee_height = 10.0;
+    let bounds = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().map_or(Rect::EMPTY, |s| s.content_bounds());
+    click_with(&mut app, Tool::RectMarquee, 10.0, 10.0, Modifiers::NONE);
+    click_with(&mut app, Tool::RectMarquee, 50.0, 10.0, Modifiers::SHIFT);
+    assert_eq!(bounds(&app), Rect::new(10, 10, 70, 20));
+    click_with(&mut app, Tool::RectMarquee, 10.0, 10.0, Modifiers::ALT);
+    assert_eq!(bounds(&app), Rect::new(50, 10, 70, 20));
+}

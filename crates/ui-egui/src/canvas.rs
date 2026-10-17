@@ -242,11 +242,13 @@ pub fn marquee_corners(o: &crate::state::ToolOptions, d: &Drag, end: [f64; 2]) -
 
 /// The pixel rectangle a Rectangular/Elliptical Marquee drag selects so far: shown live (ants
 /// and readout) exactly as the release commits it, on whole pixel edges as in Photoshop. `None`
-/// while the gesture is still a click (it never left the press point by more than a few screen
+/// while a non-fixed-size gesture is still a click (it never left the press point by more than a few screen
 /// pixels at `zoom`, points per document pixel) or the rectangle has no area: a release then
 /// deselects. A one-pixel row or column is a selection (#2391).
 pub(crate) fn marquee_preview_px(o: &crate::state::ToolOptions, d: &Drag, zoom: f32) -> Option<[f64; 4]> {
-    if !matches!(d.tool, Tool::RectMarquee | Tool::EllipseMarquee) || crate::shape_dialog::is_click(d.start, &d.points, zoom) {
+    if !matches!(d.tool, Tool::RectMarquee | Tool::EllipseMarquee)
+        || (o.marquee_style != "fixedSize" && crate::shape_dialog::is_click(d.start, &d.points, zoom))
+    {
         return None;
     }
     let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
@@ -5823,7 +5825,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
         Tool::RectMarquee | Tool::EllipseMarquee => {
-            // Exactly what the drag showed (`marquee_preview_px`); a click deselects.
+            // Exactly what the drag showed; Fixed Size also creates a selection on a click.
             let Some([x0, y0, x1, y1]) = marquee_preview_px(&app.ui.tool_options, &d, app.point_zoom()) else {
                 if app.session.is_enabled("select.deselect") {
                     let _ = app.run("select.deselect", json!({}));
