@@ -867,8 +867,8 @@ fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
 fn fit_image(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (w, h) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let bw = f64_param(p, "width").unwrap_or(w).max(1.0);
-    let bh = f64_param(p, "height").unwrap_or(h).max(1.0);
+    let bw = size_param(p, "width").unwrap_or(w);
+    let bh = size_param(p, "height").unwrap_or(h);
     let k = (bw / w).min(bh / h);
     if (k > 1.0 && p.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false)) || ((w * k).round() == w && (h * k).round() == h) {
         return Ok(json!({"width": w, "height": h, "changed": false}));

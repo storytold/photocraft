@@ -542,6 +542,19 @@ fn fit_image_and_conditional_mode_change() {
 }
 
 #[test]
+fn fit_image_zero_or_negative_side_is_unconstrained() {
+    // Dialogs send 0 for an empty field: that side is not a limit, not a 1 px box.
+    let mut s = session(1000, 800, 8);
+    s.execute("file.automate.fitImage", json!({"width": 0, "height": 400})).unwrap();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (500, 400));
+    s.execute("file.automate.fitImage", json!({"width": 250, "height": -5})).unwrap();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (250, 200));
+    let r = s.execute("file.automate.fitImage", json!({"width": 0, "height": 0})).unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (250, 200));
+}
+
+#[test]
 fn conditional_mode_change_cannot_run_a_mode_change_the_gate_denies() {
     fn deny_mode(id: &str, _: &Value) -> Result<()> {
         if id.starts_with("image.mode.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
