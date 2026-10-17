@@ -14,8 +14,9 @@
 //! later (lower-right) cell wins. Work is split per destination tile (parallel on native).
 
 use photocraft_color::PixelFormat;
-use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_geom::{Rect, TileCoord};
+use photocraft_raster::{Surface, Tile};
+use std::sync::Arc;
 
 use crate::transform::{Interp, bicubic};
 
@@ -207,7 +208,7 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
     }
     let n = fmt.channels();
     let a = n - 1;
-    let work = |(t, tris): (&Rect, &Vec<[usize; 3]>)| -> Option<(Rect, Vec<f32>)> {
+    let work = |(t, tris): (&Rect, &Vec<[usize; 3]>)| -> Option<(TileCoord, Arc<Tile>)> {
         if tris.is_empty() {
             return None;
         }
@@ -296,6 +297,11 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
                 f64::from(px[((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n + c])
             }
         };
+        // Offset of pixel (x, y) when the `taps` x `taps` block from it lies inside `foot`, so
+        // the samplers can index `px` directly instead of bounds-checking every tap.
+        let base = |x: i32, y: i32, taps: i32| -> Option<usize> {
+            (x >= foot.x0 && y >= foot.y0 && x + taps <= foot.x1 && y + taps <= foot.y1).then(|| ((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n)
+        };
         let mut outp = vec![0.0f32; w * h * n];
         let mut any = false;
         let mut acc = [0.0f64; 8];
@@ -313,6 +319,17 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
                 Interp::Bilinear => {
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                     let (fx, fy) = (u - f64::from(ix), v - f64::from(iy));
+                    if let Some(o) = base(ix, iy, 2) {
+                        for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+                            for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+                                let p = &px[o + (dy * fw + dx) * n..][..n];
+                                for (s, v) in acc.iter_mut().zip(p) {
+                                    *s += f64::from(*v) * wx * wy;
+                                }
+                            }
+                        }
+                        return;
+                    }
                     for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
                         for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
                             for (c, s) in acc.iter_mut().enumerate().take(n) {
@@ -327,6 +344,21 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
                     let (u, v) = (snap(u), snap(v));
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                     let (wx, wy) = (bicubic(u - f64::from(ix)), bicubic(v - f64::from(iy)));
+                    if let Some(o) = base(ix - 1, iy - 1, 4) {
+                        for (j, wyj) in wy.iter().enumerate() {
+                            for (i, wxi) in wx.iter().enumerate() {
+                                let k = wxi * wyj;
+                                if k == 0.0 {
+                                    continue;
+                                }
+                                let p = &px[o + (j * fw + i) * n..][..n];
+                                for (s, v) in acc.iter_mut().zip(p) {
+                                    *s += f64::from(*v) * k;
+                                }
+                            }
+                        }
+                        return;
+                    }
                     for (j, wyj) in wy.iter().enumerate() {
                         for (i, wxi) in wx.iter().enumerate() {
                             let k = wxi * wyj;
@@ -378,19 +410,27 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
             }
             outp[b + a] = al as f32;
         }
-        any.then_some((*t, outp))
+        if !any {
+            return None;
+        }
+        // Encoded (and dropped if fully transparent) here, in parallel, rather than one tile at
+        // a time once all are done. `t` lies in one tile.
+        let mut one = Surface::new(fmt);
+        one.write_region(*t, &outp);
+        one.prune();
+        if one.tile_count() == 0 {
+            return None;
+        }
+        one.take_tiles(*t).pop()
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let done: Vec<(Rect, Vec<f32>)> = {
+    let done: Vec<(TileCoord, Arc<Tile>)> = {
         use rayon::prelude::*;
         tiles.par_iter().zip(bins.par_iter()).filter_map(work).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let done: Vec<(Rect, Vec<f32>)> = tiles.iter().zip(bins.iter()).filter_map(work).collect();
-    for (r, v) in done {
-        out.write_region(r, &v);
-    }
-    out.prune();
+    let done: Vec<(TileCoord, Arc<Tile>)> = tiles.iter().zip(bins.iter()).filter_map(work).collect();
+    out.put_tiles(done);
     out
 }
 
