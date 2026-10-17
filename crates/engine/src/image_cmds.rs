@@ -316,8 +316,17 @@ fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extensi
     };
     let old_canvas = doc.bounds();
     let extends = r.x0 < old_canvas.x0 || r.y0 < old_canvas.y0 || r.x1 > old_canvas.x1 || r.y1 > old_canvas.y1;
+    // Delete Cropped Pixels deletes pixel-layer data only: type and smart objects move by
+    // shifting their rendered pixels, so cutting those would clip them at the old edge.
     if delete_pixels {
-        for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = crop_surface(surf, r));
+        for_each_layer(&mut doc.layers, &mut |l| {
+            if let Some(fc) = &mut l.fill_cache {
+                fc.surface = crop_surface(&fc.surface, r);
+            }
+            if let LayerContent::Raster(s) = &mut l.content {
+                *s = crop_surface(s, r);
+            }
+        });
     }
     translate_doc(doc, cmd, dx, dy)?;
     doc.size = Size::new(r.width(), r.height());
@@ -1168,6 +1177,21 @@ mod tests {
         s.execute("layer.new.layerFromBackground", json!({})).unwrap();
         s.execute("image.crop", json!({"x": -4, "y": 0, "width": 20, "height": 16})).unwrap();
         assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(1, 8), [0.0; 4]);
+    }
+
+    /// Delete Cropped Pixels deletes pixel-layer data only: type and smart objects keep what lies
+    /// outside the frame, so moving them later doesn't show them cut at the old edge.
+    #[test]
+    fn delete_cropped_pixels_keeps_type_and_smart_objects_whole() {
+        let mut s = session();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("type.create", json!({"x": 10, "y": 15, "text": "Hi", "size": 12})).unwrap();
+        let bounds = |s: &Session| -> Vec<Rect> { doc(s).layers[1..].iter().map(|l| l.surface().unwrap().content_bounds()).collect() };
+        let before = bounds(&s);
+        assert!(before.iter().all(|b| b.x0 < 15 && b.x1 > 15), "both cross the crop edge: {before:?}");
+        s.execute("image.crop", json!({"x": 15, "y": 0, "width": 25, "height": 20})).unwrap();
+        assert!(matches!(doc(&s).layers[1].content, LayerContent::Smart(_)) && matches!(doc(&s).layers[2].content, LayerContent::Text(_)));
+        assert_eq!(bounds(&s), before.iter().map(|b| b.translate(-15, 0)).collect::<Vec<_>>());
     }
 
     /// A document (`mode`, `depth`) with a white Background and a layer holding a red pixel at
