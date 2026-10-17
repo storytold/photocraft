@@ -4317,6 +4317,7 @@ shape	Appearance	Aspetto
 	Undo Changes	Annulla modifiche
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} è riservata dal sistema e non può essere assegnata.
 	Low-Latency Drawing (vsync off, applies at next launch)	Disegno a bassa latenza (senza vsync, si applica al prossimo avvio)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Evita lo sfarfallio G-SYNC/FreeSync (si applica al prossimo avvio)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Trasformazione libera è ancora in corso di applicazione; riprova quando è terminata.
 	The transform couldn't be applied.	Impossibile applicare la trasformazione.

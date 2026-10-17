@@ -3682,6 +3682,7 @@ curves	Smooth	Làm mượt
 	Undo Changes	Hoàn tác thay đổi
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} được hệ thống dành riêng và không thể gán.
 	Low-Latency Drawing (vsync off, applies at next launch)	Vẽ độ trễ thấp (tắt vsync, áp dụng ở lần khởi động sau)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Ngăn nhấp nháy G-SYNC/FreeSync (áp dụng ở lần khởi động sau)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Biến đổi tự do vẫn đang được áp dụng; hãy thử lại khi hoàn tất.
 	The transform couldn't be applied.	Không thể áp dụng phép biến đổi.

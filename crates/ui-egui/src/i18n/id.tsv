@@ -3188,6 +3188,7 @@ curves	Smooth	Haluskan
 	Undo Changes	Batalkan Perubahan
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} dicadangkan oleh sistem dan tidak dapat ditetapkan.
 	Low-Latency Drawing (vsync off, applies at next launch)	Menggambar latensi rendah (tanpa vsync, berlaku saat peluncuran berikutnya)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Cegah kedipan G-SYNC/FreeSync (berlaku saat peluncuran berikutnya)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Transformasi Bebas masih diterapkan; coba lagi setelah selesai.
 	The transform couldn't be applied.	Transformasi tidak dapat diterapkan.

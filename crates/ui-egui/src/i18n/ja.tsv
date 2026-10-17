@@ -3872,6 +3872,7 @@ curves	Smooth	スムーズ
 	Undo Changes	変更を取り消し
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} はシステムで予約されているため割り当てられません。
 	Low-Latency Drawing (vsync off, applies at next launch)	低遅延描画（垂直同期オフ、次回起動時に適用）
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	G-SYNC/FreeSync のちらつきを防止（次回起動時に適用）
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	自由変形を適用中です。完了してからもう一度お試しください。
 	The transform couldn't be applied.	変形を適用できませんでした。

@@ -3895,6 +3895,7 @@ curves	Smooth	Згладити
 	Undo Changes	Скасувати зміни
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} зарезервовано системою, його не можна призначити.
 	Low-Latency Drawing (vsync off, applies at next launch)	Малювання з малою затримкою (без вертикальної синхронізації, після перезапуску)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Усунути мерехтіння G-SYNC/FreeSync (після перезапуску)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Вільне трансформування ще застосовується; спробуйте знову, коли воно завершиться.
 	The transform couldn't be applied.	Не вдалося застосувати трансформування.

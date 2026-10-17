@@ -3956,6 +3956,7 @@ curves	Smooth	Vloeiend maken
 	Undo Changes	Wijzigingen ongedaan maken
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} is door het systeem gereserveerd en kan niet worden toegewezen.
 	Low-Latency Drawing (vsync off, applies at next launch)	Tekenen met lage latentie (zonder vsync, na de volgende start)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	G-SYNC/FreeSync-flikkering voorkomen (na de volgende start)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Vrije transformatie wordt nog toegepast; probeer het opnieuw als die klaar is.
 	The transform couldn't be applied.	De transformatie kon niet worden toegepast.

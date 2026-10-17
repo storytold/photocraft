@@ -4269,6 +4269,7 @@ shape	Appearance	Izgled
 	Undo Changes	Poništi izmene
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} je rezervisana od strane sistema i ne može se dodeliti.
 	Low-Latency Drawing (vsync off, applies at next launch)	Crtanje sa malim kašnjenjem (bez vsync-a, primenjuje se pri sledećem pokretanju)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Spreči treperenje G-SYNC/FreeSync (primenjuje se pri sledećem pokretanju)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Slobodna transformacija se još primenjuje; pokušajte ponovo kad se završi.
 	The transform couldn't be applied.	Transformacija nije mogla da se primeni.

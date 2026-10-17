@@ -3201,6 +3201,7 @@ curves	Smooth	Lisser
 	Undo Changes	Annuler les modifications
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} est réservé par le système et ne peut pas être attribué.
 	Low-Latency Drawing (vsync off, applies at next launch)	Dessin à faible latence (sans synchronisation verticale, au prochain lancement)
+	Prevent G-SYNC/FreeSync Flicker (applies at next launch)	Empêcher le scintillement G-SYNC/FreeSync (au prochain lancement)
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	La transformation manuelle est encore en cours d'application ; réessayez quand elle sera terminée.
 	The transform couldn't be applied.	Impossible d'appliquer la transformation.
