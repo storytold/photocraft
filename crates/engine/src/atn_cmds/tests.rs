@@ -237,6 +237,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.setProps", json!({"layer": "Shadow", "visible": false})),
         ("layer.setLabelColor", json!({"color": "red"})),
         ("layer.select", json!({"layer": "Shadow", "mode": "add"})),
+        ("layer.select", json!({"layer": "Shadow", "mode": "range"})),
         ("layer.selectTop", json!({})),
         ("layer.selectBelow", json!({})),
         ("layer.addBelowToSelection", json!({})),

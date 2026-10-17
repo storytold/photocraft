@@ -1406,6 +1406,8 @@ fn select_from(d: &Descriptor) -> Mapped {
             match get_enum(d, "selectionModifier").as_deref() {
                 Some("addToSelection") => p["mode"] = json!("add"),
                 Some("removeFromSelection") => p["mode"] = json!("remove"),
+                // Shift-click: select everything between the active layer and this one.
+                Some("addToSelectionContinuous") => p["mode"] = json!("range"),
                 _ => {}
             }
             step("layer.select", p)
@@ -1449,6 +1451,7 @@ fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
                 None | Some("replace") => {}
                 Some("add") => d = d.with("selectionModifier", enm("selectionModifierType", "addToSelection")),
                 Some("remove") => d = d.with("selectionModifier", enm("selectionModifierType", "removeFromSelection")),
+                Some("range") => d = d.with("selectionModifier", enm("selectionModifierType", "addToSelectionContinuous")),
                 Some(_) => return None,
             }
             d.with("MkVs", D::Boolean(false))
