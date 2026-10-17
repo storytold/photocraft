@@ -20,6 +20,8 @@
 //!   opacity and visibility; see `ora`.
 //! * Krita (`.kra`, `.krz`) documents open with their paint layers, groups and transparency
 //!   masks (import only); see `kra`.
+//! * GIMP XCF (`.xcf`, `.xcf.gz`) documents open with their layers, groups, masks, blend modes,
+//!   channels and selection, read only; see `xcf`.
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
@@ -65,6 +67,7 @@ mod text_import;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
+mod xcf;
 
 pub use photocraft_codecs::DpxBits;
 use photocraft_codecs::{CodecError, EncodeOptions};
@@ -91,6 +94,8 @@ pub enum IoError {
     /// OpenRaster read failure.
     #[error("OpenRaster: {0}")]
     Ora(String),
+    #[error("XCF: {0}")]
+    Xcf(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -301,6 +306,12 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if kra::is_kra(bytes) || (kra::EXTENSIONS.iter().any(|e| has_extension(name, e)) && photocraft_codecs::detect(bytes).is_none()) {
         return kra::import(name, bytes, ctl);
     }
+    if xcf::is_xcf(bytes) || has_extension(name, "xcf") {
+        return xcf::import(name, bytes, ctl);
+    }
+    if xcf::is_gzipped_xcf(name, bytes) {
+        return xcf::import(name, &xcf::gunzip(bytes)?, ctl);
+    }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
         return pdn::import(name, bytes, ctl);
     }
@@ -392,6 +403,11 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     }
     if kra::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Krita files are import-only; save as .ora to open the layers in Krita, or .pcraft to keep everything".into()));
+    }
+    if ext == "xcf" {
+        return Err(IoError::Unsupported(
+            "XCF is GIMP's own format and PhotoCraft only opens it; save as .pcraft to keep the layers, or export a flat image".into(),
+        ));
     }
     if ext == "ora" {
         return ora::export(doc);

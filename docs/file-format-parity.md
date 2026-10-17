@@ -9,7 +9,7 @@ As behaviour from Adobe's documentation where the bundle doesn't say). Ours come
 `crates/codecs/src/format.rs` (capability table), `crates/io/src/lib.rs` (import/export
 dispatch), `crates/psd`, `crates/raw`, `crates/heif`, `crates/affinity`. More detail on our side:
 [raster formats](../book/src/formats/raster-formats.md), [PSD/PSB](../book/src/formats/psd-psb.md),
-[OpenRaster](ora.md), [Paint.NET](pdn.md).
+[OpenRaster](ora.md), [Paint.NET](pdn.md), [GIMP XCF](xcf.md).
 
 **Summary.** By count, 13 of Photoshop's 31 formats are fully supported in the directions Photoshop supports them, 4 partially (48%,
 measured). Weighted by use (PSD/PSB 40%, JPEG 15%, PNG 15%, TIFF 10%, camera raw 8%, WebP/AVIF/
@@ -89,6 +89,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 | Affinity `.af`, `.afphoto`, `.afdesign`, `.afpub` | yes | no | See below |
 | Paint.NET `.pdn` | yes | no | [pdn.md](pdn.md) |
 | OpenRaster `.ora` | yes | yes | [ora.md](ora.md) |
+| GIMP `.xcf`, `.xcf.gz` | yes (layers, groups, masks, modes, channels, selection; read only) | no | [xcf.md](xcf.md) |
 | ICO, QOI | yes | yes | |
 | DirectDraw Surface `.dds` | yes | no | Top mip level of a 2D texture: uncompressed RGB, RGBA or luminance, BC1–BC3 (DXT1/3/5), legacy or DX10 header. Cubemaps, arrays, volumes and BC4–BC7 are refused (#1327). Photoshop needs a plug-in |
 | Krita `.kra`, GIMP `.xcf`, Procreate | no | no | Not in Photoshop either |
@@ -172,5 +173,6 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 | 2026-10-12 | minor | Save writes a JPEG at its own estimated quality and a WebP lossy or lossless as opened (#2399) |
 | 2026-10-11 | minor | PSD smart filters: Filter Gallery (`GEfc`) maps to `filter.filterGallery` when every effect is modelled (Chrome so far), editable from the Layers panel |
 | 2026-10-11 | minor | D5100 image area and fitted-look preservation in Camera Raw tuning |
-| 2026-10-11 | minor | PDF write now covers Save As / Save a Copy / CLI (`io::pdf::export`, #3401): one flattened RGB/Gray/CMYK page at the document's print size with the embedded profile. Read (#2541), multi-page save, PDF presentation, vector/text output still open
+| 2026-10-11 | minor | PDF write now covers Save As / Save a Copy / CLI (`io::pdf::export`, #3401): one flattened RGB/Gray/CMYK page at the document's print size with the embedded profile. Read (#2541), multi-page save, PDF presentation, vector/text output still open |
+| 2026-10-10 | minor | GIMP XCF read (#1076): layers, groups, masks, modes, channels and selection, with GIMP-rendered oracles |
 | 2026-10-10 | major | First version: Photoshop 2026 27.11.0's formats from its bundle, against our codecs; Affinity notes moved from `roadmap.md` |
