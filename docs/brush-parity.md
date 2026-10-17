@@ -124,3 +124,4 @@ tablets against Photoshop side by side.
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
+| 2026-10-15 | minor | The Brush Preset picker's cards start at the compact scale so the grid fits more brushes by default; the footer slider and the remembered scale are unchanged (#6107). No brush-feel estimate changed. |

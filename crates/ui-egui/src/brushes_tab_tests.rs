@@ -185,6 +185,8 @@ fn brush_picker_cards_follow_the_part_boxes() {
     h.state_mut().run("file.new", serde_json::json!({"width": 400, "height": 300})).unwrap();
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
+    // The part boxes are measured at the standard scale; the picker's own default is compact.
+    h.state_mut().ui.brush_picker_list.scale = 1.0;
     h.run_steps(8);
     let presets = h.state().session.tools.presets.clone();
     let cards = |h: &Harness<'_, PhotocraftApp>| -> Vec<Rect> {
@@ -398,4 +400,14 @@ fn card_tips_never_cover_their_size_number() {
         let r = card_tip_rect(cell, Some(n), size, scale);
         assert!(r.min.is_finite() && r.max.is_finite(), "{n} {size} {scale}: {r:?}");
     }
+}
+
+/// The picker's cards start at the compact default (#6107): below the standard 1.0, at or under
+/// the compact threshold, and inside the footer slider's range (a remembered scale still wins).
+#[test]
+fn brush_picker_defaults_to_compact_cards() {
+    let st = crate::brush_picker::list_state();
+    assert!(st.scale < 1.0, "the default cards are smaller than the standard size: {}", st.scale);
+    assert!(st.scale <= CARD_COMPACT_SCALE, "the default tips are compact: {}", st.scale);
+    assert!(crate::brush_picker::SCALE_RANGE.contains(&st.scale), "the default sits inside the slider's range: {}", st.scale);
 }

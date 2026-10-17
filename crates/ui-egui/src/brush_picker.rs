@@ -102,9 +102,16 @@ pub fn close(ui: &mut crate::state::UiState) {
     ui.brush_picker_list.renaming = None;
 }
 
-/// The state the picker's preset list starts from: every card part on (tip, stroke and name).
+/// The card scale the picker starts at: the compact one, so the preset grid fits many brushes
+/// without dragging the footer slider (at or below the compact threshold in `crate::brushes_tab`
+/// the tips drop their size numbers and fill their cell). A scale remembered from a previous run
+/// ([`restore`]) wins over this.
+pub const DEFAULT_SCALE: f32 = 0.7;
+
+/// The state the picker's preset list starts from: every card part on (tip, stroke and name),
+/// the cards at the compact [`DEFAULT_SCALE`].
 pub fn list_state() -> BrushesPanelState {
-    BrushesPanelState::default()
+    BrushesPanelState { scale: DEFAULT_SCALE, ..Default::default() }
 }
 
 /// The picker's view remembered across restarts: the gear's three card parts and the footer
