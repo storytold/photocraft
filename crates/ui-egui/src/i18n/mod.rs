@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 21] = [
+pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -220,6 +220,9 @@ pub static LANGUAGES: [LangInfo; 21] = [
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Finnish; `fi-FI` resolves here. One/other: the partitive singular follows any number but 1
+    // ("1 taso", "2 tasoa").
+    LangInfo { code: "fi", name: "Suomi", source: catalog!("fi"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -769,6 +772,32 @@ mod tests {
             assert_eq!(trn(uk, n, "{n} item", "{n} items"), format!("{n} {item}"));
             assert_eq!(trn(uk, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
             assert_eq!(trn(uk, n, "Group · {n} layer", "Group · {n} layers"), format!("Група · {n} {layer}"));
+        }
+    }
+
+    #[test]
+    fn finnish_resolves_locales_and_reads_as_finnish() {
+        let fi = Lang::from_code("fi").expect("fi registered");
+        assert_eq!(fi.name(), "Suomi");
+        assert!(fi.complete_menus());
+        for tag in ["fi", "FI", "fi-FI", "fi_FI", "fi_FI.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(fi), "{tag}");
+            assert_eq!(Lang::from_pref(tag), fi, "{tag}");
+        }
+        // Filipino (`fil`) and Swedish in Finland (`sv-FI`) don't pick Finnish.
+        assert_ne!(lang_from_tag("fil"), Some(fi));
+        assert_ne!(lang_from_tag("sv-FI"), Some(fi));
+        assert_eq!(tr(fi, "File"), "Tiedosto");
+        assert_eq!(tr(fi, "Layer"), "Taso");
+        assert_eq!(tr(fi, "New document…"), "Uusi asiakirja…");
+        assert_eq!(tr_id(fi, "select.all", "All"), "Valitse kaikki", "an id override wins over the plain label");
+        assert_eq!(tr(fi, "All"), "Kaikki");
+        assert_eq!(tr_ctx(fi, "cameraRaw", "Light"), "Valo");
+        assert_eq!(tr_ctx(fi, "fontWeight", "Light"), "Kevyt");
+        // The partitive singular follows any number but 1.
+        for (n, layer) in [(0, "tasoa"), (1, "taso"), (2, "tasoa"), (21, "tasoa"), (u64::MAX, "tasoa")] {
+            assert_eq!(trn(fi, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
+            assert_eq!(trn(fi, n, "Group · {n} layer", "Group · {n} layers"), format!("Ryhmä · {n} {layer}"));
         }
     }
 

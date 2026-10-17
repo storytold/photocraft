@@ -1,0 +1,4249 @@
+# Finnish (fi) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); Finnish has the same two
+#                                 forms, with the partitive singular after any number but 1
+#                                 ("1 taso", "2 tasoa")
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Finnish image-editing vocabulary (taso, maski, valinta, sumennus, sekoitustila ...). No proprietary
+# localisation resource, string table or product UI was consulted or copied, and no other catalog
+# was used as a source; add entries the same way. AI-assisted (Claude Code); a native speaker
+# checked it in the running app, but it has not been proofread line by line.
+# Labels use sentence case. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK,
+# Lab ...) stay in Latin letters; the trailing "…" of dialog commands is kept.
+	Channel Color	Kanavan väri
+	Color Indicates:	Väri osoittaa:
+	Solidity:	Kiinteys:
+	Ink Characteristics	Musteen ominaisuudet
+	Paper Width	Paperin leveys
+	Paper Height	Paperin korkeus
+	Columns	Sarakkeet
+	Rows	Rivit
+	Number	Määrä
+	Margin	Reunus
+	Top:	Ylä:
+	Left:	Vasen:
+	Bottom:	Ala:
+	Right:	Oikea:
+	Target:	Kohde:
+	Selected Artboards	Valitut piirtoalustat
+	Center Columns	Keskitä sarakkeet
+	Clear Existing Guides	Poista nykyiset apuviivat
+	Invalid guide layout	Virheellinen apuviiva-asettelu
+	Leave empty for automatic size	Jätä tyhjäksi automaattista kokoa varten
+	5 Columns, 3 Rows	5 saraketta, 3 riviä
+	8 Columns	8 saraketta
+	12 Columns	12 saraketta
+	File	Tiedosto
+	Edit	Muokkaa
+	Image	Kuva
+	Layer	Taso
+	Type	Teksti
+	Select	Valitse
+	Selected	Valittu
+	Scope	Alue
+	Top Left	Ylävasen
+	Top Right	Yläoikea
+	Bottom Left	Alavasen
+	Bottom Right	Alaoikea
+	Filter	Suodin
+	View	Näytä
+	Window	Ikkuna
+	Help	Ohje
+	(coming soon)	(tulossa pian)
+	New…	Uusi…
+	New from Clipboard	Uusi leikepöydältä
+	Open…	Avaa…
+	Open As…	Avaa muodossa…
+	Open EXR Parts…	Avaa EXR-osat…
+	Add beauty precomp from the AOVs	Lisää beauty-esikoostumus AOV:ista
+	Both	Molemmat
+	Left	Vasen
+	Right	Oikea
+	Open Recent	Avaa viimeisimpiä
+	Clear Recent Files	Tyhjennä viimeisimmät tiedostot
+	Remove from Recent	Poista viimeisimmistä
+	Remove {name} from Recent	Poista {name} viimeisimmistä
+	Close	Sulje
+	Minimize	Pienennä
+	Maximize	Suurenna
+	Restore	Palauta
+	Close All	Sulje kaikki
+	Close Others	Sulje muut
+	Save	Tallenna
+	Save As…	Tallenna nimellä…
+	Save a Copy…	Tallenna kopio…
+	{name} can't keep everything in this document	{name} ei voi säilyttää kaikkea tässä asiakirjassa
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	Valitse muoto, joka säilyttää sen, kuten Photoshop (PSD), tai tallenna kopio.
+	Revert	Palauta tallennettu
+	Export	Vie
+	Quick Export as PNG	Pikavienti PNG-muotoon
+	Export As…	Vie muodossa…
+	Export Preferences…	Vientiasetukset…
+	Save for Web (Legacy)…	Tallenna verkkoon (vanha)…
+	Artboards to Files…	Piirtoalustat tiedostoiksi…
+	Artboards to PDF…	Piirtoalustat PDF:ksi…
+	Layers to Files…	Tasot tiedostoiksi…
+	Layer Comps to Files…	Tasokoosteet tiedostoiksi…
+	Color Lookup Tables…	Värinhakutaulukot…
+	Data Sets as Files…	Tietojoukot tiedostoiksi…
+	Paths to Illustrator…	Polut Illustratoriin…
+	Render Video…	Renderöi video…
+	Generate	Luo
+	Image Assets	Kuvaresurssit
+	Place Embedded…	Sijoita upotettuna…
+	Place Linked…	Sijoita linkitettynä…
+	Package…	Paketoi…
+	Automate	Automatisoi
+	Batch…	Erä…
+	Create Droplet…	Luo droplet…
+	Crop and Straighten Photos	Rajaa ja suorista valokuvat
+	Contact Sheet II…	Vedosarkki II…
+	Conditional Mode Change…	Ehdollinen tilanvaihto…
+	Fit Image…	Sovita kuva…
+	Lens Correction…	Objektiivikorjaus…
+	Merge to HDR Pro…	Yhdistä HDR Pro -kuvaksi…
+	Photomerge…	Photomerge…
+	Scripts	Komentosarjat
+	Image Processor…	Kuvankäsittelijä…
+	Delete All Empty Layers	Poista kaikki tyhjät tasot
+	Flatten All Layer Effects	Litistä kaikki tasotehosteet
+	Flatten All Masks	Litistä kaikki maskit
+	Script Events Manager…	Komentosarjatapahtumien hallinta…
+	Import	Tuo
+	Browse…	Selaa…
+	Source Files	Lähdetiedostot
+	Use:	Käytä:
+	Files	Tiedostot
+	Add Open Files	Lisää avoimet tiedostot
+	Sort By Name	Lajittele nimen mukaan
+	Attempt to Automatically Align Source Images	Yritä kohdistaa lähdekuvat automaattisesti
+	Create Smart Object after Loading Layers	Luo älykäs objekti tasojen latauksen jälkeen
+	Reveal in Finder	Näytä Finderissa
+	Show in Explorer	Näytä Resurssienhallinnassa
+	Show in Folder	Näytä kansiossa
+	File Info…	Tiedoston tiedot…
+	Print…	Tulosta…
+	Print One Copy	Tulosta yksi kopio
+	Exit	Lopeta
+	Undo	Kumoa
+	Redo	Tee uudelleen
+	Toggle Last State	Vaihda viimeinen tila
+	Fade…	Häivytä…
+	Cut	Leikkaa
+	Copy	Kopioi
+	Copy Merged	Kopioi yhdistettynä
+	Paste	Liitä
+	Paste Special	Liitä erityisesti
+	Paste in Place	Liitä paikalleen
+	Paste Into	Liitä sisään
+	Paste Outside	Liitä ulkopuolelle
+	Paste Lorem Ipsum	Liitä Lorem ipsum
+	Clear	Tyhjennä
+	Search…	Hae…
+	Check Spelling…	Tarkista oikeinkirjoitus…
+	Find and Replace Text…	Etsi ja korvaa tekstiä…
+	Add to Dictionary	Lisää sanastoon
+	No Spelling Suggestions	Ei oikeinkirjoitusehdotuksia
+	Fill…	Täyttö…
+	Stroke…	Viiva…
+	Content-Aware Fill…	Sisältötietoinen täyttö…
+	Delete and Fill Selection	Poista ja täytä valinta
+	Content-Aware Scale	Sisältötietoinen skaalaus
+	Puppet Warp	Nukkevääristys
+	Perspective Warp	Perspektiivivääristys
+	Free Transform	Vapaa muunnos
+	Free Transform a Copy	Vapaa muunnos kopiolle
+	Transform	Muunna
+	Again	Uudelleen
+	Transform Again on a Copy	Muunna uudelleen kopiolle
+	Scale	Skaalaa
+	Rotate	Kierrä
+	Set horizontal skew	Aseta vaakasuora vinous
+	Set vertical skew	Aseta pystysuora vinous
+	Skew	Vinouta
+	Distort	Muuta muotoa
+	Perspective	Perspektiivi
+	Warp	Vääristä
+	Flip Horizontal	Käännä vaakasuunnassa
+	Flip Vertical	Käännä pystysuunnassa
+	Rotate 180°	Kierrä 180°
+	Rotate 90° Clockwise	Kierrä 90° myötäpäivään
+	Rotate 90° Counter Clockwise	Kierrä 90° vastapäivään
+	180°	180°
+	90° Clockwise	90° myötäpäivään
+	90° Counter Clockwise	90° vastapäivään
+	Arbitrary…	Vapaa kulma…
+	Auto-Align Layers…	Kohdista tasot automaattisesti…
+	Auto-Blend Layers…	Sulauta tasot automaattisesti…
+	Define Brush Preset…	Määritä sivellinesiasetus…
+	Define Pattern…	Määritä kuvio…
+	Define Custom Shape…	Määritä mukautettu muoto…
+	Purge	Tyhjennä muisti
+	Clipboard	Leikepöytä
+	Histories	Historiat
+	Video Cache	Videovälimuisti
+	All	Kaikki
+	Presets	Esiasetukset
+	Preset Manager…	Esiasetusten hallinta…
+	Migrate Presets	Siirrä esiasetukset
+	Export/Import Presets…	Vie/tuo esiasetuksia…
+	Color Settings…	Väriasetukset…
+	Assign Profile…	Määritä profiili…
+	Convert to Profile…	Muunna profiiliin…
+	Keyboard Shortcuts…	Pikanäppäimet…
+	Menus…	Valikot…
+	Toolbar…	Työkalurivi…
+	Preferences	Asetukset
+	General…	Yleiset…
+	Interface…	Käyttöliittymä…
+	Workspace…	Työtila…
+	Tools…	Työkalut…
+	History Log…	Historialoki…
+	File Handling…	Tiedostojen käsittely…
+	Export…	Vienti…
+	Performance…	Suorituskyky…
+	Scratch Disks…	Työlevyt…
+	Cursors…	Osoittimet…
+	Transparency & Gamut…	Läpinäkyvyys ja väriavaruus…
+	Units & Rulers…	Yksiköt ja viivaimet…
+	Guides, Grid & Slices…	Apuviivat, ruudukko ja viipaleet…
+	Plug-ins…	Laajennukset…
+	Type…	Teksti…
+	Enhanced Controls…	Laajennetut ohjaimet…
+	Camera Raw…	Camera Raw…
+	Raw Defaults…	Raw-oletukset…
+	Integrations…	Integraatiot…
+	AI Integrations…	Tekoälyintegraatiot…
+	Install Plug-in…	Asenna laajennus…
+	Language Options	Kieliasetukset
+	Settings…	Asetukset…
+	Mode	Tila
+	Bitmap	Bittikartta
+	Grayscale	Harmaasävy
+	Duotone	Kaksisävy
+	Indexed Color	Indeksoitu väri
+	RGB Color	RGB-väri
+	CMYK Color	CMYK-väri
+	Lab Color	Lab-väri
+	Multichannel	Monikanava
+	8 Bits/Channel	8 bittiä/kanava
+	8 bit	8-bittinen
+	Integer	Kokonaisluku
+	16 Bits/Channel	16 bittiä/kanava
+	16 bit	16-bittinen
+	32 Bits/Channel	32 bittiä/kanava
+	32 bit (float)	32-bittinen (liukuluku)
+	Floating point	Liukuluku
+	Color Table…	Väritaulukko…
+	Bitmap…	Bittikartta…
+	Duotone…	Kaksisävy…
+	Indexed Color…	Indeksoitu väri…
+	Adjustments	Säädöt
+	Brightness/Contrast…	Kirkkaus/kontrasti…
+	Levels…	Tasot…
+	Curves…	Käyrät…
+	Exposure…	Valotus…
+	Vibrance…	Eloisuus…
+	Hue/Saturation…	Sävy/kylläisyys…
+	Color Balance…	Väritasapaino…
+	Black & White…	Mustavalko…
+	Photo Filter…	Valokuvasuodin…
+	Channel Mixer…	Kanavamikseri…
+	Color Lookup…	Värinhaku…
+	Invert	Käänteinen
+	Posterize…	Posterisoi…
+	Threshold…	Kynnys…
+	Gradient Map…	Liukuväriliitos…
+	Selective Color…	Valikoiva väri…
+	Shadows/Highlights…	Varjot/korostukset…
+	HDR Toning…	HDR-sävytys…
+	Desaturate	Poista värikylläisyys
+	Match Color…	Täsmää väri…
+	Replace Color…	Korvaa väri…
+	Equalize	Tasoita
+	Auto Tone	Automaattinen sävy
+	Auto Contrast	Automaattinen kontrasti
+	Auto Color	Automaattinen väri
+	Image Size…	Kuvan koko…
+	Canvas Size…	Kankaan koko…
+	Image Rotation	Kuvan kierto
+	Flip Canvas Horizontal	Käännä kangas vaakasuunnassa
+	Flip Canvas Vertical	Käännä kangas pystysuunnassa
+	Crop	Rajaa
+	Trim…	Trimmaa…
+	Reveal All	Näytä kaikki
+	Duplicate…	Monista…
+	Apply Image…	Käytä kuvaa…
+	Calculations…	Laskutoimitukset…
+	Variables	Muuttujat
+	Define…	Määritä…
+	Data Sets…	Tietojoukot…
+	Apply Data Set…	Käytä tietojoukkoa…
+	Variable Data Sets…	Muuttuvat tietojoukot…
+	Trap…	Ylitäyttö…
+	Analysis	Analyysi
+	Set Measurement Scale…	Aseta mittakaava…
+	Select Data Points…	Valitse arvopisteet…
+	Record Measurements	Tallenna mittaukset
+	Ruler Tool	Viivaintyökalu
+	Count Tool	Laskentatyökalu
+	Place Scale Marker…	Sijoita mittakaavamerkki…
+	Custom…	Mukautettu…
+	New	Uusi
+	Layer…	Taso…
+	Group…	Ryhmä…
+	Group from Layers…	Ryhmä tasoista…
+	Artboard…	Piirtoalusta…
+	Artboard from Group…	Piirtoalusta ryhmästä…
+	Artboard from Layers…	Piirtoalusta tasoista…
+	Layer via Copy	Taso kopioimalla
+	Layer via Cut	Taso leikkaamalla
+	Layer From Background…	Taso taustasta…
+	Layer from Background…	Taso taustasta…
+	Background from Layer	Tausta tasosta
+	Background From Layer	Tausta tasosta
+	New Shape Layer	Uusi muototaso
+	New Type Layer	Uusi tekstitaso
+	New Fill Layer	Uusi täyttötaso
+	New Adjustment Layer	Uusi säätötaso
+	New Layer Based Slice	Uusi tasopohjainen viipale
+	New Smart Object via Copy	Uusi älykäs objekti kopioimalla
+	New Blank Video Layer	Uusi tyhjä videotaso
+	New Video Layer from File…	Uusi videotaso tiedostosta…
+	Duplicate Layer…	Monista taso…
+	Delete Layer	Poista taso
+	Delete	Poista
+	Rename Layer	Nimeä taso uudelleen
+	Create Layer	Luo taso
+	Layer Style	Tasotyyli
+	Blending Options…	Sekoitusasetukset…
+	Bevel & Emboss…	Viiste ja korkokuva…
+	Use Global Light	Käytä yleistä valoa
+	Inner Shadow…	Sisävarjo…
+	Inner Glow…	Sisähehku…
+	Satin…	Satiini…
+	Color Overlay…	Värin peittokuva…
+	Gradient Overlay…	Liukuvärin peittokuva…
+	Pattern Overlay…	Kuvion peittokuva…
+	Outer Glow…	Ulkohehku…
+	Drop Shadow…	Pudotusvarjo…
+	Copy Layer Style	Kopioi tasotyyli
+	Paste Layer Style	Liitä tasotyyli
+	Clear Layer Style	Tyhjennä tasotyyli
+	Global Light…	Yleinen valo…
+	Hide All Effects	Piilota kaikki tehosteet
+	Scale Effects…	Skaalaa tehosteet…
+	Smart Filter	Älykäs suodin
+	Convert for Smart Filters	Muunna älykkäitä suotimia varten
+	Clear Smart Filters	Tyhjennä älykkäät suotimet
+	Disable Smart Filters	Poista älykkäät suotimet käytöstä
+	Delete Filter Mask	Poista suodinmaski
+	Disable Filter Mask	Poista suodinmaski käytöstä
+	Solid Color…	Tasaväri…
+	Gradient…	Liukuväri…
+	Pattern…	Kuvio…
+	Layer Mask	Tasomaski
+	Vector Mask	Vektorimaski
+	Reveal Selection	Näytä valinta
+	Hide Selection	Piilota valinta
+	Hide All	Piilota kaikki
+	From Transparency	Läpinäkyvyydestä
+	Delete Vector Mask	Poista vektorimaski
+	Enable Layer Mask	Ota tasomaski käyttöön
+	Disable Layer Mask	Poista tasomaski käytöstä
+	Enable Vector Mask	Ota vektorimaski käyttöön
+	Link Layer Mask	Linkitä tasomaski
+	Unlink Layer Mask	Poista tasomaskin linkitys
+	Link Vector Mask	Linkitä vektorimaski
+	Add Vector Mask	Lisää vektorimaski
+	Vector Mask from Current Path	Vektorimaski nykyisestä polusta
+	Create Clipping Mask	Luo leikkausmaski
+	Release Clipping Mask	Vapauta leikkausmaski
+	Smart Objects	Älykkäät objektit
+	Smart Object	Älykäs objekti
+	Convert to Smart Object	Muunna älykkääksi objektiksi
+	Convert to Embedded	Muunna upotetuksi
+	Convert to Layers	Muunna tasoiksi
+	Convert to Linked…	Muunna linkitetyksi…
+	Edit Contents	Muokkaa sisältöä
+	Replace Contents…	Korvaa sisältö…
+	Relink to File…	Linkitä uudelleen tiedostoon…
+	Export Contents…	Vie sisältö…
+	Update Modified Content	Päivitä muokattu sisältö
+	Update All Modified Content	Päivitä kaikki muokattu sisältö
+	Stack Mode	Pinotila
+	Choose Stack Mode:	Valitse pinotila:
+	Entropy	Entropia
+	Kurtosis	Huipukkuus
+	Maximum	Maksimi
+	Mean	Keskiarvo
+	Median	Mediaani
+	Minimum	Minimi
+	Range	Vaihteluväli
+	Skewness	Vinous
+	Standard Deviation	Keskihajonta
+	Summation	Summa
+	Variance	Varianssi
+	Video Layers	Videotasot
+	Interpret Footage…	Tulkitse materiaali…
+	Replace Footage…	Korvaa materiaali…
+	Reload Frame	Lataa kehys uudelleen
+	Show Altered Video	Näytä muutettu video
+	Restore Frame	Palauta kehys
+	Restore All Frames	Palauta kaikki kehykset
+	Insert Blank Frame	Lisää tyhjä kehys
+	Delete Frame	Poista kehys
+	Duplicate Frame	Monista kehys
+	Frame from Layers	Kehys tasoista
+	Video Frames to Layers…	Videokehykset tasoiksi…
+	Rasterize	Rasteroi
+	Rasterize Type	Rasteroi teksti
+	Rasterize Type Layer	Rasteroi tekstitaso
+	Rasterize Shape	Rasteroi muoto
+	New Guide Layout…	Uusi apuviiva-asettelu…
+	New Guides From Shape	Uudet apuviivat muodosta
+	Lock Layers…	Lukitse tasot…
+	Link Layers	Linkitä tasot
+	Select Linked Layers	Valitse linkitetyt tasot
+	Merge Layers	Yhdistä tasot
+	Merge Down	Yhdistä alas
+	Merge Group	Yhdistä ryhmä
+	Merge Visible	Yhdistä näkyvät
+	Stamp Visible	Leimaa näkyvät
+	Select Layer Above	Valitse yläpuolinen taso
+	Select Layer Below	Valitse alapuolinen taso
+	Select Top Layer	Valitse ylin taso
+	Select Bottom Layer	Valitse alin taso
+	Add Layer Above to Selection	Lisää yläpuolinen taso valintaan
+	Add Layer Below to Selection	Lisää alapuolinen taso valintaan
+	Stamp Down	Leimaa alas
+	Flatten Image	Litistä kuva
+	Matting	Reunojen puhdistus
+	Color Decontaminate…	Poista värikontaminaatio…
+	Remove Black Matte	Poista musta reunus
+	Remove White Matte	Poista valkoinen reunus
+	Defringe…	Poista reunahapsut…
+	Group Layers	Ryhmitä tasot
+	Ungroup Layers	Pura tasojen ryhmitys
+	Hide Layers	Piilota tasot
+	Arrange	Järjestä
+	Bring to Front	Tuo eteen
+	Bring Forward	Tuo eteenpäin
+	Send Backward	Vie taaksepäin
+	Send to Back	Vie taakse
+	Reverse	Käänteinen järjestys
+	Combine Shapes	Yhdistä muodot
+	Unite Shapes	Yhdistä muodot
+	Subtract Front Shape	Vähennä edessä oleva muoto
+	Intersect Shape Areas	Leikkaa muotoalueet
+	Exclude Overlapping Shapes	Poissulje päällekkäiset muodot
+	Merge Shape Components	Yhdistä muotojen osat
+	Align	Tasaa
+	Top Edges	Yläreunat
+	Vertical Centers	Pystykeskikohdat
+	Bottom Edges	Alareunat
+	Left Edges	Vasemmat reunat
+	Horizontal Centers	Vaakakeskikohdat
+	Right Edges	Oikeat reunat
+	Distribute	Jaa tasaisesti
+	Vertically	Pystysuunnassa
+	Horizontally	Vaakasuunnassa
+	Layer Edges	Tasojen reunat
+	Isolate Layers	Eristä tasot
+	Layer Content Options…	Tasosisällön asetukset…
+	Fill Content	Täyttösisältö
+	Deselect Layers	Poista tasojen valinta
+	Find Layers	Etsi tasoja
+	Layer Comps	Tasokoosteet
+	Layers	Tasot
+	All Layers	Kaikki tasot
+	Hidden Layers	Piilotetut tasot
+	Mask All Objects	Maskaa kaikki objektit
+	Subject	Kohde
+	Sky	Taivas
+	Panels	Paneelit
+	Character Panel	Merkki-paneeli
+	Paragraph Panel	Kappale-paneeli
+	Character Styles Panel	Merkkityylit-paneeli
+	Paragraph Styles Panel	Kappaletyylit-paneeli
+	Glyphs Panel	Merkit-paneeli
+	Anti-Alias	Reunanpehmennys
+	Sharp	Terävä
+	Crisp	Tarkka
+	Strong	Vahva
+	Smooth	Pehmeä
+	Windows LCD	Windows LCD
+	Windows	Windows
+	Orientation	Suunta
+	Horizontal	Vaaka
+	Vertical	Pysty
+	OpenType	OpenType
+	Standard Ligatures	Vakioligatuurit
+	Contextual Alternates	Kontekstuaaliset vaihtoehdot
+	Discretionary Ligatures	Valinnaiset ligatuurit
+	Swash	Koukeroinen
+	Oldstyle	Vanhanaikaiset numerot
+	Stylistic Alternates	Tyylilliset vaihtoehdot
+	Titling Alternates	Otsikkovaihtoehdot
+	Ornaments	Koristeet
+	Ordinals	Järjestysluvut
+	Fractions	Murtoluvut
+	Create Work Path	Luo työpolku
+	Convert to Shape	Muunna muodoksi
+	Warp Text…	Vääristä tekstiä…
+	Convert to Point Text	Muunna pistetekstiksi
+	Convert to Paragraph Text	Muunna kappaletekstiksi
+	Default Features	Oletusominaisuudet
+	East Asian Features	Itä-Aasian ominaisuudet
+	Middle Eastern Features	Lähi-idän ominaisuudet
+	Middle Eastern & South Asian Composer	Lähi-idän ja Etelä-Aasian ladonta
+	Update All Text Layers	Päivitä kaikki tekstitasot
+	Replace All Missing Fonts	Korvaa kaikki puuttuvat fontit
+	Resolve Missing Fonts…	Ratkaise puuttuvat fontit…
+	Font Preview Size	Fontin esikatselukoko
+	None	Ei mitään
+	Small	Pieni
+	Medium	Keskikokoinen
+	Large	Suuri
+	Extra Large	Erittäin suuri
+	Huge	Valtava
+	Load Default Type Styles	Lataa oletustekstityylit
+	Save Default Type Styles	Tallenna oletustekstityylit
+	Deselect	Poista valinta
+	Reselect	Valitse uudelleen
+	Inverse	Käänteinen
+	Inverse Selection	Käänteinen valinta
+	Similar	Samankaltainen
+	Color Range…	Väriväli…
+	Focus Area…	Tarkennusalue…
+	Select and Mask…	Valitse ja maskaa…
+	Smart Radius	Älykäs säde
+	Shift Edge	Siirrä reunaa
+	Decontaminate	Poista värikontaminaatio
+	Output	Tuloste
+	Refine Edge	Tarkenna reunaa
+	Modify	Muokkaa
+	Border…	Reunus…
+	Smooth…	Pehmennä…
+	Expand…	Laajenna…
+	Contract…	Supista…
+	Feather…	Pehmennä reunat…
+	Grow	Kasvata
+	Transform Selection	Muunna valinta
+	Edit in Quick Mask Mode	Muokkaa pikamaskitilassa
+	Load Selection…	Lataa valinta…
+	Save Selection…	Tallenna valinta…
+	Match All	Täsmää kaikki
+	Last Filter	Viimeisin suodin
+	Filter Gallery…	Suodingalleria…
+	Adaptive Wide Angle…	Mukautuva laajakulma…
+	Camera Raw Filter…	Camera Raw -suodin…
+	Liquify…	Nesteytä…
+	Vanishing Point…	Katoamispiste…
+	Blur	Sumenna
+	Blur Gallery	Sumennusgalleria
+	Field Blur…	Kenttäsumennus…
+	No pin selected	Nastaa ei ole valittu
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Lisää nasta napsauttamalla kuvaa. Siirrä nastaa vetämällä sitä ja muuta sumennusta vetämällä sen rengasta. Delete poistaa valitun nastan.
+	Iris Blur…	Iirissumennus…
+	Tilt-Shift…	Kallistus-siirto…
+	Path Blur…	Polkusumennus…
+	Spin Blur…	Pyörähdyssumennus…
+	Blur More	Sumenna lisää
+	Box Blur…	Laatikkosumennus…
+	Gaussian Blur…	Gaussin sumennus…
+	Lens Blur…	Objektiivisumennus…
+	Motion Blur…	Liikesumennus…
+	Radial Blur…	Säteittäinen sumennus…
+	Shape Blur…	Muotosumennus…
+	Smart Blur…	Älykäs sumennus…
+	Surface Blur…	Pintasumennus…
+	Average	Keskiarvo
+	Displace…	Siirrä pikseleitä…
+	Pinch…	Nipistä…
+	Polar Coordinates…	Napakoordinaatit…
+	Ripple…	Väreily…
+	Shear…	Leikkausvääristys…
+	Spherize…	Pallomaistaminen…
+	Twirl…	Pyörre…
+	Wave…	Aalto…
+	ZigZag…	Siksak…
+	Noise	Kohina
+	Add Noise…	Lisää kohinaa…
+	Despeckle	Poista täplät
+	Dust & Scratches…	Pöly ja naarmut…
+	Median…	Mediaani…
+	Reduce Noise…	Vähennä kohinaa…
+	Pixelate	Pikselöi
+	Color Halftone…	Värirasteri…
+	Crystallize…	Kiteytä…
+	Facet	Fasetti
+	Fragment	Sirpaloi
+	Mezzotint…	Mezzotinto…
+	Mosaic…	Mosaiikki…
+	Pointillize…	Pisteytä…
+	Render	Renderöi
+	Clouds	Pilvet
+	Difference Clouds	Erotuspilvet
+	Fibers…	Kuidut…
+	Flame…	Liekki…
+	Lens Flare…	Linssiheijastus…
+	Lighting Effects…	Valaistustehosteet…
+	Relight…	Uudelleenvalaise…
+	Picture Frame…	Kuvakehys…
+	Tree…	Puu…
+	Sharpen	Terävöitä
+	Sharpen Edges	Terävöitä reunat
+	Sharpen More	Terävöitä lisää
+	Smart Sharpen…	Älykäs terävöinti…
+	Unsharp Mask…	Epäterävä maski…
+	High Pass…	Ylipäästö…
+	Stylize	Tyylittele
+	Diffuse…	Hajauta…
+	Emboss…	Korkokuva…
+	Extrude…	Pursota…
+	Find Edges	Etsi reunat
+	Oil Paint…	Öljymaalaus…
+	Solarize	Solarisoi
+	Tiles…	Laatat…
+	Trace Contour…	Jäljitä ääriviiva…
+	Wind…	Tuuli…
+	Video	Video
+	De-Interlace…	Poista lomitus…
+	NTSC Colors	NTSC-värit
+	Other	Muut
+	Maximum…	Maksimi…
+	Minimum…	Minimi…
+	Offset…	Siirtymä…
+	Plug-ins	Laajennukset
+	Proof Setup	Vedosasetukset
+	Proof Colors	Vedosvärit
+	Gamut Warning	Väriavaruusvaroitus
+	Working CMYK	Työ-CMYK
+	Working Cyan Plate	Työ-syaanilevy
+	Working Magenta Plate	Työ-magentalevy
+	Working Yellow Plate	Työ-keltalevy
+	Working Black Plate	Työ-mustalevy
+	Working CMY Plate	Työ-CMY-levy
+	Legacy Macintosh RGB	Vanha Macintosh RGB
+	Internet Standard RGB	Internetin vakio-RGB
+	Monitor RGB	Näytön RGB
+	Color Blindness — Protanopia-type	Värisokeus — protanopia
+	Color Blindness — Deuteranopia-type	Värisokeus — deuteranopia
+	Zoom In	Lähennä
+	Zoom Out	Loitonna
+	Fit on Screen	Sovita näyttöön
+	Fit Layer(s) on Screen	Sovita taso(t) näyttöön
+	Fit Artboard on Screen	Sovita piirtoalusta näyttöön
+	100%	100%
+	200%	200%
+	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
+	125%	125%
+	150%	150%
+	175%	175%
+	250%	250%
+	300%	300%
+	Print Size	Tulostuskoko
+	Pixel Aspect Ratio	Pikselien kuvasuhde
+	Pixel Aspect Ratio Correction	Pikselien kuvasuhteen korjaus
+	Custom Pixel Aspect Ratio…	Mukautettu pikselien kuvasuhde…
+	Square	Neliö
+	D1/DV NTSC (0.91)	D1/DV NTSC (0.91)
+	D1/DV NTSC Widescreen (1.21)	D1/DV NTSC laajakuva (1.21)
+	D1/DV PAL (1.09)	D1/DV PAL (1.09)
+	D1/DV PAL Widescreen (1.46)	D1/DV PAL laajakuva (1.46)
+	Anamorphic 2:1 (2)	Anamorfinen 2:1 (2)
+	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
+	DVCPRO HD 1080/HDV 1080 (1.5)	DVCPRO HD 1080/HDV 1080 (1.5)
+	32-bit Preview Options…	32-bittisen esikatselun asetukset…
+	Screen Mode	Näyttötila
+	Standard Screen Mode	Vakionäyttötila
+	Full Screen Mode With Menu Bar	Koko näyttö valikkorivillä
+	Full Screen Mode	Koko näytön tila
+	Cycle Screen Mode	Vaihda näyttötilaa
+	Show	Näytä
+	Extras	Lisäosat
+	Selection Edges	Valinnan reunat
+	Target Path	Kohdepolku
+	Current Path	Nykyinen polku
+	Grid	Ruudukko
+	Guides	Apuviivat
+	Canvas Guides	Kankaan apuviivat
+	Artboard Guides	Piirtoalustan apuviivat
+	Count	Laskenta
+	Smart Guides	Älykkäät apuviivat
+	Slices	Viipaleet
+	Notes	Muistiinpanot
+	Pixel Grid	Pikseliruudukko
+	Pixel Art	Pikselitaide
+	Pixel Art Preview	Pikselitaiteen esikatselu
+	Pattern Preview	Kuvion esikatselu
+	Brush Preview	Siveltimen esikatselu
+	Mesh	Verkko
+	Edit Pins	Muokkaa nastoja
+	Document Bounds	Asiakirjan rajat
+	Show Extras Options…	Lisäosien näyttöasetukset…
+	Rulers	Viivaimet
+	Snap	Tartunta
+	Snap To	Tartu kohteeseen
+	Lock Guides	Lukitse apuviivat
+	Clear Guides	Poista apuviivat
+	Clear Selected Artboard Guides	Poista valittujen piirtoalustojen apuviivat
+	Clear Canvas Guides	Poista kankaan apuviivat
+	New Guide…	Uusi apuviiva…
+	Lock Slices	Lukitse viipaleet
+	Clear Slices	Poista viipaleet
+	Match Zoom	Täsmää zoomaus
+	Match Location	Täsmää sijainti
+	Match Rotation	Täsmää kierto
+	Cascade	Limittäin
+	Tile	Vierekkäin
+	Tile All Horizontally	Kaikki vierekkäin vaakasuunnassa
+	Tile All Vertically	Kaikki vierekkäin pystysuunnassa
+	2-up Horizontal	2 rinnakkain vaakasuunnassa
+	2-up Vertical	2 rinnakkain pystysuunnassa
+	3-up Horizontal	3 rinnakkain vaakasuunnassa
+	3-up Stacked	3 pinottuna
+	3-up Vertical	3 rinnakkain pystysuunnassa
+	4-up	4 rinnakkain
+	6-up	6 rinnakkain
+	Consolidate All to Tabs	Yhdistä kaikki välilehdiksi
+	Float in Window	Kelluta ikkunassa
+	Float All in Windows	Kelluta kaikki ikkunoissa
+	New Window for Document	Uusi ikkuna asiakirjalle
+	Workspace	Työtila
+	Essentials	Perusasiat
+	Graphic and Web	Grafiikka ja verkko
+	Painting	Maalaus
+	Photography	Valokuvaus
+	New Workspace…	Uusi työtila…
+	Delete Workspace…	Poista työtila…
+	Reset Workspace	Palauta työtila
+	Reset Tool	Palauta työkalu
+	Reset All Tools	Palauta kaikki työkalut
+	Reset all tools to their default settings?	Palautetaanko kaikkien työkalujen oletusasetukset?
+	Lock Workspace	Lukitse työtila
+	Theme	Teema
+	Pro Theme	Pro-teema
+	Pro Medium Gray Theme	Pro, keskiharmaa teema
+	Pro Light Gray Theme	Pro, vaaleanharmaa teema
+	Pro Light Theme	Pro, vaalea teema
+	Studio Theme	Studio-teema
+	Studio Light Theme	Studio, vaalea teema
+	Adwaita Light Theme	Adwaita, vaalea teema
+	Adwaita Dark Theme	Adwaita, tumma teema
+	Classic Theme	Klassinen teema
+	Solarized dark	Solarized tumma
+	Solarized Dark Theme	Solarized, tumma teema
+	Breeze dark	Breeze tumma
+	Breeze Dark Theme	Breeze, tumma teema
+	Breeze light	Breeze vaalea
+	Breeze Light Theme	Breeze, vaalea teema
+	Soft dark	Pehmeä tumma
+	Soft light	Pehmeä vaalea
+	Soft Dark Theme	Pehmeä tumma teema
+	Soft Light Theme	Pehmeä vaalea teema
+	Next Theme	Seuraava teema
+	Actions	Toiminnot
+	Brush Settings	Siveltimen asetukset
+	Brushes	Siveltimet
+	Channels	Kanavat
+	Character	Merkki
+	Character Styles	Merkkityylit
+	Clone Source	Kloonauslähde
+	Color	Väri
+	Glyphs	Merkit
+	Gradients	Liukuvärit
+	Histogram	Histogrammi
+	History	Historia
+	Info	Tiedot
+	Measurement Log	Mittausloki
+	Modifier Keys	Muokkausnäppäimet
+	Navigator	Navigaattori
+	Options	Asetukset
+	Paragraph	Kappale
+	Paragraph Styles	Kappaletyylit
+	Paths	Polut
+	Patterns	Kuviot
+	Properties	Ominaisuudet
+	Shapes	Muodot
+	Styles	Tyylit
+	Swatches	Värimallit
+	Timeline	Aikajana
+	Tool Presets	Työkalujen esiasetukset
+	Tools	Työkalut
+	About PhotoCraft	Tietoja PhotoCraftista
+	PhotoCraft Website	PhotoCraftin verkkosivusto
+	PhotoCraft on GitHub	PhotoCraft GitHubissa
+	ArtCraft Website	ArtCraftin verkkosivusto
+	Join the ArtCraft Discord…	Liity ArtCraftin Discordiin…
+	Report an Issue…	Ilmoita ongelmasta…
+	WIA Support…	WIA-tuki…
+	Apply	Käytä
+	HSB/HSL	HSB/HSL
+	Invert…	Käänteinen…
+	Load Files into Stack…	Lataa tiedostot pinoon…
+	Motion	Liike
+	Notes…	Muistiinpanot…
+	Other…	Muu…
+	Remove Warp Split	Poista vääristyksen jako
+	Shape	Muoto
+	Split Warp Crosswise	Jaa vääristys ristiin
+	Split Warp Horizontally	Jaa vääristys vaakasuunnassa
+	Split Warp Vertically	Jaa vääristys pystysuunnassa
+	Statistics…	Tilastot…
+	Refine Strokes	Tarkenna vetoja
+@plural	{n} item|{n} items	{n} kohde|{n} kohdetta
+	Auto	Autom.
+@id	select.all	Valitse kaikki
+@id	edit.stroke	Viiva
+@id	edit.transform.scale	Skaalaa
+@id	edit.purge.undo	Kumoa
+	(print to the printer)	(tulosta tulostimelle)
+	+ Add variable	+ Lisää muuttuja
+	30 frames @ 30 fps	30 kehystä @ 30 fps
+	3D LUT File	3D LUT -tiedosto
+	Absolute	Absoluuttinen
+	Absolute Colorimetric	Absoluuttinen kolorimetrinen
+	Action	Toiminto
+	Adaptive	Mukautuva
+	Adaptive Wide Angle isn't open	Mukautuva laajakulma ei ole auki
+	Add	Lisää
+	Add Layer Mask	Lisää tasomaski
+	Add Stop	Lisää pysähdyskohta
+	Add a layer style	Lisää tasotyyli
+	Add a mask  (from the selection; {key} inverts)	Lisää maski  (valinnasta; {key} kääntää)
+	Add an adjustment	Lisää säätö
+	Add disk	Lisää levy
+	Add space after paragraph	Lisää väli kappaleen jälkeen
+	Add space before paragraph	Lisää väli ennen kappaletta
+	Add to Sample	Lisää näytteeseen
+	Add to selection  ({key})	Lisää valintaan  ({key})
+	Adjust for Zoom	Mukauta zoomaukseen
+	Adjustment visible	Säätö näkyvissä
+	Adobe RGB (1998) compatible	Adobe RGB (1998) -yhteensopiva
+	Align and Distribute	Tasaa ja jaa tasaisesti
+	Align and distribute	Tasaa ja jaa tasaisesti
+	Align horizontal centers	Tasaa vaakakeskikohdat
+	Align left edges	Tasaa vasemmat reunat
+	Align right edges	Tasaa oikeat reunat
+	Aligned	Kohdistettu
+	All Caps	Isot kirjaimet
+	All Slices	Kaikki viipaleet
+	All User Slices	Kaikki käyttäjän viipaleet
+	All shortcuts reset to PhotoCraft defaults.	Kaikki pikanäppäimet palautettu PhotoCraftin oletuksiin.
+	Alt	Alt
+	Always use pressure for opacity	Käytä aina painetta peittävyyteen
+	Always use pressure for size	Käytä aina painetta kokoon
+	Amount	Määrä
+	Anchor:	Ankkuri:
+	Angle	Kulma
+	Angle Gradient	Kulmaliukuväri
+	Angle Jitter	Kulman vaihtelu
+	Answer the unsaved-changes prompt first	Vastaa ensin tallentamattomien muutosten kehotteeseen
+	Anti-alias	Reunanpehmennys
+	Appearance	Ulkoasu
+	Appearance (Layer Style)	Ulkoasu (tasotyyli)
+	Apply Layer Mask	Käytä tasomaskia
+	Add Mask to Selection	Lisää maski valintaan
+	Subtract Mask from Selection	Vähennä maski valinnasta
+	Intersect Mask with Selection	Leikkaa maski valinnan kanssa
+	Apply Per Tip	Käytä kärkikohtaisesti
+	Apply next selected layer comp	Käytä seuraavaa valittua tasokoostetta
+	Apply previous selected layer comp	Käytä edellistä valittua tasokoostetta
+	Artboard	Piirtoalusta
+	Artboard Background Color	Piirtoalustan taustaväri
+	Assign working space	Määritä työtila
+	Author:	Tekijä:
+	Auto Hide	Piilota automaattisesti
+	Auto-Select:	Automaattinen valinta:
+	Automatically level near-horizontal line segments	Oikaise lähes vaakasuorat janat automaattisesti
+	Automatically straighten and level	Suorista ja oikaise automaattisesti
+	Automatically straighten near-vertical line segments	Suorista lähes pystysuorat janat automaattisesti
+	Background	Tausta
+	Background Color	Taustaväri
+	Background Contents	Taustan sisältö
+	Custom background color	Mukautettu taustaväri
+	Balance	Tasapaino
+	Baseline	Perusviiva
+	Baseline shift	Perusviivan siirto
+	Basic	Perus
+	Before (Y)	Ennen (Y)
+	Save Settings…	Tallenna asetukset…
+	Load Settings…	Lataa asetukset…
+	Save these settings as a Camera Raw .xmp file	Tallenna nämä asetukset Camera Raw -.xmp-tiedostoon
+	Load settings from a Camera Raw .xmp file	Lataa asetukset Camera Raw -.xmp-tiedostosta
+	Loaded Camera Raw settings from {file}	Camera Raw -asetukset ladattu tiedostosta {file}
+	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw -asetukset ladattu tiedostosta {file} ({n} ei tuettu)
+	Begin recording	Aloita tallennus
+	Bend:	Taivutus:
+	Bicubic	Bikuutinen
+	Bicubic (smooth gradients)	Bikuutinen (tasaiset liukuvärit)
+	Automatic	Automaattinen
+	Bicubic Smoother (enlargement)	Bikuutinen pehmeämpi (suurennus)
+	Bicubic Sharper (reduction)	Bikuutinen terävämpi (pienennys)
+	Bilinear	Bilineaarinen
+	Black	Musta
+	Black & White	Mustavalko
+	Black Point Compensation	Mustapisteen kompensointi
+	Black, White	Musta, valkoinen
+	Blacks	Mustat
+	Blending	Sekoitus
+	Blending Options	Sekoitusasetukset
+	Blue	Sininen
+	Blue, Red, Yellow	Sininen, punainen, keltainen
+	Both Axes	Molemmat akselit
+	Bottom	Ala
+	Brightness	Kirkkaus
+	Brightness Jitter	Kirkkauden vaihtelu
+	Brightness/Contrast	Kirkkaus/kontrasti
+	Bring the selected pin forward	Tuo valittu nasta eteen
+	Brush Preset picker	Siveltimen esiasetusten valitsin
+	Brush Reconstruct Options	Siveltimen rekonstruoinnin asetukset
+	Brush Tool Options	Sivellintyökalun asetukset
+	Cache Level:	Välimuistin taso:
+	Camera Raw isn't open	Camera Raw ei ole auki
+	Cancel	Peruuta
+	Cancel (Esc)	Peruuta (Esc)
+	Manage submitted jobs in the system print queue	Hallitse lähetettyjä töitä järjestelmän tulostusjonossa
+	Cancel any current edits (Esc)	Peruuta nykyiset muokkaukset (Esc)
+	Cancel current crop operation  (Esc)	Peruuta nykyinen rajaus  (Esc)
+	Cancel transform (Esc)	Peruuta muunnos (Esc)
+	Cancel warp (Esc)	Peruuta vääristys (Esc)
+	Canvas	Kangas
+	Canvas extension color:	Kankaan laajennuksen väri:
+	Capture	Tallenna
+	Capture the visibility, position and style of every layer with + below, then switch between versions.	Tallenna jokaisen tason näkyvyys, sijainti ja tyyli alla olevalla +-painikkeella ja vaihda sitten versioiden välillä.
+	Catch-up on Stroke End	Kiri vedon lopussa
+	Center	Keskitä
+	Center Crop Marks	Keskitä rajausmerkit
+	Center text	Keskitä teksti
+	Change	Muuta
+	Change All	Muuta kaikki
+	Change Screen Mode  (F)	Vaihda näyttötilaa  (F)
+	Change To:	Muuta muotoon:
+	Channel Mixer	Kanavamikseri
+	Channel:	Kanava:
+	Check All Layers	Tarkista kaikki tasot
+	Check Spelling	Tarkista oikeinkirjoitus
+	Clarity	Selkeys
+	Clear All	Tyhjennä kaikki
+	Clear Override	Poista ohitus
+	Clear Samples	Tyhjennä näytteet
+	Click sets foreground · right-click sets background	Napsautus asettaa edustavärin · napsautus hiiren kakkospainikkeella asettaa taustavärin
+	Click the first point or press {key} to close · Esc cancels	Sulje napsauttamalla ensimmäistä pistettä tai painamalla {key} · Esc peruuttaa
+	Click to add a point · drag off or {key}-click or Delete to remove	Lisää piste napsauttamalla · poista vetämällä pois, {key}-napsautuksella tai Deletellä
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	Käytä napsauttamalla, tyhjennä ohitukset {key}-napsautuksella, tyyliasetukset kaksoisnapsautuksella
+	Click to edit the gradient	Muokkaa liukuväriä napsauttamalla
+	Click to restore the current colour	Palauta nykyinen väri napsauttamalla
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Lähennä napsauttamalla  ·  loitonna {key}-napsautuksella  ·  lähennä/loitonna vetämällä oikealle/vasemmalle
+	Click with the Note tool to add a note.	Lisää muistiinpano napsauttamalla Muistiinpano-työkalulla.
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Napsautus: kulma · Veto: pyöreä · Napsauta ensimmäistä pistettä: sulje · {key} valmis · Esc peruuta
+	Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel	Napsautus: kulma · Veto: pyöreä · {alt}-veto: katkaise kahva · Napsauta tai vedä ensimmäistä pistettä: sulje · {key} valmis · Esc peruuta
+	Clip to layer below	Leikkaa alla olevaan tasoon
+	Clipped	Leikattu
+	Close Style Options	Sulje tyyliasetukset
+	Cmd	Cmd
+	Coated CMYK	Päällystetty CMYK
+	Color & Swatches	Väri ja värimallit
+	Color Balance	Väritasapaino
+	Color Detail	Värin yksityiskohdat
+	Color Grading	Värien luokittelu
+	Color Lookup	Värinhaku
+	Color Management	Värinhallinta
+	Color Mixer	Värimikseri
+	Color Mode	Väritila
+	Color Priority	Väriprioriteetti
+	Color Range preview	Värivälin esikatselu
+	Color:	Väri:
+	Colorize	Väritä
+	Colors	Värit
+	Commit Perspective Warp ({key})	Vahvista perspektiivivääristys ({key})
+	Commit Puppet Warp ({key})	Vahvista nukkevääristys ({key})
+	Commit any current edits ({key})	Vahvista nykyiset muokkaukset ({key})
+	Commit current crop operation  ({key})	Vahvista nykyinen rajaus  ({key})
+	Commit transform ({key})	Vahvista muunnos ({key})
+	Commit warp ({key})	Vahvista vääristys ({key})
+	Constant	Vakio
+	Constrain proportions	Säilytä mittasuhteet
+	Contact Sheet II	Vedosarkki II
+	Content-Aware	Sisältötietoinen
+	Contiguous	Yhtenäinen
+	Contrast	Kontrasti
+	Control:	Ohjaus:
+	Convert document's colors to the working space	Muunna asiakirjan värit työtilaan
+	Convert to sRGB	Muunna sRGB:ksi
+	Copies	Kopiot
+	Copper	Kupari
+	Copyright	Tekijänoikeus
+	Copyright and Contact Info	Tekijänoikeus- ja yhteystiedot
+	Corner Crop Marks	Kulmarajausmerkit
+	Corner radius	Kulman säde
+	Correction	Korjaus
+	Count Jitter	Määrän vaihtelu
+	Create	Luo
+	Create Droplet	Luo droplet
+	Create Texture	Luo tekstuuri
+	Create Video Timeline	Luo videoaikajana
+	Create a new count group	Luo uusi laskentaryhmä
+	Create a new document or open an existing file.	Luo uusi asiakirja tai avaa olemassa oleva tiedosto.
+	Create a new group	Luo uusi ryhmä
+	Create a new layer	Luo uusi taso
+	Create new action	Luo uusi toiminto
+	Create new channel	Luo uusi kanava
+	Create new document from current state	Luo uusi asiakirja nykyisestä tilasta
+	Create new fill or adjustment layer	Luo uusi täyttö- tai säätötaso
+	Create new gradient	Luo uusi liukuväri
+	Create new group	Luo uusi ryhmä
+	Create new layer comp	Luo uusi tasokooste
+	Create new pattern from the selection	Luo uusi kuvio valinnasta
+	Create new shape from the current path	Luo uusi muoto nykyisestä polusta
+	Create new snapshot	Luo uusi tilannekuva
+	Create new tool preset	Luo uusi työkalun esiasetus
+	Crop Factor	Rajauskerroin
+	Ctrl	Ctrl
+	Current & Below	Nykyinen ja alemmat
+	Current Layer	Nykyinen taso
+	Current Size	Nykyinen koko
+	Current Tool Only	Vain nykyinen työkalu
+	Curve	Käyrä
+	Curves	Käyrät
+	Custom	Mukautettu
+	Custom Shapes	Mukautetut muodot
+	Cyan	Syaani
+	Cyan  ·  Red	Syaani  ·  punainen
+	Darken	Tummenna
+	Darks	Tummat
+	Data Sets	Tietojoukot
+	Default	Oletus
+	Default colours (D)	Oletusvärit (D)
+	Default printer	Oletustulostin
+	Default restored.	Oletus palautettu.
+	Define	Määritä
+	Define at least one variable first.	Määritä ensin vähintään yksi muuttuja.
+	Dehaze	Usvanpoisto
+	Delete Cropped Pixels	Poista rajatut pikselit
+	Delete Group	Poista ryhmä
+	Delete Layer Mask	Poista tasomaski
+	Delete Layers	Poista tasot
+	Delete Shortcut	Poista pikanäppäin
+	Delete Timeline	Poista aikajana
+	Delete Tool Preset	Poista työkalun esiasetus
+	Delete count group	Poista laskentaryhmä
+	Delete current channel	Poista nykyinen kanava
+	Delete current state	Poista nykyinen tila
+	Delete effect layer	Poista tehostetaso
+	Delete layer ‘{name}’?	Poistetaanko taso ‘{name}’?
+	Delete {count} layers? {names}	Poistetaanko {count} tasoa? {names}
+	Delete layer?	Poistetaanko taso?
+	The document is closed	Asiakirja on suljettu
+	The document or selected layers changed. Please request deletion again.	Asiakirja tai valitut tasot muuttuivat. Pyydä poistoa uudelleen.
+	Missing delete command	Poistokomento puuttuu
+	Invalid delete command	Virheellinen poistokomento
+	Layer deleted, but confirmation preference could not be saved: {error}	Taso poistettiin, mutta vahvistusasetusta ei voitu tallentaa: {error}
+	Delete layer	Poista taso
+	Delete layer comp	Poista tasokooste
+	Delete note	Poista muistiinpano
+	Delete selected measurements	Poista valitut mittaukset
+	Delete style	Poista tyyli
+	Delete tool preset	Poista työkalun esiasetus
+	Density	Tiheys
+	Density:	Tiheys:
+	Depth	Syvyys
+	Depth Jitter	Syvyyden vaihtelu
+	Description	Kuvaus
+	Deselect All	Poista kaikki valinnat
+	Detail	Yksityiskohdat
+	Diamond Gradient	Timanttiliukuväri
+	Difference	Erotus
+	Diffusion	Diffuusio
+	Discard the embedded profile (don't color manage)	Hylkää upotettu profiili (ei värinhallintaa)
+	Discontiguous	Ei-yhtenäinen
+	Discord	Discord
+	Dismiss	Hylkää
+	Display P3	Display P3
+	Display Text	Näytä teksti
+	Dither	Värisekoitus
+	Divide…	Jaa…
+	Document	Asiakirja
+	Don't Save	Älä tallenna
+	No	Ei
+	Yes	Kyllä
+	Done	Valmis
+	Dots	Pisteet
+	Drag a rectangle around the object	Vedä suorakulmio objektin ympärille
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Lisää rajoite vetämällä kuvassa; Vaihto vaaka-/pystysuunnalle; poista napsauttamalla hiiren kakkospainikkeella.
+	Drag to move the active shape's path or the Work Path	Siirrä aktiivisen muodon polkua tai työpolkua vetämällä
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Napsautus: valitse ankkuri · Veto: siirrä ankkuria, kahvaa tai segmenttiä · {shift}-napsautus: lisää · {alt}-napsautus: koko alipolku
+	Draw with the Pen tool (P) or make a work path from a selection.	Piirrä kynätyökalulla (P) tai luo työpolku valinnasta.
+	Drop an image or PSD anywhere to open it.	Avaa kuva tai PSD pudottamalla se mihin tahansa.
+	Native file drag-and-drop is unavailable	Tiedostojen vetäminen ja pudottaminen ei ole käytettävissä
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Tiedostojen vetämistä ja pudottamista ei vielä tueta Waylandissa. Käytä komentoa Tiedosto › Avaa tai kopioi kuva tiedostonhallinnassa ja liitä se komennolla {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Jos haluat pudottaa tiedostoja, käynnistä PhotoCraft XWaylandissa: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Tai aseta Asetukset › Suorituskyky › Linux-näyttöpalvelin arvoon X11, jolloin PhotoCraft käynnistyy aina XWaylandissa.
+	Edit › Paste	Muokkaa › Liitä
+	Duplicate Layers…	Monista tasot…
+	Duplicate style	Monista tyyli
+	Edit Toolbar…	Muokkaa työkaluriviä…
+	Use File › Open, or paste a copied image with {paste}.	Käytä komentoa Tiedosto › Avaa tai liitä kopioitu kuva komennolla {paste}.
+	Edit in Quick Mask Mode  (Q)	Muokkaa pikamaskitilassa  (Q)
+	Edit in Standard Mode  (Q)	Muokkaa vakiotilassa  (Q)
+	Effects	Tehosteet
+	Embed Color Profile	Upota väriprofiili
+	Embedded Profile Mismatch	Upotettu profiili ei täsmää
+	Enable airbrush-style build-up effects	Ota käyttöön airbrush-tyyliset kertymätehosteet
+	Enhance Edge	Paranna reunaa
+	Entire Font	Koko fontti
+	Exact	Tarkka
+	Expansion:	Laajennus:
+	Export Presets	Vie esiasetukset
+	Export selected measurements (CSV)	Vie valitut mittaukset (CSV)
+	Exposure	Valotus
+	Exposure and Gamma	Valotus ja gamma
+	Exposure:	Valotus:
+	Eyedropper	Pipetti
+	Factor:	Kerroin:
+	Faux Bold	Keinolihavointi
+	Faux Italic	Keinokursivointi
+	Feather	Pehmennä reunat
+	Fewer Points	Vähemmän pisteitä
+	File Settings	Tiedostoasetukset
+	Fill	Täyttö
+	Fill:	Täyttö:
+	Filter for adjustment layers	Suodata säätötasot
+	Filter for pixel layers	Suodata pikselitasot
+	Filter for shape layers	Suodata muototasot
+	Filter for smart objects	Suodata älykkäät objektit
+	Filter for type layers	Suodata tekstitasot
+	Filter:	Suodin:
+	Finger Painting	Sormimaalaus
+	Fisheye	Kalansilmä
+	Fit	Sovita
+	Fit Screen	Sovita näyttöön
+	Fill Screen	Täytä näyttö
+	Fit in View	Sovita näkymään
+	Fixed	Kiinteä
+	Fixed Ratio	Kiinteä suhde
+	Fixed Size	Kiinteä koko
+	Flip	Käännä
+	Flip X	Käännä X
+	Flip X Jitter	Käännä X -vaihtelu
+	Flip Y	Käännä Y
+	Flip Y Jitter	Käännä Y -vaihtelu
+	Flow	Virtaus
+	Flow Jitter	Virtauksen vaihtelu
+	Focal Length	Polttoväli
+	Font	Fontti
+	Font Size:	Fonttikoko:
+	Font size	Fonttikoko
+	Foreground	Edusta
+	Foreground to Background	Edustaväristä taustaväriin
+	Foreground/Background Jitter	Edusta-/taustavärin vaihtelu
+	Format	Muoto
+	Frame from Layers…	Kehys tasoista…
+	Free	Vapaa
+	Full Spherical	Täysi pallomainen
+	Fuzziness:	Sumeus:
+	GPU	GPU
+	Gamma Correction	Gammakorjaus
+	Gamma:	Gamma:
+	Global	Yleinen
+	Glow Color	Hehkun väri
+	Gradient Map	Liukuväriliitos
+	Grain	Rae
+	Gray	Harmaa
+	Gray Gamma 2.2	Harmaa gamma 2.2
+	Green	Vihreä
+	Group	Ryhmä
+	Hardness	Kovuus
+	Heart	Sydän
+	Height	Korkeus
+	Height:	Korkeus:
+	Hide Auto Slices	Piilota automaattiset viipaleet
+	Hide Properties	Piilota ominaisuudet
+	Highlight Compression	Korostusten pakkaus
+	Highlight Priority	Korostusten prioriteetti
+	Highlights	Korostukset
+	Home	Koti
+	Horizontal scale	Vaakaskaala
+	Hue	Sävy
+	Hue Jitter	Sävyn vaihtelu
+	Hue/Saturation	Sävy/kylläisyys
+	Hyphenate	Tavuta
+	Ignore	Ohita
+	Ignore All	Ohita kaikki
+	Image Size	Kuvan koko
+	Import Brushes…	Tuo siveltimiä…
+	Gradient Preset Options	Liukuväriesiasetusten asetukset
+	Import .GRD	Tuo .GRD
+	Choose a gradient file (.grd).	Valitse liukuväritiedosto (.grd).
+	Import brushes (.abr)	Tuo siveltimiä (.abr)
+	Import Presets	Tuo esiasetuksia
+	Imported	Tuotu
+	Indent First	Sisennä ensimmäinen
+	Indent Left	Sisennä vasemmalta
+	Indent Right	Sisennä oikealta
+	Indent first line	Sisennä ensimmäinen rivi
+	Indent left margin	Sisennä vasen marginaali
+	Indent right margin	Sisennä oikea marginaali
+	Input:	Syöte:
+	Inside	Sisäpuoli
+	Interlaced	Lomitettu
+	Interpolation:	Interpolointi:
+	Intersect with selection  ({key})	Leikkaa valinnan kanssa  ({key})
+	Invert All	Käännä kaikki
+	Invert has no settings.	Käänteisellä ei ole asetuksia.
+	Italic	Kursivoitu
+	Join us on Discord	Liity Discordiin
+	Justify all	Tasaa kaikki
+	Justify last centered	Tasaa, viimeinen keskitetty
+	Justify last left	Tasaa, viimeinen vasemmalle
+	Justify last right	Tasaa, viimeinen oikealle
+	Kerning	Parivälistys
+	Keyboard Shortcuts	Pikanäppäimet
+	Keyboard Shortcuts and Menus	Pikanäppäimet ja valikot
+	Kind	Laji
+	Label Size	Selitteen koko
+	Labels	Selitteet
+	Lanczos (sharp)	Lanczos (terävä)
+	Landscape	Vaaka
+	Last Document State	Asiakirjan viimeisin tila
+	Layout	Asettelu
+	Leading	Riviväli
+	Leading (set to the font size × auto-leading when Auto)	Riviväli (fonttikoko × automaattinen riviväli, kun Auto)
+	Leave as is (don't color manage)	Jätä ennalleen (ei värinhallintaa)
+	Left align text	Tasaa teksti vasemmalle
+	Length:	Pituus:
+	Level	Taso
+	Levels	Tasot
+	Lighten	Vaalenna
+	Lightness	Vaaleus
+	Lights	Valot
+	Limits:	Rajat:
+	Linear Gradient	Lineaarinen liukuväri
+	Link layers	Linkitä tasot
+	Link width and height	Linkitä leveys ja korkeus
+	Liquify is not open	Nesteytys ei ole auki
+	Load	Lataa
+	Load 3D LUT…	Lataa 3D LUT…
+	Load channel as selection	Lataa kanava valintana
+	Load…	Lataa…
+	Localized Color Clusters	Paikalliset väriryppäät
+	Lock	Lukitse
+	Lock all	Lukitse kaikki
+	Lock image pixels	Lukitse kuvan pikselit
+	Lock layer	Lukitse taso
+	Lock position	Lukitse sijainti
+	Lock transparent pixels	Lukitse läpinäkyvät pikselit
+	Lock:	Lukitse:
+	Logical Length:	Looginen pituus:
+	Logical Units:	Loogiset yksiköt:
+	Luminance	Luminanssi
+	Luminance Detail	Luminanssin yksityiskohdat
+	Magenta	Magenta
+	Magenta  ·  Green	Magenta  ·  vihreä
+	Maintain aspect ratio	Säilytä kuvasuhde
+	Marker Size	Merkin koko
+	Mask All	Peitä kaikki
+	Mask Options	Maskin asetukset
+	Masking	Maskaus
+	Master	Kaikki
+	Matte	Matta
+	Median:	Mediaani:
+	Menus	Valikot
+	Mesh Size	Verkon koko
+	Metadata	Metatiedot
+	Metrics	Metriikka
+	Midpoint	Keskipiste
+	Midtones	Keskisävyt
+	Midtones from:	Keskisävyt alkaen:
+	Midtones to:	Keskisävyt päättyen:
+	Minimum Depth	Vähimmäissyvyys
+	Minimum Diameter	Vähimmäishalkaisija
+	Minimum Roundness	Vähimmäispyöreys
+	Mode:	Tila:
+	Monochrome	Yksivärinen
+	More Points	Lisää pisteitä
+	Move effect layer down	Siirrä tehostetasoa alas
+	Move effect layer up	Siirrä tehostetasoa ylös
+	Move to	Siirrä kohteeseen
+	Name	Nimi
+	Name:	Nimi:
+	Nearest Neighbor	Lähin naapuri
+	Nearest Neighbor (hard edges)	Lähin naapuri (terävät reunat)
+	New Size	Uusi koko
+	New document…	Uusi asiakirja…
+	New effect layer	Uusi tehostetaso
+	New selection	Uusi valinta
+	Next frame	Seuraava ruutu
+	Next note	Seuraava muistiinpano
+	No Color	Ei väriä
+	No Color Management	Ei värinhallintaa
+	No Dither	Ei rasterointia
+	No author	Ei tekijää
+	No character style	Ei merkkityyliä
+	No document	Ei asiakirjaa
+	No matching commands	Ei vastaavia komentoja
+	No presets for the current tool.	Nykyiselle työkalulle ei ole esiasetuksia.
+	No presets of this type.	Tämän tyyppisiä esiasetuksia ei ole.
+	No properties	Ei ominaisuuksia
+	No tool presets.	Ei työkaluesiasetuksia.
+	Noise Reduction	Kohinanvaimennus
+	Normal	Normaali
+	Not in Dictionary:	Ei sanastossa:
+	OK	OK
+	Offset	Siirtymä
+	Only Web Colors	Vain verkkovärit
+	Opacity	Peittävyys
+	Opacity Jitter	Peittävyyden vaihtelu
+	Opacity:	Peittävyys:
+	Open a document to define variables.	Avaa asiakirja määrittääksesi muuttujia.
+	Open a document to select a colour range.	Avaa asiakirja valitaksesi värialueen.
+	Open a document to use the timeline.	Avaa asiakirja käyttääksesi aikajanaa.
+	Optical	Optinen
+	Optimized	Optimoitu
+	Option-click to define a source point to clone from	Määritä kloonauksen lähdepiste Optio-napsautuksella
+	Original	Alkuperäinen
+	Output Channel:	Tulostekanava:
+	Output Levels:	Tulostetasot:
+	Output:	Tuloste:
+	Outside	Ulkopuoli
+	Overlay Color	Peittoväri
+	Overlay Opacity	Peiton peittävyys
+	Overlay: Rule of Thirds	Peitto: kolmanneksen sääntö
+	Override Pressure	Ohita paine
+	Override Rotation	Ohita kierto
+	Override Tilt	Ohita kallistus
+	PRESET DETAILS	ESIASETUKSEN TIEDOT
+	PSD	PSD
+	Paint Overlay	Maalauspeitto
+	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	Paneelien sijainnit tallennetaan työtilaan. Pikanäppäimet, valikot ja työkalurivi ovat valinnaisia.
+	Paper	Paperi
+	Path	Polku
+	Pattern	Kuvio
+	Pattern Size	Kuvion koko
+	Pause	Tauko
+	Percent	Prosentti
+	Perceptual	Havaintopohjainen
+	Perspective Warp is not active	Perspektiivivääristys ei ole aktiivinen
+	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspektiivivääristys: piirrä tasot kuvan perspektiivin mukaan ja siirry sitten vääristykseen
+	Photo Filter	Valokuvasuodin
+	PhotoCraft	PhotoCraft
+	PhotoCraft Manages Colors	PhotoCraft hallitsee värit
+	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — avoimen lähdekoodin natiivi kuvankäsittelyohjelma, kirjoitettu Rustilla.
+	Pin Depth:	Nastan syvyys:
+	Pixel Length:	Pikselipituus:
+	Pixels/Centimeter	Pikseliä/senttimetri
+	Pixels/Inch	Pikseliä/tuuma
+	Pixels:	Pikselit:
+	Play	Toista
+	Play selection	Toista valinta
+	Portrait	Pysty
+	Position	Sijainti
+	Position and Size	Sijainti ja koko
+	Posterize	Posterisoi
+	Preserve Details	Säilytä yksityiskohdat
+	Preserve Luminosity	Säilytä kirkkaus
+	Preset	Esiasetus
+	Preset Type	Esiasetuksen tyyppi
+	Preset:	Esiasetus:
+	Presets:	Esiasetukset:
+	Press keys…	Paina näppäimiä…
+	Pressure	Paine
+	Pressure for Opacity	Paine peittävyydelle
+	Pressure for Size	Paine koolle
+	Prevent auto-nesting in and out of Artboards and Frames	Estä automaattinen sisäkkäistys piirtoalustoihin ja kehyksiin ja niistä pois
+	Preview	Esikatselu
+	Previous frame	Edellinen ruutu
+	Previous note	Edellinen muistiinpano
+	Print	Tulosta
+	Printer	Tulostin
+	Printer Manages Colors	Tulostin hallitsee värit
+	Printer Setup	Tulostimen asetukset
+	Printing Marks	Tulostusmerkit
+	Progressive	Progressiivinen
+	Promote	Ylennä
+	Protect Detail	Suojaa yksityiskohdat
+	Protect Foreground Color	Suojaa edustaväri
+	Protect Tones	Suojaa sävyt
+	Proximity Match	Läheisyysvastaavuus
+	Pulled String Mode	Vedetyn narun tila
+	Puppet Warp is not active	Nukkevääristys ei ole aktiivinen
+	Purity	Puhtaus
+	Quality	Laatu
+	Quick Actions	Pikatoiminnot
+	Quick Export As PNG	Pikavienti PNG-muodossa
+	Radial Gradient	Säteittäinen liukuväri
+	Radius	Säde
+	Radius:	Säde:
+	Range:	Alue:
+	Rate	Nopeus
+	Recently Used	Viimeksi käytetyt
+	Reconstruct	Rekonstruoi
+	Record ● a sequence of edits, then play ▶ it on any document.	Tallenna ● muokkaussarja ja toista ▶ se millä tahansa asiakirjalla.
+	Red	Punainen
+	Redefine style by current selection	Määritä tyyli uudelleen nykyisen valinnan mukaan
+	Refine	Tarkenna
+	Reflected Gradient	Heijastettu liukuväri
+	Registration Marks	Kohdistusmerkit
+	Regular	Normaali
+	Relative	Suhteellinen
+	Relative Colorimetric	Suhteellinen kolorimetrinen
+	Remove	Poista
+	Remove All Pins	Poista kaikki nastat
+	Remove Background	Poista tausta
+	Remove Planes	Poista tasot
+	Remove Tool	Poista työkalu
+	Remove stop	Poista pysähdyskohta
+	Remove variable	Poista muuttuja
+	Rename	Nimeä uudelleen
+	Rename Group…	Nimeä ryhmä uudelleen…
+	Rename Layer…	Nimeä taso uudelleen…
+	Rename Tool Preset…	Nimeä työkaluesiasetus uudelleen…
+	Rename…	Nimeä uudelleen…
+	Resample	Uudelleennäytteistä
+	Reset All to Defaults	Palauta kaikki oletuksiin
+	Import Shortcuts…	Tuo pikanäppäimet…
+	Load a keyboard shortcut set saved as .kys	Lataa .kys-muodossa tallennettu pikanäppäinsarja
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Tuotiin {n} pikanäppäintä tiedostosta {file}. Säilytä ne valitsemalla OK.
+	{n} commands are not in PhotoCraft.	{n} komentoa ei ole PhotoCraftissa.
+	Keyboard shortcuts imported	Pikanäppäimet tuotu
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Pikanäppäinsarjasi {set} on käytössä: {n} pikanäppäintä poikkeaa oletuksista. Muokkaa › Pikanäppäimet näyttää ne; Palauta kaikki oletuksiin kumoaa tämän.
+	Import keyboard shortcuts?	Tuodaanko pikanäppäimet?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft löysi tältä tietokoneelta toisen kuvankäsittelyohjelman pikanäppäinsarjan {set}: {n} sen pikanäppäintä poikkeaa PhotoCraftin pikanäppäimistä. Tuodaanko se?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Muokkaa › Pikanäppäimet › Palauta kaikki oletuksiin kumoaa tuonnin.
+	Don't Import	Älä tuo
+	The keyboard shortcut set was not imported: {error}	Pikanäppäinsarjaa ei tuotu: {error}
+	Reset Section	Palauta osio
+	Reset Transform	Palauta muunnos
+	Reset to defaults	Palauta oletukset
+	Resolution	Tarkkuus
+	Resolution:	Tarkkuus:
+	Restore All	Palauta kaikki
+	Restore Defaults	Palauta oletukset
+	Restrictive (Web)	Rajoittava (verkko)
+	Right align text	Tasaa teksti oikealle
+	Rigid	Jäykkä
+	Rotate:	Kierrä:
+	Rotation	Kierto
+	Roughness	Karheus
+	Roundness	Pyöreys
+	Roundness Jitter	Pyöreyden vaihtelu
+	Rulers & Grids	Viivaimet ja ruudukot
+	Sample All Layers	Näytteistä kaikki tasot
+	Sample:	Näyte:
+	Sampling: Background Swatch	Näytteistys: taustan värimalli
+	Sampling: Continuous	Näytteistys: jatkuva
+	Sampling: Once	Näytteistys: kerran
+	Saturate	Kyllästä
+	Saturation	Kylläisyys
+	Saturation Jitter	Kylläisyyden vaihtelu
+	Save HTML and Images	Tallenna HTML ja kuvat
+	Save as PDF	Tallenna PDF-muodossa
+	Save selection as channel	Tallenna valinta kanavana
+	Save…	Tallenna…
+	Scale to Fit Media	Skaalaa sopimaan materiaaliin
+	Scatter	Sironta
+	Scratch disks	Työlevyt
+	Search	Haku
+	Search commands	Hae komentoja
+	Search commands, tools and panels…	Hae komentoja, työkaluja ja paneeleja…
+	Search fonts	Hae fontteja
+	Select All	Valitse kaikki
+	Select Subject	Valitse kohde
+	Select a type layer or click into text to insert glyphs	Valitse tekstitaso tai napsauta tekstiä lisätäksesi merkkejä
+	Select text to apply a character style	Valitse teksti, johon merkkityyli käytetään
+	Select:	Valitse:
+	Selections	Valinnat
+	Selective	Valikoiva
+	Selective Color	Valikoiva väri
+	Send the selected pin backward	Siirrä valittua nastaa taaksepäin
+	Set additional smoothing options	Määritä lisätasoitusasetukset
+	Set background color	Aseta taustaväri
+	Set foreground color	Aseta edustaväri
+	Set painting symmetry options	Määritä maalauksen symmetria-asetukset
+	Symmetry Off	Symmetria pois
+	Set shape fill type	Aseta muodon täytön tyyppi
+	Set shape stroke type	Aseta muodon viivan tyyppi
+	Set the text color	Aseta tekstin väri
+	Shadows	Varjot
+	Shape:	Muoto:
+	Sharpening	Terävöinti
+	Shift	Vaihto
+	Shortcut removed.	Pikanäppäin poistettu.
+	Show All Menu Items	Näytä kaikki valikkokohdat
+	Show Backdrop	Näytä tausta
+	Show Guides	Näytä apuviivat
+	Show Mask	Näytä maski
+	Show Mesh	Näytä verkko
+	Show Overlay	Näytä peitto
+	Show Transform Controls	Näytä muunnoskahvat
+	Show or hide the Notes panel	Näytä tai piilota Muistiinpanot-paneeli
+	Show:	Näytä:
+	Sides	Sivut
+	Sides:	Sivut:
+	Size	Koko
+	Size Jitter	Koon vaihtelu
+	Size:	Koko:
+	Slice Options…	Viipaleen asetukset…
+	Slices From Guides	Viipaleet apuviivoista
+	Slices are locked (View › Lock Slices)	Viipaleet on lukittu (Näytä › Lukitse viipaleet)
+	Small Caps	Kapiteelit
+	Smoothing	Tasoitus
+	Space After	Väli jälkeen
+	Space Before	Väli ennen
+	Spacing	Välistys
+	Spell check complete.	Oikoluku valmis.
+	Split:	Jako:
+	Star ratio	Tähden suhde
+	Stop playing/recording	Lopeta toisto/tallennus
+	Straighten	Suorista
+	Straighten Layer	Suorista taso
+	Strength:	Voimakkuus:
+	Strikethrough	Yliviivaus
+	Stroke	Viiva
+	Stroke Catch-up	Viivan kiinniotto
+	Stroke:	Viiva:
+	Location	Sijainti
+	Location:	Sijainti:
+	Preserve Transparency	Säilytä läpinäkyvyys
+	Style	Tyyli
+	Style Options	Tyyliasetukset
+	Style Options…	Tyyliasetukset…
+	Style: Normal	Tyyli: normaali
+	Subtract from Sample	Vähennä näytteestä
+	Subtract from selection  ({key})	Vähennä valinnasta  ({key})
+	Suggestions:	Ehdotukset:
+	Swap colours (X)	Vaihda värit (X)
+	Swaps height and width	Vaihtaa korkeuden ja leveyden
+	Switch between free transform and warp modes	Vaihda vapaan muunnoksen ja vääristystilan välillä
+	Switch theme	Vaihda teemaa
+	Temperature	Lämpötila
+	Tetrahedral	Tetraedrinen
+	Text Position:	Tekstin sijainti:
+	Texture	Tekstuuri
+	Texture Each Tip	Tekstuuri jokaiseen kärkeen
+	Threshold	Kynnys
+	Threshold Level	Kynnystaso
+	Thumbnail size (smallest: list)	Pikkukuvan koko (pienin: luettelo)
+	Tilt X	Kallistus X
+	Tilt Y	Kallistus Y
+	Tint	Sävy
+	Toggle count group visibility	Vaihda laskentaryhmän näkyvyys
+	Toggle text orientation	Vaihda tekstin suunta
+	Tolerance	Toleranssi
+	Tolerance:	Toleranssi:
+	Tone:	Sävy:
+	Toolbar	Työkalurivi
+	Top	Ylä
+	Total:	Yhteensä:
+	Tracking	Merkkiväli
+	Tracking (1/1000 em)	Merkkiväli (1/1000 em)
+	Transparency	Läpinäkyvyys
+	Transparent	Läpinäkyvä
+	Trilinear	Trilineaarinen
+	Type Styles	Tekstityylit
+	Type:	Tyyppi:
+	Underline	Alleviivaus
+	Untitled	Nimetön
+	Untitled-1	Nimetön-1
+	Update layer comp (visibility, position and appearance)	Päivitä tasokoosteen näkyvyys, sijainti ja ulkoasu
+	Use Default	Käytä oletusta
+	Use Legacy	Käytä vanhaa
+	Use Measurement Scale	Käytä mittausasteikkoa
+	Use the embedded profile (instead of the working space)	Käytä upotettua profiilia (työtilan sijaan)
+	Variables bind a layer's visibility, text or pixels to a named data slot.	Muuttujat sitovat tason näkyvyyden, tekstin tai pikselit nimettyyn tietopaikkaan.
+	Vertical scale	Pystyskaala
+	Vibrance	Eloisuus
+	View Options	Näkymän asetukset
+	Vignetting	Vinjetointi
+	Violet, Orange	Violetti, oranssi
+	Visibility	Näkyvyys
+	Visible	Näkyvä
+	Warp:	Vääristys:
+	Web Snap	Verkkotartunta
+	Weight	Paino
+	Weight:	Paino:
+	White	Valkoinen
+	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
+	Whites	Valkoiset
+	Width	Leveys
+	Slant	Kallistus
+	Width:	Leveys:
+	Work Path	Työpolku
+	Yellow	Keltainen
+	Yellow  ·  Blue	Keltainen  ·  sininen
+	Zoom	Zoomaus
+	Zoom in	Lähennä
+	Zoom out	Loitonna
+	command or shortcut	komento tai pikanäppäin
+	current	nykyinen
+	image file path	kuvatiedoston polku
+	modified	muokattu
+	name	nimi
+	new	uusi
+	{name} options	{name}: asetukset
+	↑↓ navigate   {key} run   esc close	↑↓ siirry   {key} suorita   esc sulje
+	Version {version}	Versio {version}
+	New Document	Uusi asiakirja
+	New Document With Mask	Uusi asiakirja maskilla
+	New Layer With Mask	Uusi taso maskilla
+	New Layer	Uusi taso
+	Saved	Tallennettu
+	Save Preset…	Tallenna esiasetus…
+	Preset Name	Esiasetuksen nimi
+	No saved presets yet.	Tallennettuja esiasetuksia ei vielä ole.
+	Error	Virhe
+	Command	Komento
+	Adjustment layers have nothing to transform	Säätötasoissa ei ole muunnettavaa
+	Altitude	Korkeus
+	Android 1080p	Android 1080p
+	Apple Watch 45mm	Apple Watch 45mm
+	Aqua	Akva
+	Art & Illustration	Taide ja kuvitus
+	ArtCraft	ArtCraft
+	Background Eraser Tool	Taustapyyhekumi
+	Bevel & Emboss	Viiste ja korkokuviointi
+	Blend Mode	Sekoitustila
+	Blues	Siniset
+	Blur Tool	Sumennustyökalu
+	Bold	Lihavoitu
+	Brush	Sivellin
+	Pencil	Lyijykynä
+	Block	Lohko
+	Brush Pose	Siveltimen asento
+	Brush Tip Shape	Siveltimen kärjen muoto
+	Brush Tool	Sivellintyökalu
+	Build-up	Kerrostuminen
+	Burn Tool	Tummennustyökalu
+	Centimeters	Senttimetrit
+	Choke	Kuristus
+	Classic	Klassinen
+	Click to add text	Lisää teksti napsauttamalla
+	Click to fill similar colours	Täytä samankaltaiset värit napsauttamalla
+	Clone Stamp Tool	Kloonausleimasin
+	Color Burn	Värin tummennus
+	Color Dodge	Värin vaalennus
+	Color Dynamics	Värin dynamiikka
+	Color Overlay	Värin peitto
+	Comic Book	Sarjakuva
+	Conform	Mukauta
+	Content-Aware Fill needs a selection on a pixel layer	Sisältötietoinen täyttö vaatii valinnan pikselitasolla
+	Could not transform: the layer is empty	Muuntaminen epäonnistui: taso on tyhjä
+	Could not use Perspective Warp: the layer is empty	Perspektiivivääristystä ei voitu käyttää: taso on tyhjä
+	Could not use Puppet Warp: no opaque pixels	Nukkevääristystä ei voitu käyttää: ei peittäviä pikseleitä
+	Could not use Puppet Warp: the layer is empty	Nukkevääristystä ei voitu käyttää: taso on tyhjä
+	Crop Tool	Rajaustyökalu
+	Crosswise	Ristiin
+	Current Tool	Nykyinen työkalu
+	Custom Shape Tool	Mukautettu muoto -työkalu
+	Cyans	Syaanit
+	Default PhotoCraft Size	PhotoCraftin oletuskoko
+	Delete Workspace	Poista työtila
+	Diamond	Vinoneliö
+	Dimensions:	Mitat:
+	Direction	Suunta
+	Distance	Etäisyys
+	Document Dimensions	Asiakirjan mitat
+	Document Profile	Asiakirjan profiili
+	Document Sizes	Asiakirjan koot
+	Dodge Tool	Vaalennustyökalu
+	Down	Alas
+	Drag to draw a gradient	Piirrä liukuväri vetämällä
+	Drag to move the active layer	Siirrä aktiivista tasoa vetämällä
+	Drag to pan  ·  hold Space with any tool	Panoroi vetämällä  ·  tai pidä Välilyöntiä painettuna millä tahansa työkalulla
+	Drop Shadow	Pudotettu varjo
+	Dual Brush	Kaksoissivellin
+	Edge	Reuna
+	Efficiency	Tehokkuus
+	Efficiency: 100%	Tehokkuus: 100%
+	Ellipse Tool	Ellipsityökalu
+	Elliptical Marquee Tool	Elliptinen valintakehys
+	Single Row Marquee Tool	Yhden rivin valintakehys
+	Single Column Marquee Tool	Yhden sarakkeen valintakehys
+	Emboss	Korkokuviointi
+	Eraser	Pyyhekumi
+	Eraser Tool	Pyyhekumityökalu
+	ExtraBold	Erittäin lihavoitu
+	ExtraLight	Erittäin kevyt
+	Eyedropper Tool	Pipetti
+	Fade	Häivytys
+	Fill Opacity	Täytön peittävyys
+	Film & Video	Elokuva ja video
+	From	Mistä
+	General	Yleiset
+	GitHub	GitHub
+	Gradient Overlay	Liukuvärin peitto
+	Gradient Tool	Liukuvärityökalu
+	Greens	Vihreät
+	Hand Tool	Käsityökalu
+	Hard	Kova
+	Hard Mix	Kova sekoitus
+	Healing Brush Tool	Korjaussivellin
+	Highlights from:	Korostukset alkaen:
+	History Brush Tool	Historiasivellin
+	Horizontal Type Tool	Vaakasuuntainen tekstityökalu
+	Horizontal Type Mask Tool	Vaakasuuntainen tekstimaskityökalu
+	Vertical Type Mask Tool	Pystysuuntainen tekstimaskityökalu
+	Image Size:	Kuvan koko:
+	Inches	Tuumat
+	Indexed	Indeksoitu
+	Initial Direction	Alkusuunta
+	Inner Bevel	Sisäviiste
+	Inner Glow	Sisähehku
+	Inner Shadow	Sisävarjo
+	Lab	Lab
+	Landscape, 10 x 8	Vaaka, 10 x 8
+	Landscape, 6 x 4	Vaaka, 6 x 4
+	Landscape, 7 x 5	Vaaka, 7 x 5
+	Lasso	Lasso
+	Lasso Tool	Lassotyökalu
+	Layer Count	Tasojen määrä
+	Layer Knocks Out Drop Shadow	Taso leikkaa pudotetun varjon
+	Legal	Legal
+	Letter	Letter
+	Light	Kevyt
+	Line Tool	Viivatyökalu
+	Linear	Lineaarinen
+	Linear Burn	Lineaarinen tummennus
+	Linear Height	Lineaarinen korkeus
+	Link with Layer	Linkitä tasoon
+	Lorem Ipsum	Lorem Ipsum
+	Magentas	Magentat
+	Magic Eraser Tool	Taikapyyhekumi
+	Magic Wand Tool	Taikasauva
+	Marquee	Valintakehys
+	Mean:	Keskiarvo:
+	Measurement Scale	Mittausasteikko
+	Measurement Scale Marker	Mittausasteikon merkki
+	Millimeters	Millimetrit
+	Mobile	Mobiili
+	Move Tool	Siirtotyökalu
+	Could not use the move tool because the layer is locked.	Siirtotyökalua ei voitu käyttää, koska taso on lukittu.
+	Could not complete the Free Transform command because the layer is locked.	Vapaa muunnos -komentoa ei voitu suorittaa, koska taso on lukittu.
+	Multiply	Kerro
+	My Brushes	Omat siveltimet
+	Neutrals	Neutraalit
+	New Workspace	Uusi työtila
+	Note Tool	Muistiinpanotyökalu
+	Object Selection Tool	Objektinvalintatyökalu
+	Off	Pois
+	Open	Avaa
+	Orange	Oranssi
+	Original Ratio	Alkuperäinen suhde
+	Out Of Gamut	Väriskaalan ulkopuolella
+	Outer Bevel	Ulkoviiste
+	Outer Glow	Ulkohehku
+	Overlay	Sulautus
+	Paint Bucket Tool	Maaliämpäri
+	Paints from the document's opening state	Maalaa asiakirjan avaustilasta
+	Path Selection Tool	Polunvalintatyökalu
+	Direct Selection Tool	Suoravalintatyökalu
+	Add Anchor Point Tool	Lisää ankkuripiste -työkalu
+	Delete Anchor Point Tool	Poista ankkuripiste -työkalu
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Lisää ankkuripiste napsauttamalla segmenttiä · poista ankkuri {alt}-napsautuksella
+	Click an anchor point to delete it · {alt}-click a segment to add one	Poista ankkuripiste napsauttamalla sitä · lisää ankkuri segmenttiin {alt}-napsautuksella
+	Pattern Overlay	Kuvion peitto
+	Pen Pressure	Kynän paine
+	Pen Tilt	Kynän kallistus
+	Pen Tool	Kynätyökalu
+	Convert Point Tool	Muunna piste -työkalu
+	Photo	Valokuva
+	PhotoCraft website	PhotoCraftin verkkosivusto
+	Picas	Picat
+	Pillow Emboss	Tyynykohokuviointi
+	Pixel Replacement	Pikselien korvaus
+	Pixels	Pikselit
+	Points	Pisteet
+	Polygon Tool	Monikulmiotyökalu
+	Polygonal Lasso Tool	Monikulmiolasso
+	Portrait, 4 x 6	Pysty, 4 x 6
+	Portrait, 5 x 7	Pysty, 5 x 7
+	PostScript (72 points/inch)	PostScript (72 pistettä/tuuma)
+	Postcard	Postikortti
+	Poster	Juliste
+	Pro (Dark)	Pro (tumma)
+	Pro (Light)	Pro (vaalea)
+	Pro (Light Gray)	Pro (vaaleanharmaa)
+	Pro (Medium Gray)	Pro (keskiharmaa)
+	Protect Texture	Suojaa tekstuuri
+	Purple	Purppura
+	Quick Mask	Pikamaski
+	Quick Selection Tool	Pikavalintatyökalu
+	Radial	Säteittäinen
+	Rasterize Layer	Rasteroi taso
+	Rasterize Layers	Rasteroi tasot
+	Ratio	Suhde
+	Recent	Viimeisimmät
+	Rectangle Tool	Suorakulmiotyökalu
+	Rectangular Marquee Tool	Suorakulmainen valintakehys
+	Reds	Punaiset
+	Reflected	Heijastettu
+	Sample: foreground colour	Näyte: edustaväri
+	Sampled Colors	Näytteistetyt värit
+	Satin	Satiini
+	Save Pixel Aspect Ratio	Tallenna pikselien kuvasuhde
+	Scattering	Sironta
+	Scratch Sizes	Työlevyn koot
+	Select Data Points	Valitse datapisteet
+	Selection	Valinta
+	SemiBold	Puolilihavoitu
+	Shadows up to:	Varjot enintään:
+	Shape Dynamics	Muodon dynamiikka
+	Sharpen Tool	Terävöintityökalu
+	Show Extras Options	Näytä lisätietojen asetukset
+	Slice Select Tool	Viipaleen valintatyökalu
+	Slice Tool	Viipaletyökalu
+	Smart Filters	Älykkäät suotimet
+	Smudge Tool	Hankaustyökalu
+	Soft	Pehmeä
+	Soften	Pehmennä
+	Source	Lähde
+	Source: set	Lähde: asetettu
+	Sponge Tool	Sienityökalu
+	Spot Healing Brush Tool	Pistekorjaussivellin
+	Spread	Levitys
+	Square, 12 x 12	Neliö, 12 x 12
+	Square, 5 x 5	Neliö, 5 x 5
+	Std Dev:	Keskihajonta:
+	Studio (Dark)	Studio (tumma)
+	Studio (Light)	Studio (vaalea)
+	Stylus Wheel	Kynän rulla
+	Subtract	Vähennä
+	Tabloid	Tabloid
+	Text Replacement	Tekstin korvaus
+	Thin	Ohut
+	Traditional (72.27 points/inch)	Perinteinen (72,27 pistettä/tuuma)
+	Transfer	Siirto
+	Triangle Tool	Kolmiotyökalu
+	Unsaved changes	Tallentamattomia muutoksia
+	Uses the foreground and background colours.	Käyttää edusta- ja taustaväriä.
+	Web	Verkko
+	Web Large	Verkko, suuri
+	Web Minimum	Verkko, pienin
+	Web Most Common	Verkko, yleisimmät
+	WebP (lossless)	WebP (häviötön)
+	Wet Edges	Märät reunat
+	Yellows	Keltaiset
+	Zoom Tool	Zoomaustyökalu
+	{name} Properties	{name}: ominaisuudet
+	Revert “{name}” to the last saved version? Your changes will be lost.	Palautetaanko ”{name}” viimeksi tallennettuun versioon? Muutokset menetetään.
+	Do you want to save the changes you made to “{name}” before quitting?	Tallennetaanko kohteeseen ”{name}” tehdyt muutokset ennen lopettamista?
+	Do you want to save the changes you made to “{name}” before closing?	Tallennetaanko kohteeseen ”{name}” tehdyt muutokset ennen sulkemista?
+	Doc: {flat}/{layered}	Asiak.: {flat}/{layered}
+	Scratch: {size}	Työlevy: {size}
+	Untagged {mode}	Merkitsemätön {mode}
+	Invalid {mode} profile	Virheellinen {mode}-profiili
+	Unnamed {mode} profile	Nimetön {mode}-profiili
+	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
+	Resolution: {dpi} pixels/inch	Tarkkuus: {dpi} pikseliä/tuuma
+	Doc: {w} × {h} px	Asiak.: {w} × {h} px
+	Frame {current} / {total}	Ruutu {current} / {total}
+	Count: {n}	Määrä: {n}
+	BLANK DOCUMENT PRESETS ({n})	TYHJÄN ASIAKIRJAN ESIASETUKSET ({n})
+	Constraints ({n})	Rajoitteet ({n})
+	Align {what}	Tasaa {what}
+@plural	{n} Layer|{n} Layers	{n} taso|{n} tasoa
+@plural	{n} layer|{n} layers	{n} taso|{n} tasoa
+@plural	Group · {n} layer|Group · {n} layers	Ryhmä · {n} taso|Ryhmä · {n} tasoa
+	Additional plugins folder	Lisälaajennusten kansio
+	Adobe	Adobe
+	Adobe rgb	Adobe RGB
+	Allow agent control	Salli agentin ohjaus
+	Allow scripts to connect	Salli komentosarjojen yhdistää
+	Always	Aina
+	Always create smart objects when placing	Luo aina älykkäät objektit sijoitettaessa
+	Animated zoom	Animoitu zoomaus
+	Apply auto tone	Käytä automaattista sävytystä
+	Ask	Kysy
+	Ask before saving layered tiff	Kysy ennen tasoja sisältävän TIFFin tallentamista
+	Auto collapse icon panels	Kutista kuvakepaneelit automaattisesti
+	Auto show hidden panels	Näytä piilotetut paneelit automaattisesti
+	Auto show home screen	Näytä aloitusnäyttö automaattisesti
+	Autosave	Automaattinen tallennus
+	Autosave minutes	Automaattisen tallennuksen väli (min)
+	Beep when done	Äänimerkki valmistuttua
+	Bicubic automatic	Bikuubinen, automaattinen
+	Bicubic sharper	Bikuubinen, terävämpi
+	Bicubic smoother	Bikuubinen, pehmeämpi
+	Bit depth	Bittisyvyys
+	Brush preview color	Siveltimen esikatseluväri
+	Cache levels	Välimuistin tasot
+	Cache tile size	Välimuistin ruudun koko
+	Camera Raw Defaults	Camera Raw -oletukset
+	Canvas border	Kankaan reunus
+	Show canvas dots	Näytä kankaan pisteet
+	Canvas color	Kankaan väri
+	Canvas custom color	Kankaan mukautettu väri
+	Color picker	Värinvalitsin
+	Color space	Väriavaruus
+	Column width	Sarakkeen leveys
+	Concise	Tiivis
+	Control port	Ohjausportti
+	Convert to srgb	Muunna sRGB:ksi
+	Cursors	Osoittimet
+	Custom dark	Mukautettu tumma
+	Custom light	Mukautettu vaalea
+	Dark	Tumma
+	Dark gray	Tummanharmaa
+	Dashed lines	Katkoviivat
+	Destination	Kohde
+	Detailed	Yksityiskohtainen
+	Disks	Levyt
+	Display p3	Display P3
+	Double click layer mask launches select and mask	Tasomaskin kaksoisnapsautus avaa Valitse ja maskaa -toiminnon
+	Drop shadow	Pudotettu varjo
+	Dynamic color sliders	Dynaamiset väriliukusäätimet
+	East asian	Itä-Aasian
+	Effect cache mb	Tehostevälimuisti (Mt)
+	Enable flick panning	Ota käyttöön heilautuspanorointi
+	Enable floating document window docking	Salli kelluvien asiakirjaikkunoiden telakointi
+	Enable narrow options bar	Ota käyttöön kapea asetusrivi
+	Enabled	Käytössä
+	Enhanced Controls	Parannetut säätimet
+	Export clipboard	Vie leikepöytä
+	Extra large	Erittäin suuri
+	File Handling	Tiedostojen käsittely
+	File path	Tiedostopolku
+	Fill new type layers with placeholder	Täytä uudet tekstitasot paikkamerkkitekstillä
+	Font preview	Fontin esikatselu
+	Full size tip	Täysikokoinen kärki
+	Gamut warning color	Väriskaalavaroituksen väri
+	Gamut warning opacity	Väriskaalavaroituksen peittävyys
+	Generator enabled	Generaattori käytössä
+	Gif	GIF
+	Glossy	Kiiltävä
+	Grid color	Ruudukon väri
+	Grid colors	Ruudukon värit
+	Grid size	Ruudukon koko
+	Grid style	Ruudukon tyyli
+	Grid unit	Ruudukon yksikkö
+	Gridline every	Ruudukkoviiva joka
+	Guide color	Apuviivan väri
+	Guide style	Apuviivan tyyli
+	Guides, Grid & Slices	Apuviivat, ruudukko ja viipaleet
+	Gutter	Väli
+	History Log	Historialoki
+	History states	Historiatilat
+	Ignore exif profile tag	Ohita EXIF-profiilitunniste
+	Image interpolation	Kuvan interpolointi
+	Image previews	Kuvien esikatselut
+	Integrations	Integraatiot
+	Interface	Käyttöliittymä
+	Jpeg quality	JPEG-laatu
+	Jpg	JPG
+	Language	Kieli
+	Large tabs	Suuret välilehdet
+	Legacy compositing	Vanha koostaminen
+	Light gray	Vaaleanharmaa
+	Line	Viiva
+	Lines	Viivat
+	Lossless	Häviötön
+	Lowercase extension	Pienet kirjaimet tiedostopäätteessä
+	Maximize psd compatibility	Maksimoi PSD-yhteensopivuus
+	Medium gray	Keskiharmaa
+	Memory usage mb	Muistin käyttö (Mt)
+	Low resolution previews	Matalan tarkkuuden esikatselut
+	Missing glyph protection	Puuttuvien merkkien suojaus
+	Modern	Moderni
+	Nearest neighbor	Lähin naapuri
+	Never	Ei koskaan
+	Normal tip	Normaali kärki
+	Open as smart object	Avaa älykkäänä objektina
+	Open in camera raw	Avaa Camera Raw'ssa
+	Open documents as tabs	Avaa asiakirjat välilehtinä
+	Overscroll	Ylivieritys
+	Performance	Suorituskyky
+	Png	PNG
+	Point size	Pistekoko
+	Precise	Tarkka
+	Preserve details	Säilytä yksityiskohdat
+	Print resolution	Tulostustarkkuus
+	Pro	Pro
+	Pro light	Pro, vaalea
+	Pro light gray	Pro, vaaleanharmaa
+	Pro medium	Pro, keskiharmaa
+	Pro photo	ProPhoto
+	Quick export format	Pikaviennin muoto
+	Quick export location	Pikaviennin sijainti
+	Recent file count	Viimeisimpien tiedostojen määrä
+	Recent files	Viimeisimmät tiedostot
+	Recent fonts	Viimeisimmät fontit
+	Recover on launch	Palauta käynnistettäessä
+	Remember workspace changes	Muista työtilan muutokset
+	Resize image during place	Muuta kuvan kokoa sijoitettaessa
+	Rotate view with trackpad	Kierrä näkymää kosketuslevyllä
+	Same folder	Sama kansio
+	Save in background	Tallenna taustalla
+	Scratch Disks	Työlevyt
+	Screen	Rasteri
+	Screen resolution	Näytön tarkkuus
+	Scrubby slider acceleration	Vierityssäätimen kiihtyvyys
+	Sessions only	Vain istunnot
+	Sharpen for	Terävöi kohteelle
+	Show channels in color	Näytä kanavat värillisinä
+	Show crosshair in brush tip	Näytä hiusristikko siveltimen kärjessä
+	Show extension panels	Näytä laajennuspaneelit
+	Show font names in english	Näytä fonttien nimet englanniksi
+	Show menu colors	Näytä valikkovärit
+	Show only crosshair while painting	Näytä vain hiusristikko maalattaessa
+	Show slice numbers	Näytä viipaleiden numerot
+	Show tooltips	Näytä työkaluvihjeet
+	Enable animations	Ota animaatiot käyttöön
+	Show highlight on rollover	Näytä korostus osoitettaessa
+	Show bounding box when dragging layer	Näytä rajauskehys tasoa vedettäessä
+	System title bar	Järjestelmän otsikkorivi
+	Show transformation values	Näytä muunnosarvot
+	Slice color	Viipaleen väri
+	Smart guide color	Älykkään apuviivan väri
+	Smart quotes	Älykkäät lainausmerkit
+	Snap vector tools and transforms to pixel grid	Kohdista vektorityökalut ja muunnokset pikseliruudukkoon
+	Srgb	sRGB
+	Standard	Vakio
+	Studio	Studio
+	Studio light	Studio, vaalea
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita, tumma
+	Subdivisions	Alijaot
+	System	Järjestelmä
+	Text engine	Tekstimoottori
+	Text file	Tekstitiedosto
+	Tiny	Pienin
+	Touch gestures	Kosketuseleet
+	Transparency & Gamut	Läpinäkyvyys ja väriskaala
+	Type units	Tekstin yksiköt
+	UI font size	Käyttöliittymän fonttikoko
+	UI scale	Käyttöliittymän skaalaus
+	Units & Rulers	Yksiköt ja viivaimet
+	Use additional plugins folder	Käytä lisälaajennusten kansiota
+	Use esc to commit	Vahvista Esc-näppäimellä
+	Use gpu	Käytä GPU:ta
+	Use legacy free transform	Käytä vanhaa vapaata muunnosta
+	Use shift key for tool switch	Vaihda työkalua Vaihto-näppäimellä
+	Vary round brush hardness on hud	Muuta pyöreän siveltimen kovuutta HUD-näytössä
+	Webp	WebP
+	World ready	World Ready
+	Zoom clicked point to center	Keskitä zoomaus napsautettuun pisteeseen
+	Zoom resizes windows	Zoomaus muuttaa ikkunoiden kokoa
+	Zoom with scroll wheel	Zoomaa vierityspyörällä
+	Zoom with trackpad pinch	Zoomaa kosketuslevyn nipistyksellä
+	Pass Through	Läpivienti
+	Dissolve	Hajota
+	Darker Color	Tummempi väri
+	Linear Dodge (Add)	Lineaarinen vaalennus (lisää)
+	Lighter Color	Vaaleampi väri
+	Soft Light	Pehmeä valo
+	Hard Light	Kova valo
+	Vivid Light	Kirkas valo
+	Linear Light	Lineaarinen valo
+	Pin Light	Pistevalo
+	Exclusion	Poissulkeminen
+	Divide	Jaa
+	Luminosity	Kirkkaus
+@plural	{n} sample|{n} samples	{n} näyte|{n} näytettä
+	{added}, {removed} subtracted	{added}, {removed} vähennetty
+	Adjustment Preview	Säädön esikatselu
+	Airbrush: keeps depositing paint while the pointer rests.	Ilmasivellin: lisää maalia, kun osoitin on paikallaan.
+	Angle:	Kulma:
+	Blend If	Sekoita, jos
+	Close Tab Group	Sulje välilehtiryhmä
+	Collapse	Kutista
+	Collapse All Groups	Kutista kaikki ryhmät
+	Collapse Panel Group	Kutista paneeliryhmä
+	Collapse group  ({key}-click: all groups)	Kutista ryhmä  ({key}-napsautus: kaikki ryhmät)
+	Create new brush from the current settings	Luo uusi sivellin nykyisistä asetuksista
+	Create new brush from these settings	Luo uusi sivellin näistä asetuksista
+	Update the current brush with these settings	Päivitä nykyinen sivellin näillä asetuksilla
+	Delete brush	Poista sivellin
+	Drag the arrow to set the angle, the dots to set the roundness	Aseta kulma vetämällä nuolta ja pyöreys vetämällä pisteitä
+	Expand	Laajenna
+	Expand Panel Group	Laajenna paneeliryhmä
+	Expand group  ({key}-click: all groups)	Laajenna ryhmä  ({key}-napsautus: kaikki ryhmät)
+	Fade steps	Häivytyksen vaiheet
+	Hide the layer's effects  ({key}-click: all layers)	Piilota tason tehosteet  ({key}-napsautus: kaikki tasot)
+	Import Brushes… (.abr)	Tuo siveltimiä… (.abr)
+	Move Group Down	Siirrä ryhmää alas
+	Move Group Up	Siirrä ryhmää ylös
+	Reset the brush to the defaults	Palauta sivellin oletuksiin
+	Restore original size	Palauta alkuperäinen koko
+	Roundness:	Pyöreys:
+	Search Brushes	Hae siveltimiä
+	Show the layer's effects  ({key}-click: all layers)	Näytä tason tehosteet  ({key}-napsautus: kaikki tasot)
+	Brush picker	Siveltimen valitsin
+	Erase	Pyyhi
+	Right click with painting tools	Napsauta hiiren oikealla painikkeella maalaustyökaluilla
+	System Info…	Järjestelmän tiedot…
+	System Info	Järjestelmän tiedot
+	More panels	Lisää paneeleja
+	More documents	Lisää asiakirjoja
+	These settings aren't available in PhotoCraft yet.	Nämä asetukset eivät ole vielä käytettävissä PhotoCraftissa.
+	Graphics	Grafiikka
+	Reset GPU Backend	Palauta GPU-taustajärjestelmä
+	Applies at next launch.	Tulee voimaan seuraavalla käynnistyskerralla.
+	Click to sample the foreground colour  ·  {key}-click for background	Ota edustavärin näyte napsauttamalla  ·  {key}-napsautus taustavärille
+	{key}-click to set the source	Aseta lähde {key}-napsautuksella
+	{key} to subtract	{key} vähentää
+	Clone source {n} ({key}-click with Clone Stamp to set)	Kloonauslähde {n} (aseta {key}-napsautuksella kloonausleimasimella)
+	Source: not set ({key}-click with Clone Stamp)	Lähde: ei asetettu ({key}-napsautus kloonausleimasimella)
+	Pixel Layer	Pikselitaso
+	Type Layer	Tekstitaso
+	Shape Layer	Muototaso
+	Group Layer	Ryhmätaso
+	Fill Layer	Täyttötaso
+	Smart Object Layer	Älykäs objekti -taso
+	Create Warped Text	Luo vääristetty teksti
+	Rasterize Smart Object	Rasteroi älykäs objekti
+	Rasterize Fill Content	Rasteroi täytön sisältö
+	Rasterize Layer Style	Rasteroi tasotyyli
+	Unlock: picking a preset replaces these settings	Avaa lukitus: esiasetuksen valinta korvaa nämä asetukset
+	Lock: keep these settings when picking another preset	Lukitse: säilytä nämä asetukset, kun valitaan toinen esiasetus
+	Diameter:	Halkaisija:
+	Hardness:	Kovuus:
+	No brush presets	Ei sivellinesiasetuksia
+	Toggle the Brush Settings panel  (F5)	Näytä tai piilota Siveltimen asetukset -paneeli  (F5)
+	Create new brush preset from the current settings	Luo uusi sivellinesiasetus nykyisistä asetuksista
+	Brush Settings…  (F5): every option of this brush	Siveltimen asetukset…  (F5): tämän siveltimen kaikki asetukset
+	Rename Brush…	Nimeä sivellin uudelleen…
+	Delete Brush	Poista sivellin
+	New Brush Preset…	Uusi sivellinesiasetus…
+	Capture Brush Size in Preset	Tallenna siveltimen koko esiasetukseen
+	Include Tool Settings	Sisällytä työkalun asetukset
+	Include Color	Sisällytä väri
+	Enter a name for the brush preset	Anna sivellinesiasetukselle nimi
+	A brush preset with this name already exists	Tämänniminen sivellinesiasetus on jo olemassa
+	Brush Preset Options	Sivellinesiasetuksen asetukset
+	Group name	Ryhmän nimi
+	Brush name	Siveltimen nimi
+	Brush Name	Siveltimen nimi
+	Brush Stroke	Siveltimen veto
+	Brush Tip	Siveltimen kärki
+	Off: the speed of the pointer sets the spacing	Pois: osoittimen nopeus määrää välistyksen
+	Tilt Scale	Kallistuksen skaala
+	Brush Projection	Siveltimen projektio
+	Apply the pen's tilt and rotation to the tip shape	Käytä kynän kallistusta ja kiertoa kärjen muotoon
+	Mixer Brush	Sekoitussivellin
+	Mixer Brush Tool	Sekoitussivellintyökalu
+	Color Replacement Tool	Värinkorvaustyökalu
+	Color Replacement	Värinkorvaus
+	Wet	Märkä
+	Mix	Sekoitus
+	Wetness Jitter	Märkyyden vaihtelu
+	Mix Jitter	Sekoituksen vaihtelu
+	Show the layer mask as an overlay	Näytä tasomaski peittona
+	Toggle visibility	Vaihda näkyvyys
+	Unlink the mask from the layer	Irrota maskin linkitys tasosta
+	Link the mask to the layer	Linkitä maski tasoon
+	Gradient	Liukuväri
+	Gradient Options	Liukuvärin asetukset
+	Align with layer	Tasaa tason kanssa
+	Reset Alignment	Palauta tasaus
+	Centre the gradient (offset 0, 0)	Keskitä liukuväri (siirtymä 0, 0)
+	Gradient Editor	Liukuvärieditori
+	Gradient picker	Liukuvärin valitsin
+	Save As Preset	Tallenna esiasetuksena
+	The gradient the Gradient tool paints with	Liukuväri, jolla liukuvärityökalu maalaa
+	Adds the current gradient to the Gradients panel	Lisää nykyisen liukuvärin Liukuvärit-paneeliin
+	Gradient stops	Liukuvärin pysähdyskohdat
+	Select a type layer to edit its character and paragraph settings.	Valitse tekstitaso muokataksesi sen merkki- ja kappaleasetuksia.
+	Text color	Tekstin väri
+	Type Options	Tekstin asetukset
+	Anti-aliasing method	Reunanpehmennysmenetelmä
+	Horizontal type	Vaakasuuntainen teksti
+	Vertical type	Pystysuuntainen teksti
+	Fill path with foreground color	Täytä polku edustavärillä
+	Stroke path with brush	Vedä polun viiva siveltimellä
+	Load path as a selection	Lataa polku valintana
+	Make work path from selection	Tee valinnasta työpolku
+	Add vector mask	Lisää vektorimaski
+	Create new path	Luo uusi polku
+	Delete path	Poista polku
+	Delete vector mask	Poista vektorimaski
+	CPU (no GPU acceleration)	CPU (ei GPU-kiihdytystä)
+	DirectX 12	DirectX 12
+	GPU backend	GPU-taustajärjestelmä
+	Linux display server	Linuxin näyttöpalvelin
+	X11	X11
+	Metal	Metal
+	OpenGL	OpenGL
+	Use tablet pressure	Käytä piirtopöydän painetta
+	Vulkan	Vulkan
+	Alt-click to define a source point to clone from	Määritä kloonauksen lähdepiste Alt-napsautuksella
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Ei polkua, josta tehdä valinta: piirrä polku kynätyökalulla tai valitse se Polut-paneelista.
+	Cancel opening	Peruuta avaaminen
+	Cancelled opening {name}	Kohteen {name} avaaminen peruttiin
+	The document “{name}” does not have an embedded {mode} profile.	Asiakirjassa ”{name}” ei ole upotettua {mode}-profiilia.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Asiakirjassa ”{name}” on upotettu väriprofiili, joka ei vastaa nykyistä {mode}-työtilaa.
+	Embedded: {embedded}	Upotettu: {embedded}
+	Working: {working}	Työtila: {working}
+	Developing {name}	Kehitetään {name}
+	Cancelled {label}	Peruttu: {label}
+	Esc to cancel	Peruuta Esc-näppäimellä
+	Opened {name}	Avattu {name}
+	Opening {name}	Avataan {name}
+	Saved {name}	Tallennettu {name}
+	Saving {name}	Tallennetaan {name}
+	Saving {percent}	Tallennetaan {percent}
+	A save to {name} is still running; try again when it finishes	Tallennus kohteeseen {name} on yhä käynnissä; yritä uudelleen, kun se on valmis
+	{label} is writing the file and can no longer be cancelled	{label} kirjoittaa tiedostoa, eikä sitä voi enää peruuttaa
+	Opening {name}…	Avataan {name}…
+	Opening…	Avataan…
+	Reading…	Luetaan…
+	Working…	Käsitellään…
+	3 x 3	3 x 3
+	4 x 4	4 x 4
+	5 x 5	5 x 5
+	Grid:	Ruudukko:
+	Rendering Mode	Hahmonnustila
+	Automatic (recommended)	Automaattinen (suositus)
+	CPU / Compatibility	CPU / yhteensopivuus
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automaattinen käyttää GPU-kiihdytystä, kun se on käytettävissä, ja siirtyy virhetilanteissa CPU-hahmonnukseen.
+	Switched to CPU rendering	Siirryttiin CPU-hahmonnukseen
+	GPU acceleration could not continue. Your documents are unchanged.	GPU-kiihdytystä ei voitu jatkaa. Asiakirjasi ovat ennallaan.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft käyttää CPU-kuvankoostinta. Ikkuna voi silti käyttää näytönohjainta.
+	Retry GPU requires a restart. Save your work first.	GPU:n uudelleenyritys vaatii uudelleenkäynnistyksen. Tallenna työsi ensin.
+	Keep Using CPU	Jatka CPU:n käyttöä
+	Retry GPU	Yritä GPU:ta uudelleen
+	Advanced	Lisäasetukset
+	GPU Backend	GPU-taustajärjestelmä
+	Details	Tiedot
+	Rendering mode	Hahmonnustila
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Jäädytyslasso: jäädytä alue vetämällä, sulata Alt-vedolla (L)
+	Shadow Clipping Warning (U)	Varjojen leikkautumisvaroitus (U)
+	Highlight Clipping Warning (O)	Korostusten leikkautumisvaroitus (O)
+	Show Lab Color Readouts	Näytä Lab-värilukemat
+	Show Vectorscope	Näytä vektoriskooppi
+	Show Red at 3 o'clock	Näytä punainen kello 3:n kohdalla
+	Show Skin Tone Indicator	Näytä ihonsävyn ilmaisin
+	Tone Histogram	Sävyhistogrammi
+	Show Selected Region	Näytä valittu alue
+cameraRaw	Light	Valo
+	Camera Raw Filter ({layer})	Camera Raw -suodin ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
+cameraRaw	Red	Punainen
+cameraRaw	Orange	Oranssi
+cameraRaw	Yellow	Keltainen
+cameraRaw	Green	Vihreä
+cameraRaw	Aqua	Akva
+cameraRaw	Blue	Sininen
+cameraRaw	Purple	Purppura
+cameraRaw	Magenta	Magenta
+cameraRaw	Blending	Sekoitus
+cameraRaw	Luminance	Luminanssi
+cameraRaw	Temperature	Lämpötila
+cameraRaw	Color	Väri
+	Patch Tool	Paikkaustyökalu
+	Patch:	Paikkaus:
+	Lasso around an area, then drag the selection	Rajaa alue lassolla ja vedä sitten valintaa
+	Transform On Drop	Muunna pudotettaessa
+	Scale or rotate the moved area, then press {key}	Skaalaa tai kierrä siirrettyä aluetta ja paina sitten {key}
+	Now drag the selection onto another area	Vedä nyt valinta toisen alueen päälle
+	Edit Type	Muokkaa tekstiä
+	New Style…	Uusi tyyli…
+	Style {name} saved	Tyyli {name} tallennettu
+	Create new style (from the selected type)	Luo uusi tyyli (valitusta tekstistä)
+	Create new style from the selected layer	Luo uusi tyyli valitusta tasosta
+	Make Default	Aseta oletukseksi
+	Reset to Default	Palauta oletukseen
+	Full-resolution preview unavailable	Täyden tarkkuuden esikatselu ei ole käytettävissä
+	No patterns	Ei kuvioita
+	Enable {name}	Ota käyttöön {name}
+	Hold Alt while drawing for straight segments	Pidä Alt painettuna piirtäessä suoria segmenttejä varten
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Vedä tai napsauta monikulmion pisteitä · suorat segmentit pitämällä Alt painettuna lassossa · {add} lisää · {sub} ennen piirtämistä vähentää
+	Move	Siirrä
+	Extend	Laajenna
+	Structure:	Rakenne:
+	Content-Aware Move Tool	Sisältötietoinen siirtotyökalu
+	TIFF Options	TIFF-asetukset
+	Targa Options	Targa-asetukset
+	24 bits/pixel	24 bittiä/pikseli
+	32 bits/pixel	32 bittiä/pikseli
+	Including layers will increase file size.	Tasojen sisällyttäminen kasvattaa tiedostokokoa.
+	Discard Layers and Save a Copy	Hylkää tasot ja tallenna kopio
+	Don't show again	Älä näytä uudelleen
+	Save failed: {error}	Tallennus epäonnistui: {error}
+	Save cancelled	Tallennus peruttu
+	Couldn't place {name}: {error}	Kohteen {name} sijoittaminen epäonnistui: {error}
+	Magnetic Lasso Tool	Magneettinen lassotyökalu
+	Frequency	Taajuus
+	Use tablet pressure to change pen width	Muuta kynän leveyttä piirtopöydän paineella
+	About	Tietoja
+	Contributors	Tekijät
+	Models	Mallit
+	Sort	Lajittele
+	Username	Käyttäjänimi
+	Display name	Näyttönimi
+	Real name	Oikea nimi
+	Reverse the order	Käännä järjestys
+	Grab bag	Sekalaiset
+	Table	Taulukko
+	Name (A–Z)	Nimi (A–Z)
+	Merged PRs	Yhdistetyt PR:t
+	Commits	Commitit
+	Lines added	Lisätyt rivit
+	Lines deleted	Poistetut rivit
+	Line delta	Rivien muutos
+	Binary assets added	Lisätyt binääriresurssit
+	Binary assets removed	Poistetut binääriresurssit
+	First commit	Ensimmäinen commit
+	First	Ensimmäinen
+	Last commit	Viimeisin commit
+	Last	Viimeisin
+	Contributors: {contributors} · Commits: {commits}	Tekijät: {contributors} · Commitit: {commits}
+	No contributor data was built into this copy.	Tähän kopioon ei ole koottu tekijätietoja.
+	No model credits were built into this copy.	Tähän kopioon ei ole koottu mallien tekijätietoja.
+	Company	Yritys
+	Model	Malli
+	Version	Versio
+	% of all commits	% kaikista commiteista
+	Lines +/−	Rivit +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR:ää, {commits} commitia, +{added} / −{deleted} riviä (Δ {delta}), +{binAdded} / −{binDeleted} binääriresurssia, {first} – {last}
+	Create new swatch	Luo uusi värimalli
+	New Swatch…	Uusi värimalli…
+	New Swatch Group…	Uusi värimalliryhmä…
+	Import Swatches…	Tuo värimalleja…
+	Replace Swatches…	Korvaa värimallit…
+	Export Swatches…	Vie värimalleja…
+	Export Swatches for Exchange…	Vie värimallit vaihtoa varten…
+	Reset Swatches	Palauta värimallit
+	Add to Swatches	Lisää värimalleihin
+	Blend If:	Sekoita, jos:
+	Channels:	Kanavat:
+	Knockout	Läpileikkaus
+	Apply At Canvas Bounds	Käytä kankaan rajoihin
+	Color Picker (Text Color)	Värinvalitsin (tekstin väri)
+	Color Picker ({name})	Värinvalitsin ({name})
+	Color Picker (Fill Color)	Värinvalitsin (täyttöväri)
+	Fill color	Täyttöväri
+	Color Picker (Stroke Color)	Värinvalitsin (viivan väri)
+	Stroke color	Viivan väri
+	Pick screen color	Poimi väri näytöltä
+	Sample a pixel anywhere on the screen	Poimi pikseli mistä tahansa näytöltä
+	Click to pick · Esc to cancel	Poimi napsauttamalla · Esc peruuttaa
+	Pick a screen pixel or press Esc to cancel	Poimi näytön pikseli tai peruuta painamalla Esc
+	Scroll to zoom	Zoomaa vierittämällä
+	Drag to pan · Scroll to zoom · Double-click to fit	Panoroi vetämällä · zoomaa vierittämällä · sovita kaksoisnapsauttamalla
+	Show/Hide All Panels	Näytä/piilota kaikki paneelit
+	Show/Hide Panels	Näytä/piilota paneelit
+	Could not open	Avaaminen epäonnistui
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: polku ei ole kelvollista Unicodea; nimeä tiedosto uudelleen ja avaa se uudestaan.
+	Contents:	Sisältö:
+	Custom Pattern:	Mukautettu kuvio:
+	Foreground Color	Edustaväri
+	Color…	Väri…
+	50% Gray	50 % harmaa
+	Color Adaptation	Värin mukautus
+	{size} (was {old})	{size} (aiemmin {old})
+	Cone	Kartio
+	Cone (Inverted)	Kartio (käänteinen)
+	Domed	Kupera
+	Domed (Inverted)	Kupera (käänteinen)
+	Diagonal (Descending)	Vino (laskeva)
+	Contour Editor	Ääriviivaeditori
+	Anti-aliased	Reunanpehmennetty
+	Corner	Kulma
+	Gloss Contour	Kiillon ääriviiva
+	Contour	Ääriviiva
+	Cone - Inverted	Kartio – käänteinen
+	Cove - Deep	Kouru – syvä
+	Cove - Shallow	Kouru – matala
+	Gaussian	Gaussin
+	Half Round	Puolipyöreä
+	Ring	Rengas
+	Ring - Double	Rengas – kaksois
+	Rolling Slope - Descending	Vierivä rinne – laskeva
+	Rounded Steps	Pyöristetyt portaat
+	Sawtooth 1	Sahalaita 1
+	Red Eye Tool	Punasilmätyökalu
+	Red Eye	Punasilmäisyys
+	Pupil Size	Pupillin koko
+	Darken Amount	Tummennuksen määrä
+	Click a red pupil to neutralize it	Neutraloi punainen pupilli napsauttamalla sitä
+	open source	avoin lähdekoodi
+	…and {n} more	…ja {n} muuta
+	Eyedroppers:	Pipetit:
+	Set Black Point	Aseta mustapiste
+	Set Neutral Gray Point	Aseta neutraali harmaapiste
+	Set White Point	Aseta valkopiste
+	Unavailable in this color mode	Ei käytettävissä tässä väritilassa
+	Selection Preview:	Valinnan esikatselu:
+	Black Matte	Musta matta
+	White Matte	Valkoinen matta
+	Seafoam	Merenvaahto
+	Indigo	Indigo
+	Fuchsia	Fuksia
+	Violet	Violetti
+	Reset	Palauta
+	Large document: redrawing on the CPU	Suuri asiakirja: uudelleenpiirto suorittimella
+	Redrawing	Piirretään uudelleen
+	This redraw took {seconds} s on the CPU.	Tämä uudelleenpiirto kesti {seconds} s suorittimella.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Koko asiakirjaa muuttavat muokkaukset, kuten tason sekoitustila, peittävyys tai näkyvyys, piirtävät sen kokonaan uudelleen.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Sen tasot eivät mahdu GPU:n muistibudjettiin. Muistinkäytön nostaminen kohdassa Asetukset › Suorituskyky kasvattaa budjettia enintään neljännekseen tietokoneen muistista.
+	The GPU compositor wasn't used: {reason}	GPU-koostinta ei käytetty: {reason}
+fontWeight	Thin	Ohut
+fontWeight	ExtraLight	Erittäin kevyt
+fontWeight	Light	Kevyt
+fontWeight	Regular	Normaali
+fontWeight	Medium	Keskivahva
+fontWeight	SemiBold	Puolilihavoitu
+fontWeight	Bold	Lihavoitu
+fontWeight	ExtraBold	Erittäin lihavoitu
+fontWeight	Black	Musta
+fontWeight	Italic	Kursivoitu
+	Pattern Stamp Tool	Kuvioleimasintyökalu
+	Pattern Stamp	Kuvioleimasin
+	Impressionist	Impressionistinen
+	Rotate View	Kierrä näkymää
+	Rotate View Tool	Näkymän kiertotyökalu
+	Reset View	Palauta näkymä
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Kierrä näkymää vetämällä keskipisteen ympäri  ·  Vaihto rajoittaa 15°:n välein
+	Dual Axis	Kaksi akselia
+	Diagonal	Vino
+	Transform Symmetry	Muunnossymmetria
+	Point Sample	Pistenäyte
+	3 by 3 Average	3 × 3 -keskiarvo
+	5 by 5 Average	5 × 5 -keskiarvo
+	11 by 11 Average	11 × 11 -keskiarvo
+	31 by 31 Average	31 × 31 -keskiarvo
+	51 by 51 Average	51 × 51 -keskiarvo
+	101 by 101 Average	101 × 101 -keskiarvo
+	Sample Size:	Näytteen koko:
+	All Layers No Adjustments	Kaikki tasot ilman säätöjä
+	Current & Below No Adjustments	Nykyinen ja alemmat ilman säätöjä
+	Show Sampling Ring	Näytä näytteenottorengas
+	Out of gamut for printing: click for the nearest printable colour	Tulostusvärialueen ulkopuolella: napsauta lähintä tulostettavaa väriä varten
+	Not a web colour: click for the nearest web colour	Ei verkkoväri: napsauta lähintä verkkoväriä varten
+	Color to Alpha…	Väri alfaksi…
+	Transparency Threshold	Läpinäkyvyyden kynnys
+	Opacity Threshold	Peittävyyden kynnys
+	PhotoCraft — Screen Color Picker	PhotoCraft — näytön värinvalitsin
+	Rasterize svg groups deeper than	Rasteroi SVG-ryhmät, jotka ovat syvemmällä kuin
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 poistaa tämän kynnyksen käytöstä; yli 100 tason syvyyteen sisäkkäiset SVG-ryhmät rasteroidaan aina.
+	Rule of Thirds	Kolmanneksen sääntö
+	Triangle	Kolmio
+	Golden Ratio	Kultainen leikkaus
+	Golden Spiral	Kultainen spiraali
+	Auto Show Overlay	Näytä peitto automaattisesti
+	Always Show Overlay	Näytä peitto aina
+	Never Show Overlay	Älä koskaan näytä peittoa
+	Cycle Overlay	Vaihda peittoa
+	Cycle Orientation	Vaihda suuntaa
+	Set the overlay options for the Crop tool	Aseta rajaustyökalun peittoasetukset
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-napsautus meni työpöydälle, joka siirtää ikkunoita Alt-vedolla. Aseta sen ikkunansiirtonäppäimeksi Super tai lukitse Alt kohdassa Ikkuna › Muokkausnäppäimet.
+	Color Picker (Layer Style Color)	Värinvalitsin (tasotyylin väri)
+	Auto Hide Notifications	Piilota ilmoitukset automaattisesti
+	Notification Duration (seconds)	Ilmoituksen kesto (sekuntia)
+	Appearance Mode	Ulkoasutila
+	Dark Theme	Tumma teema
+	Light Theme	Vaalea teema
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Seuraava ulkoasutila
+	Sync with system	Synkronoi järjestelmän kanssa
+	Active	Aktiivinen
+	Color Picker (Solid Color)	Värinvalitsin (tasainen väri)
+	Straighten the image by drawing a line on it	Suorista kuva piirtämällä siihen viiva
+	Set additional Crop options	Aseta lisää rajausasetuksia
+	Show Cropped Area	Näytä rajattu alue
+	Enable Crop Shield	Ota rajaussuoja käyttöön
+	Match Canvas	Vastaa kangasta
+	Auto Adjust Opacity	Säädä peittävyyttä automaattisesti
+	Crop Shield color	Rajaussuojan väri
+	Color Picker (Crop Shield Color)	Värinvalitsin (rajaussuojan väri)
+	From Center	Keskeltä
+	Link radii	Linkitä säteet
+	Star Ratio:	Tähden suhde:
+	Create Rectangle	Luo suorakulmio
+	Create Ellipse	Luo ellipsi
+	Create Triangle	Luo kolmio
+	Create Polygon	Luo monikulmio
+	Pressure curve	Painekäyrä
+	Click to add a point, right-click to remove	Lisää piste napsauttamalla, poista napsauttamalla hiiren kakkospainikkeella
+	Some brush presets could not be loaded	Joitakin sivellinesiasetuksia ei voitu ladata
+	Retry saving presets	Yritä tallentaa esiasetukset uudelleen
+	Brush preset changes are not saved: {error}	Sivellinesiasetusten muutoksia ei ole tallennettu: {error}
+	Keep this tab open to retain your brushes.	Pidä tämä välilehti auki, jotta siveltimet säilyvät.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Selaimen tallennustila ei ole käytettävissä; siveltimet säilyvät vain tämän istunnon ajan. Pidä tämä välilehti auki, jotta ne säilyvät.
+	Saving brush presets… Keep this tab open until saving finishes.	Tallennetaan sivellinesiasetuksia… Pidä tämä välilehti auki, kunnes tallennus on valmis.
+	Reflect	Heijasta
+	Glow	Hehku
+	Negation	Negaatio
+	XOR	XOR
+	Color Burn (Paint.NET)	Värivarjostus (Paint.NET)
+	Color Dodge (Paint.NET)	Värilisävalotus (Paint.NET)
+	Stroke Options	Viiva-asetukset
+	Solid	Yhtenäinen
+	Dashed	Katkoviiva
+	Dotted	Pisteviiva
+	Alignment	Tasaus
+	Caps	Päät
+	Butt / Flat	Tylppä / tasainen
+	Corners	Kulmat
+	Miter	Jiiri
+	Round	Pyöreä
+	Bevel	Viiste
+	Miter limit	Jiirin raja
+	Dashed line	Katkoviiva
+	Dash	Viiva
+	Gap	Väli
+	Dash / gap lengths × stroke width	Viivan/välin pituudet × viivan leveys
+	Add pair	Lisää pari
+	Remove pair	Poista pari
+	Dash offset	Katkoviivan siirtymä
+	Open paths use centered strokes	Avoimet polut käyttävät keskitettyjä viivoja
+	Use finite lengths and a positive pattern total	Käytä äärellisiä pituuksia ja positiivista kuvion kokonaispituutta
+	No subject found — try Object Selection or the Lasso	Kohdetta ei löytynyt – kokeile objektin valintaa tai lassoa
+	Quick Selection found nothing there	Pikavalinta ei löytänyt sieltä mitään
+	Object Selection found nothing there — try a tighter rectangle	Objektin valinta ei löytänyt sieltä mitään – kokeile tiukempaa suorakulmiota
+	No subject found — try a rectangle around the object	Kohdetta ei löytynyt – kokeile suorakulmiota objektin ympärille
+	Auto Erase	Automaattinen pyyhintä
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Napsauta ensimmäistä pistettä tai paina {key} sulkeaksesi · {del} poistaa pisteen · Esc peruuttaa
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Napsauta ja liiku reunaa pitkin · kiinnitä piste napsauttamalla · {alt}-napsautus: suora segmentti · sulje kaksoisnapsauttamalla
+	Follows only edges this close to the pointer ([ and ] change it)	Seuraa vain näin lähellä osoitinta olevia reunoja ([ ja ] muuttavat)
+	Higher values follow only edges that contrast sharply with their surroundings	Suuremmat arvot seuraavat vain reunoja, joilla on terävä kontrasti ympäristöönsä
+	How often fastening points are placed by themselves	Kuinka usein kiinnityspisteitä lisätään automaattisesti
+	Scrubby Zoom	Vetozoomaus
+	{mode} Color · {bits} bit	{mode}-väri · {bits} bittiä
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Vedä rajauslaatikko · siirrä vetämällä sisältä · reunat muuttavat kokoa ({ratio} suhde, {centre} keskeltä) · Välilyönti siirtää piirrettäessä · nuolet siirtävät · X vaihtaa suunnan · {commit} vahvistaa · Esc peruuttaa
+	Appearance Settings…	Ulkoasuasetukset…
+	Add to favorites	Lisää suosikkeihin
+	Remove from favorites	Poista suosikeista
+	Camera Data	Kameran tiedot
+cameraData	Make	Merkki
+cameraData	Model	Malli
+cameraData	Date Taken	Kuvauspäivä
+cameraData	Exposure	Valotus
+cameraData	F-Stop	Aukko
+cameraData	ISO Speed	ISO-herkkyys
+cameraData	Focal Length	Polttoväli
+cameraData	Focal Length (35 mm)	Polttoväli (35 mm)
+cameraData	Lens	Objektiivi
+	Activate Panel	Aktivoi paneeli
+	Change Panel Group	Vaihda paneeliryhmää
+	Change Panel Layout	Muuta paneelin asettelua
+	Close Panel	Sulje paneeli
+	Dock Panel	Telakoi paneeli
+	Float Panel	Irrota paneeli
+	Move Panel	Siirrä paneelia
+	Group with	Ryhmitä kanssa
+	Panel menu	Paneelivalikko
+	Resize panel window	Muuta paneeli-ikkunan kokoa
+	Resize panels	Muuta paneelien kokoa
+	Use Classic Mode	Käytä perinteistä tilaa
+	Auto Center Preview	Keskitä esikatselu automaattisesti
+	Next Document	Seuraava asiakirja
+	Previous Document	Edellinen asiakirja
+	W x H x Resolution	L × K × tarkkuus
+	Front Image	Etummainen kuva
+	Frame Tool	Kehystyökalu
+	Create a new rectangular frame	Luo uusi suorakulmainen kehys
+	Create a new elliptical frame	Luo uusi elliptinen kehys
+	Include in playback	Sisällytä toistoon
+	Perspective Crop Tool	Perspektiivirajaustyökalu
+	Show Grid	Näytä ruudukko
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Vedä laatikko tai napsauta neljää kulmaa · vedä kulmat vinon muodon reunoille · {commit} vahvistaa · Esc peruuttaa
+	Artboard Tool	Piirtoalustatyökalu
+	Make Portrait	Muuta pystysuuntaiseksi
+	Make Landscape	Muuta vaakasuuntaiseksi
+	Add New Artboard	Lisää uusi piirtoalusta
+	W	L
+	H	K
+	Freeform Pen Tool	Vapaan muodon kynätyökalu
+	Curvature Pen Tool	Kaarevuuskynätyökalu
+	Curve Fit:	Käyrän sovitus:
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	Veto: piirrä vapaalla kädellä · {alt}-napsautus: suora segmentti · vapauta aloituspisteessä: sulje
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Napsautus: pyöreä piste · kaksoisnapsautus: kulma · pisteen veto: siirrä · ensimmäisen pisteen napsautus: sulje · {key} lopeta
+	New Crop Preset…	Uusi rajausesiasetus…
+	Delete Crop Preset…	Poista rajausesiasetus…
+	Select the crop presets to delete:	Valitse poistettavat rajausesiasetukset:
+	Select the crop presets to delete	Valitse poistettavat rajausesiasetukset
+	Enter a name for the crop preset	Anna rajausesiasetukselle nimi
+	There is no crop size or ratio to save	Tallennettavaa rajauskokoa tai -suhdetta ei ole
+	Scale:	Skaalaus:
+	Snap to Origin	Tartu origoon
+	Search settings…	Hae asetuksia…
+	No matching settings	Ei vastaavia asetuksia
+	32-bit Preview Options	32-bittisen esikatselun asetukset
+	3D	3D
+	About {app}	Tietoja: {app}
+	Accented Edges	Korostetut reunat
+	Accurate	Tarkka
+	Actual Pixels	Todelliset pikselit
+	Adaptive Wide Angle	Mukautuva laajakulma
+	Add Noise	Lisää kohinaa
+	Add to	Lisää kohteeseen
+	Adjust Interval For Loops	Säädä silmukoiden väliä
+	Adjustment	Säätö
+	Adjustment Layers	Säätötasot
+	Adjustment Properties	Säädön ominaisuudet
+	Adobe RGB (1998)	Adobe RGB (1998)
+	Advanced Blending	Lisäsekoitus
+	After	Jälkeen
+	Alpha	Alfa
+	Alternative	Vaihtoehtoinen
+	Ambience	Tunnelma
+	Ambient	Ympäristö
+	Amplitude Max	Amplitudi enint.
+	Amplitude Min	Amplitudi väh.
+	Angled Strokes	Kulmikkaat vedot
+	Anisotropic	Anisotrooppinen
+	Aperture	Aukko
+	Apply Data Set	Käytä tietojoukkoa
+	Apply Image	Käytä kuvaa
+	Apply Layer Comp	Käytä tasoyhdistelmää
+	Apply Mask	Käytä maskia
+	Arbitrary	Mielivaltainen
+	Arc	Kaari
+	Arch	Holvikaari
+	Area	Alue
+	Around Center	Keskipisteen ympäri
+	Arrangement	Järjestely
+	Artboard from Group	Piirtoalusta ryhmästä
+	Artboard from Layers	Piirtoalusta tasoista
+	Artboards	Piirtoalustat
+	Artist	Taiteilija
+	Artistic	Taiteellinen
+	Assign Profile	Määritä profiili
+	At	Kohdassa
+	Author	Tekijä
+	Auto Scale	Automaattinen skaalaus
+	Auto-Align Layers	Tasaa tasot automaattisesti
+	Auto-Blend Layers	Sekoita tasot automaattisesti
+	Back	Taka
+	Background Level	Taustan taso
+	Bamboo	Bambu
+	Bas Relief	Matala reliefi
+	Base Tree Type	Puun perustyyppi
+	Baseline Shift	Perusviivan siirto
+	Batch	Erä
+	Before	Ennen
+	Berries	Marjat
+	Best	Paras
+	Black Clip	Mustien leikkaus
+	Black Intensity	Mustan voimakkuus
+	Blade Curvature	Terien kaarevuus
+	Blast	Räjähdys
+	Bleach Bypass	Valkaisun ohitus
+	Blend	Sekoitus
+	Blocks	Lohkot
+	Blue Yellow	Sini-keltainen
+	Blur Angle	Sumennuksen kulma
+	Bold Italic	Lihavoitu kursivoitu
+	Border	Reunus
+	Border Thickness	Reunuksen paksuus
+	Box Blur	Laatikkosumennus
+	Branches Color	Oksien väri
+	Branches Height	Oksien korkeus
+	Branches Thickness	Oksien paksuus
+	Brick	Tiili
+	Bristle Detail	Harjasten yksityiskohdat
+	Browse	Selaa
+	Brush Detail	Siveltimen yksityiskohdat
+	Brush Size	Siveltimen koko
+	Brush Strokes	Siveltimenvedot
+	Brush Type	Siveltimen tyyppi
+	Bulge	Pullistuma
+	Burlap	Juuttikangas
+	Calculations	Laskutoimitukset
+	Camera Calibration	Kameran kalibrointi
+	Camera Raw	Camera Raw
+	Camera Raw Filter	Camera Raw -suodin
+	Candle Light	Kynttilänvalo
+	Canvas Size	Kankaan koko
+	Caption	Kuvateksti
+	Category	Luokka
+	Cell Size	Solun koko
+	Center X	Keskipiste X
+	Center Y	Keskipiste Y
+	Chalk & Charcoal	Liitu ja hiili
+	Chalk Area	Liidun alue
+	Channel	Kanava
+	Channel1	Kanava1
+	Channel2	Kanava2
+	Channel3	Kanava3
+	Channel4	Kanava4
+	Charcoal	Hiili
+	Charcoal Area	Hiilen alue
+	Charcoal Thickness	Hiilen paksuus
+	Chrome	Kromi
+	Circle	Ympyrä
+	Circularity	Pyöreys
+	Cleanliness	Puhtaus
+	Clear Amount	Tyhjennyksen määrä
+	Clear Selection	Tyhjennä valinta
+	Clipping Path	Leikkauspolku
+	Clone	Kloonaa
+	Close Window	Sulje ikkuna
+	Clumped	Kasautunut
+	Coarse Dots	Karkeat pisteet
+	Color Decontaminate	Värien puhdistus
+	Color Halftone	Värirasteri
+	Color Lookup Tables	Värien hakutaulukot
+	Color Picker	Värinvalitsin
+	Color Profile	Väriprofiili
+	Color Range	Värialue
+	Color Settings	Väriasetukset
+	Color Swatches	Värimallit
+	Color Table	Väritaulukko
+	Color indicates	Väri osoittaa
+	Colored Pencil	Värikynä
+	Compare	Vertaa
+	Compatibility	Yhteensopivuus
+	Compose	Sommittele
+	Compression	Pakkaus
+	Condensed	Tiivistetty
+	Conditional Mode Change	Ehdollinen tilan muutos
+	Confirm	Vahvista
+	Constraints	Rajoitteet
+	Content-Aware Fill	Sisältötietoinen täyttö
+	Content-Aware Move	Sisältötietoinen siirto
+	Continue	Jatka
+	Contract	Supista
+	Contrasty	Kontrastikas
+	Conté Crayon	Conté-liitu
+	Convert to Linked	Muunna linkitetyksi
+	Convert to Profile	Muunna profiiliin
+	Cool	Viileä
+	Cooling L B B	Viilentävä LBB
+	Cooling80	Viilentävä 80
+	Cooling82	Viilentävä 82
+	Copyright Status	Tekijänoikeuden tila
+	Copyrighted	Tekijänoikeuden alainen
+	Correct C A	Korjaa CA
+	Correct Distortion	Korjaa vääristymä
+	Correct Vignette	Korjaa vinjetti
+	Crack Brightness	Halkeamien kirkkaus
+	Crack Depth	Halkeamien syvyys
+	Crack Spacing	Halkeamien väli
+	Craquelure	Krakelyyri
+	Create By	Luonut
+	Cross	Risti
+	Cross Process	Ristikehitys
+	Crosshatch	Ristiviivoitus
+	Crystallize	Kiteytä
+	Current	Nykyinen
+	Curve Darks	Käyrä: tummat
+	Curve Highlights	Käyrä: korostukset
+	Curve Lights	Käyrä: vaaleat
+	Curve Shadows	Käyrä: varjot
+	Curve Splits	Käyrä: jakopisteet
+	Custom Branch Color	Mukautettu oksien väri
+	Cutout	Leikekuva
+	Daisies	Päivänkakkarat
+	Dark Intensity	Tummien voimakkuus
+	Dark Rough	Tumma karhea
+	Dark Strokes	Tummat vedot
+	Darken Only	Vain tummennus
+	Darkness	Tummuus
+	Data	Tiedot
+	Date	Päivämäärä
+	Date and Time	Päivämäärä ja aika
+	Day For Night	Päivä yöksi
+	De-Interlace	Poista lomitus
+	Deep Blue	Syvä sininen
+	Deep Emerald	Syvä smaragdi
+	Deep Red	Syvä punainen
+	Deep Yellow	Syvä keltainen
+	Default Foreground and Background Colors	Oletusarvoiset edusta- ja taustavärit
+	Default Leaves	Oletuslehdet
+	Defaults	Oletukset
+	Define Brush Preset	Määritä sivellinesiasetus
+	Define Custom Shape	Määritä mukautettu muoto
+	Define Pattern	Määritä kuvio
+	Definition	Määritelmä
+	Defringe	Poista reunaväri
+	Degrees	Astetta
+	Delete Path	Poista polku
+	Depth Map	Syvyyskartta
+	Depth Mode	Syvyystila
+	Diameter	Halkaisija
+	Diffuse	Hajauta
+	Diffuse Glow	Hajautettu hehku
+	Digits	Numerot
+	Direction Balance	Suuntatasapaino
+	Disable	Poista käytöstä
+	Disabled	Ei käytössä
+	Displace	Siirrä pikseleitä
+	Display	Näyttö
+	Distortion	Vääristymä
+	Distribution	Jakauma
+	Documentation	Dokumentaatio
+	Documents	Asiakirjat
+	Dot	Piste
+	Double Line	Kaksoisviiva
+	Draft	Luonnos
+	Dry Brush	Kuiva sivellin
+	Duplicate	Monista
+	Duplicate Layer	Monista taso
+	Duplicate Layer Comp	Monista tasoyhdistelmä
+	Duplicate Layers	Monista tasot
+	Duplicate Path	Monista polku
+	Duplication	Monistus
+	Duration	Kesto
+	Dust & Scratches	Pöly ja naarmut
+	Dynamics	Dynamiikka
+	EXIF	EXIF
+	Edge Brightness	Reunan kirkkaus
+	Edge Extension	Reunan jatke
+	Edge Fidelity	Reunan tarkkuus
+	Edge Intensity	Reunan voimakkuus
+	Edge Only	Vain reuna
+	Edge Simplicity	Reunan yksinkertaisuus
+	Edge Thickness	Reunan paksuus
+	Edge Width	Reunan leveys
+	Elevation	Korkeus
+	Eliminate	Poista
+	Enable	Ota käyttöön
+	End X	Loppu X
+	End Y	Loppu Y
+	Enlarged	Suurennettu
+	Errors	Virheet
+	Even Fields	Parilliset kentät
+	Export As	Vie nimellä
+	Export Contents	Vie sisältö
+	Export Options	Vientiasetukset
+	Export Preferences	Viennin oletusasetukset
+	Export Settings	Vientiasetukset
+	Export/Import Presets	Vie/tuo esiasetukset
+	Extensions	Laajennukset
+	Extra Bold	Erittäin lihavoitu
+	Extra Light	Erittäin kevyt
+	Extrude	Pursota
+	F	F
+	Faded Film	Haalistunut filmi
+	Failed	Epäonnistui
+	Fast	Nopea
+	Fiber Length	Kuidun pituus
+	Fibers	Kuidut
+	Field Blur	Kenttäsumennus
+	File Info	Tiedoston tiedot
+	File Name	Tiedostonimi
+	Filename	Tiedostonimi
+	Fill Color	Täyttöväri
+	Fill Path	Täytä polku
+	Film Grain	Filmin rae
+	Filter Gallery	Suodingalleria
+	Find	Etsi
+	Fine	Hieno
+	Fine Dots	Hienot pisteet
+	Finish	Viimeistely
+	First Line Indent	Ensimmäisen rivin sisennys
+	Fish	Kala
+	Fit Image	Sovita kuva
+	Flag	Lippu
+	Flame	Liekki
+	Flame Bottom Alignment	Liekin alareunan tasaus
+	Flame Lines	Liekkiviivat
+	Flame Shape	Liekin muoto
+	Flame Style	Liekin tyyli
+	Flame Type	Liekin tyyppi
+	Flash	Salama
+	Flat	Tasainen
+	Flat Shading	Tasainen varjostus
+	Flower Color	Kukan väri
+	Focal Distance	Tarkennusetäisyys
+	Focal Length35mm	Polttoväli 35 mm
+	Focus	Tarkennus
+	Focus Area	Tarkennusalue
+	Folder	Kansio
+	Foreground Level	Edustan taso
+	Frame	Kehys
+	Fresco	Fresko
+	From Left	Vasemmalta
+	From Right	Oikealta
+	Frosted	Huurrettu
+	Full Screen	Koko näyttö
+	Fullscreen	Koko näyttö
+	Fuzziness	Sumeus
+	Gamma	Gamma
+	Gaussian Blur	Gaussin sumennus
+	Generators	Generaattorit
+	Generic	Yleinen
+	Glass	Lasi
+	Global Light	Yleinen valo
+	Gloss	Kiilto
+	Glow Amount	Hehkun määrä
+	Glow Brightness	Hehkun kirkkaus
+	Glow Size	Hehkun koko
+	Glowing Edges	Hehkuvat reunat
+	Glyph	Merkki
+	Good	Hyvä
+	Grade Balance	Sävytyksen tasapaino
+	Grade Blending	Sävytyksen sekoitus
+	Grade Global	Sävytys: yleinen
+	Grade Highlights	Sävytys: korostukset
+	Grade Midtones	Sävytys: keskisävyt
+	Grade Shadows	Sävytys: varjot
+	Grain Amount	Rakeen määrä
+	Grain Roughness	Rakeen karheus
+	Grain Size	Rakeen koko
+	Grain Type	Rakeen tyyppi
+	Graininess	Rakeisuus
+	Grainy Dots	Rakeiset pisteet
+	Graphic Pen	Grafiikkakynä
+	Graphic and web	Grafiikka ja verkko
+	Gray Value (Maximum)	Harmaasävyarvo (maksimi)
+	Gray Value (Mean)	Harmaasävyarvo (keskiarvo)
+	Gray Value (Median)	Harmaasävyarvo (mediaani)
+	Gray Value (Minimum)	Harmaasävyarvo (minimi)
+	Group · {n} layer	Ryhmä · {n} taso
+	Groups	Ryhmät
+	Grout Width	Saumalaastin leveys
+	HDR Toning	HDR-sävytys
+	Halftone Pattern	Rasterikuvio
+	Hand	Käsi
+	Heal	Korjaa
+	Healing	Korjaus
+	Hearts	Sydämet
+	Heptagon	Seitsemänkulmio
+	Hexagon	Kuusikulmio
+	Hidden	Piilotettu
+	Hide	Piilota
+	Hide Others	Piilota muut
+	Hide {app}	Piilota {app}
+	High	Korkea
+	High Pass	Ylipäästö
+	Highlight	Korostus
+	Highlight Amount	Korostuksen määrä
+	Highlight Area	Korostuksen alue
+	Highlight Radius	Korostuksen säde
+	Highlight Strength	Korostuksen voimakkuus
+	Highlight Tone	Korostuksen sävy
+	Horizontal Only	Vain vaakasuora
+	Hotspot	Kuuma piste
+	Hsb	HSB
+	Hsl	HSL
+	Hsl Hue	HSL-sävy
+	Hsl Lum	HSL-luminanssi
+	Hsl Sat	HSL-kylläisyys
+	ISO	ISO
+	ISO Speed	ISO-herkkyys
+	Image Balance	Kuvan tasapaino
+	Image Processor	Kuvaprosessori
+	Import Brushes	Tuo siveltimiä
+	In	Sisään
+	In Black	Tulon musta
+	In White	Tulon valkoinen
+	Infinite	Ääretön
+	Inflate	Pullista
+	Information	Tiedot
+	Ink Outlines	Musteääriviivat
+	Input	Tulo
+	Input Mode	Tulotila
+	Integrated Density	Integroitu tiheys
+	Intensity	Voimakkuus
+	Interpolation	Interpolointi
+	Interpret Footage	Tulkitse materiaali
+	Interval	Väli
+	Invert Mask	Käännä maski
+	Iris Blur	Iiris-sumennus
+	Ivy	Muratti
+	Jag	Sahalaita
+	Justification	Tasaus
+	Justify	Tasaa
+	Kernel	Ydin
+	Keyboard	Näppäimistö
+	Keywords	Avainsanat
+	Label	Nimiö
+	Layer Comp	Tasoyhdistelmä
+	Layer Content Options	Tason sisällön asetukset
+	Layer From Background	Taso taustasta
+	Layer Properties	Tason ominaisuudet
+	Leaf Color	Lehden väri
+	Leaves Amount	Lehtien määrä
+	Leaves Color	Lehtien väri
+	Leaves Size	Lehtien koko
+	Left Diagonal	Vasen vinottainen
+	Legacy	Vanha
+	Length	Pituus
+	Lens	Objektiivi
+	Lens Blur	Objektiivisumennus
+	Lens Correction	Objektiivikorjaus
+	Lens Flare	Objektiivin heijastus
+	Less	Vähemmän
+	Letter Spacing	Merkkiväli
+	Level Based	Tasopohjainen
+	Libraries	Kirjastot
+	Library	Kirjasto
+	Ligature	Ligatuuri
+	Light Dark Balance	Vaalea-tumma-tasapaino
+	Light Direction	Valon suunta
+	Light Intensity	Valon voimakkuus
+	Light Rough	Vaalea karhea
+	Light Source	Valonlähde
+	Light Type	Valon tyyppi
+	Light X	Valo X
+	Light Y	Valo Y
+	Light Z	Valo Z
+	Lighten Grout	Vaalenna saumalaasti
+	Lighten Only	Vain vaalennus
+	Lighting	Valaistus
+	Lighting Effects	Valaistustehosteet
+	Linear Dodge	Lineaarinen lisävalotus
+	Liquify	Nesteytä
+	List	Luettelo
+	Load Selection	Lataa valinta
+	Lock Layers	Lukitse tasot
+	Locked	Lukittu
+	Long Lines	Pitkät viivat
+	Long Strokes	Pitkät vedot
+	Loop	Silmukka
+	Low	Matala
+	Lower	Alempi
+	Lum	Luminanssi
+	Lut	LUT
+	Magnetic Lasso	Magneettinen lasso
+	Make	Tee
+	Make Selection	Tee valinta
+	Make Work Path	Tee työpolku
+	Manual	Manuaalinen
+	Map Document	Kartoita asiakirja
+	Map Layer	Kartoita taso
+	Map Path	Kartoita polku
+	Mask	Maski
+	Mask Incomplete Blocks	Peitä keskeneräiset lohkot
+	Masked Areas	Maskatut alueet
+	Masks	Maskit
+	Match Color	Täsmää väri
+	Max Offset	Enimmäissiirtymä
+	Max Radius	Enimmäissäde
+	Measure	Mittaa
+	Medium Dots	Keskikokoiset pisteet
+	Medium Lines	Keskipitkät viivat
+	Medium Strokes	Keskipitkät vedot
+	Metallic	Metallinen
+	Method	Menetelmä
+	Mezzotint	Mezzotinto
+	Middle	Keski
+	Midtone	Keskisävy
+	Mono Contrast	Mono-kontrasti
+	Monochromatic	Yksivärinen
+	More	Lisää
+	Mosaic	Mosaiikki
+	Mosaic Tiles	Mosaiikkilaatat
+	Motion Blur	Liikesumennus
+	Mouse	Hiiri
+	Move Layer	Siirrä tasoa
+	Movie Prime	Elokuva-prime
+	Multiple Flames Along Path	Useita liekkejä polkua pitkin
+	Multiple Flames One Direction	Useita liekkejä yhteen suuntaan
+	Multiple Flames Path Directions	Useita liekkejä polun suuntiin
+	Multiple Flames Various Length	Useita liekkejä eri pituisina
+	Neon Glow	Neonhehku
+	Neutralize	Neutraloi
+	New Channel	Uusi kanava
+	New Group	Uusi ryhmä
+	New Guide	Uusi apuviiva
+	New Guide Layout	Uusi apuviivojen asettelu
+	New Layer Comp	Uusi tasoyhdistelmä
+	New Layer…	Uusi taso…
+	New Video Layer from File	Uusi videotaso tiedostosta
+	New document	Uusi asiakirja
+	New document…     ⌘N	Uusi asiakirja…     ⌘N
+	Next	Seuraava
+	No Document	Ei asiakirjaa
+	No Image	Ei kuvaa
+	Noise Color	Kohinan väri
+	Noise Color Detail	Kohinan värin yksityiskohdat
+	Noise Luminance	Kohinan luminanssi
+	Noise Luminance Detail	Kohinan luminanssin yksityiskohdat
+	Note Paper	Muistiopaperi
+	Number Of Levels	Tasojen määrä
+	Ocean Ripple	Merivaahtoväre
+	Octagon	Kahdeksankulmio
+	Odd Fields	Parittomat kentät
+	Oil Paint	Öljymaalaus
+	On	Päällä
+	One Flame Along Path	Yksi liekki polkua pitkin
+	Open As	Avaa muodossa
+	Open File	Avaa tiedosto
+	Open Folder	Avaa kansio
+	Opening	Avaus
+	Operation	Toiminto
+	Out	Ulos
+	Out Black	Lähdön musta
+	Out From Center	Ulos keskeltä
+	Out White	Lähdön valkoinen
+	Out of memory	Muisti loppui
+	Output Levels	Lähtötasot
+	Oval	Soikio
+	Overlay Edge	Reunan sulautus
+	Package	Paketti
+	Paint Daubs	Maalitäplät
+	Palette Knife	Palettiveitsi
+	Panel	Paneeli
+	Paper Brightness	Paperin kirkkaus
+	Parallel	Rinnakkainen
+	Patch	Paikkaus
+	Patchwork	Tilkkutyö
+	Path Blur	Polkusumennus
+	Pattern Type	Kuvion tyyppi
+	Pen	Kynä
+	Pencil Tool	Lyijykynätyökalu
+	Pencil Width	Lyijykynän leveys
+	Pentagon	Viisikulmio
+	Percentage	Prosenttiosuus
+	Perimeter	Ympärysmitta
+	Permission denied	Käyttöoikeus evätty
+	Perspective Crop	Perspektiivirajaus
+	Phone	Puhelin
+	Photocopy	Valokopio
+	Photomerge	Photomerge
+	Picture Frame	Kuvakehys
+	Pinch	Purista
+	Pins	Nastat
+	Pixel	Pikseli
+	Place Embedded	Sijoita upotettuna
+	Place Linked	Sijoita linkitettynä
+	Place Scale Marker	Sijoita mittakaavamerkki
+	Plane	Taso
+	Planes	Tasot
+	Plaster	Kipsi
+	Plastic Wrap	Muovikalvo
+	Point	Piste
+	Point Curve	Pistekäyrä
+	Point Curve Blue	Pistekäyrä sininen
+	Point Curve Green	Pistekäyrä vihreä
+	Point Curve Red	Pistekäyrä punainen
+	Pointed	Terävä
+	Pointillize	Pointillismi
+	Polar Coordinates	Napakoordinaatit
+	Polar To Rectangular	Napakoordinaateista suorakulmaisiin
+	Pond Ripples	Lammen väreet
+	Poster Edges	Julistereunat
+	Posterization	Posterisointi
+	Preserve	Säilytä
+	Preset Manager	Esiasetusten hallinta
+	Preview Image	Esikatselukuva
+	Previous	Edellinen
+	Prime105	Prime105
+	Prime35	Prime35
+	ProPhoto	ProPhoto
+	Profile	Profiili
+	Public Domain	Vapaa käyttö
+	Punctuation	Välimerkit
+	Pyramids	Pyramidit
+	Quick Selection	Pikavalinta
+	Quit	Lopeta
+	Quit PhotoCraft	Lopeta PhotoCraft
+	Quit {app}	Lopeta {app}
+	RGB	RGB
+	Radial Blur	Säteittäinen sumennus
+	Radius X	Säde X
+	Radius Y	Säde Y
+	Random	Satunnainen
+	Randomize Length	Satunnaista pituus
+	Randomize Shapes	Satunnaista muodot
+	Raw Data	Raakadata
+	Raw Defaults	Raw-oletukset
+	Reading	Luetaan
+	Ready	Valmis
+	Recent Files	Viimeisimmät tiedostot
+	Recovery	Palautus
+	Rectangle	Suorakulmio
+	Rectangular Selection	Suorakulmainen valinta
+	Rectangular To Polar	Suorakulmaisista napakoordinaatteihin
+	Red Cyan	Puna-syaani
+	Reduce Color Noise	Vähennä värikohinaa
+	Reduce Noise	Vähennä kohinaa
+	Relief	Reliefi
+	Relink to File	Linkitä uudelleen tiedostoon
+	Remove All	Poista kaikki
+	Remove Jpeg Artifact	Poista JPEG-artefaktit
+	Rename Brush	Nimeä sivellin uudelleen
+	Rename Group	Nimeä ryhmä uudelleen
+	Rename Layer Comp	Nimeä tasoyhdistelmä uudelleen
+	Render Video	Renderöi video
+	Reorder Layer	Järjestä taso uudelleen
+	Repeat	Toista
+	Replace	Korvaa
+	Replace Color	Korvaa väri
+	Replace Contents	Korvaa sisältö
+	Replace Footage	Korvaa materiaali
+	Reset All	Palauta kaikki
+	Reset Preferences	Palauta oletusasetukset
+	Resolve Missing Fonts	Ratkaise puuttuvat fontit
+	Restart	Käynnistä uudelleen
+	Result	Tulos
+	Resume	Jatka
+	Reticulation	Verkkoutuminen
+	Retry	Yritä uudelleen
+	Rgb	RGB
+	Ridges	Harjanteet
+	Right Diagonal	Oikea vinottainen
+	Ripple	Väre
+	Ripple Magnitude	Väreen voimakkuus
+	Ripple Size	Väreen koko
+	Rise	Nousu
+	Roman	Normaali
+	Rope	Köysi
+	Roses	Ruusut
+	Rough Pastels	Karkeat pastellit
+	Row Order	Rivijärjestys
+	Ruler	Viivain
+	Sample Size	Näytteen koko
+	Sampler	Näytteenotin
+	Sandstone	Hiekkakivi
+	Sat	Kyll.
+	Save As	Tallenna nimellä
+	Save File	Tallenna tiedosto
+	Save Selection	Tallenna valinta
+	Save for Web (Legacy)	Tallenna verkkoon (vanha)
+	Scale Effects	Skaalaa tehosteet
+	Scale Factor	Skaalauskerroin
+	Scale Units	Skaalausyksiköt
+	Scaling	Skaalaus
+	Scallops	Simpukat
+	Script Events Manager	Komentosarjatapahtumien hallinta
+	Search menus	Hae valikoista
+	Seed	Siemen
+	Select All Layers	Valitse kaikki tasot
+	Select Inverse	Käänteinen valinta
+	Select Layer	Valitse taso
+	Select and Mask	Valitse ja maskaa
+	Selected Areas	Valitut alueet
+	Semi Bold	Puolilihavoitu
+	Sepia	Seepia
+	Services	Palvelut
+	Set Colors	Aseta värit
+	Set Measurement Scale	Aseta mittakaava
+	Settings	Asetukset
+	Shadow	Varjo
+	Shadow Amount	Varjon määrä
+	Shadow Intensity	Varjon voimakkuus
+	Shadow Radius	Varjon säde
+	Shadow Tone	Varjon sävy
+	Shadows/Highlights	Varjot/korostukset
+	Shape Blur	Muotosumennus
+	Sharpen Amount	Terävöinnin määrä
+	Sharpen Detail	Terävöinnin yksityiskohta
+	Sharpen Details	Terävöinnin yksityiskohdat
+	Sharpen Masking	Terävöinnin maskaus
+	Sharpen Radius	Terävöinnin säde
+	Sharpness	Terävyys
+	Shear	Leikkausvääristymä
+	Shell Lower	Kuori alempi
+	Shell Upper	Kuori ylempi
+	Shine	Kiilto
+	Short Lines	Lyhyet viivat
+	Short Strokes	Lyhyet vedot
+	Shortcut	Pikanäppäin
+	Shortcuts	Pikanäppäimet
+	Show All	Näytä kaikki
+	Simple	Yksinkertainen
+	Sine	Sini
+	Sketch	Luonnos
+	Skip	Ohita
+	Slice Options	Viipaleen asetukset
+	Smart Blur	Älykäs sumennus
+	Smart Sharpen	Älykäs terävöinti
+	Smoothness	Pehmeys
+	Smudge Stick	Hankaustikku
+	Snapshots	Tilannekuvat
+	Snowflakes	Lumihiutaleet
+	Softness	Pehmeys
+	Software	Ohjelmisto
+	Solid Color	Tasainen väri
+	Solid Front Faces	Kiinteät etupinnat
+	Source Layer	Lähdetaso
+	Sparkle	Kipinöinti
+	Spatter	Roiske
+	Speckle	Pilkutus
+	Speed	Nopeus
+	Spherize	Pallomaista
+	Spin	Pyöritys
+	Spin Blur	Pyörityssumennus
+	Spot	Pistemäinen
+	Spot Color	Spottiväri
+	Spot Healing	Pistekorjaus
+	Spray Radius	Ruiskutuksen säde
+	Sprayed Strokes	Ruiskutetut vedot
+	Sprinkles	Strösselit
+	Square Size	Ruudun koko
+	Squareness	Kulmikkuus
+	Squeeze	Purista kokoon
+	Stagger	Porrasta
+	Stained Glass	Lasimaalaus
+	Stamp	Leimasin
+	Star	Tähti
+	Stars	Tähdet
+	Start X	Alku X
+	Start Y	Alku Y
+	Statistics	Tilastot
+	Step Backward	Askel taaksepäin
+	Stippled	Pisteytetty
+	Stop	Pysäytä
+	Stops	Pysäytyspisteet
+	Strength	Vahvuus
+	Stretch	Venytä
+	Stroke Color	Viivan väri
+	Stroke Detail	Viivan yksityiskohdat
+	Stroke Direction	Viivan suunta
+	Stroke Length	Viivan pituus
+	Stroke Path	Piirrä polun viiva
+	Stroke Pressure	Viivan paine
+	Stroke Size	Viivan koko
+	Stroke Width	Viivan leveys
+	Strokes	Vedot
+	Stylization	Tyylittely
+	Sumi-e	Sumi-e
+	Surface Blur	Pintasumennus
+	Switch Foreground and Background Colors	Vaihda edusta- ja taustaväri keskenään
+	Symbols	Symbolit
+	Tablet	Piirtopöytä
+	Taper	Kavennus
+	Target	Kohde
+	Target X	Kohde X
+	Target Y	Kohde Y
+	Teal Orange	Sinivihreä-oranssi
+	Text Layer	Tekstitaso
+	Texture Coverage	Tekstuurin peitto
+	Texturizer	Tekstuurisoija
+	Thickness	Paksuus
+	Tile Size	Laatan koko
+	Tiles	Laatat
+	Tilt	Kallistus
+	Tilt-Shift	Tilt-shift
+	Time	Aika
+	Timing	Ajoitus
+	Tint Color	Sävytysväri
+	Tiny Lens	Pieni linssi
+	To Center	Keskelle
+	Tone Curve	Sävykäyrä
+	Tool Options	Työkalun asetukset
+	Toolbars	Työkalurivit
+	Torn Edges	Repeytyneet reunat
+	Trace Contour	Jäljitä ääriviiva
+	Transformation	Muunnos
+	Transition	Siirtymä
+	Trap	Ylipainatus
+	Tree	Puu
+	Trim	Rajaa reunat
+	Turbulent	Pyörteinen
+	Twirl	Pyörre
+	Twist	Kierre
+	Unaltered	Muuttamaton
+	Undefined Areas	Määrittämättömät alueet
+	Underpainting	Pohjamaalaus
+	Underwater	Vedenalainen
+	Ungroup	Pura ryhmitys
+	Uniform	Tasainen
+	Units	Yksiköt
+	Unix	Unix
+	Unknown	Tuntematon
+	Unlock	Avaa lukitus
+	Unlocked	Lukitsematon
+	Unsharp Mask	Epäterävä maski
+	Update	Päivitä
+	Update Layer Comp	Päivitä tasoyhdistelmä
+	Updates	Päivitykset
+	Upper	Ylempi
+	Use Custom Color	Käytä mukautettua väriä
+	Use Selection In Source	Käytä valintaa lähteessä
+	Use Selection In Target	Käytä valintaa kohteessa
+	Vanishing Point	Katoamispiste
+	Variable Data Sets	Muuttuvat tietojoukot
+	Vertical Only	Vain pystysuora
+	Vertical Type Tool	Pystytekstityökalu
+	Video Frames to Layers	Videokehykset tasoiksi
+	Vignette Amount	Vinjetin määrä
+	Vignette Feather	Vinjetin reunojen pehmennys
+	Vignette Highlights	Vinjetin korostukset
+	Vignette Midpoint	Vinjetin keskipiste
+	Vignette Roundness	Vinjetin pyöreys
+	Vignette Style	Vinjetin tyyli
+	Vine Color	Köynnöksen väri
+	Vine With Flowers	Köynnös kukilla
+	Vine With Leaves	Köynnös lehdillä
+	Violent	Raju
+	Wand	Sauva
+	Warm	Lämmin
+	Warming L B A	Lämmittävä LBA
+	Warming81	Lämmittävä 81
+	Warming85	Lämmittävä 85
+	Warmth	Lämpö
+	Warning	Varoitus
+	Warp Text	Vääristä tekstiä
+	Water Paper	Vesipaperi
+	Watercolor	Vesiväri
+	Wave	Aalto
+	Wavelength Max	Aallonpituus enint.
+	Wavelength Min	Aallonpituus väh.
+	Waves	Aallot
+	Wetness	Märkyys
+	White Clip	Valkoisten leikkaus
+	White Intensity	Valkoisen voimakkuus
+	White Is High	Valkoinen on korkea
+	Wide Blurry	Leveä sumea
+	Wide Sharp	Leveä terävä
+	Wind	Tuuli
+	Working	Työskennellään
+	Workspaces	Työtilat
+	Wrap	Kiedo
+	X	X
+	Y	Y
+	ZigZag	Siksak
+	Zigzag	Siksak
+	sRGB	sRGB
+	sRGB IEC61966-2.1	sRGB IEC61966-2.1
+	shortcut	pikanäppäin
+@id	filter.sharpen.sharpen	Terävöitä
+cameraRaw	Amount	Määrä
+cameraRaw	Blacks	Mustat
+cameraRaw	Color Detail	Värin yksityiskohdat
+cameraRaw	Color Grading	Värisävytys
+cameraRaw	Darks	Tummat
+cameraRaw	Global	Yleinen
+cameraRaw	Hue	Sävy
+cameraRaw	Lights	Vaaleat
+cameraRaw	Luminance Detail	Luminanssin yksityiskohdat
+cameraRaw	Masking	Maskaus
+cameraRaw	Roughness	Karheus
+cameraRaw	Tint	Sävy
+cameraRaw	Vibrance	Eloisuus
+cameraRaw	Whites	Valkoiset
+layerLabel	No Color	Ei väriä
+	Loading fonts…	Ladataan fontteja…
+	Simulate Pressure	Simuloi painetta
+	Background Eraser	Taustan pyyhekumi
+	Healing Brush	Korjaussivellin
+	Spot Healing Brush	Pistekorjaussivellin
+	Smudge	Hankaa
+	Amount:	Määrä:
+	Protect:	Suojaa:
+	Protect skin tones	Suojaa ihonsävyt
+	Edit points to modify the curve	Muokkaa käyrää muokkaamalla pisteitä
+	Draw to modify the curve	Muokkaa käyrää piirtämällä
+curves	Smooth	Tasoita
+	Smooth the curve values	Tasoita käyrän arvot
+	Drag to draw the curve · {key}-click draws a straight line	Piirrä käyrä vetämällä · {key}-napsautus piirtää suoran viivan
+	Edit Plane	Muokkaa tasoa
+	Create Plane	Luo taso
+	Grid Size:	Ruudukon koko:
+	Vanishing Point: click four corners to create a plane	Katoamispiste: luo taso napsauttamalla neljää kulmaa
+	Vanishing Point is not active	Katoamispiste ei ole aktiivinen
+	Apply Vanishing Point ({key})	Käytä katoamispistettä ({key})
+	Fix the red plane first: its corners must form a convex quad	Korjaa ensin punainen taso: sen kulmien on muodostettava kupera nelikulmio
+	Onion Skin	Sipulinkuori
+	Marching Ants	Marssivat muurahaiset
+	On Black	Mustalla
+	On White	Valkoisella
+	On Layers	Tasojen päällä
+	Show Edge	Näytä reuna
+	Show Original	Näytä alkuperäinen
+	F cycles the views; hold X to see the image	F vaihtaa näkymää; pidä X painettuna nähdäksesi kuvan
+	Refine Edge Brush (R)	Reunan tarkennussivellin (R)
+	Expand Detection Area	Laajenna tunnistusaluetta
+	Restore Original Edge	Palauta alkuperäinen reuna
+	Paint over hair or fur on the image; Alt paints the other mode	Maalaa kuvan hiusten tai turkin päälle; Alt maalaa toisessa tilassa
+	Clear Brush Strokes	Tyhjennä siveltimenvedot
+	Show rulers	Näytä viivaimet
+	Presentation	Esitys
+	Click to place · Alt-click or drag off-canvas to remove	Sijoita napsauttamalla · poista Alt-napsautuksella tai vetämällä kankaan ulkopuolelle
+	No document open	Ei avointa asiakirjaa
+	{n} of {max} sample points	{n}/{max} näytepistettä
+	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Vedä (lasso) tai napsauta pisteitä (monikulmio) · {add} lisää · {sub} vähennä
+	The current gradient (pick one in Window › Gradients)	Nykyinen liukuväri (valitse kohdassa Ikkuna › Liukuvärit)
+	Make Work Path…	Tee työpolku…
+	Create Vector Mask	Luo vektorimaski
+	Make Selection…	Tee valinta…
+	Fill Path…	Täytä polku…
+	Stroke Path…	Piirrä polun viiva…
+	Clipping Path…	Leikkauspolku…
+	Free Transform Path	Polun vapaa muunnos
+	Unite Shapes at Overlap	Yhdistä muodot päällekkäisyydessä
+	Subtract Shapes at Overlap	Vähennä muodot päällekkäisyydessä
+	Copy Fill	Kopioi täyttö
+	Copy Complete Stroke	Kopioi koko viiva
+	Paste Fill	Liitä täyttö
+	Paste Complete Stroke	Liitä koko vedos
+	Make Symmetry Path	Tee symmetriapolku
+	Disable Symmetry Path	Poista symmetriapolku käytöstä
+	Dark Gray	Tummanharmaa
+	Medium Gray	Keskiharmaa
+	Light Gray	Vaaleanharmaa
+	Select Custom Color…	Valitse mukautettu väri…
+	Color Picker (Custom Canvas Color)	Värinvalitsin (mukautettu kankaan väri)
+	Duplicate Channel	Monista kanava
+	Delete Channel	Poista kanava
+	Rename Channel…	Nimeä kanava uudelleen…
+	Merge Spot Channel	Yhdistä spottivärikanava
+	Convert to Alpha Channel	Muunna alfakanavaksi
+	Exit Quick Mask	Poistu pikamaskista
+	New Channel…	Uusi kanava…
+	New Spot Channel…	Uusi spottivärikanava…
+	Split Channels	Erota kanavat
+	Merge Channels…	Yhdistä kanavat…
+	Color Indicates Masked Areas	Väri osoittaa maskatut alueet
+	Color Indicates Selected Areas	Väri osoittaa valitut alueet
+	✓ Color Indicates Masked Areas	✓ Väri osoittaa maskatut alueet
+	✓ Color Indicates Selected Areas	✓ Väri osoittaa valitut alueet
+	Up	Ylös
+	To	Kohde
+	Shallow	Matala
+	Deep	Syvä
+	Blend Interior Effects as Group	Sekoita sisäiset tehosteet ryhmänä
+	Blend Clipped Layers as Group	Sekoita leikatut tasot ryhmänä
+	Transparency Shapes Layer	Läpinäkyvyys muotoilee tason
+	Layer Mask Hides Effects	Tasomaski piilottaa tehosteet
+	Vector Mask Hides Effects	Vektorimaski piilottaa tehosteet
+	General Blending	Yleinen sekoitus
+	This Layer:	Tämä taso:
+	Underlying Layer:	Alla oleva taso:
+	Nothing to paste: the clipboard holds no image	Ei liitettävää: leikepöydällä ei ole kuvaa
+	Preferences saved	Asetukset tallennettu
+	Invalid panel layout; restored the default dock	Virheellinen paneeliasettelu; oletustelakka palautettu
+@plural	{n} sample point removed|{n} sample points removed	{n} näytepiste poistettu|{n} näytepistettä poistettu
+	Preferences were reset: {error}	Asetukset palautettiin oletuksiin: {error}
+	Recovered {name}	Palautettu {name}
+	Couldn't save preferences: {error}. Retrying…	Asetuksia ei voitu tallentaa: {error}. Yritetään uudelleen…
+	Autosave failed: {error}	Automaattinen tallennus epäonnistui: {error}
+	Exported presets to {path}	Esiasetukset viety kohteeseen {path}
+	Ran script {name}	Komentosarja {name} suoritettu
+	Sent to the printer ({spooler})	Lähetetty tulostimelle ({spooler})
+	Printed to {path}	Tulostettu kohteeseen {path}
+	Exported {path} ({size})	Viety {path} ({size})
+	Exported {path}	Viety {path}
+	Added swatch {name}	Värimalli {name} lisätty
+	Step {step} ({id}) failed: {error}	Vaihe {step} ({id}) epäonnistui: {error}
+	Could not rename the action: {error}	Toimintoa ei voitu nimetä uudelleen: {error}
+	Action playback failed: {error}	Toiminnon toisto epäonnistui: {error}
+	Clone source set at {x}, {y}	Kloonauslähde asetettu kohtaan {x}, {y}
+	Color management: {error}	Värinhallinta: {error}
+	Opened {url}	Avattu {url}
+	No custom shape "{name}": pick one in the options bar or Window › Shapes	Mukautettua muotoa ”{name}” ei ole: valitse muoto asetuspalkista tai kohdasta Ikkuna › Muodot
+	Saved a copy as {path}	Kopio tallennettu nimellä {path}
+	Exported contents to {path}	Sisältö viety kohteeseen {path}
+	{label} is not available: {reason}	{label} ei ole käytettävissä: {reason}
+	Saved {path}; image assets: {n} in {dir}	Tallennettu {path}; kuvaresurssit: {n} kansiossa {dir}
+@plural	Played {n} step|Played {n} steps	Toistettiin {n} vaihe|Toistettiin {n} vaihetta
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Päivitettiin {n} levyllä muuttunut linkitetty älykäs objekti|Päivitettiin {n} levyllä muuttunutta linkitettyä älykästä objektia
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Tallennettu verkkokäyttöön: {n} tiedosto|Tallennettu verkkokäyttöön: {n} tiedostoa
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Tuotiin {n} sivellin ryhmästä {group}|Tuotiin {n} sivellintä ryhmästä {group}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Tuotiin {n} värimalli tiedostosta {file}|Tuotiin {n} värimallia tiedostosta {file}
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Vietiin {n} värimalli tiedostoon {file}|Vietiin {n} värimallia tiedostoon {file}
+	{message} (notes: {n}; {warning})	{message} (huomautuksia: {n}; {warning})
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} muu sivellinesiasetuksen varoitus)|{warning} (+{n} muuta sivellinesiasetusten varoitusta)
+	Preferences can't be saved	Asetuksia ei voi tallentaa
+	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	PhotoCraft yrittää uudelleen; ennen onnistunutta tallennusta tehdyt asetusmuutokset menetetään, kun sovellus suljetaan.
+	GPU retry scheduled	GPU:n uusi yritys ajastettu
+	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	Tallenna työsi ja käynnistä PhotoCraft uudelleen, niin GPU-kiihdytystä yritetään uudelleen. CPU-renderöinti pysyy käytössä tämän istunnon ajan.
+	GPU device was lost; using the CPU renderer.	GPU-laite menetettiin; käytetään CPU-renderöijää.
+	GPU error; using the CPU renderer.	GPU-virhe; käytetään CPU-renderöijää.
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} varoitus|{what}, {n} varoitusta
+	Couldn't open {name}: {error}	Kohdetta {name} ei voitu avata: {error}
+	Toggle the Brush Settings panel	Näytä/piilota Sivellinasetukset-paneeli
+	New Brush Preset	Uusi sivellinesiasetus
+	Grid view	Ruudukkonäkymä
+	List view	Luettelonäkymä
+	{verb} {mask} {layer}	{verb} {mask} {layer}
+	Unlink	Poista linkitys
+	Link	Linkitä
+	layer mask	tasomaski
+	vector mask	vektorimaski
+	Commit transform	Vahvista muunnos
+	Cancel transform	Peruuta muunnos
+	Scroll menu up	Vieritä valikkoa ylös
+	Scroll menu down	Vieritä valikkoa alas
+	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Tämä tekstitaso on rasteroitava ennen jatkamista. Sen tekstiä ei voi enää muokata. Rasteroidaanko teksti?
+	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Tämä muototaso on rasteroitava ennen jatkamista. Sitä ei voi enää muokata muotona. Rasteroidaanko muoto?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Tämä älykäs objekti on rasteroitava ennen jatkamista. Sen sisältöä ei voi enää muokata. Rasteroidaanko älykäs objekti?
+	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Tämä täyttötaso on rasteroitava ennen jatkamista. Sen täyttösisältöä ei voi enää muokata. Rasteroidaanko taso?
+	This layer must be rasterized before proceeding.	Tämä taso on rasteroitava ennen jatkamista.
+	Color Picker (Background Color)	Värinvalitsin (taustaväri)
+	Color Picker (Foreground Color)	Värinvalitsin (edustaväri)
+	Adwaita (Light)	Adwaita (vaalea)
+	Adwaita (Dark)	Adwaita (tumma)
+	Breeze Light	Breeze Light
+	Breeze Dark	Breeze Dark
+	Solarized Dark	Solarized Dark
+	Open Recent is unavailable on the web	Avaa viimeisimmät ei ole käytettävissä verkossa
+	Graphics adapter: {adapter}	Näytönohjain: {adapter}
+	Backend: {backend} ({type})	Taustajärjestelmä: {backend} ({type})
+	Driver: {driver}	Ajuri: {driver}
+	GPU backend preference: {backend}	Ensisijainen GPU-taustajärjestelmä: {backend}
+	Selected at launch: {backend}	Valittu käynnistyksessä: {backend}
+	Image compositor: {processor}	Kuvan koostaja: {processor}
+	Fallback: {reason}	Varajärjestelmä: {reason}
+	This session: {reason}	Tämä istunto: {reason}
+	Window renderer: {renderer}	Ikkunan renderöijä: {renderer}
+	Software adapter	Ohjelmistosovitin
+	Graphics adapter	Näytönohjain
+	unknown	tuntematon
+	unknown type	tuntematon tyyppi
+	auto	automaattinen
+	Platform: {os} {arch}	Alusta: {os} {arch}
+	previous reading kept; the last re-read failed: {reason}	edellinen lukema säilytetty; viimeisin uudelleenluku epäonnistui: {reason}
+	Monitor profile: {profile}	Näyttöprofiili: {profile}
+	Display profiles: {reason}	Näyttöprofiilit: {reason}
+	Monitor profile in use on {display}: {profile}	Käytössä oleva näyttöprofiili näytöllä {display}: {profile}
+	Monitor profile in use: {profile}	Käytössä oleva näyttöprofiili: {profile}
+	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	Kangas näytetään sRGB-muodossa. Valitse näyttöprofiili kohdassa Muokkaa › Väriasetukset.
+	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	Näytön {display} kangas näytetään sRGB-muodossa. Valitse näyttöprofiili kohdassa Muokkaa › Väriasetukset.
+	Display profile not used	Näyttöprofiilia ei käytetä
+	Monitor profile on {display} (main window): {profile}	Näyttöprofiili näytöllä {display} (pääikkuna): {profile}
+	Monitor profile on {display}: {profile}	Näyttöprofiili näytöllä {display}: {profile}
+	manual	manuaalinen
+	fallback	varajärjestelmä
+	Importing {what} from {file}…	Tuodaan {what} tiedostosta {file}…
+	brushes	siveltimet
+	gradients	liukuvärit
+@plural	Imported {n} brush from {file}|Imported {n} brushes from {file}	Tuotiin {n} sivellin tiedostosta {file}|Tuotiin {n} sivellintä tiedostosta {file}
+@plural	Imported {n} gradient from {file}|Imported {n} gradients from {file}	Tuotiin {n} liukuväri tiedostosta {file}|Tuotiin {n} liukuväriä tiedostosta {file}
+@plural	Imported {n} pattern from {file}|Imported {n} patterns from {file}	Tuotiin {n} kuvio tiedostosta {file}|Tuotiin {n} kuviota tiedostosta {file}
+	Data Set: {name}  ({index}/{total})	Tietojoukko: {name}  ({index}/{total})
+	(none)	(ei mitään)
+navigator	Zoom	Zoomaus
+@plural	{n} plane|{n} planes	{n} pinta|{n} pintaa
+@plural	{n} slice|{n} slices	{n} viipale|{n} viipaletta
+@plural	{n} preset|{n} presets	{n} esiasetus|{n} esiasetusta
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} tämän koosteen tallentama taso on poistettu. Päivitä kooste tai poista varoitus.|{n} tämän koosteen tallentamaa tasoa on poistettu. Päivitä kooste tai poista varoitus.
+	Apply {option}: {state}	Käytä {option}: {state}
+	on	päällä
+	off	pois
+	This adjustment ({key}) is kept as imported and can't be edited yet.	Tämä säätö ({key}) säilytetään tuotuna, eikä sitä voi vielä muokata.
+	Join the ArtCraft Discord ({url})	Liity ArtCraftin Discordiin ({url})
+	{index} of {total}	{index}/{total}
+@plural	{n} step|{n} steps	{n} vaihe|{n} vaihetta
+	{shortcut} assigned.	{shortcut} määritetty.
+	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} on jo käytössä komennolla {commands}, ja se poistetaan siltä, kun napsautat OK.
+	Emulsion Down	Emulsio alaspäin
+	Functions	Toiminnot
+	Print Resolution:	Tulostustarkkuus:
+	Use Previous Layer to Create Clipping Mask	Luo leikkausmaski edellisen tason avulla
+	Fill with {mode}-neutral color (white)	Täytä {mode}-neutraalilla värillä (valkoinen)
+	Fill with {mode}-neutral color (black)	Täytä {mode}-neutraalilla värillä (musta)
+	Fill with {mode}-neutral color (50% gray)	Täytä {mode}-neutraalilla värillä (50 % harmaa)
+	(No neutral color exists for {mode} mode.)	(Tilalle {mode} ei ole neutraalia väriä.)
+	Apply mask to layer before removing?	Käytetäänkö maskia tasoon ennen poistamista?
+	The layer or its mask changed. Drag the mask onto the Trash again.	Taso tai sen maski muuttui. Vedä maski uudelleen roskakoriin.
+	Delete the vector mask?	Poistetaanko vektorimaski?
+	Light Blue	Vaaleansininen
+	Light Red	Vaalea punainen
+	Medium Blue	Keskisininen
+	Object Finder	Objektien etsijä
+	No object found there — drag a rectangle around it	Kohdasta ei löytynyt objektia — vedä suorakulmio sen ympärille
+	Remove after each stroke	Poista jokaisen vedon jälkeen
+	Apply the removal ({key})	Käytä poistoa ({key})
+	Strokes to remove: {n} (Enter applies, Esc cancels)	Poistettavat vedot: {n} (Enter käyttää, Esc peruuttaa)
+	Clear Brush Controls	Tyhjennä sivellinsäätimet
+	Reset All Locked Settings	Palauta kaikki lukitut asetukset
+	Copy Texture to Other Tools	Kopioi tekstuuri muihin työkaluihin
+	Load Actions…	Lataa toiminnot…
+	Save Actions…	Tallenna toiminnot…
+	{name} (Photoshop)	{name} (Photoshop)
+	{message} ({note})	{message} ({note})
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	Ladattiin {n} toiminto tiedostosta {file}|Ladattiin {n} toimintoa tiedostosta {file}
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} vaiheelle ei ole vielä PhotoCraft-vastinetta|{n} vaiheelle ei ole vielä PhotoCraft-vastinetta
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	Tallennettiin {n} toiminto tiedostoon {file}|Tallennettiin {n} toimintoa tiedostoon {file}
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Jätettiin pois {n} vaihe, jolla ei ole Photoshop-vastinetta|Jätettiin pois {n} vaihetta, joilla ei ole Photoshop-vastinetta
+	File Naming	Tiedostojen nimeäminen
+	Starting serial	Aloitusnumero
+	Insert Stop…	Lisää pysäytys…
+	Save Set…	Tallenna sarja…
+	Message:	Viesti:
+	Allow Continue	Salli jatkaminen
+	Show dialog during playback	Näytä valintaikkuna toiston aikana
+	Select an action first	Valitse ensin toiminto
+	Action playback stopped	Toiminnon toisto pysäytetty
+	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
+@plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
+	Auto Add/Delete	Automaattinen lisäys/poisto
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Älä valitse myös Peilikuva-asetusta kohdassa Tulostusasetukset…: kaksi peilausta kumoaa toisensa.
+	Print Settings…	Tulostusasetukset…
+	Remember to turn off the printer's own colour management in Print Settings…	Muista poistaa tulostimen oma värinhallinta käytöstä kohdassa Tulostusasetukset…
+	Sent to {printer}	Lähetetty tulostimelle {printer}
+	set in Print Settings…	asetetaan kohdassa Tulostusasetukset…
+	ICO is limited to 256 × 256 pixels	ICO on rajoitettu kokoon 256 × 256 pikseliä
+	Clone Stamp	Kloonausleimasin
+	Dodge	Vaalenna
+	Burn	Tummenna
+	History Brush	Historiasivellin
+	Tool	Työkalu
+	Sponge	Sieni
+	Export As: {name}	Vie nimellä: {name}
+	Color Sampler Tool	Värinäytetyökalu
+	Proof Setup…	Vedosasetukset…
+	Toggle Layer Mask Overlay	Näytä/piilota tasomaskin peittokuva
+	Increase Type Size	Suurenna tekstin kokoa
+	Decrease Type Size	Pienennä tekstin kokoa
+	Increase Type Size by 10	Suurenna tekstin kokoa 10:llä
+	Decrease Type Size by 10	Pienennä tekstin kokoa 10:llä
+	Make Selection from Path	Tee valinta polusta
+	Target Composite Channel	Kohdista yhdistelmäkanavaan
+	Target Channel 3	Kohdista kanavaan 3
+	Target Channel 4	Kohdista kanavaan 4
+	Target Channel 5	Kohdista kanavaan 5
+	Target Channel 6	Kohdista kanavaan 6
+	Target Channel 7	Kohdista kanavaan 7
+	Target Channel 8	Kohdista kanavaan 8
+	Target Channel 9	Kohdista kanavaan 9
+	Fill with Foreground Color	Täytä edustavärillä
+	Fill with Background Color	Täytä taustavärillä
+	Fill with Foreground Color, Preserve Transparency	Täytä edustavärillä, säilytä läpinäkyvyys
+	Fill with Background Color, Preserve Transparency	Täytä taustavärillä, säilytä läpinäkyvyys
+	Decrease Brush Size	Pienennä siveltimen kokoa
+	Increase Brush Size	Suurenna siveltimen kokoa
+	Decrease Brush Hardness	Vähennä siveltimen kovuutta
+	Increase Brush Hardness	Lisää siveltimen kovuutta
+	Temporary	Väliaikainen
+	Space	Välilyönti
+	Hand Tool (hold)	Käsityökalu (pidä painettuna)
+	Zoom In (hold, drag to scrub)	Lähennä (pidä painettuna, vedä säätääksesi)
+	Zoom Out (hold)	Loitonna (pidä painettuna)
+	Erase with Brush or Pencil (hold)	Pyyhi siveltimellä tai lyijykynällä (pidä painettuna)
+	Author Title	Tekijän titteli
+	Copyright Url	Tekijänoikeus-URL
+	Title	Otsikko
+	Working-cmyk	Työ-CMYK
+	Coated-cmyk	Päällystetty CMYK
+	Linear-srgb	Lineaarinen sRGB
+	Gray-gamma-2.2	Harmaa, gamma 2.2
+	Adobe-rgb-compat	Adobe RGB -yhteensopiva
+	Prophoto-compat	ProPhoto-yhteensopiva
+	Display-p3	Display P3
+	Intent	Muuntotapa
+	Bpc	BPC
+	Simulate Paper	Simuloi paperi
+	Warming Filter (85)	Lämmityssuodin (85)
+	Cw	Myötäpäivään
+	Ccw	Vastapäivään
+	Nearest	Lähin
+	Mask Channel	Maskikanava
+	R G B	R G B
+	Source Channel	Lähdekanava
+	Source Invert	Käänteinen lähde
+	Source1 Channel	Lähteen 1 kanava
+	Source1 Invert	Käänteinen lähde 1
+	Source2 Channel	Lähteen 2 kanava
+	Source2 Invert	Käänteinen lähde 2
+	W:	L:
+	A:	K:
+	Pattern Fill…	Kuviotäyttö…
+	Any	Mikä tahansa
+	Cmyk	CMYK
+	Dont Enlarge	Älä suurenna
+	Change Find	Etsi ja muuta
+	Case Sensitive	Sama kirjainkoko
+	Whole Word	Koko sana
+	Forward	Eteenpäin
+	Based On	Perustuu
+	Checkerboard	Shakkiruudukko
+	Arc Lower	Alakaari
+	Arc Upper	Yläkaari
+	Bend	Taivutus
+	Horizontal Distortion	Vaakavääristymä
+	Vertical Distortion	Pystyvääristymä
+	Preferences…	Asetukset…
+	Clipping Mask	Leikkausmaski
+	Import…	Tuo…
+	Invert Selection	Käännä valinta
+	Input Levels	Syötetasot
+	Layer Styles	Tasotyylit
+	Blending Mode	Sekoitustila
+	Adjustment Layer	Säätötaso
+	File Format	Tiedostomuoto
+	Snap to Grid	Kohdista ruudukkoon
+	Step Forward	Askel eteenpäin
+	Lock Transparent Pixels	Lukitse läpinäkyvät pikselit
+	Lock Image Pixels	Lukitse kuvapikselit
+	Lock Position	Lukitse sijainti
+	Lock All	Lukitse kaikki
+	Show Rulers	Näytä viivaimet
+	Guide Layout…	Apuviiva-asettelu…
+	Page Setup…	Sivun asetukset…
+	Check for Updates	Tarkista päivitykset
+	Loading…	Ladataan…
+	Processing…	Käsitellään…
+	Saving…	Tallennetaan…
+	Exporting…	Viedään…
+	Please wait…	Odota…
+	No selection	Ei valintaa
+	No layers	Ei tasoja
+	No recent files	Ei viimeisimpiä tiedostoja
+	Unsupported file format	Tiedostomuotoa ei tueta
+	Failed to open file	Tiedoston avaaminen epäonnistui
+	Failed to save file	Tiedoston tallentaminen epäonnistui
+	Operation canceled	Toiminto peruttu
+	Changes have not been saved.	Muutoksia ei ole tallennettu.
+	Are you sure?	Oletko varma?
+	Discard Changes	Hylkää muutokset
+	Save Changes	Tallenna muutokset
+	Rendering…	Renderöidään…
+	Importing…	Tuodaan…
+	Apply to All	Käytä kaikkiin
+	Delete…	Poista…
+	Create…	Luo…
+	Edit…	Muokkaa…
+	Change…	Muuta…
+	Sensitivity	Herkkyys
+	Feather Radius	Pehmennyssäde
+	Add Mask	Lisää maski
+	Delete Mask	Poista maski
+	Enable Mask	Ota maski käyttöön
+	Disable Mask	Poista maski käytöstä
+	Import Settings	Tuo asetukset
+	Hide Grid	Piilota ruudukko
+	Fit to Window	Sovita ikkunaan
+	Live Preview	Reaaliaikainen esikatselu
+	File Size	Tiedostokoko
+	Choose Folder	Valitse kansio
+	Learn More	Lisätietoja
+	Report a Bug	Ilmoita virheestä
+	Restart Required	Uudelleenkäynnistys tarvitaan
+	New Window	Uusi ikkuna
+	Open Image	Avaa kuva
+	Save Image	Tallenna kuva
+	Export Image	Vie kuva
+	Import Image	Tuo kuva
+	Export to	Vie kohteeseen
+	Import Options	Tuontiasetukset
+	No Selection	Ei valintaa
+	No Layers	Ei tasoja
+	No Results	Ei tuloksia
+	No Results Found	Tuloksia ei löytynyt
+	Nothing to Undo	Ei kumottavaa
+	Nothing to Redo	Ei uudelleen tehtävää
+	Changes Saved	Muutokset tallennettu
+	Unsaved Changes	Tallentamattomat muutokset
+	Save before closing?	Tallennetaanko ennen sulkemista?
+	Are you sure you want to quit?	Haluatko varmasti lopettaa?
+	The file could not be opened.	Tiedostoa ei voitu avata.
+	The file could not be saved.	Tiedostoa ei voitu tallentaa.
+	Unsupported format	Muotoa ei tueta
+	File not found	Tiedostoa ei löytynyt
+	Operation failed	Toiminto epäonnistui
+	Operation completed	Toiminto valmis
+	Operation cancelled	Toiminto peruttu
+	Fill Light	Täytevalo
+	Convert to Grayscale	Muunna harmaasävyiseksi
+	Color Noise Reduction	Värikohinan vähennys
+	Luminance Smoothness	Luminanssin tasaisuus
+	Aspect Ratio	Kuvasuhde
+	Enter description…	Kirjoita kuvaus…
+	Industry Standard	Alan standardi
+	Uncoated CMYK	Päällystämätön CMYK
+	Working Spaces	Työväriavaruudet
+	Color Management Policies	Värinhallintakäytännöt
+	Detect Faces	Tunnista kasvot
+	Localize Color Clusters	Paikallista väriryhmät
+	Duplicated selection name	Valinnan nimi on jo käytössä
+	New channel only	Vain uusi kanava
+	Create Snapshot	Luo tilannevedos
+	Delete Snapshot	Poista tilannevedos
+	New Snapshot	Uusi tilannevedos
+	Snapshot 1	Tilannevedos 1
+	Nonlinear History	Epälineaarinen historia
+	Set New Snapshot as Default	Aseta uusi tilannevedos oletukseksi
+	Automatically Create First Snapshot	Luo ensimmäinen tilannevedos automaattisesti
+	Automatically Create New Snapshot When Saving	Luo uusi tilannevedos automaattisesti tallennettaessa
+	Show New Snapshot Dialog by Default	Näytä uuden tilannevedoksen valintaikkuna oletuksena
+	Clear History	Tyhjennä historia
+	Panel Options…	Paneelin asetukset…
+	View menu	Näytä-valikko
+	Keep view in sync	Pidä näkymä synkronoituna
+	Mouse Controls	Hiiren ohjaimet
+	Initial Direction of Stroke	Vedon alkusuunta
+	Direction of Stroke	Vedon suunta
+	Humidity	Kosteus
+	Auto Clean Brush	Puhdista sivellin automaattisesti
+	New Layer from Brush	Uusi taso siveltimestä
+	New Brush	Uusi sivellin
+	New Tool Preset	Uusi työkaluesiasetus
+	Auto-Leading	Automaattinen riviväli
+	Scale Horizontally	Skaalaa vaakasuunnassa
+	Scale Vertically	Skaalaa pystysuunnassa
+	Superscript	Yläindeksi
+	Subscript	Alaindeksi
+	Enable Timeline Quick Config	Ota aikajanan pika-asetukset käyttöön
+	Set Start Timecode…	Aseta aloitusaikakoodi…
+	Timecode	Aikakoodi
+	Current Time	Nykyinen aika
+	Play Once	Toista kerran
+	Info Options…	Tietopaneelin asetukset…
+	First Color Readout	Ensimmäinen värilukema
+	Second Color Readout	Toinen värilukema
+	Actual Color	Todellinen väri
+	Grayscale Slider	Harmaasävyliukusäädin
+	Web Color	Web-väri
+	Total Ink	Musteen kokonaismäärä
+	Opacity Mask	Peittävyysmaski
+	Document Size	Asiakirjan koko
+	Status Information	Tilatiedot
+	Mouse Coordinates	Hiiren koordinaatit
+	Ruler Units	Viivaimen yksiköt
+	Restore last viewed comp	Palauta viimeksi katsottu kooste
+	Keep proportions	Säilytä mittasuhteet
+	Caption Credits	Kuvatekstin tekijät
+	Copyright Info URL	Tekijänoikeustietojen URL
+	Credit	Tekijätieto
+	Transmission Reference	Lähetysviite
+	Urgency	Kiireellisyys
+	Supplemental Categories	Lisäluokat
+	Object Name / Title	Objektin nimi / otsikko
+	Date Created	Luontipäivä
+	City	Kaupunki
+	Province / State	Maakunta / osavaltio
+	Country	Maa
+	Byline	Tekijä
+	Byline Title	Tekijän titteli
+	Email	Sähköposti
+	Last Modified	Viimeksi muokattu
+	Camera Model	Kameran malli
+	Camera Make	Kameran valmistaja
+	EXIF Version	EXIF-versio
+	Exposure Program	Valotusohjelma
+	Shutter Speed	Suljinaika
+	Metering Mode	Mittaustapa
+	Create Multiple Picture Packages	Luo useita kuvapaketteja
+	Choose…	Valitse…
+	Select Folder…	Valitse kansio…
+	Override Action "Save" Commands	Ohita toimintojen ”Tallenna”-komennot
+	Include ICC Profile	Sisällytä ICC-profiili
+	Error File	Virhetiedosto
+	Stop For Errors	Pysäytä virheisiin
+	Log Errors To File	Kirjaa virheet tiedostoon
+	Settings:	Asetukset:
+	Working Space	Työväriavaruus
+	Advanced Controls	Lisäasetukset
+	Desaturate Monitor Colors By	Vähennä näytön värien kylläisyyttä
+	Blend RGB Colors Using Gamma 1.0	Sekoita RGB-värit gammalla 1.0
+	Profile Mismatches: Ask When Opening	Profiilien ristiriidat: kysy avattaessa
+	Ask When Pasting	Kysy liitettäessä
+	Missing Profiles: Ask When Opening	Puuttuvat profiilit: kysy avattaessa
+	Embed profiles	Upota profiilit
+	Coerce to sRGB	Pakota sRGB:ksi
+	Minimalistic	Minimalistinen
+	Expand All Groups	Laajenna kaikki ryhmät
+	Recent Items	Viimeisimmät kohteet
+	Delete Preset…	Poista esiasetus…
+	Preset Name:	Esiasetuksen nimi:
+	Width and Height	Leveys ja korkeus
+	Create new count group	Luo uusi laskentaryhmä
+	Drag to move the layer	Siirrä tasoa vetämällä
+	Go to Layer	Siirry tasoon
+	Reference point location	Viitepisteen sijainti
+	Toggle reference point	Näytä/piilota viitepiste
+	Heal Off	Korjaus: pois
+	Heal On	Korjaus: päällä
+	Heal Auto	Korjaus: automaattinen
+	Heal Color	Korjaus: väri
+	Subtract from	Vähennä
+	Intersect with	Leikkaa
+	Capture Comp	Tallenna kooste
+	No Layer Comps	Ei tasokoosteita
+	Add to selection  (⇧)	Lisää valintaan  (⇧)
+	Click to zoom in  ·  ⌥-click to zoom out	Lähennä napsauttamalla  ·  loitonna ⌥-napsautuksella
+	Commit Perspective Warp (↩)	Vahvista perspektiivivääristys (↩)
+	Commit Puppet Warp (↩)	Vahvista nukkevääristys (↩)
+	Commit any current edits (⌘↩)	Vahvista nykyiset muokkaukset (⌘↩)
+	Commit current crop operation  (↵)	Vahvista nykyinen rajaus  (↵)
+	Commit transform (↩)	Vahvista muunnos (↩)
+	Commit warp (↩)	Vahvista vääristys (↩)
+	Create a new layer  (⇧⌘N)	Luo uusi taso  (⇧⌘N)
+	Custom pattern	Mukautettu kuvio
+	General Brushes	Yleiset siveltimet
+	Open…     ⌘O	Avaa…     ⌘O
+	Search commands (⌘K)	Hae komentoja (⌘K)
+	Uses the foreground and background colors.	Käyttää edusta- ja taustaväriä.
+	Collapse group  (⌥-click: all groups)	Kutista ryhmä  (⌥-napsautus: kaikki ryhmät)
+	Expand group  (⌥-click: all groups)	Laajenna ryhmä  (⌥-napsautus: kaikki ryhmät)
+	Custom Pixel Aspect Ratio	Mukautettu pikselien kuvasuhde
+	Join the ArtCraft Discord	Liity ArtCraftin Discordiin
+	Report an Issue	Ilmoita ongelmasta
+	Load Files into Stack	Lataa tiedostot pinoon
+	Edit Toolbar	Muokkaa työkaluriviä
+	Load 3D LUT	Lataa 3D-LUT
+	Press keys	Paina näppäimiä
+	Rename Tool Preset	Nimeä työkaluesiasetus uudelleen
+	Search commands, tools and panels	Hae komentoja, työkaluja ja paneeleja
+	Delete Smart Filters	Poista älykkäät suotimet
+	Enable Smart Filters	Ota älykkäät suotimet käyttöön
+	Delete Layer…	Poista taso…
+	Select Similar Colors	Valitse samankaltaiset värit
+	New Selection	Uusi valinta
+	Click the first point or press ↵ to close · Esc cancels	Sulje napsauttamalla ensimmäistä pistettä tai painamalla ↵ · Esc peruuttaa
+	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	Lisää piste napsauttamalla · poista vetämällä pois, ⌘/Ctrl-napsautuksella tai Delete-näppäimellä
+	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Käytä napsauttamalla, tyhjennä ohitukset ⌥-napsautuksella, tyyliasetukset kaksoisnapsautuksella
+	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	Napsautus: kulma · Veto: pyöristetty · Ensimmäisen pisteen napsautus: sulje · ↩ valmis · Esc peruuta
+	Rulers  (⌘R)	Viivaimet  (⌘R)
+	Show Guides  (⌘;)	Näytä apuviivat  (⌘;)
+	Grid  (⌘')	Ruudukko  (⌘')
+	PDF Presentation…	PDF-esitys…
+	Picture Package…	Kuvapaketti…
+	Web Photo Gallery…	Verkkokuvagalleria…
+	Gray:	Harmaa:
+	Spot:	Spottiväri:
+	Technology Previews…	Teknologian esikatselut…
+	3D…	3D…
+	AI Integrations	Tekoälyintegraatiot
+	Add Pins	Lisää nastoja
+	Add a mask  (from the selection; ⌥ inverts)	Lisää maski  (valinnasta; ⌥ kääntää)
+	Adds grain to the soft edges of the brush tip.	Lisää rakeisuutta siveltimen kärjen pehmeisiin reunoihin.
+	Adobe PDF Presets…	Adobe PDF -esiasetukset…
+	After (X)	Jälkeen (X)
+	Airbrush: keeps painting while the pointer rests.	Ruiskusivellin: maalaa edelleen, kun osoitin on paikallaan.
+	Alternates for Current Selection	Nykyisen valinnan vaihtoehtomerkit
+	Artboards to Files	Piirtoalustat tiedostoiksi
+	Artboards to PDF	Piirtoalustat PDF:ksi
+	Ask Before Saving Saved Embedded	Kysy ennen upotetun tallentamista
+	Audio	Ääni
+	Auto-Hide	Piilota automaattisesti
+	Auto-leading %	Automaattinen riviväli %
+	Avoid Widows/Orphans	Vältä leski- ja orporivejä
+	Canvas rotation	Kankaan kierto
+	Convert Frames > Video Layers	Muunna kehykset > videotasot
+	Create Date	Luontipäivä
+	Create new layer	Luo uusi taso
+	Create new set	Luo uusi sarja
+	Data Sets as Files	Tietojoukot tiedostoina
+	DateTime Original	Alkuperäinen päivämäärä ja aika
+	Defaults restored.	Oletukset palautettu.
+	Delete Pins	Poista nastat
+	Do you want to save you made to “{name}” before quitting?	Haluatko tallentaa tiedostoon ”{name}” tekemäsi muutokset ennen lopettamista?
+	Dodge/Burn	Vaalenna/tummenna
+	Find and Replace Text	Etsi ja korvaa tekstiä
+	Flatten Frames Into Clips	Yhdistä kehykset leikkeiksi
+	Flatten Frames Into Layers	Yhdistä kehykset tasoiksi
+	Frame Duration	Kehyksen kesto
+	Frame Sync	Kehysten synkronointi
+	General Blend	Yleinen sekoitus
+	Glyph Scaling	Merkkien skaalaus
+	Group from Layers	Ryhmä tasoista
+	HSB Color	HSB-väri
+	HSL/Grayscale	HSL/harmaasävy
+	Hanging Punctuation	Riippuva välimerkitys
+	Hide the layer's effects  (⌥-click: all layers)	Piilota tason tehosteet  (⌥-napsautus: kaikki tasot)
+	Install Plug-in	Asenna laajennus
+	Intersect with selection  (⇧⌥)	Leikkaa valinnan kanssa  (⇧⌥)
+	Keeps the current texture when switching presets.	Säilyttää nykyisen tekstuurin esiasetusta vaihdettaessa.
+	Layer Comps to Files	Tasokoosteet tiedostoiksi
+	Layer from Background	Taso taustasta
+	Layers to Files	Tasot tiedostoiksi
+	Lens Corrections	Objektiivikorjaukset
+	Lens Info	Objektiivin tiedot
+	Limit Playback	Rajoita toistoa
+	Merge to HDR Pro	Yhdistä HDR Pro -kuvaksi
+	Modify Date	Muokkauspäivä
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Tiedostojen natiivia vedä ja pudota -toimintoa ei vielä tueta Waylandissa. Käytä komentoa Tiedosto › Avaa tai suorita PhotoCraft XWaylandissa komennolla `WAYLAND_DISPLAY= photocraft`.
+	New Path	Uusi polku
+	New Video Group	Uusi videoryhmä
+	New Video Layer	Uusi videotaso
+	Newspaper	Sanomalehti
+	Path to Illustrator…	Polku Illustratoriin…
+	Path:	Polku:
+	Paths to Illustrator	Polut Illustratoriin
+	Quick Sync	Pikasynkronointi
+	Roman Hanging Punctuation	Latinalainen riippuva välimerkitys
+	Rotate Auto	Kierrä automaattisesti
+	Rotate Fixed	Kiinteä kierto
+	Save a Copy	Tallenna kopio
+	Saved Multichannel	Tallennettu monikanavaisena
+	Select Plane	Valitse pinta
+	Show the layer's effects  (⌥-click: all layers)	Näytä tason tehosteet  (⌥-napsautus: kaikki tasot)
+	Single Word Justification	Yksittäisen sanan tasaus
+	Spacing:	Välistys:
+	Split Toning	Jaettu sävytys
+	Split at Playhead	Jaa toistokohdassa
+	Spot Channel	Spottivärikanava
+	Subject Distance	Kohteen etäisyys
+	Subtract from selection  (⌥)	Vähennä valinnasta  (⌥)
+	Technology Previews	Teknologian esikatselut
+	Ultra Bold	Erittäin lihavoitu
+	Ultra Light	Erittäin kevyt
+	Use File › Open to open an image.	Avaa kuva komennolla Tiedosto › Avaa.
+	WIA Support	WIA-tuki
+	Watercolour look: lighter interior, darker rims.	Vesiväriefekti: vaaleampi sisus, tummemmat reunat.
+	Word Spacing	Sanaväli
+	Working Gray Plate	Harmaa työlevy
+	↑↓ navigate   ↵ run   esc close	↑↓ siirry   ↵ suorita   esc sulje
+	Note tool	Muistiinpanotyökalu
+	Art History Brush	Taidehistoriasivellin
+	ColorSync	ColorSync
+	ACES	ACES
+	{zoom}%	{zoom} %
+	Mac LCD	Mac LCD
+	Mac Sharp	Mac terävä
+	Mac Crisp	Mac selkeä
+	Mac Strong	Mac vahva
+	Mac Smooth	Mac pehmeä
+	Adobe Single-line Composer	Adobe yksirivinen asettelija
+	Adobe Every-line Composer	Adobe kaikkien rivien asettelija
+	30 fps	30 fps
+	25 fps	25 fps
+	24 fps	24 fps
+	15 fps	15 fps
+	10 fps	10 fps
+	URLs	URL-osoitteet
+	GPS	GPS
+	Mac OS	Mac OS
+	RGB:	RGB:
+	CMYK:	CMYK:
+	ProPhoto RGB	ProPhoto RGB
+	ColorMatch RGB	ColorMatch RGB
+	Wide Gamut RGB	Wide Gamut RGB
+	Apple RGB	Apple RGB
+	NTSC (1953)	NTSC (1953)
+	PAL/SECAM	PAL/SECAM
+	SMPTE C	SMPTE C
+	HDTV (Rec. 709)	HDTV (Rec. 709)
+	CIE RGB	CIE RGB
+	Photo (2 × 3 in)	Valokuva (2 × 3 in)
+	Photo (4 × 6 in)	Valokuva (4 × 6 in)
+	Photo (5 × 7 in)	Valokuva (5 × 7 in)
+	Photo (8 × 10 in)	Valokuva (8 × 10 in)
+@id	file.close	Sulje
+@id	layer.layerMask.apply	Käytä tasomaskia
+@id	edit.clear	Tyhjennä
+layerLabel	Red	Punainen
+layerLabel	Magenta	Magenta
+	The document does not have an embedded colour profile. Working space: {working}.	Asiakirjassa ei ole upotettua väriprofiilia. Työväriavaruus: {working}.
+	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	Asiakirjan upotettu väriprofiili ei vastaa työväriavaruutta.\nUpotettu: {embedded}\nTyöväriavaruus: {working}
+	Pick Color From Image	Poimi väri kuvasta
+	Forward Warp	Eteenpäin vääristys
+	Twirl Clockwise	Pyöritä myötäpäivään
+	Twirl Counterclockwise	Pyöritä vastapäivään
+	Pucker	Kutista
+	Bloat	Pullista
+	Push Left	Työnnä vasemmalle
+	Freeze Mask	Jäädytysmaski
+	Thaw Mask	Sulatusmaski
+	Save Path	Tallenna polku
+	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	Parivälistys: metriikka, optinen tai arvo 1/1000 em (Alt+←/→ kohdistimessa)
+	Basic Latin	Latinalainen perusmerkistö
+	Latin 1	Latin 1
+	Latin Extended-A	Latin, laajennettu A
+	Latin Extended-B	Latin, laajennettu B
+	Greek	Kreikka
+	Cyrillic	Kyrilliset
+	Numbers	Numerot
+	Currency	Valuutta
+	Math Symbols	Matemaattiset symbolit
+	Arrows	Nuolet
+	R g b	R g b
+	Drag: draw freehand · Release on the start point: close	Veto: piirrä vapaalla kädellä · Vapauta aloituspisteessä: sulje
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Vedä rajausruutu · siirrä vetämällä sisältä · reunat muuttavat kokoa (suhde {ratio}, keskitys {centre}) · Välilyönti siirtää piirrettäessä · {commit} vahvistaa · Esc peruuttaa
+cameraRaw	Highlights	Korostukset
+cameraRaw	Shadows	Varjot
+	All shortcuts reset to Photoshop defaults.	Kaikki pikanäppäimet palautettu Photoshopin oletuksiin.
+	none	ei mitään
+	red	punainen
+	orange	oranssi
+	yellow	keltainen
+	green	vihreä
+	blue	sininen
+	violet	violetti
+	gray	harmaa
+	Working Rgb	Työ-RGB
+	Working Cmyk	Työ-CMYK
+	Working Gray	Työ-harmaa
+	Policy Rgb	RGB-käytäntö
+	Policy Cmyk	CMYK-käytäntö
+	Policy Gray	Harmaasävykäytäntö
+	Convert	Muunna
+	Ask On Mismatch	Kysy ristiriidassa
+	Ask On Paste	Kysy liitettäessä
+	Ask On Missing	Kysy puuttuessa
+	Blend Text Gamma	Tekstin sekoitusgamma
+	Monitor Profile	Näyttöprofiili
+	Rec2020	Rec2020
+	Sgray	sGray
+	Import Photoshop brushes (.abr)	Tuo Photoshop-siveltimiä (.abr)
+cameraRaw	Effects	Tehosteet
+cameraRaw	Exposure	Valotus
+cameraRaw	Contrast	Kontrasti
+cameraRaw	Texture	Tekstuuri
+cameraRaw	Clarity	Selkeys
+cameraRaw	Dehaze	Usvanpoisto
+cameraRaw	Saturation	Kylläisyys
+cameraRaw	Curve	Käyrä
+cameraRaw	Color Mixer	Värimikseri
+cameraRaw	Midtones	Keskisävyt
+cameraRaw	Balance	Tasapaino
+cameraRaw	Detail	Yksityiskohdat
+cameraRaw	Radius	Säde
+cameraRaw	Feather	Pehmennys
+cameraRaw	Midpoint	Keskipiste
+cameraRaw	Roundness	Pyöreys
+cameraRaw	Size	Koko
+	Default Photoshop Size	Photoshopin oletuskoko
+document	Orientation	Suunta
+	Freeze Lasso	Jäädytyslasso
+	Reconstruct All	Rekonstruoi kaikki
+	Mask None	Ei maskia
+colorRange	Invert	Käänteinen
+layers	Fill	Täyttö
+layers	Fill:	Täyttö:
+shape	Appearance	Ulkoasu
+# Labels added upstream after the first Finnish catalog (2026-10-16).
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Muuta kokoa ja kierrä vetämällä ääriviivan kahvoja, pyöristä kulmia vetämällä neliötä ja aseta sumennuksen alkukohta vetämällä sisäpuolen pisteitä.
+	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Siirrä kaistaa vetämällä nastaa tai muuta sen sumennusta vetämällä rengasta. Levennä terävää kaistaa vetämällä yhtenäisiä viivoja, aseta siirtymä vetämällä katkoviivoja ja kierrä vetämällä pisteitä.
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Muuta kokoa ja kierrä vetämällä ääriviivan kahvoja; rengas asettaa sumennuksen kulman.
+	Add Shortcut	Lisää pikanäppäin
+	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
+	Clip Thumbnails to Layer Bounds	Rajaa pikkukuvat tason rajoihin
+	Import Brushes… (.abr or image)	Tuo siveltimiä… (.abr tai kuva)
+	Import Brush from Image…	Tuo sivellin kuvasta…
+	Bundle Arrow-Key Nudges	Yhdistä nuolinäppäinsiirrot
+	Nudge Bundle Pause (ms)	Siirtojen yhdistämisen tauko (ms)
+	Response curve	Vastekäyrä
+	Show home recent files	Näytä viimeisimmät tiedostot aloitusnäkymässä
+	Background (Default)	Tausta (oletus)
+	Include All Subfolders	Sisällytä kaikki alikansiot
+	Use the embedded profile ({profile})	Käytä upotettua profiilia ({profile})
+	Convert to the working space ({profile})	Muunna työväriavaruuteen ({profile})
+	Remember this choice for future images	Muista tämä valinta tuleville kuville
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Ota kysely takaisin käyttöön asetuksella Kysy ristiriidassa kohdassa Muokkaa › Väriasetukset.
+	Button Mode	Painiketila
+	Button Mode On	Painiketila käytössä
+	Darken Interface	Tummenna käyttöliittymää
+	Lighten Interface	Vaalenna käyttöliittymää
+	Technique	Tekniikka
+	Chisel Hard	Taltta, kova
+	Chisel Soft	Taltta, pehmeä
+	Open color-less EXR as ACEScg	Avaa väriprofiilittomat EXR-tiedostot ACEScg-muodossa
+	Edit Selected Guides	Muokkaa valittuja apuviivoja
+	Clear Selected Guides	Poista valitut apuviivat
+	Delete this set	Poista tämä joukko
+	New Set…	Uusi joukko…
+	PhotoCraft Defaults	PhotoCraftin oletukset
+	Save a list of these shortcuts as a web page	Tallenna luettelo näistä pikanäppäimistä verkkosivuna
+	Save the changes to this set	Tallenna tämän joukon muutokset
+	Save these shortcuts as a .kys file	Tallenna nämä pikanäppäimet .kys-tiedostona
+	Save these shortcuts as a new set	Tallenna nämä pikanäppäimet uutena joukkona
+	Set deleted.	Joukko poistettu.
+	Set saved.	Joukko tallennettu.
+	Set:	Joukko:
+	Summarize…	Yhteenveto…
+	There are too many sets: delete one first.	Joukkoja on liikaa: poista ensin yksi.
+	set name	joukon nimi
+	{set} (modified)	{set} (muokattu)
+	Accept and Go to Conflict	Hyväksy ja siirry ristiriitaan
+	Changes undone.	Muutokset kumottu.
+	Choose a new shortcut for this command, or leave it without one.	Valitse tälle komennolle uusi pikanäppäin tai jätä se ilman.
+	Put this command's shortcuts back as they were	Palauta tämän komennon pikanäppäimet ennalleen
+	Take the shortcut from the other command and select it	Ota pikanäppäin toiselta komennolta ja valitse se
+	Undo Changes	Kumoa muutokset
+	{shortcut} is reserved by the system and can't be assigned.	{shortcut} on järjestelmän varaama, eikä sitä voi määrittää.
+	Low-Latency Drawing (vsync off, applies at next launch)	Pienen viiveen piirto (vsync pois, tulee voimaan seuraavalla käynnistyskerralla)
+	Free Transform is still being applied; try again when it has finished.	Vapaata muunnosta otetaan vielä käyttöön; yritä uudelleen, kun se on valmis.
+	The transform couldn't be applied.	Muunnosta ei voitu ottaa käyttöön.
+	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Sen tasot tarvitsevat {needed} GPU-muistia; budjetti jättää niille {budget}.
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Aseta GPU-muisti kohdassa Asetukset › Suorituskyky siihen, mitä näytönohjaimesi pystyy pitämään, enintään 3/8 sen muistista. Automaattinen seuraa muistin käyttöä, enintään neljännes tämän tietokoneen muistista ja 3/8 näytönohjaimen muistista, eikä laske asiakirjaa näytönohjaimen kuormaksi, jos sen muistin määrä tiedetään. Tilarivillä näkyy GPU-muisti täynnä, kun ne eivät mahdu.
+	GPU Memory Full	GPU-muisti täynnä
+	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Tasot tarvitsevat {needed} GPU-muistia ja saavat käyttää {budget}, joten koko asiakirjan uudelleenpiirtävät muokkaukset tehdään suorittimella. Aseta GPU-muisti napsauttamalla.
+	GPU memory budget: {budget}	GPU-muistibudjetti: {budget}
+	This document's layers: {needed} of {budget} for layers	Tämän asiakirjan tasot: {needed}/{budget} tasoille
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Tämän asiakirjan tasot tarvitsevat {needed}, mutta saavat käyttää {budget}: koko asiakirjan uudelleenpiirrot käyttävät suoritinta
+	GPU Memory (MB, 0 = Automatic)	GPU-muisti (Mt, 0 = automaattinen)
