@@ -294,7 +294,8 @@ impl SubjectCache {
 }
 
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
-    let all_layers = b(p, "sampleAllLayers", true);
+    // The selected layer's pixels; the composite only when no pixel layer is selected.
+    let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
     let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
@@ -516,7 +517,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.subject",
             "Subject",
             ["Select"],
-            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the selected layer; the composite when no pixel layer is selected)"##,
             has_doc,
             select_subject
         ),
@@ -778,6 +779,23 @@ mod tests {
         assert!(s.active().unwrap().doc.selection.is_none());
     }
 
+    /// Select Subject looks at the selected layer only; with no layer selected it looks at the
+    /// whole image.
+    #[test]
+    fn select_subject_samples_the_selected_layer_else_the_composite() {
+        let (mut s, inside) = disc(8);
+        // A layer above holding only a small square in the corner: the disc is not on it.
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("paint.pencil", json!({"points": [[10, 10], [30, 10]], "size": 3, "color": "#000000"})).unwrap();
+        s.execute("select.subject", json!({})).unwrap();
+        assert!(cov(&s, 100, 80) < 0.5, "the disc on the layer below was selected");
+        s.execute("select.deselect", json!({})).unwrap();
+        // No layer selected: the whole image, so the disc is found.
+        s.execute("select.deselectLayers", json!({})).unwrap();
+        s.execute("select.subject", json!({})).unwrap();
+        assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
+    }
+
     /// #2865: a repeat on unchanged pixels reuses the last mask (an identical selection, even
     /// after Deselect); sampling something else or a pixel edit computes it again.
     #[test]
@@ -795,8 +813,8 @@ mod tests {
         s.execute("select.subject", json!({})).unwrap();
         assert!(std::sync::Arc::ptr_eq(&mask, &cached(&s)), "the repeat recomputed the mask");
         assert_eq!(sel(&s), first);
-        // Another sampled target (the layer rather than the composite) is a miss.
-        s.execute("select.subject", json!({"sampleAllLayers": false})).unwrap();
+        // Another sampled target (the composite rather than the layer) is a miss.
+        s.execute("select.subject", json!({"sampleAllLayers": true})).unwrap();
         assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));
         // A pixel edit drops the entry; the next run recomputes it.
         s.edit("paint", |doc, _| {
