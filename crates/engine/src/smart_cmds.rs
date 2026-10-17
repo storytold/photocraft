@@ -752,14 +752,36 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         // As with Group Layers, place the result in the top selected root's parent. Insert
         // before removal so paths shifting in other parents cannot discard unselected content.
         doc.insert_above(Some(top), so);
-        for id in ids {
-            doc.remove(id).ok_or(EngineError::NoLayer(id))?;
+        for id in &ids {
+            doc.remove(*id).ok_or(EngineError::NoLayer(*id))?;
+        }
+        if let [only] = ids[..] {
+            retarget_layer_refs(doc, only, new_id);
         }
         *active = Some(new_id);
         Ok(new_id)
     })?;
     crate::layer_multi_cmds::reselect(s, vec![new_id], Some(new_id));
     Ok(json!({"layer": new_id.0}))
+}
+
+fn retarget_layer_refs(doc: &mut Document, from: LayerId, to: LayerId) {
+    let Some((fill_opacity, effects)) = doc.layer(to).map(|l| (l.fill_opacity, l.effects.clone())) else { return };
+    for comp in doc.layer_comps.iter_mut().chain(doc.last_document_state.as_mut()) {
+        for state in comp.states.iter_mut().filter(|state| state.layer == from) {
+            state.layer = to;
+            if let Some(appearance) = &mut state.appearance {
+                appearance.fill_opacity = fill_opacity;
+                appearance.effects = effects.clone();
+            }
+        }
+    }
+    for def in doc.variables.defs.iter_mut().filter(|def| def.layer == from) {
+        def.layer = to;
+    }
+    for slice in doc.slices.list.iter_mut().filter(|slice| slice.layer == Some(from)) {
+        slice.layer = Some(to);
+    }
 }
 
 // ---------- contents ----------
