@@ -774,3 +774,12 @@ fn a_damaged_preset_set_keeps_the_other_sets() {
     assert_eq!(next.presets.gradients.len(), Session::new().presets.gradients.len());
     assert_eq!(next.presets.documents, s.presets.documents);
 }
+
+/// Photoshop's Clone Source panel defaults (25.4): the overlay shows, clipped to the tip, at
+/// full opacity, and stays while painting (Auto Hide off).
+#[test]
+fn clone_overlay_defaults_match_photoshop() {
+    let s = session(8);
+    let o = &s.presets.clone.overlay;
+    assert_eq!((o.show, o.opacity, o.clipped, o.auto_hide, o.invert, o.blend.as_str()), (true, 100.0, true, false, false, "normal"));
+}

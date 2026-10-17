@@ -262,7 +262,10 @@ pub fn clone_preview_periodic(
     {
         return Err(bad("clone.preview", "preview coordinates exceed their budget"));
     }
-    let bounded = |r: Rect| r.width() > 0 && r.height() > 0 && r.width() <= 1024 && r.height() <= 1024;
+    // Up to 4 MP (a 2000 px brush with a soft tip, or the view of a reduced overlay): the UI
+    // samples at a stride past that.
+    let bounded =
+        |r: Rect| r.width() > 0 && r.height() > 0 && r.width() <= 4096 && r.height() <= 4096 && u64::from(r.width()) * u64::from(r.height()) <= 4 * 1024 * 1024;
     if !bounded(rect) || !bounded(map.source_rect(rect)) {
         return Err(bad("clone.preview", "preview region exceeds its budget"));
     }

@@ -80,7 +80,9 @@ pub struct CloneOverlay {
 
 impl Default for CloneOverlay {
     fn default() -> Self {
-        CloneOverlay { show: true, opacity: 100.0, clipped: true, auto_hide: true, invert: false, blend: "normal".into() }
+        // Photoshop's defaults (measured on 25.4): the overlay shows, clipped to the tip, and stays while
+        // painting (Auto Hide off).
+        CloneOverlay { show: true, opacity: 100.0, clipped: true, auto_hide: false, invert: false, blend: "normal".into() }
     }
 }
 
