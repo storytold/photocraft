@@ -221,6 +221,52 @@ fn writes_through_a_symlink() {
     assert_eq!(std::fs::read(&real).unwrap(), b"new");
 }
 
+/// #6605: saving onto a dangling symlink writes through to its target instead of replacing the
+/// link with a regular file, even when a folder on the way to the target doesn't exist yet.
+#[cfg(unix)]
+#[test]
+fn writes_through_a_dangling_symlink() {
+    let d = TempDir::new("dangling");
+    let real = d.0.join("missing/dir/a.psd");
+    let link = d.0.join("link.psd");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    atomic_write(&link, b"new").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link survives");
+    assert_eq!(std::fs::read(&real).unwrap(), b"new", "the bytes land at the target");
+    assert_no_temp(real.parent().unwrap_or(Path::new(".")));
+}
+
+/// A dangling link with a relative target resolves against the link's own folder.
+#[cfg(unix)]
+#[test]
+fn writes_through_a_dangling_relative_symlink() {
+    let d = TempDir::new("dangling-rel");
+    let here = d.0.join("here");
+    std::fs::create_dir(&here).unwrap();
+    let link = here.join("link.psd");
+    std::os::unix::fs::symlink("../elsewhere/real.psd", &link).unwrap();
+    atomic_write(&link, b"new").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link survives");
+    assert_eq!(std::fs::read(d.0.join("elsewhere/real.psd")).unwrap(), b"new");
+    assert_no_temp(&d.0.join("elsewhere"));
+}
+
+/// A symlink loop is an error; it never replaces either link.
+#[cfg(unix)]
+#[test]
+fn symlink_loop_errors_without_replacing_the_links() {
+    let d = TempDir::new("loop");
+    let a = d.0.join("a.psd");
+    let b = d.0.join("b.psd");
+    std::os::unix::fs::symlink(&b, &a).unwrap();
+    std::os::unix::fs::symlink(&a, &b).unwrap();
+    let e = atomic_write(&a, b"new").unwrap_err();
+    assert!(e.to_string().contains("symbolic links"), "{e}");
+    assert!(std::fs::symlink_metadata(&a).unwrap().file_type().is_symlink());
+    assert!(std::fs::symlink_metadata(&b).unwrap().file_type().is_symlink());
+    assert_no_temp(&d.0);
+}
+
 #[test]
 fn directory_target_or_bare_root_is_an_error_not_a_panic() {
     let d = TempDir::new("dir");

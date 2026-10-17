@@ -24,7 +24,7 @@
 //! [`atomic_write_with`] takes an [`AtomicFs`] so tests can inject failures at each step.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The file-system steps [`atomic_write_with`] performs. [`RealFs`] is the real thing; tests
@@ -162,7 +162,7 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 
 /// [`atomic_write_with`] reporting write progress (see [`atomic_write_progress`]).
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
-    let target = resolve_symlink(path);
+    let target = resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))?;
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
@@ -229,12 +229,57 @@ fn sleep_ms(ms: u64) {
 #[cfg(target_arch = "wasm32")]
 fn sleep_ms(_ms: u64) {}
 
+/// How deep a symlink chain we follow before giving up, like the OS limit.
+const MAX_LINK_DEPTH: u32 = 40;
+
 /// Write through a symlink to the file it points at, instead of replacing the link.
-fn resolve_symlink(path: &Path) -> PathBuf {
-    match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
-        _ => path.to_path_buf(),
+///
+/// A dangling link (its target, or a folder on the way to it, doesn't exist yet) resolves to its
+/// target too, so saving through one creates the target instead of silently turning the link
+/// into a regular file (#6605). A chain that never ends is an error, never a link replacement.
+fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Ok(path.to_path_buf());
     }
+    // A resolvable chain: canonicalize follows every link and relative target in one go.
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return Ok(real);
+    }
+    // Dangling chain: walk the links lexically; the final target may not exist yet.
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_LINK_DEPTH {
+        let Ok(link) = std::fs::read_link(&current) else {
+            return Ok(current); // not (or no longer) a link: the chain ends here
+        };
+        let base = current.parent().unwrap_or(Path::new(".")).to_path_buf();
+        current = normalize_lexically(&if link.is_absolute() { link } else { base.join(link) });
+        if !std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Ok(current);
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}: too many levels of symbolic links", path.display())))
+}
+
+/// Drop `.` components and fold `..` ones lexically, without touching the file system.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                _ => out.push(comp),
+            },
+            c => out.push(c),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(Component::CurDir);
+    }
+    out
 }
 
 /// A unique hidden temporary file name to write beside `file` before renaming over it.
