@@ -372,6 +372,23 @@ async fn bridge_doc_save_without_path_forwards_app_save_for_write_back() {
     app.abort();
 }
 
+/// A bridged `doc_place` reaches the app's `app.place`, which reads beneath the app's read root:
+/// `file.placeEmbedded` takes an ambient path and the app refuses it over control. The app
+/// places into its active document, so `index` is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_place_forwards_app_place() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let placed = json_of(&call(&client, "doc_place", json!({"path": "pub/hero.png", "scale": 50, "center": [10, 12]})).await);
+    assert_eq!(placed, json!({"placed": {"path": "pub/hero.png", "scale": 50.0, "center": [10.0, 12.0]}}));
+    let r = call(&client, "doc_place", json!({"path": "pub/hero.png", "index": 1})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(text(&r).contains("headless"), "{}", text(&r));
+    client.cancel().await.unwrap();
+    let seen = app.await.unwrap();
+    assert!(seen.iter().all(|req| req["method"] != "engine.execute"), "the ambient command is never sent: {seen:?}");
+}
+
 /// `tgaBits` reaches the app's `app.save` through the bridge; a value other than 24 or 32 is
 /// refused before anything is sent.
 #[tokio::test(flavor = "multi_thread")]
@@ -823,6 +840,7 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
                     json!({"id": id, "ok": true, "result": {"ran": req["params"]["command"], "params": req["params"]["params"], "wait": req["params"]["wait"]}})
                 }
                 "app.save" => json!({"id": id, "ok": true, "result": {"saved": req["params"]}}),
+                "app.place" => json!({"id": id, "ok": true, "result": {"placed": req["params"]}}),
                 "engine.commands" => {
                     json!({"id": id, "ok": true, "result": [{"id": "file.new", "label": "New…", "enabled": true}]})
                 }

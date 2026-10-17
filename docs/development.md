@@ -167,7 +167,7 @@ printf '%s\n' "{\"id\":\"auth\",\"method\":\"auth\",\"params\":{\"token\":\"$TOK
               '{"id":2,"method":"ui.screenshot","params":{"path":"evidence/shot.png"}}' | nc 127.0.0.1 7878
 ```
 
-See `docs/control-protocol.md` for every method. Tips:
+See `docs/control-protocol.md` for every method, and `docs/pipeline-integration.md` for driving the app from an asset pipeline tool. Tips:
 
 - **macOS does not render occluded windows.** `ui.screenshot` raises the window first (`focus: true` by default). Use `ui.focus` before other visual checks.
 - **Capture only our own window.** For native captures (to see the real title bar and traffic lights), capture by window id (`screencapture -l <CGWindowID>`), never a screen region, which can grab other apps.

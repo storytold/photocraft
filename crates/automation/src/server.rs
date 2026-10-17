@@ -617,7 +617,8 @@ impl PhotocraftMcp {
             opts.insert("center".into(), json!(v));
         }
         let opts = Value::Object(opts);
-        // Bridge mode runs the app on this machine, which reads the path itself like any command.
+        // The app refuses the ambient `file.placeEmbedded` over control, as headless does; its
+        // `app.place` reads beneath the app's own read root and places into the active document.
         let mut bridge_params = opts.clone();
         if let Some(o) = bridge_params.as_object_mut() {
             o.insert("path".into(), Value::String(p.path.clone()));
@@ -626,7 +627,13 @@ impl PhotocraftMcp {
         if let Some(r) = self.headless_op(move |h| h.place(index, &path, &opts)).await {
             return to_result(r);
         }
-        self.run_command("file.placeEmbedded".into(), bridge_params, true).await
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; the app places into its active document"));
+        }
+        to_result(b.call("app.place", bridge_params).await)
     }
 
     #[tool(

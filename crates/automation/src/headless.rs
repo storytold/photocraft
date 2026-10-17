@@ -136,6 +136,74 @@ impl Headless {
         Ok(file_cmds::place_bytes(&mut self.session, name, bytes, None, &Value::Object(opts))?)
     }
 
+    /// Replace the contents of a Smart Object layer with a file from the read root: the
+    /// capability-scoped `layer.smartObjects.replaceContents`, which reads an ambient path and
+    /// is therefore refused in automation. `layer` is a layer id (the active layer without one);
+    /// the layer keeps its transform, filters and masks.
+    pub fn replace_contents(&mut self, index: Option<usize>, path: &str, layer: Option<u64>) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            let mut opts = serde_json::Map::new();
+            opts.insert("path".into(), json!(path));
+            if let Some(layer) = layer {
+                opts.insert("layer".into(), json!(layer));
+            }
+            return self.command_run("layer.smartObjects.replaceContents", Value::Object(opts));
+        }
+        self.sync_jobs();
+        let state = self.session.active().ok_or_else(|| AutomationError::BadRequest("no document open".into()))?;
+        let id = match layer {
+            Some(layer) => photocraft_doc::LayerId(layer),
+            None => state.active_layer.ok_or_else(|| AutomationError::BadRequest("no layer given and no active layer".into()))?,
+        };
+        // Before the read: a file is not fetched for a layer that can't take it.
+        match state.doc.layer(id).map(|l| &l.content) {
+            Some(photocraft_doc::LayerContent::Smart(_)) => {}
+            Some(_) => return Err(AutomationError::BadRequest(format!("layer {} is not a Smart Object", id.0))),
+            None => return Err(AutomationError::BadRequest(format!("no layer with id {}", id.0))),
+        }
+        // The dispatcher's check, for a command body run directly.
+        if let Some(busy) = self.session.edit_conflict() {
+            return Err(AutomationError::BadRequest(busy));
+        }
+        let bytes = match &self.filesystem {
+            Filesystem::Workspace(workspace) => workspace.read(path)?,
+            _ => {
+                return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into()));
+            }
+        };
+        let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path);
+        Ok(photocraft_engine::smart_cmds::replace_contents_bytes(&mut self.session, id, name, bytes)?)
+    }
+
+    /// Export one layer or group, rendered alone, as a file beneath the write root: the
+    /// capability-scoped `layer.exportAs`, which writes an ambient path and is therefore refused
+    /// in automation. `params` carries the command's own options (`layer`, `scale`, `trim`); the
+    /// bytes come from the command's own core, so both paths write the same file.
+    pub fn export_layer(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        let mut opts = params.as_object().cloned().unwrap_or_default();
+        opts.insert("path".into(), json!(path));
+        let opts = Value::Object(opts);
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            return self.command_run("layer.exportAs", opts);
+        }
+        self.sync_jobs();
+        let workspace = match &self.filesystem {
+            Filesystem::Workspace(workspace) => workspace,
+            _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+        };
+        let (bytes, reply) = photocraft_engine::layer_menu_cmds::export_layer_bytes(&self.session, &opts, "doc.exportLayer", false)?;
+        workspace.write(path, &bytes)?;
+        Ok(reply)
+    }
+
     /// Export each exported layer of a document as its own file beneath the write root: the
     /// capability-scoped `file.export.layersToFiles`, which takes an ambient `dir` and is
     /// therefore refused in automation (#3216). The bytes come from the command's own core, so

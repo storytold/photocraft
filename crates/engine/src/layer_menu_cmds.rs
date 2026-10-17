@@ -866,10 +866,40 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     Ok(out)
 }
 
+/// The layer alone on the document's own canvas (visible, its blend mode ignored): what
+/// [`layer_document`] renders, without the trim, so the file lines up with the document and
+/// with every other layer exported from it. A group keeps its layers.
+pub fn layer_on_canvas(doc: &Document, id: LayerId) -> Result<Document> {
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let mut alone = l.clone();
+    alone.visible = true;
+    alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
+    alone.clipped = false;
+    let mut out = doc.clone();
+    out.name = l.name.clone();
+    out.layers = vec![alone];
+    out.selection = None;
+    Ok(out)
+}
+
 fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result<Value> {
+    let (bytes, reply) = export_layer_bytes(s, p, cmd, png_only)?;
+    let path = reply.get("path").and_then(Value::as_str).unwrap_or_default();
+    write_file(path, &bytes)?;
+    Ok(reply)
+}
+
+/// The body of `layer.exportAs` (and, with `png_only`, `layer.quickExportAsPng`) up to the write:
+/// the encoded file and the command's reply. `path` only names the format and is echoed in the
+/// reply; nothing is read or written here, so automation can hand the bytes to its write root.
+pub fn export_layer_bytes(s: &Session, p: &Value, cmd: &str, png_only: bool) -> Result<(Vec<u8>, Value)> {
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let mut ldoc = layer_document(&d.doc, id)?;
+    let trim = match p.get("trim") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`trim` must be true or false"))?,
+    };
+    let mut ldoc = if trim { layer_document(&d.doc, id)? } else { layer_on_canvas(&d.doc, id)? };
     let path = p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "missing `path` (UIs ask for one)"))?;
     let lower = path.to_ascii_lowercase();
     if png_only && !lower.ends_with(".png") {
@@ -884,8 +914,8 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
     let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;
-    write_file(path, &out.bytes)?;
-    Ok(json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings}))
+    let reply = json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings});
+    Ok((out.bytes, reply))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -994,7 +1024,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.exportAs",
             "Export As…",
             ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100} (format from the path's extension)"##,
+            r##"{"layer":id?,"path":text,"scale":1..1000=100,"trim":bool=true} (format from the path's extension; trim false keeps the document's canvas instead of cropping to the layer's pixels)"##,
             has_layer,
             |s, p| export_layer(s, p, "layer.exportAs", false)
         ),

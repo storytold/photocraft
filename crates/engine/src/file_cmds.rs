@@ -511,6 +511,9 @@ fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
 /// History label of an embedded place.
 pub const PLACE_EMBEDDED: &str = "Place Embedded";
 
+/// Most pixels a placed file may have at its placement scale (the resized pixels are held whole).
+const MAX_PLACED_PIXELS: f64 = (1u64 << 30) as f64;
+
 /// Place a file's bytes as a smart object layer, centred, and (with Preferences ▸ General ▸
 /// Resize Image During Place, on by default) scaled down to fit when larger than the canvas.
 /// `linked` makes it a linked smart object that refers to that path instead of embedding the bytes.
@@ -541,6 +544,16 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
         _ => (cw / 2.0, ch / 2.0),
     };
+    // Input-derived sizes are hostile: refuse an absurd placed size or position (a `scale` of
+    // 1e9 percent) before the resized pixels are allocated.
+    let side = f64::from(crate::document_preset_cmds::MAX_DIMENSION);
+    let (pw, ph) = ((w * scale).ceil(), (h * scale).ceil());
+    if !(pw <= side && ph <= side && pw * ph <= MAX_PLACED_PIXELS) {
+        return Err(EngineError::Other(format!("{name}: at {:.0}% it would be {pw:.0} × {ph:.0} px, larger than a layer can be", scale * 100.0)));
+    }
+    if !(center.0.abs() <= side && center.1.abs() <= side) {
+        return Err(EngineError::Other(format!("{name}: `center` is outside the largest canvas ({side:.0} px)")));
+    }
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     let mut px = flattened(&src, fmt);
     if (scale - 1.0).abs() > 1e-9 {
@@ -593,16 +606,16 @@ const INFO_FIELDS: [(&str, &str, &str); 6] = [
     ("authorTitle", "photoshop:AuthorsPosition", ""),
 ];
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn xml_unescape(s: &str) -> String {
+pub(crate) fn xml_unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 /// The element `<tag …>…</tag>` (first occurrence) as (start, end, inner).
-fn find_element<'a>(xmp: &'a str, tag: &str) -> Option<(usize, usize, &'a str)> {
+pub(crate) fn find_element<'a>(xmp: &'a str, tag: &str) -> Option<(usize, usize, &'a str)> {
     let open = format!("<{tag}");
     let mut from = 0;
     while let Some(i) = xmp[from..].find(&open).map(|i| i + from) {
@@ -637,7 +650,7 @@ fn li_values(inner: &str) -> Vec<String> {
 }
 
 /// Attribute form `prop="value"` on an `rdf:Description`.
-fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
+pub(crate) fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
     let key = format!(" {prop}=\"");
     let i = xmp.find(&key)?;
     let v0 = i + key.len();
@@ -780,6 +793,14 @@ pub fn camera_data(exif: Option<&[u8]>, xmp: Option<&str>) -> Value {
     Value::Object(m)
 }
 
+/// `xmp` as a packet properties can be added to: itself when it has an `rdf:RDF` element, else a
+/// new empty packet.
+pub(crate) fn xmp_packet(xmp: Option<&str>) -> String {
+    xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
+    })
+}
+
 /// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
 /// keeping the other properties verbatim. Edited properties move into their own
 /// `rdf:Description` (several descriptions per packet are valid XMP).
@@ -787,9 +808,7 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
     let cur = read_file_info(xmp);
     // The dialog submits all fields, including unchanged language alternatives.
     let changed = |key: &str| info.get(key).is_some_and(|v| cur.get(key) != Some(v));
-    let mut x = xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
-        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
-    });
+    let mut x = xmp_packet(xmp);
     for (key, prop, _) in INFO_FIELDS.into_iter().chain([("copyrightStatus", "xmpRights:Marked", ""), ("copyrightUrl", "xmpRights:WebStatement", "")]) {
         if !changed(key) {
             continue;

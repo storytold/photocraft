@@ -385,6 +385,40 @@ fn export_layer_trims_to_its_pixels() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `trim: false` keeps the document's canvas, so the file lines up with the document and with
+/// the other layers exported from it. The bytes come back without anything being written.
+#[test]
+fn export_layer_untrimmed_keeps_the_canvas() {
+    for depth in DEPTHS {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |x, y| if (5..15).contains(&x) && (4..10).contains(&y) { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+        let red = active(&s).id;
+        s.execute("layer.setProps", json!({"layer": red.0, "visible": false})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "cover"})).unwrap();
+        paint(&mut s, |_, _| [0.0, 0.0, 1.0, 1.0]);
+        let params = json!({"layer": red.0, "path": "red.png", "trim": false});
+        let (bytes, reply) = export_layer_bytes(&s, &params, "layer.exportAs", false).unwrap();
+        assert_eq!((reply["width"].as_u64(), reply["height"].as_u64()), (Some(40), Some(30)), "depth {depth}");
+        assert_eq!((reply["path"].as_str(), reply["bytes"].as_u64()), (Some("red.png"), Some(bytes.len() as u64)));
+        // Only the asked layer is in the file (hidden or not), where it sits in the document.
+        let back = photocraft_io::import("red.png", &bytes).unwrap().document;
+        let buf = photocraft_compose::render(&back, back.bounds());
+        let at = |x: usize, y: usize| buf.px[y * 40 + x];
+        assert_eq!(at(0, 0)[3], 0.0, "depth {depth}: outside the layer stays transparent");
+        let inside = at(5, 4);
+        assert!(inside[0] > 0.99 && inside[2] < 0.01 && inside[3] > 0.99, "depth {depth}: {inside:?}");
+        // Trimmed (the default) is the layer's own 10 x 6 pixels.
+        let (_, trimmed) = export_layer_bytes(&s, &json!({"layer": red.0, "path": "red.png"}), "layer.exportAs", false).unwrap();
+        assert_eq!((trimmed["width"].as_u64(), trimmed["height"].as_u64()), (Some(10), Some(6)));
+    }
+    let mut s = session(8, "rgb");
+    paint(&mut s, |_, _| [1.0; 4]);
+    for bad in [json!({"path": "a.png", "trim": "no"}), json!({"path": "a.png", "trim": 1}), json!({"path": "a.png", "layer": 999_999}), json!({"trim": false})]
+    {
+        assert!(export_layer_bytes(&s, &bad, "layer.exportAs", false).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn stack_modes_render_from_the_nested_layers() {
     let mut s = session(8, "rgb");

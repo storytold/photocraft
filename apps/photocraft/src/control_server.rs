@@ -18,14 +18,14 @@ use serde_json::{Value, json};
 
 pub fn start(port: u16, token: String, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
+    let (listener, bound) = match bind(port) {
+        Ok(bound) => bound,
         Err(e) => {
             eprintln!("photocraft: control server failed to bind 127.0.0.1:{port}: {e}");
             return rx;
         }
     };
-    eprintln!("photocraft: control server listening on 127.0.0.1:{port}");
+    eprintln!("photocraft: control server listening on 127.0.0.1:{bound}");
     std::thread::spawn(move || {
         let limiter = ConnectionLimiter::new(MAX_CONNECTIONS);
         let token = Arc::new(token);
@@ -45,6 +45,14 @@ pub fn start(port: u16, token: String, ctx: egui::Context) -> Receiver<ControlRe
         }
     });
     rx
+}
+
+/// Listen on loopback `port`, returning the port actually bound: with `--control 0` the OS
+/// picks a free one, and that is the port a launcher has to be told, not 0.
+fn bind(port: u16) -> std::io::Result<(TcpListener, u16)> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let bound = listener.local_addr()?.port();
+    Ok((listener, bound))
 }
 
 fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::Context) {
@@ -157,6 +165,15 @@ mod tests {
         let served = server.join().unwrap();
         assert!(served < Duration::from_secs(3), "the trickle did not extend the deadline: {served:?}");
         assert!(rx.try_recv().is_err(), "nothing was dispatched");
+    }
+
+    /// `--control 0`: the port reported is the one the OS chose, and a client can connect to it.
+    #[test]
+    fn port_zero_reports_the_port_the_os_chose() {
+        let (listener, port) = bind(0).unwrap();
+        assert_ne!(port, 0);
+        assert_eq!(listener.local_addr().unwrap().port(), port);
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
     }
 
     #[test]

@@ -91,6 +91,8 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
     });
     let mut v = json!({
         "id": l.id.0,
+        // The PSD layer id: stable across save and reopen, unlike `id` (`layer.persistentId`).
+        "persistentId": l.psd_id,
         "name": l.name,
         "kind": l.content.kind_name(),
         "visible": l.visible,

@@ -15,6 +15,8 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
   --automation-read-root /work/project --automation-write-root /work/project
 ```
 
+`--control 0` lets the operating system pick a free port; the launch log on standard error names the one bound (`photocraft: control server listening on 127.0.0.1:<port>`).
+
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
 
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
@@ -40,7 +42,7 @@ Each reply is one JSON line with the same `id`:
 
 The desktop server waits up to 60 seconds for a reply. A request still queued at that deadline is rejected before dispatch; a timeout does not cancel work that has already started. The two timeouts read differently, both starting with `timeout`: a request that was never dispatched (still queued at the deadline) says `timeout: not run` and is safe to re-send, while `timeout: no reply in 60s` means the command was dispatched and may still be running and still apply, so check the document before re-sending it. The timeout error names the likely causes: the command may still be running, or the request was queued while the window was not drawing frames — on Wayland the frame update (and with it the control drain) only runs on compositor frame callbacks, so a display that is asleep or a fully occluded window makes every request time out while the app itself is healthy.
 
-The transport is `apps/photocraft/src/control_server.rs`, and the handlers are in `crates/ui-egui/src/control.rs`. The MCP server (`photocraft-cli mcp --bridge 127.0.0.1:<port>`, crate `photocraft-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
+The transport is `apps/photocraft/src/control_server.rs`, and the handlers are in `crates/ui-egui/src/control.rs`. [Pipeline integration](pipeline-integration.md) maps what an asset pipeline tool needs (workfiles, loading, publishing, records kept in the file) onto these methods. The MCP server (`photocraft-cli mcp --bridge 127.0.0.1:<port>`, crate `photocraft-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
 
 ## Methods
 
@@ -88,6 +90,10 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
 - `app.open {path}` / `app.save {path?, tgaBits?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. Automation saves never show TGA or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
+- `app.place {path, scale?, fit?, center?, smartObject?}`: place a file from the read root into the active document as an embedded Smart Object layer, as File › Place Embedded does, in one undo step. `scale` is a percentage (default: fit a file larger than the canvas, as Preferences › General › Resize Image During Place says), `center` is `[x, y]` in document pixels (default: the canvas centre) and `smartObject: false` places a plain pixel layer. Replies `{layer, scale, bounds, smartObject}`; the new layer is the active one. A placed size above 300,000 px a side or 2³⁰ pixels is an error
+- `app.replaceContents {path, layer?}`: replace the contents of a Smart Object layer (`layer` is a layer id; the active layer without one) with a file from the read root, as Layer › Smart Objects › Replace Contents does. The layer keeps its id, transform, filters and masks, every instance sharing those contents updates, and it is one undo step. Replies `{layer}`. A layer that isn't a Smart Object is refused before the file is read
+- `app.exportLayer {path, layer?, scale?, trim?}`: write one layer or group (the active layer without `layer`), rendered alone and visible whatever its eye says, to a file beneath the write root, in the format the extension of `path` names, as Layer › Export As does. `trim` (default `true`) crops to the layer's pixels; `trim: false` keeps the document's canvas, so the file lines up with the document and with the other layers exported from it (a group then keeps its layers in a layered format). `scale` is a percentage, 1 to 1000. A file already at `path` is replaced, as `app.save` replaces one. Replies `{path, bytes, width, height, warnings}` and changes nothing in the document
+  - These three are the capability-scoped forms of `file.placeEmbedded`, `layer.smartObjects.replaceContents` and `layer.exportAs`, which take an ambient path and stay refused (see [Engine commands](#engine-commands)). Paths follow the rules of `app.open` and `app.save`, each method rejects a field it doesn't name, and all three fail closed without the root they need. They run inline: a large file holds the reply (and the window) until it is done
 - `app.quit`
 
 ## Engine commands
@@ -116,6 +122,8 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`), selection bounds |
 | `layer.list` | `{"document":index?,"flat":bool?}`: just the layers, top-down: `id`, `name`, `kind`, `visible`, `bounds` (`[x,y,w,h]` or null), `selected`, `active`; groups list their `children`, or with `flat` every layer is one row with its `depth` and `parent` group id |
 | `document.pixel` | `{"x":10,"y":10}`: composite RGBA |
+| `document.userData` | `{"key":str?,"value":json?,"remove":bool?}`: free-form data stored with the document, for tools that track what it holds (see [Pipeline integration](pipeline-integration.md)). No `key`: everything, as `{data: {key: value}}`; `key` alone: `{key, value}` (`null` when unset); `value`: store any JSON under the key; `remove: true`: delete it (`{key, value: null, removed}`). Keys are 1–64 characters from `A-Z a-z 0-9 . _ -`; a value is at most 1 MiB of JSON and a document's data 4 MiB. It lives in the document's XMP packet (`photocraft:UserData`), so PSD, PSB, TIFF and `.pcraft` files keep it. A change is one undo step; storing the value already there is not. Not recorded into actions |
+| `layer.persistentId` | `{"layer":id?}` → `{layer, persistentId, assigned}`: the layer's PSD layer id, which stays the same when the file is saved and reopened as PSD, PSB or `.pcraft`. The `id` of `document.inspect` is a session id (a PSD's layers get new ones every time it opens), so anything stored about a layer should name this id. A layer without one is given the next free id (`assigned: true`), which is not an undo step and leaves a clean document clean; a duplicate starts without one. `document.inspect` reports it as `persistentId` on every layer (`null` until assigned) |
 | `document.presets.list` | `{}` → `{presets:[{name,settings}]}`: saved New Document configurations |
 | `document.presets.save` | `{"name":"Product square","settings":{"width":1600,"height":1600,"background":"transparent"}}`: save a snapshot; names are trimmed, 1–255 characters, and ASCII case-insensitive duplicates are rejected |
 | `document.presets.get` | `{"name":"Product square"}` → `{preset,params}`: fetch settings; pass `params` to `file.new` to create a document, optionally adding a document `name` |
@@ -161,7 +169,7 @@ automation permissions.
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
-Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, preset imports, and plug-in install/reload) are refused the same way. `prefs.set` rejects whole-preference updates and file-backed sections (`colorSettings`, `scriptEvents`, `historyLog`, `plugIns` and `scratchDisks`) so automation cannot configure ambient file access indirectly. The desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
+Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Place a file with `app.place`, replace a Smart Object's contents with `app.replaceContents` and export a layer with `app.exportLayer`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, preset imports, and plug-in install/reload) are refused the same way. `prefs.set` rejects whole-preference updates and file-backed sections (`colorSettings`, `scriptEvents`, `historyLog`, `plugIns` and `scratchDisks`) so automation cannot configure ambient file access indirectly. The desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
 
 Embedded Smart Objects can be opened with `layer.smartObjects.editContents {layer?}` or
 unpacked with `layer.smartObjects.convertToLayers {layer?}`. This includes Photoshop sources
@@ -172,7 +180,8 @@ in memory, or close the dirty contents document. For nested objects, save from t
 contents outward. `app.save` exports the active document to a scoped file; it is not a substitute
 for Save Contents. Save the parent document to disk when the edits are complete. These rules
 also apply to recorded actions and synthetic UI input; interactive desktop commands retain
-their usual file access. Source replacement, relinking and export commands remain restricted.
+their usual file access. Replace a Smart Object's contents from the read root with
+`app.replaceContents`; relinking and the contents export commands remain restricted.
 
 `type.editText` starts inline editing of the active type layer and selects all its text, like
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
@@ -314,7 +323,7 @@ How each MCP tool maps onto control methods in bridge mode:
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |
 | `doc_inspect` | `engine.execute {command: "document.inspect"}` |
 | `doc_open {path}` | `app.open {path}` |
-| `doc_place {path, …}` | `engine.execute {command: "file.placeEmbedded", params}` |
+| `doc_place {path, …}` | `app.place {path, …}` (`index` is an error: the app places into its active document) |
 | `doc_export_layers {dir, …}` | `engine.execute {command: "file.export.layersToFiles", params}` |
 | `doc_export_data_sets {dir, …}` | `engine.execute {command: "file.export.dataSetsAsFiles", params}` |
 | `doc_import_data_sets {path, …}` | `engine.execute {command: "file.import.variableDataSets", params}` |
@@ -372,6 +381,8 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
 | `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
+| `doc.replaceContents` | `{path, layer?, index?}` → `{layer}`: replaces the contents of a Smart Object layer (the active layer without `layer`) with a file beneath the read root, keeping the layer, its transform, filters and masks: the capability-scoped `layer.smartObjects.replaceContents` |
+| `doc.exportLayer` | `{path, layer?, scale? (100), trim? (true), index?}` → `{path, bytes, width, height, warnings}`: one layer or group, rendered alone, written beneath the write root in the format the extension names; `trim: false` keeps the document's canvas. The capability-scoped `layer.exportAs`, replacing a file that exists as `doc.save` does |
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, count}`: one file per exported layer, named like `file.export.layersToFiles` names them. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file |
 | `doc.exportDataSets` | `{dir, format? (png), dataSets? (all), naming? ("{name}\|{index}\|{document}"), index?}` → `{files, count}`: the capability-scoped `file.export.dataSetsAsFiles`. The batch is planned first and colliding names are refused before any file is written, as in the command |
 | `doc.importDataSets` | `{path, delimiter? (,), index?}` → `{imported}`: the capability-scoped `file.import.variableDataSets`; the CSV is read beneath the read root |

@@ -283,6 +283,34 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// An absurd `scale` or `center` is an error before anything is allocated, not a multi-terabyte
+/// resize: these reach the command from automation clients.
+#[test]
+fn place_refuses_absurd_sizes_and_positions() {
+    let dir = tmp("place-absurd");
+    let path = png(&dir, "small.png", 10, 10, "#0000ff");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut s = session(100, 100, 8);
+    for p in [
+        json!({"scale": 1e9}),
+        json!({"scale": 1e300}),
+        json!({"scale": 3_000_100.0}),
+        json!({"center": [1e300, 0]}),
+        json!({"center": [0, -1e12]}),
+        json!({"scale": 1e9, "center": [1e300, 1e300]}),
+    ] {
+        let e = place_bytes(&mut s, "small.png", bytes.clone(), None, &p).unwrap_err().to_string();
+        assert!(e.contains("larger than a layer can be") || e.contains("`center` is outside"), "{p}: {e}");
+        let mut with_path = p.clone();
+        with_path["path"] = json!(path);
+        assert!(s.execute("file.placeEmbedded", with_path).is_err(), "{p}");
+    }
+    assert_eq!(doc(&s).layers.len(), 1, "nothing was placed");
+    // Ordinary enlargements and off-canvas centres still place.
+    let r = place_bytes(&mut s, "small.png", bytes, None, &json!({"scale": 800, "center": [-20, 150]})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 800.0).abs() < 1e-9, "{r}");
+}
+
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
 /// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
 #[test]
