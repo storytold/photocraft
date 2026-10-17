@@ -87,7 +87,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
-- `app.open {path}` / `app.save {path?, tgaBits?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. Automation saves never show TGA or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
+- `app.open {path}` / `app.save {path?, tgaBits?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths beneath the canonical or configured root are accepted, while `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. Automation saves never show TGA or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
 
 ## Engine commands
@@ -345,9 +345,14 @@ the desktop `photocraft` process, but not by headless `photocraft-cli mcp` or `s
 for those CLI modes, supply the flags explicitly. In MCP bridge mode, configure roots on the
 desktop process rather than on the bridging CLI. Request paths must be
 non-empty, forward-slash relative paths beneath the applicable root, or absolute paths that lie
-beneath it. An absolute path is compared with the root as text and the rest is checked like a
-relative path; nothing is resolved on the filesystem. Absolute paths outside the root, parent
-traversal, alternate separators in relative paths, drive/device/stream prefixes, malformed
+beneath it. Configured roots are canonicalized at startup, so relative roots, `..` in trusted
+configuration and directory links grant the resolved directory. Absolute requests may use that
+canonical root or the original configured spelling; both refer to the capability opened at
+startup, even if a launch-time link is later retargeted. Only that root prefix is translated;
+request paths are not resolved through the ambient filesystem. The remaining components are
+validated and all file effects use the held directory capability, including new output files
+and nested export directories. Other absolute aliases outside those roots, parent
+traversal beyond the granted root prefix, alternate separators in relative paths, drive/device/stream prefixes, malformed
 components, and link escapes are rejected before file effects. Read and write authority are
 independent; the parent of a new output file must already exist. Engine commands that still use
 ambient filesystem paths are disabled for automation until they are migrated to the same
