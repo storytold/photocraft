@@ -166,6 +166,9 @@ pub struct StrokeFx {
     pub size: f32,
     pub position: StrokePosition,
     pub paint: FxPaint,
+    /// Overprint (PSD `overprint`).
+    #[serde(default)]
+    pub overprint: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

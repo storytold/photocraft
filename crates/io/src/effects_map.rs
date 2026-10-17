@@ -213,6 +213,7 @@ fn parse_stroke(d: &Descriptor) -> StrokeFx {
             _ => StrokePosition::Outside,
         },
         paint,
+        overprint: bool_of(d, "overprint"),
     }
 }
 
@@ -404,7 +405,8 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             };
             let mut d = with_common(Descriptor::new("FrFX"), &s.common)
                 .with("Styl", Value::Enumerated { type_id: Id::new("FStl"), value: Id::new(styl) })
-                .with("Sz  ", unit(b"#Pxl", s.size));
+                .with("Sz  ", unit(b"#Pxl", s.size))
+                .with("overprint", Value::Boolean(s.overprint));
             d = match &s.paint {
                 FxPaint::Color(c) => {
                     d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("SClr") }).with("Clr ", Value::Descriptor(color_to_desc(c)))
@@ -680,12 +682,14 @@ mod tests {
                 size: 3.0,
                 position: StrokePosition::Inside,
                 paint: FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)),
+                overprint: false,
             }),
             Effect::Stroke(StrokeFx {
                 common: FxCommon::new(BlendMode::Multiply, 0.5),
                 size: 6.0,
                 position: StrokePosition::Center,
                 paint: FxPaint::Gradient(g.clone()),
+                overprint: true,
             }),
             Effect::ColorOverlay { common: FxCommon::new(BlendMode::Overlay, 0.5), color: Color::rgb(0.0, 0.0, 1.0) },
             Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: g, dither: true },

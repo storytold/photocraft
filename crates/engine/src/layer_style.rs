@@ -91,7 +91,7 @@ pub fn effect_defaults(kind: &str) -> Value {
         "innerGlow" => {
             json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "source": "edge", "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
-        "stroke" => json!({"size": 3, "position": "outside", "blend": "Normal", "opacity": 100, "color": "#000000"}),
+        "stroke" => json!({"size": 3, "position": "outside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
             json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100})
@@ -510,6 +510,7 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             size: 3.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+            overprint: false,
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
         "gradientOverlay" => Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false },
@@ -690,6 +691,7 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                     _ => StrokePosition::Outside,
                 };
             }
+            set_bool(p, "overprint", &mut s.overprint);
             if p.get("from").is_some() {
                 s.paint = FxPaint::Gradient(gradient(p));
             } else if let Some(c) = color_of(p, "color") {
@@ -1005,7 +1007,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "stroke",
             "Stroke…",
-            r##"{"size":px=3,"position":"outside|inside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"size":px=3,"position":"outside|inside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
         ),
         style_cmd!("colorOverlay", "Color Overlay…", r##"{"color":"#rrggbb","opacity":0..100=100,"blend":str,"add":bool}"##),
         style_cmd!(
@@ -1135,6 +1137,17 @@ mod tests {
         assert!((b.contour.as_ref().unwrap().range - 0.7).abs() < 1e-6);
         let t = b.texture.as_ref().unwrap();
         assert_eq!((t.name.as_str(), t.depth, t.invert), ("Bubbles", -2.0, true));
+    }
+
+    #[test]
+    fn stroke_overprint_is_a_param() {
+        let mut s = session();
+        s.execute("layer.layerStyle.stroke", json!({"size": 4, "overprint": true})).unwrap();
+        let Effect::Stroke(st) = &effects(&s)[0] else { panic!() };
+        assert!(st.overprint);
+        s.execute("layer.layerStyle.stroke", json!({"overprint": false})).unwrap();
+        let Effect::Stroke(st) = &effects(&s)[0] else { panic!() };
+        assert!(!st.overprint);
     }
 
     #[test]
@@ -1313,6 +1326,7 @@ mod tests {
             size: 7.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Gradient(Gradient { stops: vec![(0.0, Color::rgb(0.0, 0.0, 1.0)), (1.0, Color::WHITE)], ..Gradient::default() }),
+            overprint: false,
         });
         let r = s
             .execute(
@@ -1349,6 +1363,7 @@ mod tests {
             size: 3.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
         });
         for p in [
             json!({}),

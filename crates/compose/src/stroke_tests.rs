@@ -21,7 +21,7 @@ fn px(doc: &Document, x: i32, y: i32) -> [f32; 4] {
 }
 
 fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> Effect {
-    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size, position, paint })
+    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size, position, paint, overprint: false })
 }
 
 fn blue() -> FxPaint {

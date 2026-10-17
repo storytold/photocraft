@@ -46,6 +46,7 @@ fn effects() -> Vec<Effect> {
             size: 6.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Color(Color::rgb(0.95, 0.85, 0.2)),
+            overprint: false,
         }),
         Effect::BevelEmboss(Bevel {
             enabled: true,

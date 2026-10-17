@@ -8,7 +8,7 @@ use photocraft_geom::{Rect, Size};
 use photocraft_io::{ExportOptions, export, import};
 
 fn stroke(size: f32, position: StrokePosition, paint: FxPaint, opacity: f32) -> Effect {
-    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, opacity), size, position, paint })
+    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, opacity), size, position, paint, overprint: false })
 }
 
 fn roundtrip(doc: &Document) -> Document {

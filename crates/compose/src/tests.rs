@@ -874,6 +874,7 @@ fn stroke(size: f32, position: StrokePosition) -> Effect {
         size,
         position,
         paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
+        overprint: false,
     })
 }
 
@@ -1587,6 +1588,7 @@ fn upper_stroke_blends_with_the_backdrop_not_the_lower_stroke() {
         size: 3.0,
         position: StrokePosition::Outside,
         paint: FxPaint::Color(Color::rgb(1.0, 1.0, 0.0)),
+        overprint: false,
     });
     let d = fx_doc(vec![yellow, stroke(8.0, StrokePosition::Outside)]);
     assert!(close4(px(&d, 8, 20), [1.0, 1.0, 0.0, 1.0]), "{:?}", px(&d, 8, 20));
@@ -2517,6 +2519,7 @@ fn nested_parallel_fx_doc() -> Document {
         size: 3.0,
         position: StrokePosition::Inside,
         paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+        overprint: false,
     })];
     let mut glow = Layer::new("glow", LayerContent::Fill(g(90.0)));
     glow.opacity = 0.5;

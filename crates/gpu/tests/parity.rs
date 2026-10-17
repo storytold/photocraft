@@ -855,7 +855,13 @@ fn hard_stop_effects_and_gradient_maps_request_cpu() {
             let paint = FxPaint::Gradient(gradient.clone());
             let effects = [
                 Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient, dither: false },
-                Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size: 1.0, position: StrokePosition::Inside, paint: paint.clone() }),
+                Effect::Stroke(StrokeFx {
+                    common: FxCommon::new(BlendMode::Normal, 1.0),
+                    size: 1.0,
+                    position: StrokePosition::Inside,
+                    paint: paint.clone(),
+                    overprint: false,
+                }),
                 Effect::InnerGlow(glow(paint.clone(), GlowTechnique::Softer, 1.0, 0.0, GlowSource::Edge)),
                 Effect::OuterGlow(glow(paint, GlowTechnique::Softer, 1.0, 0.0, GlowSource::Edge)),
             ];
@@ -1340,7 +1346,7 @@ fn bevel(style: BevelStyle, up: bool, size: f32, soften: f32) -> Bevel {
 }
 
 fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> StrokeFx {
-    StrokeFx { common: FxCommon::new(BlendMode::Normal, 0.9), size, position, paint }
+    StrokeFx { common: FxCommon::new(BlendMode::Normal, 0.9), size, position, paint, overprint: false }
 }
 
 fn checker_pattern() -> Pattern {

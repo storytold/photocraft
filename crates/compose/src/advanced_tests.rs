@@ -289,6 +289,7 @@ fn inside_stroke() -> Effect {
         size: 2.0,
         position: StrokePosition::Inside,
         paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+        overprint: false,
     })
 }
 
@@ -298,6 +299,7 @@ fn outside_stroke() -> Effect {
         size: 6.0,
         position: StrokePosition::Outside,
         paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+        overprint: false,
     })
 }
 
@@ -318,6 +320,7 @@ fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
                             size: 6.0,
                             position,
                             paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+                            overprint: false,
                         })];
                         l.blend = blend;
                         l.fill_opacity = fill;
