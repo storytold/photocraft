@@ -15,6 +15,8 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
   --automation-read-root /work/project --automation-write-root /work/project
 ```
 
+`--control 0` lets the operating system pick a free port; the launch log on standard error names the one bound (`photocraft: control server listening on 127.0.0.1:<port>`).
+
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
 
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
