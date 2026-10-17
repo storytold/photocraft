@@ -217,6 +217,28 @@ fn shape_edit_live_params_and_undo() {
 }
 
 #[test]
+fn arrowhead_edits_preserve_unchanged_transformed_oversize_dimensions_only() {
+    let mut s = session(200, 100, 8);
+    let id =
+        s.execute("shape.create", json!({"kind":"line","from":[20,40],"to":[120,40],"arrowheads":{"end":true,"width":6000,"length":10}})).unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+    s.execute("shape.edit", json!({"layer":id,"transform":[2,0,0,2,0,0]})).unwrap();
+    let transformed = shape(&s, id).path.clone();
+    assert!(matches!(shape(&s, id).live, Some(LiveShape::Line { arrowheads: Some(ref a), .. }) if a.width == 12000.0 && a.length == 20.0));
+
+    s.execute("shape.edit", json!({"layer":id,"arrowheads":{"start":true,"end":true,"width":12000,"length":20,"concavity":0}})).unwrap();
+    assert!(matches!(shape(&s, id).live, Some(LiveShape::Line { arrowheads: Some(ref a), .. }) if a.start && a.width == 12000.0 && a.length == 20.0));
+    let expected_doc = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute("shape.edit", json!({"layer":id,"arrowheads":{"start":true,"end":true,"width":12001,"length":20,"concavity":0}})).is_err());
+    assert_eq!(doc(&s), &expected_doc, "rejected new oversize dimension leaves the document unchanged");
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_ne!(shape(&s, id).path, transformed, "the arrowhead toggle is applied");
+    assert!(s.execute("shape.create", json!({"kind":"line","from":[10,10],"to":[20,10],"arrowheads":{"end":true,"width":10001,"length":10}})).is_err());
+}
+
+#[test]
 fn reapplying_unchanged_live_rectangle_keeps_nonuniformly_scaled_corners() {
     for depth in [8, 16, 32] {
         let mut s = session(128, 128, depth);
@@ -242,6 +264,30 @@ fn reapplying_unchanged_live_rectangle_keeps_nonuniformly_scaled_corners() {
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(shape(&s, id).path, path);
     }
+}
+
+#[test]
+fn anisotropically_scaled_rounded_polygon_noop_side_edit_keeps_its_exact_outline() {
+    let mut s = session(256, 128, 8);
+    let id = s.execute("shape.create", json!({"kind":"polygon","rect":[0,0,100,100],"sides":4,"cornerRadius":10})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer":id,"transform":[2,0,0,1,0,0]})).unwrap();
+    let transformed = shape(&s, id).path.clone();
+    s.execute("shape.edit", json!({"layer":id,"sides":4})).unwrap();
+    assert_eq!(shape(&s, id).path, transformed, "reapplying unchanged live metadata must preserve the scaled outline");
+}
+
+#[test]
+fn anisotropically_scaled_regular_polygon_keeps_outline_when_storing_smooth_indents() {
+    let mut s = session(256, 128, 8);
+    let id = s.execute("shape.create", json!({"kind":"polygon","rect":[0,0,100,100],"sides":4,"cornerRadius":10})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer":id,"transform":[2,0,0,1,0,0]})).unwrap();
+    let transformed = shape(&s, id).path.clone();
+
+    s.execute("shape.edit", json!({"layer":id,"smoothIndents":true})).unwrap();
+
+    let sh = shape(&s, id);
+    assert_eq!(sh.path, transformed, "smooth indents are inactive for a regular polygon and must not rebuild its exact transformed path");
+    assert!(matches!(sh.live, Some(LiveShape::Polygon { star_ratio: 1.0, corner_radius: 10.0, smooth_indents: true, .. })));
 }
 
 #[test]

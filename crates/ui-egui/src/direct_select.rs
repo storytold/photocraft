@@ -536,7 +536,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
             Some(Drag::Edit { target, preview: Some(p), .. }) if *target == r => p.clone(),
             _ => path,
         };
-        crate::vector_ui::draw_outline(painter, &path, to_scr, accent);
+        crate::vector_ui::draw_outline(painter, &path, to_scr, accent, crate::shape_modes::path_display(app, painter.ctx()).1);
         let ours = ds.target == Some(r);
         for &(k, h) in if ours { shown_handles(ds, &path) } else { Vec::new() }.iter() {
             if let Some(kn) = path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])) {

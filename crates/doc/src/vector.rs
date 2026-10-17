@@ -289,7 +289,19 @@ impl ShapeStroke {
     }
 }
 
-/// Parametric ("live") shape the path was generated from, kept for re-editing (Properties panel).
+/// Filled line arrowheads; dimensions are document pixels.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineArrowheads {
+    pub start: bool,
+    pub end: bool,
+    pub width: f64,
+    pub length: f64,
+    /// Indentation of the arrowhead base, in percent (`-50..=50`).
+    pub concavity: f64,
+}
+
+/// Parametric shape geometry retained for subsequent editing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LiveShape {
@@ -306,12 +318,18 @@ pub enum LiveShape {
         rect: [f64; 4],
         sides: u32,
         star_ratio: f64,
+        #[serde(default)]
+        corner_radius: f64,
+        #[serde(default)]
+        smooth_indents: bool,
     },
     /// Line from `from` to `to` drawn as a filled bar `weight` px thick.
     Line {
         from: [f64; 2],
         to: [f64; 2],
         weight: f64,
+        #[serde(default)]
+        arrowheads: Option<LineArrowheads>,
     },
 }
 
@@ -333,6 +351,16 @@ pub struct ShapeLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_live_shapes_default_new_geometry_fields() {
+        let polygon: LiveShape = serde_json::from_str(r#"{"kind":"polygon","rect":[0,0,10,10],"sides":3,"star_ratio":1}"#).unwrap();
+        assert!(matches!(polygon, LiveShape::Polygon { corner_radius: 0.0, smooth_indents: false, .. }));
+        let line: LiveShape = serde_json::from_str(r#"{"kind":"line","from":[0,0],"to":[10,10],"weight":2}"#).unwrap();
+        assert!(matches!(line, LiveShape::Line { arrowheads: None, .. }));
+        let heads: LineArrowheads = serde_json::from_str(r#"{"start":true,"end":false,"width":10,"length":20}"#).unwrap();
+        assert_eq!(heads.concavity, 0.0);
+    }
 
     #[test]
     fn segments_open_and_closed() {

@@ -18,6 +18,23 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Channel Options and New Spot Channel (#3761)
+	Color Picker	Выбор цвета
+	Color opacity	Непрозрачность цвета
+	Concavity:	Вогнутость:
+	No recent colors	Нет недавно использованных цветов
+	Recent Colors	Недавно использованные цвета
+	Align Edges	Выровнять края
+	Arrowheads	Наконечники стрелок
+	Constrain Proportions	Сохранить пропорции
+	End	Конец
+	Path Options	Параметры контура
+	Proportional	Пропорционально
+	Show Path	Показать контур
+	Smooth Indents	Сгладить впадины
+	Unconstrained	Без ограничений
+	Solid Color	Сплошной цвет
+	Start	Начало
+	Stop opacity	Непрозрачность точки
 	Channel Color	Цвет канала
 	Color Indicates:	Цветом обозначены:
 	Solidity:	Плотность:

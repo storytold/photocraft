@@ -7,8 +7,8 @@
 //! click without movement changes nothing.
 
 use egui::{Color32, Modifiers, Pos2, Stroke};
-use photocraft_doc::LayerContent;
 use photocraft_doc::vector::LiveShape;
+use photocraft_doc::{DocId, LayerContent, LayerId};
 
 use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
@@ -29,6 +29,10 @@ pub struct Target {
 /// A corner radius drag in progress.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drag {
+    doc: DocId,
+    revision: u64,
+    tool: Tool,
+    selection: Vec<LayerId>,
     /// Every selected live rectangle, as at the press.
     targets: Vec<Target>,
     /// The rectangle whose widget was pressed (an index into `targets`) and its corner,
@@ -45,12 +49,48 @@ pub struct Drag {
 
 /// Do the widgets show with the current tool?
 fn shows(app: &PhotocraftApp) -> bool {
+    let tool = app.active_tool();
     app.ui.transform.is_none()
-        && match app.ui.tool {
+        && !app.ui.mask_target
+        && !app.ui.vector_mask_target
+        && (!crate::vector_ui::is_shape_tool(tool) || app.ui.tool_options.shape.mode == "shape")
+        && match tool {
             Tool::PathSelection | Tool::Rectangle => true,
             Tool::Move => app.ui.tool_options.move_show_transform,
             _ => false,
         }
+}
+
+/// Is this radius system active for the canvas tool?
+pub(crate) fn supports_tool(app: &PhotocraftApp, tool: Tool) -> bool {
+    app.active_tool() == tool && shows(app)
+}
+
+pub(crate) fn dragging(app: &PhotocraftApp) -> bool {
+    app.ui.corner_radius.is_some()
+}
+
+/// Drop a preview when its document, selection, tool or edit context changes.
+pub(crate) fn cancel_stale(app: &mut PhotocraftApp) -> bool {
+    let stale = app.ui.corner_radius.as_ref().is_some_and(|d| {
+        app.session.active().is_none_or(|st| {
+            st.doc.id != d.doc
+                || st.revision != d.revision
+                || app.active_tool() != d.tool
+                || st.selected_layers() != d.selection
+                || !shows(app)
+                || targets(app).iter().map(|t| t.layer).collect::<Vec<_>>() != d.targets.iter().map(|t| t.layer).collect::<Vec<_>>()
+        })
+    });
+    if stale {
+        app.ui.corner_radius = None;
+    }
+    stale
+}
+
+/// A temporary navigation tool owns the pointer and cancels any radius preview immediately.
+pub(crate) fn end_if_navigation(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    matches!(tool, Tool::Hand | Tool::Zoom | Tool::RotateView) && app.ui.corner_radius.take().is_some()
 }
 
 /// The selected layers that are live rectangles, front first.
@@ -64,6 +104,10 @@ fn targets(app: &PhotocraftApp) -> Vec<Target> {
         .into_iter()
         .filter_map(|id| {
             let l = st.doc.layer(id)?;
+            let locks = st.doc.effective_locks(id);
+            if locks.all || locks.pixels || locks.position {
+                return None;
+            }
             let LayerContent::Shape(sh) = &l.content else { return None };
             let Some(LiveShape::Rect { rect: [x, y, w, h], radii }) = sh.live else { return None };
             let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
@@ -118,17 +162,17 @@ fn zoom(app: &PhotocraftApp) -> f64 {
 /// index into `targets`) and its corner, the nearest when several are close.
 fn hit(app: &PhotocraftApp, targets: &[Target], p: [f64; 2]) -> Option<(usize, usize)> {
     let z = zoom(app);
-    let tol = 7.0 / z;
+    let aspect = f64::from(app.ui.view.display_aspect());
     targets
         .iter()
         .enumerate()
         .flat_map(|(t, g)| {
             (0..4).map(move |i| {
                 let w = widget(g.rect, g.radii, i, z);
-                (t, i, (w[0] - p[0]).hypot(w[1] - p[1]))
+                (t, i, ((w[0] - p[0]) * z * aspect).hypot((w[1] - p[1]) * z))
             })
         })
-        .filter(|(.., d)| *d <= tol)
+        .filter(|(.., d)| *d <= 7.0)
         .min_by(|a, b| a.2.total_cmp(&b.2))
         .map(|(t, i, _)| (t, i))
 }
@@ -139,8 +183,15 @@ pub fn hovers(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.ui.corner_radius.is_some() || hit(app, &targets(app), p).is_some()
 }
 
+pub(crate) fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<egui::CursorIcon> {
+    hovers(app, p).then_some(egui::CursorIcon::PointingHand)
+}
+
 /// Canvas pointer events for the corner widgets; false when the event is not theirs.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
+    if cancel_stale(app) {
+        return !matches!(ev, ToolEvent::Down { .. });
+    }
     match ev {
         ToolEvent::Down { x, y, .. } => {
             if mods.command {
@@ -148,8 +199,20 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             }
             let targets = targets(app);
             let Some((grabbed, corner)) = hit(app, &targets, [x, y]) else { return false };
+            let Some(st) = app.session.active() else { return false };
             let now = targets.iter().map(|t| t.radii).collect();
-            app.ui.corner_radius = Some(Drag { targets, grabbed, corner, all: !mods.alt, start: [x, y], now });
+            app.ui.corner_radius = Some(Drag {
+                doc: st.doc.id,
+                revision: st.revision,
+                tool: app.active_tool(),
+                selection: st.selected_layers(),
+                targets,
+                grabbed,
+                corner,
+                all: !mods.alt,
+                start: [x, y],
+                now,
+            });
             // The press may have started the Move tool's snapping, which a radius drag has none of.
             app.prefs_rt.snap = None;
             app.prefs_rt.snap_lines.clear();
@@ -157,7 +220,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             true
         }
         ToolEvent::Move { x, y, .. } => {
+            let z = zoom(app);
+            let aspect = f64::from(app.ui.view.display_aspect());
             let Some(d) = app.ui.corner_radius.as_mut() else { return false };
+            let screen_dx = (x - d.start[0]) * z * aspect;
+            let screen_dy = (y - d.start[1]) * z;
+            if screen_dx.hypot(screen_dy) < 0.5 {
+                for (target, now) in d.targets.iter().zip(&mut d.now) {
+                    *now = target.radii;
+                }
+                return true;
+            }
             let Some(g) = d.targets.get(d.grabbed) else { return true };
             let from = g.radii.get(d.corner).copied().unwrap_or(0.0).clamp(0.0, max_radius(g.rect));
             let r = radius_after(g.rect, d.corner, from, d.start, [x, y]);
@@ -197,6 +270,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     }
 }
 
+/// Escape cancels the preview without changing document history.
+pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    cancel_stale(app);
+    if app.ui.corner_radius.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, egui::Key::Escape)) {
+        app.ui.corner_radius = None;
+        return true;
+    }
+    false
+}
+
 /// The radius the dragged corner shows in the readout.
 fn dragged_radius(d: &Drag) -> Option<f64> {
     d.now.get(d.grabbed).and_then(|r| r.get(d.corner)).copied()
@@ -217,7 +300,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         let radii = now.copied().unwrap_or(t.radii);
         if now.is_some() {
             let path = photocraft_vector::shapes::rounded_rect(t.rect[0], t.rect[1], t.rect[2], t.rect[3], radii);
-            crate::vector_ui::draw_outline(painter, &path, to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &path, to_scr, accent, crate::shape_modes::path_display(app, painter.ctx()).1);
         }
         for i in 0..4 {
             let p = to_scr(widget(t.rect, radii, i, z));

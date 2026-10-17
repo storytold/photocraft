@@ -76,7 +76,7 @@ fn from_center_and_the_other_tools() {
     let id = only_dialog(&app);
     set(&mut app, id, json!({"width": 50, "height": 60, "sides": 7, "starRatio": 50}));
     crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(live(&app), LiveShape::Polygon { rect: [10.0, 10.0, 50.0, 60.0], sides: 7, star_ratio: 0.5 });
+    assert_eq!(live(&app), LiveShape::Polygon { rect: [10.0, 10.0, 50.0, 60.0], sides: 7, star_ratio: 0.5, corner_radius: 0.0, smooth_indents: false });
 
     press(&mut app, Tool::Triangle, [5.0, 6.0], [5.0, 6.0]);
     let id = only_dialog(&app);

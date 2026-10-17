@@ -1327,6 +1327,7 @@
 	Offset	Posun
 	Only Web Colors	Pouze webové barvy
 	Opacity	Krytí
+	Stop opacity	Krytí zarážky
 	Opacity Jitter	Kolísání krytí
 	Opacity:	Krytí:
 	Open a document to define variables.	Chcete-li definovat proměnné, otevřete dokument.
@@ -2626,6 +2627,10 @@ cameraData	Lens	Objektiv
 	Add New Artboard	Přidat novou kreslicí plochu
 	W	Š
 	H	V
+	Arrowheads	Hroty šipek
+	Recent Colors	Naposledy použité barvy
+	No recent colors	Žádné nedávno použité barvy
+	Color opacity	Krytí barvy
 	Freeform Pen Tool	Nástroj pero od ruky
 	Curvature Pen Tool	Nástroj pero křivosti
 	Curve Fit:	Přizpůsobení křivky:
@@ -3326,6 +3331,16 @@ cameraData	Lens	Objektiv
 	Snowflakes	Sněhové vločky
 	Softness	Měkkost
 	Software	Software
+	Constrain Proportions	Zachovat proporce
+	End	Konec
+	Path Options	Volby cesty
+	Show Path	Zobrazit cestu
+	Start	Začátek
+	Align Edges	Zarovnat hrany
+	Unconstrained	Bez omezení
+	Proportional	Proporcionální
+	Smooth Indents	Vyhladit prohlubně
+	Concavity:	Konkávnost:
 	Solid Color	Plná barva
 	Solid Front Faces	Plné přední stěny
 	Source Layer	Zdrojová vrstva

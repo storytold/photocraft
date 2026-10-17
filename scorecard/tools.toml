@@ -192,7 +192,7 @@ id = "TOOL-214-12"
 target = "Shapes: on-canvas corner radius handles, shape feather, selection to shape with tolerance"
 status = "partial"
 issue = 214
-note = "On-canvas corner radius widgets on every selected live rectangle with Path Selection, the Rectangle tool and Move + Show Transform Controls: drag rounds every corner of every selected rectangle alike, Alt that corner on each, corner radius cursor and R: readout, one history step (corner_radius.rs, 2026-10-13); select.convertToShape with tolerance (vector_cmds.rs:1256). Missing: shape feather"
+note = "On-canvas corner-radius handles on live rectangles with Path Selection and Move + Show Transform Controls; linked/per-corner editing, rotated/flipped views and one-step Undo (corner_radius.rs; corner_radius_tests.rs). select.convertToShape supports tolerance (vector_cmds.rs). Shape feather remains open."
 
 [[item]]
 id = "TOOL-214-13"
@@ -290,7 +290,7 @@ id = "TOOL-1053-1"
 target = "Shape stroke controls: solid/dashed/dotted, custom dash/gap/offset, caps, joins, alignment, miter limit and opacity"
 status = "done"
 issue = 1053
-note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; existing shape.create/edit/info; serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Gradient fill UI and saved stroke libraries remain open; Line retains filled-bar geometry"
+note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; shape_paint_ui.rs: independent Solid/Gradient/Pattern/No Color fill and stroke pickers; shape.create/edit/info, serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Saved stroke libraries remain open; Line retains filled-bar geometry"
 
 [[item]]
 id = "TOOL-213-19"

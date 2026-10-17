@@ -1351,6 +1351,40 @@ fn checker_pattern() -> Pattern {
     Pattern::new("checker", s, 6, 5)
 }
 
+#[test]
+fn patterned_shape_fill_and_stroke_clip_and_effects_match_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
+            for effects in [false, true] {
+                let mut d = Document::new("pattern shape", Size::new(90, 70), mode, depth);
+                let p = checker_pattern();
+                let fill = Fill::Pattern { id: p.id.clone(), name: p.name.clone(), scale: 1.3, angle: 23.0, link: true, phase: (2.0, -3.0) };
+                d.patterns.push(p);
+                let mut sh = photocraft_doc::ShapeLayer {
+                    path: photocraft_vector::shapes::rounded_rect(12.0, 12.0, 60.0, 40.0, [4.0; 4]),
+                    fill: Some(fill.clone()),
+                    stroke: Some(photocraft_doc::ShapeStroke { width: 4.0, paint: fill, align: photocraft_doc::StrokeAlign::Outside, ..Default::default() }),
+                    ..Default::default()
+                };
+                sh.cache = Some(photocraft_vector::render_shape_with_patterns(&sh, d.pixel_format(), d.bounds(), &d.patterns));
+                assert!(sh.cache.as_ref().unwrap().rgba(30, 30)[3] > 0.5, "pattern fill must be visible before parity");
+                assert!(sh.cache.as_ref().unwrap().rgba(9, 30)[3] > 0.5, "pattern stroke must be visible before parity");
+                let mut layer = Layer::new("pattern", LayerContent::Shape(sh));
+                if effects {
+                    layer.mask = Some(mask(d.bounds(), 7, 0.6));
+                    layer.effects.items.push(Effect::DropShadow(shadow(BlendMode::Multiply, 0.6, 120.0, 4.0, 3.0, 0.0)));
+                }
+                d.layers.push(layer);
+                let mut clipped = noise_layer("clipped", d.pixel_format(), Rect::new(28, 0, 50, 70), 9, 0.5);
+                clipped.clipped = true;
+                d.layers.push(clipped);
+                fx_check(&mut g, &d, &format!("pattern shape {depth:?}/{mode:?}, effects {effects}"));
+            }
+        }
+    }
+}
+
 /// Every effect kind with several option combinations, one effect stack per case.
 fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     let pat = checker_pattern();

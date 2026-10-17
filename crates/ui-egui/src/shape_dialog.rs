@@ -15,7 +15,7 @@ const MARK: &str = "__createShape";
 /// Largest side the dialog accepts, in pixels (Photoshop's document limit).
 const MAX_PX: f64 = 300_000.0;
 /// Remembered values (document pixels; sides and radii come from the options bar).
-const KEYS: [&str; 4] = ["width", "height", "fromCenter", "starRatio"];
+const KEYS: [&str; 5] = ["width", "height", "fromCenter", "starRatio", "smoothIndents"];
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
@@ -53,29 +53,47 @@ pub fn is_click(start: [f64; 2], points: &[[f64; 3]], zoom: f32) -> bool {
 /// Open the creation dialog of `tool` for a click at `at` (document px). `None` for a tool without
 /// one (Line, Custom Shape).
 pub fn open(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> Option<u64> {
+    open_gesture(app, tool, at, egui::Modifiers::NONE)
+}
+
+pub(crate) fn open_gesture(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2], mods: egui::Modifiers) -> Option<u64> {
     let (kind, label) = kind_of(tool)?;
     if !(at[0].is_finite() && at[1].is_finite()) {
         return None;
     }
     let o = &app.ui.tool_options;
-    let r = f64::from(o.corner_radius.max(0.0));
-    let sides = o.polygon_sides.clamp(3, 100);
+    let live = crate::shape_options::drawing_live(app);
+    let r = match &live {
+        Some(photocraft_doc::LiveShape::Rect { radii, .. }) if tool == Tool::Rectangle => radii[0],
+        Some(photocraft_doc::LiveShape::Polygon { corner_radius, .. }) if matches!(tool, Tool::Triangle | Tool::Polygon) => *corner_radius,
+        _ => f64::from(o.corner_radius.max(0.0)),
+    };
+    let sides = match &live {
+        Some(photocraft_doc::LiveShape::Polygon { sides, .. }) if tool == Tool::Polygon => *sides,
+        _ => o.polygon_sides.clamp(3, 100),
+    };
     let mut f = Map::new();
     f.insert(MARK.into(), json!(kind));
     f.insert("__command".into(), json!("shape.create"));
     f.insert("__label".into(), json!(label));
-    f.insert("__at".into(), json!([at[0].round(), at[1].round()]));
+    f.insert("__at".into(), json!(if o.shape.align_edges { at.map(f64::round) } else { at }));
     f.insert("width".into(), json!(100.0));
     f.insert("height".into(), json!(100.0));
-    f.insert("fromCenter".into(), json!(false));
+    f.insert("fromCenter".into(), json!(o.shape.from_center || mods.alt));
     match kind {
         "rectangle" => {
             f.insert("radii".into(), json!([r, r, r, r]));
             f.insert("linkRadii".into(), json!(true));
         }
-        "polygon" => {
+        "triangle" | "polygon" => {
+            f.insert("cornerRadius".into(), json!(r));
             f.insert("sides".into(), json!(sides));
-            f.insert("starRatio".into(), json!(100.0));
+            let (ratio, smooth) = match &live {
+                Some(photocraft_doc::LiveShape::Polygon { star_ratio, smooth_indents, .. }) if tool == Tool::Polygon => (*star_ratio, *smooth_indents),
+                _ => (o.shape.star_ratio, o.shape.smooth_indents),
+            };
+            f.insert("starRatio".into(), json!(ratio * 100.0));
+            f.insert("smoothIndents".into(), json!(smooth));
         }
         _ => {}
     }
@@ -87,6 +105,13 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> Option<u64> {
                 f.insert(key.into(), v.clone());
             }
         }
+    }
+    if matches!(o.shape.size_mode.as_str(), "fixed" | "proportional") {
+        f.insert("width".into(), json!(o.shape.size_width));
+        f.insert("height".into(), json!(o.shape.size_height));
+    }
+    if mods.alt {
+        f.insert("fromCenter".into(), json!(true));
     }
     Some(app.ui.open_dialog(DialogKind::Command, f))
 }
@@ -123,11 +148,11 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
             if radii.iter().any(|r| *r > 0.0) { json!({"kind": "roundedRect", "rect": rect, "radii": radii}) } else { json!({"kind": "rect", "rect": rect}) }
         }
         "ellipse" => json!({"kind": "ellipse", "rect": rect}),
-        "triangle" => json!({"kind": "polygon", "rect": rect, "sides": 3}),
+        "triangle" => json!({"kind": "polygon", "rect": rect, "sides": 3,"cornerRadius":num(f,"cornerRadius").unwrap_or(0.0)}),
         "polygon" => {
             let sides = num(f, "sides").map_or(5.0, |s| s.round().clamp(3.0, 100.0));
             let ratio = num(f, "starRatio").map_or(100.0, |r| r.clamp(1.0, 100.0));
-            json!({"kind": "polygon", "rect": rect, "sides": sides, "starRatio": ratio / 100.0})
+            json!({"kind": "polygon", "rect": rect, "sides": sides, "starRatio": ratio / 100.0,"cornerRadius":num(f,"cornerRadius").unwrap_or(0.0),"smoothIndents":f.get("smoothIndents").and_then(Value::as_bool).unwrap_or(false)})
         }
         other => return Err(format!("unknown shape `{other}`")),
     })
@@ -232,8 +257,24 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
                     f.insert("starRatio".into(), json!(f64::from(r.clamp(1.0, 100.0))));
                 }
             });
+            ui.horizontal(|ui| {
+                label(ui, "");
+                let mut smooth = f.get("smoothIndents").and_then(Value::as_bool).unwrap_or(false);
+                if crate::widgets::checkbox(ui, &mut smooth, tl!("Smooth Indents")).changed() {
+                    f.insert("smoothIndents".into(), json!(smooth));
+                }
+            });
         }
         _ => {}
+    }
+    if matches!(kind.as_str(), "triangle" | "polygon") {
+        ui.horizontal(|ui| {
+            label(ui, tl!("Radius:"));
+            let mut radius = num(f, "cornerRadius").unwrap_or(0.0) as f32;
+            if crate::widgets::value_field(ui, &mut radius, 0.0..=10000.0, "px", 72.0).changed() {
+                f.insert("cornerRadius".into(), json!(radius));
+            }
+        });
     }
     ui.horizontal(|ui| {
         label(ui, "");

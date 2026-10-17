@@ -1296,6 +1296,7 @@
 	Offset	Verschuiving
 	Only Web Colors	Alleen webkleuren
 	Opacity	Dekking
+	Stop opacity	Dekking van stop
 	Opacity Jitter	Dekkingsvariatie
 	Opacity:	Dekking:
 	Open a document to define variables.	Open een document om variabelen te definiëren.
@@ -3493,6 +3494,16 @@ cameraRaw	Color	Kleur
 	Smart Blur	Slim vervagen
 	Smart Sharpen	Slim verscherpen
 	Smudge Stick	Veegstift
+	Constrain Proportions	Verhoudingen behouden
+	End	Einde
+	Path Options	Padopties
+	Show Path	Pad tonen
+	Start	Begin
+	Align Edges	Randen uitlijnen
+	Unconstrained	Onbeperkt
+	Proportional	Proportioneel
+	Smooth Indents	Inkepingen vloeiend maken
+	Concavity:	Holte:
 	Solid Color	Effen kleur
 	Spacing:	Tussenruimte:
 	Spherize	Bolvorm
@@ -3739,6 +3750,10 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+	Arrowheads	Pijlpunten
+	Recent Colors	Onlangs gebruikte kleuren
+	No recent colors	Geen onlangs gebruikte kleuren
+	Color opacity	Kleurdekking
 	Appearance Settings…	Weergave-instellingen…
 	Add to favorites	Toevoegen aan favorieten
 	Remove from favorites	Verwijderen uit favorieten

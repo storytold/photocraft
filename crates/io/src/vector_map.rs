@@ -383,6 +383,21 @@ pub fn live_from_vogk(data: &[u8]) -> Option<LiveShape> {
             from: point_of(o, "keyOriginLineStart")?,
             to: point_of(o, "keyOriginLineEnd")?,
             weight: num(o.get("keyOriginLineWeight")).unwrap_or(1.0),
+            arrowheads: if matches!(o.get("keyOriginLineArrowSt"), Some(Value::Boolean(true)))
+                || matches!(o.get("keyOriginLineArrowEnd"), Some(Value::Boolean(true)))
+                || num(o.get("keyOriginLineArrWdth")).is_some_and(|v| v > 0.0)
+                || num(o.get("keyOriginLineArrLngth")).is_some_and(|v| v > 0.0)
+            {
+                Some(photocraft_doc::vector::LineArrowheads {
+                    start: matches!(o.get("keyOriginLineArrowSt"), Some(Value::Boolean(true))),
+                    end: matches!(o.get("keyOriginLineArrowEnd"), Some(Value::Boolean(true))),
+                    width: num(o.get("keyOriginLineArrWdth")).unwrap_or(10.0),
+                    length: num(o.get("keyOriginLineArrLngth")).unwrap_or(20.0),
+                    concavity: num(o.get("keyOriginLineArrConc")).unwrap_or(0.0),
+                })
+            } else {
+                None
+            },
         }),
         _ => None,
     }
@@ -421,7 +436,7 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
             )
             .with("keyOriginShapeBBox", bbox(*rect)),
         LiveShape::Ellipse { rect } => base(5).with("keyOriginShapeBBox", bbox(*rect)),
-        LiveShape::Line { from, to, weight } => {
+        LiveShape::Line { from, to, weight, arrowheads } => {
             let pnt = |p: [f64; 2]| Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", Value::Double(p[0])).with("Vrtc", Value::Double(p[1])));
             let r = [from[0].min(to[0]), from[1].min(to[1]), (from[0] - to[0]).abs(), (from[1] - to[1]).abs()];
             base(4)
@@ -429,11 +444,11 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
                 .with("keyOriginLineEnd", pnt(*to))
                 .with("keyOriginLineStart", pnt(*from))
                 .with("keyOriginLineWeight", Value::Double(*weight))
-                .with("keyOriginLineArrowSt", Value::Boolean(false))
-                .with("keyOriginLineArrowEnd", Value::Boolean(false))
-                .with("keyOriginLineArrWdth", Value::Double(0.0))
-                .with("keyOriginLineArrLngth", Value::Double(0.0))
-                .with("keyOriginLineArrConc", Value::Integer(0))
+                .with("keyOriginLineArrowSt", Value::Boolean(arrowheads.as_ref().is_some_and(|a| a.start)))
+                .with("keyOriginLineArrowEnd", Value::Boolean(arrowheads.as_ref().is_some_and(|a| a.end)))
+                .with("keyOriginLineArrWdth", Value::Double(arrowheads.as_ref().map_or(0.0, |a| a.width)))
+                .with("keyOriginLineArrLngth", Value::Double(arrowheads.as_ref().map_or(0.0, |a| a.length)))
+                .with("keyOriginLineArrConc", Value::Double(arrowheads.as_ref().map_or(0.0, |a| a.concavity)))
         }
         LiveShape::Polygon { .. } => return None,
     };
@@ -666,12 +681,67 @@ mod tests {
             LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [0.0; 4] },
             LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [1.0, 2.0, 3.0, 4.0] },
             LiveShape::Ellipse { rect: [5.0, 6.0, 7.0, 8.0] },
-            LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0 },
+            LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, arrowheads: None },
+            LiveShape::Line {
+                from: [0.0, 10.0],
+                to: [20.0, 0.0],
+                weight: 3.0,
+                arrowheads: Some(photocraft_doc::vector::LineArrowheads { start: true, end: true, width: 12.0, length: 10.0, concavity: -32.5 }),
+            },
         ] {
             let b = vogk_bytes(&s, 72.0).unwrap();
             assert_eq!(live_from_vogk(&b), Some(s));
         }
-        assert!(vogk_bytes(&LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0 }, 72.0).is_none());
+        assert!(vogk_bytes(&LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0, corner_radius: 0.0, smooth_indents: false }, 72.0).is_none());
+    }
+
+    #[test]
+    fn vogk_arrowhead_concavity_keeps_fractional_values_and_defaults_missing_values() {
+        for concavity in [-50.0, -12.5, 0.0, 32.5, 50.0] {
+            let live = LiveShape::Line {
+                from: [5.0, 10.0],
+                to: [75.0, 20.0],
+                weight: 3.0,
+                arrowheads: Some(photocraft_doc::vector::LineArrowheads { start: false, end: true, width: 12.0, length: 10.0, concavity }),
+            };
+            assert_eq!(live_from_vogk(&vogk_bytes(&live, 72.0).unwrap()), Some(live));
+        }
+        let point = |x| Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", Value::Double(x)).with("Vrtc", Value::Double(10.0)));
+        let origin = Descriptor::new("null")
+            .with("keyOriginType", Value::Integer(4))
+            .with("keyOriginLineStart", point(5.0))
+            .with("keyOriginLineEnd", point(75.0))
+            .with("keyOriginLineArrowEnd", Value::Boolean(true));
+        let descriptor = Descriptor::new("null").with("keyDescriptorList", Value::List(vec![Value::Descriptor(origin)]));
+        let mut data = 1u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(descriptor).to_bytes());
+        let Some(LiveShape::Line { arrowheads: Some(heads), .. }) = live_from_vogk(&data) else { panic!("line origination") };
+        assert_eq!(heads.concavity, 0.0);
+    }
+
+    #[test]
+    fn smooth_star_psd_keeps_curve_geometry_without_inventing_origination_metadata() {
+        let live = LiveShape::Polygon { rect: [5.0, 5.0, 100.0, 70.0], sides: 5, star_ratio: 0.4, corner_radius: 3.0, smooth_indents: true };
+        let shape = ShapeLayer { path: photocraft_vector::shapes::live_path(&live), live: Some(live), ..Default::default() };
+        let mut raw = Vec::new();
+        shape_blocks(&shape, &mut raw, 128, 128, 72.0);
+        let lookup = |k: &[u8; 4]| raw.iter().find(|(key, _)| key == k).map(|(_, data)| data.clone());
+        let mut back = ShapeLayer::default();
+        shape_from_blocks(&mut back, &lookup, 128, 128, 72.0);
+        assert!(back.live.is_none());
+        assert_eq!(shape.path.subpaths.len(), back.path.subpaths.len());
+        for (a, b) in shape.path.subpaths.iter().zip(&back.path.subpaths) {
+            assert_eq!(a.knots.len(), b.knots.len());
+            assert_eq!((a.closed, a.op), (b.closed, b.op));
+            for (a, b) in a.knots.iter().zip(&b.knots) {
+                for (a, b) in [a.anchor, a.in_ctrl, a.out_ctrl].into_iter().zip([b.anchor, b.in_ctrl, b.out_ctrl]) {
+                    assert!((a.x - b.x).abs() < 0.00001 && (a.y - b.y).abs() < 0.00001);
+                }
+            }
+        }
+        let before = raw.clone();
+        shape_blocks(&back, &mut raw, 128, 128, 72.0);
+        assert_eq!(raw, before, "unchanged imported curves must keep original PSD bytes");
     }
 
     #[test]
@@ -699,7 +769,7 @@ mod tests {
         // Edit: path changes → vmsk regenerated, live dropped when polygon.
         let mut edited = sh.clone();
         edited.path.subpaths.pop();
-        edited.live = Some(LiveShape::Polygon { rect: [0.0; 4], sides: 3, star_ratio: 1.0 });
+        edited.live = Some(LiveShape::Polygon { rect: [0.0; 4], sides: 3, star_ratio: 1.0, corner_radius: 0.0, smooth_indents: false });
         shape_blocks(&edited, &mut raw, 64, 64, 72.0);
         assert!(!raw.iter().any(|(k, _)| k == b"vogk"));
         let (p, _) = path_from_vmsk(&raw[0].1, 64, 64).unwrap();

@@ -12,6 +12,28 @@ use photocraft_raster::Rgba8Image;
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
 
 #[test]
+fn rounded_polygon_and_line_arrowheads_roundtrip() {
+    for mode in MODES {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut d = rich_doc(mode, depth);
+            for live in [
+                photocraft_doc::LiveShape::Polygon { rect: [5.0, 5.0, 40.0, 30.0], sides: 3, star_ratio: 1.0, corner_radius: 7.0, smooth_indents: false },
+                photocraft_doc::LiveShape::Polygon { rect: [5.0, 5.0, 40.0, 30.0], sides: 5, star_ratio: 0.4, corner_radius: 7.0, smooth_indents: true },
+                photocraft_doc::LiveShape::Line {
+                    from: [5.0, 20.0],
+                    to: [50.0, 20.0],
+                    weight: 3.0,
+                    arrowheads: Some(photocraft_doc::vector::LineArrowheads { start: true, end: true, width: 12.0, length: 20.0, concavity: 32.5 }),
+                },
+            ] {
+                d.layers.push(Layer::new("Live shape", LayerContent::Shape(photocraft_doc::ShapeLayer { live: Some(live), ..Default::default() })));
+            }
+            assert_eq!(load_from_bytes(&save_to_bytes(&d, &SaveOptions::default()).unwrap()).unwrap(), d);
+        }
+    }
+}
+
+#[test]
 fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {

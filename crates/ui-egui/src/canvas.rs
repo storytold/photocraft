@@ -2939,6 +2939,9 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    if primary {
+        crate::corner_radius::cancel_stale(app);
+    }
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -3344,6 +3347,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    if primary && !crate::corner_radius::end_if_navigation(app, tool) {
+        crate::corner_radius::cancel_stale(app);
+    }
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
@@ -3587,7 +3593,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
-        let gesture_active_before = app.drag.is_some();
+        let gesture_active_before = app.drag.is_some() || crate::corner_radius::dragging(app);
+        if crate::corner_radius::supports_tool(app, tool)
+            && response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_pressed())
+            && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
+        {
+            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+            let d = xf.to_doc(p);
+            crate::corner_radius::pointer(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+        }
+        let radius_drag = crate::corner_radius::dragging(app);
         // Stroke timing: egui's events carry no timestamps, so a press takes the frame time and
         // the moves below are spread between the previous point and this frame (`spread_ms`).
         let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3608,7 +3624,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             app.press_stroke = app.drag.is_some();
         }
         let press_stroke = app.press_stroke;
-        if press_stroke {
+        if press_stroke || radius_drag {
             buttons.started = false;
         }
         if buttons.started
@@ -3624,7 +3640,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // A stroke started on the press takes its moves from the press on, not only once egui
         // recognises a drag (past its click distance): otherwise the first few points are lost
         // and the stroke starts with a straight segment and no pressure ramp.
-        let press_stroke_moving = press_stroke && app.drag.is_some();
+        let press_stroke_moving = (press_stroke && app.drag.is_some()) || radius_drag;
         if buttons.dragged || buttons.stopped || press_stroke_moving {
             // Feed every pointer move the OS delivered this frame, not just the latest position, so
             // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
@@ -3685,7 +3701,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // The live painting press already created the stroke and this release commits it.
             // egui may also report clicked on the same release; replaying that click paints a
             // second full-pressure dab over the real (possibly light-pressure) pen dab.
-            if press_stroke {
+            if press_stroke || radius_drag {
                 buttons.clicked = false;
             }
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
@@ -3696,11 +3712,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // A stroke started on the press ends with the release, whether egui saw a drag, a click,
         // or neither (a long press that never moved).
-        if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
+        if (press_stroke || radius_drag) && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
             buttons.clicked = false;
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p
-                && app.drag.is_some()
+                && (app.drag.is_some() || crate::corner_radius::dragging(app))
             {
                 tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
@@ -3863,6 +3879,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::perspective_crop_ui::draw_overlay(app, &painter, &xf);
         crate::retouch_ui::draw_source_marker(app, &painter, &xf);
         crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
+        let path_visible = app.ui.tool_options.shape.show_path
+            && app.ui.view.shows(app.ui.view.show.target_path)
+            && !app.ui.transform.as_ref().is_some_and(|t| t.path.is_some());
+        if path_visible && !crate::direct_select::shows(app, ui.input(|i| i.modifiers)) && crate::corner_radius::supports_tool(app, tool) {
+            let (accent, _) = crate::shape_modes::path_display(app, &ctx);
+            crate::corner_radius::draw(app, &painter, &|p| xf.to_screen(p[0] as f32, p[1] as f32), accent);
+        }
         crate::symmetry_ui::draw(app, &painter, &xf);
         crate::analysis_ui::draw_overlay(app, &painter, &xf);
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
@@ -4106,6 +4129,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             // ⇧ after a stroke: the straight line a click would paint (#257).
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
+        }
+        // Radius knobs keep their pointing cursor after the shared cursor path has run.
+        if guide_hover.is_none()
+            && let Some(c) =
+                response.hover_pos().filter(|_| crate::corner_radius::supports_tool(app, tool)).and_then(|p| crate::corner_radius::cursor(app, xf.to_doc(p)))
+        {
+            ui.ctx().set_cursor_icon(c);
         }
     }
     if primary && hand_pan && response.dragged() {
@@ -4734,7 +4764,7 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     if b.is_empty() {
         return None;
     }
-    let (dx, dy) = crate::move_ui::shown_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
+    let (dx, dy) = crate::move_ui::shown_layer_offset(app, st.doc.id, st.revision, id).unwrap_or((0, 0));
     Some(b.translate(dx, dy))
 }
 
@@ -4824,7 +4854,7 @@ fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
 fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
-    if transform_controls_several(app) {
+    if crate::corner_radius::cursor(app, xf.to_doc(p)).is_some() || transform_controls_several(app) {
         return false;
     }
     let Some(r) = transform_controls_rect(app, xf) else { return false };
@@ -4848,7 +4878,7 @@ fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf:
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     for l in transform_controls_layers(app) {
         if let LayerContent::Shape(sh) = &l.content {
-            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent, 1.0);
         }
     }
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
@@ -5140,6 +5170,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     let armed = std::mem::take(&mut app.brush_resize_armed);
     crate::transform_tool::end_if_left(app);
     let mods = crate::workspace_ui::sticky_mods(app, mods);
+    if crate::corner_radius::pointer(app, ev, mods) {
+        return;
+    }
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
         return;
     }
@@ -5193,10 +5226,6 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Move tool: ⇧ locks the axis, ⌥ duplicates (move_mods.rs).
     let ev = crate::move_mods::filter_event(app, ev, mods);
-    // A live rectangle's corner radius widgets (Path Selection, Rectangle tool).
-    if crate::corner_radius::pointer(app, ev, mods) {
-        return;
-    }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
     if crate::direct_select::pointer(app, ev, mods) {
         return;
@@ -5817,7 +5846,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
         t if crate::vector_ui::is_shape_tool(t)
             && crate::shape_dialog::is_click(d.start, &d.points, app.point_zoom())
-            && crate::shape_dialog::open(app, t, d.start).is_some() => {}
+            && crate::shape_dialog::open_gesture(app, t, d.start, d.modifiers).is_some() => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),

@@ -184,6 +184,9 @@ pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_modes;
+mod shape_options;
+mod shape_paint_ui;
 pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
@@ -1221,6 +1224,7 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        crate::corner_radius::cancel_stale(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
@@ -1991,6 +1995,7 @@ impl eframe::App for PhotocraftApp {
         let dpi = self.session.active().map_or(72.0, |d| f64::from(d.doc.resolution_dpi.max(1.0)));
         crate::widgets::set_field_resolution(&ctx, dpi, ppi);
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
+        shape_paint_ui::prune(self, &ctx);
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
             egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {

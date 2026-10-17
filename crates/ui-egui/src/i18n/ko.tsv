@@ -1287,6 +1287,7 @@
 	Offset	오프셋
 	Only Web Colors	웹 색상만
 	Opacity	불투명도
+	Stop opacity	중지점 불투명도
 	Opacity Jitter	불투명도 지터
 	Opacity:	불투명도:
 	Open a document to define variables.	변수를 정의하려면 문서를 여세요.
@@ -2603,6 +2604,17 @@ cameraRaw	Color	색상
 	Duplicate Layer	레이어 복제
 	Global Light	전체 조명
 	Scale Effects	효과 크기 조절
+	Constrain Proportions	비율 유지
+	End	끝
+	Path Options	패스 옵션
+	Show Path	패스 표시
+	Start	시작
+	Align Edges	가장자리 정렬
+	Unconstrained	제한 없음
+	Proportional	비율 유지
+	Smooth Indents	들여쓰기 부드럽게
+	Concavity:	오목함:
+	Mask	마스크
 	Solid Color	단색
 	Convert to Linked	연결된 오브젝트로 변환
 	Replace Contents	내용 대체
@@ -3150,6 +3162,11 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+	Arrowheads	화살촉
+	Color Picker	색상 선택기
+	Recent Colors	최근 사용한 색상
+	No recent colors	최근 사용한 색상이 없습니다
+	Color opacity	색상 불투명도
 	Auto Erase	자동 지우기
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	첫 점을 클릭하거나 {key}를 눌러 닫기 · {del}로 점 제거 · Esc로 취소
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	클릭한 다음 가장자리를 따라 이동 · 클릭하여 고정점 추가 · {alt}-클릭으로 직선 구간 · 두 번 클릭하여 닫기

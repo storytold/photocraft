@@ -335,6 +335,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
+    crate::shape_paint_ui::prune(app, ctx);
+    // The independent shape colour dialog owns keys until it is confirmed or cancelled.
+    if crate::shape_paint_ui::color_dialog_open(ctx) {
+        return;
+    }
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -353,7 +358,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // dropdown is open. This runs before Popup::show registers the current pass, so use
     // the editor's explicit state; otherwise Escape deselects or commits a pending Pen path.
     // Modified commands such as Undo still follow the ordinary dispatch below.
-    if app.ui.stroke_editor.is_some() && !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+    if (app.ui.stroke_editor.is_some() || crate::shape_paint_ui::paint_popup_open(ctx)) && !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
         return;
     }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
@@ -401,6 +406,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
     if crate::distort_ui::keys(app, ctx) {
+        return;
+    }
+    if crate::corner_radius::keys(app, ctx) {
         return;
     }
     // Free Transform: ↩ commits, Esc cancels.

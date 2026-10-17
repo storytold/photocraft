@@ -96,6 +96,22 @@ fn only_live_rectangles_with_the_right_tools_take_the_press() {
     // A press off the widgets is the tool's.
     let mut a = app(Tool::PathSelection);
     assert!(!super::pointer(&mut a, ToolEvent::Down { x: 100.0, y: 80.0, pressure: 1.0 }, Modifiers::NONE));
+    // Shape drawing's Path/Pixels mode does not disable the main selection tools.
+    for tool in [Tool::PathSelection, Tool::Move] {
+        let mut a = app(tool);
+        a.ui.tool_options.shape.mode = "pixels".into();
+        if tool == Tool::Move {
+            a.ui.tool_options.move_show_transform = true;
+        }
+        assert!(super::pointer(&mut a, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE), "{tool:?}");
+        super::pointer(&mut a, ToolEvent::Up { x: 50.0, y: 50.0 }, Modifiers::NONE);
+    }
+    for lock in ["all", "pixels", "position"] {
+        let mut a = app(Tool::PathSelection);
+        let id = a.session.active().unwrap().active_layer.unwrap().0;
+        a.run("layer.setProps", json!({"layer":id,"locks":{lock:true}})).unwrap();
+        assert!(!super::pointer(&mut a, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE), "{lock}");
+    }
 }
 
 fn app_with(shape: serde_json::Value) -> PhotocraftApp {
@@ -150,6 +166,104 @@ fn one_widget_rounds_every_selected_rectangle_alike_in_one_step() {
 }
 
 #[test]
+fn escape_cancels_a_radius_preview_without_discarding_the_existing_redo_branch() {
+    let mut app = app(Tool::PathSelection);
+    let id = app.session.active().unwrap().active_layer.unwrap().0;
+    app.run("layer.setProps", json!({"layer":id,"name":"Renamed"})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().history.can_redo());
+    let before = app.session.active().unwrap().doc.clone();
+
+    assert!(super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+    super::pointer(&mut app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.ui.corner_radius.is_some());
+    assert_eq!(app.session.active().unwrap().doc, before, "drag changes preview only");
+
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+            ..Default::default()
+        },
+        |ui| crate::shortcuts::handle(&mut app, ui.ctx()),
+    );
+    output.textures_delta.clear();
+
+    assert!(app.ui.corner_radius.is_none(), "Escape ends the preview");
+    assert_eq!(app.session.active().unwrap().doc, before);
+    assert!(app.session.active().unwrap().history.can_redo(), "Escape keeps the pre-existing redo branch");
+    app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().name, "Renamed");
+}
+
+#[test]
+fn a_tool_change_ends_a_radius_gesture_without_committing_its_preview() {
+    let mut app = app(Tool::PathSelection);
+    let before_radii = radii(&app);
+    let history = app.session.active().unwrap().history.past_len();
+    assert!(super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+    super::pointer(&mut app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+
+    app.ui.tool = Tool::Move;
+    super::pointer(&mut app, ToolEvent::Up { x: 58.0, y: 58.0 }, Modifiers::NONE);
+
+    assert!(app.ui.corner_radius.is_none(), "the old gesture is discarded");
+    assert_eq!(radii(&app), before_radii, "tool change must discard the preview");
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn document_and_target_changes_discard_a_radius_preview() {
+    let mut first_app = app(Tool::PathSelection);
+    assert!(super::pointer(&mut first_app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+    super::pointer(&mut first_app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+    first_app.run("file.new", json!({"width":100,"height":100})).unwrap();
+    let new_document = first_app.session.active().unwrap().doc.clone();
+    super::pointer(&mut first_app, ToolEvent::Up { x: 58.0, y: 58.0 }, Modifiers::NONE);
+    assert!(first_app.ui.corner_radius.is_none(), "document change ends the stale gesture");
+    assert_eq!(first_app.session.active().unwrap().doc, new_document, "old target is not edited in the new document");
+
+    let mut target_app = app(Tool::PathSelection);
+    let first = target_app.session.active().unwrap().active_layer.unwrap();
+    target_app.run("shape.create", json!({"kind":"roundedRect","rect":[130,40,50,50],"radii":10})).unwrap();
+    let second = target_app.session.active().unwrap().active_layer.unwrap();
+    target_app.run("layer.select", json!({"layer":first.0})).unwrap();
+    let before_radii = radii(&target_app);
+    assert!(super::pointer(&mut target_app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+    super::pointer(&mut target_app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+    target_app.run("layer.select", json!({"layer":second.0})).unwrap();
+    super::pointer(&mut target_app, ToolEvent::Up { x: 58.0, y: 58.0 }, Modifiers::NONE);
+    assert!(target_app.ui.corner_radius.is_none(), "target change ends the stale gesture");
+    assert_eq!(radii_of(&target_app, first), before_radii.unwrap());
+
+    let mut mask_app = app(Tool::PathSelection);
+    let before_radii = radii(&mask_app);
+    assert!(super::pointer(&mut mask_app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+    super::pointer(&mut mask_app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+    mask_app.ui.mask_target = true;
+    super::pointer(&mut mask_app, ToolEvent::Up { x: 58.0, y: 58.0 }, Modifiers::NONE);
+    assert!(mask_app.ui.corner_radius.is_none(), "mask target change ends the stale gesture");
+    assert_eq!(radii(&mask_app), before_radii);
+}
+
+#[test]
+fn rectangle_path_modes_do_not_start_or_commit_radius_gestures() {
+    for mode in ["path", "pixels"] {
+        let mut app = app(Tool::Rectangle);
+        app.ui.tool_options.shape.mode = mode.into();
+        assert!(!super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE), "{mode} mode belongs to drawing options");
+
+        app.ui.tool_options.shape.mode = "shape".into();
+        assert!(super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE));
+        super::pointer(&mut app, ToolEvent::Move { x: 58.0, y: 58.0, pressure: 1.0 }, Modifiers::NONE);
+        app.ui.tool_options.shape.mode = mode.into();
+        super::pointer(&mut app, ToolEvent::Up { x: 58.0, y: 58.0 }, Modifiers::NONE);
+        assert!(app.ui.corner_radius.is_none(), "switch to {mode} ends the shape-tool gesture");
+        assert_eq!(radii(&app), Some([10.0; 4]));
+    }
+}
+
+#[test]
 fn alt_changes_that_corner_on_each_and_each_stays_within_its_own_size() {
     let (mut app, ids) = three(Tool::Rectangle);
     // ⌥ on the first rectangle's top-left widget (radius 5, so drawn 10 px inside at (30, 30)),
@@ -183,4 +297,122 @@ fn the_cursor_and_readout_follow_the_widgets() {
     assert_eq!(app.ui.corner_radius.as_ref().and_then(super::dragged_radius), Some(22.0));
     tool_event(&mut app, ToolEvent::Up { x: 62.0, y: 62.0 }, Modifiers::NONE);
     assert!(!super::hovers(&app, [100.0, 80.0]));
+}
+
+#[test]
+fn clicking_an_unlinked_radius_widget_without_motion_preserves_all_radii() {
+    let mut app = app_with(json!({"kind":"roundedRect", "rect":[40,40,120,80], "radii":[5,10,15,20]}));
+    let before = radii(&app);
+    let history = steps(&app);
+    super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+    super::pointer(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, Modifiers::NONE);
+    assert_eq!(radii(&app), before);
+    assert_eq!(steps(&app), history);
+
+    let mut app = app_with(json!({"kind":"roundedRect", "rect":[40,40,120,80], "radii":[5,10,15,20]}));
+    let before = radii(&app);
+    let history = steps(&app);
+    super::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+    super::pointer(&mut app, ToolEvent::Move { x: 60.0, y: 60.0, pressure: 1.0 }, Modifiers::NONE);
+    super::pointer(&mut app, ToolEvent::Move { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+    super::pointer(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, Modifiers::NONE);
+    assert_eq!(radii(&app), before, "returning to the press point restores the unlinked radii");
+    assert_eq!(steps(&app), history);
+}
+
+#[test]
+fn widget_hit_distance_tracks_corrected_pixel_aspect() {
+    let mut app = app(Tool::PathSelection);
+    app.ui.view.pixel_aspect = "custom:0.5:test".into();
+    assert!(super::hit(&app, &super::targets(&app), [58.0, 50.0]).is_some(), "4 screen points from the grip at 0.5 aspect");
+    app.ui.view.pixel_aspect = "custom:2:test".into();
+    assert!(super::hit(&app, &super::targets(&app), [54.0, 50.0]).is_none(), "8 screen points from the grip at 2.0 aspect");
+}
+
+fn canvas_frame_for_radius(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
+    app.last_canvas_rect = rect;
+    let view = app.ui.views[0].clone();
+    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), events, ..Default::default() }, |ui| {
+        app.ui.views[0] = crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
+    });
+    out.textures_delta.clear();
+    out.shapes
+}
+
+fn canvas_radius_app() -> (PhotocraftApp, egui::Context) {
+    let mut app = app(Tool::Rectangle);
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].center = [100.0, 80.0];
+    app.ui.views[0].fit_pending = false;
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    canvas_frame_for_radius(&mut app, &ctx, vec![]);
+    (app, ctx)
+}
+
+fn space_key(pressed: bool) -> egui::Event {
+    egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn primary_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn native_space_navigation_cancels_radius_preview_before_release() {
+    let (mut app, ctx) = canvas_radius_app();
+    let before = app.session.active().unwrap().doc.clone();
+    let history = steps(&app);
+    let xf = crate::canvas::ViewXform::active(&app).unwrap();
+    let t = super::targets(&app)[0];
+    let doc = super::widget(t.rect, t.radii, 0, f64::from(app.point_zoom()));
+    let screen = xf.to_screen(doc[0] as f32, doc[1] as f32);
+    canvas_frame_for_radius(&mut app, &ctx, vec![egui::Event::PointerMoved(screen), primary_button(screen, true)]);
+    assert!(app.ui.corner_radius.is_some(), "radius drag starts on the widget");
+    canvas_frame_for_radius(&mut app, &ctx, vec![egui::Event::PointerMoved(screen + egui::vec2(2.0, 2.0))]);
+    assert!(app.ui.corner_radius.is_some());
+    canvas_frame_for_radius(&mut app, &ctx, vec![space_key(true)]);
+    assert!(app.ui.corner_radius.is_none(), "temporary Hand navigation cancels the preview");
+    let moved = screen + egui::vec2(30.0, 25.0);
+    canvas_frame_for_radius(&mut app, &ctx, vec![egui::Event::PointerMoved(moved), primary_button(moved, false)]);
+    canvas_frame_for_radius(&mut app, &ctx, vec![space_key(false)]);
+    assert_eq!(app.session.active().unwrap().doc, before);
+    assert_eq!(steps(&app), history);
+}
+
+#[test]
+fn canvas_draws_one_visible_custom_colored_radius_grip_set() {
+    let (mut app, ctx) = canvas_radius_app();
+    let color = egui::Color32::from_rgb(230, 40, 70);
+    app.ui.tool_options.shape.path_color = Some([230, 40, 70]);
+    let xf = crate::canvas::ViewXform::active(&app).unwrap();
+    let center = xf.to_screen(50.0, 50.0);
+    let circles_at_center = |shapes: &[egui::epaint::ClippedShape]| {
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Circle(c) if c.center.distance(center) < 0.01 => Some(c),
+                _ => None,
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let shapes = canvas_frame_for_radius(&mut app, &ctx, vec![]);
+    let circles = circles_at_center(&shapes);
+    assert_eq!(circles.len(), 2, "one grip uses its outer and inner circles");
+    assert!(circles.iter().any(|c| c.fill == color), "grip uses the configured path color");
+
+    app.ui.tool_options.shape.show_path = false;
+    let shapes = canvas_frame_for_radius(&mut app, &ctx, vec![]);
+    assert!(circles_at_center(&shapes).is_empty(), "hidden paths hide the radius grips");
+}
+
+#[test]
+fn raw_pointer_press_does_not_become_a_radius_hit_after_pixel_rounding() {
+    let mut app = app(Tool::Rectangle);
+    app.ui.extras.snap = false;
+    assert!(app.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid);
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 57.2, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.ui.corner_radius.is_none(), "raw press is 7.2 points from the grip; snapped x=57 must not start it");
 }

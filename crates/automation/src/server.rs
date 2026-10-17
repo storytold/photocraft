@@ -306,6 +306,13 @@ pub struct MenuParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UiSetParams {
+    /// Shape defaults additionally accept shapeOptions (mode, pixel drawing, sizing, path display,
+    /// edge alignment, stars and arrowheads), shapeFillPaint and shapeStrokePaint (independent
+    /// Solid / Gradient / Pattern JSON as in `shape.create`, or null for No Color). These fields
+    /// change tool defaults without editing the document or foreground/background colours. A
+    /// stored stroke paint takes priority over the legacy colour source below; shapeStroke metadata
+    /// retains that paint default.
+    ///
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
