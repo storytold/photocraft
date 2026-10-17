@@ -2271,6 +2271,21 @@ mod tests {
     }
 
     #[test]
+    fn new_group_with_multiple_selected_moves_them_into_the_group() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        let b = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        select_all(&mut s, &[a, b]);
+        let g = LayerId(s.execute("layer.new.group", json!({"name": "Packed"})).unwrap()["layer"].as_u64().unwrap());
+        let docu = doc(&s);
+        let gl = docu.layer(g).unwrap();
+        assert_eq!(gl.name, "Packed");
+        assert_eq!(gl.children().unwrap().iter().map(|l| l.id).collect::<Vec<_>>(), vec![a, b]);
+        assert_eq!(docu.layers.len(), 2, "background and the new group");
+        assert_eq!(sel(&s), vec![g]);
+    }
+
+    #[test]
     fn group_from_layers_preserves_order() {
         let mut s = session(8);
         let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));

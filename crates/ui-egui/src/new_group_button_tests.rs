@@ -1,5 +1,4 @@
-//! #2561: the Layers panel New Group button. Like Photoshop a plain click adds an empty group
-//! and Shift-click groups the selected layers.
+//! Layers panel New Group button: with multiple layers selected, plain click groups them (#5792).
 
 use egui::Modifiers;
 use egui_kittest::kittest::Queryable;
@@ -29,9 +28,9 @@ fn groups(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> Vec<Layer> {
 }
 
 #[test]
-fn shift_click_groups_the_selected_layers_in_order() {
+fn plain_click_groups_the_selected_layers_in_order() {
     let (mut h, a, b) = two_selected();
-    h.get_by_label("Create a new group").click_modifiers(Modifiers::SHIFT);
+    h.get_by_label("Create a new group").click();
     h.run_steps(4);
     let groups = groups(&h);
     assert_eq!(groups.len(), 1);
@@ -42,14 +41,12 @@ fn shift_click_groups_the_selected_layers_in_order() {
 }
 
 #[test]
-fn plain_click_still_adds_an_empty_group() {
+fn shift_click_still_groups_the_selected_layers() {
     let (mut h, a, b) = two_selected();
-    h.get_by_label("Create a new group").click();
+    h.get_by_label("Create a new group").click_modifiers(Modifiers::SHIFT);
     h.run_steps(4);
     let groups = groups(&h);
     assert_eq!(groups.len(), 1);
-    assert!(groups[0].children().unwrap().is_empty());
-    let doc = &h.state().session.active().unwrap().doc;
-    let top: Vec<LayerId> = doc.layers.iter().map(|l| l.id).collect();
-    assert_eq!(top[1..3], [a, b], "the selected layers stay where they were");
+    let children: Vec<LayerId> = groups[0].children().unwrap().iter().map(|l| l.id).collect();
+    assert_eq!(children, vec![a, b]);
 }

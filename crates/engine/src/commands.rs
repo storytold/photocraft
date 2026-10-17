@@ -665,6 +665,10 @@ fn build() -> Vec<CommandSpec> {
             crate::new_layer::run
         ),
         cmd!("layer.new.group", "Group…", ["Layer", "New"], None, r##"{"name":str?}"##, has_doc, |s, p| {
+            // With two or more layers selected, behave like Group Layers / Group from Layers (#5792).
+            if crate::layer_multi_cmds::selected(s).len() >= 2 {
+                return crate::layer_multi_cmds::group_layers(s, p);
+            }
             let id = s.edit("New Group", |doc, active| {
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| doc.next_layer_name("Group"));
                 let id = doc.insert_above(*active, Layer::group(name, vec![]));
