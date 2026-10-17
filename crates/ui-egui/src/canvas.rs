@@ -987,6 +987,23 @@ pub fn doc_point_at(app: &PhotocraftApp, pos: Pos2) -> Option<[f64; 2]> {
     xf.rect.contains(pos).then(|| xf.to_doc(pos))
 }
 
+/// Keep `view` on `doc` when the document's size changed (a crop, Image Size): like Photoshop,
+/// the zoom level stays and the resized document is re-centred. True when it re-centred.
+fn follow_document_size(view: &mut View, doc: &Document) -> bool {
+    let size = [doc.size.width, doc.size.height];
+    if view.doc_size == size {
+        return false;
+    }
+    // A view seeing its document for the first time keeps the centre it was given.
+    let first = view.doc_size == [0, 0];
+    view.doc_size = size;
+    if first {
+        return false;
+    }
+    view.center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
+    true
+}
+
 /// Fit the document into `area` (egui points) for a display with `ppp` physical pixels per
 /// point; `View::zoom` is stored in physical pixels per document pixel. `aspect` is the
 /// displayed pixel aspect ratio ([`ViewXform::aspect`]): the image is that much wider on screen.
@@ -2963,14 +2980,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let full = rect;
     let rect = if primary { crate::rulers::content_rect(app, rect) } else { rect };
     let doc = app.session.documents()[idx].doc.clone();
-    let size = [doc.size.width, doc.size.height];
-    if view.doc_size != size {
-        // Like Photoshop: keep the zoom level, re-centre the resized document.
-        if view.doc_size != [0, 0] {
-            view.center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
-        }
-        view.doc_size = size;
-    }
+    follow_document_size(&mut view, &doc);
     // View › Pixel Aspect Ratio Correction: document pixels are shown this much wider.
     let aspect = app.ui.view.display_aspect();
     if view.fit_pending && rect.width() > 50.0 {
@@ -2999,10 +3009,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         None => paint_dots(ui, rect, app.session.prefs().interface.show_canvas_dots),
     }
     let border = app.session.prefs().interface.canvas_border;
-    // Default-mode Crop changes its camera during input. Defer its image until the new camera
-    // is known; other tools keep their existing paint order and texture/outline snapshots.
+    // Default-mode Crop changes its camera during input: the image is painted with the camera it
+    // ends up with.
     let crop_camera = primary && crate::crop_mode::moves_image(app);
-    let paint_canvas = |app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform| {
+    // The image and what belongs with it (selection outline, artboards, pixel grid…). Painted
+    // after this frame's input, below, from the document as the input left it.
+    let paint_canvas = |app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform, doc: &Document| {
+        let size = [doc.size.width, doc.size.height];
         let point_zoom = view.zoom / ppp;
         let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
         // Drop shadow, checkerboard, document image.
@@ -3048,9 +3061,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 },
                 pixel_grid: false,
                 view_key: egui::Id::new(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
-                display: sync_display_lut(app, &doc, key, output),
+                display: sync_display_lut(app, doc, key, output),
                 output: output.unwrap_or(0),
-                hdr: hdr_preview(app, &doc),
+                hdr: hdr_preview(app, doc),
                 offset: [0.0, 0.0],
             };
             paint_gpu_view(&painter, rect, params, &pattern);
@@ -3070,9 +3083,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 },
                 pixel_grid,
                 view_key: egui::Id::new(("pc-canvas", ctx.viewport_id(), idx)).value(),
-                display: sync_display_lut(app, &doc, doc.id.0, output),
+                display: sync_display_lut(app, doc, doc.id.0, output),
                 output: output.unwrap_or(0),
-                hdr: hdr_preview(app, &doc),
+                hdr: hdr_preview(app, doc),
                 offset: [0.0, 0.0],
             };
             if app.navigator_plain.contains(&doc.id) {
@@ -3116,7 +3129,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let t = crate::theme::Tokens::get(&ctx);
             let pasteboard = crate::prefs_ui::pasteboard_color(app);
             let dot_tex = dots(&ctx, &t);
-            for r in crate::artboard_ui::pasteboard_rects(&xf, &doc) {
+            for r in crate::artboard_ui::pasteboard_rects(&xf, doc) {
                 let r = r.intersect(rect);
                 if !r.is_positive() {
                     continue;
@@ -3245,11 +3258,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
 
         (img_rect, beyond, layer_edges)
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &view, xf)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
+    // Select and Mask's Refine Edge Brush under the pointer: drawn once the image is painted, so it
+    // shows over it.
+    let mut refine_brush = None;
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
     // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
     if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
@@ -3416,7 +3431,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && let Some(p) = crate::dialogs::free_pointer_over(&ctx, rect)
         {
             let press = crate::dialogs::free_press(&ctx, rect).map(|q| xf.to_doc(q));
-            crate::select_mask_view::canvas_brush(app, &painter, p, press, xf.zoom_x());
+            refine_brush = Some((p, press));
         } else if primary
             && !middle
             && let Some(p) = crate::dialogs::free_pointer_over(&ctx, rect).filter(|p| img_rect.contains(*p))
@@ -3813,7 +3828,23 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
     let xf = if crop_camera { ViewXform { center: view.center, rotation: view.rotation, ..xf } } else { xf };
-    let (img_rect, beyond, layer_edges) = painted.unwrap_or_else(|| paint_canvas(app, ui, &view, xf));
+    // Everything from here on is drawn from the document as this frame's input left it, so the
+    // image and what is drawn over it show the same moment. (Painted before the input, a release
+    // showed its result a frame late, after the tool's preview had already gone: a new shape or
+    // selection blinked out for a frame, a moved guide blinked back to where it was.)
+    let doc = match app.session.documents().get(idx) {
+        Some(st) if st.doc.id == doc.id => st.doc.clone(),
+        // The input closed this document (or another took its place): nothing of it to draw.
+        _ => return view,
+    };
+    // A crop committed above changed the document's size: re-centre for it now, as the next frame
+    // would.
+    let recentred = follow_document_size(&mut view, &doc);
+    let xf = if recentred { ViewXform { center: view.center, ..xf } } else { xf };
+    let (img_rect, beyond, layer_edges) = paint_canvas(app, ui, &view, xf, &doc);
+    if let Some((p, press)) = refine_brush {
+        crate::select_mask_view::canvas_brush(app, &painter, p, press, xf.zoom_x());
+    }
     if primary && !(hand_pan && response.dragged()) {
         // The transform preview is image content: it goes under the grid and guides, which
         // stay visible across a layer being transformed (#5086); the box is drawn later.
