@@ -21,6 +21,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("id-ID", "id"),
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
+        ("ka-GE", "ka"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }

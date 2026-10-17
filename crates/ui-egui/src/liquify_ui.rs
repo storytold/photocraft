@@ -782,7 +782,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::slider_row(ui, tl!("Size"), &mut d.opts.size, 1.0..=3000.0, "", None);
             widgets::slider_row(ui, tl!("Density"), &mut d.opts.density, 0.0..=100.0, "", None);
             widgets::slider_row(ui, tl!("Pressure"), &mut d.opts.pressure, 0.0..=100.0, "", None);
-            widgets::slider_row(ui, tl!("Rate"), &mut d.opts.rate, 0.0..=100.0, "", None);
+            widgets::slider_row(ui, crate::i18n::tr_ctx(crate::i18n::current(), "liquify", "Rate"), &mut d.opts.rate, 0.0..=100.0, "", None);
             widgets::hairline(ui);
             widgets::section_label(ui, tl!("Brush Reconstruct Options"));
             widgets::slider_row(ui, tl!("Amount"), &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
