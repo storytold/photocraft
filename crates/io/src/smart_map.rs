@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 18] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -156,6 +156,10 @@ const KNOWN: [Known; 14] = [
     Known { class: "Mnm ", filter_id: code(b"Mnm "), name: "Minimum...", command: "filter.other.minimum" },
     Known { class: "Msc ", filter_id: code(b"Msc "), name: "Mosaic...", command: "filter.pixelate.mosaic" },
     Known { class: "Embs", filter_id: code(b"Embs"), name: "Emboss...", command: "filter.stylize.emboss" },
+    Known { class: "Dfs ", filter_id: code(b"Dfs "), name: "Diffuse...", command: "filter.stylize.diffuse" },
+    Known { class: "TrcC", filter_id: code(b"TrcC"), name: "Trace Contour...", command: "filter.stylize.traceContour" },
+    Known { class: "Crst", filter_id: code(b"Crst"), name: "Crystallize...", command: "filter.pixelate.crystallize" },
+    Known { class: "Pntl", filter_id: code(b"Pntl"), name: "Pointillize...", command: "filter.pixelate.pointillize" },
     Known { class: "Lvls", filter_id: code(b"Lvls"), name: "Levels...", command: "image.adjustments.levels" },
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
@@ -258,9 +262,29 @@ fn curves_params(f: &Descriptor) -> Option<J> {
     Some(J::Object(out))
 }
 
+/// Diffuse's `Md  ` (`DfsM` enum, measured in Photoshop) ↔ our `mode`.
+const DIFFUSE_MODES: [(&str, &str); 4] = [("Nrml", "normal"), ("DrkO", "darkenOnly"), ("LghO", "lightenOnly"), ("anisotropic", "anisotropic")];
+
+/// Trace Contour's `Edg ` (`CntE` enum, measured in Photoshop) ↔ our `edge`.
+const TRACE_EDGES: [(&str, &str); 2] = [("Upr ", "upper"), ("Lwr ", "lower")];
+
+/// The `long` value of `key` when it lies in `lo..=hi`.
+fn int_in(d: &Descriptor, key: &str, lo: i32, hi: i32) -> Option<i32> {
+    int(d, key).filter(|v| (lo..=hi).contains(v))
+}
+
+/// Our name for the enum value of `key` (of type `type_id`) through `table` (Photoshop's value, ours).
+fn enum_param(d: &Descriptor, key: &str, type_id: &str, table: &[(&str, &'static str)]) -> Option<&'static str> {
+    let Some(Value::Enumerated { type_id: t, value }) = d.get(key) else { return None };
+    if t.as_bytes() != type_id.as_bytes() {
+        return None;
+    }
+    table.iter().find(|(psd, _)| value.as_bytes() == psd.as_bytes()).map(|(_, ours)| *ours)
+}
+
 /// Our command and parameters for a known Photoshop filter; `None` when the filter (or one of its
-/// settings) is not modelled.
-fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)> {
+/// settings) is not modelled. `item` is the whole `filterFX` entry (Pointillize reads its `BckC`).
+fn known_params(class: &str, f: Option<&Descriptor>, item: &Descriptor) -> Option<(&'static str, J)> {
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
         ("adaptCorrect", None) => json!({}),
@@ -282,6 +306,17 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
         }
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
+        ("Dfs ", Some(f)) => json!({"mode": enum_param(f, "Md  ", "DfsM", &DIFFUSE_MODES)?}),
+        ("TrcC", Some(f)) => json!({"level": int_in(f, "Lvl ", 0, 255)?, "edge": enum_param(f, "Edg ", "CntE", &TRACE_EDGES)?}),
+        ("Crst", Some(f)) => json!({"cellSize": int_in(f, "ClSz", CELL_SIZE.0, CELL_SIZE.1)?}),
+        ("Pntl", Some(f)) => {
+            let mut p = json!({"cellSize": int_in(f, "ClSz", CELL_SIZE.0, CELL_SIZE.1)?});
+            // Pointillize paints the gaps in the background colour the entry carries.
+            if item.get("BckC").is_some() {
+                p["background"] = get_desc(item, "BckC").and_then(rgbc_colour)?;
+            }
+            p
+        }
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
         _ => return None,
@@ -470,7 +505,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
         Some(camera_raw::CLASS) => camera_raw::import_params(item).map(|p| (camera_raw::COMMAND, p)),
         Some(displace::CLASS) => displace::import_params(item).map(|p| (displace::COMMAND, p)),
         Some(GALLERY_CLASS) => fltr.and_then(|f| gallery_params(item, f)).map(|p| (GALLERY_COMMAND, p)),
-        c => c.and_then(|c| known_params(c, fltr)),
+        c => c.and_then(|c| known_params(c, fltr, item)),
     };
     let (command, params) = match known {
         Some((c, p)) => (c.to_string(), p),
@@ -574,6 +609,24 @@ fn adjustments(p: &J, curves: bool) -> Result<Value, String> {
     Ok(Value::List(list))
 }
 
+/// Crystallize's and Pointillize's cell size range (`ClSz`, a `long`).
+const CELL_SIZE: (i32, i32) = (3, 300);
+
+/// Our `key` (a string) as Photoshop's enum value through `table` (Photoshop's value, ours).
+fn enum_out(p: &J, key: &str, default: &str, type_id: &str, table: &[(&str, &str)]) -> Result<Value, String> {
+    let ours = match p.get(key) {
+        None => default,
+        Some(v) => v.as_str().ok_or_else(|| format!("`{key}` is not a string"))?,
+    };
+    let (psd, _) = table.iter().find(|(_, o)| *o == ours).ok_or_else(|| format!("{key} `{ours}` has no PSD equivalent"))?;
+    Ok(enumv(type_id, psd))
+}
+
+/// `key` rounded to a `long` in `lo..=hi`.
+fn pi_in(p: &J, key: &str, default: f64, lo: i32, hi: i32) -> Value {
+    Value::Integer(pf(p, key, default).round().clamp(f64::from(lo), f64::from(hi)) as i32)
+}
+
 /// The `Fltr` descriptor of a modelled filter (`None` = written without options).
 fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
     let d = Descriptor::new(k.class);
@@ -595,6 +648,11 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
+        // Photoshop stores no random seed for these: `seed` is ours only and is not written.
+        "Dfs " => d.with("Md  ", enum_out(p, "mode", "normal", "DfsM", &DIFFUSE_MODES)?),
+        "TrcC" => d.with("Lvl ", pi_in(p, "level", 128.0, 0, 255)).with("Edg ", enum_out(p, "edge", "lower", "CntE", &TRACE_EDGES)?),
+        "Crst" => d.with("ClSz", pi_in(p, "cellSize", 10.0, CELL_SIZE.0, CELL_SIZE.1)),
+        "Pntl" => d.with("ClSz", pi_in(p, "cellSize", 5.0, CELL_SIZE.0, CELL_SIZE.1)),
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
         "adaptCorrect" => {
@@ -633,13 +691,15 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
     }
     let k = known_by_command(&f.command).ok_or("this filter has no PSD equivalent")?;
     let fltr = fltr_for(k, &f.params)?;
+    // Pointillize's background colour is the entry's `BckC`; the others write the defaults.
+    let background = if k.class == "Pntl" { colour_rgbc(f.params.get("background"), 255.0)? } else { rgbc(255.0) };
     let mut d = Descriptor::new("filterFX")
         .with("Nm  ", Value::Text(UnicodeString::new_nul(k.name)))
         .with("blendOptions", blend_options(f))
         .with("enab", Value::Boolean(f.visible))
         .with("hasoptions", Value::Boolean(fltr.is_some()))
         .with("FrgC", rgbc(0.0))
-        .with("BckC", rgbc(255.0));
+        .with("BckC", background);
     if let Some(x) = fltr {
         d = d.with("Fltr", Value::Descriptor(x));
     }
@@ -1063,6 +1123,19 @@ mod tests {
             sf("filter.other.minimum", json!({"radius": 2.0})),
             sf("filter.pixelate.mosaic", json!({"cellSize": 8.0})),
             sf("filter.stylize.emboss", json!({"angle": 135, "height": 3, "amount": 100})),
+            sf("filter.stylize.diffuse", json!({"mode": "normal"})),
+            sf("filter.stylize.diffuse", json!({"mode": "darkenOnly"})),
+            sf("filter.stylize.diffuse", json!({"mode": "lightenOnly"})),
+            sf("filter.stylize.diffuse", json!({"mode": "anisotropic"})),
+            sf("filter.stylize.traceContour", json!({"level": 60, "edge": "lower"})),
+            sf("filter.stylize.traceContour", json!({"level": 128, "edge": "upper"})),
+            sf("filter.stylize.traceContour", json!({"level": 0, "edge": "upper"})),
+            sf("filter.stylize.traceContour", json!({"level": 255, "edge": "lower"})),
+            sf("filter.pixelate.crystallize", json!({"cellSize": 10})),
+            sf("filter.pixelate.crystallize", json!({"cellSize": 3})),
+            sf("filter.pixelate.crystallize", json!({"cellSize": 300})),
+            sf("filter.pixelate.pointillize", json!({"cellSize": 7, "background": [1.0, 1.0, 1.0, 1.0]})),
+            sf("filter.pixelate.pointillize", json!({"cellSize": 300, "background": [0.0, 0.5, 1.0, 1.0]})),
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
             sf("image.adjustments.shadowsHighlights", json!({})),
@@ -1101,6 +1174,150 @@ mod tests {
         // A known filter with a setting we don't model is kept verbatim too.
         let odd = Descriptor::new("filterFX").with("Fltr", Value::Descriptor(Descriptor::new("GsnB"))).with("filterID", Value::Integer(code(b"GsnB")));
         assert_eq!(filter_from_item(&odd).command, UNSUPPORTED_FILTER);
+    }
+
+    /// A `filterFX` entry shaped as Photoshop saves it (measured in Photoshop: the filter applied
+    /// through Action Manager to a smart object, the PSD saved, `filterFX` read back).
+    fn photoshop_item(filter_id: &[u8; 4], fltr: Descriptor) -> Descriptor {
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Filter...")))
+            .with("blendOptions", blend_options(&sf("", J::Null)))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(0.0))
+            .with("BckC", rgbc(255.0))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(code(filter_id)))
+    }
+
+    #[test]
+    fn stylize_and_pixelate_filters_open_from_photoshop_shapes() {
+        let cases = [
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "Nrml")), "filter.stylize.diffuse", json!({"mode": "normal"})),
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "DrkO")), "filter.stylize.diffuse", json!({"mode": "darkenOnly"})),
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "LghO")), "filter.stylize.diffuse", json!({"mode": "lightenOnly"})),
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "anisotropic")), "filter.stylize.diffuse", json!({"mode": "anisotropic"})),
+            (
+                b"TrcC",
+                Descriptor::new("TrcC").with("Lvl ", Value::Integer(128)).with("Edg ", enumv("CntE", "Upr ")),
+                "filter.stylize.traceContour",
+                json!({"level": 128, "edge": "upper"}),
+            ),
+            (
+                b"TrcC",
+                Descriptor::new("TrcC").with("Lvl ", Value::Integer(60)).with("Edg ", enumv("CntE", "Lwr ")),
+                "filter.stylize.traceContour",
+                json!({"level": 60, "edge": "lower"}),
+            ),
+            (b"Crst", Descriptor::new("Crst").with("ClSz", Value::Integer(10)), "filter.pixelate.crystallize", json!({"cellSize": 10})),
+            (
+                b"Pntl",
+                Descriptor::new("Pntl").with("ClSz", Value::Integer(7)),
+                "filter.pixelate.pointillize",
+                json!({"cellSize": 7, "background": [1.0, 1.0, 1.0, 1.0]}),
+            ),
+        ];
+        for (id, fltr, command, params) in cases {
+            let item = photoshop_item(id, fltr);
+            // Through bytes, as read from a file.
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!((f.command.as_str(), &f.params), (command, &params));
+            // Written back in the measured shape: same class, keys, value types and filterID.
+            let back = item_for_filter(&f).unwrap();
+            for key in ["Fltr", "filterID", "BckC"] {
+                assert_eq!(back.get(key), item.get(key), "{command} {key}");
+            }
+        }
+        // The `anisotropic` mode is a long id, as Photoshop writes it.
+        let d = item_for_filter(&sf("filter.stylize.diffuse", json!({"mode": "anisotropic"}))).unwrap();
+        let Some(Value::Descriptor(fltr)) = d.get("Fltr") else { panic!("no Fltr") };
+        assert!(matches!(fltr.get("Md  "), Some(Value::Enumerated { value: Id::Str(v), .. }) if v == b"anisotropic"));
+        // Pointillize takes the entry's background colour; the others ignore it.
+        let mut item = photoshop_item(b"Pntl", Descriptor::new("Pntl").with("ClSz", Value::Integer(7)));
+        set(&mut item, "BckC", rgbc(51.0));
+        let f = filter_from_item(&item);
+        assert_eq!(f.params["background"], json!([0.2, 0.2, 0.2, 1.0]));
+        assert_eq!(item_for_filter(&f).unwrap().get("BckC"), Some(&rgbc(51.0)));
+        let mut item = photoshop_item(b"Crst", Descriptor::new("Crst").with("ClSz", Value::Integer(7)));
+        set(&mut item, "BckC", rgbc(51.0));
+        assert_eq!(filter_from_item(&item).params, json!({"cellSize": 7}));
+        // Our random seed has no PSD key: it is not written.
+        let fltr = |c: &str, p: J| item_for_filter(&sf(c, p)).unwrap().get("Fltr").cloned();
+        assert_eq!(
+            fltr("filter.stylize.diffuse", json!({"mode": "normal", "seed": 7})),
+            Some(Value::Descriptor(Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "Nrml"))))
+        );
+        // Defaults and out-of-range values are written in Photoshop's ranges.
+        assert_eq!(
+            fltr("filter.stylize.traceContour", json!({})),
+            Some(Value::Descriptor(Descriptor::new("TrcC").with("Lvl ", Value::Integer(128)).with("Edg ", enumv("CntE", "Lwr "))))
+        );
+        assert_eq!(fltr("filter.pixelate.crystallize", json!({})), Some(Value::Descriptor(Descriptor::new("Crst").with("ClSz", Value::Integer(10)))));
+        assert_eq!(fltr("filter.pixelate.pointillize", json!({})), Some(Value::Descriptor(Descriptor::new("Pntl").with("ClSz", Value::Integer(5)))));
+        assert_eq!(
+            fltr("filter.pixelate.crystallize", json!({"cellSize": 1e9})),
+            Some(Value::Descriptor(Descriptor::new("Crst").with("ClSz", Value::Integer(300))))
+        );
+        assert_eq!(
+            fltr("filter.pixelate.pointillize", json!({"cellSize": "big"})),
+            Some(Value::Descriptor(Descriptor::new("Pntl").with("ClSz", Value::Integer(5))))
+        );
+        assert_eq!(
+            fltr("filter.stylize.traceContour", json!({"level": -40, "edge": "upper"})),
+            Some(Value::Descriptor(Descriptor::new("TrcC").with("Lvl ", Value::Integer(0)).with("Edg ", enumv("CntE", "Upr "))))
+        );
+    }
+
+    #[test]
+    fn malformed_stylize_and_pixelate_filters_are_kept_verbatim() {
+        let long = Value::Integer;
+        let cases = [
+            // Missing keys.
+            (b"Dfs ", Descriptor::new("Dfs ")),
+            (b"TrcC", Descriptor::new("TrcC").with("Lvl ", long(60))),
+            (b"TrcC", Descriptor::new("TrcC").with("Edg ", enumv("CntE", "Upr "))),
+            (b"Crst", Descriptor::new("Crst")),
+            (b"Pntl", Descriptor::new("Pntl")),
+            // Unknown enum values or enum types.
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("DfsM", "Wild"))),
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", enumv("BlnM", "Nrml"))),
+            (b"TrcC", Descriptor::new("TrcC").with("Lvl ", long(60)).with("Edg ", enumv("CntE", "Mddl"))),
+            // Wrong types (also NaN).
+            (b"Dfs ", Descriptor::new("Dfs ").with("Md  ", long(1))),
+            (b"TrcC", Descriptor::new("TrcC").with("Lvl ", Value::Double(60.0)).with("Edg ", enumv("CntE", "Upr "))),
+            (b"Crst", Descriptor::new("Crst").with("ClSz", unit(b"#Pxl", 10.0))),
+            (b"Pntl", Descriptor::new("Pntl").with("ClSz", Value::Double(f64::NAN))),
+            // Out of range.
+            (b"TrcC", Descriptor::new("TrcC").with("Lvl ", long(256)).with("Edg ", enumv("CntE", "Upr "))),
+            (b"TrcC", Descriptor::new("TrcC").with("Lvl ", long(-1)).with("Edg ", enumv("CntE", "Upr "))),
+            (b"Crst", Descriptor::new("Crst").with("ClSz", long(2))),
+            (b"Pntl", Descriptor::new("Pntl").with("ClSz", long(i32::MAX))),
+        ];
+        for (id, fltr) in cases {
+            let item = photoshop_item(id, fltr);
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{item:?}");
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes());
+        }
+        // Saved without options (`hasoptions` false, no `Fltr`): kept verbatim.
+        let bare = Descriptor::new("filterFX").with("hasoptions", Value::Boolean(false)).with("filterID", Value::Integer(code(b"Crst")));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
+        // A Pointillize entry whose background colour is unreadable is kept verbatim too.
+        for bad in [Value::Integer(3), Value::Descriptor(Descriptor::new("RGBC").with("Rd  ", Value::Double(0.0)))] {
+            let mut item = photoshop_item(b"Pntl", Descriptor::new("Pntl").with("ClSz", Value::Integer(7)));
+            set(&mut item, "BckC", bad);
+            assert_eq!(filter_from_item(&item).command, UNSUPPORTED_FILTER);
+        }
+        // Values with no PSD equivalent are reported, not guessed.
+        for (c, p) in [
+            ("filter.stylize.diffuse", json!({"mode": "sideways"})),
+            ("filter.stylize.diffuse", json!({"mode": 3})),
+            ("filter.stylize.traceContour", json!({"edge": "middle"})),
+            ("filter.pixelate.pointillize", json!({"background": "teal"})),
+            ("filter.pixelate.pointillize", json!({"background": [1.0]})),
+        ] {
+            assert!(item_for_filter(&sf(c, p.clone())).is_err(), "{c} {p}");
+        }
     }
 
     /// A Filter Gallery item as Photopea writes it (Chrome, Detail 12, Smoothness 4).
