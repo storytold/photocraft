@@ -357,8 +357,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
-    // it is open don't reach the text beneath.
-    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text) {
+    // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
+    // commit the crop under it (#6561).
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return;
     }
     let symmetry_editing = app.ui.symmetry_transform.is_some();

@@ -1295,11 +1295,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                         widgets::vline(ui, 22.0);
                         if widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
-                            if o.crop_ratio == crate::crop_size::WHR {
-                                crate::crop_size::clear(o);
-                            } else {
-                                o.crop_ratio.clear();
-                            }
+                            crate::crop_size::clear_ratio(o);
                         }
                         crate::crop_straighten::options_button(&mut app.crop.straighten, ui);
                         crate::crop_overlay::options_button(o, ui);

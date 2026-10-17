@@ -223,6 +223,15 @@ pub fn clear(o: &mut ToolOptions) {
     o.crop_resolution.clear();
 }
 
+/// The options bar's Clear: W, H and the resolution in W x H x Resolution mode, else the ratio.
+pub fn clear_ratio(o: &mut ToolOptions) {
+    if o.crop_ratio == WHR {
+        clear(o);
+    } else {
+        o.crop_ratio.clear();
+    }
+}
+
 /// Swaps W and H (the ⇄ button, X). False outside W x H x Resolution mode.
 pub fn swap(o: &mut ToolOptions) -> bool {
     if o.crop_ratio != WHR {
