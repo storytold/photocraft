@@ -1,8 +1,8 @@
-# PhotoCraft roadmap
+# PhotoCraft parity summary
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (clarified document ownership; removed the duplicate upcoming-priorities table) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
 the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
@@ -108,15 +108,12 @@ Also shipped: Traditional Chinese, Russian, Ukrainian, Czech, Polish, Greek, Dut
 
 ## Upcoming
 
-| Rank | Milestone | Estimate |
-|---|---|---:|
-| 1 | PSD that Photoshop trusts: Save As corruption, Photoshop re-open check, Photoshop-oracle floor 145 → 200+ of 258 | 150–250 h |
-| 2 | Performance budgets: the 22 over-budget scenarios and the 150-layer GPU crash | 200–350 h |
-| 3 | User bug backlog to under 100 open | 250–400 h |
-| 4 | Brush and transform feel (brush-parity, ui-parity rows) | 160–290 h |
-| 5 | The 12 missing tools | 60–100 h |
-
-Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
+The maintained priority order and estimates live in
+[Current focus](docs/roadmap.md#current-focus) and
+[What’s next](docs/roadmap.md#whats-next-with-estimates). Update those sections when
+priorities change; this file summarizes measured readiness rather than maintaining
+another work plan. Published versions and release notes are on the
+[GitHub Releases page](https://github.com/storytold/photocraft/releases).
 
 ## Progress log
 
@@ -135,6 +132,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Parity summary owns the readiness overview; docs/roadmap.md owns priorities and milestones; release history links to GitHub Releases |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
 | 2026-10-11 | minor | Toolbox count 56 of 68 (12 missing) with the Convert Point tool (#3204) |
 | 2026-10-10 | minor | Readiness by audience with hours per tier |

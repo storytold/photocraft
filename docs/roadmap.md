@@ -1,6 +1,6 @@
-# Roadmap
+# Implementation roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (made priorities and milestones canonical here; release history and measured counts link to their owners) · **Target:** Adobe Photoshop 2026
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -21,7 +21,9 @@ Status legend: ✅ done · 🟡 in progress · ⬜ not started. Hours are Opus 5
 for one agent working sequentially (calibration in
 [`target-app-parity.md`](target-app-parity.md#remaining-effort-and-calibration)).
 
-**Stage: alpha** (ready for real work ~45%). Beta needs ~75% and reliable PSD: ~1,100–1,800 h.
+Current stage and readiness are maintained in the [parity summary](../ROADMAP.md#headline-numbers).
+This document owns the implementation priorities, milestones and acceptance criteria.
+Its dated alpha-gate evidence below is a historical assessment, not a fresh release test.
 
 ## Alpha gate
 
@@ -60,8 +62,8 @@ real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 | M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; JP2 / DICOM / DPX / C2PA pending |
 | M12 Pro parity | 🟡 | CMYK / Lab / Indexed / Bitmap / Duotone, ICC + soft proofing, channels + Quick Mask, smart-object stack modes, artboards, layer comps; print, HDR, timeline pending; Photomerge is implemented, with real-world quality validation still open |
 
-Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.3.0 (10-07),
-0.5.0 (10-08), 0.6.0 (10-10).
+Published versions and release notes: [GitHub Releases](https://github.com/storytold/photocraft/releases).
+Release procedure: [Release playbook](release-playbook.md). Do not maintain a second release list here.
 
 ## Current focus
 
@@ -69,26 +71,31 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 
 1. **PSD that Photoshop trusts** ([G1](gaps.md#g1-psd-fidelity-and-photoshop-acceptance)):
    fix Photoshop refusing our files (#1281, #2469; text-layer case #2374 closed); add a
-   Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 133/256 → 200+. 150–250 h.
+   Photoshop re-open check (FILE-216-4); raise the Photoshop-oracle floor toward 200+
+   passing cases. The current floor and corpus size are maintained in G1. 150–250 h.
 2. **Performance budgets** ([G2](gaps.md#g2-interactive-performance)): the 22 over-budget
    scenarios, the P12 GPU crash at 150 layers, brush and cursor lag (#2619, #2566). 200–350 h.
    Local adaptive [Unsharp Mask optimisation](unsharp-mask-performance.md) improves native
    threshold-zero 24 MP RGBA CPU application by 37–102x at radii 300–1000, with measured
    rounding differences and an exact fallback; no published budget is closed by that measurement.
-3. **User bug backlog** ([G3](gaps.md#g3-user-reported-bug-backlog)): 579 open issues, most from
-   0.5/0.6 users; triage weekly, fix regressions first. 250–400 h.
+3. **User bug backlog** ([G3](gaps.md#g3-user-reported-bug-backlog)): use G3’s dated backlog
+   assessment and [open issues](https://github.com/storytold/photocraft/issues) for the live
+   queue; triage weekly, fix regressions first. 250–400 h.
 4. **Brush and transform feel** ([G4](gaps.md#g4-brush-feel), [G5](gaps.md#g5-transform-handles-and-modifiers)):
    [`brush-parity.md`](brush-parity.md) and [`ui-parity.md`](ui-parity.md) rows marked partial
    or missing. 150–250 h.
-5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 14 of Photoshop's 68. 60–100 h.
+5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): follow G6’s maintained inventory and
+   evidence. 60–100 h.
 
 ## What's next, with estimates
 
+These are work themes and estimates, not promises attached to release version numbers.
+
 | Next milestone | Scope | Estimate |
 |---|---|---:|
-| 0.7 "files you can trust" | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
-| 0.8 "fast enough" | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
-| 0.9 "feels like Photoshop" | Current focus 4 and 5; transform context menu; floating panels; Color panel | 300–500 h |
+| Files you can trust | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
+| Fast enough | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
+| Feels like Photoshop | Current focus 4 and 5; transform context menu; floating panels; Color panel | 300–500 h |
 | Beta | All of the above, type depth, Select and Mask / Content-Aware Fill workspaces, Hindi/Arabic/Vietnamese + RTL, bug backlog under 100 | 1,100–1,800 h total |
 | Later, needs owner decisions | AI backend (#41), plug-in hosting (.8BF / UXP), scripting compatibility | 550–1,050 h |
 
@@ -116,6 +123,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Removed duplicate release history and stale count snapshots; canonical priorities stay here and readiness stays in the parity summary |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate from the progress-docs standard): passes, stage stays alpha |

@@ -1,6 +1,6 @@
 # PhotoCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (workspace size and test counts recounted; current-state summary added; the design plan below is kept, with its deviations listed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (documented the current egui boundary and bespoke UI as deviations from the original design plan) · **Target:** Adobe Photoshop 2026
 
 ## Current state (2026-10-10)
 
@@ -26,10 +26,31 @@ What exists on `main` today. The numbered sections below are the original design
 - **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
   (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
   is superseded by [`roadmap.md`](roadmap.md).
+- **UI portability deviation (reviewed 2026-10-15):** dependency layering keeps egui out of the
+  engine and lower crates; it does not make the shell interchangeable. Pointer gestures,
+  interaction state, layout and painting live in egui-specific modules such as
+  [`transform_tool.rs`](../crates/ui-egui/src/transform_tool.rs) and
+  [`canvas.rs`](../crates/ui-egui/src/canvas.rs). A different toolkit could reuse the engine,
+  document model and algorithms, but would need to port these interactions and their UI tests.
+- **Data-driven UI deviation (reviewed 2026-10-15):** menus and many parameter forms use the
+  command catalog and schemas, while specialised dialogs and tools use handwritten egui code
+  (for example [`color_picker_ui.rs`](../crates/ui-egui/src/color_picker_ui.rs) and
+  [`layer_style.rs`](../crates/ui-egui/src/layer_style.rs)). There is no complete toolkit-neutral
+  overlay or dialog description that a replacement renderer could consume. The original
+  principle 3 below is a design aspiration, not a description of all current UI code.
+
+For new work, keep document changes in engine commands and reusable algorithms below L6,
+keep view state and interaction in the shell, and test both the command and the real UI flow.
+Use existing data-driven forms where they fit; specialised controls still require egui
+implementation and visual verification. The current rules are in [AGENTS.md](../AGENTS.md).
 
 ---
 
 # Design plan (2026-09-30)
+
+This historical plan contains goals that were not fully realized. The current-state deviations
+above take precedence; in particular, toolkit swapping and fully generated dialogs are not
+existing capabilities.
 
 This plan sets out:
 - the Cargo workspace,
@@ -589,6 +610,7 @@ Each phase ends with a demoable build and green CI on all targets. Phases 8–10
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Documented egui-specific interactions and bespoke dialogs as explicit deviations from the original portability plan |
 | 2026-10-13 | minor | Workspace size and `#[test]` counts recounted (393k → 539k lines, 5,460 → 8,040 tests); other current-state figures unchanged |
 | 2026-10-10 | minor | Current-state summary and deviations from the plan; status line; broken link to `photoshop-parity.md` repointed to `target-app-parity.md` |
 | 2026-09-30 | major | Design plan v1 |
