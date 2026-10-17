@@ -891,6 +891,17 @@ mod tests {
         assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 1, 2, 2, 1]);
     }
 
+    /// Counted status messages read in Simplified Chinese instead of falling back to English (they were
+    /// missing from the catalog).
+    #[test]
+    fn simplified_chinese_counted_messages_are_translated() {
+        let lang = Lang::from_code("zh-hans").expect("zh-hans registered");
+        assert_eq!(trn(lang, 3, "Played {n} step", "Played {n} steps"), "已播放 3 个步骤");
+        let brushes = trn(lang, 2, "Imported {n} brush from {group}", "Imported {n} brushes from {group}");
+        assert_eq!(fmt(&brushes, &[("group", "水彩")]), "已从 水彩 导入 2 个画笔");
+        assert_eq!(trn(lang, 5, "{n} slice", "{n} slices"), "5 个切片");
+    }
+
     #[test]
     fn czech_plural_rule() {
         let forms: Vec<usize> = [0, 1, 2, 3, 4, 5, 11, 12, 21, 22, 100, u64::MAX].into_iter().map(plural_cs).collect();
