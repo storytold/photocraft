@@ -162,9 +162,21 @@ pub fn tip_shape(radius: f32, hardness: f32) -> (f32, f32) {
     let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
     // A tip of a few pixels keeps a narrower edge, so a small hard dab stays solid in the middle.
     // Never sharper than a quarter pixel, the small-tip supersampling step.
-    let edge = TIP_EDGE_PX.min(0.3 * radius).max(0.25);
+
+    ///////////////////////////////////////////////
+    // FIX The 0.25-px floor on the tip's edge (tip_shape) makes a
+    // 0.3-radius dab emit ~0.2 of a pixel's worth of ink instead of ~0.28,
+    // and a 0.15-radius dab emit ~0.05 instead of 0.07. It's not what's producing
+    // the flat ending — but if the fade is still a bit abrupt after the fixes above,
+    // this is the remaining contributor
+    let edge = if radius < 0.83 {
+        (0.3 * radius).max(0.02)
+    } else {
+        TIP_EDGE_PX.min(0.3 * radius).max(0.25)
+    };
     ((r0 * radius).min(radius - edge).max(0.0), (s * radius).max(edge).max(1e-3))
 }
+///////////////////////////////////////////////////////////////
 
 /// `exp(-u)` as `(1 − u/64)⁶⁴` by six squarings: within 1/255 of `exp` where it matters, exact
 /// arithmetic (the same on every platform) and exactly 0 from `u = 64`.

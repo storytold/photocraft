@@ -98,7 +98,7 @@ fn hardness_profile_is_monotonic() {
 #[test]
 fn hard_edge_is_sharp() {
     // A hardness of 1 is a steep rim: fully opaque inside the nominal radius, empty just past
-    // it, with only the anti-aliasing band in between.
+    // it, with only the antialiasing band in between.
     let b = BrushSettings { hardness: 1.0, ..brush() };
     let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), 20.0, 1.0));
     let prof: Vec<f32> = (0..22).map(|i| at(&r, 50 + i, 50)).collect();
@@ -766,13 +766,13 @@ fn smoothing_modes() {
     a.time = 0.0;
     let b = StrokePoint { x: 100.0, time: 16.0, ..a };
     let c = StrokePoint { time: 500.0, ..b };
-    let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() }, 1.0);
+    let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() }, 1.0, 20.0);
     let mut out = Vec::new();
     for p in [a, b, c] {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x > 99.0, "{}", out.last().unwrap().x);
-    let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() }, 1.0);
+    let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() }, 1.0, 20.0);
     let mut out = Vec::new();
     for p in [a, b, c] {
         s.push(p, &mut out);
@@ -786,7 +786,7 @@ fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() 
     for pulled_string in [false, true] {
         let smoothing = Smoothing { enabled: false, amount: 0.8, pulled_string, ..Default::default() };
         let got = smooth_points(&smoothing, 1.0, &pts);
-        assert_eq!(got.len(), pts.len());
+        assert!(got.len() >= pts.len(), "the tapering tail now always adds points");
         for (a, b) in got.iter().zip(&pts) {
             assert_eq!((a.x, a.y, a.pressure), (b.x, b.y, b.pressure));
         }
@@ -817,7 +817,7 @@ fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() 
 fn smoothing_string_runs_from_the_lagging_brush_to_the_pointer() {
     // #3479: the canvas draws the line between the brush and the pointer.
     let cfg = Smoothing { amount: 0.8, ..Default::default() };
-    let mut s = Smoother::new(&cfg, 1.0);
+    let mut s = Smoother::new(&cfg, 1.0, 20.0);
     let mut out = Vec::new();
     assert_eq!(s.string(), None, "no stroke yet");
     s.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
@@ -826,7 +826,7 @@ fn smoothing_string_runs_from_the_lagging_brush_to_the_pointer() {
     let (brush, pointer) = s.string().unwrap();
     assert!(brush[0] > 0.0 && brush[0] < 100.0, "the brush lags: {brush:?}");
     assert_eq!(pointer, [100.0, 0.0]);
-    let mut off = Smoother::new(&Smoothing { amount: 0.0, ..cfg }, 1.0);
+    let mut off = Smoother::new(&Smoothing { amount: 0.0, ..cfg }, 1.0, 20.0);
     off.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
     off.push(StrokePoint::new(100.0, 0.0, 1.0), &mut out);
     assert_eq!(off.string(), None, "smoothing off: no string");
@@ -837,7 +837,7 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
     // The pointer jumps 100 px and is held there for 32 ms, reported at 1000 Hz or about 60 Hz.
     let cfg = Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() };
     let run = |interval: f64| {
-        let mut s = Smoother::new(&cfg, 1.0);
+        let mut s = Smoother::new(&cfg, 1.0, 20.0);
         let mut out = Vec::new();
         s.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
         let mut t = 0.0;
@@ -852,7 +852,7 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
     assert!((slow - 36.0).abs() < 1e-4, "{slow}");
     assert!((fast - slow).abs() < 1e-4, "1000 Hz {fast} vs 60 Hz {slow}");
     // Without timestamps each point is one step, as before.
-    let mut s = Smoother::new(&cfg, 1.0);
+    let mut s = Smoother::new(&cfg, 1.0, 20.0);
     let mut out = Vec::new();
     for x in [0.0, 100.0] {
         s.push(StrokePoint::new(x, 0.0, 1.0), &mut out);
@@ -863,7 +863,7 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
 #[test]
 fn smoothing_without_catch_up_stops_while_the_pointer_pauses() {
     let cfg = Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() };
-    let mut s = Smoother::new(&cfg, 1.0);
+    let mut s = Smoother::new(&cfg, 1.0, 20.0);
     let mut out = Vec::new();
     s.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
     s.push(StrokePoint { time: 16.0, ..StrokePoint::new(100.0, 0.0, 1.0) }, &mut out);
@@ -1354,7 +1354,7 @@ fn dab_rect_of_a_far_or_non_finite_centre_does_not_overflow() {
     assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "{r:?}");
 }
 
-/// Alpha down from a horizontal line at `y = 100.5` on an f32 surface, one value per pixel row.
+/// Alpha down from a horizontal line at `y = 100.5` on a f32 surface, one value per pixel row.
 fn cross_section(b: &BrushSettings, pts: &[StrokePoint], x: i32) -> Vec<f32> {
     let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
     render_stroke(&mut s, b, pts, None, false, 1.0);

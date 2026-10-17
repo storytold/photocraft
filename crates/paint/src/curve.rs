@@ -13,7 +13,7 @@ const MAX: usize = 16;
 /// at [`Self::MAX_POINTS`], and their outputs made non-decreasing. Before the first point and after
 /// the last the curve stays flat. Fewer than two usable points is linear.
 ///
-/// Fixed-size and `Copy`, so a brush evaluates it per dab without allocating. In JSON it is its
+/// Fixed-size and `Copy`, so a brush evaluates it per dab without allocating. In JSON, it is its
 /// list of points, `[[0,0],[0.5,0.2],[1,1]]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResponseCurve {
@@ -37,18 +37,33 @@ impl Default for ResponseCurve {
     }
 }
 
-impl ResponseCurve {
+impl ResponseCurve {    // >>>> Added SMOOTH to match Photoshop's curve 
     pub const MAX_POINTS: usize = MAX;
 
     /// The identity: input passes through unchanged.
     pub const LINEAR: Self = Self { n: 2, xs: padded(0.0, 1.0), ys: padded(0.0, 1.0), ms: padded(1.0, 1.0) };
+
+
+    /// Photoshop's default pressure response: a smooth S-curve (smoothstep, `3x² − 2x³`).
+    /// Matches Photoshop's measured output within a rounding step — 10 % pressure → ~2.8 %
+    /// size, 25 % → ~15.6 %, 50 % → 50 %, 75 % → ~84.4 %, 90 % → ~97.2 %. The low end is
+    /// damped (a small pressure wriggle barely moves the size) and the high-end opens up
+    /// (the last 20 % of pressure gives most of the size) — the "grip" a linear response
+    /// has none of. Control points are on smoothstep; the tangents below are the
+    /// Fritsch–Carlson output for those points, with no limiting needed.
+    pub const SMOOTH: Self = Self {
+        n: 7,
+        xs: [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ys: [0.0, 0.028, 0.156, 0.5, 0.844, 0.972, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ms: [0.28, 0.56667, 1.11467, 1.376, 1.11467, 0.56667, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    };
 
     pub fn new(points: &[[f32; 2]]) -> Self {
         let mut pts: Vec<[f32; 2]> =
             points.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]).collect();
         pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
         pts.dedup_by(|b, a| {
-            // Same input: keep the later point's output.
+            // Same input: keep the latter point's output.
             let same = (a[0] - b[0]).abs() < 1e-6;
             if same {
                 a[1] = b[1];

@@ -53,28 +53,42 @@ pub struct Dynamic {
     /// 0..1 floor the control/jitter may reduce the value to (minimum diameter, roundness, depth…).
     pub minimum: f32,
     /// This dynamic's own response to its control (Fade, Pen Pressure, Pen Tilt, Stylus Wheel,
-    /// Rotation), applied after the global pen curve. Linear by default. Always written to JSON, so
-    /// a `tools.setBrush` patch can set it back to linear. Angle Jitter's controls ignore it.
+    /// Rotation), applied after the global pen curve. Smooth (Photoshop's default S-curve) by
+    /// default; a `tools.setBrush` patch can set it back to linear. Angle Jitter's controls
+    /// ignore it.
     pub curve: ResponseCurve,
 }
 
+//////////////////////////////////////////////////////////
+// FIX
+
 impl Default for Dynamic {
     fn default() -> Self {
-        Self { jitter: 0.0, control: Control::Off, fade_steps: 25, minimum: 0.0, curve: ResponseCurve::LINEAR }
+        Self {
+            jitter: 0.0,
+            control: Control::Off,
+            fade_steps: 25,
+            minimum: 0.0,
+            curve: ResponseCurve::SMOOTH, // Keep this! It provides the Photoshop grip.
+        }
     }
 }
 
+//////////////////////////////////////////////////
+// ADDED is_active
 impl Dynamic {
     pub const fn controlled(control: Control) -> Self {
-        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, curve: ResponseCurve::LINEAR }
+        Self { jitter: 0.0, control, fade_steps: 25, minimum: 0.0, curve: ResponseCurve::SMOOTH }
     }
     pub const fn jitter(jitter: f32) -> Self {
-        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, curve: ResponseCurve::LINEAR }
+        Self { jitter, control: Control::Off, fade_steps: 25, minimum: 0.0, curve: ResponseCurve::SMOOTH }
     }
     pub fn is_active(&self) -> bool {
-        self.jitter > 0.0 || self.control != Control::Off
+        self.control != Control::Off || self.jitter > 0.0
     }
 }
+
+/////////////////////////////////////////////
 
 /// The brush tip bitmap source.
 ///
@@ -368,7 +382,7 @@ pub struct ColorDynamics {
     pub hue_jitter: f32,
     pub saturation_jitter: f32,
     pub brightness_jitter: f32,
-    /// -1 (fully desaturated) .. 1 (fully saturated).
+    /// -1 (fully desaturated) / 1 (fully saturated).
     pub purity: f32,
 }
 
@@ -467,12 +481,12 @@ impl Default for Smoothing {
 }
 
 /// A complete brush: tip shape, dynamics, and stroke-level options.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BrushSettings {
     /// Diameter in pixels.
     pub size: f32,
-    /// 0 (soft) ..1 (hard). Computed tips only.
+    /// 0 (soft) / 1 (hard). Computed tips only.
     pub hardness: f32,
     /// Spacing between dabs as a fraction of the diameter.
     pub spacing: f32,
@@ -586,6 +600,50 @@ impl Default for BrushSettings {
     }
 }
 
+// Implemented PartialEq for real
+
+impl PartialEq for BrushSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size
+            && self.hardness == other.hardness
+            && self.spacing == other.spacing
+            && self.spacing_enabled == other.spacing_enabled
+            && self.opacity == other.opacity
+            && self.flow == other.flow
+            && self.pressure_size == other.pressure_size
+            && self.pressure_opacity == other.pressure_opacity
+            && self.color == other.color
+            && self.background == other.background
+            && self.erase == other.erase
+            && self.mode == other.mode
+            && self.tip == other.tip
+            && self.angle == other.angle
+            && self.roundness == other.roundness
+            && self.flip_x == other.flip_x
+            && self.flip_y == other.flip_y
+            && self.aliased == other.aliased
+            && self.square == other.square
+            && self.shape_dynamics == other.shape_dynamics
+            && self.scattering == other.scattering
+            && self.texture == other.texture
+            && self.dual_brush == other.dual_brush
+            && self.color_dynamics == other.color_dynamics
+            && self.transfer == other.transfer
+            && self.pose == other.pose
+            && self.noise == other.noise
+            && self.wet_edges == other.wet_edges
+            && self.build_up == other.build_up
+            && self.build_up_rate == other.build_up_rate
+            && self.smoothing == other.smoothing
+            && self.protect_texture == other.protect_texture
+            && self.locks == other.locks
+            && self.mixer == other.mixer
+            && self.seed == other.seed
+    }
+}
+
+
+
 impl BrushSettings {
     /// Resize the primary tip and keep an enabled Dual Brush tip at the same relative size.
     /// An explicit Dual Brush size edit should bypass this and retain the requested diameter.
@@ -661,7 +719,7 @@ impl BrushSettings {
         b
     }
 
-    /// Apply Protect Texture: if `current` protects its texture, a newly chosen brush with a texture
+    /// Apply to Protect Texture: if `current` protects its texture, a newly chosen brush with a texture
     /// keeps `current`'s pattern and scale.
     pub fn with_protected_texture(mut self, current: &BrushSettings) -> Self {
         if current.protect_texture && current.texture.enabled && self.texture.enabled {

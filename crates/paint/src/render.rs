@@ -822,6 +822,7 @@ impl StrokeRenderer {
 
     /// End of stroke (smoothing catch-up, a lone first point).
     pub fn finish(&mut self) {
+
         self.generator.finish(&mut self.dab_buf, &mut self.dual_buf);
         self.raster_pending();
     }
@@ -958,9 +959,32 @@ impl StrokeRenderer {
             let mut k: Vec<_> = self.cov.tiles.keys().copied().collect();
             k.sort_unstable();
             k
+
+        /////////////////////////////////////////////////////////////////////
+       // FIX no.1
         } else {
-            self.cov.take_dirty()
+            // If the brush has a stroke-level mask (Dual Brush or Texture that is not per-tip),
+            // we must re-composite the *entire* stroke bounds, not just the dirty tiles.
+            // Otherwise, the mask is applied inconsistently on tile boundaries.
+            let has_stroke_mask = self.dual.is_some() || (self.ctx.texture.is_some() && !self.ctx.brush.texture.each_tip);
+            if has_stroke_mask {
+                // Force a full re-composite of the stroke bounds.
+                // We still clear the dirty set to avoid re-processing later.
+                self.cov.dirty.clear();
+                if let Some(d) = self.dual.as_mut() {
+                    d.dirty.clear();
+                }
+                // Return all tiles that have coverage (the stroke bounds).
+                let mut k: Vec<_> = self.cov.tiles.keys().copied().collect();
+                k.sort_unstable();
+                k
+            } else {
+                self.cov.take_dirty()
+            }
         };
+        //////////////////////////////////////////////////////////////////////////////////
+
+
         if let Some(d) = self.dual.as_mut() {
             d.dirty.clear();
         }

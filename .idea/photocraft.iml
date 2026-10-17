@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft-cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft-cli/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft-web-boot/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft-web/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/photocraft/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/affinity/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/affinity/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/algo/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/algo/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/algo/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/automation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/automation/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/cms/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/cms/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/codecs/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/codecs/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/color/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/compose/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/compose/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/compose/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/compose/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/doc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/engine/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/engine/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/engine/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/format/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/format/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/geom/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gpu/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gpu/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gpu/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/heif/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/io/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/io/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/io/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ops/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ops/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/paint/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/paint/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/plugins/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/plugins/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/plugins/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/psd/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/psd/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/psd/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/raster/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/raw/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/raw/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/raw/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tablet/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/tablet/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/testkit/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/vector/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/vector/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/xtask/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
