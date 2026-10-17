@@ -25,6 +25,8 @@ use crate::theme::{ThemeKind, Tokens};
 /// Shell runtime state for preferences, autosave and snapping (not serialised).
 #[derive(Default)]
 pub struct Runtime {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_files: crate::recent_files::Runtime,
     loaded: bool,
     /// Preferences revision last written to storage (or loaded from it).
     saved_rev: u64,
@@ -450,6 +452,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);
     app.sync_recent();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::recent_files::tick(app, ctx);
     if let Some(wait) = persist(app, ctx.input(|i| i.time)) {
         ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait).unwrap_or_default());
     }
@@ -3209,35 +3213,57 @@ mod tests {
 
     #[test]
     fn recent_files_survive_a_restart_and_honour_the_count() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let dir = std::env::temp_dir().join(format!(
+            "photocraft-recent-prefs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        std::fs::create_dir(&dir).unwrap();
+        #[cfg(not(target_arch = "wasm32"))]
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        #[cfg(target_arch = "wasm32")]
+        let path = |name: &str| format!("/work/{name}");
+        #[cfg(not(target_arch = "wasm32"))]
+        for name in ["a.psd", "b.png", "c.tif", "d.tif", "x.psd"] {
+            std::fs::write(path(name), []).unwrap();
+        }
         let (mut app, store) = app_with_store();
         let ctx = egui::Context::default();
         tick(&mut app, &ctx);
-        app.push_recent("/work/a.psd");
-        app.push_recent("/work/b.png");
+        app.push_recent(&path("a.psd"));
+        app.push_recent(&path("b.png"));
         tick(&mut app, &ctx);
         let saved = store.lock().unwrap().clone().unwrap();
         // A new app instance (a restart) gets the list back, newest first.
         let (mut app2, _) = app_with_saved(Some(saved));
         tick(&mut app2, &ctx);
-        assert_eq!(app2.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
+        assert_eq!(app2.ui.recent_files, vec![path("b.png"), path("a.psd")]);
         // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
         app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
         tick(&mut app2, &ctx);
-        assert_eq!(app2.ui.recent_files, vec!["/work/b.png".to_string()]);
-        app2.push_recent("/work/c.tif");
-        assert_eq!(app2.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
+        assert_eq!(app2.ui.recent_files, vec![path("b.png")]);
+        app2.push_recent(&path("c.tif"));
+        assert_eq!(app2.session.prefs().file_handling.recent_files, vec![path("c.tif")]);
         app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
         tick(&mut app2, &ctx);
-        app2.push_recent("/work/d.tif");
+        app2.push_recent(&path("d.tif"));
         assert!(app2.ui.recent_files.is_empty());
         // Clearing the list in the Preferences dialog (or by an agent) reaches the menu.
-        app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
+        app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": [path("x.psd")]}})).unwrap();
         tick(&mut app2, &ctx);
-        assert_eq!(app2.ui.recent_files, vec!["/x.psd".to_string()]);
+        assert_eq!(app2.ui.recent_files, vec![path("x.psd")]);
         // A hostile count from a hand-edited preferences file is capped, not trusted.
         app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
         app2.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
         assert_eq!(app2.recent_cap(), 100);
+        #[cfg(not(target_arch = "wasm32"))]
+        for name in ["a.psd", "b.png", "c.tif", "d.tif", "x.psd"] {
+            std::fs::remove_file(path(name)).unwrap();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]
