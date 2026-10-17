@@ -239,6 +239,7 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
         altitude: f(d, "Lald", 30.0),
         use_global_light: !matches!(d.get("uglg"), Some(Value::Boolean(false))),
         gloss_contour: contour(d, "TrnS"),
+        gloss_anti_alias: bool_of(d, "antialiasGloss"),
         highlight: FxCommon { enabled: true, blend: blend_of(d, "hglM", BlendMode::Screen), opacity: pct(d, "hglO", 0.75) },
         highlight_color: get_desc(d, "hglC").and_then(color_from_desc).unwrap_or(Color::WHITE),
         shadow: FxCommon { enabled: true, blend: blend_of(d, "sdwM", BlendMode::Multiply), opacity: pct(d, "sdwO", 0.75) },
@@ -482,6 +483,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
                 .with("blur", unit(b"#Pxl", b.size))
                 .with("bvlD", Value::Enumerated { type_id: Id::new("BESs"), value: Id::new(if b.up { "In  " } else { "Out " }) })
                 .with("TrnS", contour_value(&b.gloss_contour))
+                .with("antialiasGloss", Value::Boolean(b.gloss_anti_alias))
                 .with("Sftn", unit(b"#Pxl", b.soften));
             let d = match &b.contour {
                 Some(c) => d
@@ -720,6 +722,7 @@ mod tests {
                 altitude: 40.0,
                 use_global_light: false,
                 gloss_contour: Contour::Linear,
+                gloss_anti_alias: true,
                 highlight: FxCommon::new(BlendMode::Screen, 0.75),
                 highlight_color: Color::WHITE,
                 shadow: FxCommon::new(BlendMode::Multiply, 0.6),

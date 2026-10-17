@@ -1330,6 +1330,7 @@ fn bevel(style: BevelStyle, up: bool, size: f32, soften: f32) -> Bevel {
         altitude: 35.0,
         use_global_light: true,
         gloss_contour: Contour::Linear,
+        gloss_anti_alias: false,
         highlight: FxCommon::new(BlendMode::Screen, 0.8),
         highlight_color: Color::rgb(1.0, 1.0, 0.9),
         shadow: FxCommon::new(BlendMode::Multiply, 0.7),

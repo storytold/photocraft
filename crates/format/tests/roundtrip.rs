@@ -579,6 +579,7 @@ fn channel_restrictions_and_bevel_elements_roundtrip() {
         altitude: 40.0,
         use_global_light: false,
         gloss_contour: Contour::Linear,
+        gloss_anti_alias: false,
         highlight: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Screen, 0.7),
         highlight_color: photocraft_color::Color::WHITE,
         shadow: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Multiply, 0.6),
