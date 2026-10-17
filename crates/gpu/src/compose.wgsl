@@ -53,6 +53,7 @@ const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment res
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
+const F_ALPHA_FILL: u32 = 524288u; // blend / atop: Transparency Shapes Layer off, pixel alpha is Fill
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
 @group(0) @binding(1) var<uniform> op: Op;
@@ -812,28 +813,56 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
     return c;
 }
 
+// Transparency Shapes Layer off: content alpha is pixel_alpha × mask. Masks stay coverage;
+// pixel alpha (times the layer Fill) is Fill.
+struct AlphaFill {
+    src: vec4<f32>,
+    fill: f32,
+}
+fn alpha_as_fill(s: vec4<f32>, d: vec2<i32>) -> AlphaFill {
+    let m = mask_value(d);
+    var pixel = 0.0;
+    if (m > 1e-6) { pixel = clamp(s.a / m, 0.0, 1.0); }
+    return AlphaFill(vec4(s.rgb, m), op.fill * pixel);
+}
+
 // blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
 @fragment
 fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let b = textureLoad(tex_a, p, 0);
     var s = textureLoad(tex_b, p, 0);
+    var fill = op.fill;
+    if ((op.flags & F_ALPHA_FILL) != 0u) {
+        let split = alpha_as_fill(s, doc_px(p));
+        s = split.src;
+        fill = split.fill;
+        if (fill <= 0.0) { return b; }
+    }
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
-        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
+        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
-    return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
+    return composite_fill(op.mode, b, s, op.opacity, fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.
+// F_ALPHA_FILL: pixel alpha is Fill (psblend::composite_fill), as on the CPU.
 @fragment
 fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let base = textureLoad(tex_a, p, 0);
     if (base.a <= 0.0) { return base; }
-    let s = textureLoad(tex_b, p, 0);
-    let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
+    var s = textureLoad(tex_b, p, 0);
+    let gamma_on = (op.flags & F_TEXT_GAMMA) != 0u;
+    if ((op.flags & F_ALPHA_FILL) != 0u) {
+        let split = alpha_as_fill(s, doc_px(p));
+        if (split.fill <= 0.0) { return base; }
+        let r = composite_fill(op.mode, vec4(base.rgb, 1.0), split.src, op.opacity, split.fill, gamma_on);
+        return vec4(r.rgb, base.a);
+    }
+    let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, gamma_on);
     return vec4(r.rgb, base.a);
 }
 

@@ -529,6 +529,35 @@ fn blend_modes() {
     }
 }
 
+/// Transparency Shapes Layer off: pixel alpha is Fill on both compositors (a clipped Linear
+/// Dodge highlight adds Cs·α). Masks stay coverage.
+#[test]
+fn transparency_shapes_off_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for mode in [BlendMode::LinearDodge, BlendMode::Normal, BlendMode::Multiply, BlendMode::ColorDodge] {
+        let mut d = base_doc(64, 48);
+        let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
+        l.blend = mode;
+        l.opacity = 0.85;
+        l.fill_opacity = 0.7;
+        l.advanced.transparency_shapes = false;
+        d.layers.push(l);
+        check(&mut g, &d, &format!("tsly off {mode:?}"));
+
+        let mut d = base_doc(64, 48);
+        let base = noise_layer("base", PixelFormat::RGBA8, Rect::new(2, 2, 50, 40), 3, 1.0);
+        let mut clip = noise_layer("shine", PixelFormat::RGBA8, d.bounds(), 4, 0.0);
+        clip.clipped = true;
+        clip.blend = mode;
+        clip.fill_opacity = 0.8;
+        clip.advanced.transparency_shapes = false;
+        clip.mask = Some(mask(d.bounds(), 9, 1.0));
+        d.layers.push(base);
+        d.layers.push(clip);
+        check(&mut g, &d, &format!("tsly off clipped {mode:?}"));
+    }
+}
+
 /// Photoshop's special eight apply Fill inside the blend (psblend::composite_fill): the GPU's
 /// blend pass takes Fill separately and must match the CPU at low and middle Fill, with Opacity,
 /// over transparency and over an opaque backdrop.

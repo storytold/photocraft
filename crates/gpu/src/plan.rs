@@ -395,6 +395,8 @@ pub const F_ADD_DIFF: u32 = 16384;
 pub const F_BLEND_IF: u32 = 524288;
 /// Blend / Atop / FxMerge of a type layer: coverage mixed at `psblend::TEXT_GAMMA`.
 pub const F_TEXT_GAMMA: u32 = 8192;
+/// Blend / Atop when Transparency Shapes Layer is off: pixel alpha is Fill, masks stay coverage.
+pub const F_ALPHA_FILL: u32 = 524288;
 
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
 /// [this layer, underlying layer]; every range as two floats, `black low × 256 + black high` and
@@ -750,6 +752,7 @@ impl<'a> Planner<'a> {
             p.mode = layer.blend;
             p.opacity = layer.opacity;
             p.fill = layer.fill_opacity;
+            self.mark_alpha_fill(&mut p, layer);
             return Ok(self.emit(p));
         }
 
@@ -785,6 +788,7 @@ impl<'a> Planner<'a> {
         p.fill = layer.fill_opacity;
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
+        self.mark_alpha_fill(&mut p, layer);
         p.clip = clip;
         let merged = self.emit(p);
         match clip {
@@ -967,10 +971,27 @@ impl<'a> Planner<'a> {
         p.a = Some(base);
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
+        if layer.advanced.transparency_shapes {
+            p.opacity = opacity;
+        } else {
+            // Pixel alpha is Fill; coverage is the layer opacity (masks stay on the source).
+            p.opacity = layer.opacity;
+            p.fill = layer.fill_opacity;
+            self.mark_alpha_fill(&mut p, layer);
+        }
         Ok(self.emit(p))
+    }
+
+    /// Transparency Shapes Layer off: the blend/atop shader reads pixel alpha as Fill. The mask
+    /// is already in the content alpha; binding it again lets the shader split the two.
+    fn mark_alpha_fill(&self, p: &mut Pass<'a>, layer: &'a Layer) {
+        if layer.advanced.transparency_shapes {
+            return;
+        }
+        p.flags |= F_ALPHA_FILL;
+        p.mask = self.mask_use(layer);
     }
 
     /// adjust::apply_with on a slot (consumes it).

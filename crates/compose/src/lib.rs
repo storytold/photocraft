@@ -1465,12 +1465,12 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
             *p = psblend::composite(BlendMode::Normal, *p, *s, 1.0);
             p[3] *= mask_k(&mask, i);
         }
-        blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, 1.0);
+        blend_layer(backdrop, &content, layer, cx);
         return;
     }
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
-    blend_into_fill(backdrop, &content, layer.blend, layer.opacity, layer.fill_opacity, text_gamma(layer));
+    blend_layer(backdrop, &content, layer, cx);
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -1831,6 +1831,8 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         return;
     }
     let Some(content) = render_content(layer, rect, cx) else { return };
+    let shapeless = !layer.advanced.transparency_shapes;
+    let masks = shapeless.then(|| mask_vals(layer, rect, cx)).flatten();
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
     for (i, p) in base.px.iter_mut().enumerate() {
@@ -1840,7 +1842,12 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         }
         let s = content.px[i];
         // Blend as if the base were opaque, then keep the base's alpha.
-        let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
+        // Transparency Shapes Layer off: this pixel's alpha is Fill, not coverage.
+        let r = if shapeless {
+            shapeless_composite(layer.blend, [p[0], p[1], p[2], 1.0], s, mask_k(&masks, i), layer.opacity, layer.fill_opacity, gamma)
+        } else {
+            blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma)
+        };
         *p = [r[0], r[1], r[2], alpha];
     }
 }
@@ -1848,6 +1855,64 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
 /// Blend an isolated layer buffer into the backdrop.
 fn blend_into(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32) {
     blend_into_g(backdrop, src, mode, opacity, 1.0);
+}
+
+/// `layer` over `backdrop`. Transparency Shapes Layer off makes each pixel's alpha Fill
+/// ([`blend_shapeless`]); otherwise Fill is the layer slider ([`blend_into_fill`]).
+fn blend_layer(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx) {
+    if layer.advanced.transparency_shapes {
+        blend_into_fill(backdrop, src, layer.blend, layer.opacity, layer.fill_opacity, text_gamma(layer));
+    } else {
+        blend_shapeless(backdrop, src, layer, cx);
+    }
+}
+
+/// A content pixel whose alpha already includes `mask`, split into coverage (the mask) and the
+/// pixel's own alpha (Fill when Transparency Shapes Layer is off).
+fn coverage_and_pixel_fill(pixel: [f32; 4], mask: f32) -> ([f32; 4], f32) {
+    let m = mask.clamp(0.0, 1.0);
+    let fill = if m > 1.0e-6 { (pixel[3] / m).clamp(0.0, 1.0) } else { 0.0 };
+    ([pixel[0], pixel[1], pixel[2], m], fill)
+}
+
+/// [`psblend::composite_fill`] with pixel alpha as Fill and `mask` as coverage. A zero fill
+/// leaves the backdrop unchanged (the special eight's neutral at Fill 0 is the backdrop).
+fn shapeless_composite(mode: BlendMode, backdrop: [f32; 4], pixel: [f32; 4], mask: f32, opacity: f32, fill_opacity: f32, gamma: f32) -> [f32; 4] {
+    let (src, pixel_fill) = coverage_and_pixel_fill(pixel, mask);
+    let fill = (fill_opacity * pixel_fill).clamp(0.0, 1.0);
+    if src[3] <= 0.0 || fill <= 0.0 {
+        return backdrop;
+    }
+    psblend::composite_fill(mode, backdrop, src, opacity, fill, gamma)
+}
+
+/// Transparency Shapes Layer off: pixel alpha is Fill (times the Fill slider) and masks stay
+/// coverage, so a Linear Dodge highlight adds `Cs·α` instead of mixing a full-strength add.
+fn blend_shapeless(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx) {
+    let masks = mask_vals(layer, backdrop.rect, cx);
+    let gamma = text_gamma(layer);
+    let rect = backdrop.rect;
+    let w = rect.width() as i32;
+    let dissolve = layer.blend == BlendMode::Dissolve;
+    for (i, (b, s)) in backdrop.px.iter_mut().zip(&src.px).enumerate() {
+        let mk = mask_k(&masks, i);
+        if dissolve {
+            let (mut src_px, pixel_fill) = coverage_and_pixel_fill(*s, mk);
+            let fill = (layer.fill_opacity * pixel_fill).clamp(0.0, 1.0);
+            let cover = src_px[3] * layer.opacity * fill;
+            if cover <= 0.0 {
+                continue;
+            }
+            let x = rect.x0 + (i as i32 % w);
+            let y = rect.y0 + (i as i32 / w);
+            src_px[3] = if dissolve_noise(x, y) < cover { 1.0 } else { 0.0 };
+            if src_px[3] > 0.0 {
+                *b = blend::composite(BlendMode::Normal, *b, src_px, 1.0);
+            }
+            continue;
+        }
+        *b = shapeless_composite(layer.blend, *b, *s, mk, layer.opacity, layer.fill_opacity, gamma);
+    }
 }
 
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for

@@ -12,7 +12,9 @@
 //!   composites onto the result in its own mode, kept inside the base's shape (its alpha with
 //!   masks, times its opacity).
 //! - **Transparency Shapes Layer off.** The layer's effects and knockout cover the whole layer
-//!   (its masks still apply) instead of following its transparency.
+//!   (its masks still apply) instead of following its transparency. With no effects, the pixel
+//!   alpha is Fill — multiplied with the Fill slider, masks staying coverage — so the special
+//!   eight scale the source by that alpha instead of mixing a full-strength blend by coverage.
 //! - **Layer / Vector Mask Hides Effects.** The effects are built from the layer without that
 //!   mask, and the mask is applied to the finished layer and effects.
 //!
@@ -21,9 +23,10 @@
 //! don't use these options render exactly as before at no extra cost.
 //!
 //! Measured on the psd-tools knockout files (deep/shallow, nested, pass-through, no Background,
-//! groups with knockout). Not yet measured against Photoshop: the clip of individually blended
-//! clipped layers (base alpha × opacity, ignoring its fill), Transparency Shapes Layer off, and the
-//! masks hiding effects.
+//! groups with knockout) and on a Photoshop Linear Dodge clip with Transparency Shapes Layer off
+//! (pixel alpha as Fill: `min(1, Cb + Cs·α)`). Not yet measured against Photoshop: the clip of
+//! individually blended clipped layers (base alpha × opacity, ignoring its fill) and the masks
+//! hiding effects.
 
 use std::borrow::Cow;
 

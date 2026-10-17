@@ -459,6 +459,10 @@ fn defaults_take_the_plain_paths() {
     l.advanced.layer_mask_hides_effects = true;
     l.advanced.blend_clipped = false;
     assert!(!advanced_active(&l, &[]));
+    // Pixel alpha as Fill is the plain blend (CPU and GPU), not an advanced-blending fallback.
+    l.advanced.transparency_shapes = false;
+    assert!(!advanced_active(&l, &[]));
+    l.advanced.transparency_shapes = true;
     let mut c = solid(&d, "c", full(&d), RED);
     c.clipped = true;
     assert!(advanced_active(&l, std::slice::from_ref(&c)));
@@ -466,6 +470,95 @@ fn defaults_take_the_plain_paths() {
     assert!(!advanced_active(&l, std::slice::from_ref(&c)));
     l.effects.items = vec![overlay([1.0, 0.0, 0.0])];
     assert!(advanced_active(&l, &[]), "blend interior with effects");
+}
+
+/// Photoshop Linear Dodge with Transparency Shapes Layer off (a clipped brush-light): pixel
+/// alpha is Fill, `min(1, Cb + Cs·α)`, which clips the highlight to white-yellow. Coverage
+/// mixing leaves it several levels darker. Measured on an 8-bit PSD flatten (179/255 alpha).
+#[test]
+fn transparency_shapes_off_uses_pixel_alpha_as_fill_for_linear_dodge() {
+    let gold: [f32; 4] = [224.0 / 255.0, 176.0 / 255.0, 46.0 / 255.0, 1.0];
+    let shine: [f32; 4] = [1.0, 215.0 / 255.0, 105.0 / 255.0, 179.0 / 255.0];
+    let a = shine[3];
+    for depth in DEPTHS {
+        // 8/16-bit Linear Dodge clips at 1; 32-bit keeps the sum (psblend HDR).
+        let hdr = depth == SampleType::F32;
+        let as_fill = blend::with_hdr(hdr, || {
+            let rgb = blend::blend_rgb_fill(BlendMode::LinearDodge, [gold[0], gold[1], gold[2]], [shine[0], shine[1], shine[2]], a);
+            [rgb[0], rgb[1], rgb[2], 1.0]
+        });
+        let as_coverage = blend::with_hdr(hdr, || blend::composite(BlendMode::LinearDodge, gold, shine, 1.0));
+        let half = blend::with_hdr(hdr, || blend::composite_fill(BlendMode::LinearDodge, gold, [shine[0], shine[1], shine[2], 1.0], 0.5, a, 1.0));
+        let mut clipped = doc(depth, false);
+        let base = solid(&clipped, "gold", full(&clipped), gold);
+        let mut clip = solid(&clipped, "shine", full(&clipped), shine);
+        clip.clipped = true;
+        clip.blend = BlendMode::LinearDodge;
+        clip.advanced.transparency_shapes = false;
+        clipped.layers.push(base);
+        clipped.layers.push(clip);
+        check(&clipped, 2, 2, as_fill, "clipped, alpha is fill");
+        clipped.layers[1].advanced.transparency_shapes = true;
+        check(&clipped, 2, 2, as_coverage, "clipped, alpha is coverage");
+
+        let mut over = doc(depth, false);
+        over.layers.push(solid(&over, "gold", full(&over), gold));
+        let mut top = solid(&over, "shine", full(&over), shine);
+        top.blend = BlendMode::LinearDodge;
+        top.advanced.transparency_shapes = false;
+        over.layers.push(top);
+        check(&over, 2, 2, as_fill, "unclipped, alpha is fill");
+
+        // Layer opacity stays coverage: half of the fill-blend over the gold.
+        over.layers[1].opacity = 0.5;
+        check(&over, 2, 2, half, "opacity 50 % still covers");
+    }
+}
+
+/// A mask shapes the layer; it does not become Fill. At 50 % mask and opaque pixels, Linear
+/// Dodge mixes the full add by 50 %. Treating the mask as Fill would clip red and green to 1.
+#[test]
+fn transparency_shapes_off_keeps_masks_as_coverage() {
+    let gold: [f32; 4] = [224.0 / 255.0, 176.0 / 255.0, 46.0 / 255.0, 1.0];
+    let shine: [f32; 4] = [1.0, 215.0 / 255.0, 105.0 / 255.0, 1.0];
+    for depth in DEPTHS {
+        let hdr = depth == SampleType::F32;
+        // Mask 50 % is coverage of the full-strength add, not Fill 50 %.
+        let mixed = blend::with_hdr(hdr, || blend::composite_fill(BlendMode::LinearDodge, gold, [shine[0], shine[1], shine[2], 0.5], 1.0, 1.0, 1.0));
+        let mut d = doc(depth, false);
+        d.layers.push(solid(&d, "gold", full(&d), gold));
+        let mut top = solid(&d, "shine", full(&d), shine);
+        top.blend = BlendMode::LinearDodge;
+        top.clipped = true;
+        top.advanced.transparency_shapes = false;
+        let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+        m.fill_rect(full(&d), &photocraft_raster::from_rgba(&m.format(), [0.5, 0.5, 0.5, 1.0]));
+        top.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        d.layers.push(top);
+        check(&d, 2, 2, mixed, "50 % mask is coverage");
+    }
+}
+
+/// Ordinary modes already treat Fill as coverage, so turning Transparency Shapes Layer off
+/// does not move a partial-alpha pixel.
+#[test]
+fn transparency_shapes_off_matches_coverage_for_ordinary_modes() {
+    let gold: [f32; 4] = [224.0 / 255.0, 176.0 / 255.0, 46.0 / 255.0, 1.0];
+    let shine: [f32; 4] = [1.0, 215.0 / 255.0, 105.0 / 255.0, 179.0 / 255.0];
+    for depth in DEPTHS {
+        for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+            let mut d = doc(depth, false);
+            d.layers.push(solid(&d, "gold", full(&d), gold));
+            let mut top = solid(&d, "shine", full(&d), shine);
+            top.blend = mode;
+            top.clipped = true;
+            d.layers.push(top);
+            let on = render(&d, Rect::from_xywh(2, 2, 1, 1)).px[0];
+            d.layers[1].advanced.transparency_shapes = false;
+            let off = render(&d, Rect::from_xywh(2, 2, 1, 1)).px[0];
+            assert!(close(on, off), "{mode:?} {depth:?}: tsly on {on:?} off {off:?}");
+        }
+    }
 }
 
 #[test]
