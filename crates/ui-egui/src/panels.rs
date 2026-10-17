@@ -2423,7 +2423,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 && let Some(at) = drawn.iter().position(|(id, _)| id.0 == from)
                 && let Some(&(next, _)) = if up { at.checked_sub(1).and_then(|i| drawn.get(i)) } else { drawn.get(at + 1) }
                 && let Some(l) = doc.layer(next).filter(|l| !crate::doc_props_ui::is_background(&doc, l))
-                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), next.0, &l.name)
+                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), next.0, &crate::layer_row_ui::display_name(l))
             {
                 actions.push(done);
             }
@@ -2798,7 +2798,7 @@ fn layer_row(
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
     // Rows are painted: name them for screen readers and UI tests.
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &l.name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &*crate::layer_row_ui::display_name(l)));
     // A row scrolled out of view only keeps its place (#125): a layout's hundreds of rows would
     // otherwise lay out names, icons and thumbnails every frame. Group rows stay whole: their
     // disclosure triangle is a widget (accessibility, scroll-to).
@@ -2915,7 +2915,7 @@ fn layer_row(
     let italic = !t.pro && doc.is_background(l.id);
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
     let is_pixel = t.pro || matches!(l.content, LayerContent::Raster(_));
-    let name_rect = crate::layer_row_ui::truncated(&painter, &l.name, font, name_color, italic, name_right - x).map(|galley| {
+    let name_rect = crate::layer_row_ui::truncated(&painter, &crate::layer_row_ui::display_name(l), font, name_color, italic, name_right - x).map(|galley| {
         let text_pos = pos2(x, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
         let r = Rect::from_min_size(text_pos, galley.size());
         painter.galley(text_pos, galley, name_color);
@@ -2996,7 +2996,7 @@ fn layer_row(
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
         } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
-            if let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &l.name) {
+            if let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &crate::layer_row_ui::display_name(l)) {
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
@@ -3046,7 +3046,7 @@ fn layer_row(
             // Right-clicking inside a multi-selection keeps it and acts on every selected layer.
             let on_set = row.multi && selected;
             if crate::layer_menu_ui::show(app, ui, l, on_set, actions)
-                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), l.id.0, &l.name)
+                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), l.id.0, &crate::layer_row_ui::display_name(l))
             {
                 actions.push(done);
             }
@@ -3976,7 +3976,7 @@ fn layer_drag_and_drop(
     if dragged == l.id.0 {
         // Ghost label following the pointer, and the copy cursor while ⌥ is held.
         if let Some(p) = pointer {
-            crate::layer_transfer::ghost(ctx, p, &l.name);
+            crate::layer_transfer::ghost(ctx, p, &crate::layer_row_ui::display_name(l));
         }
         if copy {
             ctx.set_cursor_icon(egui::CursorIcon::Copy);

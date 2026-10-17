@@ -582,6 +582,65 @@ fn the_studio_lock_button_shows_every_lock() {
     }
 }
 
+/// The Background layer is stored under the English name "Background" (File › New), so only
+/// its display follows the UI language. A layer someone named "Background" without the lock, and
+/// every other name, show as they are.
+#[test]
+fn only_the_background_layers_display_name_is_translated() {
+    use photocraft_doc::{Layer, Locks};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let background = s.active().unwrap().doc.layers[0].clone();
+    assert_eq!(background.name, "Background");
+    let plain = Layer { name: "Background".into(), locks: Locks::default(), ..background.clone() };
+    let other = Layer { name: "Ebene 1".into(), ..background.clone() };
+    let de = crate::i18n::lang_from_tag("de").unwrap();
+    crate::i18n::with_language(de, || {
+        assert_eq!(super::display_name(&background), "Hintergrund");
+        assert_eq!(super::display_name(&plain), "Background", "an unlocked layer that happens to carry the name");
+        assert_eq!(super::display_name(&other), "Ebene 1");
+    });
+    crate::i18n::with_language(crate::i18n::Lang::EN, || assert_eq!(super::display_name(&background), "Background"));
+    assert_eq!(background.name, "Background", "the stored name is untouched");
+}
+
+/// New layers carry English generated names ("Layer 1", "Curves 2", "Layer 1 copy"); the Layers
+/// panel shows them in the UI language, and leaves every name someone chose alone.
+#[test]
+fn generated_layer_names_follow_the_ui_language() {
+    use photocraft_doc::Layer;
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let base = s.active().unwrap().doc.layers[0].clone();
+    let named = |name: &str| Layer { name: name.into(), ..base.clone() };
+    let shown = |name: &str| super::display_name(&named(name)).into_owned();
+    let de = crate::i18n::lang_from_tag("de").unwrap();
+    crate::i18n::with_language(de, || {
+        for (stored, expected) in [
+            ("Layer 1", "Ebene 1"),
+            ("Layer 0", "Ebene 0"),
+            ("Layer 12 copy", "Ebene 12 Kopie"),
+            ("Layer 1 copy 2", "Ebene 1 Kopie 2"),
+            ("Group 1", "Gruppe 1"),
+            ("Curves 3", "Gradationskurven 3"),
+            ("Gradient Fill 1", "Verlaufsfüllung 1"),
+            ("Black & White 1", "Schwarzweiß 1"),
+            ("Background copy", "Hintergrund Kopie"),
+            ("Type Layer", "Textebene"),
+        ] {
+            assert_eq!(shown(stored), expected, "{stored}");
+        }
+        for chosen in ["Layer", "Sky", "My Layer 1", "Layer one", "Layer 1 copying", "Layer  1", "Layer 1a", "Hintergrund 2", ""] {
+            assert_eq!(shown(chosen), chosen, "a name someone chose: {chosen:?}");
+        }
+    });
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        for stored in ["Layer 1", "Layer 1 copy", "Curves 3", "Background copy", "Type Layer"] {
+            assert_eq!(shown(stored), stored, "{stored}");
+        }
+    });
+}
+
 #[test]
 fn clicking_the_lock_icon_on_a_row_unlocks_the_layer() {
     // #4723: the row's lock icon was only painted. In Photoshop a click on it clears every lock,

@@ -2484,7 +2484,7 @@ fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
     let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !st.doc.is_background(l.id));
     let mask = app.session.active_index() == Some(i) && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
     let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
-    let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
+    let layer = active_layer.map(|l| format!("{}, ", crate::layer_row_ui::display_name(l))).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
     format!("{} @ {}% ({layer}{model}/{}){}{saving}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
@@ -8699,6 +8699,19 @@ mod rotation_preview_isolation_tests {
         app.session.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
         assert_eq!(app.session.active_index(), Some(1));
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none(), "an inactive tab must never inherit the command preview");
+    }
+
+    /// The tab title names the active layer as the Layers panel does: a generated name such as
+    /// "Layer 1" follows the UI language (the Background is left out, as in Photoshop).
+    #[test]
+    fn the_tab_title_shows_the_active_layers_display_name() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let de = crate::i18n::lang_from_tag("de").unwrap();
+        crate::i18n::with_language(de, || assert!(pro_tab_title(&app, 0).contains("(Ebene 1, "), "{}", pro_tab_title(&app, 0)));
+        crate::i18n::with_language(crate::i18n::Lang::EN, || assert!(pro_tab_title(&app, 0).contains("(Layer 1, "), "{}", pro_tab_title(&app, 0)));
     }
 }
 

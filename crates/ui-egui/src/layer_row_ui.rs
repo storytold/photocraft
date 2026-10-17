@@ -16,6 +16,89 @@ use std::sync::Arc;
 use crate::icons;
 use crate::theme::{self, Tokens};
 
+/// What the engine calls a new layer of each kind ("Layer 1", "Curves 2", "Group 1" ...): the
+/// names [`display_name`] shows in the UI language. Anything else is a name someone chose.
+const GENERATED_BASES: &[&str] = &[
+    "Layer",
+    "Group",
+    "Artboard",
+    "Shape",
+    "Rectangle",
+    "Rounded Rectangle",
+    "Ellipse",
+    "Triangle",
+    "Polygon",
+    "Line",
+    "Custom Shape",
+    "Frame",
+    "Video Layer",
+    "Color Fill",
+    "Gradient Fill",
+    "Pattern Fill",
+    "Content-Aware Fill",
+    "Vanishing Point",
+    "Black & White",
+    "Brightness/Contrast",
+    "Channel Mixer",
+    "Color Balance",
+    "Color Lookup",
+    "Curves",
+    "Exposure",
+    "Gradient Map",
+    "Hue/Saturation",
+    "Invert",
+    "Levels",
+    "Photo Filter",
+    "Posterize",
+    "Selective Color",
+    "Threshold",
+    "Vibrance",
+];
+
+/// The UI-language form of a name the engine generated: "Layer 1" → "Ebene 1", "Layer 1 copy 2"
+/// → "Ebene 1 Kopie 2", "Background copy" → "Hintergrund Kopie". `None` when `name` is not one
+/// (or the language has nothing to change).
+fn generated_name(name: &str) -> Option<String> {
+    let lang = crate::i18n::current();
+    if name == "Type Layer" {
+        return Some(crate::i18n::tr(lang, "Type Layer").to_string()).filter(|s| s != name);
+    }
+    // A duplicate appends " copy" or " copy <n>" (`Document::copy_name`).
+    let (root, copy) = match name.rsplit_once(" copy") {
+        Some((root, "")) => (root, Some("")),
+        Some((root, n)) if n.strip_prefix(' ').is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) => (root, Some(n)),
+        _ => (name, None),
+    };
+    let shown_root = if root == "Background" && copy.is_some() {
+        crate::i18n::tr(lang, "Background").to_string()
+    } else {
+        let (base, n) = root.rsplit_once(' ')?;
+        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) || !GENERATED_BASES.contains(&base) {
+            return None;
+        }
+        format!("{} {n}", crate::i18n::tr_ctx(lang, "layerName", base))
+    };
+    let shown = match copy {
+        Some(n) => format!("{shown_root} {}{n}", crate::i18n::tr_ctx(lang, "layerName", "copy")),
+        None => shown_root,
+    };
+    (shown != name).then_some(shown)
+}
+
+/// The name the UI shows for `layer`. File › New stores the Background layer under the English
+/// name "Background" (a PSD carries whatever name its Photoshop gave it), and new layers get
+/// English generated names ("Layer 1"), so only the display follows the UI language ("Hintergrund",
+/// "Ebene 1"); any name someone chose, or a file brought along, is shown as it is.
+pub(crate) fn display_name(layer: &Layer) -> std::borrow::Cow<'_, str> {
+    if layer.name == "Background" && layer.has_background_traits() {
+        return std::borrow::Cow::Borrowed(crate::i18n::t("Background"));
+    }
+    match generated_name(&layer.name) {
+        Some(shown) => std::borrow::Cow::Owned(shown),
+        None => std::borrow::Cow::Borrowed(&layer.name),
+    }
+}
+
 /// Space kept free at a row's right edge: the overlay scrollbar sits there.
 pub const RIGHT_PAD: f32 = 10.0;
 /// Gap between indicators, and between the name and the first indicator.

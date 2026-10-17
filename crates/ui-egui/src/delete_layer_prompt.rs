@@ -22,7 +22,12 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
     if ids.is_empty() {
         return None;
     }
-    let names = ids.iter().filter_map(|id| state.doc.layer(*id).map(|layer| layer.name.as_str())).take(4).collect::<Vec<_>>().join(", ");
+    let names = ids
+        .iter()
+        .filter_map(|id| state.doc.layer(*id).map(|layer| crate::layer_row_ui::display_name(layer).into_owned()))
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(", ");
     let message = if ids.len() == 1 {
         crate::i18n::fmt(tl!("Delete layer ‘{name}’?"), &[("name", &names)])
     } else {

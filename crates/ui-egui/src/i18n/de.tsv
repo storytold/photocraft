@@ -870,6 +870,17 @@
 	Automatically straighten and level	Automatisch begradigen und ausrichten
 	Automatically straighten near-vertical line segments	Fast vertikale Liniensegmente automatisch begradigen
 	Background	Hintergrund
+# Generated layer names as the Layers panel shows them (context layerName; the stored name stays English)
+layerName	copy	Kopie
+layerName	Gradient Fill	Verlaufsfüllung
+layerName	Pattern Fill	Musterfüllung
+layerName	Color Fill	Farbfüllung
+layerName	Video Layer	Videoebene
+layerName	Custom Shape	Eigene Form
+layerName	Rounded Rectangle	Abgerundetes Rechteck
+layerName	Frame	Rahmen
+layerName	Polygon	Polygon
+layerName	Ellipse	Ellipse
 	Background Color	Hintergrundfarbe
 	Background Contents	Hintergrundinhalte
 	Custom background color	Benutzerdefinierte Hintergrundfarbe
