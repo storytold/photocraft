@@ -1,5 +1,7 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
 use super::*;
+use crate::shape_options::set_tool_paint;
+use crate::shape_paint_ui::color_of;
 use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_doc::ShapeLayer;
