@@ -1335,6 +1335,7 @@ pub fn export_layers_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[
     let cmd = "file.export.layersToFiles";
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
+    let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
@@ -1351,6 +1352,32 @@ pub fn export_layers_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[
         only.visible = true;
         only.clipped = false;
         one.layers = vec![only];
+        if trim {
+            // Measure the isolated layer's rendered alpha, including masks and effects.
+            // Track the extrema without constructing a rectangle for every pixel.
+            let rendered = photocraft_compose::flatten(&one);
+            let width = one.size.width as usize;
+            let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+            if width > 0 {
+                for (pixel, rgba) in rendered.px.iter().enumerate() {
+                    if rgba[3] > 0.0 {
+                        let x = pixel % width;
+                        let y = pixel / width;
+                        x0 = x0.min(x);
+                        y0 = y0.min(y);
+                        x1 = x1.max(x + 1);
+                        y1 = y1.max(y + 1);
+                    }
+                }
+            }
+            // Empty layers retain a valid full-sized canvas.
+            if x0 != usize::MAX {
+                let bounds = Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32);
+                if bounds != one.bounds() {
+                    crate::image_cmds::crop_doc(&mut one, cmd, bounds, true, [0.0; 4])?;
+                }
+            }
+        }
         let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
@@ -1694,7 +1721,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"quality":0..12?,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"quality":0..12?,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)} → {files}"##,
             native_doc,
             layers_to_files
         ),
