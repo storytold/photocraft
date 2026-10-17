@@ -149,7 +149,10 @@ Raw rendering (quarter size, medians over the frames) the measured profile is 0.
 luminance with a mean CIE76 ΔE of 1.8; the look fitted to the embedded JPEG would be 0.30 stop and
 ΔE 6.4, as it follows the camera's picture style instead. The open-time re-develop
 (`photocraft-io`'s `import_raw_tuned`) and the tone curve its previews use (`tone_curve`) take the
-same look as the default open, so changing a slider does not change the colour rendering.
+same look as the default open, so changing a slider does not change the colour rendering. The D4's
+saturation level was measured on 14-bit files and follows the sample depth (a 12-bit frame is the
+14-bit one shifted right by two, so its level is a quarter of it): the three public 12-bit D4 files
+develop within 0.02 stop of their 14-bit twin.
 
 ## Tools
 

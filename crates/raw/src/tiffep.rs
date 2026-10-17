@@ -254,7 +254,7 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         black_point: 0.0,
         warnings,
     };
-    crate::cameras::apply(&mut sensor);
+    crate::cameras::apply(&mut sensor, plane.bits);
     Ok(sensor)
 }
 
