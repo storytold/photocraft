@@ -130,6 +130,24 @@ pub fn stroke_coverage(stroke: &Stroke) -> (Rect, Vec<f32>) {
     r.dense_coverage()
 }
 
+/// [`stroke_coverage`] that admits the **rendered** extent before it is made dense: `None` when the
+/// stroke covers more than `max_pixels`.
+///
+/// Rendering itself is tiled, so it holds only the tiles the dabs touch. The bounds are read from
+/// those tiles, after tips, dynamics and scattering have placed every dab, so this is the stroke's
+/// real extent rather than an estimate from the input points. Only then is the `width × height`
+/// buffer allocated, which is what callers need bounded.
+pub fn stroke_coverage_within(stroke: &Stroke, max_pixels: u64) -> Option<(Rect, Vec<f32>)> {
+    let mut r = crate::StrokeRenderer::new(&stroke.brush, None, 1.0);
+    r.push(&stroke.points);
+    r.finish();
+    let b = r.bounds();
+    if u64::from(b.width()).saturating_mul(u64::from(b.height())) > max_pixels {
+        return None;
+    }
+    Some(r.dense_coverage())
+}
+
 /// Index of the alpha channel, if the format has one.
 #[inline]
 pub fn alpha_index(fmt: &PixelFormat) -> Option<usize> {

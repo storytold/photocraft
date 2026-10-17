@@ -71,6 +71,7 @@ fn stroke_bounds(stroke: &Stroke) -> Rect {
 fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>)> {
     let Some(list) = p.get("strokes") else {
         let (stroke, id) = parse_brush(s, p, CMD)?;
+        reject_huge_stroke(CMD, &stroke)?;
         return Ok((vec![stroke], id));
     };
     let list = list.as_array().ok_or_else(|| bad(CMD, "`strokes` is a list of point lists"))?;
@@ -86,6 +87,7 @@ fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>
             o.insert("points".into(), points.clone());
         }
         let (stroke, layer) = parse_brush(s, &one, CMD)?;
+        reject_huge_stroke(CMD, &stroke)?;
         strokes.push(stroke);
         id = layer;
     }
@@ -115,12 +117,12 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
 
 /// The hole over the plan's window: the strokes' footprints, their enclosed areas and a margin,
 /// limited to the selection. Empty when nothing would change.
-fn hole(plan: &Plan, sel: Option<&Surface>) -> Vec<bool> {
+fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
     let win = plan.window;
     let (w, h) = (win.width() as usize, win.height() as usize);
     let mut m = vec![false; w * h];
     for stroke in &plan.strokes {
-        let (bounds, cov) = stroke_coverage(stroke);
+        let (bounds, cov) = super::coverage(CMD, stroke)?;
         let bw = bounds.width() as usize;
         for (i, c) in cov.iter().enumerate() {
             let (x, y) = (bounds.x0 + (i % bw.max(1)) as i32, bounds.y0 + (i / bw.max(1)) as i32);
@@ -141,13 +143,13 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Vec<bool> {
             *v &= c > 0.0;
         }
     }
-    m
+    Ok(m)
 }
 
 /// The filled window and the hole it fills, computed on `doc` (a snapshot). `None` when the
 /// layer's own window is fully transparent: nothing to remove and nothing to fill from.
 fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<Option<(Region, Vec<bool>)>> {
-    let hole = hole(plan, doc.selection.as_ref());
+    let hole = hole(plan, doc.selection.as_ref())?;
     if !hole.iter().any(|m| *m) {
         return Err(bad(CMD, "the stroke doesn't cover anything that can change (check the selection)"));
     }

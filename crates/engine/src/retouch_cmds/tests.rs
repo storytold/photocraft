@@ -544,6 +544,96 @@ fn history_brush_restores_earlier_pixels() {
     }
 }
 
+/// #4961 and #6110: every retouch stroke renders its coverage densely over the stroke's bounds
+/// and reads a source region over the same box, so a stroke whose box dwarfs the canvas is
+/// refused from the points and brush size alone, before anything is cloned or rendered. The
+/// document is left as it was, and ordinary strokes still paint at every depth.
+#[test]
+fn history_brush_refuses_a_stroke_too_large_to_render() {
+    for depth in DEPTHS {
+        let mut s = session(40, 20, depth, "rgb");
+        s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+        let before = rgba(&s, 20, 10);
+
+        let err = s.execute("paint.historyBrush", json!({"points": [[0, 0], [60000, 60000]], "size": 6, "hardness": 100})).unwrap_err();
+        assert!(err.to_string().contains("stroke too large"), "depth {depth}: {err}");
+        assert_eq!(rgba(&s, 20, 10), before, "depth {depth}: a refused stroke leaves the pixels alone");
+
+        // The guard is sized for real work: a stroke corner to corner across the canvas still runs.
+        s.execute("paint.historyBrush", json!({"points": [[0, 0], [40, 20]], "size": 6, "hardness": 100})).unwrap();
+        assert!(rgba(&s, 20, 10).iter().all(|v| *v > 0.99), "depth {depth}: the Open snapshot is white");
+    }
+}
+
+/// #6110: Pattern Stamp already refused a stroke it could not render; every other retouch stroke
+/// reached the same dense conversion unguarded. Each command refuses the oversized stroke without
+/// touching the pixels or the history, and an ordinary stroke still succeeds.
+#[test]
+fn every_retouch_stroke_refuses_a_box_it_cannot_render() {
+    let huge = json!([[0, 0], [900_000, 900_000]]);
+    let ok = json!([[2, 2], [30, 16]]);
+    // Fixtures that are valid for a plain RGB document with one pixel layer.
+    let cases: [(&str, Value); 4] = [
+        ("paint.cloneStamp", json!({"offset": [4, 0], "size": 8, "hardness": 100})),
+        ("paint.healingBrush", json!({"offset": [4, 0], "size": 8, "hardness": 100})),
+        ("paint.spotHealing", json!({"size": 8, "hardness": 100})),
+        ("paint.historyBrush", json!({"size": 8, "hardness": 100})),
+    ];
+    for (cmd, base) in cases {
+        let mut s = session(40, 20, 8, "rgb");
+        s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+        let before = rgba(&s, 20, 10);
+        let steps = s.active().unwrap().history.past_len();
+        let with = |points: &Value| {
+            let mut v = base.clone();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("points".into(), points.clone());
+            }
+            v
+        };
+        let err = s.execute(cmd, with(&huge)).unwrap_err().to_string();
+        assert!(err.contains("stroke too large"), "{cmd}: {err}");
+        assert_eq!(rgba(&s, 20, 10), before, "{cmd}: a refused stroke leaves the pixels alone");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd}: and records no history step");
+
+        // The allowance still covers ordinary work: this must succeed, not merely avoid the error.
+        s.execute(cmd, with(&ok)).unwrap_or_else(|e| panic!("{cmd}: an ordinary stroke must work: {e}"));
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{cmd}: and records one step");
+    }
+
+    // Remove takes a list of strokes; each one is charged as it is parsed.
+    let mut s = session(40, 20, 8, "rgb");
+    let err = s.execute("paint.remove", json!({"strokes": [[[0, 0], [900_000, 900_000]]], "size": 8})).unwrap_err().to_string();
+    assert!(err.contains("stroke too large"), "paint.remove: {err}");
+}
+
+/// The review on #6110: the estimate from the input points is not the bound. Brush dynamics place
+/// dabs beyond those points, so the budget is applied to the extent the renderer actually produced,
+/// before the dense buffer is allocated. An injected budget makes that observable without asking
+/// for a stroke big enough to exhaust anything.
+#[test]
+fn the_budget_is_applied_to_the_rendered_extent_not_the_input_points() {
+    use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
+    let mut brush = BrushSettings { size: 24.0, hardness: 1.0, ..Default::default() };
+    brush.scattering.enabled = true;
+    brush.scattering.scatter.jitter = 6.0;
+    let stroke = Stroke { brush, points: vec![StrokePoint::new(10.0, 10.0, 1.0), StrokePoint::new(40.0, 10.0, 1.0)] };
+
+    // What the renderer really covered, once scattering has placed every dab.
+    let (bounds, cov) = super::coverage_within("t", &stroke, u64::MAX).unwrap();
+    let rendered = u64::from(bounds.width()) * u64::from(bounds.height());
+    assert_eq!(cov.len() as u64, rendered, "the dense buffer is exactly the rendered extent");
+
+    // Scattering reaches past the points plus half the tip, which is what the estimate alone sees.
+    let points_only = (40.0 - 10.0 + 24.0 + 8.0) * (24.0 + 8.0);
+    assert!(rendered as f64 > points_only, "scattering expanded the stroke: {rendered} vs {points_only}");
+
+    // A budget one pixel under what it rendered refuses it; exactly the rendered extent fits.
+    let err = super::coverage_within("t", &stroke, rendered - 1).unwrap_err().to_string();
+    assert!(err.contains("stroke too large"), "{err}");
+    assert!(super::coverage_within("t", &stroke, rendered).is_ok(), "the rendered extent itself fits");
+}
+
 #[test]
 fn history_brush_reads_a_source_when_its_pixels_were_locked() {
     // Given a white layer locked in history state 1, then unlocked and filled red.
