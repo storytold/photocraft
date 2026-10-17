@@ -1098,10 +1098,21 @@ pub(crate) fn canvas_display(
 ) -> (Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>, u64) {
     match app.session.color.canvas_display_for(doc, display.or(app.session.color.main_display)) {
         Ok(d) => {
-            let k = d.key;
+            let k = d.key ^ ink_preview_key(doc);
             (Some(d), k)
         }
-        Err(_) => (None, 0),
+        Err(_) => (None, ink_preview_key(doc)),
+    }
+}
+
+/// What a Multichannel document's ink preview depends on beyond its pixels: Color Settings ›
+/// Spot (the dot gain the compositor adds). Folded into the display key, so changing the
+/// setting redraws open Multichannel documents; other modes don't print inks.
+fn ink_preview_key(doc: &Document) -> u64 {
+    if doc.mode == photocraft_color::ColorMode::Multichannel {
+        u64::from(photocraft_compose::multichannel::spot_dot_gain().to_bits()).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1 << 62
+    } else {
+        0
     }
 }
 

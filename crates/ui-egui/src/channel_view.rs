@@ -204,13 +204,19 @@ fn render_with_source(
         }
     };
     let quick = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden && !solo_quick);
+    // Spot inks preview with Color Settings › Spot's dot gain, as Photoshop shows them.
+    let gain = photocraft_compose::multichannel::spot_dot_gain();
     for ch in overlays.into_iter().chain(quick) {
         let (color, opacity) = match ch.spot {
             // Spot inks show more solid as solidity rises.
             Some((ink, solidity)) => (ink, 0.5 + 0.5 * solidity),
             None => (ch.color, ch.opacity),
         };
-        tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
+        if ch.spot.is_some() {
+            tint(sample(&ch.surface, r, factor), color, opacity, &|x| photocraft_compose::multichannel::dot_gain(ch.overlay_coverage(x), gain));
+        } else {
+            tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
+        }
     }
     // ⇧⌥-click mask view (#196): the layer mask as Quick Mask's red over the hidden areas
     // (Photoshop's Layer Mask Display Options default).
@@ -254,7 +260,9 @@ fn q(x: f32) -> u8 {
 
 fn view_key(v: &ChannelView, in_color: bool) -> u64 {
     let s = serde_json::to_string(v).unwrap_or_default();
-    s.bytes().fold(in_color as u64 + 1, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
+    // Spot overlays follow Color Settings › Spot: a new dot gain redraws them.
+    let seed = (in_color as u64 + 1) ^ u64::from(photocraft_compose::multichannel::spot_dot_gain().to_bits()) << 8;
+    s.bytes().fold(seed, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
 }
 
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.
@@ -450,6 +458,27 @@ mod tests {
         let s = session();
         let st = s.active().unwrap();
         assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).is_none());
+    }
+
+    #[test]
+    fn spot_overlay_previews_with_the_spot_dot_gain() {
+        // A 50 % tint of a black spot ink over the composite: its coverage is the 50 % dot plus
+        // Color Settings › Spot's dot gain (read, not changed: the setting is process-wide).
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("channel.newSpot", json!({"name": "Ink", "color": "#000000", "solidity": 0})).unwrap();
+        let st = s.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        let ch = doc.channels.last_mut().unwrap();
+        ch.surface.write_region(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.5]);
+        let i = doc.channels.len() - 1;
+        st.channel_view.alpha_visible = vec![false; i + 1];
+        st.channel_view.alpha_visible[i] = true;
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let gain = photocraft_compose::multichannel::spot_dot_gain();
+        let coverage = photocraft_compose::multichannel::dot_gain(0.5, gain) * 0.5;
+        assert!((f32::from(px[0].a()) / 255.0 - coverage).abs() <= 1.5 / 255.0, "{:?} vs {coverage} at {gain} %", px[0]);
     }
 
     #[test]
