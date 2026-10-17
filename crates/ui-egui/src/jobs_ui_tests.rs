@@ -767,6 +767,60 @@ fn esc_cancels_a_background_free_transform_commit() {
     assert_eq!(st.doc.layers.len(), before.layers.len());
 }
 
+/// Warp the active layer into an arc, then ↩.
+fn warp_and_commit(h: &mut Harness<'static, PhotocraftApp>) {
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    crate::transform_tool::begin(app, &ctx).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.warp = Some(photocraft_geom::warp::Warp::preset(photocraft_geom::warp::WarpStyle::Arc, 40.0, t.rect));
+    crate::transform_tool::commit(app);
+}
+
+#[test]
+fn a_warp_commit_runs_in_the_background_and_keeps_its_preview() {
+    let mut h = app_harness();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    warp_and_commit(&mut h);
+    let app = h.state();
+    let job = crate::transform_tool::committing(app).expect("the commit runs as a job");
+    assert!(app.session.job(job).is_some_and(|j| j.label == "Warp"));
+    assert!(app.ui.transform.is_some() && app.transform_preview.is_some());
+    assert_eq!(h.state_mut().run("edit.undo", json!({})).err().as_deref(), Some("Warp is still being applied"));
+    let t = Instant::now();
+    while h.state().session.has_jobs() && t.elapsed() < Duration::from_secs(10) {
+        h.step();
+    }
+    h.run_steps(2);
+    let app = h.state();
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the session ends with the job");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), steps + 1);
+    assert_eq!(st.history.undo_label(), Some("Warp"));
+    // The arc bulges the layer past its old edges.
+    let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+    assert_ne!(b, photocraft_geom::Rect::new(0, 0, 320, 240), "the layer was warped");
+}
+
+#[test]
+fn esc_cancels_a_background_warp_commit() {
+    let mut h = app_harness();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let before = h.state().session.active().unwrap().doc.clone();
+    warp_and_commit(&mut h);
+    let job = crate::transform_tool::committing(h.state()).expect("the commit runs as a job");
+    crate::transform_tool::cancel(h.state_mut());
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.session.job(job).is_none());
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), steps);
+    let id = st.active_layer.unwrap();
+    let px = |d: &photocraft_doc::Document| d.layer(id).unwrap().surface().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 320, 240));
+    assert_eq!(px(&st.doc), px(&before), "the layer is untouched");
+}
+
 /// #4559: a background open (the desktop app's) also warns, when its document arrives, about
 /// type in a font that isn't installed.
 #[test]
