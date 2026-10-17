@@ -9,6 +9,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Language | Preference code | Integer plural forms |
 |---|---|---|
 | English | `en` | one / other |
+| العربية | `ar` | zero / one / two / few (3–10) / many (11–99) / other (100+) |
 | 简体中文 | `zh-hans` | one form |
 | 日本語 | `ja` | one form |
 | 한국어 | `ko` | one form |
