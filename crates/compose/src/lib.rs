@@ -19,6 +19,7 @@
 pub mod adjust;
 pub mod advanced;
 pub mod bounds;
+pub mod deep;
 pub mod effects;
 pub mod fill_layout;
 pub mod filter_mask;
@@ -753,6 +754,7 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
             }
         }),
         LayerContent::Fill(_) => canvas,
+        LayerContent::Deep(d) => Rect::from_xywh(d.x, d.y, d.width, d.height),
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             let b = match &layer.content {
@@ -928,6 +930,7 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns, adjustment_quantum(cx.depth)),
         },
         LayerContent::Adjustment(_) => return None,
+        LayerContent::Deep(d) => deep::render(d, rect),
         _ => match layer.surface() {
             Some(s) => surface_to_buffer(s, rect),
             None => Buffer::transparent(rect),
@@ -1582,6 +1585,16 @@ fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::DefaultHash
             }
         }
         LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+
+        LayerContent::Deep(d) => {
+            d.width.hash(h);
+            d.height.hash(h);
+            d.counts.hash(h);
+            for c in &d.channels {
+                c.name.hash(h);
+                c.samples.iter().for_each(|v| v.to_bits().hash(h));
+            }
+        }
         _ => layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h),
     }
     if let Some(m) = &layer.mask {

@@ -69,6 +69,7 @@
 	New from Clipboard	Создать из буфера обмена
 	New	Создать
 	Open…	Открыть…
+	Open as Deep…	Открыть как deep…
 	Open	Открыть
 	Open As…	Открыть как…
 	Open EXR Parts…	Открыть части EXR…
@@ -3022,6 +3023,7 @@ curves	Smooth	Сгладить
 	There is no crop size or ratio to save	Нет размера или соотношения сторон кадрирования для сохранения
 	Presentation	Представление
 
+	
 # Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Щёлкните, чтобы разместить · Alt-щелчок или перетаскивание за пределы холста для удаления
 	No document open	Документ не открыт
@@ -3033,7 +3035,7 @@ curves	Smooth	Сгладить
 	Use Previous Layer to Create Clipping Mask	Использовать предыдущий слой для создания обтравочной маски
 	Fill with {mode}-neutral color (white)	Залить нейтральным цветом режима «{mode}» (белый)
 	Fill with {mode}-neutral color (black)	Залить нейтральным цветом режима «{mode}» (черный)
-	Fill with {mode}-neutral color (50% gray)	Залить нейтральным цветом режима «{mode}» (50% серого)
+	Fill with {mode}-neutral color (50% gray)	Залить нейтральным цветом режима «{mode}» (50% серый)
 	(No neutral color exists for {mode} mode.)	(Для режима «{mode}» нет нейтрального цвета.)
 	Apply mask to layer before removing?	Применить маску к слою перед удалением?
 	The layer or its mask changed. Drag the mask onto the Trash again.	Слой или его маска изменились. Перетащите маску в корзину ещё раз.
@@ -3181,3 +3183,4 @@ curves	Smooth	Сгладить
 	Replace	Заменить
 	{name} was changed by another app after it was opened or saved here.	Файл {name} был изменён другим приложением после того, как его открыли или сохранили здесь.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замените его этим документом или отмените и используйте Файл › Сохранить как, чтобы сохранить оба.
+	Filter for deep layers	Фильтр по глубоким слоям

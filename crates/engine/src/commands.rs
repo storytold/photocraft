@@ -120,6 +120,9 @@ fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Val
         s.set_sampler_map(a);
     }
     s.edit(label, |doc, _| {
+        if photocraft_compose::deep::any_deep(&doc.layers) {
+            return Err(EngineError::Other("deep layers cannot be turned yet; their samples keep their depth".into()));
+        }
         crate::canvas_geom::turn_canvas(doc, t);
         Ok(())
     })?;
@@ -955,7 +958,7 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc, &lower, &upper);
+                let merged = pixels::merge_down(doc, &lower, &upper).map_err(EngineError::Other)?;
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);

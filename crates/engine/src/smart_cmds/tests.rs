@@ -1108,3 +1108,23 @@ fn displace_smart_filter_reads_its_map_path_on_re_render() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn shifting_a_layer_refuses_a_deep_origin_overflow() {
+    let mut l = Layer::new(
+        "deep",
+        LayerContent::Deep(photocraft_doc::DeepData {
+            x: i32::MAX - 5,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        }),
+    );
+    let err = shift_layer(&mut l, 10, 0).unwrap_err().to_string();
+    assert!(err.contains("32-bit coordinate range"), "{err}");
+    // A shift that fits still moves the deep origin.
+    shift_layer(&mut l, 5, 0).unwrap();
+    assert!(matches!(&l.content, LayerContent::Deep(d) if d.x == i32::MAX));
+}
