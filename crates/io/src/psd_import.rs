@@ -465,6 +465,15 @@ impl Ctx<'_> {
                     LayerContent::Raster(self.record_surface(rec, &name))
                 }
             }
+        } else if let Some(k) = unknown_adjustment_key(rec) {
+            // An adjustment type no mapper knows: kept verbatim like an unreadable one, not
+            // opened as an empty pixel layer without a word (#6575).
+            let key = String::from_utf8_lossy(&k).into_owned();
+            self.warn(format!(
+                "layer \"{name}\": its adjustment settings could not be read (unknown adjustment type \"{key}\"); the layer is kept as saved but has no effect"
+            ));
+            let raw = rec.block(&k).map(|b| b.data.clone()).unwrap_or_default();
+            LayerContent::Adjustment(photocraft_doc::Adjustment::Unsupported { psd_key: key, raw })
         } else {
             LayerContent::Raster(self.record_surface(rec, &name))
         };
@@ -593,6 +602,33 @@ pub(crate) fn group_depth(file: &PsdFile) -> usize {
         }
     }
     depth
+}
+
+/// Additional-layer-information keys (Adobe PSD spec, plus `cust`, `vowv` and `SoLE` seen in
+/// Photoshop's files) that are not an adjustment of their own: names, ids, locks, effects,
+/// masks, metadata, and the fill, type, placed and shape content read before.
+const LAYER_INFO_KEYS: [&[u8; 4]; 50] = [
+    b"luni", b"lyid", b"lnsr", b"lsct", b"lsdk", b"lspf", b"lclr", b"iOpa", b"clbl", b"infx", b"knko", b"tsly", b"lmgm", b"vmgm", b"brst", b"shmd", b"fxrp",
+    b"lfx2", b"lfxs", b"lmfx", b"lrFX", b"lyvr", b"sn2P", b"cust", b"CgEd", b"vmsk", b"vsms", b"vogk", b"vowv", b"vstk", b"vscg", b"artb", b"artd", b"abdd",
+    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd",
+];
+
+/// The key of an adjustment layer whose type no mapper knows (#6575), e.g. Photoshop 4's
+/// `hue ` or a type newer than PhotoCraft. Photoshop writes every adjustment layer without
+/// pixels and with "pixel data irrelevant" set (every one in the corpus; pixel, type and smart
+/// layers never have it). Such a record that is not a group and carries exactly one block that
+/// is neither a known layer-information key nor a known adjustment is that adjustment. More than
+/// one candidate is a guess, so the layer stays an (empty) pixel layer, as before; either way no
+/// pixels can be lost and the block is saved back verbatim.
+fn unknown_adjustment_key(rec: &LayerRecord) -> Option<[u8; 4]> {
+    let marked = rec.flags.bit4_useful() && rec.flags.pixel_data_irrelevant();
+    if !marked || !rec.rect.is_empty() || rec.block(b"lsct").is_some() || rec.block(b"lsdk").is_some() {
+        return None;
+    }
+    let mut unknown = rec.blocks.iter().filter(|b| !LAYER_INFO_KEYS.contains(&&b.key) && !ADJUSTMENT_KEYS.contains(&&b.key));
+    let only = unknown.next()?;
+    // A key that isn't four printable ASCII bytes names no adjustment (nor saves back as one).
+    (unknown.next().is_none() && only.key.iter().all(|c| c.is_ascii_graphic() || *c == b' ')).then_some(only.key)
 }
 
 fn preserved_blocks(rec: &LayerRecord) -> Vec<([u8; 4], Arc<Vec<u8>>)> {

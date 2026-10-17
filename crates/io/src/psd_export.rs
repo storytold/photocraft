@@ -599,8 +599,16 @@ impl Ex {
                 let keep = keep
                     || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
                         && raw.iter_mut().any(|(k, d)| k == b"grdm" && adjust_map::retarget_gradient_map(d, a, channels)));
+                // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
+                // never written a second time beside a stale copy.
+                let own = match a {
+                    photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
+                    _ => None,
+                };
+                let keep =
+                    keep || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d == r));
                 if !keep {
-                    raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd");
+                    raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
                     let w = adjust_map::write(a);
                     if w.is_empty() {
                         self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
