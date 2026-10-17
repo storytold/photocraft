@@ -173,7 +173,12 @@ impl Keys {
                     self.alt_down = false;
                     tap |= std::mem::take(&mut self.alt_tap);
                 }
-                Event::Key { pressed: true, .. } | Event::Text(_) | Event::PointerButton { pressed: true, .. } => self.alt_tap = false,
+                // Alt+wheel (zoom, brush size…) or Alt going to the desktop is no tap either.
+                Event::Key { pressed: true, .. }
+                | Event::Text(_)
+                | Event::PointerButton { pressed: true, .. }
+                | Event::MouseWheel { .. }
+                | Event::WindowFocused(false) => self.alt_tap = false,
                 _ => {}
             }
         }

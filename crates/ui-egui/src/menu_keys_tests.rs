@@ -76,6 +76,37 @@ fn alt_focuses_the_bar_arrows_move_and_down_opens_the_lit_menu() {
     assert!(!is_open(&h.ctx) && Keys::current(&h.ctx).focus.is_none(), "Esc leaves the menu and the bar");
 }
 
+/// Alt+wheel zooms; letting go of Alt after it is no tap, so Space (the hand tool) can't then
+/// open File and run New….
+#[test]
+fn alt_with_a_wheel_scroll_or_a_lost_focus_is_no_tap() {
+    let mut h = bar();
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.event_modifiers(
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::ALT,
+        },
+        egui::Modifiers::ALT,
+    );
+    h.run_steps(2);
+    h.key_up(egui::Key::AltLeft);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "Alt+scroll leaves the bar alone");
+    key(&mut h, egui::Key::Space);
+    assert!(!is_open(&h.ctx), "Space opens no menu");
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(false));
+    h.event(egui::Event::WindowFocused(true));
+    h.key_up(egui::Key::AltLeft);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "Alt that went to the desktop leaves the bar alone");
+}
+
 #[test]
 fn a_second_alt_or_esc_or_a_click_takes_the_keyboard_off_the_bar() {
     let mut h = bar();
