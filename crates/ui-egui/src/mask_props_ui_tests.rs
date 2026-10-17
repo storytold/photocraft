@@ -94,8 +94,32 @@ fn mask_slider_drags_preview_live_and_undo_as_separate_gestures() {
     h.state_mut().run("edit.redo", json!({})).unwrap();
     assert!((mask(&h).density - 0.5).abs() < 0.01);
     h.run_steps(3);
-    drag(&mut h, 1, &[0.0, 0.01, 0.02]);
-    assert!((mask(&h).feather - 20.0).abs() < 0.1);
+    // #6545: Feather's track is curved like Photoshop's, so a fifth of the way is 8 px, not 200.
+    drag(&mut h, 1, &[0.0, 0.1, 0.2]);
+    assert!((mask(&h).feather - 8.0).abs() < 0.3, "feather {}", mask(&h).feather);
+}
+
+/// #6545: the curve is only the track's. A typed Feather and the arrow keys stay exact px, and
+/// drawing the knob for them never writes the value back.
+#[test]
+fn typed_and_stepped_feather_stays_exact() {
+    let mut h = harness(false, crate::theme::ThemeKind::Pro);
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("5".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(mask(&h).feather, 5.0);
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().click();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(mask(&h).feather, 6.0);
+    let before = h.state().session.active().unwrap().history.past_len();
+    h.run_steps(5);
+    assert_eq!(mask(&h).feather, 6.0);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), before, "idle frames write nothing");
 }
 
 #[test]

@@ -66,8 +66,12 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64
         }
         g.0
     });
-    for (field, label, mut value, max, unit) in [("density", tl!("Density"), density * 100.0, 100.0, "%"), ("feather", tl!("Feather"), feather, 1000.0, "px")] {
-        let response = widgets::slider_row(ui, label, &mut value, 0.0..=max, unit, None);
+    // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
+    for (field, label, mut value, max, unit, curve) in
+        [("density", tl!("Density"), density * 100.0, 100.0, "%", None), ("feather", tl!("Feather"), feather, 1000.0, "px", Some(3.0))]
+    {
+        let gestures = widgets::RowGestures { curve, ..Default::default() };
+        let response = widgets::slider_row_with(ui, label, &mut value, 0.0..=max, unit, None, gestures);
         response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), label));
         if response.changed() {
             let mut params = json!({"document": document, "layer": layer,

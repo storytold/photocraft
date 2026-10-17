@@ -926,6 +926,34 @@ pub struct RowGestures {
     /// Each wheel notch over the slider moves the value by this step (up = higher; ×10 with
     /// Shift). Photoshop does this in dialogs, not in the Properties panel.
     pub wheel_step: Option<f32>,
+    /// A curved track: the knob at fraction f of the track is `lo + (hi - lo) * f^k`, so small
+    /// values get fine steps (Photoshop's mask Feather, #6545). Typed, scrubbed and stepped
+    /// values stay linear; only the track maps through the curve.
+    pub curve: Option<f32>,
+}
+
+/// The value at fraction `f` of a track over `lo..=hi`, through `curve` (see [`RowGestures`]).
+pub(crate) fn curve_value(f: f32, lo: f32, hi: f32, curve: Option<f32>) -> f32 {
+    match curve {
+        Some(k) if k.is_finite() && k > 0.0 => lo + f.clamp(0.0, 1.0).powf(k) * (hi - lo),
+        _ => lo + f * (hi - lo),
+    }
+}
+
+/// Where `v` sits on a track over `lo..=hi`, as a fraction: the inverse of [`curve_value`].
+pub(crate) fn curve_fraction(v: f32, lo: f32, hi: f32, curve: Option<f32>) -> f32 {
+    let f = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+    match curve {
+        // An unset (NaN) value draws the knob at the start rather than nowhere.
+        Some(k) if k.is_finite() && k > 0.0 => {
+            if f.is_finite() {
+                f.powf(1.0 / k)
+            } else {
+                0.0
+            }
+        }
+        _ => f,
+    }
 }
 
 /// Wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
@@ -1010,7 +1038,7 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         && (resp.dragged() || resp.clicked())
     {
         let f = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
-        let nv = lo + f * (hi - lo);
+        let nv = curve_value(f, lo, hi, g.curve);
         if (nv - *value).abs() > f32::EPSILON {
             *value = nv;
             resp.mark_changed();
@@ -1033,7 +1061,7 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             }
         }
     }
-    let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let f = curve_fraction(*value, lo, hi, g.curve);
     let knob_x = track.left() + f * track.width();
     let painter = ui.painter();
     match gradient {
@@ -2091,6 +2119,28 @@ mod tests {
         assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowUp), 0.62);
         let mut h = focused(995.0, 0.0..=1000.0);
         assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 1000.0);
+    }
+
+    /// #6545: a curved track (the mask Feather) has fine steps at the left and coarse ones toward
+    /// the right end, and the knob drawn for a value lands where that value is picked.
+    #[test]
+    fn curved_track_maps_ends_middle_and_round_trips() {
+        use super::{curve_fraction, curve_value};
+        for (f, want) in [(0.0, 0.0), (0.1, 1.0), (0.2, 8.0), (0.5, 125.0), (1.0, 1000.0)] {
+            assert!((curve_value(f, 0.0, 1000.0, Some(3.0)) - want).abs() < 1e-3, "{f}: {}", curve_value(f, 0.0, 1000.0, Some(3.0)));
+        }
+        assert_eq!(curve_value(0.25, 0.0, 1000.0, None), 250.0, "no curve is the linear track");
+        assert_eq!(curve_value(0.5, 10.0, 20.0, Some(3.0)), 11.25, "the curve starts at the range's low end");
+        for i in 0..=100 {
+            let f = i as f32 / 100.0;
+            let back = curve_fraction(curve_value(f, 0.0, 1000.0, Some(3.0)), 0.0, 1000.0, Some(3.0));
+            assert!((back - f).abs() < 1e-4, "{f} -> {back}");
+            let v = i as f32 * 10.0;
+            let again = curve_value(curve_fraction(v, 0.0, 1000.0, Some(3.0)), 0.0, 1000.0, Some(3.0));
+            assert!((again - v).abs() < 1e-3, "{v} -> {again}");
+        }
+        assert_eq!(curve_fraction(-5.0, 0.0, 1000.0, Some(3.0)), 0.0);
+        assert_eq!(curve_fraction(f32::NAN, 0.0, 1000.0, Some(3.0)), 0.0);
     }
 
     #[test]

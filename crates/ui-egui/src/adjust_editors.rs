@@ -216,7 +216,7 @@ fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
     for &(key, text, min, max, default, unit, decimals) in rows {
         let mut x = num(v, key, default).clamp(min, max);
         // A double-click on the slider puts it back to its default (Photoshop).
-        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None };
+        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
         let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
         if r.changed() {
             v[key] = json!(row_value(x, min, max, decimals));
@@ -1095,7 +1095,7 @@ fn color_balance(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ];
     // Photoshop: a double-click on a slider zeroes it (this tone only); the dialog's sliders step
     // with the wheel; Up/Down step the fields; Shift makes those steps 10.
-    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0) };
+    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0), ..Default::default() };
     let mut changed = false;
     for (i, (text, a, b)) in rows.iter().enumerate() {
         let r = Edit::of(&widgets::slider_row_with(ui, text, &mut vals[i], -100.0..=100.0, "", Some(&[*a, *b]), gestures));

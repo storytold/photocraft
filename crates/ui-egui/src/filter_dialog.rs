@@ -696,7 +696,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         ui.add_space(4.0);
                     } else {
                         // A double-click on the slider puts it back to the filter's default.
-                        let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None };
+                        let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
                         crate::widgets::slider_row_with(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures);
                     }
                 });
