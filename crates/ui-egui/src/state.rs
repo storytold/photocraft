@@ -498,6 +498,12 @@ pub struct DocWindow {
     pub document: usize,
     pub view: View,
     pub open: bool,
+    /// This window owns the document's view; the document is removed from the main canvas.
+    #[serde(default)]
+    pub floating: bool,
+    /// Transient focus edge used to activate the document once when this viewport gains focus.
+    #[serde(skip)]
+    pub focused: bool,
     /// Where the window opens on screen (outer top-left, in points); `None` lets the OS place it.
     /// A tab dragged off the tab strip opens its window where it was dropped (#3733).
     #[serde(default)]

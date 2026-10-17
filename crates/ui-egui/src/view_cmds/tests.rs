@@ -420,9 +420,12 @@ fn float_in_window_takes_a_document_and_position() {
     let w = app.ui.windows.last().unwrap();
     assert_eq!(r, json!({"window": w.id}));
     assert_eq!((w.document, w.position), (1, Some([1950.0, 40.5])));
-    assert_eq!(app.session.active_index(), Some(1));
-    menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({})).unwrap();
-    assert_eq!(app.ui.windows.last().map(|w| (w.document, w.position)), Some((1, None)), "defaults: the active document, placed by the OS");
+    assert!(w.floating);
+    assert_eq!(app.session.active_index(), Some(1), "the floated document stays active");
+    let again = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    assert_eq!(again, r, "tearing off the same document reuses its window");
+    assert_eq!(app.ui.windows.len(), 1);
+    assert_eq!(app.ui.windows[0].position, Some([1950.0, 40.5]));
     for bad in [
         json!({"document": 3}),
         json!({"document": -1}),
@@ -434,7 +437,31 @@ fn float_in_window_takes_a_document_and_position() {
     ] {
         assert!(menu(&mut app, &ctx, "window.arrange.floatInWindow", bad.clone()).is_err(), "{bad}");
     }
-    assert_eq!(app.ui.windows.len(), 2, "rejected params open no window");
+    assert_eq!(app.ui.windows.len(), 1, "rejected params open no window");
+    app.ui.windows[0].open = false;
+    let reopened = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    assert_ne!(reopened, r, "a closed window can be floated again");
+    assert_eq!(app.ui.windows.last().map(|w| (w.document, w.position)), Some((1, None)));
+}
+
+#[test]
+fn float_in_window_defaults_to_the_active_document() {
+    let (mut app, ctx) = app_with(3);
+    app.session.set_active(1);
+    let r = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({})).unwrap();
+    let window = app.ui.windows.last().unwrap();
+    assert_eq!(r, json!({"window": window.id}));
+    assert_eq!(window.document, 1);
+    assert!(window.floating);
+    assert_eq!(app.session.active_index(), Some(1));
+}
+
+#[test]
+fn float_all_in_windows_gives_each_document_its_own_view() {
+    let (mut app, ctx) = app_with(3);
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    assert_eq!(app.ui.windows.iter().map(|w| w.document).collect::<Vec<_>>(), [0, 1, 2]);
+    assert!(app.ui.windows.iter().all(|w| w.floating));
 }
 
 #[test]

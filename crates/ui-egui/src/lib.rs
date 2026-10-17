@@ -1250,7 +1250,7 @@ impl PhotocraftApp {
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx);
+                    crate::view_cmds::float_window(self, idx, idx, false);
                 }
             }
         }
