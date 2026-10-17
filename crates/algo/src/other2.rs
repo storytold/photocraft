@@ -8,7 +8,8 @@ use crate::image::Image;
 use crate::{Ctx, HsbModel};
 
 /// Custom: `Σ kernel·pixel / scale + offset/255` per colour channel (alpha
-/// kept). Kernels shorter than 25 entries are zero-padded.
+/// kept). Kernels shorter than 25 entries are zero-padded. CMYK samples are
+/// ink, so there it runs on `1 - ink` and a positive offset brightens.
 pub(crate) fn custom(src: &Image, out: Rect, ctx: &Ctx, kernel: &[f32], scale: f32, offset: f32) -> Vec<f32> {
     let n = src.ch;
     let cc = ncol(ctx, n);
@@ -16,6 +17,7 @@ pub(crate) fn custom(src: &Image, out: Rect, ctx: &Ctx, kernel: &[f32], scale: f
         (0..25).filter_map(|i| kernel.get(i).copied().filter(|v| *v != 0.0).map(|v| (i as i32 % 5 - 2, i as i32 / 5 - 2, v))).collect();
     let s = if scale == 0.0 { 1.0 } else { scale };
     let off = offset / 255.0;
+    let sub = crate::fxutil::subtractive(ctx);
     let mut res = src.crop(out);
     if k.is_empty() {
         return res;
@@ -23,8 +25,10 @@ pub(crate) fn custom(src: &Image, out: Rect, ctx: &Ctx, kernel: &[f32], scale: f
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
         let (x, y) = xy(out, i);
         for (c, v) in px.iter_mut().enumerate().take(cc) {
-            let sum: f32 = k.iter().map(|&(dx, dy, w)| src.get(x + dx, y + dy, c) * w).sum();
-            *v = sum / s + off;
+            // CMYK: convolve brightness (1 - ink), then back to ink.
+            let lum = |v: f32| if sub { 1.0 - v } else { v };
+            let sum: f32 = k.iter().map(|&(dx, dy, w)| lum(src.get(x + dx, y + dy, c)) * w).sum();
+            *v = lum(sum / s + off);
         }
     }
     res

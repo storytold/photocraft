@@ -608,6 +608,28 @@ fn custom_kernel_shifts_and_offsets() {
     assert!((off.pixel(5, 5)[0] - 0.4).abs() < 1e-5);
 }
 
+/// CMYK samples are ink: Custom's positive offset brightens (removes ink), as in Photoshop
+/// (identity, scale 1, offset +50: white stays white, C=100% becomes C≈80%). Alpha is untouched.
+/// Photoshop's CMYK depths; float is unclamped on both polarities (RGB white + offset exceeds 1).
+#[test]
+fn custom_offset_brightens_cmyk() {
+    let mut id = vec![0.0; 25];
+    id[12] = 1.0;
+    let p = FilterParams::Custom { kernel: id, scale: 1.0, offset: 50.0 };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let f = PixelFormat::new(ColorMode::Cmyk, depth, true);
+        let mut s = Surface::new(f);
+        s.fill_rect(R, &[0.0, 0.0, 0.0, 0.0, 0.6]);
+        let w = run(&s, &p).pixel(5, 5);
+        assert!(w[..4].iter().all(|v| v.abs() < 1e-6) && (w[4] - 0.6).abs() < 0.01, "{depth:?} white: {w:?}");
+        let mut s = Surface::new(f);
+        s.fill_rect(R, &[1.0, 0.5, 0.0, 0.0, 1.0]);
+        let c = run(&s, &p).pixel(5, 5);
+        let want = [1.0 - 50.0 / 255.0, 0.5 - 50.0 / 255.0, 0.0, 0.0, 1.0];
+        assert!(c.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{depth:?} C100: {c:?}");
+    }
+}
+
 #[test]
 fn hsb_filter_encodes_and_decodes() {
     let s = flat(SampleType::F32, R, [1.0, 0.0, 0.0, 1.0]);
