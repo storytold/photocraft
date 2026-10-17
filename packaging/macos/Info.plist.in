@@ -225,6 +225,7 @@
         <string>com.ilm.openexr-image</string>
         <string>public.radiance</string>
         <string>public.avif</string>
+        <string>public.svg-image</string>
         <string>ai.storyteller.photocraft.qoi</string>
         <string>ai.storyteller.photocraft.pdn</string>
         <string>ai.storyteller.photocraft.ora</string>
