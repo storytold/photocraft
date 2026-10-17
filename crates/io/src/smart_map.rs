@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 17] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -158,6 +158,10 @@ const KNOWN: [Known; 14] = [
     Known { class: "Embs", filter_id: code(b"Embs"), name: "Emboss...", command: "filter.stylize.emboss" },
     Known { class: "Lvls", filter_id: code(b"Lvls"), name: "Levels...", command: "image.adjustments.levels" },
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
+    Known { class: "HStr", filter_id: code(b"HStr"), name: "Hue/Saturation...", command: "image.adjustments.hueSaturation" },
+    Known { class: "DstS", filter_id: code(b"DstS"), name: "Dust & Scratches...", command: "filter.noise.dustAndScratches" },
+    // Sharpen has no settings: Photoshop stores no `Fltr`, only the name and `filterID`.
+    Known { class: "Shrp", filter_id: code(b"Shrp"), name: "Sharpen", command: "filter.sharpen.sharpen" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
     Known { class: "adaptCorrect", filter_id: 781, name: "Shado&ws/Highlights...", command: "image.adjustments.shadowsHighlights" },
 ];
@@ -263,7 +267,7 @@ fn curves_params(f: &Descriptor) -> Option<J> {
 fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)> {
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
-        ("adaptCorrect", None) => json!({}),
+        ("adaptCorrect" | "Shrp", None) => json!({}),
         (_, None) => return None,
         ("GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm ", Some(f)) => json!({"radius": px(f, "Rds ")?}),
         ("MtnB", Some(f)) => json!({"angle": int(f, "Angl")?, "distance": px(f, "Dstn")?}),
@@ -284,9 +288,76 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
+        ("HStr", Some(f)) => hue_sat_params(f)?,
+        ("DstS", Some(f)) => json!({"radius": px(f, "Rds ")?, "threshold": int(f, "Thsh")?}),
         _ => return None,
     };
     Some((k.command, params))
+}
+
+/// Hue/Saturation's master and per-range entries (`Adjs`: `Hst2` items, `LclR` 1–6 for a range).
+const HUE_RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
+const HUE_KEYS: [(&str, &str); 3] = [("H   ", "hue"), ("Strt", "saturation"), ("Lght", "lightness")];
+const HUE_RANGE_KEYS: [&str; 4] = ["BgnR", "BgnS", "EndS", "EndR"];
+
+fn hue_sat_params(f: &Descriptor) -> Option<J> {
+    let mut out = Map::new();
+    out.insert("colorize".into(), json!(bool_or(f, "Clrz", false)));
+    for a in adjustment_list(f)? {
+        let mut o = Map::new();
+        for (key, param) in HUE_KEYS {
+            o.insert(param.into(), json!(hue_value(a, key)?));
+        }
+        match int(a, "LclR") {
+            None => out.extend(o),
+            Some(r) => {
+                let name = *HUE_RANGES.get(usize::try_from(r).ok()?.checked_sub(1)?)?;
+                let range: Option<Vec<i32>> = HUE_RANGE_KEYS.iter().map(|k| int(a, k)).collect();
+                o.insert("range".into(), json!(range?));
+                out.insert(name.into(), J::Object(o));
+            }
+        }
+    }
+    Some(J::Object(out))
+}
+
+/// Photoshop writes the master hue as `H   `; older files and actions use `Hue `.
+fn hue_value(a: &Descriptor, key: &str) -> Option<i32> {
+    int(a, key).or_else(|| if key == "H   " { int(a, "Hue ") } else { None })
+}
+
+fn hue_sat_adjustments(p: &J) -> Result<Value, String> {
+    let entry = |o: &J, range: Option<(usize, &J)>| -> Result<Descriptor, String> {
+        let mut e = Descriptor::new("Hst2");
+        if let Some((i, r)) = range {
+            // Photoshop's default slider positions for the range when the params carry none.
+            let start = 315 + 60 * i32::try_from(i).map_err(|_| "bad hue range")?;
+            let default = [start, start + 30, start + 60, start + 90].map(|v| f64::from(v.rem_euclid(360)));
+            let bounds = match r.get("range") {
+                None => default.to_vec(),
+                Some(a) => a
+                    .as_array()
+                    .filter(|a| a.len() == 4)
+                    .and_then(|a| a.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect::<Option<Vec<_>>>())
+                    .ok_or("a hue range needs four numeric bounds")?,
+            };
+            e = e.with("LclR", Value::Integer(i32::try_from(i + 1).map_err(|_| "bad hue range")?));
+            for (k, v) in HUE_RANGE_KEYS.iter().zip(bounds) {
+                e = e.with(k, Value::Integer(v.round().clamp(-360.0, 720.0) as i32));
+            }
+        }
+        for (key, param) in HUE_KEYS {
+            e = e.with(key, pi(o, param, 0.0));
+        }
+        Ok(e)
+    };
+    let mut list = vec![Value::Descriptor(entry(p, None)?)];
+    for (i, name) in HUE_RANGES.iter().enumerate() {
+        if let Some(r) = p.get(*name).filter(|v| v.is_object()) {
+            list.push(Value::Descriptor(entry(r, Some((i, r)))?));
+        }
+    }
+    Ok(Value::List(list))
 }
 
 // ---------- Filter Gallery ----------
@@ -597,6 +668,12 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
+        "HStr" => d
+            .with("presetKind", Value::Enumerated { type_id: Id::new("presetKindType"), value: Id::new("presetKindCustom") })
+            .with("Clrz", Value::Boolean(p.get("colorize").and_then(J::as_bool).unwrap_or(false)))
+            .with("Adjs", hue_sat_adjustments(p)?),
+        "DstS" => d.with("Rds ", pi(p, "radius", 1.0)).with("Thsh", pi(p, "threshold", 0.0)),
+        "Shrp" => return Ok(None),
         "adaptCorrect" => {
             if p.as_object().is_some_and(|o| o.keys().any(|k| !is_meta(k))) {
                 return Err("only default Shadows/Highlights settings are written to PSD".into());
@@ -1066,6 +1143,12 @@ mod tests {
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
             sf("image.adjustments.shadowsHighlights", json!({})),
+            sf("filter.sharpen.sharpen", json!({})),
+            sf("filter.noise.dustAndScratches", json!({"radius": 4.0, "threshold": 12})),
+            sf(
+                "image.adjustments.hueSaturation",
+                json!({"colorize": false, "hue": 10, "saturation": -20, "lightness": 5, "reds": {"hue": 5, "saturation": 0, "lightness": -3, "range": [315, 345, 15, 45]}}),
+            ),
             // A pencil-drawn curve: 256 output levels (`Mpng`).
             sf("image.adjustments.curves", json!({"pencil": true, "points": (0..256).rev().collect::<Vec<i32>>()})),
         ];
@@ -1078,6 +1161,33 @@ mod tests {
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
         }
+    }
+
+    #[test]
+    fn photoshop_sharpen_without_fltr_imports_as_sharpen() {
+        // #6267: Photoshop's Sharpen item holds only its name, blending and `filterID`.
+        let item = Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Sharpen")))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(false))
+            .with("filterID", Value::Integer(1_399_353_968));
+        let f = filter_from_item(&item);
+        assert_eq!((f.command.as_str(), &f.params), ("filter.sharpen.sharpen", &json!({})));
+        // Hue/Saturation with an unnumbered range and Dust & Scratches with a missing setting fail
+        // cleanly instead of panicking.
+        let bad = SmartFilter {
+            command: "image.adjustments.hueSaturation".into(),
+            params: json!({"reds": {"range": [1, "x", 3, 4]}}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(item_for_filter(&bad).is_err());
+        let dust = Descriptor::new("filterFX")
+            .with("Fltr", Value::Descriptor(Descriptor::new("DstS").with("Rds ", Value::Integer(3))))
+            .with("filterID", Value::Integer(code(b"DstS")));
+        assert_eq!(filter_from_item(&dust).command, UNSUPPORTED_FILTER);
     }
 
     #[test]
