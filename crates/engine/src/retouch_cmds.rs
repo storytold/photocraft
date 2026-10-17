@@ -18,6 +18,7 @@ use photocraft_geom::Rect;
 use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke, stroke_coverage};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, blend_from_str};
@@ -977,19 +978,26 @@ impl DabTool {
                     let win = ((r.x0 - work.rect.x0) as usize, (r.y0 - work.rect.y0) as usize, (r.x1 - work.rect.x0) as usize, (r.y1 - work.rect.y0) as usize);
                     let out = if sharpen { local_sharpen(&work.data, w, h, n, a, win, 1.0, protect) } else { local_blur(&work.data, w, h, n, a, win, sigma) };
                     let rw = r.width() as usize;
-                    for y in r.y0..r.y1 {
+                    // Row-parallel, like the blur itself (#5426).
+                    let (wx0, wy0) = (work.rect.x0, work.rect.y0);
+                    work.data.par_chunks_mut(w * n).enumerate().for_each(|(row, line)| {
+                        let y = wy0 + row as i32;
+                        if y < r.y0 || y >= r.y1 {
+                            return;
+                        }
                         for x in r.x0..r.x1 {
                             let k = per_dab(fp.at(x, y) * strength, sp);
                             if k <= 0.0 {
                                 continue;
                             }
                             let o = ((y - r.y0) as usize * rw + (x - r.x0) as usize) * n;
-                            let px = work.px_mut(x, y);
+                            let i = (x - wx0) as usize * n;
+                            let px = &mut line[i..i + n];
                             for c in 0..n {
                                 px[c] += (out[o + c] - px[c]) * k;
                             }
                         }
-                    }
+                    });
                 })
             }
             Self::Smudge { strength, finger, max_size } => {
