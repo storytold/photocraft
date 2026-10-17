@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 21] = [
+pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -220,6 +220,8 @@ pub static LANGUAGES: [LangInfo; 21] = [
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Swedish; `sv-SE` and `sv-FI` resolve here.
+    LangInfo { code: "sv", name: "Svenska", source: catalog!("sv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -829,6 +831,33 @@ mod tests {
             (21, "Uklonjena je 21 tačka uzorkovanja"),
         ] {
             assert_eq!(trn(sr, n, "{n} sample point removed", "{n} sample points removed"), expected);
+        }
+    }
+
+    #[test]
+    fn swedish_resolves_locales_and_translates() {
+        let sv = Lang::from_code("sv").expect("sv registered");
+        assert_eq!(sv.name(), "Svenska");
+        assert!(sv.complete_menus());
+        for tag in ["sv", "SV", "sv-SE", "sv_SE", "sv_SE.UTF-8", "sv-FI"] {
+            assert_eq!(lang_from_tag(tag), Some(sv), "{tag}");
+            assert_eq!(Lang::from_pref(tag), sv, "{tag}");
+        }
+        assert_eq!(tr(sv, "File"), "Arkiv");
+        assert_eq!(tr(sv, "Layer"), "Lager");
+        assert_eq!(tr(sv, "New document…"), "Nytt dokument…");
+        assert_eq!(tr(sv, "All"), "Alla");
+        assert_eq!(tr_ctx(sv, "cameraRaw", "Light"), "Ljus");
+        assert_eq!(tr_ctx(sv, "fontWeight", "Light"), "Tunn");
+        for key in ["Alt", "⌥"] {
+            assert_eq!(
+                fmt(tr(sv, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]),
+                format!("Lägg till en mask  (från markeringen; {key} inverterar)")
+            );
+        }
+        for n in [0, 1, 2, 21] {
+            assert_eq!(trn(sv, n, "{n} layer", "{n} layers"), format!("{n} lager"));
+            assert_eq!(trn(sv, n, "Group · {n} layer", "Group · {n} layers"), format!("Grupp · {n} lager"));
         }
     }
 

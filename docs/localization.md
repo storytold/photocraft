@@ -28,6 +28,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
+| Svenska | `sv` | one / other |
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels; tests enforce that coverage. Vietnamese (`vi`) is
@@ -50,6 +51,7 @@ native system locale; an unsupported code follows the same fallback. Regional ta
 Simplified Chinese remain distinct. Every Portuguese locale (`pt`, `pt-BR`, `pt-PT`) uses the
 Brazilian Portuguese catalog. The Serbian catalog is written in Latin script (Ekavian); every
 Serbian locale (`sr-RS`, `sr-Latn-RS`, `sr_RS@latin`, and Cyrillic `sr-Cyrl-RS`) resolves to it.
+Every Swedish locale (`sv-SE`, `sv-FI`) uses the Swedish catalog.
 
 ### First launch and system language
 

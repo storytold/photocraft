@@ -21,6 +21,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("id-ID", "id"),
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
+        ("sv-SE", "sv"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
@@ -233,7 +234,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
 
 #[test]
 fn missing_or_unsupported_system_languages_render_english() {
-    for tags in [vec![], vec!["sv-SE", "ar-SA"]] {
+    for tags in [vec![], vec!["fi-FI", "ar-SA"]] {
         system::with_system_tags(&tags, || {
             with_language(Lang::EN, || {
                 let h = harness();

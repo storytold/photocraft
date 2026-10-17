@@ -583,6 +583,7 @@ mod tests {
             ("tr", "tr.tsv"),
             ("vi", "vi.tsv"),
             ("sr", "sr.tsv"),
+            ("sv", "sv.tsv"),
         ] {
             let catalog_path = root.join("crates/ui-egui/src/i18n").join(path);
             let text = fs::read_to_string(&catalog_path).unwrap_or_default();
