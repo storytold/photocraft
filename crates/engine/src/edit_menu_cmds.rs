@@ -1027,18 +1027,18 @@ fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
             let new =
                 p.get("newName").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(cmd, "missing `newName`"))?.to_string();
             match kind.as_str() {
-                "brushes" => {
-                    // A renamed built-in is the user's preset now (and persists as one).
-                    let b = &mut s.tools.presets[i];
-                    b.name = new;
-                    b.builtin = false;
-                }
+                // Same rules as Brush Settings: no duplicate names (case-insensitive), the current
+                // preset follows, a renamed built-in is the user's preset now (and persists as one).
+                "brushes" => crate::brush_preset_cmds::rename_at(s, i, &new, cmd)?,
                 "patterns" => s.patterns.items[i].name = new,
                 _ => s.edit_state.custom_shapes[i].name = new,
             }
         }
         "delete" => match kind.as_str() {
-            "brushes" => drop(s.tools.presets.remove(i)),
+            "brushes" => {
+                let gone = s.tools.presets.remove(i);
+                crate::brush_cmds::forget_deleted_preset(s, &gone.name);
+            }
             "patterns" => drop(s.patterns.items.remove(i)),
             _ => drop(s.edit_state.custom_shapes.remove(i)),
         },

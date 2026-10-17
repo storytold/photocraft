@@ -793,13 +793,19 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
-    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&name)) {
+    forget_deleted_preset(s, &name);
+    Ok(json!({ "count": s.tools.presets.len() }))
+}
+
+/// After preset `name` was deleted (here or in Edit › Presets › Preset Manager): the current
+/// brush no longer comes from a preset, and the library is saved.
+pub(crate) fn forget_deleted_preset(s: &mut Session, name: &str) {
+    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
         s.tools.current_preset = None;
         // The remembered brush names the preset it was picked from: the name went away.
         s.tools.brush_changed();
     }
     s.brush_presets_changed();
-    Ok(json!({ "count": s.tools.presets.len() }))
 }
 
 /// Overwrite an existing preset with the current brush (or the current brush plus a `brush`

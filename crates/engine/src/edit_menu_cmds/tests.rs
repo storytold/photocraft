@@ -428,6 +428,35 @@ fn define_custom_shape_and_preset_manager() {
 }
 
 #[test]
+fn preset_manager_brush_rename_follows_current_preset() {
+    let mut s = Session::new();
+    s.execute("brush.presets.setCurrent", json!({"name": "Chalk"})).unwrap();
+    s.execute("edit.presets.presetManager", json!({"action": "rename", "kind": "brushes", "name": "Chalk", "newName": "Chalky"})).unwrap();
+    assert_eq!(s.tools.current_preset.as_deref(), Some("Chalky"));
+    s.execute("brush.presets.update", json!({})).unwrap();
+}
+
+#[test]
+fn preset_manager_brush_rename_refuses_duplicate_name() {
+    let mut s = Session::new();
+    let before: Vec<String> = s.tools.presets.iter().map(|b| b.name.clone()).collect();
+    let r = s.execute("edit.presets.presetManager", json!({"action": "rename", "kind": "brushes", "name": "Soft Round", "newName": "hard round"}));
+    assert!(r.is_err(), "a case-insensitive duplicate name must be refused");
+    assert_eq!(s.tools.presets.iter().map(|b| b.name.clone()).collect::<Vec<_>>(), before);
+    // Renaming to a different case of its own name is fine.
+    s.execute("edit.presets.presetManager", json!({"action": "rename", "kind": "brushes", "name": "Soft Round", "newName": "soft round"})).unwrap();
+}
+
+#[test]
+fn preset_manager_brush_delete_clears_current_preset() {
+    let mut s = Session::new();
+    s.execute("brush.presets.setCurrent", json!({"name": "Chalk"})).unwrap();
+    s.execute("edit.presets.presetManager", json!({"action": "delete", "kind": "brushes", "name": "Chalk"})).unwrap();
+    assert!(!s.tools.presets.iter().any(|b| b.name == "Chalk"));
+    assert_eq!(s.tools.current_preset, None);
+}
+
+#[test]
 fn define_brush_preset_wraps_define_from_selection() {
     let mut s = session(8);
     assert!(!s.is_enabled("edit.defineBrushPreset"));
