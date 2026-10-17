@@ -832,7 +832,12 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let base = textureLoad(tex_a, p, 0);
     if (base.a <= 0.0) { return base; }
-    let s = textureLoad(tex_b, p, 0);
+    var s = textureLoad(tex_b, p, 0);
+    if (op.mode == M_DISSOLVE) {
+        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity);
+        let r = composite(M_NORMAL, vec4(base.rgb, 1.0), s, 1.0);
+        return vec4(r.rgb, base.a);
+    }
     let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
     return vec4(r.rgb, base.a);
 }
@@ -855,6 +860,11 @@ fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
     let k = op.opacity * mask_value(doc_px(p));
     if (k <= 0.0) { return b; }
     let a = textureLoad(tex_b, p, 0);
+    // Dissolve keeps the adjusted colour or the backdrop (#3050).
+    if (op.mode == M_DISSOLVE) {
+        if (dissolve_noise(doc_px(p)) < k) { return vec4(a.rgb, b.a); }
+        return b;
+    }
     let bl = blend_rgb(op.mode, b.rgb, a.rgb);
     return vec4(b.rgb + (bl - b.rgb) * k, b.a);
 }
@@ -1174,7 +1184,13 @@ fn fs_fxmerge(in: VOut) -> @location(0) vec4<f32> {
     let atop = (op.flags & F_ATOP) != 0u;
     var before = c;
     if (atop) { before = vec4(c.rgb, 1.0); }
-    let o = mix_premul(before, w, op.opacity);
+    // Dissolve chooses the finished layer or the backdrop. Mixing by opacity grays it (#3051).
+    var o: vec4<f32>;
+    if (op.mode == M_DISSOLVE) {
+        o = select(before, w, dissolve_noise(doc_px(p)) < op.opacity);
+    } else {
+        o = mix_premul(before, w, op.opacity);
+    }
     if (atop) {
         if (c.a > 0.0) { return vec4(o.rgb, c.a); }
         return c;

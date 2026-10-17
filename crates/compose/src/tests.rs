@@ -316,6 +316,35 @@ fn clipping_mask_restricts_to_base_alpha() {
     assert!(close4(px(&d, 6, 1), [1.0; 4]), "outside base: clipped layer hidden");
 }
 
+/// #4921: Dissolve coverage must survive clipping and use Opacity × Fill.
+#[test]
+fn clipped_dissolve_is_binary_and_preserves_the_base_shape() {
+    let mut d = doc_white(40, 12);
+    d.layers.push(solid_layer("base", Rect::new(0, 0, 20, 12), [0.0, 0.0, 1.0, 1.0]));
+    let mut clip = solid_layer("clip", d.bounds(), [1.0, 0.0, 0.0, 1.0]);
+    clip.clipped = true;
+    clip.blend = BlendMode::Dissolve;
+    clip.opacity = 0.6;
+    clip.fill_opacity = 0.5;
+    d.layers.push(clip);
+    let mut red = 0;
+    let mut blue = 0;
+    for y in 0..12 {
+        for x in 0..20 {
+            let p = px(&d, x, y);
+            if close4(p, [1.0, 0.0, 0.0, 1.0]) {
+                red += 1;
+            } else {
+                assert!(close4(p, [0.0, 0.0, 1.0, 1.0]), "Dissolve must not interpolate: {p:?} at ({x},{y})");
+                blue += 1;
+            }
+        }
+        assert!(close4(px(&d, 30, y), [1.0; 4]), "outside the base the clip is invisible");
+    }
+    assert!(red > 0 && blue > 0, "Dissolve must expose both source and base: {red}/{blue}");
+    assert!((red as f32 / (red + blue) as f32 - 0.3).abs() < 0.1, "coverage should follow 60% opacity × 50% fill: {red}/{blue}");
+}
+
 #[test]
 fn hidden_base_hides_clipping_group() {
     let mut d = doc_white(4, 4);
@@ -326,6 +355,33 @@ fn hidden_base_hides_clipping_group() {
     clip.clipped = true;
     d.layers.push(clip);
     assert!(close4(px(&d, 1, 1), [1.0; 4]));
+}
+
+#[test]
+fn clipped_dissolve_matches_whole_render_at_offset_regions_and_depths() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        let mut d = Document::new("coverage", Size::new(32, 18), ColorMode::Rgb, fmt.sample);
+        let bounds = Rect::new(-3, -2, 32, 18);
+        let mut base = Layer::raster("base", fmt);
+        base.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 1.0, 0.5]);
+        d.layers.push(base);
+        let mut clip = Layer::raster("clip", fmt);
+        clip.surface_mut().unwrap().fill_rect(bounds, &[1.0, 0.0, 0.0, 0.75]);
+        clip.clipped = true;
+        clip.blend = BlendMode::Dissolve;
+        clip.opacity = 0.6;
+        clip.fill_opacity = 0.5;
+        d.layers.push(clip);
+        let whole = render(&d, bounds);
+        for region in [Rect::new(-3, -2, 5, 4), Rect::new(5, 4, 17, 11), Rect::new(17, 11, 32, 18)] {
+            let part = render(&d, region);
+            for y in region.y0..region.y1 {
+                for x in region.x0..region.x1 {
+                    assert!(close4(part.get(x, y), whole.get(x, y)), "{fmt:?}: region mismatch at ({x},{y})");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -574,6 +630,55 @@ fn dissolve_coverage_matches_opacity() {
     assert!((covered - 0.3).abs() < 0.05, "{covered}");
     // deterministic
     assert_eq!(flatten(&d), b);
+}
+
+/// Invert at 50% Dissolve is black or white, not the gray of a Normal mix (#3050).
+#[test]
+fn dissolve_adjustment_is_a_per_pixel_choice() {
+    let mut d = doc_white(16, 16);
+    let mut inv = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
+    inv.blend = photocraft_color::BlendMode::Dissolve;
+    inv.opacity = 0.5;
+    d.layers.push(inv);
+    let b = flatten(&d);
+    let (black, white, other) = b.px.iter().fold((0, 0, 0), |(k, w, o), p| {
+        if close4(*p, [0.0, 0.0, 0.0, 1.0]) {
+            (k + 1, w, o)
+        } else if close4(*p, [1.0, 1.0, 1.0, 1.0]) {
+            (k, w + 1, o)
+        } else {
+            (k, w, o + 1)
+        }
+    });
+    assert_eq!(other, 0, "a partial mix would be gray");
+    assert!(black > 40 && white > 40, "black {black} white {white}");
+}
+
+/// A clipped black fill at 50% Dissolve stays black or white on an opaque base (#3052).
+#[test]
+fn clipped_dissolve_fill_is_a_per_pixel_choice() {
+    let mut d = doc_white(16, 16);
+    let mut l = solid_layer("k", Rect::new(0, 0, 16, 16), [0.0, 0.0, 0.0, 1.0]);
+    l.clipped = true;
+    l.blend = photocraft_color::BlendMode::Dissolve;
+    l.opacity = 0.5;
+    d.layers.push(l);
+    let b = flatten(&d);
+    assert!(b.px.iter().all(|p| close4(*p, [0.0, 0.0, 0.0, 1.0]) || close4(*p, [1.0; 4])));
+}
+
+/// A Color Overlay must not turn Dissolve coverage into a Normal mix (#3051).
+#[test]
+fn color_overlay_keeps_dissolve_coverage() {
+    use photocraft_doc::effects::{Effect, FxCommon};
+    let mut d = doc_white(16, 16);
+    let mut l = Layer::new("ink", LayerContent::Fill(Fill::Solid(photocraft_color::Color::BLACK)));
+    l.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: photocraft_color::Color::BLACK });
+    l.blend = photocraft_color::BlendMode::Dissolve;
+    l.opacity = 0.5;
+    d.layers.push(l);
+    let b = flatten(&d);
+    assert!(b.px.iter().all(|p| close4(*p, [0.0, 0.0, 0.0, 1.0]) || close4(*p, [1.0; 4])));
 }
 
 #[test]

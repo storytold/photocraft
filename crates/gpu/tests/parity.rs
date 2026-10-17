@@ -735,6 +735,18 @@ fn groups_masks_and_clipping() {
         d.layers.extend([base, c1, c2]);
         check(&mut g, &d, &format!("clipping hidden={hidden}"));
     }
+    // #4921: a clipped Dissolve layer keeps binary coverage at partial opacity/fill.
+    for (opacity, fill) in [(0.4, 1.0), (0.8, 0.5)] {
+        let mut d = base_doc(56, 44);
+        let base = noise_layer("base", PixelFormat::RGBA8, Rect::new(5, 6, 48, 40), 45, 0.0);
+        let mut clip = noise_layer("dissolve clip", PixelFormat::RGBA8, d.bounds(), 46, 0.0);
+        clip.clipped = true;
+        clip.blend = BlendMode::Dissolve;
+        clip.opacity = opacity;
+        clip.fill_opacity = fill;
+        d.layers.extend([base, clip]);
+        check(&mut g, &d, "clipped Dissolve CPU/GPU parity");
+    }
     // Clipped group base (isolated) with a clipped layer.
     let mut d = base_doc(56, 44);
     let mut gb = Layer::group("gb", vec![child(18, BlendMode::Normal)]);
@@ -2597,6 +2609,33 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
         assert_eq!(s.tiles_uploaded, 0, "{s:?}");
         let cpu = photocraft_compose::render(&d, view);
         assert!(worst_diff(&cpu.px, &out).0 <= TOL);
+    }
+}
+
+/// Dissolve's adjustment/effect decisions use document coordinates, even in offset regions
+/// and in the paged compositor. The clipped path comes from #4992.
+#[test]
+fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for effects in [false, true] {
+            let mut d = Document::new("Dissolve", Size::new(300, 280), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(0, 0, 300, 280), 19, 0.4));
+            let mut layer = if effects {
+                let mut l = noise_layer("effect", d.pixel_format(), Rect::new(-8, 13, 290, 270), 27, 0.6);
+                l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.7), color: Color::rgb(0.2, 0.8, 0.4) }];
+                l
+            } else {
+                Layer::new("adjustment", LayerContent::Adjustment(Adjustment::Invert))
+            };
+            layer.blend = BlendMode::Dissolve;
+            layer.opacity = 0.37;
+            layer.mask = Some(mask(Rect::new(11, 7, 287, 265), 43, 0.0));
+            d.layers.push(layer);
+            let label = format!("Dissolve effects={effects} {depth:?}");
+            fx_check(&mut g, &d, &label);
+            diff_rect(&mut g, &d, Rect::new(17, 23, 281, 269), &label).unwrap();
+        }
     }
 }
 

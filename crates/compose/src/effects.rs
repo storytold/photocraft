@@ -2172,7 +2172,8 @@ pub(crate) fn composite_with_effects_prepared(
             let i = ((y - rect.y0) as usize) * rect.width() as usize + (x - rect.x0) as usize;
             let a = before.px[i];
             let b = if x >= big.x0 && x < big.x1 && y >= big.y0 && y < big.y1 { work.px[((y - big.y0) as usize) * w + (x - big.x0) as usize] } else { a };
-            backdrop.px[i] = mix_premul(a, b, op);
+            // Dissolve chooses the finished layer or the backdrop. Mixing by opacity grays it (#3051).
+            backdrop.px[i] = if layer.blend == BlendMode::Dissolve { if super::dissolve_noise(x, y) < op { b } else { a } } else { mix_premul(a, b, op) };
         }
     }
 }
