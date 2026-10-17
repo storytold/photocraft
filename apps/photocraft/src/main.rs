@@ -75,13 +75,13 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
-/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
+/// Custom title bar support on Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
 /// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
 /// keeps its traffic lights over the integrated title strip.
 const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
 
-/// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
-/// Interface › System Title Bar asks for the system's (#1271, #1316). Read from the saved
+/// Whether this start draws its own title bar. Linux defaults to the toolkit frame; Preferences ›
+/// Interface › System Title Bar overrides the platform default (#1271, #1316). Read from the saved
 /// preferences before the window opens; a missing or unreadable file keeps the default.
 fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
     let prefs: photocraft_engine::prefs::Preferences =
@@ -784,9 +784,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("prefs.json");
-        assert_eq!(super::custom_titlebar(None), super::CUSTOM_TITLEBAR, "no preferences file: the default");
+        assert_eq!(super::custom_titlebar(None), super::CUSTOM_TITLEBAR && !cfg!(target_os = "linux"), "no preferences file: the default");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR, "an unreadable file: the default");
+        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR && !cfg!(target_os = "linux"), "an unreadable file: the default");
+        std::fs::write(&file, r#"{"interface":{}}"#).unwrap();
+        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR && !cfg!(target_os = "linux"));
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":true}}"#).unwrap();
         assert!(!super::custom_titlebar(Some(&file)));
         assert_eq!(super::native_options(false).viewport.decorations, Some(true));

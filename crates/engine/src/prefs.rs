@@ -285,6 +285,7 @@ pub struct Interface {
     /// Windows and Linux: use the system's title bar and window buttons instead of PhotoCraft's
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
     /// #1271, #1316). Read when the app starts. macOS always uses the system's.
+    /// Enabled by default on Linux; an explicitly saved choice is preserved.
     pub system_title_bar: bool,
     /// Notices (the lower-right cards) hide themselves after
     /// [`Interface::notification_duration_seconds`] unless the pointer rests on them (#2022).
@@ -316,7 +317,7 @@ impl Default for Interface {
             show_tooltips: true,
             enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
-            system_title_bar: false,
+            system_title_bar: cfg!(target_os = "linux"),
             notification_auto_hide: true,
             notification_duration_seconds: 6,
         }

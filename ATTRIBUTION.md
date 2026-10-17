@@ -118,3 +118,12 @@ next to the files:
 | `corpus/pixls/` (11 files) | Real camera raws, one per decode path: Canon PowerShot SX50 HS (CR2 and its DNG conversion), Nikon D3 uncompressed NEF and Z6 paired 12/14-bit lossy and packed NEFs, Sony DSC-RX0 cRAW ARW, Panasonic DC-G9 high-res RW2, Olympus E-1 GRBG ORF, plus the E-5 packed ORF as the documented known-unsupported case. Per file (each CC0, per its database entry): [IMG_4059.CR2](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/IMG_4059.CR2), [CRW_4061.DNG](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/CRW_4061.DNG), [JD1_8203.NEF](https://raw.pixls.us/data/Nikon/D3/JD1_8203.NEF), [DSC00009.ARW](https://raw.pixls.us/data/Sony/DSC-RX0/DSC00009.ARW), [P1000475.RW2](https://raw.pixls.us/data/Panasonic/DC-G9/P1000475.RW2), [E_1__C106743_gredos.ORF](https://raw.pixls.us/data/Olympus/E-1/E_1__C106743_gredos.ORF), [_7061961_copy.ORF](https://raw.pixls.us/data/Olympus/E-5/_7061961_copy.ORF), [DSC_0750.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0750.NEF), [DSC_0751.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0751.NEF), [DSC_0753.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0753.NEF), [DSC_0754.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0754.NEF) | The photographers of the pixls.us raw samples database | [raw.pixls.us](https://raw.pixls.us) `data/`, fetched per [xtask/src/corpus_pins.rs](xtask/src/corpus_pins.rs) | CC0 / public domain, per file as linked |
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
+
+## Linux Wayland frame (Cargo dependency)
+
+| Dependency asset | Title | Author | Source | Licence |
+|---|---|---|---|---|
+| `sctk-adwaita` 0.10.1: `src/title/Cantarell-Regular.ttf` | Cantarell Regular, unmodified fallback window-title font; Linux only | Understanding Limited; Jakub Steiner | [sctk-adwaita at d5f343c](https://github.com/PolyMeilex/sctk-adwaita/blob/d5f343c45c04d4a026db57f76760819b7325db00/src/title/Cantarell-Regular.ttf) | OFL-1.1; full copyright and licence in `NOTICE` |
+
+The font is embedded by the dependency, with no font file added to this repository.
+Adwaita window buttons are vector paths and do not depend on font glyphs.

@@ -3646,6 +3646,7 @@ mod tests {
         let (mut app, store) = app_with_store();
         app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
         app.custom_titlebar = true;
+        let initial = app.session.prefs().interface.system_title_bar;
         let id = open_preferences(&mut app, "interface");
         let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -3655,7 +3656,7 @@ mod tests {
         h.get_by_label("System title bar").scroll_to_me();
         h.run_steps(4);
         h.get_by_label("Applies at next launch.");
-        for desired in [true, false] {
+        for desired in [!initial, initial] {
             h.get_by_label("System title bar").click();
             h.run_steps(4);
             assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
@@ -3675,8 +3676,8 @@ mod tests {
         h.get_by_label("Cancel").click();
         h.run_steps(4);
         assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
-        assert!(!h.state().session.prefs().interface.system_title_bar);
-        assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
+        assert_eq!(h.state().session.prefs().interface.system_title_bar, initial);
+        assert_eq!(stored(&store)["interface"]["systemTitleBar"], initial);
         assert!(h.state().custom_titlebar);
     }
 
