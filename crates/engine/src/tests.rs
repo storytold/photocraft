@@ -1130,6 +1130,38 @@ fn selecting_a_layer_does_not_dirty_the_document() {
 }
 
 #[test]
+fn selection_tools_do_not_dirty_the_document() {
+    // #6865: marquee, lasso, Select All / Inverse / Deselect and their undo and redo are
+    // history steps, but not edits, so a clean document stays clean.
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
+        let past = s.active().unwrap().history.past_len();
+        s.execute("select.rect", json!({"x": 2, "y": 2, "width": 20, "height": 10})).unwrap();
+        s.execute("select.rect", json!({"x": 30, "y": 20, "width": 8, "height": 8, "ellipse": true, "mode": "add"})).unwrap();
+        s.execute("select.lasso", json!({"points": [[0, 0], [40, 0], [20, 30]], "mode": "subtract"})).unwrap();
+        s.execute("select.inverse", json!({})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        assert!(s.active().unwrap().history.past_len() > past, "selections are still history steps");
+        assert!(!s.active().unwrap().is_dirty(), "depth {depth}: selecting is not an edit");
+        assert!(s.undo() && s.undo());
+        assert!(s.redo());
+        assert!(!s.active().unwrap().is_dirty(), "depth {depth}: undoing a selection is not an edit");
+        s.execute("history.selectState", json!({"state": past})).unwrap();
+        assert!(!s.active().unwrap().is_dirty(), "depth {depth}: stepping back over selections is not an edit");
+        // A real edit still dirties, with or without a selection, and a selection can't clean it.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        assert!(s.active().unwrap().is_dirty());
+        s.execute("select.deselect", json!({})).unwrap();
+        assert!(s.active().unwrap().is_dirty());
+        assert!(s.undo());
+        assert!(s.active().unwrap().is_dirty(), "the new layer is still unsaved");
+    }
+}
+
+#[test]
 fn coalesced_edits_share_one_history_step() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();

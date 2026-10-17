@@ -297,6 +297,21 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
     }
+    /// Whether the step from `before` to the current document leaves a clean document clean:
+    /// it changed nothing but the selection (#6865). Making, changing or dropping a selection
+    /// (marquee, lasso, Magic Wand, Quick / Object Selection, Select › …) is a history step but
+    /// not an edit, so it neither marks the file modified nor makes closing ask to save.
+    pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
+        self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+    }
+    /// Move to the next revision; `keep_clean` (from [`Self::keeps_clean`]) moves the saved
+    /// revision with it.
+    pub(crate) fn bump_revision(&mut self, keep_clean: bool) {
+        self.revision += 1;
+        if keep_clean {
+            self.saved_revision = self.revision;
+        }
+    }
     /// The targeted layers, as history stores them with each state.
     fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
@@ -830,6 +845,7 @@ impl Session {
         // duplicate or a paste), and everything when that can't be bounded. A command may still
         // report its own, tighter damage after this.
         let damage = layer_multi_cmds::step_damage(&before, &st.doc);
+        let keep_clean = st.keeps_clean(&before);
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
@@ -841,7 +857,7 @@ impl Session {
             st.history.set_current_layers(layers);
         }
         st.coalesce = key;
-        st.revision += 1;
+        st.bump_revision(keep_clean);
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
         if damage.is_none_or(|d| !d.is_empty()) {
@@ -930,9 +946,10 @@ impl Session {
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-                st.doc = d;
+                let before = std::mem::replace(&mut st.doc, d);
+                let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.revision += 1;
+                st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 true
             }
@@ -952,9 +969,10 @@ impl Session {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
                 }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
-                st.doc = d;
+                let before = std::mem::replace(&mut st.doc, d);
+                let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.revision += 1;
+                st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 true
             }

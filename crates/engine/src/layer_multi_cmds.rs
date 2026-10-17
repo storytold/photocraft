@@ -745,6 +745,70 @@ pub fn same_pixels(a: &Document, b: &Document) -> bool {
     doc_pixels_equal(a, b) && walk(&a.layers, &b.layers, 0)
 }
 
+/// Whether `a` and `b` differ at most in their selection (#6865): a selection step, which must
+/// not mark a clean document modified. Pixels compare by tile pointer ([`same_pixels`], which
+/// also turns down video layers, whose own equality is shallow); every other field compares
+/// structurally, where copy-on-write `Arc`s of `Eq` data short-circuit on pointer identity. The
+/// destructure is exhaustive, so a new `Document` field fails to compile until it is classified.
+pub fn selection_only_change(a: &Document, b: &Document) -> bool {
+    let Document {
+        id,
+        name,
+        size: _,
+        resolution_dpi: _,
+        mode: _,
+        depth: _,
+        icc_profile: _,
+        layers,
+        channels: _,
+        guides,
+        ruler_origin,
+        selection: _,
+        metadata,
+        global_light: _,
+        paths,
+        work_path,
+        clipping_path,
+        quick_mask: _,
+        quick_mask_unselected,
+        patterns: _,
+        color_table: _,
+        duotone: _,
+        layer_comps,
+        last_applied_comp,
+        last_document_state,
+        measurement,
+        notes,
+        text_styles,
+        slices,
+        variables,
+        timeline,
+        file_encoding,
+    } = a;
+    // The ignored fields above are the pixel ones `same_pixels` already compares.
+    same_pixels(a, b)
+        && *id == b.id
+        && *name == b.name
+        && *layers == b.layers
+        && *guides == b.guides
+        && *ruler_origin == b.ruler_origin
+        && *metadata == b.metadata
+        && *paths == b.paths
+        && *work_path == b.work_path
+        && *clipping_path == b.clipping_path
+        && *quick_mask_unselected == b.quick_mask_unselected
+        && *layer_comps == b.layer_comps
+        && *last_applied_comp == b.last_applied_comp
+        && *last_document_state == b.last_document_state
+        && *measurement == b.measurement
+        && *notes == b.notes
+        && *text_styles == b.text_styles
+        && *slices == b.slices
+        && *variables == b.variables
+        && *timeline == b.timeline
+        && *file_encoding == b.file_encoding
+}
+
 /// Pixels a single history step can have changed between `a` and `b` (the documents on either
 /// side of an edit, its undo or its redo): the union of the change bounds of every layer whose
 /// pixels differ, so a local edit recomposites only that area instead of the whole canvas. A
