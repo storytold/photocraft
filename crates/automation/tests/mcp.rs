@@ -318,6 +318,10 @@ async fn errors_are_tool_errors_not_crashes() {
     assert!(text(&r).contains("bridge"));
     let r = call(&client, "doc_export", json!({})).await;
     assert_eq!(r.is_error, Some(true));
+    // Quality 0 is refused, not clamped to 1 (serde already refuses 500, -1 and "85").
+    let r = call(&client, "doc_save", json!({"path": "q.jpg", "quality": 0})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("from 1 to 100"), "{}", text(&r));
     // Server still alive.
     json_of(&call(&client, "session_list", json!({})).await);
     client.cancel().await.unwrap();

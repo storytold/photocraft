@@ -114,10 +114,19 @@ impl Headless {
                 let mut opts =
                     photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), tga_bits, ..Default::default() };
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
-                if let Some(q) = p.get("quality").and_then(Value::as_u64) {
-                    opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
-                    opts.encode.webp_quality = q.clamp(1, 100) as u8;
-                    opts.encode.webp_lossless = false;
+                match p.get("quality") {
+                    None | Some(Value::Null) => {}
+                    Some(v) => {
+                        // Like the CLI's `--quality`: never ignore or clamp a bad value.
+                        let q = v
+                            .as_u64()
+                            .filter(|q| (1..=100).contains(q))
+                            .and_then(|q| u8::try_from(q).ok())
+                            .ok_or_else(|| bad(format!("`quality` must be a whole number from 1 to 100, got {v}")))?;
+                        opts.encode.jpeg_quality = q;
+                        opts.encode.webp_quality = q;
+                        opts.encode.webp_lossless = false;
+                    }
                 }
                 let path = str_of(&p, "path").map(PathBuf::from);
                 self.save(index_of(&p)?, path.as_deref(), str_of(&p, "format"), &opts)
@@ -573,6 +582,26 @@ mod tests {
         let decode = |p: &std::path::Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap().to_rgba8();
         assert_ne!(decode(&before), decode(&after), "the export holds the blur");
         assert_ne!(render(&mut h), unblurred, "the preview holds the blur");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Regression: `quality` 85.0 or "85" was ignored (a lossless WebP, reply ok) and 0 or 500 was
+    /// clamped, where the CLI refuses anything but a whole number from 1 to 100.
+    #[test]
+    fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
+        let dir = std::env::temp_dir().join(format!("pc-rpc-save-quality-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.webp");
+        let mut h = Headless::trusted_local();
+        h.handle("doc.new", json!({"width": 16, "height": 16})).unwrap();
+        for q in [json!(85.0), json!("85"), json!(0), json!(500), json!(-5), json!(true)] {
+            let err = h.handle("doc.save", json!({"path": path.to_string_lossy(), "quality": q})).unwrap_err().to_string();
+            assert!(err.contains("quality"), "{q}: {err}");
+            assert!(!path.exists(), "{q} wrote a file");
+        }
+        h.handle("doc.save", json!({"path": path.to_string_lossy(), "quality": 85})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.get(12..16), Some(&b"VP8 "[..]), "a WebP saved with a quality is lossy");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

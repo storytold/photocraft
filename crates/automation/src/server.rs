@@ -1001,6 +1001,9 @@ impl PhotocraftMcp {
             Some((_, Some(bits))) => Some(bits),
             Some((b, None)) => return Ok(fail(format!("`dpxBits` must be 8, 10, 12 or 16, got {b}"))),
         };
+        if let Some(q) = p.quality.filter(|q| !(1..=100).contains(q)) {
+            return Ok(fail(format!("`quality` must be a whole number from 1 to 100, got {q}")));
+        }
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
@@ -1033,8 +1036,8 @@ impl PhotocraftMcp {
                 let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, tga_bits, ..Default::default() };
                 opts.encode.dpx_bits = dpx_bits;
                 if let Some(q) = p.quality {
-                    opts.encode.jpeg_quality = q.clamp(1, 100);
-                    opts.encode.webp_quality = q.clamp(1, 100);
+                    opts.encode.jpeg_quality = q;
+                    opts.encode.webp_quality = q;
                     opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
