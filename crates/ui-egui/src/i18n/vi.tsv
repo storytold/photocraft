@@ -3594,6 +3594,7 @@ curves	Smooth	Làm mượt
 	Response curve	Đường cong phản hồi
 	Object Finder	Trình tìm đối tượng
 	No object found there — drag a rectangle around it	Không tìm thấy đối tượng ở đó — hãy kéo một hình chữ nhật quanh nó
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Lớp đang hoạt động không có điểm ảnh ở đây — hãy bật Lấy mẫu mọi lớp hoặc chọn một lớp có điểm ảnh
 	Remove after each stroke	Xóa sau mỗi nét vẽ
 	Apply the removal ({key})	Áp dụng việc xóa ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Nét vẽ cần xóa: {n} (Enter áp dụng, Esc hủy)

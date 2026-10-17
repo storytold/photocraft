@@ -3872,6 +3872,7 @@ curves	Smooth	Vloeiend maken
 	Light Gray	Lichtgrijs
 	Object Finder	Objectzoeker
 	No object found there — drag a rectangle around it	Daar is geen object gevonden — sleep er een rechthoek omheen
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	De actieve laag heeft hier geen pixels — zet Alle lagen samplen aan of selecteer een laag met pixels
 	Remove after each stroke	Verwijderen na elke streek
 	Apply the removal ({key})	Verwijdering toepassen ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Streken om te verwijderen: {n} (Enter past toe, Esc annuleert)

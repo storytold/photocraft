@@ -3720,6 +3720,7 @@ navigator	Zoom	Zvětšení
 	Medium Blue	Středně modrá
 	Object Finder	Hledání objektů
 	No object found there — drag a rectangle around it	Nebyl tam nalezen žádný objekt — přetáhněte kolem něj obdélník
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Aktivní vrstva tu nemá žádné pixely — zapněte Vzorkovat všechny vrstvy nebo vyberte vrstvu s pixely
 	Remove after each stroke	Odstranit po každém tahu
 	Apply the removal ({key})	Použít odstranění ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tahy k odstranění: {n} (Enter použije, Esc zruší)

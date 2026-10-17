@@ -4181,6 +4181,7 @@ shape	Appearance	Izgled
 	Drag to pan · Scroll to zoom · Double-click to fit	Prevucite za pomeranje · Skrolujte za zumiranje · Dvaput kliknite za uklapanje
 	Object Finder	Pronalazač objekata
 	No object found there — drag a rectangle around it	Tu nije pronađen nijedan objekat — prevucite pravougaonik oko njega
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Aktivni sloj ovde nema piksela — uključite Uzorkuj sve slojeve ili izaberite sloj sa pikselima
 	Clear Brush Controls	Obriši kontrole četkice
 	Reset All Locked Settings	Vrati sva zaključana podešavanja
 	Copy Texture to Other Tools	Kopiraj teksturu u druge alatke

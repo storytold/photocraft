@@ -2723,6 +2723,7 @@ curves	Smooth	平滑
 	Light Gray	浅灰色
 	Object Finder	对象查找程序
 	No object found there — drag a rectangle around it	那里未找到对象 — 请在其周围拖动矩形
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	当前图层在此处没有像素 — 请打开“对所有图层采样”或选择有像素的图层
 	Remove after each stroke	每次描边后移除
 	Apply the removal ({key})	应用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描边：{n}（Enter 应用，Esc 取消）

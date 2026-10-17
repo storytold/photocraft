@@ -3115,6 +3115,7 @@ curves	Smooth	Lisser
 	Light Gray	Gris clair
 	Object Finder	Outil de recherche d’objets
 	No object found there — drag a rectangle around it	Aucun objet trouvé ici — tracez un rectangle autour
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Le calque actif n’a pas de pixels ici — activez Échantillonner tous les calques ou sélectionnez un calque contenant des pixels
 	Remove after each stroke	Supprimer après chaque trait
 	Apply the removal ({key})	Appliquer la suppression ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traits à supprimer : {n} (Entrée applique, Échap annule)

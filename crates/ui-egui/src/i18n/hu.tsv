@@ -4047,6 +4047,7 @@ cameraRaw	Yellow	Sárga
 @plural	{n} action|{n} actions	{n} művelet
 	Object Finder	Objektumkereső
 	No object found there — drag a rectangle around it	Ott nem található objektum – húzz köré egy téglalapot
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Az aktív rétegnek itt nincsenek képpontjai – kapcsold be a Mintavétel minden rétegből beállítást, vagy válassz képpontokat tartalmazó réteget
 	Drag to pan · Scroll to zoom · Double-click to fit	Húzás: mozgatás · Görgetés: nagyítás · Dupla kattintás: igazítás
 	Gradient Preset Options	Színátmenet-előbeállítás beállításai
 	Import .GRD	.GRD importálása

@@ -3811,6 +3811,7 @@ curves	Smooth	Згладити
 	Light Gray	Світло-сірий
 	Object Finder	Пошук об’єктів
 	No object found there — drag a rectangle around it	Там не знайдено об’єкта — обведіть його прямокутником
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	В активному шарі тут немає пікселів — увімкніть «Зразок з усіх шарів» або виберіть шар із пікселями
 	Remove after each stroke	Видаляти після кожного штриха
 	Apply the removal ({key})	Застосувати видалення ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихів для видалення: {n} (Enter застосовує, Esc скасовує)

@@ -3723,6 +3723,7 @@ curves	Smooth	スムーズ
 	Light Gray	ライトグレー
 	Object Finder	オブジェクトファインダー
 	No object found there — drag a rectangle around it	そこにオブジェクトが見つかりません — 周囲に矩形をドラッグしてください
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	アクティブなレイヤーのここにはピクセルがありません — 「すべてのレイヤーをサンプル」をオンにするか、ピクセルのあるレイヤーを選択してください
 	Remove after each stroke	ストロークごとに削除
 	Apply the removal ({key})	削除を適用 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n}（Enter で適用、Esc で取り消し）

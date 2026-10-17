@@ -3060,6 +3060,7 @@ curves	Smooth	Сгладить
 	Light Gray	Светло-серый
 	Object Finder	Поиск объектов
 	No object found there — drag a rectangle around it	Объект не найден — обведите его прямоугольником
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	В активном слое здесь нет пикселей — включите «По всем слоям» или выберите слой с пикселями
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)

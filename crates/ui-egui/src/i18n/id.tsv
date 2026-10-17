@@ -3102,6 +3102,7 @@ curves	Smooth	Haluskan
 	Light Gray	Abu-abu Muda
 	Object Finder	Pencari Objek
 	No object found there — drag a rectangle around it	Tidak ada objek ditemukan di sana — seret persegi panjang di sekelilingnya
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Layer aktif tidak memiliki piksel di sini — aktifkan Sampel Semua Layer atau pilih layer yang berisi piksel
 	Remove after each stroke	Hapus setelah setiap goresan
 	Apply the removal ({key})	Terapkan penghapusan ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Goresan untuk dihapus: {n} (Enter menerapkan, Esc membatalkan)

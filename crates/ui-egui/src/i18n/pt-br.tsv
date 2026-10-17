@@ -3902,6 +3902,7 @@ layerLabel	No Color	Sem cor
 	Light Gray	Cinza-claro
 	Object Finder	Localizador de objetos
 	No object found there — drag a rectangle around it	Nenhum objeto encontrado ali — arraste um retângulo ao redor dele
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	A camada ativa não tem pixels aqui — ative Usar amostra de todas as camadas ou selecione uma camada com pixels
 	Remove after each stroke	Remover após cada traço
 	Apply the removal ({key})	Aplicar a remoção ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traços a remover: {n} (Enter aplica, Esc cancela)

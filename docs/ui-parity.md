@@ -29,7 +29,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Move, artboard | Move, Artboard | |
 | Marquee | Rectangular, Elliptical, Single Row, Single Column | |
 | Lasso | Lasso, Polygonal, Magnetic | |
-| Selection | Object Selection, Quick Selection, Magic Wand | Object Selection's Object Finder (on by default in its options bar): resting the pointer highlights the object a click selects (`select.object` with `point`; ⇧ adds, ⌥ subtracts, ⇧⌥ intersects); dragging keeps the rectangle mode (#4087). Heuristic, not a learned segmenter (#2788). |
+| Selection | Object Selection, Quick Selection, Magic Wand | Object Selection's Object Finder (on by default in its options bar): resting the pointer highlights the object a click selects (`select.object` with `point`; ⇧ adds, ⌥ subtracts, ⇧⌥ intersects); dragging keeps the rectangle mode (#4087). Where the active layer has no pixels under the pointer (Sample All Layers off), the status bar says so instead of showing nothing (#6549). Heuristic, not a learned segmenter (#2788). |
 | Crop and slice | Crop, Perspective Crop, Slice, Slice Select | |
 | Frame | Frame (frames are groups clipped by a rectangular or elliptical mask) | |
 | Eyedropper | Eyedropper, Color Sampler, Ruler, Note, Count | |

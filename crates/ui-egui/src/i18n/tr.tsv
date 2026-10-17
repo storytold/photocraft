@@ -3858,6 +3858,7 @@ cameraData	Lens	Lens
 @plural	{n} action|{n} actions	{n} eylem
 	Object Finder	Nesne Bulucu
 	No object found there — drag a rectangle around it	Orada nesne bulunamadı — çevresine bir dikdörtgen sürükleyin
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Etkin katmanda burada piksel yok — Tüm Katmanları Örnekle seçeneğini açın veya piksel içeren bir katman seçin
 	Drag to pan · Scroll to zoom · Double-click to fit	Kaydırmak için sürükleyin · Yakınlaştırmak için kaydırın · Sığdırmak için çift tıklayın
 	Gradient Preset Options	Gradyan Ön Ayarı Seçenekleri
 	Import .GRD	.GRD İçe Aktar

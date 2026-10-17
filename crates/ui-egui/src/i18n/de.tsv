@@ -3110,6 +3110,7 @@ curves	Smooth	Glätten
 	Fuzziness	Toleranz
 	Object Finder	Objektsucher
 	No object found there — drag a rectangle around it	Dort wurde kein Objekt gefunden — ziehen Sie ein Rechteck darum
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Die aktive Ebene hat hier keine Pixel — aktivieren Sie „Alle Ebenen einbeziehen“ oder wählen Sie eine Ebene mit Pixeln
 	Remove after each stroke	Nach jedem Strich entfernen
 	Apply the removal ({key})	Entfernen anwenden ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Striche zum Entfernen: {n} (Eingabe wendet an, Esc bricht ab)

@@ -4076,6 +4076,7 @@ navigator	Zoom	Zoom
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} è già usata da {commands} e verrà rimossa quando fai clic su OK.
 	Object Finder	Ricerca oggetti
 	No object found there — drag a rectangle around it	Nessun oggetto trovato lì: trascina un rettangolo intorno
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Il livello attivo non ha pixel qui: attiva Campiona tutti i livelli o seleziona un livello con pixel
 	Remove after each stroke	Rimuovi dopo ogni tratto
 	Apply the removal ({key})	Applica la rimozione ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tratti da rimuovere: {n} (Invio applica, Esc annulla)

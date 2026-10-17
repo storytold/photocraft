@@ -3710,6 +3710,7 @@ curves	Smooth	Wygładź
 	Light Gray	Jasnoszary
 	Object Finder	Wyszukiwanie obiektów
 	No object found there — drag a rectangle around it	Nie znaleziono tam obiektu — przeciągnij wokół niego prostokąt
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	Aktywna warstwa nie ma tu pikseli — włącz Próbkuj wszystkie warstwy albo wybierz warstwę z pikselami
 	Remove after each stroke	Usuwaj po każdym pociągnięciu
 	Apply the removal ({key})	Zastosuj usuwanie ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Pociągnięcia do usunięcia: {n} (Enter stosuje, Esc anuluje)
