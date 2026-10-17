@@ -108,7 +108,8 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
                 let rotated = photocraft_algo::transform::warp_surface(surf, src, &h, interp)?;
                 let mut base = Surface::new(fmt);
                 let fill = photocraft_raster::from_rgba(&fmt, bg);
-                base.write_region(canvas, &fill.repeat(canvas.width() as usize * canvas.height() as usize));
+                // One shared tile per full tile, not a canvas-sized float buffer.
+                base.fill_rect(canvas, &fill);
                 crate::transform_cmds::composite_over(&mut base, &rotated);
                 base.prune();
                 *surf = base;

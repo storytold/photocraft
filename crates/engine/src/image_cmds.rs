@@ -629,6 +629,21 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
         rotated: true,
     };
     crate::analysis_cmds::compound(s, "Crop", |s| {
+        // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
+        // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
+        // 10 MP photo took over half a second).
+        if delete {
+            let keep = turned_crop_source(size, new, angle, target);
+            s.edit("Crop", |doc, _| {
+                for_each_surface(&mut doc.layers, true, &mut |surf, _| *surf = crop_surface(surf, keep));
+                for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
+                    ch.surface = crop_surface(&ch.surface, keep);
+                }
+                // The crop drops the selection anyway.
+                doc.selection = None;
+                Ok(())
+            })?;
+        }
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(target.x0), -f64::from(target.y0)));
@@ -644,6 +659,26 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
         })
     })?;
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle })))
+}
+
+/// The pixels a turned crop reads, in document coordinates before the turn: the source of the
+/// `target` frame (on the `new` canvas the rotation by `-angle` makes of `old`), grown by the widest
+/// interpolation kernel's reach so every sample the frame's pixels take is kept.
+fn turned_crop_source(old: Size, new: Size, angle: f64, target: Rect) -> Rect {
+    const KERNEL_REACH: f64 = 4.0;
+    // The inverse of `rotate_arbitrary`'s map: x = c·u + s·v + cx, y = −s·u + c·v + cy, where
+    // (u, v) is the point relative to the new canvas's centre.
+    let (sn, cs) = (-angle).to_radians().sin_cos();
+    let (cx, cy) = (f64::from(old.width) / 2.0, f64::from(old.height) / 2.0);
+    let (nx, ny) = (f64::from(new.width) / 2.0, f64::from(new.height) / 2.0);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (px, py) in [(target.x0, target.y0), (target.x1, target.y0), (target.x0, target.y1), (target.x1, target.y1)] {
+        let (u, v) = (f64::from(px) - nx, f64::from(py) - ny);
+        let (x, y) = (cs * u + sn * v + cx, -sn * u + cs * v + cy);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    // `as` saturates: a frame near the coordinate limits keeps more, never less.
+    Rect::new((x0 - KERNEL_REACH).floor() as i32, (y0 - KERNEL_REACH).floor() as i32, (x1 + KERNEL_REACH).ceil() as i32, (y1 + KERNEL_REACH).ceil() as i32)
 }
 
 /// Image → Trim.
@@ -1212,7 +1247,10 @@ mod tests {
                 for y in 0..20 {
                     for x in 0..10 {
                         let (a, b) = (layer_rgba(&s, l, x, y), layer_rgba(&reference, l, x, y));
-                        assert!(a.iter().zip(b).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
+                        // A fully transparent pixel's colour is invisible, and the turned crop
+                        // doesn't turn the pixels it deletes, which the warp spreads colour from.
+                        let n = if b[3] > 1e-3 { 4 } else { 1 };
+                        assert!(a.iter().rev().zip(b.iter().rev()).take(n).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
                     }
                 }
             }
@@ -1249,6 +1287,61 @@ mod tests {
                 // The Background stays opaque white inside the canvas it came from.
                 let bg = layer_rgba(&s, 0, 10, 7);
                 assert!(bg.iter().all(|v| (v - 1.0).abs() < 0.02), "{mode} {depth} {angle}: {bg:?}");
+            }
+        }
+    }
+
+    /// A turned crop that deletes the cropped pixels turns only what lands in the frame; inside the
+    /// new canvas every layer, mask and channel is exactly what turning everything gives (the
+    /// frame spans several tiles, at several depths and angles).
+    #[test]
+    fn turned_crop_deleting_pixels_matches_turning_the_whole_canvas() {
+        use photocraft_color::PixelFormat;
+        let pixels = || (0..500).flat_map(|y| (0..700).map(move |x| (x, y)));
+        for depth in [8, 16, 32] {
+            for angle in [3.0, -7.5, 33.0, 181.0] {
+                let mut sessions = [true, false].map(|delete| {
+                    let mut s = Session::new();
+                    s.execute("file.new", json!({"width": 700, "height": 500, "depth": depth, "background": "white"})).unwrap();
+                    s.execute("layer.new.layer", json!({})).unwrap();
+                    s.edit("paint", |doc, active| {
+                        let wave = |x: i32, y: i32, k: i32| ((x * 7 + y * 13 + k * 31) % 97) as f32 / 96.0;
+                        let all = Rect::new(0, 0, 700, 500);
+                        let rgba: Vec<f32> = pixels().flat_map(|(x, y)| [wave(x, y, 0), wave(x, y, 1), wave(x, y, 2), wave(y, x, 3)]).collect();
+                        let gray: Vec<f32> = pixels().map(|(x, y)| wave(y, x, 4)).collect();
+                        let l = doc.layer_mut(active.unwrap()).unwrap();
+                        l.surface_mut().unwrap().write_region(all, &rgba);
+                        let mut mask = photocraft_doc::LayerMask::reveal_all();
+                        mask.surface.write_region(all, &gray);
+                        l.mask = Some(mask);
+                        let bg = doc.background_mut().unwrap().surface_mut().unwrap();
+                        bg.write_region(all, &pixels().flat_map(|(x, y)| [wave(x, y, 5), wave(x, y, 6), wave(x, y, 7), 1.0]).collect::<Vec<_>>());
+                        let fmt = PixelFormat::new(ColorMode::Grayscale, doc.pixel_format().sample, false);
+                        let mut ch = Surface::new(fmt);
+                        ch.write_region(all, &gray);
+                        doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", ch));
+                        Ok(())
+                    })
+                    .unwrap();
+                    let p = json!({"x": 150, "y": 120, "width": 330, "height": 290, "angle": angle, "deleteCroppedPixels": delete});
+                    s.execute("image.crop", p).unwrap();
+                    s
+                });
+                let [deleted, kept] = &mut sessions;
+                let (a, b) = (doc(deleted), doc(kept));
+                assert_eq!(a.size, b.size, "{depth} {angle}");
+                let canvas = a.bounds();
+                for (la, lb) in a.layers.iter().zip(&b.layers) {
+                    let (sa, sb) = (la.surface().unwrap(), lb.surface().unwrap());
+                    assert!(sa.to_interleaved(canvas) == sb.to_interleaved(canvas), "{depth} {angle}: layer {}", la.name);
+                    if let (Some(ma), Some(mb)) = (&la.mask, &lb.mask) {
+                        assert!(ma.surface.to_interleaved(canvas) == mb.surface.to_interleaved(canvas), "{depth} {angle}: mask of {}", la.name);
+                    }
+                }
+                assert!(a.channels[0].surface.to_interleaved(canvas) == b.channels[0].surface.to_interleaved(canvas), "{depth} {angle}: alpha channel");
+                // Deleting keeps nothing past the canvas.
+                let layer = a.layers[1].surface().unwrap();
+                assert!(canvas.contains_rect(&layer.content_bounds()), "{depth} {angle}: {:?}", layer.content_bounds());
             }
         }
     }
