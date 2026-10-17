@@ -205,7 +205,9 @@ fn groups_open(s: &photocraft_engine::Session) -> Vec<bool> {
 
 #[test]
 fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
-    let mut h = harness(busy(), 1.0, "promedium", 290.0);
+    let mut s = busy();
+    s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
     assert!(groups_open(&h.state().session).iter().all(|o| *o));
     let menu = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("layers group").1;
     // The hamburger sits at the right end of the group's tab strip.

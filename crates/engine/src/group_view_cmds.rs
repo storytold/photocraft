@@ -102,6 +102,7 @@ mod tests {
         s.execute("layer.new.layer", json!({"name": "deep"})).unwrap();
         let inner = s.execute("layer.groupLayers", json!({"name": "inner"})).unwrap()["layer"].as_u64().unwrap();
         let outer = s.execute("layer.groupLayers", json!({"layer": inner, "name": "outer"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute(ID, json!({"layer": outer, "expanded": true, "all": true})).unwrap();
         (s, inner, outer)
     }
 

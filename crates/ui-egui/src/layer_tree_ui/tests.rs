@@ -73,14 +73,14 @@ fn rows_list_groups_above_their_contents_and_hide_closed_ones() {
     let s = layered();
     let doc: &Document = &s.active().unwrap().doc;
     let names = |doc: &Document, all| display_rows(doc, all).iter().map(|(d, l)| format!("{d}:{}", l.name)).collect::<Vec<_>>();
-    assert_eq!(names(doc, false), ["0:top", "0:outer", "1:in-outer", "1:inner", "2:deep", "0:Background"]);
-    let mut closed = doc.clone();
-    let id = closed.walk().into_iter().find(|(_, _, l)| l.name == "inner").unwrap().2.id;
-    if let Some(LayerContent::Group(g)) = closed.layer_mut(id).map(|l| &mut l.content) {
-        g.expanded = false;
+    assert_eq!(names(doc, false), ["0:top", "0:outer", "0:Background"], "new groups start collapsed");
+    let mut outer_open = doc.clone();
+    let id = outer_open.walk().into_iter().find(|(_, _, l)| l.name == "outer").unwrap().2.id;
+    if let Some(LayerContent::Group(g)) = outer_open.layer_mut(id).map(|l| &mut l.content) {
+        g.expanded = true;
     }
-    assert_eq!(names(&closed, false), ["0:top", "0:outer", "1:in-outer", "1:inner", "0:Background"]);
-    assert_eq!(names(&closed, true).len(), 6, "a kind filter still finds layers in closed groups");
+    assert_eq!(names(&outer_open, false), ["0:top", "0:outer", "1:in-outer", "1:inner", "0:Background"], "a collapsed child group hides its contents");
+    assert_eq!(names(&outer_open, true).len(), 6, "a kind filter still finds layers in closed groups");
 }
 
 #[test]
@@ -89,16 +89,19 @@ fn clicking_a_triangle_toggles_its_group_at_every_ui_scale() {
         let mut h = harness_with(layered(), ppp);
         let active = h.state().session.active().unwrap().active_layer;
         let undo = h.state().session.active().unwrap().history.entries().len();
+        let p = triangle(&mut h, "outer").expect("outer's triangle shows");
+        click(&mut h, p, Modifiers::NONE);
+        assert!(group(&h, "outer").1, "@{ppp}x: expand outer to list nested groups");
         let p = triangle(&mut h, "inner").expect("inner's triangle shows");
         click(&mut h, p, Modifiers::NONE);
-        assert!(!group(&h, "inner").1, "@{ppp}x: click collapses");
+        assert!(group(&h, "inner").1, "@{ppp}x: click expands a collapsed group");
         assert!(group(&h, "outer").1, "@{ppp}x: only that group");
         // The click opened/closed the group; it didn't select it or start a drag-reorder.
         assert_eq!(h.state().session.active().unwrap().active_layer, active, "@{ppp}x: selection unchanged");
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), undo, "@{ppp}x: not an undo step");
-        let p = triangle(&mut h, "inner").expect("still shows, now pointing right");
+        let p = triangle(&mut h, "inner").expect("still shows, now pointing down");
         click(&mut h, p, Modifiers::NONE);
-        assert!(group(&h, "inner").1, "@{ppp}x: click expands again");
+        assert!(!group(&h, "inner").1, "@{ppp}x: click collapses again");
         // Nested: closing the outer group hides the inner group's row (and so its triangle).
         let p = triangle(&mut h, "outer").unwrap();
         click(&mut h, p, Modifiers::NONE);
@@ -112,18 +115,19 @@ fn alt_click_toggles_every_group() {
     let mut h = harness_with(layered(), 1.0);
     let p = triangle(&mut h, "outer").unwrap();
     click(&mut h, p, Modifiers::ALT);
-    assert!(!group(&h, "outer").1 && !group(&h, "inner").1, "⌥-click closes all groups");
-    let p = triangle(&mut h, "outer").unwrap();
-    click(&mut h, p, Modifiers::ALT);
     assert!(group(&h, "outer").1 && group(&h, "inner").1, "⌥-click opens all groups");
     assert!(triangle(&mut h, "inner").is_some());
+    let p = triangle(&mut h, "outer").unwrap();
+    click(&mut h, p, Modifiers::ALT);
+    assert!(!group(&h, "outer").1 && !group(&h, "inner").1, "⌥-click closes all groups");
 }
 
 #[test]
 fn state_survives_psd_export_and_import_and_imported_groups_toggle() {
     let mut h = harness_with(layered(), 2.0);
-    let p = triangle(&mut h, "inner").unwrap();
+    let p = triangle(&mut h, "outer").unwrap();
     click(&mut h, p, Modifiers::NONE);
+    assert!(group(&h, "outer").1 && !group(&h, "inner").1, "outer open, inner still collapsed");
     let doc = (*h.state().session.active().unwrap().doc).clone();
     let bytes = photocraft_io::export(&doc, "groups.psd", &Default::default()).unwrap().bytes;
     let back = photocraft_io::import("groups.psd", &bytes).unwrap().document;

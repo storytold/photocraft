@@ -573,6 +573,20 @@ fn arrange_and_group() {
 }
 
 #[test]
+fn group_layers_creates_a_collapsed_group() {
+    let mut s = session_with_doc();
+    let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": a, "mode": "replace"})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    let g = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.active().unwrap().doc.layer(LayerId(g)).unwrap();
+    let photocraft_doc::LayerContent::Group(group) = &group.content else { panic!("expected a group") };
+    assert!(!group.expanded, "Group Layers (Ctrl+G) starts collapsed, as in Photoshop");
+    assert_eq!(group.children.len(), 2);
+}
+
+#[test]
 fn canvas_flips_and_rotation() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 10, "height": 4})).unwrap();

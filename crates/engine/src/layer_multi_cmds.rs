@@ -1263,6 +1263,7 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
 
 /// Group Layers (⌘G) / Group from Layers: the explicit layer, or every selected layer, moves
 /// into a new group placed where the top-most of them was. Bottom-to-top order is preserved.
+/// Like Photoshop, the new group starts collapsed in the Layers panel.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
@@ -1276,7 +1277,11 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let ids = top_level(doc, &ids);
         let top = *ids.last().ok_or(EngineError::NoLayer(LayerId(0)))?;
         let name = name.unwrap_or_else(|| doc.next_layer_name("Group"));
-        let gid = doc.insert_above(Some(top), Layer::group(name, vec![]));
+        let mut group = Layer::group(name, vec![]);
+        if let LayerContent::Group(g) = &mut group.content {
+            g.expanded = false;
+        }
+        let gid = doc.insert_above(Some(top), group);
         let mut children = Vec::with_capacity(ids.len());
         for id in &ids {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
