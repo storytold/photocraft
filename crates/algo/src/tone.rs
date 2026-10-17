@@ -233,8 +233,17 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     });
     let mut base = logl.clone();
     gauss_blur_n(&mut base, w, h, 1, p.radius.max(1.0) / 2.0);
-    let n = px.iter().filter(|q| q[3] > 0.0).count().max(1) as f32;
-    let mean = base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| *b).sum::<f32>() / n;
+    // Counting is integer work, so chunks can be counted in parallel and added in any order.
+    const COUNT_CHUNK: usize = 1 << 16;
+    let n = par_map(px.len().div_ceil(COUNT_CHUNK), |c| px[c * COUNT_CHUNK..((c + 1) * COUNT_CHUNK).min(px.len())].iter().filter(|q| q[3] > 0.0).count())
+        .iter()
+        .sum::<usize>()
+        .max(1) as f32;
+    // The f32 sum must keep its strict pixel order (any other order rounds differently), so it
+    // stays one serial chain. It is made branch-free: a skipped pixel adds `-0.0`, which leaves
+    // an f32 sum unchanged, bit for bit, instead of a data-dependent branch that mispredicts on
+    // masked images. The start value is what `Iterator::sum` starts from.
+    let mean = base.iter().zip(px.iter()).fold(std::iter::empty::<f32>().sum::<f32>(), |acc, (b, q)| acc + if q[3] > 0.0 { *b } else { -0.0 }) / n;
     let compress = 1.0 / (1.0 + p.strength.max(0.0));
     let detail = 1.0 + p.detail / 100.0;
     let exposure = 2f32.powf(p.exposure);
@@ -326,5 +335,83 @@ mod tests {
         let mut px = ramp(40, 10);
         hdr_toning(&mut px, 40, 10, &HdrToning { strength: 0.0, detail: 0.0, saturation: 0.0, curve: vec![(0.0, 1.0), (1.0, 0.0)], ..Default::default() });
         assert!(luma([px[2][0], px[2][1], px[2][2]]) > luma([px[38][0], px[38][1], px[38][2]]));
+    }
+
+    /// A display-referred image from `+ - * /` and `sqrt` only (exact on every platform), with
+    /// alpha holes and fractional alpha.
+    fn display(w: usize, h: usize) -> Vec<[f32; 4]> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+                let m = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40;
+                let n = (m & 0xFF) as f32 / 255.0;
+                let v = (0.02 + 0.9 * x * x * (0.5 + 0.5 * y) + 0.05 * n).clamp(0.0, 1.0);
+                let a = match m % 16 {
+                    0 => 0.0,
+                    1 => 0.5,
+                    _ => 1.0,
+                };
+                [v, (v * 0.8 + 0.05 * y).sqrt() * 0.9, v * 0.6, a]
+            })
+            .collect()
+    }
+
+    fn toning_variants() -> Vec<HdrToning> {
+        vec![
+            HdrToning::default(),
+            HdrToning {
+                radius: 7.0,
+                strength: 1.3,
+                gamma: 0.8,
+                exposure: 0.5,
+                detail: -20.0,
+                shadow: 30.0,
+                highlight: 20.0,
+                vibrance: 40.0,
+                saturation: -10.0,
+                curve: vec![(1.0, 1.0), (0.0, 0.1), (0.5, 0.4)],
+            },
+            HdrToning { radius: 1.0, strength: 0.1, ..Default::default() },
+            HdrToning { radius: 500.0, strength: 4.0, detail: 300.0, ..Default::default() },
+        ]
+    }
+
+    /// Hashes recorded from the code before the blur passes were parallelised. They go through
+    /// `ln`, `exp` and `powf` of the platform's libm (which other systems may round differently in
+    /// the last bit), so they are checked on Linux x86-64 only; `fxutil`'s tests cover the blur
+    /// itself against its serial reference on every platform.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn hdr_toning_keeps_its_recorded_output() {
+        let mut got: Vec<(String, u64)> = Vec::new();
+        for (w, h) in [(97usize, 61usize), (257, 193), (1, 300), (300, 1)] {
+            let src = display(w, h);
+            for (k, p) in toning_variants().iter().enumerate() {
+                let mut px = src.clone();
+                hdr_toning(&mut px, w, h, p);
+                let hash = px.iter().flatten().fold(0xcbf2_9ce4_8422_2325u64, |a, v| (a ^ v.to_bits() as u64).wrapping_mul(0x0000_0100_0000_01b3));
+                got.push((format!("hdr_toning {w}x{h} variant#{k}"), hash));
+            }
+        }
+        const WANT: &[(&str, u64)] = &[
+            ("hdr_toning 97x61 variant#0", 0x67d4c197ab45bcf4),
+            ("hdr_toning 97x61 variant#1", 0x393b61d186c59b1d),
+            ("hdr_toning 97x61 variant#2", 0x2ed82fb39a0c19ba),
+            ("hdr_toning 97x61 variant#3", 0x050c2432c4ff6bc8),
+            ("hdr_toning 257x193 variant#0", 0x60cae193716503b8),
+            ("hdr_toning 257x193 variant#1", 0x75af6e239f9a98d4),
+            ("hdr_toning 257x193 variant#2", 0x9daa551078bd1bcd),
+            ("hdr_toning 257x193 variant#3", 0xd81c3e90c88b3128),
+            ("hdr_toning 1x300 variant#0", 0x88e8f073464f4c72),
+            ("hdr_toning 1x300 variant#1", 0xdb918c2a611f0c53),
+            ("hdr_toning 1x300 variant#2", 0xe5d5957bad917ea9),
+            ("hdr_toning 1x300 variant#3", 0x578c2f21a8b7f9aa),
+            ("hdr_toning 300x1 variant#0", 0xb6ce510309500012),
+            ("hdr_toning 300x1 variant#1", 0x85796a207cdf5868),
+            ("hdr_toning 300x1 variant#2", 0x8680a02d793bf0ce),
+            ("hdr_toning 300x1 variant#3", 0x00a9c4e658f2bc04),
+        ];
+        let got: Vec<(&str, u64)> = got.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+        assert_eq!(got, WANT);
     }
 }
