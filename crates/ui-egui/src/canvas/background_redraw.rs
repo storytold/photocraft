@@ -293,7 +293,7 @@ fn reduce(r: Rect, k: i32) -> Rect {
 
 /// `doc` scaled down by `k` for a reduced first picture: [`photocraft_compose::proxy::proxy_document`]
 /// with what is measured in document pixels scaled too (layer effects, mask feathers, vector mask
-/// paths), so styled documents look right at the reduced size. Only a stand-in: the full
+/// and shape paths, stroke widths), so styled documents look right at the reduced size. Only a stand-in: the full
 /// redraw replaces it.
 pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
     fn scale_layer(l: &mut Layer, k: f32) {
@@ -306,10 +306,21 @@ pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
             v.path = v.path.transform(&Affine::scale(1.0 / f64::from(k)));
             v.feather /= k;
         }
-        if let LayerContent::Group(g) = &mut l.content {
-            for c in &mut g.children {
-                scale_layer(c, k);
+        match &mut l.content {
+            // The compositor re-renders a stroked shape from its path (split into fill and stroke),
+            // so the path and stroke shrink with the pixels.
+            LayerContent::Shape(sh) => {
+                photocraft_engine::vector_cmds::transform_shape(sh, &Affine::scale(1.0 / f64::from(k)));
+                if let Some(st) = &mut sh.stroke {
+                    st.width /= k;
+                }
             }
+            LayerContent::Group(g) => {
+                for c in &mut g.children {
+                    scale_layer(c, k);
+                }
+            }
+            _ => {}
         }
     }
     let mut p = photocraft_compose::proxy::proxy_document(doc, k);
