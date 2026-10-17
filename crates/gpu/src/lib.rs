@@ -1078,7 +1078,7 @@ impl Compositor {
         let aprons: Vec<i32> = plan.fx.iter().zip(&paged).map(|(f, &pg)| if pg { Self::fx_apron(doc, f) } else { 0 }).collect();
         for (f, &pg) in plan.fx.iter().zip(&paged) {
             if !pg {
-                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats);
+                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
         let fr = self.frame_res(device, queue, canvas, &plan);
@@ -1109,7 +1109,7 @@ impl Compositor {
                     continue;
                 }
                 let window = pf.inflate(aprons.get(i).copied().unwrap_or(0)).intersect(&f.region);
-                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats);
+                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats)?;
             }
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
@@ -1720,7 +1720,7 @@ impl Compositor {
         key: FxKey,
         region: Rect,
         stats: &mut Stats,
-    ) {
+    ) -> Result<(), Unsupported> {
         let layer = f.layer;
         let canvas = doc.bounds();
         let is_group = matches!(layer.content, LayerContent::Group(_));
@@ -1791,13 +1791,13 @@ impl Compositor {
         }
         // Present: kept or (re)inserted above.
         let stamp = self.stamp;
-        let Some(e) = self.fx.get_mut(&key) else { return };
+        let Some(e) = self.fx.get_mut(&key) else { return Ok(()) };
         e.last_used = frame;
         e.stamp = stamp;
         e.doc = doc.id;
         e.tiles = [content_src.map(fx::snapshot), mask_src.map(fx::snapshot)];
         if region.is_empty() {
-            return;
+            return Ok(());
         }
 
         let t_trace = web_time_now();
@@ -1819,27 +1819,41 @@ impl Compositor {
             layer.effects.items.iter().filter(|e| e.enabled()).map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, anchor)).collect();
         let want = field_reaches(&progs);
         e.fields.retain(|k, _| want.contains_key(k));
-        for (&kind, &reach) in &want {
-            let have = e.fields.get(&kind).map(|(r, _)| *r);
-            let out = match have {
-                Some(r) if r >= reach => {
-                    if damage.is_empty() {
-                        continue;
-                    }
-                    damage.inflate(fx::field_radius(kind, r)).intersect(&region)
+        // Each field to recompute: over which rectangle, exact up to which reach.
+        let jobs: Vec<(FieldKind, Rect, i32)> = want
+            .iter()
+            .filter_map(|(&kind, &reach)| match e.fields.get(&kind).map(|(r, _)| *r) {
+                Some(r) if r >= reach => (!damage.is_empty()).then(|| (kind, damage.inflate(fx::field_radius(kind, r)).intersect(&region), r)),
+                _ => Some((kind, region, reach)),
+            })
+            .collect();
+        // A chiselled bevel's two fields are asked for and kept together (`fx::bevel_fields`), so they
+        // are recomputed together, over one rectangle at one reach.
+        let job = |k: FieldKind| jobs.iter().find(|j| j.0 == k).map(|j| (j.1, j.2));
+        let (bevel_in, bevel_out) = (job(FieldKind::BevelInside), job(FieldKind::BevelOutside));
+        if bevel_in != bevel_out {
+            return Err(Unsupported(format!("bevel fields of `{}` out of step: inside {bevel_in:?}, outside {bevel_out:?}", layer.name)));
+        }
+        for (kind, out, reach) in jobs {
+            let fields = match kind {
+                FieldKind::BevelInside => {
+                    let [inside, outside] = fx::bevel_fields(reach, &e.shape_cpu, region, out);
+                    vec![(FieldKind::BevelInside, inside), (FieldKind::BevelOutside, outside)]
                 }
-                _ => region,
+                // Computed with BevelInside, over the same rectangle at the same reach (checked above).
+                FieldKind::BevelOutside => continue,
+                _ => vec![(kind, fx::field(kind, reach, &e.shape_cpu, region, out))],
             };
-            let reach = have.filter(|r| *r >= reach).unwrap_or(reach);
-            let v = fx::field(kind, reach, &e.shape_cpu, region, out);
-            if have.is_none_or(|r| r < reach) {
-                e.fields.insert(kind, (reach, Tex::map(device, "pc_fx_field", region, MAP32)));
+            for (kind, v) in fields {
+                if e.fields.get(&kind).is_none_or(|(r, _)| *r < reach) {
+                    e.fields.insert(kind, (reach, Tex::map(device, "pc_fx_field", region, MAP32)));
+                }
+                if let Some((_, t)) = e.fields.get(&kind) {
+                    t.write_r32(queue, region, out, &v);
+                }
+                staged += v.len() as u64 * 4;
+                stats.fx_pixels += out.width() as u64 * out.height() as u64;
             }
-            if let Some((_, t)) = e.fields.get(&kind) {
-                t.write_r32(queue, region, out, &v);
-            }
-            staged += v.len() as u64 * 4;
-            stats.fx_pixels += out.width() as u64 * out.height() as u64;
         }
 
         if let Some(t) = t_trace.filter(|_| !damage.is_empty()) {
@@ -1854,7 +1868,7 @@ impl Compositor {
             if prog.maps == 0 {
                 continue;
             }
-            let Some(e) = self.fx.get_mut(&key) else { return };
+            let Some(e) = self.fx.get_mut(&key) else { return Ok(()) };
             let same = e.progs[i].key == prog.key && e.progs[i].maps.len() == prog.maps;
             let d = if same { damage } else { region };
             if d.is_empty() {
@@ -1869,6 +1883,7 @@ impl Compositor {
             stats.fx_programs += 1;
             self.run_program(device, queue, encoder, key, i, prog, d, stats);
         }
+        Ok(())
     }
 
     /// Record the passes of `prog` (maps of item `item` of `layer`) recomputing damage `d`.
