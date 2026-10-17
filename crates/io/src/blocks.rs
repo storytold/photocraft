@@ -294,6 +294,29 @@ pub(crate) fn gradient_stops_editable(grad: &Descriptor, method: Option<&[u8]>) 
     raw
 }
 
+/// The exact, constant-RGB subset of Photoshop noise gradients. If every RGB component has the
+/// same minimum and maximum, the generated field is constant regardless of seed or roughness.
+/// Other models, transparency, and varying ranges are not approximated.
+fn constant_rgb_noise_color(grad: &Descriptor) -> Option<Color> {
+    if enum_of(grad, "GrdF")? != b"ClNs" || enum_of(grad, "ClrS")? != b"RGBC" || bool_of(grad, "ShTr") {
+        return None;
+    }
+    let components = |key: &str| -> Option<[f32; 4]> {
+        let Some(Value::List(values)) = grad.get(key) else { return None };
+        if values.len() != 4 {
+            return None;
+        }
+        let converted: Vec<f32> = values.iter().map(|value| num(Some(value)).map(|v| v as f32)).collect::<Option<_>>()?;
+        converted.try_into().ok()
+    };
+    let min = components("Mnm ")?;
+    let max = components("Mxm ")?;
+    if min.iter().zip(max).take(3).any(|(a, b)| !a.is_finite() || *a < 0.0 || *a > 100.0 || *a != b) {
+        return None;
+    }
+    Some(Color::rgb(min[0] / 100.0, min[1] / 100.0, min[2] / 100.0))
+}
+
 fn gradient_stops_raw(grad: &Descriptor) -> RawStops {
     let mut stops = Vec::new();
     let mut mids = Vec::new();
@@ -413,7 +436,8 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
         b"GdFl" => {
             let angle = num(d.get("Angl")).unwrap_or(90.0) as f32;
             let scale = num(d.get("Scl ")).map_or(1.0, |v| v as f32 / 100.0);
-            let raw = get_desc(d, "Grad").map(|g| gradient_stops_editable(g, gradient_method(d)));
+            let gradient = get_desc(d, "Grad");
+            let raw = gradient.map(|g| gradient_stops_editable(g, gradient_method(d)));
             let (mut stops, midpoints) = raw.map(|r| (r.stops, r.mids)).unwrap_or_default();
             // Opacity stops with Photoshop's smoothness and opacity midpoints applied (raw when
             // the interpolation is plain); none when fully opaque.
@@ -422,7 +446,12 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 opacity_stops.clear();
             }
             if stops.is_empty() {
-                stops = vec![(0.0, Color::BLACK), (1.0, Color::WHITE)];
+                if let Some(grad) = gradient.filter(|g| enum_of(g, "GrdF") == Some(b"ClNs")) {
+                    let color = constant_rgb_noise_color(grad)?;
+                    stops = vec![(0.0, color), (1.0, color)];
+                } else {
+                    stops = vec![(0.0, Color::BLACK), (1.0, Color::WHITE)];
+                }
             }
             let pct = |o: &Descriptor, k: &str| num(o.get(k)).map_or(0.0, |v| v as f32 / 100.0);
             let offset = get_desc(d, "Ofst").map_or((0.0, 0.0), |o| (pct(o, "Hrzn"), pct(o, "Vrtc")));
@@ -757,6 +786,37 @@ pub fn effects_enabled(lfx2: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn noise_gradient_fill(min: [i32; 4], max: [i32; 4], add_transparency: bool) -> Descriptor {
+        let values = |v: [i32; 4]| Value::List(v.into_iter().map(Value::Integer).collect());
+        let gradient = Descriptor::new("Grdn")
+            .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("ClNs") })
+            .with("ClrS", Value::Enumerated { type_id: Id::new("ClrS"), value: Id::new("RGBC") })
+            .with("ShTr", Value::Boolean(add_transparency))
+            .with("VctC", Value::Boolean(true))
+            .with("RndS", Value::Integer(9052369))
+            .with("Smth", Value::Integer(2048))
+            .with("Mnm ", values(min))
+            .with("Mxm ", values(max));
+        Descriptor::new("null").with("Grad", Value::Descriptor(gradient))
+    }
+
+    #[test]
+    fn constant_rgb_noise_fill_uses_its_exact_colour() {
+        use photocraft_doc::Fill;
+        let fill = fill_from_desc(b"GdFl", &noise_gradient_fill([50, 25, 0, 0], [50, 25, 0, 100], false));
+        let Some(Fill::Gradient { stops, .. }) = fill else { panic!("constant noise gradient") };
+        assert_eq!(stops, vec![(0.0, Color::rgb(0.5, 0.25, 0.0)), (1.0, Color::rgb(0.5, 0.25, 0.0))]);
+    }
+
+    #[test]
+    fn variable_or_transparent_noise_fill_is_not_fabricated_as_a_black_to_white_ramp() {
+        for descriptor in [noise_gradient_fill([0, 0, 0, 0], [100, 100, 100, 100], false), noise_gradient_fill([50, 25, 0, 0], [50, 25, 0, 100], true)] {
+            assert!(fill_from_desc(b"GdFl", &descriptor).is_none());
+        }
+    }
+
     /// psd-tools layers-minimal/gradient-fill.psd ("Color to Transparent", no stored pixels): a
     /// gradient fill's opacity stops reach the model (as its opacity stops; written from stop
     /// alpha) and survive a write; the ramp's alpha follows them.
@@ -887,8 +947,6 @@ mod tests {
         assert_eq!(super::brst_data(0b101).unwrap(), vec![0, 0, 0, 0, 0, 0, 0, 2]);
         assert_eq!(super::brst_data(0), None);
     }
-
-    use super::*;
 
     #[test]
     fn placed_layer_warp_is_read() {
