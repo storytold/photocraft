@@ -24,6 +24,10 @@ const PSD_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 const PSD_ESTIMATE_FIXED_OVERHEAD: u64 = 1024 * 1024;
 const PSD_ESTIMATE_LAYER_OVERHEAD: u64 = 64 * 1024;
 
+/// Guides v2 and per-guide GUID resources duplicate regenerated resource 1032 (#5966).
+const GUIDES_V2: u16 = 1092;
+const GUIDE_GUIDS: u16 = 1097;
+
 /// Options for [`document_to_psd_with`].
 #[derive(Debug, Clone)]
 pub struct PsdExportOptions {
@@ -1249,6 +1253,10 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
+    // Export always writes 1032 from `doc.guides`; 1092/1097 would disagree after edits.
+    if id == GUIDES_V2 || id == GUIDE_GUIDS {
+        return false;
+    }
     // Measurement scale / count resources: only while they still describe the document.
     if !crate::annotations_map::keep_resource(doc, id) {
         return false;
@@ -2080,5 +2088,29 @@ mod tests {
         assert_eq!(back.channels.len(), 1);
         assert_eq!(back.channels[0].name, "Alpha 1");
         assert!((back.channels[0].opacity - 0.5).abs() < 1e-6);
+    }
+
+    /// #5966: imported 1092/1097 must not be written back verbatim while 1032 is regenerated.
+    #[test]
+    fn guide_v2_resources_are_not_kept_on_export() {
+        use std::sync::Arc;
+
+        let stale_1092 = vec![0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 1];
+        let stale_1097 = vec![0u8; 32];
+        assert!(!keep_imported_resource(&document(64, 64), GUIDES_V2, &stale_1092));
+        assert!(!keep_imported_resource(&document(64, 64), GUIDE_GUIDS, &stale_1097));
+
+        let mut doc = document(64, 64);
+        doc.guides.vertical.push(40.0);
+        doc.metadata.psd_resources.push((GUIDES_V2, String::new(), Arc::new(stale_1092)));
+        doc.metadata.psd_resources.push((GUIDE_GUIDS, String::new(), Arc::new(stale_1097)));
+        let ids = |file: &PsdFile| file.resources.iter().map(|r| r.id).collect::<Vec<_>>();
+        let with_guide = document_to_psd(&doc);
+        assert!(ids(&with_guide).contains(&1032));
+        assert!(!ids(&with_guide).iter().any(|id| *id == GUIDES_V2 || *id == GUIDE_GUIDS));
+
+        doc.guides = photocraft_doc::Guides::default();
+        let cleared = document_to_psd(&doc);
+        assert!(!ids(&cleared).iter().any(|id| matches!(*id, 1032 | GUIDES_V2 | GUIDE_GUIDS)));
     }
 }
