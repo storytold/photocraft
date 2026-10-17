@@ -38,7 +38,7 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     }
     r.document.file_encoding = file_encoding_as(format, bytes);
     if format == Some(Format::Tga) && img.layout() == ChannelLayout::Rgba {
-        tga_alpha_to_channel(&mut r.document)?;
+        alpha_to_channel(&mut r.document, "Alpha 1")?;
     }
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
     // stated otherwise, and an OpenEXR `Y` is linear luminance): tag them linear sRGB or linear
@@ -110,11 +110,13 @@ pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     }
 }
 
-/// Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1" channel holding the
-/// fourth byte, even when the header declares no alpha bits, and keeps the stored colours (#2225;
-/// measured on Photoshop 27.11). Layer transparency would hide those colours and lose the channel
-/// on the next save, where only an alpha channel becomes the Targa's alpha.
-fn tga_alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
+/// Moves a just-opened single layer's alpha into an alpha channel named `name`, leaving an
+/// opaque Background. Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1"
+/// channel holding the fourth byte, even when the header declares no alpha bits, and keeps the
+/// stored colours (#2225; measured on Photoshop 27.11). Layer transparency would hide those
+/// colours and lose the channel on the next save, where only an alpha channel becomes the
+/// Targa's alpha. A TIFF's unspecified extra sample is Photoshop's alpha channel too (#5301).
+fn alpha_to_channel(doc: &mut Document, name: &str) -> Result<(), IoError> {
     let canvas = doc.bounds();
     let depth = doc.depth;
     let Some(layer) = doc.layers.first_mut() else { return Ok(()) };
@@ -140,11 +142,11 @@ fn tga_alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
     layer.name = "Background".into();
     layer.locks.transparency = true;
     layer.locks.position = true;
-    doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", alpha));
+    doc.channels.push(photocraft_doc::AlphaChannel::new(name, alpha));
     Ok(())
 }
 
-/// Undoes [`tga_alpha_to_channel`] for a document a Targa just opened as: the "Alpha 1" channel
+/// Undoes [`alpha_to_channel`] for a document a Targa just opened as: the "Alpha 1" channel
 /// becomes the layer's transparency again. For image sequences, which treat a frame's alpha as
 /// transparency, as video footage does (Photoshop's Interpret Footage). Anything else is left
 /// alone.
@@ -194,7 +196,27 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
         }
         return Ok(r);
     }
-    image_to_document(name, &img.oriented(orientation)?)
+    // An unspecified extra sample is an alpha channel, not transparency (#5301): named as the
+    // TIFF's Photoshop resources name it (Unicode, else Pascal names), else "Alpha 1".
+    let channel_name = img.meta.alpha_is_channel.then(|| tiff_alpha_name(img.meta.photoshop_resources.as_deref()));
+    let mut r = image_to_document(name, &img.oriented(orientation)?)?;
+    if let Some(channel_name) = channel_name {
+        alpha_to_channel(&mut r.document, &channel_name)?;
+    }
+    Ok(r)
+}
+
+/// The first alpha channel's name in a TIFF's Photoshop resources (1045 Unicode names, else
+/// 1006 Pascal names), else "Alpha 1".
+fn tiff_alpha_name(resources: Option<&[u8]>) -> String {
+    let resources = resources.and_then(|r| photocraft_psd::tiff::resources_from_bytes(r).ok()).map(|(r, _)| r).unwrap_or_default();
+    let unicode = resources.iter().find(|r| r.id == 1045).and_then(|r| crate::psd_import::unicode_names(&r.data).into_iter().next());
+    let pascal = || {
+        let data = &resources.iter().find(|r| r.id == 1006)?.data;
+        let n = usize::from(*data.first()?);
+        Some(String::from_utf8_lossy(data.get(1..1 + n)?).into_owned())
+    };
+    unicode.or_else(pascal).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Alpha 1".into())
 }
 
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
@@ -574,7 +596,37 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
+    if format == Format::Tiff {
+        img = tiff_image(doc, img, &mut warnings)?;
+    }
     encode_image(&img, format, opts, warnings)
+}
+
+/// A flat TIFF's image with the document's alpha channel (#5301). Photoshop writes an alpha
+/// channel as an unspecified extra sample; this writer holds one extra sample, so the first
+/// alpha channel (spot channels don't count) is written when the document has no transparency,
+/// named in the Photoshop resources so it opens with its name. With transparency, that is the
+/// extra sample and the alpha channels are left out, as before; either way the ones left out are
+/// named in a warning.
+fn tiff_image(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let alphas: Vec<&AlphaChannel> = doc.channels.iter().filter(|c| c.spot.is_none()).collect();
+    let names = |cs: &[&AlphaChannel]| cs.iter().map(|c| format!("\"{}\"", c.name)).collect::<Vec<_>>().join(", ");
+    let Some((first, rest)) = alphas.split_first() else { return Ok(img) };
+    if img.layout().has_alpha() {
+        warnings.push(format!("the TIFF's one extra channel holds the transparency; alpha channels not saved: {}", names(&alphas)));
+        return Ok(img);
+    }
+    if !rest.is_empty() {
+        warnings.push(format!("the TIFF holds one alpha channel; not saved: {}", names(rest)));
+    }
+    let mut out = append_alpha_channel(doc, &img, first)?;
+    out.meta.alpha_is_channel = true;
+    let resources = [
+        photocraft_psd::ImageResource::new(1006, crate::psd_export::pascal_names_resource(&[first.name.as_str()])),
+        photocraft_psd::ImageResource::new(1045, crate::psd_export::unicode_names_resource(&[first.name.as_str()])),
+    ];
+    out.meta.photoshop_resources = photocraft_psd::tiff::resources_to_bytes(&resources).ok();
+    Ok(out)
 }
 
 /// What Targa Options offers first, as Photoshop does: 32 bits per pixel when the document has an
@@ -634,6 +686,18 @@ fn tga_with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, wa
     } else {
         img
     };
+    append_alpha_channel(doc, &img, channel)
+}
+
+/// `img` (without alpha: RGB, gray or CMYK) with `channel`'s values added as its alpha.
+fn append_alpha_channel(doc: &Document, img: &Image, channel: &AlphaChannel) -> Result<Image, IoError> {
+    let out_layout = match img.layout() {
+        ChannelLayout::Rgb => ChannelLayout::Rgba,
+        ChannelLayout::Gray => ChannelLayout::GrayA,
+        ChannelLayout::Cmyk => ChannelLayout::CmykA,
+        other => return Err(IoError::Unsupported(format!("an alpha channel can't be added to a {other:?} image"))),
+    };
+    let colors = img.layout().channels();
     let (w, h) = img.dimensions();
     let canvas = doc.bounds();
     if canvas.width() != w || canvas.height() != h {
@@ -643,22 +707,22 @@ fn tga_with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, wa
     let row = img.data().len() / (h.max(1) as usize);
     let band = (BAND_BYTES / row.max(1)).max(1);
     let stride = channel.surface.channels().max(1);
-    let mut data = try_buffer(img.pixel_count(), ChannelLayout::Rgba.channels() * sample.bytes())?;
+    let mut data = try_buffer(img.pixel_count(), out_layout.channels() * sample.bytes())?;
     let mut y0 = canvas.y0;
     for rows in img.data().chunks(row.max(1) * band) {
         let n = (rows.len() / row.max(1)) as u32;
         let y1 = y0.saturating_add(i32::try_from(n).unwrap_or(i32::MAX));
         let alpha = channel.surface.read_region(Rect::new(canvas.x0, y0, canvas.x1, y1));
-        let rgb = Image::from_raw(w, n, img.layout(), sample, rows.to_vec())?.to_normalized();
-        let mut vals = Vec::with_capacity(rgb.len() / 3 * 4);
-        for (px, a) in rgb.as_chunks::<3>().0.iter().zip(alpha.chunks_exact(stride)) {
+        let color = Image::from_raw(w, n, img.layout(), sample, rows.to_vec())?.to_normalized();
+        let mut vals = Vec::with_capacity(color.len() / colors.max(1) * (colors + 1));
+        for (px, a) in color.chunks_exact(colors.max(1)).zip(alpha.chunks_exact(stride)) {
             vals.extend_from_slice(px);
             vals.push(a.first().copied().unwrap_or(1.0));
         }
-        data.extend_from_slice(Image::from_normalized(w, n, ChannelLayout::Rgba, sample, &vals)?.data());
+        data.extend_from_slice(Image::from_normalized(w, n, out_layout, sample, &vals)?.data());
         y0 = y1;
     }
-    Ok(Image::from_raw(w, h, ChannelLayout::Rgba, sample, data)?.with_icc(img.icc.clone()).with_meta(img.meta.clone()))
+    Ok(Image::from_raw(w, h, out_layout, sample, data)?.with_icc(img.icc.clone()).with_meta(img.meta.clone()))
 }
 
 /// Encodes a flat codec image as `format`: the fidelity warnings, then the codec. The end of

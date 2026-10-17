@@ -145,6 +145,11 @@ pub struct Metadata {
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept
     /// opaque here; `photocraft-io` reads and writes it through `photocraft-psd`.
     pub photoshop_layers: Option<Vec<u8>>,
+    /// The image's alpha is an alpha channel (a saved selection or texture mask), not
+    /// transparency: TIFF's "unspecified" extra sample (ExtraSamples 0), which Photoshop writes for
+    /// a document's alpha channel (#5301). Decoders set it; the TIFF encoder writes such an alpha as
+    /// an unspecified extra sample instead of as transparency.
+    pub alpha_is_channel: bool,
 }
 
 impl Metadata {
@@ -155,6 +160,7 @@ impl Metadata {
             && self.text.is_empty()
             && self.photoshop_resources.is_none()
             && self.photoshop_layers.is_none()
+            && !self.alpha_is_channel
     }
 }
 
@@ -181,6 +187,9 @@ pub enum DecodeWarning {
     /// A DPX element's transfer characteristic and colorimetric specification (SMPTE 268M codes,
     /// 255 when undefined). The code values are imported as stored, without a colour transform.
     DpxEncoding { transfer: u8, colorimetric: u8 },
+    /// A TIFF's extra samples beyond the one decoded as the alpha (more alpha channels, or data
+    /// the file doesn't describe) were not imported.
+    ExtraSamplesSkipped { count: u32 },
 }
 
 /// The SMPTE 268M name of a transfer characteristic or colorimetric code.
@@ -231,6 +240,8 @@ impl fmt::Display for DecodeWarning {
                 dpx_code_name(*transfer),
                 dpx_code_name(*colorimetric)
             ),
+            DecodeWarning::ExtraSamplesSkipped { count: 1 } => write!(f, "one more extra channel in the TIFF was not imported"),
+            DecodeWarning::ExtraSamplesSkipped { count } => write!(f, "{count} more extra channels in the TIFF were not imported"),
         }
     }
 }

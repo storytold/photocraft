@@ -172,3 +172,25 @@ fn malformed_tags_read_as_absent_without_panicking() {
     f[at + 4..at + 8].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(tiff_photoshop_tags(&f).1, None);
 }
+
+/// #5301: an alpha flagged as an alpha channel is written as an unspecified extra sample
+/// (ExtraSamples 0, as Photoshop writes a document's alpha channel) and decodes back flagged, in
+/// every layout with an alpha and both orders of decoding (chunky and the all-samples path);
+/// transparency stays unassociated alpha (2).
+#[test]
+fn an_alpha_channel_round_trips_as_an_unspecified_extra_sample() {
+    for layout in [ChannelLayout::Rgba, ChannelLayout::GrayA, ChannelLayout::CmykA] {
+        for compression in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate] {
+            for channel in [true, false] {
+                let mut img = synth(13, 11, layout, SampleType::U8, 7, 0.4);
+                img.meta.alpha_is_channel = channel;
+                let bytes = encode(&img, Format::Tiff, &EncodeOptions { tiff_compression: compression, ..Default::default() }).unwrap();
+                let back = decode(&bytes).unwrap();
+                assert_eq!(back.layout(), layout, "{layout:?} {compression:?} channel {channel}");
+                assert_eq!(back.meta.alpha_is_channel, channel, "{layout:?} {compression:?}");
+                assert_eq!(back.data(), img.data(), "{layout:?} {compression:?} channel {channel}");
+                assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+            }
+        }
+    }
+}

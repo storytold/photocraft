@@ -1248,3 +1248,39 @@ fn batch_naming_rejects_outputs_that_replace_inputs_before_processing() {
     assert_eq!(std::fs::read(&first).unwrap(), before[0]);
     assert_eq!(std::fs::read(&second).unwrap(), before[1]);
 }
+
+/// The Compression tag (259) of a TIFF's first directory.
+fn tiff_compression_tag(b: &[u8]) -> Option<u16> {
+    let le = b.get(..2)? == b"II";
+    let u16_at = |i: usize| b.get(i..i + 2).map(|s| if le { u16::from_le_bytes([s[0], s[1]]) } else { u16::from_be_bytes([s[0], s[1]]) });
+    let u32_at =
+        |i: usize| b.get(i..i + 4).map(|s| if le { u32::from_le_bytes([s[0], s[1], s[2], s[3]]) } else { u32::from_be_bytes([s[0], s[1], s[2], s[3]]) });
+    let ifd = u32_at(4)? as usize;
+    (0..usize::from(u16_at(ifd)?)).map(|k| ifd + 2 + 12 * k).find(|e| u16_at(*e) == Some(259)).and_then(|e| u16_at(e + 8))
+}
+
+/// #5301: `tiffCompression` picks a TIFF's compression (TIFF Options: None, LZW, ZIP); unset,
+/// none. Anything else is refused before anything is written.
+#[test]
+fn save_a_copy_writes_the_tiff_compression_asked_for() {
+    let dir = tmp("tiff-compression");
+    for (params, tag) in
+        [(json!({}), 1), (json!({"tiffCompression": "none"}), 1), (json!({"tiffCompression": "lzw"}), 5), (json!({"tiffCompression": "zip"}), 8)]
+    {
+        let mut s = session(12, 6, 8);
+        let out = join(&dir, "a.tif");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(tiff_compression_tag(&bytes), Some(tag), "{params}");
+        assert_eq!(photocraft_io::import("a.tif", &bytes).unwrap().document.size, photocraft_geom::Size::new(12, 6));
+    }
+    let mut s = session(8, 8, 8);
+    for bad in [json!("jpeg"), json!("LZW"), json!(5), json!(true)] {
+        let out = join(&dir, "bad.tif");
+        let r = s.execute("file.saveACopy", json!({"path": out, "tiffCompression": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+    }
+}

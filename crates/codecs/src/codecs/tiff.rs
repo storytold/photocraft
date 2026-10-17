@@ -249,7 +249,9 @@ pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) ->
         .ok_or_else(|| CodecError::InvalidImage(format!("TIFF page {index} does not exist (the file has {} directories)", info.pages.len())))?;
     let dir = file.ifd(p.ifd_offset).ok_or_else(|| err("image directory cut off"))?;
     let mut img = decode_ifd(&file, &dir, limits)?;
+    let alpha_is_channel = img.meta.alpha_is_channel;
     img.meta = metadata(&file, &dir, &mut img.icc);
+    img.meta.alpha_is_channel = alpha_is_channel;
     let pages = info.page_count();
     if pages > 1 {
         img.warnings.push(DecodeWarning::MorePages { total: info.complete.then_some(u32::try_from(pages).unwrap_or(u32::MAX)) });
@@ -548,8 +550,16 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         5 => 4,
         _ => 1,
     };
-    let alpha_at = extra.iter().position(|&e| e == 1 || e == 2).filter(|&a| (color + a as u64) < spp);
-    let all_samples = palette.is_none() && matches!(photometric, 2 | 5 | 8 | 9) && alpha_at.is_some_and(|a| a > 0);
+    // With no extra sample marked as transparency, the first unspecified one (ExtraSamples 0) is
+    // decoded as the alpha and flagged as an alpha channel: Photoshop writes a document's alpha
+    // channel that way, and dropping it lost the channel (#5301).
+    let marked = extra.iter().position(|&e| e == 1 || e == 2);
+    let paletted = palette.is_some();
+    let channel_alpha = marked.is_none() && !paletted && extra.first() == Some(&0);
+    let alpha_at = marked.or(channel_alpha.then_some(0)).filter(|&a| (color + a as u64) < spp);
+    // The `tiff` crate returns an RGB, CMYK or Lab alpha only when the first extra sample is marked
+    // as one, so an alpha channel (unspecified) is read through every sample too.
+    let all_samples = palette.is_none() && matches!(photometric, 2 | 5 | 8 | 9) && alpha_at.is_some_and(|a| a > 0 || channel_alpha);
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let encode_u = |v: u64, len: usize| -> Vec<u8> {
         let b = if f.le { v.to_le_bytes() } else { v.to_be_bytes() };
@@ -693,8 +703,15 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         convert_ab(&mut data, out_layout.channels(), out, photometric == 8, false);
     }
     let mut img = Image::from_raw(w, h, out_layout, out, data)?;
+    img.meta.alpha_is_channel = channel_alpha && out_layout.has_alpha();
     if tally.missing > 0 {
         img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    // Extra samples past the colour and the one decoded as the alpha are not imported.
+    let kept = out_layout.channels() as u64;
+    let skipped = if paletted { 0 } else { spp.saturating_sub(kept) };
+    if skipped > 0 {
+        img.warnings.push(DecodeWarning::ExtraSamplesSkipped { count: u32::try_from(skipped).unwrap_or(u32::MAX) });
     }
     Ok(img)
 }
@@ -1080,6 +1097,9 @@ struct TagSet<'a> {
     dpi: Option<(f32, f32)>,
     text: Vec<(Tag, &'a str)>,
     alpha: bool,
+    /// The alpha is an alpha channel ([`Metadata::alpha_is_channel`]): written as an unspecified
+    /// extra sample (0) rather than unassociated alpha (2).
+    alpha_is_channel: bool,
     photoshop_resources: Option<&'a [u8]>,
     photoshop_layers: Option<&'a [u8]>,
 }
@@ -1110,8 +1130,8 @@ where
     }
     let d = im.encoder();
     if tags.alpha {
-        // 2 = unassociated alpha
-        d.write_tag(Tag::ExtraSamples, &[2u16][..])?;
+        // 2 = unassociated alpha (transparency); 0 = unspecified, Photoshop's alpha channel.
+        d.write_tag(Tag::ExtraSamples, &[if tags.alpha_is_channel { 0u16 } else { 2 }][..])?;
     }
     if let Some(icc) = tags.icc {
         d.write_tag(Tag::IccProfile, Undefined(icc))?;
@@ -1233,6 +1253,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         dpi: if opts.embed_metadata { img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0) } else { None },
         text,
         alpha: img.layout().has_alpha(),
+        alpha_is_channel: img.layout().has_alpha() && img.meta.alpha_is_channel,
         // Document content, not metadata: written whenever present.
         photoshop_resources: img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()),
         photoshop_layers: img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()),

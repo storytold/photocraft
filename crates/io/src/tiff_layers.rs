@@ -222,10 +222,13 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let fmt = doc.pixel_format();
     let cc = fmt.mode.color_channels();
     let has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
-    let channels = cc + usize::from(has_alpha);
+    // Without transparency, the first alpha channel is the TIFF's extra sample, written as an
+    // unspecified one (Photoshop's alpha channel) and named by the resources above (#5301).
+    let channel_alpha = !has_alpha && usize::from(file.header.channels) > cc;
+    let channels = cc + usize::from(has_alpha || channel_alpha);
     let extra = usize::from(file.header.channels).saturating_sub(channels);
     if extra > 0 {
-        warnings.push(format!("{extra} alpha channel(s) are not written to TIFF (one transparency channel only)"));
+        warnings.push(format!("{extra} alpha channel(s) are not written to TIFF (one extra channel only)"));
     }
     let sample = csample(fmt.sample);
     let (w, h) = (doc.size.width, doc.size.height);
@@ -233,7 +236,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let data = interleave(&file.image_data.data, w, h, channels, cc, sample, cmyk)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(TIFF_COMPOSITE_DONE);
-    let layout = layout_for(fmt.mode, has_alpha);
+    let layout = layout_for(fmt.mode, has_alpha || channel_alpha);
     let mut img = Image::from_raw(w, h, layout, sample, data)?;
     img.icc = doc.icc_profile.as_ref().map(|i| i.to_vec());
     img.meta = codecs::Metadata {
@@ -246,6 +249,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         photoshop_resources: Some(resources),
         photoshop_layers: Some(layers),
+        alpha_is_channel: channel_alpha,
         ..Default::default()
     };
     encode_image(&img, Format::Tiff, opts, warnings)

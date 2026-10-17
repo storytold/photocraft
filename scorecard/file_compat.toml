@@ -52,7 +52,7 @@ id = "FILE-215-7"
 target = "Layered TIFF read and write (tag 37724), honouring the ask-before-saving pref"
 status = "partial"
 issue = 215
-note = "psd tiff.rs (ImageSourceData, both byte orders), io tiff_layers.rs, ui tiff_options_ui.rs (Discard Layers and Save a Copy); extra alpha channels and a Quick Mask are not written (the TIFF codec holds one transparency sample)"
+note = "psd tiff.rs (ImageSourceData, both byte orders), io tiff_layers.rs, ui tiff_options_ui.rs (Discard Layers and Save a Copy); a TIFF holds one extra sample: the transparency, or else the first alpha channel, written as an unspecified extra sample (Photoshop's alpha channel) and read back as a named alpha channel, flat or layered (#5301); further alpha channels and a Quick Mask are not written, and the save names them"
 
 [[item]]
 id = "FILE-215-8"

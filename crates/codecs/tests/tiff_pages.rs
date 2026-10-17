@@ -128,13 +128,16 @@ fn planar_strips_at_every_depth() {
     }
 }
 
+/// #5301: with no extra sample marked as transparency, the first unspecified one is decoded as
+/// the alpha and flagged as an alpha channel (Photoshop's alpha channel). Extra samples beyond
+/// the colour and the alpha are dropped, with a warning.
 #[test]
-fn extra_samples_that_are_not_alpha_are_dropped() {
+fn an_unspecified_extra_sample_is_an_alpha_channel_and_further_extras_are_dropped() {
     let (w, h) = (5usize, 3usize);
     let t = truth(w * h * 5, 4);
     let rgb_of = |spp: usize, keep: usize| -> Vec<u8> { t.u8s[..w * h * spp].chunks(spp).flat_map(|p| p[..keep].to_vec()).collect() };
     for planar in [false, true] {
-        // RGB + one unspecified extra sample: RGB.
+        // RGB + one unspecified extra sample: RGB and an alpha channel.
         let px = &t.u8s[..w * h * 4];
         let chunks = if planar { planar_strips(px, w, h, 4, 1, 2) } else { px.chunks(w * 4 * 2).map(<[u8]>::to_vec).collect() };
         let mut d = Dir { entries: base(w as u32, h as u32, 8, 4, 2), chunks, tiled: false }.tag(278, LONG, &[2]).tag(338, SHORT, &[0]);
@@ -142,9 +145,10 @@ fn extra_samples_that_are_not_alpha_are_dropped() {
             d = d.tag(284, SHORT, &[2]);
         }
         let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
-        assert_eq!(img.layout(), ChannelLayout::Rgb);
-        assert_eq!(img.data(), &rgb_of(4, 3)[..], "planar {planar}");
-        // RGB + alpha + an unspecified extra sample: RGBA.
+        assert_eq!((img.layout(), img.meta.alpha_is_channel), (ChannelLayout::Rgba, true), "planar {planar}");
+        assert_eq!(img.data(), &rgb_of(4, 4)[..], "planar {planar}");
+        assert_eq!(img.warnings, [], "planar {planar}");
+        // RGB + alpha + an unspecified extra sample: RGBA (transparency), the extra dropped.
         let px = &t.u8s[..w * h * 5];
         let chunks = if planar { planar_strips(px, w, h, 5, 1, 2) } else { px.chunks(w * 5 * 2).map(<[u8]>::to_vec).collect() };
         let mut d = Dir { entries: base(w as u32, h as u32, 8, 5, 2), chunks, tiled: false }.tag(278, LONG, &[2]).tag(338, SHORT, &[2, 0]);
@@ -152,20 +156,23 @@ fn extra_samples_that_are_not_alpha_are_dropped() {
             d = d.tag(284, SHORT, &[2]);
         }
         let img = decode_ok(&build(false, true, &[d], &[0]).bytes);
-        assert_eq!(img.layout(), ChannelLayout::Rgba);
+        assert_eq!((img.layout(), img.meta.alpha_is_channel), (ChannelLayout::Rgba, false), "planar {planar}");
         assert_eq!(img.data(), &rgb_of(5, 4)[..], "planar {planar}");
+        assert_eq!(img.warnings, [DecodeWarning::ExtraSamplesSkipped { count: 1 }], "planar {planar}");
     }
-    // Gray + alpha + extra: gray and alpha; gray + an unspecified extra: gray.
+    // Gray + alpha + extra: gray and alpha, the extra dropped; gray + an unspecified extra: gray
+    // and an alpha channel.
     let px = &t.u8s[..w * h * 3];
     let d = strips(w as u32, h as u32, 8, 3, 1, 3, px).tag(338, SHORT, &[2, 0]);
     let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
-    assert_eq!(img.layout(), ChannelLayout::GrayA);
+    assert_eq!((img.layout(), img.meta.alpha_is_channel), (ChannelLayout::GrayA, false));
     assert_eq!(img.data(), &rgb_of(3, 2)[..]);
+    assert_eq!(img.warnings, [DecodeWarning::ExtraSamplesSkipped { count: 1 }]);
     let px = &t.u8s[..w * h * 2];
     let d = strips(w as u32, h as u32, 8, 2, 1, 3, px).tag(338, SHORT, &[0]);
     let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
-    assert_eq!(img.layout(), ChannelLayout::Gray);
-    assert_eq!(img.data(), &rgb_of(2, 1)[..]);
+    assert_eq!((img.layout(), img.meta.alpha_is_channel), (ChannelLayout::GrayA, true));
+    assert_eq!(img.data(), &rgb_of(2, 2)[..]);
 }
 
 #[test]
@@ -193,7 +200,8 @@ fn alpha_after_an_unspecified_extra_sample_is_kept() {
                     let what = format!("photometric {photometric} little {little} big {big} bits {bits} planar {planar}");
                     assert_eq!((img.layout(), img.sample_type()), (layout, sample), "{what}");
                     assert_eq!(img.data(), &want[..], "{what}");
-                    assert_eq!(img.warnings, [], "{what}");
+                    // The unspecified sample before the alpha is the one left out.
+                    assert_eq!(img.warnings, [DecodeWarning::ExtraSamplesSkipped { count: 1 }], "{what}");
                 }
             }
         }
