@@ -1168,8 +1168,12 @@ fn parse_size(item: &str, dpi: f64) -> (Option<f64>, Option<f64>, Option<f64>, &
         && toks[1].eq_ignore_ascii_case("x")
         && let (Some(w), Some(h)) = (unit_px(toks[0], dpi), unit_px(toks[2], dpi))
     {
-        let pos = item.find(toks[3]).unwrap_or(item.len());
-        return (None, w, h, &item[pos..]);
+        // Skip exactly the three size tokens; searching for the name's first word could match inside the size.
+        let mut rest = item;
+        for _ in 0..3 {
+            rest = rest.trim_start().trim_start_matches(|c: char| !c.is_whitespace());
+        }
+        return (None, w, h, rest.trim_start());
     }
     (None, None, None, item)
 }

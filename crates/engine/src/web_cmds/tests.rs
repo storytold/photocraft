@@ -486,6 +486,20 @@ fn webp_export_preferences_select_lossless_or_lossy_output() {
 }
 
 #[test]
+fn generator_spaced_size_keeps_only_the_file_name() {
+    for (name, w, h, file) in [
+        ("2 x 2 2 icon.png", 2.0, 2.0, "2 icon.png"),
+        ("1in x 1in in.png", 72.0, 72.0, "in.png"),
+        ("2px x 1px x.png", 2.0, 1.0, "x.png"),
+        ("2in  x  1in   label name.png", 144.0, 72.0, "label name.png"),
+    ] {
+        let a = parse_asset_name(name, 72.0);
+        assert_eq!(a.len(), 1, "{name}");
+        assert_eq!((a[0].width, a[0].height, a[0].file.as_str()), (Some(w), Some(h), file), "{name}");
+    }
+}
+
+#[test]
 fn generator_naming_grammar() {
     let a = parse_asset_name("200% foo@2x.png, 48x48 icons/bar.png8 + photo.jpg8", 72.0);
     assert_eq!(a.len(), 3);
