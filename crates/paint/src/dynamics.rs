@@ -46,6 +46,27 @@ fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
 // Smoothing
 // ---------------------------------------------------------------------------
 
+/// The smoothed brush moved `f` of the way from `brush` towards the pointer `p`. Its pose
+/// (pressure, tilt, rotation, wheel) moves with it, so the lagging brush paints with the pose the
+/// pen had along the way, not the pointer's newest one. Taking the pointer's pressure made a fast
+/// stroke's lift thin the brush while it still trailed far behind, and the end catch-up a hairline
+/// (#5713). Time is the pointer's.
+fn pull(brush: &StrokePoint, p: &StrokePoint, f: f64) -> StrokePoint {
+    let ff = f as f32;
+    // Barrel rotation takes the shorter way round.
+    let dr = (p.rotation - brush.rotation + 540.0).rem_euclid(360.0) - 180.0;
+    StrokePoint {
+        x: brush.x + (p.x - brush.x) * f,
+        y: brush.y + (p.y - brush.y) * f,
+        pressure: brush.pressure + (p.pressure - brush.pressure) * ff,
+        tilt_x: brush.tilt_x + (p.tilt_x - brush.tilt_x) * ff,
+        tilt_y: brush.tilt_y + (p.tilt_y - brush.tilt_y) * ff,
+        rotation: (brush.rotation + dr * ff).rem_euclid(360.0),
+        wheel: brush.wheel + (p.wheel - brush.wheel) * ff,
+        time: p.time,
+    }
+}
+
 /// Incremental stroke smoothing: exponential (with optional time-based catch-up) or pulled string.
 #[derive(Clone, Debug)]
 pub struct Smoother {
@@ -87,7 +108,7 @@ impl Smoother {
             let d = (dx * dx + dy * dy).sqrt();
             if d > len {
                 let k = (d - len) / d;
-                let np = StrokePoint { x: pos.x + dx * k, y: pos.y + dy * k, ..p };
+                let np = pull(&pos, &p, k);
                 self.pos = Some(np);
                 out.push(np);
             }
@@ -113,7 +134,7 @@ impl Smoother {
         };
         let mut cur = pos;
         for _ in 0..iters {
-            cur = StrokePoint { x: cur.x + (p.x - cur.x) * step, y: cur.y + (p.y - cur.y) * step, ..p };
+            cur = pull(&cur, &p, step);
             out.push(cur);
         }
         self.pos = Some(cur);

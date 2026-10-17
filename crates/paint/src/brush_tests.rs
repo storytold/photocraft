@@ -875,6 +875,38 @@ fn smoothing_without_catch_up_stops_while_the_pointer_pauses() {
 }
 
 #[test]
+fn a_smoothed_brush_keeps_the_pressure_of_where_it_is_when_the_pen_lifts() {
+    // #5713: a fast stroke at full pressure, lifted in the last sample. The brush trails far
+    // behind the pointer; it used to take the lift's pressure there, and the end catch-up drew
+    // a hairline from the trailing brush to the pointer.
+    let pts: Vec<StrokePoint> =
+        (0..=20).map(|i| StrokePoint { time: f64::from(i) * 4.0, ..StrokePoint::new(f64::from(i) * 10.0, 0.0, if i < 20 { 1.0 } else { 0.05 }) }).collect();
+    let out = smooth_points(&Smoothing { amount: 0.8, ..Default::default() }, 1.0, &pts);
+    let (last, rest) = out.split_last().unwrap();
+    assert_eq!((last.x, last.pressure), (200.0, 0.05), "the catch-up still ends at the pen's last sample");
+    let lifted = rest.last().unwrap();
+    assert!(lifted.x < 190.0, "the brush lags the pointer: {}", lifted.x);
+    for p in rest {
+        assert!(p.pressure > 0.5, "the trailing brush at x {} has pressure {}", p.x, p.pressure);
+    }
+}
+
+#[test]
+fn a_pulled_string_brush_takes_the_pose_along_the_string() {
+    let ps = Smoothing { amount: 0.2, pulled_string: true, catch_up_on_end: false, ..Default::default() };
+    let a = StrokePoint { rotation: 350.0, ..StrokePoint::new(0.0, 0.0, 1.0) };
+    let b = StrokePoint { rotation: 10.0, tilt_x: 40.0, ..StrokePoint::new(100.0, 0.0, 0.0) };
+    let out = smooth_points(&ps, 1.0, &[a, b]);
+    // The 20 px string leaves the brush 80 % of the way to the pointer.
+    let p = out.last().unwrap();
+    assert!((p.x - 80.0).abs() < 1e-4, "{}", p.x);
+    assert!((p.pressure - 0.2).abs() < 1e-4, "{}", p.pressure);
+    assert!((p.tilt_x - 32.0).abs() < 1e-3, "{}", p.tilt_x);
+    // Rotation the short way round: 350° + 80 % of 20°.
+    assert!((p.rotation - 6.0).abs() < 1e-3, "{}", p.rotation);
+}
+
+#[test]
 fn pose_overrides_stylus_values() {
     let b = BrushSettings {
         size: 40.0,
