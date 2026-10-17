@@ -1710,10 +1710,10 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let mut resp = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click_and_drag());
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let l = ui
-                .add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).selectable(false).sense(Sense::click()))
+                .add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).selectable(false).sense(Sense::click_and_drag()))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             // Pressing the label presses the box (#4476).
             let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
@@ -1721,11 +1721,39 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             resp.union(l)
         })
         .inner;
-    if resp.clicked() {
-        *on = !*on;
+    if drag_toggle(ui, &resp, resp.rect, on) {
         resp.mark_changed();
     }
     resp
+}
+
+/// Click or drag-paint a checkbox (#3333). A click flips `on`. Pressing and dragging flips it and
+/// remembers the new state in the egui context; every other checkbox whose `hit` rect the pointer
+/// then sweeps over is set to that same state (as Photoshop's eye column does), until the button
+/// is released. `resp` is the response of the pressed widget (it must sense drags). Returns
+/// whether `on` changed.
+pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
+    let ctx = ui.ctx();
+    let key = egui::Id::new("pc-checkbox-drag-target");
+    if !ctx.input(|i| i.pointer.primary_down()) {
+        ctx.data_mut(|d| d.remove::<bool>(key));
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        *on = !*on;
+        ctx.data_mut(|d| d.insert_temp(key, *on));
+        return true;
+    }
+    if resp.clicked() {
+        *on = !*on;
+        return true;
+    }
+    let Some(target) = ctx.data(|d| d.get_temp::<bool>(key)) else { return false };
+    let over = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| hit.contains(p));
+    if over && *on != target {
+        *on = target;
+        return true;
+    }
+    false
 }
 
 /// The fill of a check box: the accent when `on`, else the field colour. While it's pressed
@@ -1898,6 +1926,36 @@ mod tests {
         }
     }
     use egui_kittest::{Harness, kittest::Queryable};
+
+    /// #3333: pressing a checkbox and dragging over its neighbours sets them all to the state the
+    /// first one switched to; the box past the sweep stays untouched.
+    #[test]
+    fn dragging_across_checkboxes_sets_them_all_like_the_first() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        super::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false, true, false, false],
+        );
+        h.run();
+        let boxes: Vec<egui::Pos2> = h.get_all_by_label("Box").map(|n| n.rect().left_center() + egui::vec2(7.0, 0.0)).collect();
+        assert_eq!(boxes.len(), 4);
+        h.event(egui::Event::PointerMoved(boxes[0]));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: boxes[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for b in &boxes[1..3] {
+            h.event(egui::Event::PointerMoved(*b));
+            h.run_steps(2);
+        }
+        h.event(egui::Event::PointerButton { pos: boxes[2], button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(*h.state(), [true, true, true, false]);
+    }
 
     /// #3789: a plain text field is one boxed, outline-free input whose text-selection colour stays
     /// local, so it isn't recoloured for the rest of the frame (selected rows, slider trails).

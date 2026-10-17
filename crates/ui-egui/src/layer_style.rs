@@ -841,7 +841,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                     }
                     let cb = fx_checkbox_rect(rect);
-                    let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
+                    let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click_and_drag());
                     fx_checkbox(ui.painter(), cb, on, &t);
                     ui.painter().text(
                         rect.left_center() + vec2(28.0, 0.0),
@@ -867,8 +867,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             add_instance(f, kind);
                         }
                     }
-                    if cresp.clicked() {
-                        on = !on;
+                    if widgets::drag_toggle(ui, &cresp, rect, &mut on) {
                         if let Some(e) = entry_mut(f, id) {
                             e["on"] = json!(on);
                         }
