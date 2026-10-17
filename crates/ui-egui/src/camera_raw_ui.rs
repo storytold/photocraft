@@ -1215,7 +1215,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 };
                 for (k, name) in BANDS.iter().enumerate() {
                     let c = photocraft_algo::camera_raw::HSL_BANDS[k];
-                    let base = hue_color(c);
+                    let base = widgets::hue_color(c);
                     let grad = [Color32::from_gray(128), base];
                     row(ui, &mut dirty, name, &mut arr[k], -100.0..=100.0, Some(&grad));
                 }
@@ -1306,20 +1306,6 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         _ => {}
     }
-}
-
-fn hue_color(h: f32) -> Color32 {
-    let h6 = (h.rem_euclid(360.0)) / 60.0;
-    let x = 1.0 - ((h6 % 2.0) - 1.0).abs();
-    let (r, g, b) = match h6 as u32 {
-        0 => (1.0, x, 0.0),
-        1 => (x, 1.0, 0.0),
-        2 => (0.0, 1.0, x),
-        3 => (0.0, x, 1.0),
-        4 => (x, 0.0, 1.0),
-        _ => (1.0, 0.0, x),
-    };
-    Color32::from_rgb((r * 220.0) as u8, (g * 220.0) as u8, (b * 220.0) as u8)
 }
 
 #[cfg(test)]

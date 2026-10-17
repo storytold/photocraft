@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::tone::{self, HistSource, Histograms};
-use crate::widgets;
+use crate::widgets::{self, hue_color};
 
 /// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
 pub const KINDS: [&str; 13] = [
@@ -848,11 +848,6 @@ fn threshold(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 
 const RANGE_LABELS: [&str; 6] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
 
-fn hue_color(deg: f32) -> Color32 {
-    let rgb = egui::ecolor::Hsva::new(deg.rem_euclid(360.0) / 360.0, 1.0, 1.0, 1.0).to_srgb();
-    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-}
-
 /// The Saturation slider's track: grey to the hue at full saturation (UI-217-16).
 fn saturation_track(hue_deg: f32) -> [Color32; 2] {
     [Color32::from_gray(128), hue_color(hue_deg)]
@@ -885,7 +880,7 @@ fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
     let rect = photocraft_geom::Rect::new(0, 0, n as i32, 1);
     let px = (0..n)
         .map(|i| {
-            let c = egui::ecolor::Hsva::new(i as f32 / (n - 1).max(1) as f32, 1.0, 1.0, 1.0).to_rgb();
+            let c = crate::color_picker_ui::hsv_to_rgb(i as f32 / (n - 1).max(1) as f32 * 360.0, 1.0, 1.0);
             [c[0], c[1], c[2], 1.0]
         })
         .collect();

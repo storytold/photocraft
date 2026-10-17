@@ -1368,15 +1368,17 @@ pub fn vline(ui: &mut Ui, height: f32) {
     ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, t.separator));
 }
 
-/// Hue spectrum stops for colour sliders.
+/// The fully saturated colour at hue `deg` (degrees), built on sRGB values as Photoshop's hue
+/// tracks are: 0 is (255,0,0), 60 is (255,255,0), 120 is (0,255,0) and so on (#6540).
+pub fn hue_color(deg: f32) -> Color32 {
+    let [r, g, b] = crate::color_picker_ui::hsv_to_rgb(deg, 1.0, 1.0);
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(q(r), q(g), q(b))
+}
+
+/// Hue spectrum stops for colour sliders: red, yellow, green, cyan, blue, magenta, red.
 pub fn hue_stops() -> Vec<Color32> {
-    (0..=12)
-        .map(|i| {
-            let h = i as f32 / 12.0;
-            let rgb = egui::ecolor::Hsva::new(h, 0.85, 1.0, 1.0).to_srgb();
-            Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-        })
-        .collect()
+    (0..=12).map(|i| hue_color(i as f32 * 30.0)).collect()
 }
 
 /// A compact labelled dropdown in the studio style.
@@ -1811,7 +1813,20 @@ fn clean(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Key, Modifiers};
+    use super::{hue_color, hue_stops};
+    use egui::{Color32, Key, Modifiers};
+
+    #[test]
+    fn hue_stops_are_pure_and_evenly_spaced() {
+        let c = |r, g, b| Color32::from_rgb(r, g, b);
+        let want = [c(255, 0, 0), c(255, 255, 0), c(0, 255, 0), c(0, 255, 255), c(0, 0, 255), c(255, 0, 255), c(255, 0, 0)];
+        let stops = hue_stops();
+        assert_eq!(stops.len(), 13);
+        for (k, w) in want.iter().enumerate() {
+            assert_eq!(stops[k * 2], *w, "stop at {} degrees", k * 60);
+            assert_eq!(hue_color(k as f32 * 60.0), *w);
+        }
+    }
 
     #[test]
     fn checkbox_label_is_a_button_target_not_selectable_text() {
