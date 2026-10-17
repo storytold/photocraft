@@ -2305,6 +2305,7 @@ cameraRaw	Color	Barvy
 	Structure:	Struktura:
 	Content-Aware Move Tool	Nástroj přesun s ohledem na obsah
 	TIFF Options	Možnosti TIFF
+	JPEG Options	Možnosti JPEG
 	Targa Options	Možnosti Targa
 	24 bits/pixel	24 bitů/pixel
 	32 bits/pixel	32 bitů/pixel

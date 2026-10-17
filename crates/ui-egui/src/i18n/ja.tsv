@@ -2280,6 +2280,7 @@ cameraRaw	Color	カラー
 	Structure:	構造:
 	Content-Aware Move Tool	コンテンツに応じた移動ツール
 	TIFF Options	TIFF オプション
+	JPEG Options	JPEG オプション
 	Targa Options	Targa オプション
 	24 bits/pixel	24 ビット/ピクセル
 	32 bits/pixel	32 ビット/ピクセル

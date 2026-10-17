@@ -109,6 +109,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+pub mod jpeg_options_ui;
 pub mod kys_import;
 pub mod lasso_ui;
 pub(crate) mod last_brush;
@@ -346,6 +347,31 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
         }
         _ => None,
     }
+}
+
+/// Whether `layer`'s pixels are fully opaque over `canvas` (what a JPEG can keep). Walks the
+/// tiles, so a large image isn't read whole.
+pub(crate) fn opaque_over(layer: &photocraft_doc::Layer, canvas: photocraft_geom::Rect) -> bool {
+    let Some(s) = layer.surface() else { return false };
+    let f = s.format();
+    if !f.alpha {
+        return true;
+    }
+    let n = f.channels();
+    let default_opaque = s.default_pixel().last().is_some_and(|a| *a >= 1.0);
+    let tile = photocraft_geom::TILE_SIZE;
+    canvas.tiles().all(|c| match s.tile(c) {
+        None => default_opaque,
+        Some(t) => {
+            let (tr, r) = (c.rect(), c.rect().intersect(&canvas));
+            (r.y0..r.y1).all(|y| {
+                (r.x0..r.x1).all(|x| {
+                    let i = ((y - tr.y0) * tile + (x - tr.x0)) as usize * n + n - 1;
+                    photocraft_color::read_sample(t.bytes(), f.sample, i) >= 1.0
+                })
+            })
+        }
+    })
 }
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
@@ -798,6 +824,8 @@ pub struct PhotocraftApp {
     pub(crate) file_dialog: Option<file_dialog::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
+    /// A Save over a flat JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
+    pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
@@ -952,6 +980,7 @@ impl PhotocraftApp {
             discard: None,
             file_dialog: None,
             tiff_options: None,
+            jpeg_options: None,
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
@@ -1417,6 +1446,9 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err("Answer TIFF or Targa Options before starting another save".into());
         }
+        if self.jpeg_options.is_some() {
+            return Err("Answer JPEG Options before starting another save".into());
+        }
         // Edit Contents documents save back into their smart object.
         if path.is_none() && self.session.is_enabled("layer.smartObjects.saveContents") {
             self.run("layer.smartObjects.saveContents", serde_json::json!({}))?;
@@ -1435,12 +1467,16 @@ impl PhotocraftApp {
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
-        let writable = ext.is_some_and(|e| {
-            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
+        let writable = ext.as_deref().is_some_and(|e| {
+            matches!(e, photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
-                || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                || (flat && photocraft_codecs::from_extension(e).is_some_and(|f| f.caps().write))
         });
+        // A JPEG can't keep transparency: Photoshop suggests PNG once pixels are deleted (#2223).
+        let jpeg = ext.as_deref().is_some_and(|e| matches!(e, "jpg" | "jpeg"));
+        let transparent_jpeg = jpeg && plain_raster(&st.doc).is_some_and(|l| !opaque_over(l, st.doc.bounds()));
         let suggested = match &st.path {
+            Some(p) if transparent_jpeg => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
             Some(p) if writable => p.clone(),
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
@@ -1470,6 +1506,47 @@ impl PhotocraftApp {
                 Ok(r)
             })
         })
+    }
+
+    /// File › Save over the flat file the document came from, when it is still one plain layer,
+    /// as Photoshop does (#2223): a PNG is written straight back; a JPEG (fully opaque) first asks
+    /// the JPEG Options. `None` when Save should go through the save dialog instead.
+    pub(crate) fn save_flat_in_place(&mut self) -> Option<Result<Value, String>> {
+        let (path, jpeg) = self.flat_save_path()?;
+        if jpeg {
+            return Some(jpeg_options_ui::park(self, path.clone()).map(|()| serde_json::json!({"path": path, "warnings": [], "pending": true})));
+        }
+        Some(self.save_flat(path, None))
+    }
+
+    /// The flat file the active document can be saved back to (whether it is a JPEG): a PNG, or
+    /// a fully opaque JPEG, that is still one plain layer.
+    fn flat_save_path(&self) -> Option<(String, bool)> {
+        let st = self.session.active()?;
+        let path = st.path.clone()?;
+        let ext = std::path::Path::new(&path).extension()?.to_string_lossy().to_ascii_lowercase();
+        let layer = plain_raster(&st.doc)?;
+        match ext.as_str() {
+            "png" => Some((path, false)),
+            "jpg" | "jpeg" if opaque_over(layer, st.doc.bounds()) => Some((path, true)),
+            _ => None,
+        }
+    }
+
+    /// Writes the active document over its flat file (a JPEG at `jpeg_quality`) and journals it
+    /// as a `file.save` step, so an action being recorded keeps it (#2746).
+    pub(crate) fn save_flat(&mut self, path: String, jpeg_quality: Option<u8>) -> Result<Value, String> {
+        let settings = ExportSettings { jpeg_quality, ..Default::default() };
+        let r = match self.write_document(path.clone(), &settings, false)? {
+            Some((path, warnings)) => serde_json::json!({"path": path, "warnings": warnings}),
+            None => serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)}),
+        };
+        let step = match jpeg_quality {
+            Some(q) => serde_json::json!({"jpegQuality": q}),
+            None => serde_json::json!({}),
+        };
+        self.session.journal.push(("file.save".into(), step));
+        Ok(r)
     }
 
     /// [`Self::save_as_with`] once the path is known.
@@ -1538,12 +1615,24 @@ impl PhotocraftApp {
             // file a recorded Save confirmed in the dialog while the document is still a plain
             // raster, so it is never flattened over (#3531, #3806).
             let st = self.session.active().ok_or("no document")?;
+            if let Some(path) = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p)) {
+                return self.save_in_place(path);
+            }
+            // A flat PNG or JPEG still one plain layer (#2223): the JPEG at the recorded quality.
+            if let Some((path, jpeg)) = self.flat_save_path() {
+                let quality = jpeg.then(|| {
+                    let recorded = params.get("jpegQuality").and_then(Value::as_u64);
+                    recorded.unwrap_or(u64::from(self.session.prefs().export.jpeg_quality)).clamp(1, 100) as u8
+                });
+                return self.save_flat(path, quality);
+            }
+            let st = self.session.active().ok_or("no document")?;
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
                     && plain_raster(&st.doc).is_some()
                     && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
             };
-            let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
+            let path = st.path.clone().filter(|p| flat_own(p)).ok_or(
                 "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
             )?;
             return self.save_in_place(path);
@@ -2045,6 +2134,7 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
+        jpeg_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);

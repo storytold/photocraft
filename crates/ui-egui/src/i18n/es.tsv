@@ -2379,6 +2379,7 @@ cameraRaw	Amount	Cantidad
 	Structure:	Estructura:
 	Content-Aware Move Tool	Herramienta Mover con detección de contenido
 	TIFF Options	Opciones de TIFF
+	JPEG Options	Opciones de JPEG
 	Targa Options	Opciones de Targa
 	24 bits/pixel	24 bits/píxel
 	32 bits/pixel	32 bits/píxel

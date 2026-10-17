@@ -2577,6 +2577,7 @@ cameraRaw	Roughness	Неровность
 	Structure:	Структура:
 	Content-Aware Move Tool	Перемещение с учётом содержимого
 	TIFF Options	Параметры TIFF
+	JPEG Options	Параметры JPEG
 	Targa Options	Параметры Targa
 	24 bits/pixel	24 бит/пиксел
 	32 bits/pixel	32 бит/пиксел

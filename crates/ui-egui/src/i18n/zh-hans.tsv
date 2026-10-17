@@ -2318,6 +2318,7 @@ cameraRaw	Blending	混合
 	Structure:	结构：
 	Content-Aware Move Tool	内容感知移动工具
 	TIFF Options	TIFF 选项
+	JPEG Options	JPEG 选项
 	Targa Options	Targa 选项
 	24 bits/pixel	24 位/像素
 	32 bits/pixel	32 位/像素
