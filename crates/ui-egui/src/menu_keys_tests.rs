@@ -210,3 +210,27 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
     h.run_steps(3);
     assert_ne!(h.state().ui.tool, tool, "off the bar, E picks the Eraser again");
 }
+
+/// #5863: a label with no Latin letter (Chinese, Japanese…) shows its English label's letter in
+/// parentheses, before a trailing ellipsis, and takes it as its mnemonic; labels with letters and
+/// the top menus' Photoshop letters are as before, and the letters stay unique.
+#[test]
+fn labels_without_latin_letters_show_their_english_key() {
+    let labels: Vec<String> = ["文件", "编辑", "Image", "图层"].map(String::from).to_vec();
+    let english = ["File", "Edit", "Image", "Layer"];
+    let preferred = [Some('F'), Some('E'), Some('I'), Some('L')];
+    let (shown, keys) = crate::menu_keys::localized(&labels, &english, &preferred);
+    assert_eq!(shown, ["文件(F)", "编辑(E)", "Image", "图层(L)"]);
+    assert_eq!(keys, [Some('F'), Some('E'), Some('I'), Some('L')]);
+    // Rows: the key goes before the ellipsis; a clash takes the next letter of the shown label.
+    let labels: Vec<String> = ["新建…", "打开...", "关闭"].map(String::from).to_vec();
+    let (shown, keys) = crate::menu_keys::localized(&labels, &["New…", "Open...", "Close"], &[]);
+    assert_eq!(shown, ["新建(N)…", "打开(O)...", "关闭(C)"]);
+    assert_eq!(keys, [Some('N'), Some('O'), Some('C')]);
+    let (shown, keys) = crate::menu_keys::localized(&["关闭".to_string(), "复制".to_string()], &["Close", "Copy"], &[]);
+    assert_eq!(shown, ["关闭(C)", "复制(O)"]);
+    assert_eq!(keys, [Some('C'), Some('O')]);
+    // An English UI is unchanged.
+    let labels: Vec<String> = ["File", "Edit"].map(String::from).to_vec();
+    assert_eq!(crate::menu_keys::localized(&labels, &["File", "Edit"], &[Some('F'), Some('E')]).0, labels);
+}

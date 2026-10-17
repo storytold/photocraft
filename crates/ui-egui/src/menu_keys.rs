@@ -8,7 +8,8 @@
 //! They are assigned per menu level from the labels as shown (so translated), unique within
 //! the level: Photoshop's letters for the top menus where the label has them (F E I L Y S T V
 //! W H), else the first unused letter, word starts first. Only ASCII letters and digits are keys
-//! the keyboard reports as such, so a label without one (Japanese, Chinese…) has no mnemonic.
+//! the keyboard reports as such, so a label without one (Japanese, Chinese…) shows its English
+//! label's letter after it, as Windows menus do in those languages: "文件(F)" ([`localized`]).
 //!
 //! The state is view state in egui memory, like [`crate::menu_nav::Nav`]. On macOS the native
 //! menu bar replaces the in-window one and this never runs.
@@ -92,6 +93,37 @@ pub fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> 
         out.push(pick);
     }
     out
+}
+
+/// The labels to show and their mnemonics for translated `labels` whose English originals are
+/// `english` (same order). A label with an ASCII letter or digit keeps its text and is assigned
+/// as [`assign`] does. One without (Chinese, Japanese, Korean…) can't be typed on its own, so it
+/// shows its English label's letter after it in parentheses and takes that letter, as Windows menus
+/// do in those languages ("文件(F)", #5863). Mnemonics stay unique within the group.
+pub fn localized(labels: &[String], english: &[&str], preferred: &[Option<char>]) -> (Vec<String>, Vec<Option<char>>) {
+    let typed = |l: &str| l.chars().any(|c| c.is_ascii_alphanumeric());
+    // The key goes before a trailing ellipsis, as Windows writes it: "新建(N)…".
+    let with_key = |l: &str, k: char| match l.strip_suffix('…').map(|b| (b, "…")).or_else(|| l.strip_suffix("...").map(|b| (b, "..."))) {
+        Some((base, tail)) => format!("{base}({k}){tail}"),
+        None => format!("{l}({k})"),
+    };
+    let english_keys = assign(english, preferred);
+    let mut shown = Vec::with_capacity(labels.len());
+    let mut pref = Vec::with_capacity(labels.len());
+    for (i, label) in labels.iter().enumerate() {
+        match english_keys.get(i).copied().flatten().filter(|_| !typed(label)) {
+            Some(k) => {
+                shown.push(with_key(label, k));
+                pref.push(Some(k));
+            }
+            None => {
+                shown.push(label.clone());
+                pref.push(preferred.get(i).copied().flatten());
+            }
+        }
+    }
+    let keys = assign(&shown.iter().map(String::as_str).collect::<Vec<_>>(), &pref);
+    (shown, keys)
 }
 
 /// `prefix + label` as menu text with the mnemonic's first occurrence in `label` underlined

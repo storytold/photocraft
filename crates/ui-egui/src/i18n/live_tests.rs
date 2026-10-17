@@ -4,6 +4,13 @@ use super::*;
 use crate::{PhotocraftApp, Services};
 use serde_json::json;
 
+/// The File menu's title as the menu bar draws it in `lang`: the translation, plus the English
+/// access key where it has no Latin letter of its own ("文件(F)", #5863).
+fn file_title(lang: Lang) -> String {
+    let (shown, _) = crate::menu_keys::localized(&[tr(lang, "File").to_string()], &["File"], &[Some('F')]);
+    shown.into_iter().next().unwrap_or_default()
+}
+
 fn lang(code: &str) -> Lang {
     Lang::from_code(code).expect("registered language")
 }
@@ -225,7 +232,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
                 let h = harness();
                 assert_eq!(h.state().session.prefs().interface.language, "auto");
                 assert_eq!(current(), lang(code), "{tag}");
-                assert!(drawn_text(&h).iter().any(|text| text.as_str() == tr(lang(code), "File")), "first-launch menu: {tag}");
+                assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))), "first-launch menu: {tag}");
             });
         });
     }
@@ -276,7 +283,7 @@ fn an_explicit_language_survives_restart_on_a_different_system_language() {
             let h = harness_with_services(services);
             assert_eq!(h.state().session.prefs().interface.language, "ko");
             assert_eq!(current(), lang("ko"));
-            assert!(drawn_text(&h).iter().any(|text| text.as_str() == tr(lang("ko"), "File")));
+            assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang("ko"))));
         });
     });
 }
@@ -295,7 +302,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
             h.step();
             assert_eq!(reply.try_recv().expect("response")["ok"], true);
             assert_eq!(current(), lang(code));
-            assert!(drawn_text(&h).iter().any(|text| text == tr(lang(code), "File")), "the menu must change in this frame: {code}");
+            assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))), "the menu must change in this frame: {code}");
             assert!(std::sync::Arc::ptr_eq(&document, &h.state().session.active().expect("document").doc), "switching language must preserve the document");
         }
         assert!(h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": []})).is_err());

@@ -1137,9 +1137,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     let mut keys = crate::menu_keys::Keys::load(ui.ctx());
     keys.take_first_row(&mut nav);
     nav.underline = keys.show_underlines(ui.ctx());
-    let top_labels: Vec<String> = TOP_MENUS.iter().map(|top| crate::i18n::tr(lang, top).to_string()).collect();
+    let translated: Vec<String> = TOP_MENUS.iter().map(|top| crate::i18n::tr(lang, top).to_string()).collect();
     let preferred: Vec<Option<char>> = TOP_MENUS.iter().map(|top| crate::menu_keys::TOP_PREFERRED.iter().find(|(t, _)| t == top).map(|(_, c)| *c)).collect();
-    let top_mnemonics = crate::menu_keys::assign(&top_labels.iter().map(String::as_str).collect::<Vec<_>>(), &preferred);
+    // A title with no Latin letter shows its English key: "文件(F)" (#5863).
+    let (top_labels, top_mnemonics) = crate::menu_keys::localized(&translated, &TOP_MENUS, &preferred);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let v = &mut ui.style_mut().visuals;
@@ -1425,24 +1426,25 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
     // of its first child.
     // Each row's mnemonic (#4988), unique within this level, in display order: the leaves' labels
     // and the submenus' names as shown.
-    let shown_labels: Vec<String> = {
+    // A label with no Latin letter shows its English label's key after it: "新建(N)…" (#5863).
+    let (translated, english): (Vec<String>, Vec<&str>) = {
         let mut subs: Vec<&str> = Vec::new();
         items
             .iter()
             .filter_map(|it| {
                 if it.path.len() == depth {
-                    (it.label != "---").then(|| translated_menu_label(lang, it))
+                    (it.label != "---").then(|| (translated_menu_label(lang, it), it.label.as_str()))
                 } else {
                     let name = it.path.get(depth).map(String::as_str)?;
                     (!subs.contains(&name)).then(|| {
                         subs.push(name);
-                        crate::i18n::tr(lang, name).to_string()
+                        (crate::i18n::tr(lang, name).to_string(), name)
                     })
                 }
             })
-            .collect()
+            .unzip()
     };
-    let mnemonics = crate::menu_keys::assign(&shown_labels.iter().map(String::as_str).collect::<Vec<_>>(), &[]);
+    let (shown_labels, mnemonics) = crate::menu_keys::localized(&translated, &english, &[]);
     let mut next_row = 0usize;
     let mut shown_subs: Vec<&str> = Vec::new();
     let mut last_was_sep = true;
@@ -1455,7 +1457,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
                 }
                 continue;
             }
-            let label = translated_menu_label(lang, it);
+            let label = shown_labels.get(next_row).cloned().unwrap_or_else(|| translated_menu_label(lang, it));
             let prefix = match it.checked {
                 Some(true) => "✔ ",
                 Some(false) => "   ",
@@ -1496,12 +1498,9 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             let child: Vec<&MenuItem> = items.iter().copied().filter(|c| c.path.len() > depth && c.path[depth] == name).collect();
             let enabled = submenu_enabled(&child);
             let mnemonic = mnemonics.get(next_row).copied().flatten();
+            let shown = shown_labels.get(next_row).cloned().unwrap_or_else(|| crate::i18n::tr(lang, name).to_string());
             next_row += 1;
-            let title: egui::WidgetText = if nav.underline {
-                crate::menu_keys::mnemonic_text(ui, "", crate::i18n::tr(lang, name), mnemonic, None)
-            } else {
-                crate::i18n::tr(lang, name).into()
-            };
+            let title: egui::WidgetText = if nav.underline { crate::menu_keys::mnemonic_text(ui, "", &shown, mnemonic, None) } else { shown.into() };
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, mnemonic, |ui, nav| {
                     let r = ui.menu_button(title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
