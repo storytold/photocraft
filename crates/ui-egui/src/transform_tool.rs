@@ -1809,6 +1809,43 @@ pub(crate) fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods
     }
 }
 
+fn anchor_uv(anchor: usize) -> (f64, f64) {
+    match anchor {
+        0 => (0.0, 0.0),
+        1 => (0.5, 0.0),
+        2 => (1.0, 0.0),
+        3 => (0.0, 0.5),
+        4 => (0.5, 0.5),
+        5 => (1.0, 0.5),
+        6 => (0.0, 1.0),
+        7 => (0.5, 1.0),
+        8 => (1.0, 1.0),
+        _ => (0.5, 0.5),
+    }
+}
+
+fn point_on_quad(quad: [[f64; 2]; 4], anchor: usize) -> [f64; 2] {
+    let (u, v) = anchor_uv(anchor);
+    if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], quad) {
+        let (x, y) = h.apply(u, v);
+        if x.is_finite() && y.is_finite() {
+            return [x, y];
+        }
+    }
+    match anchor {
+        0 => quad[0],
+        1 => [(quad[0][0] + quad[1][0]) / 2.0, (quad[0][1] + quad[1][1]) / 2.0],
+        2 => quad[1],
+        3 => [(quad[0][0] + quad[3][0]) / 2.0, (quad[0][1] + quad[3][1]) / 2.0],
+        4 => [(quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4.0, (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4.0],
+        5 => [(quad[1][0] + quad[2][0]) / 2.0, (quad[1][1] + quad[2][1]) / 2.0],
+        6 => quad[3],
+        7 => [(quad[2][0] + quad[3][0]) / 2.0, (quad[2][1] + quad[3][1]) / 2.0],
+        8 => quad[2],
+        _ => [(quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4.0, (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4.0],
+    }
+}
+
 /// Where the reference point lands when the box goes from `quad0` to `quad`: the same place
 /// within the box, as in Photoshop, where it is attached to the bounding box (#1329). A box
 /// that has collapsed leaves it where it was.
@@ -2809,6 +2846,41 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
     }
 }
 
+fn matching_anchor(quad: [[f64; 2]; 4], pivot: [f64; 2]) -> Option<usize> {
+    (0..9).find(|&i| {
+        let p = point_on_quad(quad, i);
+        (p[0] - pivot[0]).abs() <= 0.05 && (p[1] - pivot[1]).abs() <= 0.05
+    })
+}
+
+fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>) -> Option<usize> {
+    let size = egui::vec2(16.0, 16.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let tk = crate::theme::Tokens::get(ui.ctx());
+    let painter = ui.painter();
+    painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, tk.card_border), egui::StrokeKind::Inside);
+    let mut clicked = None;
+    let pointer = resp.interact_pointer_pos();
+    for row in 0..3 {
+        for col in 0..3 {
+            let idx = row * 3 + col;
+            let cx = rect.min.x + (col as f32 + 0.5) * (rect.width() / 3.0);
+            let cy = rect.min.y + (row as f32 + 0.5) * (rect.height() / 3.0);
+            let pt_rect = egui::Rect::from_center_size(egui::pos2(cx, cy), egui::vec2(3.5, 3.5));
+            if resp.clicked() && pointer.is_some_and(|p| (p.x - cx).abs() <= 3.0 && (p.y - cy).abs() <= 3.0) {
+                clicked = Some(idx);
+            }
+            if current_anchor == Some(idx) {
+                painter.rect_filled(pt_rect, 0.5, tk.accent);
+            } else {
+                painter.rect_filled(pt_rect, 0.5, tk.text_dim);
+            }
+        }
+    }
+    resp.on_hover_text(tl!("Reference point location"));
+    clicked
+}
+
 /// The reference point's X/Y and the W/H scale fields (with the aspect link) of the options bar.
 pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
     let tk = crate::theme::Tokens::get(ui.ctx());
@@ -2816,8 +2888,18 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
-    let mut px = t.pivot[0] as f32;
-    let mut py = t.pivot[1] as f32;
+    let current_anchor = matching_anchor(t.quad, t.pivot);
+    let mut pivot = t.pivot;
+    if let Some(new_anchor) = anchor_grid_widget(ui, current_anchor) {
+        let new_p = point_on_quad(t.quad, new_anchor);
+        if let Some(s) = app.ui.transform.as_mut() {
+            s.pivot = new_p;
+        }
+        pivot = new_p;
+    }
+    ui.add_space(4.0);
+    let mut px = pivot[0] as f32;
+    let mut py = pivot[1] as f32;
     lbl(ui, "X:");
     let rx = crate::widgets::value_field(ui, &mut px, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0);
     lbl(ui, "Y:");
@@ -5339,5 +5421,31 @@ mod tests {
         let st = app.session.active().unwrap();
         assert!(matches!(&st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
         assert_eq!(past(&app), before + 2);
+    }
+
+    #[test]
+    fn anchor_grid_point_on_quad_and_carry_pivot() {
+        let quad = [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]];
+        assert_eq!(point_on_quad(quad, 0), [0.0, 0.0]);
+        assert_eq!(point_on_quad(quad, 1), [50.0, 0.0]);
+        assert_eq!(point_on_quad(quad, 2), [100.0, 0.0]);
+        assert_eq!(point_on_quad(quad, 3), [0.0, 25.0]);
+        assert_eq!(point_on_quad(quad, 4), [50.0, 25.0]);
+        assert_eq!(point_on_quad(quad, 5), [100.0, 25.0]);
+        assert_eq!(point_on_quad(quad, 6), [0.0, 50.0]);
+        assert_eq!(point_on_quad(quad, 7), [50.0, 50.0]);
+        assert_eq!(point_on_quad(quad, 8), [100.0, 50.0]);
+
+        let quad_scaled = [[0.0, 0.0], [200.0, 0.0], [200.0, 100.0], [0.0, 100.0]];
+        let p_top_right = carry_pivot(quad, quad_scaled, [100.0, 0.0]);
+        assert_eq!(p_top_right, [200.0, 0.0]);
+        let p_center = carry_pivot(quad, quad_scaled, [50.0, 25.0]);
+        assert_eq!(p_center, [100.0, 50.0]);
+
+        for anchor in 0..9 {
+            assert_eq!(matching_anchor(quad, point_on_quad(quad, anchor)), Some(anchor));
+        }
+        assert_eq!(matching_anchor(quad, [12.3, 45.6]), None);
+        assert_eq!(matching_anchor(quad, [50.0, 30.0]), None);
     }
 }
