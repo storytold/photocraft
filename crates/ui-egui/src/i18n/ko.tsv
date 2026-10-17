@@ -3352,6 +3352,10 @@ curves	Smooth	매끄럽게
 # View › Guides › right-click a guide
 	Edit Selected Guides	선택한 안내선 편집
 	Clear Selected Guides	선택한 안내선 지우기
+	Pasting from other apps is unavailable	다른 앱에서 붙여넣기를 사용할 수 없습니다
+	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	이 세션에서는 PhotoCraft가 시스템 클립보드에 접근할 수 없습니다. Wayland에서는 Flatpak 샌드박스가 다른 앱의 이미지를 읽는 데 쓰이는 프로토콜을 숨깁니다.
+	To paste from other apps, start PhotoCraft under XWayland: `{command}`	다른 앱에서 붙여넣으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
+	Nothing to paste: PhotoCraft can't read the system clipboard here	붙여넣을 내용 없음: 여기서는 PhotoCraft가 시스템 클립보드를 읽을 수 없습니다
 	Delete this set	이 세트 삭제
 	New Set…	새 세트…
 	PhotoCraft Defaults	PhotoCraft 기본값

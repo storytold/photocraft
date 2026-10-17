@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::PhotocraftApp;
 
 const WAYLAND_FILE_DROP_DISMISSED: &str = "ui.waylandFileDropGuidanceDismissed";
+const CLIPBOARD_UNREADABLE: &str = "Pasting from other apps is unavailable";
 /// At most this many notices are kept; older ones drop off.
 pub const MAX_NOTICES: usize = 3;
 /// Lines shown per notice before "…and N more".
@@ -86,6 +87,30 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
         lines.push("Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.".to_owned());
     }
     let id = post(app, "Native file drag-and-drop is unavailable", lines, false, Some(WAYLAND_FILE_DROP_DISMISSED));
+    if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
+        notice.args = args;
+    }
+}
+
+/// A paste found no clipboard to read (#5031). In a Flatpak on Wayland the sandbox hides the
+/// data-control protocol that other apps' images are read through, and there is no X server to
+/// fall back to, so the clipboard may hold an image all the same. Say so, and give the command
+/// that starts this install under XWayland, where the X11 clipboard works, when there is one.
+pub fn clipboard_unreadable(app: &mut PhotocraftApp) {
+    app.ui.status = tl!("Nothing to paste: PhotoCraft can't read the system clipboard here").into();
+    app.ui.status_error = false;
+    if app.ui.notices.iter().any(|notice| notice.title == CLIPBOARD_UNREADABLE) {
+        return;
+    }
+    // English templates, translated when drawn, as in `wayland_file_drop_guidance`.
+    let mut lines =
+        vec!["PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.".to_owned()];
+    let mut args = Vec::new();
+    if let Some(command) = &app.services.xwayland_command {
+        lines.push("To paste from other apps, start PhotoCraft under XWayland: `{command}`".to_owned());
+        args.push(("command".to_owned(), command.clone()));
+    }
+    let id = post(app, CLIPBOARD_UNREADABLE, lines, false, None);
     if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
         notice.args = args;
     }
@@ -276,6 +301,37 @@ mod tests {
         assert_eq!(crate::i18n::tr(es, &notice.title), "Arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
         assert_ne!(crate::i18n::tr(es, &notice.lines[0]), notice.lines[0]);
         assert_eq!(crate::i18n::tr(crate::i18n::Lang::EN, &notice.title), "Native file drag-and-drop is unavailable");
+    }
+
+    /// #5031: a paste that can't reach the clipboard (a Flatpak on Wayland) says why and how to
+    /// paste anyway, once while shown; a clipboard that simply holds no image stays a quiet no-op.
+    #[test]
+    fn unreadable_clipboard_paste_explains_the_sandbox() {
+        let command = "flatpak run --nosocket=wayland --socket=x11 ai.storyteller.photocraft";
+        let services = |unreadable: bool| Services {
+            clipboard_get_image: Some(Box::new(|| None)),
+            clipboard_unreadable: Some(Box::new(move || unreadable)),
+            xwayland_command: Some(command.to_string()),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(Session::new(), services(true));
+        for _ in 0..2 {
+            let r = crate::menus::invoke(&mut app, &ctx, "edit.paste", serde_json::json!({})).unwrap();
+            assert_eq!(r["pasted"], serde_json::json!(false));
+        }
+        assert_eq!(app.ui.status, "Nothing to paste: PhotoCraft can't read the system clipboard here");
+        let shown: Vec<_> = app.ui.notices.iter().filter(|notice| notice.title == CLIPBOARD_UNREADABLE).collect();
+        assert_eq!(shown.len(), 1, "a second paste doesn't stack another notice");
+        let guidance = english(shown[0]);
+        assert!(guidance.contains(&format!("under XWayland: `{command}`")), "{guidance}");
+        let es = crate::i18n::Lang::from_code("es").unwrap();
+        assert!(shown[0].lines.iter().chain([&shown[0].title]).all(|line| crate::i18n::tr(es, line) != *line), "every line is a catalog template");
+
+        let mut empty = PhotocraftApp::new(Session::new(), services(false));
+        crate::menus::invoke(&mut empty, &ctx, "edit.paste", serde_json::json!({})).unwrap();
+        assert_eq!(empty.ui.status, "Nothing to paste: the clipboard holds no image");
+        assert!(empty.ui.notices.iter().all(|notice| notice.title != CLIPBOARD_UNREADABLE));
     }
 
     /// A notice's lines in English with their arguments filled in.

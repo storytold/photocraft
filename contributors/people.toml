@@ -159,6 +159,9 @@ sync_github_name = false
 real_name = "Ufuk Efe"
 sync_github_name = true
 
+[people.nicolasfalesy]
+sync_github_name = true
+
 [people.sidney]
 real_name = "Sidney Markowitz"
 sync_github_name = true

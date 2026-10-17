@@ -390,6 +390,8 @@ pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 /// Read an RGBA8 image from the OS clipboard.
 pub type ClipboardGetFn = Box<dyn FnMut() -> Option<(u32, u32, Vec<u8>)>>;
+/// Whether the last clipboard read found no way to reach the OS clipboard at all.
+pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// Read the saved preferences text (`None` when there is none yet).
@@ -485,6 +487,9 @@ pub struct Services {
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
+    /// True when the last `clipboard_get_image` read had no clipboard to read, as in a Flatpak on
+    /// Wayland (#5031), rather than a clipboard that holds no image. `None` where that can't happen.
+    pub clipboard_unreadable: Option<ClipboardUnreadableFn>,
     /// Preferences persistence: the platform config directory on native, browser storage on
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
@@ -1105,6 +1110,11 @@ impl PhotocraftApp {
                 self.import_os_clipboard();
             }
             if self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
+                if self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
+                    // The clipboard may well hold an image that can't be reached: say why.
+                    notices::clipboard_unreadable(self);
+                    return Ok(serde_json::json!({"pasted": false}));
+                }
                 // Enabled on the strength of the OS clipboard, which held no image: a quiet no-op.
                 let message = "Nothing to paste: the clipboard holds no image";
                 self.ui.status = tl!(message).into();

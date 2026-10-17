@@ -2774,6 +2774,10 @@ curves	Smooth	平滑
 # View › Guides › right-click a guide
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
+	Pasting from other apps is unavailable	無法從其他應用程式貼上
+	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft 在此工作階段中無法存取系統剪貼簿。在 Wayland 上，Flatpak 沙盒會隱藏讀取其他應用程式影像所用的協定。
+	To paste from other apps, start PhotoCraft under XWayland: `{command}`	若要從其他應用程式貼上，請在 XWayland 下啟動 PhotoCraft：`{command}`
+	Nothing to paste: PhotoCraft can't read the system clipboard here	沒有可貼上的內容：PhotoCraft 在此無法讀取系統剪貼簿
 	Delete this set	刪除此組合
 	New Set…	新增組合…
 	PhotoCraft Defaults	PhotoCraft 預設值
