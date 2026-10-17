@@ -2647,6 +2647,26 @@ cameraData	Lens	镜头
 	Snap to Origin	贴紧原点
 	Search settings…	搜索设置…
 	No matching settings	没有匹配的设置
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	取样画笔工具
+	Sampling Area Overlay	取样区域叠加
+	Show Sampling Area	显示取样区域
+	Indicates	指示
+	Sampling Area	取样区域
+	Excluded Area	排除区域
+	Sampling Area Options	取样区域选项
+	Rectangular	矩形
+	Fill Settings	填充设置
+	Rotation Adaptation	旋转适应
+	Very High	非常高
+	High	高
+	Low	低
+	Full	完全
+	Mirror	镜像
+	Output Settings	输出设置
+	Output To	输出到
+	Duplicate Layer	复制图层
+	Contract	收缩
 	Loading fonts…	正在加载字体…
 	Response curve	响应曲线
 	Tool	工具

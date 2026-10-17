@@ -3054,6 +3054,25 @@ cameraData	Lens	Lente
 	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Ferramenta Pincel de amostragem
+	Sampling Area Overlay	Sobreposição da área de amostragem
+	Show Sampling Area	Mostrar área de amostragem
+	Indicates	Indica
+	Sampling Area	Área de amostragem
+	Excluded Area	Área excluída
+	Sampling Area Options	Opções da área de amostragem
+	Rectangular	Retangular
+	Fill Settings	Configurações de preenchimento
+	Rotation Adaptation	Adaptação de rotação
+	Very High	Muito alta
+	Full	Completa
+	Mirror	Espelhar
+	Output Settings	Configurações de saída
+	Output To	Saída para
+	New Layer	Nova camada
+	Duplicate Layer	Duplicar camada
+	Contract	Contrair
 	Loading fonts…	Carregando fontes…
 	Response curve	Curva de resposta
 	Tool	Ferramenta
@@ -3073,7 +3092,6 @@ curves	Smooth	Suavizar
 	Smooth the curve values	Suavizar os valores da curva
 	Drag to draw the curve · {key}-click draws a straight line	Arraste para desenhar a curva · {key}-clique traça uma linha reta
 	Grid Size:	Tamanho da grade:
-	New Layer	Nova camada
 	Vanishing Point: click four corners to create a plane	Ponto de fuga: clique em quatro cantos para criar um plano
 	Vanishing Point is not active	Ponto de fuga não está ativo
 	Apply Vanishing Point ({key})	Aplicar ponto de fuga ({key})
@@ -3118,7 +3136,6 @@ layerLabel	No Color	Sem cor
 	Clear Selection	Limpar seleção
 	Invert Selection	Inverter seleção
 	Select Inverse	Inverter seleção
-	Contract	Contrair
 	Sample Size	Tamanho da amostra
 	Strength	Intensidade
 	Gamma	Gama
@@ -3145,7 +3162,6 @@ layerLabel	No Color	Sem cor
 	Workspaces	Áreas de trabalho
 	Show All	Mostrar tudo
 	Hidden	Oculto
-	Duplicate Layer	Duplicar camada
 	Ungroup	Desagrupar
 	Lock Transparent Pixels	Bloquear pixels transparentes
 	Lock Image Pixels	Bloquear pixels da imagem

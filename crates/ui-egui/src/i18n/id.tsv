@@ -3038,6 +3038,24 @@ cameraData	Lens	Lensa
 	Snap to Origin	Jepret ke Titik Asal
 	Search settings…	Cari pengaturan…
 	No matching settings	Tidak ada pengaturan yang cocok
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Alat Kuas Pengambilan Sampel
+	Sampling Area Overlay	Hamparan Area Pengambilan Sampel
+	Show Sampling Area	Tampilkan Area Pengambilan Sampel
+	Indicates	Menandai
+	Sampling Area	Area Pengambilan Sampel
+	Excluded Area	Area yang Dikecualikan
+	Sampling Area Options	Opsi Area Pengambilan Sampel
+	Rectangular	Persegi Panjang
+	Fill Settings	Pengaturan Isian
+	Rotation Adaptation	Adaptasi Rotasi
+	Very High	Sangat Tinggi
+	Full	Penuh
+	Mirror	Cermin
+	Output Settings	Pengaturan Keluaran
+	Output To	Keluaran Ke
+	Duplicate Layer	Duplikat Layer
+	Contract	Ciutkan
 	Loading fonts…	Memuat font…
 	Response curve	Kurva respons
 	Tool	Alat

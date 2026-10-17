@@ -110,6 +110,12 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
+    pixel_layer_id(s, id)
+}
+
+/// `id` if it is an unlocked pixel layer of the active document.
+fn pixel_layer_id(s: &Session, id: LayerId) -> std::result::Result<LayerId, String> {
+    let d = s.active().ok_or("no document open")?;
     let l = d.doc.layer(id).ok_or("no active layer")?;
     if !matches!(l.content, LayerContent::Raster(_)) {
         return Err(format!("active layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
@@ -358,38 +364,169 @@ fn delete_and_fill(s: &mut Session, _: &Value) -> Result<Value> {
     content_aware_fill_as(s, &json!({"sampling": "rectangular"}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
 }
 
-fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
-    use photocraft_algo::content_aware::{FillOptions, auto_sampling_with, color_level, fill_owned, rotation_level};
-    let id = pixel_layer(s).map_err(EngineError::Other)?;
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = st.doc.clone();
-    let sel = doc.selection.clone().ok_or_else(|| bad(cmd, "no selection"))?;
-    let hb = sel.content_bounds().intersect(&doc.bounds());
-    if hb.is_empty() {
+/// Everything one Content-Aware Fill needs, worked out from the document and the command's
+/// params. The Content-Aware Fill workspace runs exactly this for its preview, so what it shows
+/// is what OK and Apply write.
+pub struct CafPlan {
+    pub layer: LayerId,
+    /// The rectangle worked on: the sampling window, and any sampling-brush strokes or custom
+    /// area beyond it.
+    pub rect: Rect,
+    /// Photoshop's sampling window around the fill area (`content_aware::sampling_window`).
+    pub window: Rect,
+    pub fmt: PixelFormat,
+    /// What is sampled over `rect`: the target's pixels, or with Sample All Layers the visible
+    /// composite in the target's encoding.
+    pub img: Vec<f32>,
+    /// The target's own pixels over `rect` when they differ from `img` (Sample All Layers); see
+    /// [`CafPlan::layer_pixels`].
+    pub layer_px: Option<Vec<f32>>,
+    /// The fill area (selection coverage, after the workspace's lasso edits) over `rect`.
+    pub cover: Vec<f32>,
+    pub hole: Vec<bool>,
+    /// What may be copied from: the sampling option's area before the brush strokes, and after.
+    pub base: Vec<bool>,
+    pub source: Vec<bool>,
+    pub opts: photocraft_algo::content_aware::FillOptions,
+    pub output: String,
+}
+
+impl CafPlan {
+    /// The target layer's pixels over `rect`.
+    pub fn layer_pixels(&self) -> &[f32] {
+        self.layer_px.as_deref().unwrap_or(&self.img)
+    }
+}
+
+/// The workspace's lasso edits of the fill area: `{"op": "new|add|subtract|intersect", "points":
+/// [[x, y], ...]}` or `{"op": "expand|contract", "by": px}`, applied in order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FillEdit {
+    Lasso { op: SelOp, points: Vec<[f64; 2]> },
+    Grow(i32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelOp {
+    New,
+    Add,
+    Subtract,
+    Intersect,
+}
+
+/// Most `fillEdits` and `samplingStrokes` one fill takes, and most points in all of them
+/// together: the strokes and lassos are painted pixel by pixel, segment by segment.
+pub const MAX_CAF_EDITS: usize = 1_000;
+pub const MAX_CAF_POINTS: usize = 200_000;
+
+fn points_param(v: &Value, cmd: &str, what: &str, budget: &mut usize) -> Result<Vec<[f64; 2]>> {
+    let a = v.get("points").and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("{what} needs `points` [[x, y], ...]")))?;
+    *budget = budget.checked_sub(a.len()).ok_or_else(|| bad(cmd, format!("at most {MAX_CAF_POINTS} points in all fill edits and sampling strokes")))?;
+    a.iter()
+        .map(|p| {
+            let x = p.get(0).and_then(Value::as_f64).filter(|v| v.is_finite() && v.abs() < 1e7);
+            let y = p.get(1).and_then(Value::as_f64).filter(|v| v.is_finite() && v.abs() < 1e7);
+            match (x, y) {
+                (Some(x), Some(y)) => Ok([x, y]),
+                _ => Err(bad(cmd, format!("{what} points must be pairs of finite numbers"))),
+            }
+        })
+        .collect()
+}
+
+/// `p[key]` as an array of at most [`MAX_CAF_EDITS`] entries (empty when absent).
+fn edits_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a [Value]> {
+    let Some(a) = p.get(key) else { return Ok(&[]) };
+    let a = a.as_array().ok_or_else(|| bad(cmd, format!("`{key}` must be an array")))?;
+    if a.len() > MAX_CAF_EDITS {
+        return Err(bad(cmd, format!("`{key}` takes at most {MAX_CAF_EDITS} entries")));
+    }
+    Ok(a)
+}
+
+fn fill_edits(p: &Value, cmd: &str, budget: &mut usize) -> Result<Vec<FillEdit>> {
+    edits_param(p, "fillEdits", cmd)?
+        .iter()
+        .map(|e| {
+            let op = e.get("op").and_then(Value::as_str).unwrap_or("");
+            Ok(match op {
+                "expand" | "contract" => {
+                    let by = e
+                        .get("by")
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite() && (0.0..=1000.0).contains(v))
+                        .ok_or_else(|| bad(cmd, "`by` must be 0..1000 px"))?;
+                    FillEdit::Grow(if op == "expand" { by.round() as i32 } else { -(by.round() as i32) })
+                }
+                "new" | "add" | "subtract" | "intersect" => FillEdit::Lasso {
+                    op: match op {
+                        "new" => SelOp::New,
+                        "add" => SelOp::Add,
+                        "subtract" => SelOp::Subtract,
+                        _ => SelOp::Intersect,
+                    },
+                    points: points_param(e, cmd, "a lasso edit", budget)?,
+                },
+                o => return Err(bad(cmd, format!("unknown fill edit `{o}` (new|add|subtract|intersect|expand|contract)"))),
+            })
+        })
+        .collect()
+}
+
+fn sampling_strokes(p: &Value, cmd: &str, budget: &mut usize) -> Result<Vec<photocraft_algo::content_aware::SamplingStroke>> {
+    edits_param(p, "samplingStrokes", cmd)?
+        .iter()
+        .map(|e| {
+            let add = match e.get("mode").and_then(Value::as_str).unwrap_or("add") {
+                "add" => true,
+                "subtract" => false,
+                o => return Err(bad(cmd, format!("unknown stroke mode `{o}` (add|subtract)"))),
+            };
+            let size = e
+                .get("size")
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite() && (1.0..=5000.0).contains(v))
+                .ok_or_else(|| bad(cmd, "a stroke's `size` must be 1..5000 px"))?;
+            Ok(photocraft_algo::content_aware::SamplingStroke { add, size, points: points_param(e, cmd, "a sampling stroke", budget)? })
+        })
+        .collect()
+}
+
+/// A Content-Aware Fill's params, checked against the document before any pixel is read.
+struct CafParams<'a> {
+    sel: &'a Surface,
+    /// The selection's bounds on the canvas.
+    sb: Rect,
+    edits: Vec<FillEdit>,
+    strokes: Vec<photocraft_algo::content_aware::SamplingStroke>,
+    sampling: String,
+    custom_mask: Option<&'a Surface>,
+    custom_rect: Option<Rect>,
+    opts: photocraft_algo::content_aware::FillOptions,
+    output: String,
+    surf: &'a Surface,
+}
+
+fn caf_params<'a>(doc: &'a Document, id: LayerId, p: &Value, cmd: &str) -> Result<CafParams<'a>> {
+    use photocraft_algo::content_aware::{FillOptions, color_level, rotation_level};
+    let sel = doc.selection.as_ref().ok_or_else(|| bad(cmd, "no selection"))?;
+    let sb = sel.content_bounds().intersect(&doc.bounds());
+    if sb.is_empty() {
         return Err(bad(cmd, "the selection is outside the canvas"));
     }
+    let mut budget = MAX_CAF_POINTS;
+    let edits = fill_edits(p, cmd, &mut budget)?;
+    let strokes = sampling_strokes(p, cmd, &mut budget)?;
     let sampling = str_or(p, "sampling", "auto").to_string();
-    let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
+    let custom_mask: Option<&Surface> = p.get("channel").and_then(|v| channel_mask(doc, v));
     let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
-    // Photoshop's window (`content_aware::sampling_window`) for Auto and Rectangular; `margin`
-    // asks for a rectangle that far around the selection instead.
-    let window = match sampling.as_str() {
-        "auto" => crate::fill_cmds::sampling_window(hb, doc.bounds()),
-        "rectangular" => match int(p, "margin") {
-            Some(m) => hb.inflate(m.clamp(0, 100_000) as i32),
-            None => crate::fill_cmds::sampling_window(hb, doc.bounds()),
-        },
-        "custom" => {
-            let r = match (custom_rect, custom_mask.as_ref()) {
-                (Some(r), _) => r,
-                (None, Some(m)) => m.content_bounds(),
-                (None, None) => return Err(bad(cmd, "custom sampling needs `area` [x,y,w,h] or `channel` (alpha channel index or name)")),
-            };
-            r.union(&hb).inflate(4)
-        }
+    match sampling.as_str() {
+        "auto" | "rectangular" => {}
+        // The workspace's Custom: only what the Sampling Brush adds.
+        "custom" if custom_rect.is_some() || custom_mask.is_some() || strokes.iter().any(|s| s.add) => {}
+        "custom" => return Err(bad(cmd, "custom sampling needs `area` [x,y,w,h], `channel` (alpha channel index or name) or `samplingStrokes`")),
         other => return Err(bad(cmd, format!("unknown sampling `{other}` (auto|rectangular|custom)"))),
     }
-    .intersect(&doc.bounds());
     let opts = FillOptions {
         color_adaptation: color_level(str_or(p, "colorAdaptation", "default")),
         rotations: rotation_level(str_or(p, "rotationAdaptation", "none")),
@@ -402,6 +539,77 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
         return Err(bad(cmd, "`output` must be current|new|duplicate"));
     }
     let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
+    Ok(CafParams { sel, sb, edits, strokes, sampling, custom_mask, custom_rect, opts, output, surf })
+}
+
+/// Work out a Content-Aware Fill (see [`CafPlan`]) on layer `id` of `doc`.
+pub fn content_aware_plan(doc: &Document, id: LayerId, p: &Value, cmd: &str) -> Result<CafPlan> {
+    content_aware_plan_with(doc, id, p, cmd, &photocraft_raster::Interrupt::NONE)
+}
+
+/// [`content_aware_plan`], asking `ctl` row by row whether to stop ([`EngineError::Cancelled`]).
+pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str, ctl: &photocraft_raster::Interrupt) -> Result<CafPlan> {
+    use photocraft_algo::content_aware::{auto_sampling_with, grow_mask, paint_strokes, polygon_mask};
+    use rayon::prelude::*;
+
+    use crate::fill_cmds::{read_window, read_window_mask};
+    let CafParams { sel, sb, edits, strokes, sampling, custom_mask, custom_rect, opts, output, surf } = caf_params(doc, id, p, cmd)?;
+    let canvas = doc.bounds();
+    let cancel = || ctl.cancelled();
+    let stop = || if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) };
+    // The fill area: the selection, then the lasso edits, over a rectangle that holds them all.
+    let grow: i32 = edits.iter().map(|e| if let FillEdit::Grow(b) = e { b.max(&0) } else { &0 }).sum();
+    let reach = edits.iter().fold(sb, |r, e| match e {
+        FillEdit::Lasso { points, .. } => {
+            points.iter().fold(r, |r, q| r.union(&Rect::new(q[0].floor() as i32, q[1].floor() as i32, q[0].floor() as i32 + 1, q[1].floor() as i32 + 1)))
+        }
+        FillEdit::Grow(_) => r,
+    });
+    let er = reach.inflate(grow.saturating_add(1)).intersect(&canvas);
+    let (ew, eh) = crate::fill_cmds::window_size(er)?;
+    let ecover = read_window_mask(sel, er, &cancel).ok_or(EngineError::Cancelled)?;
+    let mut ehole: Vec<bool> = ecover.par_iter().map(|c| *c > 0.0).collect();
+    for e in &edits {
+        stop()?;
+        match e {
+            FillEdit::Lasso { op, points } => {
+                let m = polygon_mask(er, points);
+                for (h, v) in ehole.iter_mut().zip(&m) {
+                    *h = match op {
+                        SelOp::New => *v,
+                        SelOp::Add => *h || *v,
+                        SelOp::Subtract => *h && !*v,
+                        SelOp::Intersect => *h && *v,
+                    };
+                }
+            }
+            FillEdit::Grow(by) => ehole = grow_mask(&ehole, ew, eh, *by),
+        }
+    }
+    let (bx0, by0, bx1, by1) = mask_bounds(ew, eh, &ehole);
+    if bx1 <= bx0 {
+        return Err(bad(cmd, "the fill area is empty"));
+    }
+    let hb = Rect::new(er.x0 + bx0 as i32, er.y0 + by0 as i32, er.x0 + bx1 as i32, er.y0 + by1 as i32);
+    // Photoshop's window (`content_aware::sampling_window`) for Auto and Rectangular; `margin`
+    // asks for a rectangle that far around the fill area instead.
+    let window = match sampling.as_str() {
+        "rectangular" => match int(p, "margin") {
+            Some(m) => hb.inflate(m.clamp(0, 100_000) as i32),
+            None => crate::fill_cmds::sampling_window(hb, canvas),
+        },
+        "custom" => match (custom_rect, custom_mask) {
+            (Some(r), _) => r,
+            (None, Some(m)) => m.content_bounds(),
+            (None, None) => hb,
+        }
+        .union(&hb)
+        .inflate(4),
+        _ => crate::fill_cmds::sampling_window(hb, canvas),
+    }
+    .intersect(&canvas);
+    // Strokes that add to the sampling area may reach past the window.
+    let rect = strokes.iter().filter(|s| s.add).fold(window, |r, s| r.union(&s.bounds())).intersect(&canvas);
     let fmt = surf.format();
     // Photoshop's Sample All Layers checkbox is off unless the caller asks. When the active
     // layer has no pixels in the window there is nothing to sample, so that case uses the
@@ -412,56 +620,127 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     };
     let n = fmt.channels();
     // Refuse a window too large to read before allocating for it, whatever the sampling (#963).
-    let (w, h) = crate::fill_cmds::window_size(window)?;
-    // A background job when started with `Session::start` (#210): reading the window and the
-    // PatchMatch fill run on a worker against the document snapshot, cancellable per row band.
+    let (w, h) = crate::fill_cmds::window_size(rect)?;
+    let pixels = read_window(surf, rect, &cancel).ok_or(EngineError::Cancelled)?;
+    let (img, layer_px) = if sample_all {
+        stop()?;
+        (crate::retouch_cmds::composite_region(doc, Some(id), crate::retouch_cmds::SampleLayers::All, rect, fmt).data, Some(pixels))
+    } else {
+        (pixels, None)
+    };
+    stop()?;
+    let mut cover = vec![0.0f32; w * h];
+    let mut hole = vec![false; w * h];
+    cover.par_chunks_mut(w.max(1)).zip(hole.par_chunks_mut(w.max(1))).enumerate().try_for_each(|(y, (crow, hrow))| {
+        stop()?;
+        let dy = rect.y0 + y as i32;
+        if dy < er.y0 || dy >= er.y1 {
+            return Ok(());
+        }
+        for (x, (c, hl)) in crow.iter_mut().zip(hrow.iter_mut()).enumerate() {
+            let dx = rect.x0 + x as i32;
+            if dx >= er.x0 && dx < er.x1 {
+                let j = (dy - er.y0) as usize * ew + (dx - er.x0) as usize;
+                let (eh, ec) = (ehole.get(j).copied().unwrap_or(false), ecover.get(j).copied().unwrap_or(0.0));
+                *hl = eh;
+                // Pixels the lasso added are filled outright; selected ones by their coverage.
+                *c = if eh { if ec > 0.0 { ec } else { 1.0 } } else { 0.0 };
+            }
+        }
+        Ok::<(), EngineError>(())
+    })?;
+    drop((ecover, ehole));
+    // The sampling option's area: Auto keeps what looks like the surroundings within the window,
+    // Rectangular the whole window, Custom the given area (or nothing, for the brush to add to).
+    let mut base = vec![false; w * h];
+    match sampling.as_str() {
+        "auto" | "rectangular" => {
+            let (ww, wh) = (window.width() as usize, window.height() as usize);
+            let (ox, oy) = ((window.x0 - rect.x0) as usize, (window.y0 - rect.y0) as usize);
+            let area: Vec<bool> = match sampling.as_str() {
+                "auto" if window == rect => auto_sampling_with(w, h, n, &img, &hole, ctl).map_err(|_| EngineError::Cancelled)?,
+                "auto" => {
+                    let mut wimg = vec![0.0f32; ww * wh * n];
+                    let mut whole = vec![false; ww * wh];
+                    for y in 0..wh {
+                        let s = ((oy + y) * w + ox) * n;
+                        wimg[y * ww * n..(y + 1) * ww * n].copy_from_slice(&img[s..s + ww * n]);
+                        whole[y * ww..(y + 1) * ww].copy_from_slice(&hole[(oy + y) * w + ox..(oy + y) * w + ox + ww]);
+                    }
+                    auto_sampling_with(ww, wh, n, &wimg, &whole, ctl).map_err(|_| EngineError::Cancelled)?
+                }
+                _ => vec![true; ww * wh],
+            };
+            for y in 0..wh {
+                base[(oy + y) * w + ox..(oy + y) * w + ox + ww].copy_from_slice(&area[y * ww..(y + 1) * ww]);
+            }
+        }
+        _ => match (custom_rect, custom_mask) {
+            (Some(r), _) => base.par_iter_mut().enumerate().for_each(|(i, b)| *b = r.contains(rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32)),
+            (None, Some(m)) => {
+                let v = read_window_mask(m, rect, &cancel).ok_or(EngineError::Cancelled)?;
+                base.par_iter_mut().zip(&v).for_each(|(b, v)| *b = *v > 0.5);
+            }
+            (None, None) => {}
+        },
+    }
+    stop()?;
+    base.par_iter_mut().zip(&hole).for_each(|(b, h)| *b &= !*h);
+    let mut source = base.clone();
+    paint_strokes(&mut source, rect, &strokes);
+    source.par_iter_mut().zip(&hole).for_each(|(s, h)| *s &= !*h);
+    Ok(CafPlan { layer: id, rect, window, fmt, img, layer_px, cover, hole, base, source, opts, output })
+}
+
+fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
+    use photocraft_algo::content_aware::fill_owned;
+    // The workspace names the layer it opened on: after an Apply to a new layer that one is
+    // active, but the fill still samples the original.
+    let id = match p.get("layer").and_then(Value::as_u64) {
+        Some(l) => pixel_layer_id(s, LayerId(l)),
+        None => pixel_layer(s),
+    }
+    .map_err(EngineError::Other)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = st.doc.clone();
+    // Check the params before the job starts.
+    caf_params(&doc, id, p, cmd)?;
+    let p = p.clone();
+    // A background job when started with `Session::start` (#210): working out the fill area and
+    // the sampling area, reading the pixels and the PatchMatch fill run on a worker against the
+    // document snapshot, cancellable per row band.
     crate::jobs::run(
         s,
         label,
         true,
         move |ctx| {
             use rayon::prelude::*;
-
-            use crate::fill_cmds::{read_window, read_window_cover, read_window_mask};
             ctx.progress(0.0, label);
             let cancel = || ctx.cancelled();
-            let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
-            let img = if sample_all {
-                if cancel() {
-                    return Err(EngineError::Cancelled);
-                }
-                let region = crate::retouch_cmds::composite_region(&doc, None, crate::retouch_cmds::SampleLayers::All, window, fmt);
-                if cancel() {
-                    return Err(EngineError::Cancelled);
-                }
-                region.data
-            } else {
-                read_window(surf, window, &cancel).ok_or(EngineError::Cancelled)?
-            };
-            let hole = read_window_cover(&sel, window, &cancel).ok_or(EngineError::Cancelled)?;
-            let mut source = match (sampling.as_str(), custom_rect, custom_mask.as_ref()) {
-                ("custom", Some(r), _) => (0..w * h).into_par_iter().map(|i| r.contains(window.x0 + (i % w) as i32, window.y0 + (i / w) as i32)).collect(),
-                ("custom", None, Some(m)) => read_window_mask(m, window, &cancel).ok_or(EngineError::Cancelled)?.par_iter().map(|v| *v > 0.5).collect(),
-                _ => vec![true; w * h],
-            };
-            ctx.check()?;
-            // Auto: only what looks like the selection's surroundings.
-            if sampling == "auto" {
-                source = auto_sampling_with(w, h, n, &img, &hole, &photocraft_raster::Interrupt::cancel_only(&cancel)).map_err(|_| EngineError::Cancelled)?;
-            }
-            ctx.check()?;
-            // The fill changes only the selected pixels: keep the original and the coverage over
-            // their bounds for the apply step, and fill the window's pixels themselves.
+            let plan = content_aware_plan_with(&doc, id, &p, cmd, &photocraft_raster::Interrupt::cancel_only(&cancel))?;
+            let CafPlan { layer, rect, fmt, img, layer_px, cover, hole, source, opts, output, .. } = plan;
+            let (w, h) = (rect.width() as usize, rect.height() as usize);
+            let n = fmt.channels();
+            // The fill changes only the fill area: keep the layer's pixels and the coverage over
+            // its bounds for the apply step, and fill the sampled pixels themselves.
             let (bx0, by0, bx1, by1) = mask_bounds(w, h, &hole);
-            let original: Vec<f32> = (by0..by1).flat_map(|y| img[(y * w + bx0) * n..(y * w + bx1) * n].iter().copied()).collect();
-            let at = |x: usize, y: usize| (window.x0 + x as i32, window.y0 + y as i32);
-            let ((x0, y0), (x1, y1)) = (at(bx0, by0), at(bx1, by1));
-            let cover = read_window_mask(&sel, Rect::new(x0, y0, x1, y1), &cancel).ok_or(EngineError::Cancelled)?;
+            let own = layer_px.as_deref().unwrap_or(&img);
+            let original: Vec<f32> = (by0..by1).flat_map(|y| own[(y * w + bx0) * n..(y * w + bx1) * n].iter().copied()).collect();
+            let cover: Vec<f32> = (by0..by1).flat_map(|y| cover[y * w + bx0..y * w + bx1].iter().copied()).collect();
             let n_hole = cover.iter().filter(|c| **c > 0.0).count();
-            let filled = ctx.stage(0.05, 1.0, label, |ctl| fill_owned(w, h, n, img, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
-            Ok(FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover, n_hole })
+            ctx.check()?;
+            let mut filled = ctx.stage(0.05, 1.0, label, |ctl| fill_owned(w, h, n, img, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
+            // Sampled from all layers: outside the fill area the window keeps the layer's pixels.
+            if let Some(own) = layer_px {
+                filled.par_chunks_mut(n.max(1)).zip(own.par_chunks(n.max(1))).zip(hole.par_iter()).for_each(|((f, o), h)| {
+                    if !*h {
+                        f.copy_from_slice(o);
+                    }
+                });
+            }
+            Ok((layer, rect, fmt, output, FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover, n_hole }))
         },
-        move |s, done| apply_content_aware_fill(s, label, id, &output, fmt, window, done),
+        move |s, (layer, rect, fmt, output, done)| apply_content_aware_fill(s, label, layer, &output, fmt, rect, done),
     )
 }
 
@@ -1169,7 +1448,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Content-Aware Fill…",
             ["Edit"],
             None,
-            r##"{"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"sampleAllLayers":bool=false,"output":"current|new|duplicate","seed":u64=1}"##,
+            r##"{"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"samplingStrokes":[{"mode":"add|subtract","size":px,"points":[[x,y],…]}]? (the workspace's Sampling Brush, after the sampling option's area; added strokes may lie outside the window),"fillEdits":[{"op":"new|add|subtract|intersect","points":[[x,y],…]}|{"op":"expand|contract","by":px}]? (the workspace's lasso edits of the fill area, in order),"sampleAllLayers":bool=false,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"output":"current|new|duplicate","layer":id?=active (the layer filled and sampled),"seed":u64=1}"##,
             can_caf,
             content_aware_fill
         ),

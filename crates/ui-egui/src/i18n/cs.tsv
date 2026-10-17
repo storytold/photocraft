@@ -2641,6 +2641,26 @@ cameraData	Lens	Objektiv
 	Snap to Origin	Přichytit k počátku
 	Search settings…	Hledat nastavení…
 	No matching settings	Žádná odpovídající nastavení
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Nástroj Štětec vzorkování
+	Sampling Area Overlay	Překrytí oblasti vzorkování
+	Show Sampling Area	Zobrazit oblast vzorkování
+	Indicates	Označuje
+	Sampling Area	Oblast vzorkování
+	Excluded Area	Vyloučená oblast
+	Sampling Area Options	Volby oblasti vzorkování
+	Rectangular	Obdélníková
+	Fill Settings	Nastavení výplně
+	Rotation Adaptation	Přizpůsobení otočení
+	Very High	Velmi vysoká
+	High	Vysoká
+	Low	Nízká
+	Full	Úplná
+	Mirror	Zrcadlit
+	Output Settings	Nastavení výstupu
+	Output To	Výstup do
+	Duplicate Layer	Duplikovat vrstvu
+	Contract	Zúžit
 
 # Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
 # choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
@@ -2781,7 +2801,6 @@ cameraData	Lens	Objektiv
 	Content-Aware Fill	Výplň s ohledem na obsah
 	Content-Aware Move	Přesun s ohledem na obsah
 	Continue	Pokračovat
-	Contract	Zúžit
 	Contrasty	Kontrastní
 	Conté Crayon	Křída Conté
 	Convert to Linked	Převést na propojený
@@ -2857,7 +2876,6 @@ cameraData	Lens	Objektiv
 	Draft	Koncept
 	Dry Brush	Suchý štětec
 	Duplicate	Duplikovat
-	Duplicate Layer	Duplikovat vrstvu
 	Duplicate Layer Comp	Duplikovat kompozici vrstev
 	Duplicate Layers	Duplikovat vrstvy
 	Duplicate Path	Duplikovat cestu
@@ -2984,7 +3002,6 @@ cameraData	Lens	Objektiv
 	Hide	Skrýt
 	Hide Others	Skrýt ostatní
 	Hide {app}	Skrýt {app}
-	High	Vysoká
 	High Pass	Horní propust
 	Highlight	Světla
 	Highlight Amount	Míra světel
@@ -3071,7 +3088,6 @@ cameraData	Lens	Objektiv
 	Long Lines	Dlouhé čáry
 	Long Strokes	Dlouhé tahy
 	Loop	Smyčka
-	Low	Nízká
 	Lower	Dolní
 	Lum	Jas
 	Lut	LUT

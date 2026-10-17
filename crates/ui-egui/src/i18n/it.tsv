@@ -2705,6 +2705,22 @@ cameraData	Lens	Obiettivo
 	Snap to Origin	Aggancia all'origine
 	Search settings…	Cerca impostazioni…
 	No matching settings	Nessuna impostazione corrispondente
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Strumento Pennello di campionamento
+	Sampling Area Overlay	Sovrapposizione area di campionamento
+	Show Sampling Area	Mostra area di campionamento
+	Indicates	Indica
+	Sampling Area	Area di campionamento
+	Excluded Area	Area esclusa
+	Sampling Area Options	Opzioni area di campionamento
+	Rectangular	Rettangolare
+	Fill Settings	Impostazioni di riempimento
+	Rotation Adaptation	Adattamento rotazione
+	Very High	Molto alta
+	Full	Completa
+	Mirror	Rifletti
+	Output Settings	Impostazioni di output
+	Output To	Output in
 	Loading fonts…	Caricamento font…
 	Response curve	Curva di risposta
 	Tool	Strumento

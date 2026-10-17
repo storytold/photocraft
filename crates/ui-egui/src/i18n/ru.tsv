@@ -2975,6 +2975,24 @@ cameraData	Lens	Объектив
 	Rasterize Layer Style	Растрировать стиль слоя
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Кисть области выборки
+	Sampling Area Overlay	Наложение области выборки
+	Show Sampling Area	Показать область выборки
+	Indicates	Обозначает
+	Sampling Area	Область выборки
+	Excluded Area	Исключённая область
+	Sampling Area Options	Параметры области выборки
+	Rectangular	Прямоугольная
+	Fill Settings	Параметры заливки
+	Rotation Adaptation	Адаптация поворота
+	Very High	Очень высокая
+	Full	Полная
+	Mirror	Отражение
+	Output Settings	Параметры вывода
+	Output To	Вывод в
+	Duplicate Layer	Дубликат слоя
+	Contract	Сжать
 	Loading fonts…	Загрузка шрифтов…
 	Response curve	Кривая отклика
 	Tool	Инструмент

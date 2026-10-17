@@ -3219,6 +3219,22 @@ cameraData	Lens	렌즈
 	Snap to Origin	원점에 스냅
 	Search settings…	설정 검색…
 	No matching settings	일치하는 설정 없음
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	샘플링 브러시 도구
+	Sampling Area Overlay	샘플링 영역 오버레이
+	Show Sampling Area	샘플링 영역 표시
+	Indicates	표시 대상
+	Sampling Area	샘플링 영역
+	Excluded Area	제외 영역
+	Sampling Area Options	샘플링 영역 옵션
+	Rectangular	사각형
+	Fill Settings	채우기 설정
+	Rotation Adaptation	회전 적응
+	Very High	매우 높음
+	Full	전체
+	Mirror	미러
+	Output Settings	출력 설정
+	Output To	출력 위치
 	Loading fonts…	글꼴 불러오는 중…
 	Response curve	응답 곡선
 	Simulate Pressure	압력 시뮬레이션

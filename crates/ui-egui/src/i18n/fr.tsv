@@ -3051,6 +3051,24 @@ cameraData	Lens	Objectif
 	Snap to Origin	Aligner sur l'origine
 	Search settings…	Rechercher des réglages…
 	No matching settings	Aucun réglage correspondant
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Outil Pinceau d’échantillonnage
+	Sampling Area Overlay	Incrustation de la zone d’échantillonnage
+	Show Sampling Area	Afficher la zone d’échantillonnage
+	Indicates	Indique
+	Sampling Area	Zone d’échantillonnage
+	Excluded Area	Zone exclue
+	Sampling Area Options	Options de la zone d’échantillonnage
+	Rectangular	Rectangulaire
+	Fill Settings	Paramètres de remplissage
+	Rotation Adaptation	Adaptation de la rotation
+	Very High	Très élevée
+	Full	Totale
+	Mirror	Miroir
+	Output Settings	Paramètres de sortie
+	Output To	Sortie vers
+	Duplicate Layer	Dupliquer le calque
+	Contract	Contracter
 	Loading fonts…	Chargement des polices…
 	Response curve	Courbe de réponse
 	Tool	Outil

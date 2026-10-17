@@ -4225,6 +4225,22 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Alatka četkica za uzorkovanje
+	Sampling Area Overlay	Preklop oblasti uzorkovanja
+	Show Sampling Area	Prikaži oblast uzorkovanja
+	Indicates	Označava
+	Sampling Area	Oblast uzorkovanja
+	Excluded Area	Izuzeta oblast
+	Sampling Area Options	Opcije oblasti uzorkovanja
+	Rectangular	Pravougaona
+	Fill Settings	Podešavanja popune
+	Rotation Adaptation	Prilagođavanje rotacije
+	Very High	Veoma visoka
+	Full	Potpuna
+	Mirror	Preslikavanje
+	Output Settings	Podešavanja izlaza
+	Output To	Izlaz u
 	Response curve	Kriva odziva
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Koristi ugrađeni profil ({profile})

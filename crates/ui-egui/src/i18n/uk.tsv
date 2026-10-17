@@ -3722,6 +3722,22 @@ cameraData	Lens	Об'єктив
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Пензель області вибірки
+	Sampling Area Overlay	Накладання області вибірки
+	Show Sampling Area	Показати область вибірки
+	Indicates	Позначає
+	Sampling Area	Область вибірки
+	Excluded Area	Виключена область
+	Sampling Area Options	Параметри області вибірки
+	Rectangular	Прямокутна
+	Fill Settings	Параметри заливки
+	Rotation Adaptation	Адаптація повороту
+	Very High	Дуже висока
+	Full	Повна
+	Mirror	Віддзеркалення
+	Output Settings	Параметри виводу
+	Output To	Вивести в
 	Loading fonts…	Завантаження шрифтів…
 	Response curve	Крива відгуку
 	Simulate Pressure	Імітувати натиск

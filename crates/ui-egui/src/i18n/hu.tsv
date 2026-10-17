@@ -4017,6 +4017,22 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
+# Edit › Content-Aware Fill workspace
+	Excluded Area	Kizárt terület
+	Fill Settings	Kitöltési beállítások
+	Full	Teljes
+	Indicates	Jelzi
+	Mirror	Tükrözés
+	Output Settings	Kimeneti beállítások
+	Output To	Kimenet célja
+	Rectangular	Téglalap
+	Rotation Adaptation	Elforgatás-adaptáció
+	Sampling Area	Mintavételi terület
+	Sampling Area Options	Mintavételi terület beállításai
+	Sampling Area Overlay	Mintavételi terület átfedése
+	Sampling Brush Tool	Mintavételi ecset
+	Show Sampling Area	Mintavételi terület megjelenítése
+	Very High	Nagyon magas
 	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
 	Response curve	Válaszgörbe
 	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn
