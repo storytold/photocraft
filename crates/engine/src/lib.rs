@@ -28,6 +28,7 @@ pub mod channel_cmds;
 mod clip_group;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
+pub mod command_hints;
 pub mod commands;
 pub mod comps_cmds;
 mod crop_fill;
@@ -146,7 +147,8 @@ pub use photocraft_paint::BrushSettings;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    #[error("unknown command `{0}`")]
+    /// Displays with the nearest registered ids, if any ([`command_hints`], #3674).
+    #[error("unknown command `{id}`{hint}", id = .0, hint = command_hints::unknown_command_hint(.0))]
     UnknownCommand(String),
     #[error("command `{0}` is not available right now: {1}")]
     Disabled(String, String),
@@ -739,7 +741,7 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(s) = commands::find(id) else { return Some(format!("unknown command `{id}`")) };
+        let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
         self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
     }
 

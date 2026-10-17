@@ -81,6 +81,9 @@ impl Headless {
         match method {
             "engine.execute" => {
                 let id = str_of(&p, "command").ok_or_else(|| bad("engine.execute needs `command`"))?;
+                if METHODS.contains(&id) && photocraft_engine::commands::find(id).is_none() {
+                    return Err(bad(photocraft_engine::command_hints::protocol_method_as_command(id)));
+                }
                 let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
                 self.command_start(id, p.get("params").cloned().unwrap_or(Value::Null), wait)
             }
@@ -164,7 +167,7 @@ impl Headless {
             "doc.close" => self.close(index_of(&p)?),
             "batch" => self.batch(&p),
             "methods" => Ok(json!(METHODS)),
-            other => Err(bad(format!("unknown method `{other}` (try `methods`)"))),
+            other => Err(bad(format!("{} (try `methods`)", photocraft_engine::command_hints::unknown_method(other, METHODS)))),
         }
     }
 
@@ -779,6 +782,23 @@ mod tests {
             }
         }
         assert!(h.handle("jobs.nope", Value::Null).unwrap_err().to_string().contains("unknown method"));
+    }
+
+    /// #3674: a guessed name gets a pointer to the right one, in both directions.
+    #[test]
+    fn unknown_names_suggest_the_right_method_or_command() {
+        let mut h = Headless::new();
+        let err = |h: &mut Headless, m: &str, p: Value| h.handle(m, p).unwrap_err().to_string();
+        let e = err(&mut h, "engine.execute", json!({"command": "engine.commands"}));
+        assert!(e.contains("did you mean `command.list`") && e.contains("protocol method"), "{e}");
+        let e = err(&mut h, "engine.execute", json!({"command": "doc.inspect"}));
+        assert!(e.contains("`doc.inspect` is a protocol method"), "{e}");
+        let e = err(&mut h, "engine.execute", json!({"command": "edit.undoo"}));
+        assert!(e.contains("did you mean `edit.undo`"), "{e}");
+        let e = err(&mut h, "doc.inspct", Value::Null);
+        assert!(e.contains("did you mean `doc.inspect`") && e.contains("(try `methods`)"), "{e}");
+        let e = err(&mut h, "edit.undo", Value::Null);
+        assert!(e.contains("engine.execute {\"command\": \"edit.undo\"}"), "{e}");
     }
 
     #[test]
