@@ -1203,12 +1203,13 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
             return (doc.clone(), key);
         }
     }
+    let revision = st.revision;
     let snapshot = st.doc.clone();
     if let Some((layer, params)) = app.live_adjust.clone()
         && let Some(l) = snapshot.layer(layer)
         && let LayerContent::Adjustment(a) = &l.content
     {
-        let key = 1 + params.to_string().bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+        let key = crate::adjust_preview::live_key(app, &snapshot, revision, layer, &params);
         let shown = memo_display(app, &snapshot, key, || {
             let kind = photocraft_engine::commands::adjustment_kind(a);
             let preview = photocraft_engine::adjust_params::from_params(kind, &params, Some(a), snapshot.mode).unwrap_or_else(|_| a.clone());
@@ -1489,6 +1490,14 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     {
         return Some(r);
     }
+    // Between a Properties-panel adjustment-layer drag's previews (and the document): the
+    // layer's area. Without this every parameter value recomposited the whole document (#6839).
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::adjust_preview::live_switch_region(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(r);
+    }
     // Between a Move drag's offsets: where the moving layers were and are (Auto-Select's pick
     // at the press changes no pixels).
     if (seen.0 == now.0 || (seen.0 + 1 == now.0 && last_damage.is_some_and(|r| r.is_empty())))
@@ -1592,6 +1601,12 @@ fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible:
     {
         damage = Some(crate::adjust_preview::switch_damage(app, raw_key, r, visible));
     }
+    // The same for a Properties-panel drag's previews.
+    if damage.is_some()
+        && let Some(r) = seen.filter(|s| s.0 == revision).and_then(|s| crate::adjust_preview::live_switch_region(app, id, revision, s.1 ^ display_key, raw_key))
+    {
+        damage = Some(crate::adjust_preview::live_switch_damage(app, raw_key, r, visible));
+    }
     let preview_key = raw_key ^ display_key;
     // The Navigator may draw this texture only while it holds the plain document (no live
     // preview, which can be composited only where the view is).
@@ -1632,6 +1647,10 @@ fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible:
     if present && current {
         // An adjustment preview composited where the view was: catch up where it moved to.
         if let Some(r) = crate::adjust_preview::uncovered(app, id, raw_key, visible) {
+            let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
+            app.perf.record(r.kind, r.px, r.composite_ms, r.upload_ms);
+        }
+        if let Some(r) = crate::adjust_preview::live_uncovered(app, id, raw_key, visible) {
             let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
             app.perf.record(r.kind, r.px, r.composite_ms, r.upload_ms);
         }
