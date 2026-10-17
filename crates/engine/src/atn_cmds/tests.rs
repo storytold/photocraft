@@ -67,6 +67,105 @@ fn sample() -> AtnFile {
 }
 
 #[test]
+fn layer_comp_apply_imports_plays_and_undoes() {
+    let name = "合成 𠮷";
+    let data = set_of("Comps", vec![("Apply", vec![item("applyComp", "Apply Layer Comp", Some(desc("null").with("null", name_ref("compsClass", name))))])]);
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+        assert_eq!(s.actions.list[0].steps, [("layerComp.apply".into(), json!({"comp": name}))]);
+
+        s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+        s.execute("layerComp.new", json!({"name": "Other"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let played = s.execute("actions.play", json!({"action": "Apply"})).unwrap();
+        assert_eq!(played["ran"], 0, "{played}");
+        assert!(played["failed"]["error"].as_str().unwrap().contains(name), "{played}");
+        assert_eq!(*s.active().unwrap().doc, *before, "a missing comp must not apply another comp");
+
+        let comp = s.execute("layerComp.new", json!({"name": name})).unwrap()["comp"].clone();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.setProps", json!({"visible": false})).unwrap();
+        s.execute("layerComp.new", json!({"name": "Hidden"})).unwrap();
+        let played = s.execute("actions.play", json!({"action": "Apply"})).unwrap();
+        assert_eq!(played["ran"], 1, "{played}");
+        assert!(played.get("failed").is_none(), "{played}");
+        assert!(s.active().unwrap().doc.layer(layer).unwrap().visible);
+        assert_eq!(json!(s.active().unwrap().doc.last_applied_comp), comp);
+        assert!(s.undo());
+        assert!(!s.active().unwrap().doc.layer(layer).unwrap().visible);
+        assert!(s.redo());
+        assert!(s.active().unwrap().doc.layer(layer).unwrap().visible);
+    }
+}
+
+#[test]
+fn layer_comp_apply_round_trips_by_name() {
+    for name in ["Comp 1", "合成 𠮷"] {
+        let descriptor = desc("null").with("null", name_ref("compsClass", name));
+        let data = set_of("Comps", vec![("Apply", vec![item("applyComp", "Apply Layer Comp", Some(descriptor.clone()))])]);
+        let mut s = Session::new();
+        let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+        let saved = s.execute("actions.save", json!({"set": "Comps"})).unwrap();
+        assert_eq!(saved["skipped"], json!([]));
+        let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        let file = atn::parse(&bytes).unwrap();
+        assert_eq!(file.actions[0].items[0].event, AtnEvent::Name("applyComp".into()));
+        assert_eq!(file.actions[0].items[0].descriptor, Some(descriptor));
+        let mut reloaded = Session::new();
+        reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+        assert_eq!(reloaded.actions.list, s.actions.list);
+    }
+    // Local comp ids and the default comp cannot be resolved to a portable name at export.
+    for params in [json!({}), json!({"comp": 1}), json!({"comp": null}), json!({"comp": true}), json!({"comp": []})] {
+        assert!(export_item("layerComp.apply", &params, "Comps").is_none(), "{params}");
+    }
+}
+
+#[test]
+fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
+    let references = [
+        None,
+        Some(D::Integer(1)),
+        Some(D::Reference(vec![])),
+        Some(name_ref("Lyr ", "Comp 1")),
+        Some(target_ref("compsClass")),
+        Some(class_ref("compsClass")),
+        Some(D::Reference(vec![ReferenceItem::Index { class: class("compsClass"), index: 1 }])),
+        Some(D::Reference(vec![ReferenceItem::Identifier { class: class("compsClass"), id: 1 }])),
+        Some(D::Reference(vec![
+            ReferenceItem::Name { class: class("compsClass"), name: UnicodeString::new_nul("Comp 1") },
+            ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") },
+        ])),
+    ];
+    let items: Vec<_> =
+        references.into_iter().map(|reference| item("applyComp", "Apply Layer Comp", reference.map(|r| desc("null").with("null", r)))).collect();
+    let data = set_of("Comps", vec![("Unknown", items.clone())]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(loaded["unsupported"].as_array().unwrap().len(), items.len());
+    assert!(s.actions.list[0].steps.iter().all(|(id, _)| id == PHOTOSHOP_STEP));
+    assert!(s.actions.list[0].disabled.is_empty());
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layerComp.new", json!({"name": "Comp 1"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let played = s.execute("actions.play", json!({"action": "Unknown"})).unwrap();
+    assert_eq!(played["ran"], 0, "{played}");
+    assert!(played["failed"]["error"].as_str().unwrap().contains("Apply Layer Comp"), "{played}");
+    assert_eq!(*s.active().unwrap().doc, *before);
+    let saved = s.execute("actions.save", json!({"set": "Comps"})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let file = atn::parse(&bytes).unwrap();
+    assert_eq!(file.actions[0].items.len(), items.len());
+    for (saved, original) in file.actions[0].items.iter().zip(&items) {
+        assert_eq!(saved.event, original.event);
+        assert_eq!(saved.descriptor, original.descriptor);
+    }
+}
+
+#[test]
 fn load_maps_events_keeps_flags_and_plays() {
     let mut s = Session::new();
     let bytes = atn::write(&sample()).unwrap();
@@ -321,6 +420,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
+        ("layerComp.apply", json!({"comp": "Comp 1"})),
     ];
     for (id, params) in &cases {
         let item = export_item(id, params, "S").unwrap_or_else(|| panic!("{id} does not export"));

@@ -1957,6 +1957,20 @@ fn duplicate_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Only a comp name in the active document is portable across action playback.
+fn apply_comp_from(d: &Descriptor) -> Mapped {
+    match get_ref(d, "null") {
+        Some([ReferenceItem::Name { class, name }]) if trimmed(&class.class_id) == "compsClass" => {
+            step("layerComp.apply", json!({"comp": name.to_string_lossy()}))
+        }
+        _ => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
+    Some(desc("null").with("null", name_ref("compsClass", jstr(p, "comp")?)))
+}
+
 fn play_from(d: &Descriptor) -> Mapped {
     match get_ref(d, "null").map(target) {
         Some(Target::Name(n)) => step("actions.play", json!({"action": n})),
@@ -2914,6 +2928,7 @@ const EVENTS: &[Event] = &[
     ev!("save", "save", "Save", "file.save", &[]),
     ev!("Rvrt", "revert", "Revert", "file.revert", &[]),
     Event { code: "Ply ", name: "play", label: "Play", ids: &["actions.play"], from: play_from, to: play_to },
+    Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
 ];
 
