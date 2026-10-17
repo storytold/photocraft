@@ -2250,7 +2250,7 @@ layers	Fill:	Độ tô:
 	Delete Timeline	Xóa dòng thời gian
 	Deselect All	Bỏ chọn tất cả
 	Display Text	Hiển thị văn bản
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Kéo trên ảnh để thêm ràng buộc; Shift cho ngang/dọc; nhấp chuột phải để xóa.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Kéo trên ảnh để thêm ràng buộc; Shift cho ngang/dọc; nhấp chuột phải vào ràng buộc để thay đổi hoặc xóa.
 	Export selected measurements (CSV)	Xuất các phép đo đã chọn (CSV)
 	Focal Length	Tiêu cự
 	Font Size:	Cỡ chữ:

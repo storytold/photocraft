@@ -1052,7 +1052,7 @@
 	Done	Bitti
 	Dots	Noktalar
 	Drag a rectangle around the object	Nesnenin çevresine bir dikdörtgen sürükleyin
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Kısıtlama eklemek için resmin üzerine sürükleyin; Yatay/dikey için kaydırma; silmek için sağ tıklayın.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Kısıtlama eklemek için resmin üzerine sürükleyin; Yatay/dikey için kaydırma; değiştirmek veya silmek için bir kısıtlamaya sağ tıklayın.
 	Drag to move the active shape's path or the Work Path	Etkin şeklin yolunu veya Çalışma Yolunu taşımak için sürükleyin
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Tıklayın: çapayı seçin · Sürükleyin: çapayı, tutamacı veya parçayı taşıyın · {shift}-tıklayın: ekleyin · {alt}-tıklayın: alt yolun tamamı
 	Draw with the Pen tool (P) or make a work path from a selection.	Kalem aracıyla (P) çizim yapın veya seçimden bir çalışma yolu oluşturun.

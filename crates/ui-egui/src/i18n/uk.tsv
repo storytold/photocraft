@@ -1556,7 +1556,7 @@
 	Click to restore the current colour	Клацніть, щоб відновити поточний колір
 	Click with the Note tool to add a note.	Клацніть інструментом «Нотатка», щоб додати нотатку.
 	Drag a rectangle around the object	Намалюйте прямокутник навколо об'єкта
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Перетягніть на зображенні, щоб додати обмеження; Shift для горизонталі/вертикалі; праве клацання для видалення.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Перетягніть на зображенні, щоб додати обмеження; Shift для горизонталі/вертикалі; клацніть правою кнопкою на обмеженні, щоб змінити або видалити його.
 	Drag the arrow to set the angle, the dots to set the roundness	Перетягніть стрілку, щоб установити кут, а точки — округлість
 	Create new pattern from the selection	Створити новий візерунок із виділення
 	Create new gradient	Створити новий градієнт

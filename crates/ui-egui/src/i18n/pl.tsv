@@ -1092,7 +1092,7 @@
 	Done	Gotowe
 	Dots	Kropki
 	Drag a rectangle around the object	Przeciągnij prostokąt wokół obiektu
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Przeciągnij po obrazie, aby dodać ograniczenie; Shift — poziomo/pionowo; prawy przycisk usuwa.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Przeciągnij po obrazie, aby dodać ograniczenie; Shift — poziomo/pionowo; prawy przycisk na ograniczeniu — zmiana lub usunięcie.
 	Drag to move the active shape's path or the Work Path	Przeciągnij, aby przesunąć ścieżkę aktywnego kształtu lub ścieżkę roboczą
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: zaznacz punkt kontrolny · Przeciągnięcie: przesuń punkt, uchwyt lub segment · {shift}-klik: dodaj · {alt}-klik: cała podścieżka
 	Draw with the Pen tool (P) or make a work path from a selection.	Rysuj narzędziem Pióro (P) lub utwórz ścieżkę roboczą z zaznaczenia.

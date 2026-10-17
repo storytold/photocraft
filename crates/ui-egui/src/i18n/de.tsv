@@ -1087,7 +1087,7 @@
 	Done	Fertig
 	Dots	Punkte
 	Drag a rectangle around the object	Ziehe ein Rechteck um das Objekt
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Ziehe auf dem Bild, um eine Zwangsbedingung hinzuzufügen; Shift für horizontal/vertikal; Rechtsklick löscht.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Ziehe auf dem Bild, um eine Zwangsbedingung hinzuzufügen; Shift für horizontal/vertikal; Rechtsklick auf eine Zwangsbedingung ändert oder löscht sie.
 	Drag to move the active shape's path or the Work Path	Ziehen, um den Pfad der aktiven Form oder den Arbeitspfad zu verschieben
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klick: Ankerpunkt auswählen · Ziehen: Ankerpunkt, Griff oder Segment verschieben · {shift}-Klick: hinzufügen · {alt}-Klick: ganzer Teilpfad
 	Draw with the Pen tool (P) or make a work path from a selection.	Zeichne mit dem Stift-Werkzeug (P) oder erzeuge einen Arbeitspfad aus einer Auswahl.

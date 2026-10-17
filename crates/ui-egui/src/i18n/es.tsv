@@ -1094,7 +1094,7 @@
 	Done	Hecho
 	Dots	Puntos
 	Drag a rectangle around the object	Arrastre un rectángulo alrededor del objeto
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Arrastre sobre la imagen para añadir una restricción; Mayús para horizontal/vertical; clic derecho para eliminar.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Arrastre sobre la imagen para añadir una restricción; Mayús para horizontal/vertical; clic derecho en una restricción para cambiarla o eliminarla.
 	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleccionar punto · Arrastrar: mover punto, manejador o segmento · {shift}-clic: añadir · {alt}-clic: subtrazado completo
 	Draw with the Pen tool (P) or make a work path from a selection.	Dibuje con la herramienta Pluma (P) o cree un trazado de trabajo a partir de una selección.

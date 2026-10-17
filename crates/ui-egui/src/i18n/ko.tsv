@@ -1070,7 +1070,7 @@
 	Done	완료
 	Dots	점
 	Drag a rectangle around the object	오브젝트를 둘러싸는 사각형을 드래그하세요
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	이미지 위에서 드래그하여 제약 조건 추가; Shift 키로 수평/수직 유지; 오른쪽 클릭하여 삭제.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	이미지 위에서 드래그하여 제약 조건 추가; Shift 키로 수평/수직 유지; 제약 조건을 오른쪽 클릭하여 변경 또는 삭제.
 	Drag to move the active shape's path or the Work Path	드래그하여 활성 모양의 패스 또는 작업 패스 이동
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	클릭: 기준점 선택 · 드래그: 기준점, 핸들 또는 세그먼트 이동 · {shift}-클릭: 추가 · {alt}-클릭: 하위 패스 전체
 	Draw with the Pen tool (P) or make a work path from a selection.	펜 도구(P)로 그리거나 선택 영역에서 작업 패스를 만드세요.
