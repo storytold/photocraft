@@ -312,8 +312,16 @@ pub fn document_saved(s: &mut Session, index: usize) -> Option<Value> {
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
-    let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
-    let mut steps = parse_steps(steps_v, cmd)?;
+    let mut steps = if p.get("action").is_some()
+        && (p.get("steps").is_none() || p.get("__actionStepsFor").is_some_and(|orig| orig != &p["action"]))
+        && !p["action"].is_array()
+    {
+        let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
+        s.actions.list[idx].enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+    } else {
+        let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
+        parse_steps(steps_v, cmd)?
+    };
     // The droplet's output folder replaces recorded saves, and view steps don't apply, as in batch.
     steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id));
     check_known(&steps, cmd)?;

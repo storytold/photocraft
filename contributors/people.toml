@@ -159,6 +159,7 @@ sync_github_name = false
 real_name = "Ufuk Efe"
 sync_github_name = true
 
-[people.sidney]
-real_name = "Sidney Markowitz"
+[people.sathwik-e]
+real_name = "Sathwik Elaprolu"
+display_name = "sathwik-e"
 sync_github_name = true

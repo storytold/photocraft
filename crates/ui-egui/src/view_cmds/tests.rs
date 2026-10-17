@@ -532,3 +532,18 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     assert_eq!(app.ui.view.screen_mode, "standard");
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
+
+#[test]
+fn data_sets_as_files_and_render_video_open_dialogs_from_menus() {
+    let (mut app, ctx) = app_with(1);
+    for id in ["file.export.dataSetsAsFiles", "file.export.renderVideo"] {
+        let opened = menu(&mut app, &ctx, id, json!({})).unwrap();
+        let d = opened["dialog"].as_u64().expect("menu item should open a dialog");
+        assert_eq!(app.ui.dialog_mut(d).unwrap().fields["__command"], id);
+        app.ui.close_dialog(d);
+    }
+    // Batch with no action reveals the Actions panel so the user can record one.
+    app.ui.panels.history = false;
+    assert!(menu(&mut app, &ctx, "file.automate.batch", json!({})).is_err());
+    assert!(app.ui.panels.history && app.ui.dock_tabs.history == 1);
+}

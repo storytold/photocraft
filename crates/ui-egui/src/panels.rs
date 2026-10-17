@@ -1699,13 +1699,39 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 for (icon, name, g) in entries {
                     // Studio floats Properties outside the dock.
                     let docked = t.pro || g != Group::Properties;
-                    let on = if customized { crate::panel_docking::rail_on(app, g) } else { g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g)) };
+                    let on = if customized {
+                        crate::panel_docking::rail_on(app, g)
+                    } else if g == Group::History {
+                        g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g)) && app.ui.dock_tabs.history != 1
+                    } else {
+                        g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g))
+                    };
                     if icons::rail_button(ui, icon, rb, on, name).clicked() {
                         if customized {
                             crate::panel_docking::rail_click(app, g);
+                        } else if g == Group::History && g.shown(&p) && !app.ui.dock.is_collapsed(g) && app.ui.dock_tabs.history == 1 {
+                            app.ui.dock_tabs.history = 0;
+                            crate::dock::reveal(app, Group::History);
                         } else {
+                            if g == Group::History {
+                                app.ui.dock_tabs.history = 0;
+                            }
                             crate::dock::rail_click(app, g, docked);
                         }
+                    }
+                }
+                let actions_on = if customized {
+                    crate::panel_docking::checked(app, "window.panel.actions").unwrap_or(false)
+                } else {
+                    p.history && !app.ui.dock.is_collapsed(Group::History) && app.ui.dock_tabs.history == 1
+                };
+                if icons::rail_button(ui, "play", rb, actions_on, tl!("Actions")).clicked() {
+                    if customized {
+                        let _ = crate::panel_docking::command(app, "window.panel.actions", &serde_json::json!({}));
+                    } else if actions_on {
+                        app.ui.dock.set_collapsed(Group::History, true);
+                    } else {
+                        crate::actions::reveal_panel(app);
                     }
                 }
             });

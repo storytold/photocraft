@@ -57,6 +57,16 @@ pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
     idx.and_then(|i| list.get(i)).or_else(|| list.first())
 }
 
+/// Show and expand the Actions panel tab in the dock.
+pub fn reveal_panel(app: &mut PhotocraftApp) {
+    if app.ui.docking.is_some() {
+        let _ = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "actions"}));
+    } else {
+        app.ui.dock_tabs.history = 1;
+        crate::dock::reveal(app, crate::dock::Group::History);
+    }
+}
+
 /// Index of the playback target. Photoshop's Play button uses the first action when
 /// the panel has actions but none of its rows is selected.
 fn playback_selection(app: &PhotocraftApp) -> Option<usize> {
@@ -92,6 +102,39 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, name: &str, shortcut: &st
     app.run("edit.keyboardShortcuts", json!({"set": set, "allowUnknown": true, "removeConflicts": false}))
 }
 
+/// Replay a conditional step in the desktop shell so its branches run view/save commands and
+/// step dialogs just like top-level playback.
+fn play_conditional(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    let condition = match p.get("if") {
+        Some(Value::String(c)) => c.clone(),
+        _ => return Err(format!("invalid parameters for `actions.conditional`: needs `if`, one of {}", photocraft_engine::actions_edit_cmds::CONDITIONS.join("|"))),
+    };
+    let branch = |key: &str| -> Result<Option<String>, String> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(n)) if !n.trim().is_empty() => Ok(Some(n.clone())),
+            Some(Value::String(_)) => Ok(None),
+            Some(_) => Err(format!("invalid parameters for `actions.conditional`: `{key}` must be an action name or null")),
+        }
+    };
+    let (then, otherwise) = (branch("then")?, branch("else")?);
+    let holds = photocraft_engine::actions_edit_cmds::evaluate(&app.session, &condition).map_err(|e| e.to_string())?;
+    let played = if holds { then } else { otherwise };
+    let mut out = json!({"if": condition, "holds": holds, "played": played});
+    if let Some(name) = played {
+        let r = play(app, &json!({"action": name}))?;
+        if let Some(f) = r.get("failed") {
+            out["failed"] = f.clone();
+        }
+        if let Some(paused) = r.get("paused") {
+            out["paused"] = paused.clone();
+        }
+        out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
+        out["action"] = json!(name);
+    }
+    Ok(out)
+}
+
 /// Replay edits synchronously, with view steps handled by the shell in the same order.
 /// Engine steps keep the headless action semantics (no dialogs or background jobs).
 pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
@@ -121,6 +164,8 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
             }
             if id == "actions.play" {
                 play(app, p)
+            } else if id == "actions.conditional" {
+                play_conditional(app, p)
             } else if actions_cmds::shell_save_command(id) {
                 // Write synchronously, so the next step doesn't meet a document locked by a
                 // background save.
@@ -155,6 +200,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
         }
     }
     actions_cmds::finish_playback(&mut app.session, recording, &action, from);
+    app.sync_views();
     Ok(match (failed, paused) {
         (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
         (None, Some(p)) => json!({"action": action.name, "ran": ran, "paused": p}),
@@ -384,23 +430,84 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
 }
 
 const INSERT_STOP: &str = "__insertStop";
+const INSERT_MENU_ITEM: &str = "__insertMenuItem";
+const INSERT_CONDITIONAL: &str = "__insertConditional";
 
 pub fn owns_insert_stop(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(INSERT_STOP)
+    fields.contains_key(INSERT_STOP) || fields.contains_key(INSERT_MENU_ITEM) || fields.contains_key(INSERT_CONDITIONAL)
+}
+
+fn selected_insert_target(app: &PhotocraftApp) -> Result<(usize, usize), String> {
+    let action = app.ui.actions.selected.filter(|i| *i < app.session.actions.list.len()).ok_or_else(|| tl!("Select an action first").to_string())?;
+    let len = app.session.actions.list[action].steps.len() + actions_cmds::pending_steps(&app.session, action).count();
+    let at = app.ui.actions.selected_step.map_or(len, |s| (s + 1).min(len));
+    Ok((action, at))
 }
 
 /// Insert Stop…: a message step after the selected step (or at the end of the selected action).
 fn insert_stop_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let action = app.ui.actions.selected.filter(|i| *i < app.session.actions.list.len()).ok_or_else(|| tl!("Select an action first").to_string())?;
-    let len = app.session.actions.list[action].steps.len() + actions_cmds::pending_steps(&app.session, action).count();
-    let at = app.ui.actions.selected_step.map_or(len, |s| (s + 1).min(len));
+    let (action, at) = selected_insert_target(app)?;
     let fields =
         json!({INSERT_STOP: true, "__command": "actions.insert", "__label": "Insert Stop", "action": action, "at": at, "message": "", "allowContinue": false});
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     Ok(json!({"dialog": id}))
 }
 
+/// Insert Menu Item…: choose a command to insert at the selected position.
+fn insert_menu_item_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let (action, at) = selected_insert_target(app)?;
+    let fields = json!({INSERT_MENU_ITEM: true, "__command": "actions.insert", "__label": "Insert Menu Item", "action": action, "at": at, "id": "select.all"});
+    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
+    Ok(json!({"dialog": id}))
+}
+
+/// Insert Conditional…: choose a document/layer condition and the then/else actions to play.
+fn insert_conditional_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let (action, at) = selected_insert_target(app)?;
+    let fields = json!({
+        INSERT_CONDITIONAL: true,
+        "__command": "actions.insert",
+        "__label": "Conditional Action",
+        "action": action,
+        "at": at,
+        "if": "landscape",
+        "then": "",
+        "else": "",
+    });
+    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
+    Ok(json!({"dialog": id}))
+}
+
 pub fn insert_stop_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    if fields.contains_key(INSERT_MENU_ITEM) {
+        ui.label(tl!("Command:"));
+        let mut id = fields.get("id").and_then(Value::as_str).unwrap_or("select.all").to_string();
+        ui.add(egui::TextEdit::singleline(&mut id).desired_width(320.0));
+        ui.weak(label_of(&id));
+        fields.insert("id".into(), json!(id));
+        return;
+    }
+    if fields.contains_key(INSERT_CONDITIONAL) {
+        let mut cond = fields.get("if").and_then(Value::as_str).unwrap_or("landscape").to_string();
+        let mut then_act = fields.get("then").and_then(Value::as_str).unwrap_or_default().to_string();
+        let mut else_act = fields.get("else").and_then(Value::as_str).unwrap_or_default().to_string();
+        egui::Grid::new("insert-conditional-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label(tl!("If Current:"));
+            let opts: Vec<(String, &str)> = photocraft_engine::actions_edit_cmds::CONDITIONS.iter().map(|&c| (c.to_string(), c)).collect();
+            crate::widgets::dropdown(ui, "cond-if", &mut cond, &opts, 220.0);
+            ui.end_row();
+            ui.label(tl!("Then Play Action:"));
+            ui.add(egui::TextEdit::singleline(&mut then_act).desired_width(220.0).hint_text(tl!("None")));
+            ui.end_row();
+            ui.label(tl!("Else Play Action:"));
+            ui.add(egui::TextEdit::singleline(&mut else_act).desired_width(220.0).hint_text(tl!("None")));
+            ui.end_row();
+        });
+        fields.insert("if".into(), json!(cond));
+        fields.insert("then".into(), json!(then_act));
+        fields.insert("else".into(), json!(else_act));
+        return;
+    }
     ui.label(tl!("Message:"));
     let mut message = fields.get("message").and_then(Value::as_str).unwrap_or_default().to_string();
     ui.add(egui::TextEdit::multiline(&mut message).desired_rows(4).desired_width(320.0));
@@ -413,12 +520,33 @@ pub fn insert_stop_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, 
 
 pub fn insert_stop_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     let action = fields.get("action").and_then(Value::as_u64).ok_or("the dialog names no action")?;
-    let params = json!({
-        "action": action,
-        "at": fields.get("at").cloned().unwrap_or(Value::Null),
-        "id": photocraft_engine::atn_cmds::STOP_MESSAGE,
-        "params": {"message": fields.get("message").cloned().unwrap_or(json!("")), "allowContinue": fields.get("allowContinue").cloned().unwrap_or(json!(false))},
-    });
+    let params = if fields.contains_key(INSERT_MENU_ITEM) {
+        json!({
+            "action": action,
+            "at": fields.get("at").cloned().unwrap_or(Value::Null),
+            "id": fields.get("id").cloned().unwrap_or(json!("")),
+            "params": {},
+        })
+    } else if fields.contains_key(INSERT_CONDITIONAL) {
+        let non_empty = |k: &str| fields.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map( Value::from).unwrap_or(Value::Null);
+        json!({
+            "action": action,
+            "at": fields.get("at").cloned().unwrap_or(Value::Null),
+            "id": "actions.conditional",
+            "params": {
+                "if": fields.get("if").cloned().unwrap_or(json!("always")),
+                "then": non_empty("then"),
+                "else": non_empty("else"),
+            },
+        })
+    } else {
+        json!({
+            "action": action,
+            "at": fields.get("at").cloned().unwrap_or(Value::Null),
+            "id": photocraft_engine::atn_cmds::STOP_MESSAGE,
+            "params": {"message": fields.get("message").cloned().unwrap_or(json!("")), "allowContinue": fields.get("allowContinue").cloned().unwrap_or(json!(false))},
+        })
+    };
     let r = app.run("actions.insert", params)?;
     if let (Some(a), Some(step)) = (usize::try_from(action).ok(), r["step"].as_u64().and_then(|s| usize::try_from(s).ok())) {
         app.ui.actions.selected = Some(a);
@@ -465,6 +593,10 @@ pub fn stopped(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>)
 /// The Actions entries of the panel group's menu ("…").
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut act: Option<&str> = None;
+    let recording_now = app.session.actions.recording.is_some();
+    if ui.add_enabled(!recording_now, egui::Button::new(tl!("New Action…"))).clicked() {
+        act = Some("new");
+    }
     if ui.button(tl!("Load Actions…")).clicked() {
         act = Some("load");
     }
@@ -474,14 +606,26 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     let selected = app.ui.actions.selected.is_some_and(|i| i < app.session.actions.list.len());
+    if ui.add_enabled(selected, egui::Button::new(tl!("Insert Menu Item…"))).clicked() {
+        act = Some("menuItem");
+    }
     if ui.add_enabled(selected, egui::Button::new(tl!("Insert Stop…"))).clicked() {
         act = Some("stop");
+    }
+    if ui.add_enabled(selected, egui::Button::new(tl!("Insert Conditional…"))).clicked() {
+        act = Some("conditional");
     }
     let Some(a) = act else { return };
     ui.close();
     let r = match a {
+        "new" => {
+            begin_recording(app, false);
+            Ok(Value::Null)
+        }
         "load" => load_dialog(app),
+        "menuItem" => insert_menu_item_dialog(app),
         "stop" => insert_stop_dialog(app),
+        "conditional" => insert_conditional_dialog(app),
         _ => save_dialog(app, None),
     };
     if let Err(e) = r
@@ -599,9 +743,11 @@ fn rename_action(app: &mut PhotocraftApp, index: usize, name: String) {
     }
 }
 
-/// One action's row data for a frame.
+/// One action's row data for a frame. Steps and flag sets are only cloned when the row is expanded.
 struct Row {
     name: String,
+    step_count: usize,
+    disabled_count: usize,
     steps: Vec<(String, Value)>,
     disabled: std::collections::BTreeSet<usize>,
     dialogs: std::collections::BTreeSet<usize>,
@@ -612,13 +758,16 @@ struct Row {
 /// The panel's order: actions outside any set first, then each set folder (in order of first
 /// appearance) with its actions. Indices are into the engine's flat list.
 fn display_order(rows: &[Row]) -> Vec<usize> {
-    let mut order: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r.set.is_none()).map(|(i, _)| i).collect();
+    let mut order: Vec<usize> = Vec::with_capacity(rows.len());
     let mut sets: Vec<&str> = Vec::new();
-    for r in rows {
-        if let Some(set) = r.set.as_deref()
-            && !sets.contains(&set)
-        {
-            sets.push(set);
+    for (i, r) in rows.iter().enumerate() {
+        match r.set.as_deref() {
+            None => order.push(i),
+            Some(set) => {
+                if !sets.contains(&set) {
+                    sets.push(set);
+                }
+            }
         }
     }
     for set in sets {
@@ -630,26 +779,42 @@ fn display_order(rows: &[Row]) -> Vec<usize> {
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
+    let total_actions = app.session.actions.list.len();
+    let recording_row = recording.and_then(|(_, i)| {
+        app.session.actions.list.get(i).map(|a| (i, a.steps.len() + actions_cmds::pending_steps(&app.session, i).count()))
+    });
+    let reveal = recording_row.filter(|row| app.ui.actions.reveal_recording != Some(*row));
+    app.ui.actions.reveal_recording = recording_row;
+    if let Some((i, _)) = reveal {
+        app.ui.actions.expanded.resize(total_actions, false);
+        if let Some(expanded) = app.ui.actions.expanded.get_mut(i) {
+            *expanded = true;
+        }
+    }
     let rows: Vec<Row> = app
         .session
         .actions
         .list
         .iter()
         .enumerate()
-        .map(|(i, a)| Row {
-            name: a.name.clone(),
-            steps: visible_steps(app, i),
-            disabled: a.disabled.clone(),
-            dialogs: a.dialogs.clone(),
-            set: a.set.clone(),
-            color: a.color.clone(),
+        .map(|(i, a)| {
+            let expanded = app.ui.actions.expanded.get(i).copied().unwrap_or(false);
+            let pending = if recording.is_some_and(|(_, r)| r == i) { actions_cmds::pending_steps(&app.session, i).count() } else { 0 };
+            let step_count = a.steps.len() + pending;
+            let disabled_count = a.disabled.len();
+            let (steps, disabled, dialogs) = if expanded {
+                (visible_steps(app, i), a.disabled.clone(), a.dialogs.clone())
+            } else {
+                (Vec::new(), std::collections::BTreeSet::new(), std::collections::BTreeSet::new())
+            };
+            Row { name: a.name.clone(), step_count, disabled_count, steps, disabled, dialogs, set: a.set.clone() }
         })
         .collect();
     if app
         .ui
         .actions
         .selected
-        .is_some_and(|i| i >= rows.len() || app.ui.actions.selected_step.is_some_and(|step| rows.get(i).is_none_or(|row| step >= row.steps.len())))
+        .is_some_and(|i| i >= rows.len() || app.ui.actions.selected_step.is_some_and(|step| rows.get(i).is_none_or(|row| step >= row.step_count)))
     {
         app.ui.actions.selected = None;
         app.ui.actions.selected_step = None;
@@ -660,23 +825,21 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.actions.renaming.as_ref().is_some_and(|r| r.index >= rows.len()) {
         app.ui.actions.renaming = None;
     }
+    let mut set_counts: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    for r in &rows {
+        if let Some(s) = r.set.as_deref() {
+            *set_counts.entry(s).or_insert(0) += 1;
+        }
+    }
     let mut renamed = None;
     let mut toggled = None;
     let mut dialog_toggled = None;
     let mut set_toggled: Option<String> = None;
     let mut save_set: Option<String> = None;
+    let mut assigned_set: Option<(usize, Option<String>)> = None;
     let max_h = (ui.available_height() - 38.0).max(0.0);
     let mut play_idx = None;
     let mut moved = None;
-    let recording_row = recording.and_then(|(_, i)| rows.get(i).map(|r| (i, r.steps.len())));
-    let reveal = recording_row.filter(|row| app.ui.actions.reveal_recording != Some(*row));
-    app.ui.actions.reveal_recording = recording_row;
-    if let Some((i, _)) = reveal {
-        app.ui.actions.expanded.resize(rows.len(), false);
-        if let Some(expanded) = app.ui.actions.expanded.get_mut(i) {
-            *expanded = true;
-        }
-    }
     egui::ScrollArea::vertical().id_salt("actions-rows").max_height(max_h).min_scrolled_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         if rows.is_empty() {
             ui.label(egui::RichText::new(tl!("Record ● a sequence of edits, then play ▶ it on any document.")).color(t.text_faint).size(11.5));
@@ -699,7 +862,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         let mut shown_set: Option<&str> = None;
         for i in display_order(&rows) {
-            let Row { name, steps, disabled, dialogs, set, color: swatch } = &rows[i];
+            let Row { name, step_count: nsteps, disabled_count, steps, disabled, dialogs, set } = &rows[i];
             // A set folder row before the first of its actions; collapsed folders hide them.
             if let Some(set) = set.as_deref()
                 && shown_set != Some(set)
@@ -710,6 +873,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 hresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, !collapsed, set));
                 if hresp.hovered() {
                     ui.painter().rect_filled(hr, 0.0, t.hover.gamma_multiply(0.5));
+                }
+                if let Some(source) = hresp.dnd_hover_payload::<DragRow>().filter(|s| s.step.is_none()) {
+                    ui.painter().rect_stroke(hr, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                    if hresp.dnd_release_payload::<DragRow>().is_some() {
+                        assigned_set = Some((source.action, Some(set.to_string())));
+                    }
                 }
                 let tri = Rect::from_center_size(pos2(hr.left() + 12.0, hr.center().y), vec2(8.0, 8.0));
                 let pts = if collapsed {
@@ -726,7 +895,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     t.icon,
                 );
                 ui.painter().text(pos2(hr.left() + 44.0, hr.center().y), Align2::LEFT_CENTER, set, egui::FontId::proportional(12.0), t.text);
-                let count = rows.iter().filter(|r| r.set.as_deref() == Some(set)).count() as u64;
+                let count = set_counts.get(set).copied().unwrap_or(0);
                 let summary = crate::i18n::trn(crate::i18n::current(), count, "{n} action", "{n} actions");
                 ui.painter().text(pos2(hr.right() - 8.0, hr.center().y), Align2::RIGHT_CENTER, summary, egui::FontId::proportional(11.0), t.text_faint);
                 if hresp.clicked() {
@@ -773,9 +942,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 crate::icons::paint(ui, Rect::from_center_size(pos2(x0 + 30.0, rect.center().y), vec2(16.0, 16.0)), "play", 11.0, t.icon);
             }
             let recording_this = recording.is_some_and(|(_, r)| r == i);
-            let nsteps = steps.len();
-            let name_x = if button_mode { x0 + 8.0 } else { x0 + 44.0 };
-            let name_color = if button_mode { button_label_color(swatch, &t) } else { t.text };
+            let nsteps = *nsteps;
             let name_rect = if app.ui.actions.renaming.as_ref().is_some_and(|r| r.index == i) {
                 let field = Rect::from_min_max(pos2(x0 + 40.0, rect.top() + 3.0), pos2((rect.right() - 80.0).max(x0 + 120.0), rect.bottom() - 3.0));
                 if let Some(text) = rename_field(app, ui, i, field) {
@@ -785,20 +952,18 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else {
                 ui.painter().text(pos2(name_x, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), name_color)
             };
-            if !button_mode {
-                ui.painter().text(
-                    pos2(rect.right() - 8.0, rect.center().y),
-                    Align2::RIGHT_CENTER,
-                    app.session
-                        .prefs()
-                        .shortcuts
-                        .get(&shortcut_id(name))
-                        .filter(|s| !s.is_empty())
-                        .map_or_else(|| step_count(nsteps, disabled.len()), |key| format!("{key} · {}", step_count(nsteps, disabled.len()))),
-                    egui::FontId::proportional(11.0),
-                    t.text_faint,
-                );
-            }
+            ui.painter().text(
+                pos2(rect.right() - 8.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                app.session
+                    .prefs()
+                    .shortcuts
+                    .get(&shortcut_id(name))
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| step_count(nsteps, *disabled_count), |key| format!("{key} · {}", step_count(nsteps, *disabled_count))),
+                egui::FontId::proportional(11.0),
+                t.text_faint,
+            );
             if recording_this {
                 ui.painter().circle_filled(pos2(rect.right() - 64.0, rect.center().y), 4.0, Color32::from_rgb(230, 60, 60));
             }
@@ -920,6 +1085,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             None => app.ui.actions.collapsed_sets.push(set),
         }
+    }
+    if let Some((action, set)) = assigned_set {
+        let _ = app.run("actions.assignSet", json!({"action": action, "set": set}));
     }
     if let Some(set) = save_set
         && let Err(e) = save_dialog(app, Some(set))
@@ -1593,25 +1761,17 @@ mod tests {
     }
 
     #[test]
-    fn button_mode_plays_the_clicked_action_and_hides_its_steps() {
-        use egui_kittest::{Harness, kittest::Queryable};
+    fn conditional_action_plays_shell_view_steps_and_dialogs() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
-        app.session.actions.list.push(Action::new("Print", vec![("layer.new.layer".into(), json!({}))]));
-        app.session.actions.list[0].color = "blue".into();
-        app.ui.actions.expanded = vec![true];
-        app.ui.actions.button_mode = true;
-        let mut h = Harness::builder().with_size(vec2(420.0, 280.0)).build_ui_state(|ui, app| panel(app, ui), app);
-        h.run_steps(3);
-        assert_eq!(h.query_all_by_role(egui::accesskit::Role::CheckBox).count(), 0, "button mode hides the step list");
-        let before = h.state().session.active().unwrap().doc.layers.len();
-        h.get_by_label("Print").click();
-        h.run_steps(3);
-        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1, "a click plays the action");
-        h.get_by_label("Button Mode On").click();
-        h.run_steps(2);
-        assert!(!h.state().ui.actions.button_mode);
-        assert!(h.query_by_label("Button Mode").is_some());
-        assert_eq!(h.query_all_by_role(egui::accesskit::Role::CheckBox).count(), 1, "the step list returns when Button Mode is turned off");
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.session.actions.list.push(Action::new("Wide", vec![("view.fitOnScreen".into(), json!({}))]));
+        app.session.actions.list.push(Action::new(
+            "Check",
+            vec![("actions.conditional".into(), json!({"if": "landscape", "then": "Wide", "else": null}))],
+        ));
+        app.ui.views[0].fit_pending = false;
+        let r = app.run("actions.play", json!({"action": "Check"})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert!(app.ui.views[0].fit_pending, "conditional branch ran shell view step");
     }
 }

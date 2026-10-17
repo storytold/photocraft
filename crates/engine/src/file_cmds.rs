@@ -1099,8 +1099,15 @@ impl OutputClaims {
 
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps =
-        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    let mut steps = if p.get("action").is_some()
+        && (p.get("steps").is_none() || p.get("__actionStepsFor").is_some_and(|orig| orig != &p["action"]))
+        && !p["action"].is_array()
+    {
+        let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
+        s.actions.list[idx].enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+    } else {
+        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?
+    };
     // Each result goes to the destination folder, which overrides the action's recorded Save /
     // Save As steps (Photoshop's "Override Action 'Save As' Commands"). Recorded view steps
     // (zoom, fit) don't change the output, so they are skipped (#2752).
