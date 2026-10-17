@@ -1942,6 +1942,8 @@
 	Grid size	グリッドのサイズ
 	Grid style	グリッドのスタイル
 	Grid unit	グリッドの単位
+	Gridline every (X)	グリッド線の間隔
+	Gridline every (Y)	グリッド線の間隔
 	Gridline every	グリッド線の間隔
 	Guide color	ガイドの色
 	Guide style	ガイドのスタイル

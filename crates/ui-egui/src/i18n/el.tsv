@@ -2492,6 +2492,8 @@
 	Grid style	Στυλ πλέγματος
 	Grid unit	Μονάδα πλέγματος
 	Grid:	Πλέγμα:
+	Gridline every (X)	Γραμμή πλέγματος ανά
+	Gridline every (Y)	Γραμμή πλέγματος ανά
 	Gridline every	Γραμμή πλέγματος ανά
 	Group from Layers	Ομάδα από επίπεδα
 	Group · {n} layer	Ομάδα · {n} επίπεδο

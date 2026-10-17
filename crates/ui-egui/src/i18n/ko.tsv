@@ -1908,6 +1908,8 @@
 	Grid size	격자 크기
 	Grid style	격자 스타일
 	Grid unit	격자 단위
+	Gridline every (X)	격자선 간격
+	Gridline every (Y)	격자선 간격
 	Gridline every	격자선 간격
 	Guide color	안내선 색상
 	Guide style	안내선 스타일

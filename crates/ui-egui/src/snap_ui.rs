@@ -1153,7 +1153,7 @@ mod tests {
         app.ui.view.snap_to.grid = true;
         app.run(
             "prefs.set",
-            json!({"values": {"guidesGridAndSlices.gridlineEvery": 20, "guidesGridAndSlices.gridUnit": "percent", "guidesGridAndSlices.subdivisions": 2}}),
+            json!({"values": {"guidesGridAndSlices.gridlineEveryX": 20, "guidesGridAndSlices.gridlineEveryY": 20, "guidesGridAndSlices.gridUnit": "percent", "guidesGridAndSlices.subdivisions": 2}}),
         )
         .unwrap();
         let opts = options(&app);
@@ -1168,7 +1168,7 @@ mod tests {
         app.ui.extras.grid = true;
         app.run(
             "prefs.set",
-            json!({"values": {"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
+            json!({"values": {"guidesGridAndSlices.gridlineEveryX": 100, "guidesGridAndSlices.gridlineEveryY": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
         )
         .unwrap();
         assert_eq!(options(&app).grid_step, [25.0; 2]);

@@ -738,8 +738,10 @@ pub struct GuidesGridAndSlices {
     pub smart_guide_color: String,
     pub grid_color: String,
     pub grid_style: LineStyle,
-    /// Major gridline spacing in `gridUnit`.
-    pub gridline_every: f64,
+    /// Major gridline spacing on the x axis (vertical lines), in `gridUnit` (#5476).
+    pub gridline_every_x: f64,
+    /// Major gridline spacing on the y axis (horizontal lines), in `gridUnit` (#5476).
+    pub gridline_every_y: f64,
     pub grid_unit: Unit,
     pub subdivisions: u32,
     pub slice_color: String,
@@ -754,7 +756,8 @@ impl Default for GuidesGridAndSlices {
             smart_guide_color: "#ff00ff".into(),
             grid_color: "#8c8c8c".into(),
             grid_style: LineStyle::Lines,
-            gridline_every: 1.0,
+            gridline_every_x: 1.0,
+            gridline_every_y: 1.0,
             grid_unit: Unit::Inches,
             subdivisions: 4,
             slice_color: "#38b5ff".into(),
@@ -764,9 +767,10 @@ impl Default for GuidesGridAndSlices {
 }
 
 impl GuidesGridAndSlices {
-    /// Major gridline spacing in document pixels.
-    pub fn major_px(&self, dpi: f64, extent: f64, ppi: f64) -> f64 {
-        self.grid_unit.to_px(self.gridline_every.max(1e-3), dpi, extent, ppi).max(1e-3)
+    /// Major gridline spacing in document pixels; x for vertical lines, y for horizontal (#5476).
+    pub fn major_px(&self, axis: usize, dpi: f64, extent: f64, ppi: f64) -> f64 {
+        let v = if axis == 0 { self.gridline_every_x } else { self.gridline_every_y };
+        self.grid_unit.to_px(v.max(1e-3), dpi, extent, ppi).max(1e-3)
     }
 }
 
@@ -1120,7 +1124,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "transparencyAndGamut.gamutWarningOpacity" => (1.0, 100.0),
         "unitsAndRulers.columnWidth" | "unitsAndRulers.gutter" => (0.0, 10_000.0),
         "unitsAndRulers.printResolution" | "unitsAndRulers.screenResolution" | "rawDefaults.resolution" => (1.0, 10_000.0),
-        "guidesGridAndSlices.gridlineEvery" => (0.001, 10_000.0),
+        "guidesGridAndSlices.gridlineEveryX" | "guidesGridAndSlices.gridlineEveryY" => (0.001, 10_000.0),
         "guidesGridAndSlices.subdivisions" => (1.0, 100.0),
         "type.recentFonts" => (0.0, 50.0),
         "integrations.controlPort" => (0.0, 65535.0),
@@ -1672,6 +1676,15 @@ impl Session {
             interface.insert("appearanceMode".into(), json!(mode));
             // A partially migrated file may already contain a newer theme selection (#5139).
             interface.entry(slot).or_insert_with(|| json!(theme.name()));
+        }
+        // Preferences saved before the grid was non-square (#5476): one spacing value
+        // for both axes becomes the per-axis pair.
+        if let Some(grid) = v.get_mut("guidesGridAndSlices").and_then(Value::as_object_mut)
+            && !grid.contains_key("gridlineEveryX")
+            && let Some(legacy) = grid.get("gridlineEvery").cloned()
+        {
+            grid.insert("gridlineEveryX".into(), legacy.clone());
+            grid.insert("gridlineEveryY".into(), legacy);
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));

@@ -1936,6 +1936,8 @@
 	Grid size	Rozmiar siatki
 	Grid style	Styl siatki
 	Grid unit	Jednostka siatki
+	Gridline every (X)	Linia siatki co
+	Gridline every (Y)	Linia siatki co
 	Gridline every	Linia siatki co
 	Guide color	Kolor prowadnic
 	Guide style	Styl prowadnic

@@ -1094,6 +1094,8 @@ fn humanize(key: &str) -> String {
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
+        "gridlineEveryX" => return "Gridline every (X)".into(),
+        "gridlineEveryY" => return "Gridline every (Y)".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.

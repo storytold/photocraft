@@ -1949,6 +1949,8 @@
 	Grid size	格點大小
 	Grid style	格點樣式
 	Grid unit	格點單位
+	Gridline every (X)	格線間隔
+	Gridline every (Y)	格線間隔
 	Gridline every	格線間隔
 	Guide color	參考線顏色
 	Guide style	參考線樣式

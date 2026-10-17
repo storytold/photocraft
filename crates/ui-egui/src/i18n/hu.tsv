@@ -3271,6 +3271,8 @@ cameraRaw	Yellow	Sárga
 	Grid colors	Rács színei
 	Grid style	Rács stílusa
 	Grid unit	Rács mértékegysége
+	Gridline every (X)	Rácsvonalak távolsága
+	Gridline every (Y)	Rácsvonalak távolsága
 	Gridline every	Rácsvonalak távolsága
 	Group Layer	Csoportréteg
 	Groups	Csoportok

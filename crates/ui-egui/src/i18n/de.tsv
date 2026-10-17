@@ -1932,6 +1932,8 @@
 	Grid size	Rastergröße
 	Grid style	Rasterstil
 	Grid unit	Rastereinheit
+	Gridline every (X)	Rasterlinie alle
+	Gridline every (Y)	Rasterlinie alle
 	Gridline every	Rasterlinie alle
 	Guide color	Hilfslinienfarbe
 	Guide style	Hilfslinienstil

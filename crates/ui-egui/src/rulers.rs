@@ -119,11 +119,13 @@ fn tick_step(zoom: f32) -> f64 {
 
 /// Grid spacing in document pixels. Percentages use each axis's own extent.
 pub(crate) fn grid_major_px(g: &GuidesGridAndSlices, dpi: f64, size: [f64; 2], ppi: f64) -> [f64; 2] {
-    size.map(|extent| g.major_px(dpi, extent, ppi))
+    let [w, h] = size;
+    [g.major_px(0, dpi, w, ppi), g.major_px(1, dpi, h, ppi)]
 }
 
 /// View › Show › Grid, from Preferences › Guides, Grid & Slices (spacing, subdivisions, colour,
-/// style). Photoshop's default is a gridline every inch with 4 subdivisions.
+/// style). Photoshop's default is a gridline every inch with 4 subdivisions; (#5476)
+/// PhotoCraft separates the spacing per axis.
 pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let g = &app.session.prefs().guides_grid_and_slices;
     let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
@@ -687,13 +689,14 @@ mod tests {
     }
 
     #[test]
-    fn percentage_grid_spacing_uses_both_canvas_dimensions() {
-        let mut g = GuidesGridAndSlices { grid_unit: Unit::Percent, gridline_every: 20.0, subdivisions: 2, ..Default::default() };
-        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [256.0, 144.0]);
-        // Absolute units remain equal on both axes, irrespective of aspect ratio.
+    fn grid_spacing_is_independent_per_axis() {
+        let mut g = GuidesGridAndSlices { grid_unit: Unit::Percent, gridline_every_x: 20.0, gridline_every_y: 10.0, subdivisions: 4, ..Default::default() };
+        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [256.0, 72.0]);
+        // Absolute units keep each axis's own spacing, irrespective of aspect ratio.
         g.grid_unit = Unit::Pixels;
-        g.gridline_every = 100.0;
-        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [100.0, 100.0]);
+        g.gridline_every_x = 100.0;
+        g.gridline_every_y = 50.0;
+        assert_eq!(grid_major_px(&g, 72.0, [1280.0, 720.0], 72.0), [100.0, 50.0]);
     }
 
     #[test]

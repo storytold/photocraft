@@ -1452,6 +1452,8 @@ cameraRaw	Shadows	Vùng tối
 	Grid size	Cỡ lưới
 	Grid style	Kiểu lưới
 	Grid unit	Đơn vị lưới
+	Gridline every (X)	Đường lưới mỗi
+	Gridline every (Y)	Đường lưới mỗi
 	Gridline every	Đường lưới mỗi
 	Guide color	Màu đường căn
 	Guide style	Kiểu đường căn

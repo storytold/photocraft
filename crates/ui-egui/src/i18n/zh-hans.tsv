@@ -1956,6 +1956,8 @@
 	Grid size	网格大小
 	Grid style	网格样式
 	Grid unit	网格单位
+	Gridline every (X)	网格线间隔
+	Gridline every (Y)	网格线间隔
 	Gridline every	网格线间隔
 	Guide color	参考线颜色
 	Guide style	参考线样式
