@@ -3666,6 +3666,8 @@ curves	Smooth	スムーズ
 	Vanishing Point: click four corners to create a plane	消点: 4 つの角をクリックして面を作成します
 	Vanishing Point is not active	消点はアクティブではありません
 	Apply Vanishing Point ({key})	消点を適用({key})
+	Alt-click a plane to set the clone source	Alt キーを押しながら平面をクリックしてコピー元を設定
+	Too many clone strokes: apply Vanishing Point first	コピースタンプのストロークが多すぎます：先に消点を適用してください
 	Fix the red plane first: its corners must form a convex quad	先に赤い面を修正してください: 角が凸四角形になる必要があります
 # Select and Mask view modes (#1754)
 	Onion Skin	オニオンスキン

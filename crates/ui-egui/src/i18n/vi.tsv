@@ -2432,6 +2432,8 @@ shape	Appearance	Diện mạo
 	Fill with {mode}-neutral color (black)	Tô bằng màu trung tính của {mode} (đen)
 	Fill with {mode}-neutral color (white)	Tô bằng màu trung tính của {mode} (trắng)
 	Fix the red plane first: its corners must form a convex quad	Hãy sửa mặt phẳng đỏ trước: các góc phải tạo thành tứ giác lồi
+	Alt-click a plane to set the clone source	Nhấp Alt vào một mặt phẳng để đặt nguồn sao chép
+	Too many clone strokes: apply Vanishing Point first	Quá nhiều nét sao chép: hãy áp dụng Điểm tụ trước
 	Float Panel	Thả nổi bảng
 	Functions	Hàm
 	Grid Size:	Cỡ lưới:

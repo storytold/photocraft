@@ -2730,6 +2730,8 @@ curves	Smooth	Leviga
 	Vanishing Point is not active	Punto di fuga non è attivo
 	Apply Vanishing Point ({key})	Applica punto di fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Correggi prima il piano rosso: i suoi angoli devono formare un quadrilatero convesso
+	Alt-click a plane to set the clone source	Alt-clic su un piano per impostare l’origine della clonazione
+	Too many clone strokes: apply Vanishing Point first	Troppi tratti di clonazione: applica prima Punto di fuga
 # Select and Mask view modes (#1754)
 	Onion Skin	Velina
 	Marching Ants	Formiche in marcia

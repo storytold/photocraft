@@ -3669,6 +3669,8 @@ curves	Smooth	Wygładź
 	Vanishing Point is not active	Punkt zbieżności nie jest aktywny
 	Apply Vanishing Point ({key})	Zastosuj punkt zbieżności ({key})
 	Fix the red plane first: its corners must form a convex quad	Najpierw popraw czerwoną płaszczyznę: jej narożniki muszą tworzyć czworokąt wypukły
+	Alt-click a plane to set the clone source	Kliknij płaszczyznę z Alt, aby ustawić źródło klonowania
+	Too many clone strokes: apply Vanishing Point first	Zbyt wiele pociągnięć klonowania: najpierw zastosuj Punkt zbieżności
 # Select and Mask view modes (#1754)
 	Onion Skin	Skórka cebuli
 	Marching Ants	Maszerujące mrówki

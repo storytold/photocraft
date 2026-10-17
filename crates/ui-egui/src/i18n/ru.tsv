@@ -2998,6 +2998,8 @@ curves	Smooth	Сгладить
 	Vanishing Point is not active	Точка схода не активна
 	Apply Vanishing Point ({key})	Применить точку схода ({key})
 	Fix the red plane first: its corners must form a convex quad	Сначала исправьте красную плоскость: ее углы должны образовывать выпуклый четырехугольник
+	Alt-click a plane to set the clone source	Щёлкните плоскость с Alt, чтобы задать источник клонирования
+	Too many clone strokes: apply Vanishing Point first	Слишком много мазков клонирования: сначала примените «Точку схода»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Бегущие муравьи

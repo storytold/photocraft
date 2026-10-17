@@ -3074,6 +3074,8 @@ curves	Smooth	Lisser
 	Vanishing Point is not active	Point de fuite n’est pas actif
 	Apply Vanishing Point ({key})	Appliquer le point de fuite ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrigez d’abord le plan rouge : ses coins doivent former un quadrilatère convexe
+	Alt-click a plane to set the clone source	Alt-clic sur un plan pour définir la source de duplication
+	Too many clone strokes: apply Vanishing Point first	Trop de traits de duplication : appliquez d’abord Point de fuite
 # Select and Mask view modes (#1754)
 	Onion Skin	Pelure d'oignon
 	Marching Ants	Fourmis en marche

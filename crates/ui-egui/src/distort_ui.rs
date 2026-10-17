@@ -88,7 +88,8 @@ pub(crate) fn surface_image(surf: &Surface, r: Rect, max_side: usize) -> ColorIm
     ColorImage::new([tw, th], px)
 }
 
-/// The document shown on the canvas while Puppet or Perspective Warp previews a layer.
+/// The document shown on the canvas while Puppet or Perspective Warp previews a layer, or
+/// Vanishing Point's Stamp has painted.
 pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(idx) {
         return None;
@@ -99,7 +100,8 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     if let Some(p) = &app.distort.perspective {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
-    None
+    // Vanishing Point: the clone strokes painted so far.
+    app.distort.vanishing.as_ref().and_then(crate::vp_ui::VpSession::shown)
 }
 
 /// Menu / control routing. `Some` when this module handles the invocation.

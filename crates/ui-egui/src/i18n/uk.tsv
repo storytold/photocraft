@@ -3743,6 +3743,8 @@ curves	Smooth	Згладити
 	Vanishing Point is not active	Точка сходження не активна
 	Apply Vanishing Point ({key})	Застосувати точку сходження ({key})
 	Fix the red plane first: its corners must form a convex quad	Спершу виправте червону площину: її кути мають утворювати опуклий чотирикутник
+	Alt-click a plane to set the clone source	Клацніть площину з Alt, щоб задати джерело клонування
+	Too many clone strokes: apply Vanishing Point first	Забагато мазків клонування: спочатку застосуйте «Точку сходження»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Мурашки

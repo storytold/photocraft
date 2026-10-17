@@ -3078,6 +3078,8 @@ curves	Smooth	Suavizar
 	Vanishing Point is not active	Ponto de fuga não está ativo
 	Apply Vanishing Point ({key})	Aplicar ponto de fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrija primeiro o plano vermelho: seus cantos devem formar um quadrilátero convexo
+	Alt-click a plane to set the clone source	Clique com Alt em um plano para definir a origem da clonagem
+	Too many clone strokes: apply Vanishing Point first	Traços de clonagem demais: aplique Ponto de fuga primeiro
 # Select and Mask view modes (#1754)
 	Onion Skin	Papel vegetal
 	Marching Ants	Formigas marchando

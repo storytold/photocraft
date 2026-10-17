@@ -3061,6 +3061,8 @@ curves	Smooth	Haluskan
 	Vanishing Point is not active	Vanishing Point tidak aktif
 	Apply Vanishing Point ({key})	Terapkan Vanishing Point ({key})
 	Fix the red plane first: its corners must form a convex quad	Perbaiki bidang merah dulu: sudut-sudutnya harus membentuk segi empat cembung
+	Alt-click a plane to set the clone source	Alt-klik sebuah bidang untuk menetapkan sumber kloning
+	Too many clone strokes: apply Vanishing Point first	Terlalu banyak goresan kloning: terapkan Vanishing Point terlebih dahulu
 # Select and Mask view modes (#1754)
 	Onion Skin	Kulit Bawang
 	Marching Ants	Semut Berbaris

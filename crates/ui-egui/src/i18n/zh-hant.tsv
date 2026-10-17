@@ -2646,6 +2646,9 @@ curves	Smooth	平滑
 	Vanishing Point is not active	消失點未啟用
 	Apply Vanishing Point ({key})	套用消失點 ({key})
 	Fix the red plane first: its corners must form a convex quad	請先修正紅色平面：其四個角必須構成凸四邊形
+	Alt-click a plane to set the clone source	按住 Alt 鍵按一下平面以設定仿製來源
+	Too many clone strokes: apply Vanishing Point first	仿製筆畫過多：請先套用消失點
+	Stamp	印章
 # Select and Mask view modes (#1754)
 	Onion Skin	洋蔥皮
 	Marching Ants	螞蟻線

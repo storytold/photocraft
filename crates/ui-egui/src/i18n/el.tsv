@@ -3755,6 +3755,8 @@ curves	Smooth	Εξομάλυνση
 	Vanishing Point is not active	Το Σημείο φυγής δεν είναι ενεργό
 	Apply Vanishing Point ({key})	Εφαρμογή σημείου φυγής ({key})
 	Fix the red plane first: its corners must form a convex quad	Διορθώστε πρώτα το κόκκινο επίπεδο: οι γωνίες του πρέπει να σχηματίζουν κυρτό τετράπλευρο
+	Alt-click a plane to set the clone source	Alt-κλικ σε ένα επίπεδο για να ορίσετε την πηγή κλωνοποίησης
+	Too many clone strokes: apply Vanishing Point first	Πάρα πολλές πινελιές κλωνοποίησης: εφαρμόστε πρώτα το Σημείο φυγής
 # Select and Mask view modes (#1754)
 	Onion Skin	Φλούδα κρεμμυδιού
 	Marching Ants	Κινούμενο περίγραμμα

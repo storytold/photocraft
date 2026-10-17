@@ -3,7 +3,7 @@
 //! ([`photocraft_algo::vanishing`]). The edit lands on the active pixel layer, or on a new layer
 //! with `"newLayer": true` (Photoshop's advice for non-destructive Vanishing Point work).
 
-use photocraft_algo::vanishing::{Edge, PlaneCheck, Scene, VpPlane, clone_stroke, paste};
+use photocraft_algo::vanishing::{Edge, PlaneCheck, Scene, VpPlane, clone_dabs, paste};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -13,6 +13,11 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 pub const VP: &str = "filter.vanishingPoint";
+/// Most planes a scene holds.
+pub const MAX_PLANES: usize = 64;
+/// Most clone strokes, and dabs over all of them, one run paints.
+pub const MAX_CLONE_STROKES: usize = 4096;
+pub const MAX_CLONE_DABS: usize = 200_000;
 
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: VP.into(), msg: msg.into() }
@@ -29,6 +34,9 @@ pub fn scene(p: &Value, canvas: Rect) -> Result<Scene> {
         .and_then(Value::as_array)
         .filter(|a| !a.is_empty())
         .ok_or_else(|| bad("pass `planes`: [{\"corners\":[[x,y]×4]}, {\"from\":0,\"edge\":\"top\",\"angle\":90}]"))?;
+    if planes.len() > MAX_PLANES {
+        return Err(bad(format!("at most {MAX_PLANES} planes")));
+    }
     let center = [(canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0];
     let corners = |v: &Value| -> Option<[[f64; 2]; 4]> {
         let a = v.get("corners")?.as_array()?;
@@ -67,12 +75,98 @@ pub fn scene(p: &Value, canvas: Rect) -> Result<Scene> {
         };
         let angle = pl.get("angle").and_then(Value::as_f64).unwrap_or(90.0);
         let depth = pl.get("depth").and_then(Value::as_f64).unwrap_or(1.0);
+        if !angle.is_finite() || !(0.0..=360.0).contains(&angle) {
+            return Err(bad(format!("plane {i}: `angle` must be 0..360 degrees")));
+        }
+        if !depth.is_finite() || depth <= 0.0 || depth > 1000.0 {
+            return Err(bad(format!("plane {i}: `depth` must be above 0 and at most 1000")));
+        }
         sc.tear_off(from, edge, angle, depth).ok_or_else(|| bad(format!("plane {i} would lie behind the camera")))?;
     }
     if sc.planes.iter().any(|p| p.homography().is_none()) {
         return Err(bad("a plane is degenerate"));
     }
     Ok(sc)
+}
+
+/// One stroke of `"clone"`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CloneSpec {
+    pub source: [f64; 2],
+    pub points: Vec<[f64; 2]>,
+    pub size: f64,
+    pub hardness: f64,
+    pub opacity: f64,
+}
+
+/// Reads `"clone"`: finite points, at most [`MAX_CLONE_STROKES`] strokes and
+/// [`MAX_CLONE_DABS`] dabs in all.
+pub fn clone_specs(p: &Value) -> Result<Vec<CloneSpec>> {
+    let Some(v) = p.get("clone").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let strokes = v.as_array().ok_or_else(|| bad("`clone` is a list of strokes"))?;
+    if strokes.len() > MAX_CLONE_STROKES {
+        return Err(bad(format!("at most {MAX_CLONE_STROKES} clone strokes")));
+    }
+    let finite = |q: [f64; 2]| q.iter().all(|v| v.is_finite() && v.abs() < 1e7);
+    let num = |c: &Value, k: &str, default: f64, lo: f64, hi: f64| -> Result<f64> {
+        match c.get(k) {
+            None | Some(Value::Null) => Ok(default),
+            Some(v) => v.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(lo, hi)).ok_or_else(|| bad(format!("clone `{k}` must be a number"))),
+        }
+    };
+    let mut dabs = 0usize;
+    let mut out = Vec::with_capacity(strokes.len());
+    for (k, c) in strokes.iter().enumerate() {
+        let source = c.get("source").and_then(pt).filter(|q| finite(*q)).ok_or_else(|| bad(format!("clone {k}: `source` [x,y]")))?;
+        let raw = c.get("points").and_then(Value::as_array).ok_or_else(|| bad(format!("clone {k}: `points` [[x,y], …]")))?;
+        dabs = dabs.saturating_add(raw.len());
+        if dabs > MAX_CLONE_DABS {
+            return Err(bad(format!("at most {MAX_CLONE_DABS} clone points in all")));
+        }
+        let points =
+            raw.iter().map(|q| pt(q).filter(|q| finite(*q))).collect::<Option<Vec<_>>>().ok_or_else(|| bad(format!("clone {k}: every point is [x,y]")))?;
+        out.push(CloneSpec {
+            source,
+            points,
+            size: num(c, "size", 40.0, 1.0, 2000.0)?,
+            hardness: num(c, "hardness", 50.0, 0.0, 100.0)? / 100.0,
+            opacity: num(c, "opacity", 100.0, 0.0, 100.0)? / 100.0,
+        });
+    }
+    Ok(out)
+}
+
+/// Paints clone stroke `c` on `surf`, or, with `work` (the image it samples), on `work` and copies
+/// the pixels it changed to `surf`. Returns the dabs painted.
+pub fn clone_into(sc: &Scene, surf: &mut Surface, work: Option<&mut Surface>, c: &CloneSpec) -> usize {
+    let Some(first) = c.points.first() else { return 0 };
+    let Some(work) = work else {
+        return clone_dabs(sc, surf, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32).0;
+    };
+    let before = work.clone();
+    let (dabs, area) = clone_dabs(sc, work, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32);
+    copy_changed(surf, &before, work, area);
+    dabs
+}
+
+/// Copies to `dst` the pixels of `area` where `after` differs from `before` (same format).
+pub fn copy_changed(dst: &mut Surface, before: &Surface, after: &Surface, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+    let n = dst.format().channels();
+    let (nw, ow, mut cur) = (after.read_region(area), before.read_region(area), dst.read_region(area));
+    for ((c, a), b) in cur.chunks_exact_mut(n).zip(nw.chunks_exact(n)).zip(ow.chunks_exact(n)) {
+        if a != b {
+            c.copy_from_slice(a);
+        }
+    }
+    dst.write_region(area, &cur);
+}
+
+/// The image a `"newLayer"` run's clone strokes sample: the visible document.
+pub fn visible_image(doc: &Document) -> Surface {
+    crate::file_cmds::flattened(doc, doc.pixel_format())
 }
 
 fn has_layer(s: &Session) -> std::result::Result<(), String> {
@@ -134,7 +228,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         let width = item.get("width").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.01, 10.0);
         pastes.push((plane, surf, rect, at, width));
     }
-    let clones: Vec<Value> = p.get("clone").and_then(Value::as_array).cloned().unwrap_or_default();
+    let clones = clone_specs(p)?;
     let new_layer = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
     let mut dabs = 0usize;
     let target = s.edit("Vanishing Point", |doc: &mut Document, active| {
@@ -147,7 +241,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             active.ok_or_else(|| EngineError::Other("no active layer".into()))?
         };
         // A new layer clones from the visible image; otherwise from the layer itself.
-        let base: Option<Surface> = new_layer.then(|| crate::file_cmds::flattened(doc, doc.pixel_format()));
+        let base: Option<Surface> = new_layer.then(|| visible_image(doc));
         let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.all || locks.pixels {
@@ -159,36 +253,14 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
                 over(surf, &out);
             }
         }
-        for (k, c) in clones.iter().enumerate() {
-            let source = c.get("source").and_then(pt).ok_or_else(|| bad(format!("clone {k}: `source` [x,y]")))?;
-            let points: Vec<[f64; 2]> = c.get("points").and_then(Value::as_array).map(|a| a.iter().filter_map(pt).collect()).unwrap_or_default();
-            let size = c.get("size").and_then(Value::as_f64).unwrap_or(40.0).clamp(1.0, 2000.0);
-            let hardness = c.get("hardness").and_then(Value::as_f64).unwrap_or(50.0).clamp(0.0, 100.0) / 100.0;
-            let opacity = (c.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) / 100.0) as f32;
-            // Sample from the original pixels (merged with what's been pasted).
-            let mut work = match &base {
-                Some(b) => {
-                    let mut w = b.clone();
-                    over(&mut w, surf);
-                    w
-                }
-                None => surf.clone(),
-            };
-            let before = work.clone();
-            dabs += clone_stroke(&sc, &mut work, source, &points, size, hardness, opacity);
-            // Copy back only what the stroke changed.
-            let b = work.content_bounds().union(&before.content_bounds());
-            if !b.is_empty() {
-                let (nw, ow) = (work.read_region(b), before.read_region(b));
-                let n = surf.format().channels();
-                let mut cur = surf.read_region(b);
-                for i in 0..cur.len() / n {
-                    if nw[i * n..(i + 1) * n] != ow[i * n..(i + 1) * n] {
-                        cur[i * n..(i + 1) * n].copy_from_slice(&nw[i * n..(i + 1) * n]);
-                    }
-                }
-                surf.write_region(b, &cur);
-            }
+        // A new layer samples the visible image (merged with what's been pasted) and takes only
+        // the pixels the strokes change; otherwise the strokes paint the layer itself.
+        let mut work = base.map(|mut w| {
+            over(&mut w, surf);
+            w
+        });
+        for c in &clones {
+            dabs += clone_into(&sc, surf, work.as_mut(), c);
         }
         surf.prune();
         Ok(id)
@@ -281,5 +353,36 @@ mod tests {
             assert!(e.contains("convex"), "{e}");
         }
         assert!(s.execute(VP, json!({"planes": [{"corners": square}]})).is_ok());
+    }
+
+    #[test]
+    fn rejects_hostile_clone_and_tear_off_params() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 200, "depth": 32})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let floor = json!({"corners": [[60, 60], [140, 60], [190, 190], [10, 190]]});
+        for torn in [json!({"from": 0, "angle": 1e9}), json!({"from": 0, "depth": -1}), json!({"from": 0, "depth": 1e300})] {
+            let e = s.execute(VP, json!({"planes": [floor, torn]})).unwrap_err().to_string();
+            assert!(e.contains("plane 1"), "{e}");
+        }
+        let many: Vec<[f64; 2]> = vec![[100.0, 150.0]; MAX_CLONE_DABS + 1];
+        for clone in [
+            json!([{"points": [[100, 150]]}]),
+            json!([{"source": [100, 180], "points": [[100, 150], "x"]}]),
+            json!([{"source": [100, 180], "points": [[100, 150]], "size": "big"}]),
+            json!([{"source": [100, 180], "points": many}]),
+            json!({"source": [100, 180]}),
+        ] {
+            let label: String = clone.to_string().chars().take(80).collect();
+            assert!(s.execute(VP, json!({"planes": [floor], "clone": clone})).is_err(), "{label}");
+        }
+        let planes: Vec<Value> = std::iter::repeat_n(floor.clone(), MAX_PLANES + 1).collect();
+        assert!(s.execute(VP, json!({"planes": planes})).is_err());
+        // A clone on a torn-off wall, at 32 bits, sampling the floor.
+        let r = s
+            .execute(VP, json!({"planes": [floor, {"from": 0, "edge": "top", "angle": 90, "depth": 0.5}], "clone": [{"source": [100, 150], "points": [[100, 50], [104, 50]], "size": 8}]}))
+            .unwrap();
+        assert_eq!(r["planes"].as_array().unwrap().len(), 2);
+        assert!(r["dabs"].as_u64().unwrap() >= 1, "{r}");
     }
 }

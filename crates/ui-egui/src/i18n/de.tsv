@@ -2700,6 +2700,8 @@ curves	Smooth	Glätten
 	Vanishing Point is not active	Fluchtpunkt ist nicht aktiv
 	Apply Vanishing Point ({key})	Fluchtpunkt anwenden ({key})
 	Fix the red plane first: its corners must form a convex quad	Korrigieren Sie zuerst die rote Ebene: Ihre Ecken müssen ein konvexes Viereck bilden
+	Alt-click a plane to set the clone source	Alt-Klick auf eine Ebene legt die Kopierquelle fest
+	Too many clone strokes: apply Vanishing Point first	Zu viele Kopierstriche: Wenden Sie zuerst Fluchtpunkt an
 # Select and Mask view modes (#1754)
 	Onion Skin	Zwiebelschicht
 	Marching Ants	Laufende Ameisen
