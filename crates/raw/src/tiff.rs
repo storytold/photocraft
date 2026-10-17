@@ -121,7 +121,7 @@ pub(crate) fn type_size(typ: u16) -> usize {
         1 | 2 | 6 | 7 => 1,
         3 | 8 => 2,
         4 | 9 | 11 | 13 => 4,
-        5 | 10 | 12 => 8,
+        5 | 10 | 12 | 16 | 17 | 18 => 8,
         _ => 0,
     }
 }
@@ -384,6 +384,23 @@ mod tests {
         b.extend_from_slice(&8u32.to_le_bytes());
         let t = Tiff::new(&b).unwrap();
         assert_eq!(t.all_ifds().len(), 1);
+    }
+
+    #[test]
+    fn eight_byte_types_are_read_from_their_offset() {
+        for typ in [16u16, 17, 18] {
+            let mut b = b"II*\0\x08\0\0\0".to_vec();
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend_from_slice(&50000u16.to_le_bytes());
+            b.extend_from_slice(&typ.to_le_bytes());
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&26u32.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&0x0102_0304_0506_0708u64.to_le_bytes());
+            let t = Tiff::new(&b).unwrap();
+            let ifd = t.ifd_at(8, 0).unwrap();
+            assert_eq!(t.raw(ifd.get(50000).unwrap()), Some(&0x0102_0304_0506_0708u64.to_le_bytes()[..]), "type {typ}");
+        }
     }
 
     #[test]

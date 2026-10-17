@@ -148,65 +148,12 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         return Err(RawError::malformed("empty active area"));
     }
     let cfa = if is_cfa { Some(cfa(t, &raw, &active)?) } else { None };
-
-    // Default crop, relative to the active area. Each tag has its own default (DNG 1.7.1.0,
-    // DefaultCropOrigin and DefaultCropSize): the origin (0, 0), the size the whole image.
-    let mut crop = active;
-    if raw.has(tag::DEFAULT_CROP_ORIGIN) || raw.has(tag::DEFAULT_CROP_SIZE) {
-        // A present tag must hold two values; an absent one takes its default.
-        let pair = |tg: u16, default: [f64; 2]| -> Option<[f64; 2]> {
-            if !raw.has(tg) {
-                return Some(default);
-            }
-            match t.tag_floats(&raw, tg).as_slice() {
-                [a, b] => Some([*a, *b]),
-                _ => None,
-            }
-        };
-        let origin = pair(tag::DEFAULT_CROP_ORIGIN, [0.0, 0.0]);
-        let size = pair(tag::DEFAULT_CROP_SIZE, [plane.width as f64, plane.height as f64]);
-        if let (Some([ox, oy]), Some([cw, ch])) = (origin, size) {
-            let (ox, oy, cw, ch) = (
-                crop_value(ox, "DefaultCropOrigin"),
-                crop_value(oy, "DefaultCropOrigin"),
-                crop_value(cw, "DefaultCropSize"),
-                crop_value(ch, "DefaultCropSize"),
-            );
-            let (ox, oy, cw, ch) = (ox?, oy?, cw?, ch?);
-            let active_right = active.x.checked_add(active.width).ok_or_else(|| RawError::malformed("DNG active-area right edge overflow"))?;
-            let active_bottom = active.y.checked_add(active.height).ok_or_else(|| RawError::malformed("DNG active-area bottom edge overflow"))?;
-            let candidate = active.x.checked_add(ox).zip(active.y.checked_add(oy)).and_then(|(x, y)| {
-                let right = x.checked_add(cw)?;
-                let bottom = y.checked_add(ch)?;
-                (x >= active.x && y >= active.y && right <= active_right && bottom <= active_bottom).then_some(Rect::new(x, y, cw, ch))
-            });
-            if let Some(r) = candidate.filter(|r| !r.is_empty()) {
-                crop = r;
-            } else {
-                warnings.push("out-of-range or empty DNG default crop; active area used".to_string());
-            }
-        } else {
-            warnings.push("incomplete DNG default crop; active area used".to_string());
-        }
-    }
+    let crop = default_crop(t, &raw, active, (plane.width, plane.height), &mut warnings)?;
     let scale = t.tag_floats(&raw, tag::DEFAULT_SCALE);
     if scale.len() == 2 && (scale[0] - scale[1]).abs() > 1e-6 {
         warnings.push("non-square pixels (DefaultScale) are not resampled".to_string());
     }
-    // Opcode lists: OpcodeList2 gain maps (lens shading) are applied; everything else is reported.
-    let mut gain_maps = Vec::new();
-    for (tg, what) in [(tag::OPCODE_LIST_1, 1), (tag::OPCODE_LIST_2, 2), (tag::OPCODE_LIST_3, 3)] {
-        let Some(bytes) = raw.get(tg).and_then(|e| t.raw(e)) else { continue };
-        let (maps, skipped) = opcodes::parse(bytes);
-        if what == 2 {
-            gain_maps = maps;
-        } else if !maps.is_empty() {
-            warnings.push(format!("DNG OpcodeList{what}: GainMap is not applied"));
-        }
-        if !skipped.is_empty() {
-            warnings.push(format!("DNG OpcodeList{what}: {} not applied", skipped.join(", ")));
-        }
-    }
+    let gain_maps = gain_maps(t, &raw, &mut warnings);
 
     // DNG 1.6 ProfileGainTableMap: the local tone mapping that phones (Samsung Expert RAW) rely on
     // for their default look. Without it the rendering is darker in the shadows.
@@ -214,34 +161,8 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         warnings.push("DNG ProfileGainTableMap (local tone mapping) is not applied".to_string());
     }
 
-    let max = ((1u32 << plane.bits) - 1) as f32;
-    let linearization = raw.get(tag::LINEARIZATION_TABLE).map(|e| t.uints(e)).filter(|v| !v.is_empty() && v.len() <= 65536);
-    let linearization: Option<Vec<u16>> = linearization.map(|v| v.into_iter().map(|x| x.min(65535) as u16).collect());
-    let white_default = match &linearization {
-        Some(l) => f32::from(l.iter().copied().max().unwrap_or(u16::MAX)),
-        None => max,
-    };
-    let wl = t.tag_floats(&raw, tag::WHITE_LEVEL);
-    let white = [0, 1, 2].map(|s| wl.get(s).or_else(|| wl.first()).map(|v| *v as f32).filter(|v| *v > 0.0).unwrap_or(white_default));
-
-    let (rows, cols) = match t.tag_uints(&raw, tag::BLACK_LEVEL_REPEAT_DIM).as_slice() {
-        [r, c] if (1..=16).contains(r) && (1..=16).contains(c) => (*r as usize, *c as usize),
-        _ => (1, 1),
-    };
-    let bl = t.tag_floats(&raw, tag::BLACK_LEVEL);
-    let mut black = if bl.len() == rows * cols * samples {
-        BlackLevels { rows, cols, values: bl.iter().map(|v| *v as f32).collect(), delta_h: Vec::new(), delta_v: Vec::new() }
-    } else {
-        BlackLevels::uniform(bl.first().copied().unwrap_or(0.0) as f32)
-    };
-    let dh = t.tag_floats(&raw, tag::BLACK_LEVEL_DELTA_H);
-    if dh.len() == active.width {
-        black.delta_h = dh.iter().map(|v| *v as f32).collect();
-    }
-    let dv = t.tag_floats(&raw, tag::BLACK_LEVEL_DELTA_V);
-    if dv.len() == active.height {
-        black.delta_v = dv.iter().map(|v| *v as f32).collect();
-    }
+    let (linearization, white) = white_levels(t, &raw, plane.bits);
+    let black = black_levels(t, &raw, samples, &active);
 
     let color = color_info(t, &ifd0);
     // A monochrome image has no colour to calibrate: it develops as neutral grey.
@@ -274,4 +195,94 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         black_point: 0.0,
         warnings,
     })
+}
+
+fn default_crop(t: &Tiff, raw: &Ifd, active: Rect, (width, height): (usize, usize), warnings: &mut Vec<String>) -> Result<Rect> {
+    if !raw.has(tag::DEFAULT_CROP_ORIGIN) && !raw.has(tag::DEFAULT_CROP_SIZE) {
+        return Ok(active);
+    }
+    let pair = |tg: u16, default: [f64; 2]| -> Option<[f64; 2]> {
+        if !raw.has(tg) {
+            return Some(default);
+        }
+        match t.tag_floats(raw, tg).as_slice() {
+            [a, b] => Some([*a, *b]),
+            _ => None,
+        }
+    };
+    let origin = pair(tag::DEFAULT_CROP_ORIGIN, [0.0, 0.0]);
+    let size = pair(tag::DEFAULT_CROP_SIZE, [width as f64, height as f64]);
+    let (Some([ox, oy]), Some([cw, ch])) = (origin, size) else {
+        warnings.push("incomplete DNG default crop; active area used".to_string());
+        return Ok(active);
+    };
+    let (ox, oy, cw, ch) =
+        (crop_value(ox, "DefaultCropOrigin"), crop_value(oy, "DefaultCropOrigin"), crop_value(cw, "DefaultCropSize"), crop_value(ch, "DefaultCropSize"));
+    let (ox, oy, cw, ch) = (ox?, oy?, cw?, ch?);
+    let active_right = active.x.checked_add(active.width).ok_or_else(|| RawError::malformed("DNG active-area right edge overflow"))?;
+    let active_bottom = active.y.checked_add(active.height).ok_or_else(|| RawError::malformed("DNG active-area bottom edge overflow"))?;
+    let candidate = active.x.checked_add(ox).zip(active.y.checked_add(oy)).and_then(|(x, y)| {
+        let right = x.checked_add(cw)?;
+        let bottom = y.checked_add(ch)?;
+        (x >= active.x && y >= active.y && right <= active_right && bottom <= active_bottom).then_some(Rect::new(x, y, cw, ch))
+    });
+    match candidate.filter(|r| !r.is_empty()) {
+        Some(r) => Ok(r),
+        None => {
+            warnings.push("out-of-range or empty DNG default crop; active area used".to_string());
+            Ok(active)
+        }
+    }
+}
+
+fn gain_maps(t: &Tiff, raw: &Ifd, warnings: &mut Vec<String>) -> Vec<opcodes::GainMap> {
+    let mut gain_maps = Vec::new();
+    for (tg, what) in [(tag::OPCODE_LIST_1, 1), (tag::OPCODE_LIST_2, 2), (tag::OPCODE_LIST_3, 3)] {
+        let Some(bytes) = raw.get(tg).and_then(|e| t.raw(e)) else { continue };
+        let (maps, skipped) = opcodes::parse(bytes);
+        if what == 2 {
+            gain_maps = maps;
+        } else if !maps.is_empty() {
+            warnings.push(format!("DNG OpcodeList{what}: GainMap is not applied"));
+        }
+        if !skipped.is_empty() {
+            warnings.push(format!("DNG OpcodeList{what}: {} not applied", skipped.join(", ")));
+        }
+    }
+    gain_maps
+}
+
+fn white_levels(t: &Tiff, raw: &Ifd, bits: u32) -> (Option<Vec<u16>>, [f32; 3]) {
+    let max = ((1u32 << bits) - 1) as f32;
+    let linearization = raw.get(tag::LINEARIZATION_TABLE).map(|e| t.uints(e)).filter(|v| !v.is_empty() && v.len() <= 65536);
+    let linearization: Option<Vec<u16>> = linearization.map(|v| v.into_iter().map(|x| x.min(65535) as u16).collect());
+    let white_default = match &linearization {
+        Some(l) => f32::from(l.iter().copied().max().unwrap_or(u16::MAX)),
+        None => max,
+    };
+    let wl = t.tag_floats(raw, tag::WHITE_LEVEL);
+    let white = [0, 1, 2].map(|s| wl.get(s).or_else(|| wl.first()).map(|v| *v as f32).filter(|v| *v > 0.0).unwrap_or(white_default));
+    (linearization, white)
+}
+
+fn black_levels(t: &Tiff, raw: &Ifd, samples: usize, active: &Rect) -> BlackLevels {
+    let (rows, cols) = match t.tag_uints(raw, tag::BLACK_LEVEL_REPEAT_DIM).as_slice() {
+        [r, c] if (1..=16).contains(r) && (1..=16).contains(c) => (*r as usize, *c as usize),
+        _ => (1, 1),
+    };
+    let bl = t.tag_floats(raw, tag::BLACK_LEVEL);
+    let mut black = if bl.len() == rows * cols * samples {
+        BlackLevels { rows, cols, values: bl.iter().map(|v| *v as f32).collect(), delta_h: Vec::new(), delta_v: Vec::new() }
+    } else {
+        BlackLevels::uniform(bl.first().copied().unwrap_or(0.0) as f32)
+    };
+    let dh = t.tag_floats(raw, tag::BLACK_LEVEL_DELTA_H);
+    if dh.len() == active.width {
+        black.delta_h = dh.iter().map(|v| *v as f32).collect();
+    }
+    let dv = t.tag_floats(raw, tag::BLACK_LEVEL_DELTA_V);
+    if dv.len() == active.height {
+        black.delta_v = dv.iter().map(|v| *v as f32).collect();
+    }
+    black
 }
