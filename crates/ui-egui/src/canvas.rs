@@ -4883,6 +4883,11 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         app.trail = None;
         return;
     };
+    // The Move tool's ΔX/ΔY beside the pointer, for layers and selected pixels alike (#5727).
+    if let Some(values) = crate::move_ui::offset_readout(app) {
+        let at = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
+        draw_value_readout(app, painter.ctx(), "move-readout", xf.to_screen(at[0] as f32, at[1] as f32), ["ΔX:", "ΔY:"], values);
+    }
     // Dragging the selection: its own ants follow the pointer (`selection_shown_offset`).
     if d.sel_move.is_some() {
         return;

@@ -96,6 +96,15 @@ fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     Some((dx, dy))
 }
 
+/// The ΔX/ΔY values shown beside the pointer while the Move tool drags layers or selected pixels,
+/// as in Photoshop (#5727): the whole pixels the release will move them. Free Transform shows its
+/// own (`transform_tool::live_readout`). `None` until the pointer moves.
+pub(crate) fn offset_readout(app: &PhotocraftApp) -> Option<[String; 2]> {
+    app.drag.as_ref().filter(|d| d.points.len() > 1)?;
+    let (dx, dy) = drag_offset(app)?;
+    Some([dx, dy].map(|v| format!("{v} px")))
+}
+
 /// The document to show while a Move drag is under way on document `idx`: the moving layers at
 /// the pointer. `None` without a drag (or when the layers can't move: locked, say; the drag then
 /// shows its arrow and the release reports why).
@@ -307,6 +316,35 @@ mod tests {
         // From +10 to +20 the strip x 0..10 shows pixels that were off the canvas a frame ago.
         let r = super::damage(&app, st.doc.id, st.revision, keys[0], keys[1]).unwrap();
         assert_eq!(r, Rect::new(0, 0, 64, 64));
+    }
+
+    /// The Move tool shows how far it has moved the layer, ΔX/ΔY in whole pixels, as Photoshop
+    /// and Free Transform do (#5727): once the pointer moves, until the release.
+    #[test]
+    fn a_move_drag_reads_out_the_offset_it_will_commit() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(16, 16, 32, 32), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let m = egui::Modifiers::NONE;
+        assert_eq!(super::offset_readout(&app), None, "no drag");
+        // Pressed on the red square (16..32): with Auto-Select (on by default) an empty spot would
+        // start the layer marquee instead of a move.
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 24.0, y: 24.0, pressure: 1.0 }, m);
+        assert_eq!(super::offset_readout(&app), None, "pressed, not moved yet");
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 34.4, y: 20.8, pressure: 1.0 }, m);
+        assert_eq!(super::offset_readout(&app), Some(["10 px".to_string(), "-3 px".to_string()]));
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 34.4, y: 20.8 }, m);
+        assert_eq!(super::offset_readout(&app), None, "released");
     }
 
     /// A shape reaching past the canvas edge renders cut at the canvas, but its path goes on: a
