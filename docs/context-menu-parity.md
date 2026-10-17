@@ -1,6 +1,6 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (layer-mask thumbnail menu, #4575) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** trivial (pasteboard row: the menu exists, #2462; layer-mask thumbnail menu, #4575) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
@@ -82,7 +82,7 @@ Photoshop's Generative Fill and Delete and Fill Selection rows are left out: Pho
 | Brushes and preset panels | Rename/Delete brush or group, export selected brushes, view/reset preset choices | Rename/Delete, and preset group/item menus exist | Adobe explicitly documents Export Selected Brushes from brush/group right-click ([brushes](https://helpx.adobe.com/photoshop/desktop/apply-painting-techniques/brushes-presets/create-brush-set-painting-options.html)); Photoshop pop-up-panel rename/delete/reset/view options are [documented](https://helpx.adobe.com/photoshop/using/panels-menus.html), though some are panel-button menus |
 | Paths, History, Actions, Swatches, Gradients, Patterns, Styles, Libraries, Properties | Target-specific duplicate/delete/rename and panel operations where a panel exists | Paths row menu added in this PR; other panels need audit | **Inferred** catalog; record a Photoshop capture before claiming parity |
 | Document tab | Close, Close Others, Close All, Reveal in file manager, duplicate/move to window where supported | Close, Close Others, Close All, Reveal in Finder, and drag to reorder implemented; duplicate/move to window where supported remains open | **Inferred** exact list; P1 |
-| Empty pasteboard / workspace | Gray, Black, Custom canvas color choices; verify any additional entries in a current Photoshop capture | No menu | Adobe [documents right-clicking outside the image for canvas color](https://helpx.adobe.com/ph_en/photoshop/using/filling-stroking-selections-layers-paths.html); exact current layout still needs a capture |
+| Empty pasteboard / workspace | Gray, Black, Custom canvas color choices; verify any additional entries in a current Photoshop capture | Implemented (canvas_tool_menu.rs `PASTEBOARD_MENU`, #2462): Default, Black, Dark Gray, Medium Gray, Light Gray, Custom, Select Custom Color… | Adobe [documents right-clicking outside the image for canvas color](https://helpx.adobe.com/ph_en/photoshop/using/filling-stroking-selections-layers-paths.html); exact current layout still needs a capture |
 | Text field / selected text | Native edit menu and spelling suggestions without routing to active image tool | Edit menu implemented in text_field_menu.rs for every text field (Undo, Cut, Copy, Paste, Delete, Select All; a right-click inside the selection keeps it; never reaches the canvas or tool menu). Spelling suggestions live in the Type tool's edit menu (canvas_tool_menu.rs), not in generic fields, which hold no type layer text (UI-217-8) | P1; **inferred** exact spelling list |
 | Tool icon in Options bar | Reset Tool, Reset All Tools | Audit | Explicitly documented in [Adobe Photoshop reference](https://helpx.adobe.com/archive/en/photoshop/cc/2015/photoshop_reference.pdf); historical source, verify modern label |
 | Adaptive Wide Angle constraint line | Auto, Horizontal, Vertical orientation | Current right-click deletes constraint | P1 behavior mismatch: [Adobe documents orientation choice](https://helpx.adobe.com/photoshop/using/adaptive-wide-angle-filter.html) |
@@ -100,6 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Pasteboard row: the colour menu exists since #2462 |
 | 2026-10-13 | minor | Layer-mask thumbnail menu (#4575) |
 | 2026-10-10 | trivial | Status line, revision history |
 | 2026-10-09 | minor | Selection canvas reference and tool matrix updates |

@@ -127,9 +127,9 @@ note = "panels.rs:1837 single field + hex/RGB readout"
 [[item]]
 id = "UI-217-18"
 target = "Alt+wheel zooms in gentle ~5 % steps; zoom controls uncramped"
-status = "missing"
+status = "partial"
 issue = 217
-note = "canvas.rs:1107-1125 no Alt handling"
+note = "Alt+wheel zooms around the pointer, one step per notch applied the frame it arrives (wheel_nav.rs; input_tests.rs alt_scroll_zooms_in_steps_around_the_pointer, wheel_nav.rs alt_scroll_zooms_ten_percent_per_notch), but the step is x1.1 (10 %), not the ~5 % this row asks for: #1718 changed it from x1.05 after measuring Photoshop, so the row's target is in question. Status bar zoom field and Fit button fit inside the bar in every theme (status_bar_tests.rs status_bar_controls_sit_inside_the_bar_with_even_margins, #2823); the Navigator zoom controls are not checked"
 
 [[item]]
 id = "UI-217-19"

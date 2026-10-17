@@ -49,9 +49,9 @@ note = "Alt+Left/Right at a collapsed caret kerns the pair (type_tool.rs kern_pa
 [[item]]
 id = "TYPE-218-7"
 target = "Warp Text dialog previews live and opens with the layer's current warp"
-status = "missing"
+status = "done"
 issue = 218
-note = "view_cmds.rs:834 always seeds arc, bend 50"
+note = "Type > Warp Text opens with the shown layer's warp, or None, never remembered values (filter_dialog.rs warp_defaults; warp_text_dialog_tests.rs warp_text_opens_with_the_type_layers_current_warp, warp_text_opens_at_none_for_a_layer_without_warp, remembered_warp_values_never_override_the_layers_warp). The dialog previews live without editing the document, Cancel leaves no step and OK is one undoable step (warp_text_dialog_previews_the_warp_without_editing_the_document, cancelling_warp_text_leaves_the_document_and_history_untouched, confirming_warp_text_is_one_undoable_step); the reduced-proxy preview matches the full-size result (filter_dialog.rs warp_text_preview_matches_the_full_size_result_on_a_reduced_proxy)"
 
 [[item]]
 id = "TYPE-218-8"

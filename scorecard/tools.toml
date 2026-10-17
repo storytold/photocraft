@@ -136,7 +136,7 @@ id = "TOOL-214-4"
 target = "Move tool: box-select layers, Auto-Select hover outline, double-click fit, drag to a tab"
 status = "partial"
 issue = 214
-note = "Auto-Select hover outline (Preferences › Tools › Show Highlight on Rollover, #2834) and box-select layers from an empty spot (move_box.rs, layer.selectInRect, #2844) done; double-click fit and drag to a tab open"
+note = "Auto-Select hover outline (Preferences › Tools › Show Highlight on Rollover, #2834) and box-select layers from an empty spot (move_box.rs, layer.selectInRect, #2844) done; dragging layers with the Move tool (or from the Layers panel) onto another document's tab copies them there (layer_transfer.rs, layer.copyToDocument, #589/#851); double-click fit and dragging a selection's pixels to another document open"
 
 [[item]]
 id = "TOOL-214-5"
@@ -197,9 +197,9 @@ note = "On-canvas corner radius widgets on every selected live rectangle with Pa
 [[item]]
 id = "TOOL-214-13"
 target = "Mask Properties: Density and Feather controls"
-status = "partial"
+status = "done"
 issue = 214
-note = "Vector-mask density/feather in the engine (vector_cmds.rs:948); no UI controls"
+note = "Properties panel shows Density (%) and Feather (px) sliders for a targeted pixel mask (layer.layerMask.edit) and a targeted vector mask (layer.vectorMask.edit), non-destructive and one undo step per drag, with Photoshop's Refine row (mask_props_ui.rs; mask_props_ui_tests.rs pixel_mask_properties_follow_target_for_raster_and_adjustment_in_both_themes, mask_slider_drags_preview_live_and_undo_as_separate_gestures, vector_mask_properties_edit_density_and_feather)"
 
 [[item]]
 id = "TOOL-214-14"
