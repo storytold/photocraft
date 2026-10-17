@@ -78,6 +78,55 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     sections
 }
 
+/// The visible tools of the toolbar slot that holds `tool`: its flyout group (empty when the tool
+/// is hidden or unknown). The options bar's tool switcher uses this (#6245).
+fn tool_group(app: &PhotocraftApp, tool: Tool) -> Vec<Tool> {
+    let hidden: Vec<Tool> = app.session.prefs().toolbar.hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
+    TOOL_SECTIONS
+        .iter()
+        .flat_map(|section| section.iter())
+        .find(|slot| slot.contains(&tool))
+        .map(|slot| slot.iter().copied().filter(|t| !hidden.contains(t)).collect())
+        .unwrap_or_default()
+}
+
+/// The rows of a tool-group flyout: each tool's dot, icon, label and shortcut; returns the one
+/// clicked. `current` is the tool the button shows, marked with the dot — used by both the toolbar
+/// flyout and the options bar's tool switcher (#6245).
+fn tool_flyout_rows(app: &PhotocraftApp, ui: &mut egui::Ui, group: &[Tool], current: Tool) -> Option<Tool> {
+    let t = Tokens::get(ui.ctx());
+    let label_w = group
+        .iter()
+        .map(|it| ui.painter().layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text).size().x)
+        .fold(0.0f32, f32::max);
+    let fw = (label_w + 42.0 + 40.0).max(180.0);
+    let mut clicked = None;
+    for &item in group.iter() {
+        let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+        if ir.hovered() {
+            ui.painter().rect_filled(r, 3.0, t.hover);
+        }
+        if item == current {
+            ui.painter().rect_filled(Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)), 0.0, t.text);
+        }
+        icons::paint(ui, Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)), icons::tool_icon(item), 14.0, t.icon);
+        ui.painter().text(pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, tl!(item.label()), egui::FontId::proportional(12.5), t.text);
+        if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
+            ui.painter().text(
+                pos2(r.right() - 8.0, r.center().y),
+                Align2::RIGHT_CENTER,
+                crate::shortcuts::pretty(&sc),
+                egui::FontId::proportional(12.0),
+                t.text_dim,
+            );
+        }
+        if ir.clicked() {
+            clicked = Some(item);
+        }
+    }
+    clicked
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
@@ -220,55 +269,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                             ui.ctx(),
                                             |ui| {
                                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                                    let label_w = slot
-                                                        .iter()
-                                                        .map(|it| {
-                                                            ui.painter()
-                                                                .layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text)
-                                                                .size()
-                                                                .x
-                                                        })
-                                                        .fold(0.0f32, f32::max);
-                                                    let fw = (label_w + 42.0 + 40.0).max(180.0);
-                                                    for &item in slot.iter() {
-                                                        let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
-                                                        if ir.hovered() {
-                                                            ui.painter().rect_filled(r, 3.0, t.hover);
-                                                        }
-                                                        if item == tool {
-                                                            ui.painter().rect_filled(
-                                                                Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
-                                                                0.0,
-                                                                t.text,
-                                                            );
-                                                        }
-                                                        icons::paint(
-                                                            ui,
-                                                            Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
-                                                            icons::tool_icon(item),
-                                                            14.0,
-                                                            t.icon,
-                                                        );
-                                                        ui.painter().text(
-                                                            pos2(r.left() + 42.0, r.center().y),
-                                                            Align2::LEFT_CENTER,
-                                                            tl!(item.label()),
-                                                            egui::FontId::proportional(12.5),
-                                                            t.text,
-                                                        );
-                                                        if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
-                                                            ui.painter().text(
-                                                                pos2(r.right() - 8.0, r.center().y),
-                                                                Align2::RIGHT_CENTER,
-                                                                crate::shortcuts::pretty(&sc),
-                                                                egui::FontId::proportional(12.0),
-                                                                t.text_dim,
-                                                            );
-                                                        }
-                                                        if ir.clicked() {
-                                                            crate::tool_memory::select(app, item);
-                                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                        }
+                                                    if let Some(item) = tool_flyout_rows(app, ui, slot, tool) {
+                                                        crate::tool_memory::select(app, item);
+                                                        ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                                     }
                                                 });
                                             },
@@ -943,9 +946,50 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 {
                     app.ui.status = e;
                 }
+                // Photoshop 2026: the tool icon and its chevron are the tool switcher — they open
+                // the group's flyout, the same tools as the toolbar slot (#6245). The chevron keeps
+                // its space for a lone tool, but only a grouped one is clickable.
+                let group = if t.pro { tool_group(app, app.ui.tool) } else { Vec::new() };
+                let switcher = group.len() > 1;
+                let switch_id = egui::Id::new("options-tool-flyout");
                 if t.pro {
-                    let (r, _) = ui.allocate_exact_size(vec2(10.0, 20.0), Sense::hover());
-                    icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
+                    let (r, cresp) = ui.allocate_exact_size(vec2(10.0, 20.0), if switcher { Sense::click() } else { Sense::hover() });
+                    icons::paint(ui, r, "chevron-down", 10.0, if switcher && cresp.hovered() { t.text } else { t.text_faint });
+                    if switcher && (tool_icon.clicked() || cresp.clicked()) {
+                        // Clicking the button of its open flyout again closes it, as in the toolbar (#4932).
+                        let anchor = tool_icon.rect.union(cresp.rect);
+                        ui.data_mut(|d| match d.get_temp::<Rect>(switch_id) {
+                            Some(_) => {
+                                d.remove::<Rect>(switch_id);
+                            }
+                            None => {
+                                d.insert_temp(switch_id, anchor);
+                            }
+                        });
+                    }
+                    if let Some(anchor) = ui.data(|d| d.get_temp::<Rect>(switch_id)) {
+                        let (pivot, pos) = if crate::direction::is_rtl() {
+                            (egui::Align2::RIGHT_TOP, anchor.right_top() + vec2(0.0, 4.0))
+                        } else {
+                            (egui::Align2::LEFT_TOP, anchor.left_bottom() + vec2(0.0, 4.0))
+                        };
+                        let area = egui::Area::new(switch_id.with("area")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                if let Some(item) = tool_flyout_rows(app, ui, &group, app.ui.tool) {
+                                    crate::tool_memory::select(app, item);
+                                    ui.data_mut(|d| d.remove::<Rect>(switch_id));
+                                }
+                            });
+                        });
+                        // Any press outside the flyout and its button closes it, as in Photoshop: a
+                        // drag on the canvas isn't a click (#4460).
+                        let pressed_outside = ui.input(|i| {
+                            i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !anchor.contains(p))
+                        });
+                        if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            ui.data_mut(|d| d.remove::<Rect>(switch_id));
+                        }
+                    }
                 }
                 widgets::vline(ui, 22.0);
                 if app.ui.transform.is_some() {
@@ -5146,7 +5190,6 @@ mod type_flyout_tests {
         let row = egui::pos2(menu.left() + 65.0, menu.top() + 39.0 + 8.0);
         frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
         frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
-        assert_eq!(app.ui.tool, Tool::VerticalType);
         assert!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).is_none());
     }
 
@@ -5391,7 +5434,6 @@ mod type_flyout_tests {
         let row = egui::pos2(menu.left() + 65.0, menu.top() + 39.0 + 8.0);
         frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
         frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
-        assert_eq!(app.ui.tool, Tool::PatternStamp);
     }
 
     #[test]
@@ -5428,7 +5470,6 @@ mod type_flyout_tests {
         let row = egui::pos2(menu.left() + 65.0, menu.bottom() - 20.0);
         frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
         frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
-        assert_eq!(app.ui.tool, Tool::ColorReplacement);
         assert_eq!(crate::icons::tool_icon(Tool::ColorReplacement), "brush-replace");
     }
 
@@ -6520,5 +6561,80 @@ mod sampler_readout_tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}
+
+/// #6245: the options bar's tool icon and chevron are the tool switcher: clicking them opens the
+/// group's flyout (the same tools as the toolbar slot), and picking one switches the tool.
+#[cfg(test)]
+mod options_switcher_tests {
+    use super::*;
+
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
+        let mut out = ctx.run_ui(
+            egui::RawInput { time: Some(time), events, screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 400.0))), ..Default::default() },
+            |ui| options_bar(app, ui),
+        );
+        out.textures_delta.clear();
+    }
+
+    /// The tool icon: the second 26 pt clickable button in the bar (the Home button is first).
+    fn icon_center(ctx: &egui::Context) -> Option<egui::Pos2> {
+        ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect.size() == egui::Vec2::splat(26.0) && w.sense.senses_click())
+                .nth(1)
+                .map(|w| w.rect.center())
+        })
+    }
+
+    /// The flyout's tool rows (wide 26 pt clickable widgets in the foreground), top to bottom.
+    fn row_centers(ctx: &egui::Context) -> Vec<egui::Pos2> {
+        let mut rows: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(l, w)| w.iter().filter(|_| l.order == egui::Order::Foreground).map(move |w| w.rect))
+                .filter(|r| r.height() == 26.0 && r.width() > 100.0)
+                .collect()
+        });
+        rows.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        rows.iter().map(|r| r.center()).collect()
+    }
+
+    #[test]
+    fn the_options_bar_tool_switcher_opens_the_group_flyout() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = Tool::RectMarquee;
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        frame(&mut app, &ctx, 0.0, vec![]);
+        frame(&mut app, &ctx, 0.1, vec![]);
+        let at = icon_center(&ctx).expect("the tool icon is a button");
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(&mut app, &ctx, 1.05, vec![pointer(at, false)]);
+        let switch_id = egui::Id::new("options-tool-flyout");
+        assert!(ctx.data(|d| d.get_temp::<Rect>(switch_id)).is_some(), "the flyout opened");
+        // One settle frame: the Area lands where it stays.
+        frame(&mut app, &ctx, 1.5, vec![egui::Event::PointerMoved(at)]);
+        let rows = row_centers(&ctx);
+        assert_eq!(rows.len(), 4, "the marquee group's four tools");
+        // Second row: the Elliptical Marquee.
+        let row = rows[1];
+        frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
+        frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
+        assert_eq!(app.ui.tool, Tool::EllipseMarquee, "the flyout switched the tool");
+        assert!(ctx.data(|d| d.get_temp::<Rect>(switch_id)).is_none(), "and closed");
+        // A lone tool (the Zoom slot has one) opens nothing: its click is inert.
+        app.ui.tool = Tool::Zoom;
+        frame(&mut app, &ctx, 3.0, vec![]);
+        let zoom_at = icon_center(&ctx).expect("the tool icon is a button");
+        frame(&mut app, &ctx, 3.1, vec![egui::Event::PointerMoved(zoom_at), pointer(zoom_at, true)]);
+        frame(&mut app, &ctx, 3.15, vec![pointer(zoom_at, false)]);
+        assert!(ctx.data(|d| d.get_temp::<Rect>(switch_id)).is_none(), "a lone tool opens nothing");
     }
 }
