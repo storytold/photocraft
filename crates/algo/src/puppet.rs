@@ -2,11 +2,10 @@
 //! as-rigidly-as-possible.
 //!
 //! * **Mesh.** The layer's coverage (alpha above a threshold) becomes a signed distance field,
-//!   offset by `expansion` to grow or shrink the region. A square grid at the density's spacing,
-//!   split into triangles, is fitted to that outline (2D isosurface stuffing): vertices near the
-//!   outline snap onto it and the triangles it crosses are cut along it, so the mesh edge follows
-//!   the shape, and separate shapes get separate meshes. Inside, the mesh stays a uniform grid,
-//!   which is all ARAP needs.
+//!   offset by `expansion` to grow or shrink the region. Its traced outline and interior lattice
+//!   are triangulated with conforming Delaunay edges. Thin regions get extra interior samples
+//!   sized by their local thickness; broad areas keep the density's original lattice. Separate
+//!   shapes get separate meshes, and holes stay empty.
 //! * **Deformation.** The per-triangle ARAP energy of Liu et al. 2008 (the triangle form of
 //!   Sorkine & Alexa 2007), `E = Σ_t Σ_(i,j)∈t w_ij |(v_i − v_j) − R_t (x_i − x_j)|²` with
 //!   cotangent weights, minimized by alternating a local step (best rotation per triangle from
@@ -20,7 +19,7 @@
 //! * **Rendering.** Triangles are rasterized with [`crate::warp::warp_triangles`] (tile-parallel,
 //!   premultiplied, bilinear/bicubic), back to front by the depth of their nearest pin.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -603,11 +602,227 @@ impl<'a> Inside<'a> {
 /// Most outline points the mesh takes; a busier outline is simplified more coarsely.
 const MAX_OUTLINE_POINTS: usize = 20_000;
 
+/// Maximum extra points of each kind (interior and collinear boundary subdivisions).
+const MAX_ADAPTIVE_POINTS: usize = 2048;
+
+/// Proportionally reduce requested subdivisions, distributing rounding remainders across
+/// the contour instead of dropping all splits when many sides each request just one.
+fn limit_subdivisions(parts: &mut [usize]) {
+    let total: usize = parts.iter().map(|n| n - 1).sum();
+    if total <= MAX_ADAPTIVE_POINTS {
+        return;
+    }
+    let mut used = 0;
+    let mut remainders = Vec::with_capacity(parts.len());
+    for (i, n) in parts.iter_mut().enumerate() {
+        let scaled = (*n - 1) * MAX_ADAPTIVE_POINTS;
+        *n = 1 + scaled / total;
+        used += *n - 1;
+        remainders.push((scaled % total, i));
+    }
+    remainders.sort_unstable_by_key(|&(remainder, i)| (usize::MAX - remainder, i.reverse_bits()));
+    for &(_, i) in remainders.iter().take(MAX_ADAPTIVE_POINTS - used) {
+        if let Some(n) = parts.get_mut(i) {
+            *n += 1;
+        }
+    }
+}
+
+/// Refine by local thickness, not distance to the nearest edge (which would refine the rim of
+/// every broad plane). Four directional chord lengths detect straight, curved and diagonal
+/// strips, including short thin appendages of a broad body. Grade the resulting sizes inside
+/// each component, leaving the traced contour intact and only subdividing its straight sides.
+fn refine_narrow_regions(dl: &mut Delaunay, segs: &mut Vec<(usize, usize)>, field: &Field, spacing: f64, density: PuppetDensity) {
+    let minimum = (2.0 * field.g).max(spacing / 32.0).min(spacing);
+    if minimum >= spacing {
+        return;
+    }
+    let mut sizes = vec![f64::INFINITY; field.sd.len()];
+    for (dx, dy) in [(1isize, 0isize), (0, 1), (1, 1), (-1, 1)] {
+        let pitch = field.g * if dx != 0 && dy != 0 { 2f64.sqrt() } else { 1.0 };
+        let mut run = Vec::new();
+        let mut finish = |run: &mut Vec<usize>| {
+            let width = run.len() as f64 * pitch;
+            for i in run.drain(..) {
+                if let Some(size) = sizes.get_mut(i) {
+                    *size = size.min(width);
+                }
+            }
+        };
+        for start in 0..field.sd.len() {
+            let (mut x, mut y) = (start % field.bw, start / field.bw);
+            if x.checked_add_signed(-dx).is_some_and(|px| px < field.bw) && y.checked_add_signed(-dy).is_some_and(|py| py < field.bh) {
+                continue;
+            }
+            loop {
+                if field.at(x, y) < 0.0 {
+                    run.push(y * field.bw + x);
+                } else {
+                    finish(&mut run);
+                }
+                let (Some(nx), Some(ny)) = (x.checked_add_signed(dx), y.checked_add_signed(dy)) else { break };
+                if nx >= field.bw || ny >= field.bh {
+                    break;
+                }
+                (x, y) = (nx, ny);
+            }
+            finish(&mut run);
+        }
+    }
+    let across = match density {
+        PuppetDensity::Fewer => 2.0,
+        PuppetDensity::Normal => 3.0,
+        PuppetDensity::More => 4.0,
+    };
+    for (i, size) in sizes.iter_mut().enumerate() {
+        *size = if field.at(i % field.bw, i / field.bw) < 0.0 { (*size / across).clamp(minimum, spacing) } else { 0.0 };
+    }
+    let directions = [(-1isize, -1isize), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
+    let neighbour = |i: usize, dx: isize, dy: isize| {
+        let (x, y) = (i % field.bw, i / field.bw);
+        let (nx, ny) = (x.checked_add_signed(dx)?, y.checked_add_signed(dy)?);
+        if nx >= field.bw || ny >= field.bh {
+            return None;
+        }
+        // Do not cut across an outside corner between otherwise disconnected components.
+        if dx != 0 && dy != 0 && (field.at(nx, y) >= 0.0 || field.at(x, ny) >= 0.0) {
+            return None;
+        }
+        let cost = 0.5 * field.g * if dx != 0 && dy != 0 { 2f64.sqrt() } else { 1.0 };
+        Some((ny * field.bw + nx, cost))
+    };
+    let mut queue = BinaryHeap::new();
+    for (i, &size) in sizes.iter().enumerate() {
+        if directions.iter().any(|&(dx, dy)| neighbour(i, dx, dy).is_some_and(|(j, cost)| sizes.get(j).is_some_and(|&s| s > 0.0 && s < size - cost))) {
+            // Positive finite float bits sort in the same order as their values.
+            queue.push((size.to_bits(), i));
+        }
+    }
+    while let Some((bits, i)) = queue.pop() {
+        let size = f64::from_bits(bits);
+        if sizes.get(i) != Some(&size) {
+            continue;
+        }
+        for (dx, dy) in directions {
+            if let Some((j, cost)) = neighbour(i, dx, dy)
+                && let Some(s) = sizes.get_mut(j)
+                && *s > 0.0
+                && size - cost > *s
+            {
+                *s = size - cost;
+                queue.push((s.to_bits(), j));
+            }
+        }
+    }
+    // A contour midpoint can fall in an outside cell. Use the nearest inside sample, not
+    // a neighbourhood maximum that could pick up a broad component across a narrow gap.
+    let boundary_size = |p: [f64; 2]| {
+        let (x, y) = (((p[0] - field.x0) / field.g) as usize, ((p[1] - field.y0) / field.g) as usize);
+        let (mut size, mut closest) = (spacing, f64::INFINITY);
+        for by in y.saturating_sub(1)..=(y + 1).min(field.bh - 1) {
+            for bx in x.saturating_sub(1)..=(x + 1).min(field.bw - 1) {
+                let sample = sizes.get(by * field.bw + bx).copied().unwrap_or(0.0);
+                let d = dist2(p, [field.x0 + (bx as f64 + 0.5) * field.g, field.y0 + (by as f64 + 0.5) * field.g]);
+                if sample > 0.0 && d < closest {
+                    (size, closest) = (sample, d);
+                }
+            }
+        }
+        size
+    };
+    let mut parts: Vec<usize> = segs
+        .iter()
+        .map(|&(a, b)| {
+            let (a, b) = (dl.pts[a], dl.pts[b]);
+            (dist2(a, b).sqrt() / (1.25 * boundary_size(lerp(a, b, 0.5)))).ceil().clamp(1.0, 32.0) as usize
+        })
+        .collect();
+    limit_subdivisions(&mut parts);
+    let mut refined = Vec::with_capacity(segs.len() + MAX_ADAPTIVE_POINTS);
+    for (&(a, b), n) in segs.iter().zip(parts) {
+        let mut prev = a;
+        for k in 1..n {
+            if let Some(next) = dl.insert(lerp(dl.pts[a], dl.pts[b], k as f64 / n as f64))
+                && next != prev
+                && next != b
+            {
+                refined.push((prev, next));
+                prev = next;
+            }
+        }
+        refined.push((prev, b));
+    }
+    *segs = refined;
+    let rise = minimum * 3f64.sqrt() / 2.0;
+    let rows = (field.bh as f64 * field.g / rise).ceil() as usize;
+    let cols = (field.bw as f64 * field.g / minimum).ceil() as usize;
+    // Reverse Morton order visits distant subcells before filling adjacent ones.
+    let spatial_order = |(x, y): (usize, usize)| {
+        let mut spread = 0u64;
+        for bit in 0..16 {
+            spread |= ((x as u64 >> bit) & 1) << (2 * bit);
+            spread |= ((y as u64 >> bit) & 1) << (2 * bit + 1);
+        }
+        spread.reverse_bits()
+    };
+    let mut candidates = Vec::new();
+    for y in 0..rows {
+        for x in 0..cols {
+            let p = [field.x0 + (x as f64 + 0.5 * (y % 2) as f64) * minimum, field.y0 + y as f64 * rise];
+            let bx = ((p[0] - field.x0) / field.g) as usize;
+            let by = ((p[1] - field.y0) / field.g) as usize;
+            if bx >= field.bw || by >= field.bh {
+                continue;
+            }
+            let size = sizes.get(by * field.bw + bx).copied().unwrap_or(0.0);
+            if size > 0.0 && size < 0.95 * spacing && field.value(p) < -0.5 * size {
+                candidates.push((p, size, spatial_order((x, y))));
+            }
+        }
+    }
+    // Round-robin coarse spatial cells so a refinement cap does not leave the last strokes
+    // untouched. Interleave samples within each cell as well, rather than exhausting one row.
+    let cell = |p: [f64; 2]| ((2.0 * (p[0] - field.x0) / spacing) as usize, (2.0 * (p[1] - field.y0) / spacing) as usize);
+    candidates.sort_by_cached_key(|&(p, _, spread)| (spatial_order(cell(p)), spread));
+    let mut groups: VecDeque<_> = candidates.chunk_by(|a, b| cell(a.0) == cell(b.0)).map(|group| group.iter()).collect();
+    // Coarse buckets avoid thousands of empty hash probes for candidates near the base size.
+    let bin_size = (spacing / 4.0).max(minimum);
+    let bucket = |p: [f64; 2]| (((p[0] - field.x0) / bin_size).floor() as i32, ((p[1] - field.y0) / bin_size).floor() as i32);
+    let mut bins: HashMap<(i32, i32), Vec<[f64; 2]>> = HashMap::new();
+    for &p in dl.pts.iter().skip(3) {
+        bins.entry(bucket(p)).or_default().push(p);
+    }
+    let mut added = 0;
+    while let Some(mut group) = groups.pop_front() {
+        let mut accepted = false;
+        for &(p, size, _) in group.by_ref() {
+            let separation = 0.85 * size;
+            let reach = (separation / bin_size).ceil() as i32;
+            let (bx, by) = bucket(p);
+            let near = (by - reach..=by + reach).any(|y| {
+                (bx - reach..=bx + reach).any(|x| bins.get(&(x, y)).is_some_and(|points| points.iter().any(|&q| dist2(p, q) < separation * separation)))
+            });
+            if !near && dl.insert(p).is_some() {
+                bins.entry((bx, by)).or_default().push(p);
+                added += 1;
+                accepted = true;
+                break;
+            }
+        }
+        if added == MAX_ADAPTIVE_POINTS {
+            break;
+        }
+        if accepted {
+            groups.push_back(group);
+        }
+    }
+}
+
 /// Builds the mesh over the covered part of `src` inside `bounds`.
 ///
 /// The outline of the opaque region grown by `expansion` is traced, simplified (corners kept)
 /// and split into sides no longer than the density's spacing; a triangular lattice at that
-/// spacing fills the inside, at least half a step from the outline. The mesh is the
+/// spacing fills the inside, with local refinement in narrow regions. The mesh is the
 /// Delaunay triangulation of those points with the outline's sides recovered (split until
 /// each is an edge), minus the triangles outside the outline.
 pub fn build_mesh(src: &Surface, bounds: Rect, density: PuppetDensity, expansion: f64) -> PuppetMesh {
@@ -656,6 +871,7 @@ pub fn build_mesh(src: &Surface, bounds: Rect, density: PuppetDensity, expansion
             }
         }
     }
+    refine_narrow_regions(&mut dl, &mut segs, &field, spacing, density);
     // Recover the outline's sides: split a side the triangulation lacks at its midpoint.
     let mut budget = segs.len() * 2;
     for _ in 0..8 {
@@ -1399,6 +1615,216 @@ mod tests {
             let (d0, d1, d2) = (orient(a, b, p), orient(b, c, p), orient(c, a, p));
             (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
         })
+    }
+
+    fn interior_vertices(m: &PuppetMesh) -> Vec<[f64; 2]> {
+        let mut edges = HashMap::<(usize, usize), usize>::new();
+        for t in &m.tris {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        assert!(edges.values().all(|&n| n <= 2), "non-manifold mesh");
+        let boundary: HashSet<usize> = edges.iter().filter(|(_, n)| **n == 1).flat_map(|(&(a, b), _)| [a, b]).collect();
+        m.verts.iter().enumerate().filter(|(i, _)| !boundary.contains(i)).map(|(_, &p)| p).collect()
+    }
+
+    #[test]
+    fn narrow_strokes_have_interior_vertices_along_their_length_at_every_density() {
+        for angle in [0.0f64, std::f64::consts::FRAC_PI_8, std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2] {
+            let a = [30.0, 30.0];
+            let direction = [angle.cos(), angle.sin()];
+            let b = [a[0] + 512.0 * direction[0], a[1] + 512.0 * direction[1]];
+            let mut s = Surface::new(PixelFormat::RGBA8);
+            for y in 20..=(b[1] + 10.0).ceil() as i32 {
+                for x in 20..=(b[0] + 10.0).ceil() as i32 {
+                    if seg_dist([f64::from(x) + 0.5, f64::from(y) + 0.5], a, b) <= 8.0 {
+                        s.write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
+                    }
+                }
+            }
+            let mut counts = Vec::new();
+            for density in [PuppetDensity::Fewer, PuppetDensity::Normal, PuppetDensity::More] {
+                let m = build_mesh(&s, s.content_bounds(), density, 2.0);
+                let interior = interior_vertices(&m);
+                for bin in 1..5 {
+                    let n = interior
+                        .iter()
+                        .filter(|p| {
+                            let along = (p[0] - a[0]) * direction[0] + (p[1] - a[1]) * direction[1];
+                            along >= f64::from(bin) * 85.0 && along < f64::from(bin + 1) * 85.0
+                        })
+                        .count();
+                    assert!(n >= 4, "{density:?}, angle {angle}, section {bin}: only {n} interior vertices");
+                }
+                assert!(m.tris.iter().all(|t| orient(m.verts[t[0]], m.verts[t[1]], m.verts[t[2]]) > 1e-9));
+                let longest =
+                    m.tris.iter().flat_map(|t| (0..3).map(move |k| (t[k], t[(k + 1) % 3]))).map(|(a, b)| dist2(m.verts[a], m.verts[b])).fold(0.0, f64::max);
+                assert!(longest.sqrt() < 40.0, "thin-region boundary segments need refinement too: {} px", longest.sqrt());
+                let solver = PuppetSolver::new(m.clone(), &[a], &[false]);
+                let (moved, _) = solver.solve(&[[a[0] + 5.0, a[1] - 3.0]], &[None], PuppetMode::Rigid, ITERATIONS, None);
+                for (p, q) in m.verts.iter().zip(moved) {
+                    assert!((q[0] - p[0] - 5.0).abs() < 1e-3 && (q[1] - p[1] + 3.0).abs() < 1e-3, "refined strip must still translate rigidly");
+                }
+                counts.push(interior.len());
+            }
+            assert!(counts[0] < counts[1] && counts[1] < counts[2], "density still controls thin regions: {counts:?}");
+        }
+    }
+
+    #[test]
+    fn broad_regions_keep_the_original_lattice_even_with_a_narrow_tail() {
+        for tail_end in [400, 500, 1000] {
+            let tail = tail_end > 400;
+            let mut s = Surface::new(PixelFormat::RGBA8);
+            s.fill_rect(Rect::new(0, 0, 400, 400), &[1.0, 0.0, 0.0, 1.0]);
+            if tail {
+                s.fill_rect(Rect::new(400, 190, tail_end, 210), &[1.0, 0.0, 0.0, 1.0]);
+            }
+            let b = s.content_bounds();
+            let field = Field::new(&s, b, 2.0);
+            let m = build_mesh(&s, b, PuppetDensity::Normal, 2.0);
+            let interior = interior_vertices(&m);
+            let rise = m.spacing * 3f64.sqrt() / 2.0;
+            let mut extra = 0;
+            for p in interior.iter().filter(|p| !tail || (p[0] < 300.0 && p[1] > 50.0 && p[1] < 350.0)) {
+                let row = ((p[1] - field.y0) / rise).round();
+                let col = ((p[0] - field.x0) / m.spacing - 0.5 * (row as usize % 2) as f64).round();
+                let expected = [field.x0 + (col + 0.5 * (row as usize % 2) as f64) * m.spacing, field.y0 + row * rise];
+                if dist2(*p, expected) >= 1e-12 {
+                    extra += 1;
+                    let corner = (p[0] < 2.0 * m.spacing || p[0] > 400.0 - 2.0 * m.spacing) && (p[1] < 2.0 * m.spacing || p[1] > 400.0 - 2.0 * m.spacing);
+                    assert!(!tail && corner, "refinement must not spread into a broad interior at {p:?}");
+                }
+            }
+            assert!(extra <= 16, "only a few extra points at broad corners, not a denser plane: {extra}");
+            if tail {
+                let start = if tail_end == 500 { 450.0 } else { 750.0 };
+                let count = interior.iter().filter(|p| p[0] > start).count();
+                assert!(count >= if tail_end == 500 { 6 } else { 40 }, "thin tail ending at {tail_end}: only {count} interior points");
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_mesh_keeps_expanded_outlines_holes_and_disconnected_pieces() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 600, 180), &[1.0, 0.0, 0.0, 1.0]);
+        s.fill_rect(Rect::new(12, 12, 588, 168), &[0.0; 4]);
+        s.fill_rect(Rect::new(0, 240, 600, 256), &[1.0, 0.0, 0.0, 1.0]);
+        s.fill_rect(Rect::new(650, 20, 657, 27), &[1.0, 0.0, 0.0, 1.0]);
+        let bounds = s.content_bounds();
+        for expansion in [-3.0, 0.0, 2.0, 12.0] {
+            let field = Field::new(&s, bounds, expansion);
+            let m = build_mesh(&s, bounds, PuppetDensity::Normal, expansion);
+            assert!(!in_mesh(&m, [300.0, 90.0]), "the hole stays empty");
+            assert!(!in_mesh(&m, [300.0, 210.0]), "the two pieces stay separate");
+            assert!(in_mesh(&m, [653.5, 23.5]), "the small disconnected piece remains present");
+            assert!(interior_vertices(&m).len() > 50);
+            let mut edges = HashMap::<(usize, usize), usize>::new();
+            for t in &m.tris {
+                let [a, b, c] = t.map(|i| m.verts[i]);
+                assert!(orient(a, b, c) > 1e-9);
+                for k in 0..3 {
+                    let (a, b) = (t[k], t[(k + 1) % 3]);
+                    *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+                    let midpoint = lerp(m.verts[a], m.verts[b], 0.5);
+                    assert!(field.value(midpoint) <= field.g, "edge crosses outside at {midpoint:?}");
+                }
+            }
+            for ((a, b), n) in edges {
+                assert!(n <= 2);
+                if n == 1 {
+                    for p in [m.verts[a], m.verts[b], lerp(m.verts[a], m.verts[b], 0.5)] {
+                        assert!(field.value(p).abs() <= 1.5 * field.g, "expansion {expansion}: boundary left the original contour at {p:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_refinement_is_bounded_and_deterministic() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        for y in (0..360).step_by(12) {
+            s.fill_rect(Rect::new(0, y, 600, y + 4), &[1.0, 0.0, 0.0, 1.0]);
+        }
+        let bounds = s.content_bounds();
+        let m = build_mesh(&s, bounds, PuppetDensity::More, 0.0);
+        let interior = interior_vertices(&m);
+        assert!(interior.len() > 1000, "exercise the refinement budget");
+        assert!(interior.len() <= MAX_ADAPTIVE_POINTS, "the original lattice admits no points in these 4 px strips");
+        for y in (0..360).step_by(12) {
+            for x in (0..600).step_by(100) {
+                let count =
+                    interior.iter().filter(|p| p[0] >= f64::from(x) && p[0] < f64::from(x + 100) && p[1] > f64::from(y) && p[1] < f64::from(y + 4)).count();
+                assert!(count >= 2, "budget must reach every stroke and longitudinal section: ({x}, {y}) has {count} points");
+            }
+        }
+        assert_eq!(m, build_mesh(&s, bounds, PuppetDensity::More, 0.0));
+    }
+
+    #[test]
+    fn subdivision_budget_does_not_drop_all_splits_just_above_the_limit() {
+        for count in [MAX_ADAPTIVE_POINTS + 1, MAX_ADAPTIVE_POINTS * 4] {
+            let mut parts = vec![2; count];
+            limit_subdivisions(&mut parts);
+            assert_eq!(parts.iter().map(|n| n - 1).sum::<usize>(), MAX_ADAPTIVE_POINTS);
+            assert!(parts.iter().all(|&n| n == 1 || n == 2));
+            for section in parts.chunks(count / 4) {
+                assert!(section.contains(&2), "splits are distributed, not confined to the first contours");
+            }
+        }
+    }
+
+    #[test]
+    fn thin_boundary_is_not_coarsened_by_a_nearby_broad_component() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 4, 600), &[1.0, 0.0, 0.0, 1.0]);
+        s.fill_rect(Rect::new(5, 0, 405, 600), &[1.0, 0.0, 0.0, 1.0]);
+        let m = build_mesh(&s, s.content_bounds(), PuppetDensity::Normal, 0.0);
+        let mut edges = HashMap::<(usize, usize), usize>::new();
+        for t in &m.tris {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        let mut facing = 0;
+        for ((a, b), n) in edges {
+            let (a, b) = (m.verts[a], m.verts[b]);
+            // Simplification may move the side within half a field block of x=4.
+            if n == 1 && (a[0] - 4.0).abs() < 0.6 && (b[0] - 4.0).abs() < 0.6 && a[1] > 30.0 && a[1] < 570.0 {
+                facing += 1;
+                assert!(dist2(a, b).sqrt() < 6.0, "facing edge borrowed the broad component's spacing");
+            }
+        }
+        assert!(facing > 50, "only {facing} segments on the facing thin edge");
+        assert!(!in_mesh(&m, [4.5, 300.0]));
+    }
+
+    #[test]
+    fn curved_strokes_are_refined_with_coarser_distance_fields_too() {
+        for scale in [1, 4] {
+            let mut s = Surface::new(PixelFormat::RGBA8);
+            let centre = |x: i32| 100 * scale + (80.0 * f64::from(scale) * (f64::from(x) / (200.0 * f64::from(scale))).sin()) as i32;
+            for x in 0..1200 * scale {
+                let y = centre(x);
+                s.fill_rect(Rect::new(x, y - 8 * scale, x + 1, y + 8 * scale), &[1.0, 0.0, 0.0, 1.0]);
+            }
+            let expansion = 2.0 * f64::from(scale);
+            let field = Field::new(&s, s.content_bounds(), expansion);
+            assert!(field.g > 1.0);
+            let m = build_mesh(&s, s.content_bounds(), PuppetDensity::Normal, expansion);
+            let interior = interior_vertices(&m);
+            for section in 0..6 {
+                let x = (section * 200 + 100) * scale;
+                assert!(in_mesh(&m, [f64::from(x), f64::from(centre(x))]));
+                let count = interior.iter().filter(|p| p[0] >= f64::from(section * 200 * scale) && p[0] < f64::from((section + 1) * 200 * scale)).count();
+                assert!(count >= 10, "scale {scale}, section {section}: only {count} interior points");
+            }
+        }
     }
 
     #[test]
