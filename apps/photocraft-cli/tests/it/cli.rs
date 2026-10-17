@@ -1815,3 +1815,71 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Answer one JSON-lines request from `photocraft-cli serve` on stdio.
+fn serve_call(stdin: &mut impl Write, stdout: &mut impl BufRead, id: u64, method: &str, params: Value) -> Value {
+    writeln!(stdin, "{}", json!({"id": id, "method": method, "params": params})).unwrap();
+    stdin.flush().unwrap();
+    loop {
+        let mut line = String::new();
+        assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["id"] == id {
+            return v;
+        }
+    }
+}
+
+/// The profile an untagged CMYK file in `dir` opens with in a `serve` session started with `args`.
+fn serve_untagged_cmyk_profile(dir: &Path, args: &[&str]) -> String {
+    let psd = dir.join("untagged.psd");
+    if !psd.exists() {
+        ok(bin().args(["run", "--new", r#"{"width":4,"height":4,"mode":"cmyk"}"#, "--cmd", "edit.profileInfo", "--out"]).arg(&psd));
+    }
+    let mut child = bin()
+        .arg("serve")
+        .arg("--automation-read-root")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let r = serve_call(&mut stdin, &mut stdout, 1, "doc.open", json!({"path": psd}));
+    assert!(r.get("error").is_none(), "{r}");
+    let r = serve_call(&mut stdin, &mut stdout, 2, "engine.execute", json!({"command": "edit.profileInfo", "params": {}}));
+    drop(stdin);
+    let _ = child.wait();
+    r["result"]["profile"]["description"].as_str().unwrap_or_else(|| panic!("{r}")).to_owned()
+}
+
+#[test]
+fn serve_color_settings_sets_the_working_cmyk() {
+    let dir = tmp("serve-color-settings");
+    let icc = dir.join("custom.icc");
+    let custom = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+        description: "Serve test uncoated".into(),
+        tvi: [0.26, 0.26, 0.26, 0.3],
+        grid_a2b: 5,
+        grid_b2a: 9,
+        ..Default::default()
+    });
+    std::fs::write(&icc, &*custom.to_bytes()).unwrap();
+    let settings = json!({"workingCmyk": icc.to_str().unwrap()}).to_string();
+    assert_eq!(serve_untagged_cmyk_profile(&dir, &["--color-settings", &settings]), "Serve test uncoated");
+    assert_ne!(serve_untagged_cmyk_profile(&dir, &[]), "Serve test uncoated");
+}
+
+#[test]
+fn serve_refuses_bad_color_settings() {
+    let missing = tmp("serve-color-settings-bad").join("missing.icc");
+    let missing = json!({"workingCmyk": missing.to_str().unwrap()}).to_string();
+    for bad in ["{not json", "[1]", missing.as_str()] {
+        let o = bin().args(["serve", "--color-settings", bad]).stdin(Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("--color-settings"), "{bad}: exit {:?}, stderr {err}", o.status);
+    }
+}

@@ -199,7 +199,8 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
-        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
+        // Color Settings apply as in the app: an untagged file takes a configured working space.
+        let (index, _) = self.session.open_document(o.document, path.filter(|_| !o.source_read_only));
         if let Some(st) = self.session.active_mut() {
             st.source_read_only = o.source_read_only;
         }
