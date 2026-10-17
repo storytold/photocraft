@@ -7,8 +7,8 @@ Exec=photocraft %F
 TryExec=photocraft
 Icon=ai.storyteller.photocraft
 Terminal=false
-# The native runner does not complete desktop startup-notification handshakes.
-StartupNotify=false
+# The app ends the launch feedback itself (apps/photocraft/src/startup_notify.rs).
+StartupNotify=true
 StartupWMClass=ai.storyteller.photocraft
 Categories=Graphics;2DGraphics;RasterGraphics;Photography;
 Keywords=photo;image;editor;psd;layers;retouch;paint;
