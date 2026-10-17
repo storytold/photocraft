@@ -1241,8 +1241,13 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     // BigTIFF when asked, or when the file could pass the 4 GiB a classic TIFF can address. A
     // classic write that still runs out of 32-bit offsets (compression grew the data) is redone
     // as BigTIFF.
+    let estimate = estimated_size(&img, &tags);
     let write = |big: bool| -> tiff::TiffResult<Vec<u8>> {
-        let mut cursor = Cursor::new(Vec::new());
+        // Allocated once for the whole file (an upper bound: compression only shrinks the
+        // pixels). Grown as written, the buffer doubles near the end, copying the file (#6607).
+        let mut out = Vec::new();
+        let _ = out.try_reserve(usize::try_from(estimate).unwrap_or(usize::MAX));
+        let mut cursor = Cursor::new(out);
         if big {
             let mut enc = TiffEncoder::new_big(&mut cursor)?.with_compression(compression).with_predictor(predictor);
             write_image::<TiffKindBig>(&mut enc, &img, &tags)?;
@@ -1252,7 +1257,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         }
         Ok(cursor.into_inner())
     };
-    let big = opts.tiff_bigtiff || estimated_size(&img, &tags) > CLASSIC_LIMIT;
+    let big = opts.tiff_bigtiff || estimate > CLASSIC_LIMIT;
     match write(big) {
         Ok(v) => Ok(v),
         Err(tiff::TiffError::IntSizeError) if !big => write(true).map_err(|e| CodecError::encode(F, e)),

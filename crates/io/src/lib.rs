@@ -148,6 +148,67 @@ pub struct ExportResult {
     pub warnings: Vec<String>,
 }
 
+/// What [`encode_with`] produced: the file's bytes, or for PSD/PSB the file model, which
+/// [`Encoded::write_to`] serializes straight into the file, so a save never holds the whole
+/// encoded file next to the model (#6607). Either way the bytes are exactly [`export`]'s.
+#[derive(Debug, Clone)]
+pub enum Encoded {
+    /// The encoded file.
+    Bytes(Vec<u8>),
+    /// A PSD/PSB file, serialized when written.
+    Psd(Box<PsdFile>),
+}
+
+impl Encoded {
+    /// The file's bytes, serializing a PSD/PSB model in memory.
+    pub fn into_bytes(self) -> Result<Vec<u8>, IoError> {
+        match self {
+            Encoded::Bytes(b) => Ok(b),
+            Encoded::Psd(file) => Ok(file.to_bytes()?),
+        }
+    }
+
+    /// [`Self::into_bytes`] without giving up the model.
+    pub fn bytes(&self) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
+        match self {
+            Encoded::Bytes(b) => Ok(std::borrow::Cow::Borrowed(b)),
+            Encoded::Psd(file) => Ok(std::borrow::Cow::Owned(file.to_bytes()?)),
+        }
+    }
+
+    /// The written length for progress: exact for bytes, an upper bound for PSD/PSB.
+    pub fn len_hint(&self) -> u64 {
+        match self {
+            Encoded::Bytes(b) => b.len() as u64,
+            Encoded::Psd(file) => file.size_bound() as u64,
+        }
+    }
+
+    /// Writes the file into `w` from its current position (PSD/PSB seeks back to patch lengths).
+    /// A PSD/PSB serializer error comes back as `InvalidData`.
+    pub fn write_to<W: std::io::Write + std::io::Seek + ?Sized>(&self, w: &mut W) -> std::io::Result<()> {
+        match self {
+            Encoded::Bytes(b) => w.write_all(b),
+            Encoded::Psd(file) => file.write_to(w),
+        }
+    }
+}
+
+/// Result of [`encode_with`].
+#[derive(Debug, Clone)]
+pub struct EncodedExport {
+    /// The file, ready to write.
+    pub encoded: Encoded,
+    /// Human-readable notes about anything approximated or dropped.
+    pub warnings: Vec<String>,
+}
+
+impl From<ExportResult> for EncodedExport {
+    fn from(r: ExportResult) -> Self {
+        EncodedExport { encoded: Encoded::Bytes(r.bytes), warnings: r.warnings }
+    }
+}
+
 /// Which part of the document's XMP packet and free-form text a flat export embeds.
 /// PSD/PSB always keep XMP; `.pcraft` keeps both. Save As and conversions keep the whole packet, as
 /// Photoshop's Save As does; Export As starts at `None`, because the packet lists the text of
@@ -362,6 +423,18 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let r = export_stages(doc, name_or_ext, opts, ctl)?;
+    let bytes = r.encoded.into_bytes()?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(1.0);
+    Ok(ExportResult { bytes, warnings: r.warnings })
+}
+
+/// [`export_with`] up to the point where the file can be written: PSD/PSB stop at the file model,
+/// which [`Encoded::write_to`] serializes into the file as it goes (#6607); every other format is
+/// encoded. Reports progress up to `1.0` once the result is ready.
+pub fn encode_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let r = export_stages(doc, name_or_ext, opts, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
@@ -382,7 +455,7 @@ const PCRAFT_PREVIEWS_DONE: f32 = 0.4;
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
 
-fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
     let ext = extension(name_or_ext);
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
@@ -394,10 +467,10 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return Err(IoError::Unsupported("Krita files are import-only; save as .ora to open the layers in Krita, or .pcraft to keep everything".into()));
     }
     if ext == "ora" {
-        return ora::export(doc);
+        return ora::export(doc).map(EncodedExport::from);
     }
     if ext == "pdf" {
-        return pdf::export(doc);
+        return pdf::export(doc).map(EncodedExport::from);
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);
@@ -408,10 +481,13 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         ctl.check().map_err(|_| IoError::Cancelled)?;
         ctl.progress(PCRAFT_PREVIEWS_DONE);
         let previews = photocraft_format::SaveOptions { thumbnail, composite };
-        return Ok(ExportResult { bytes: photocraft_format::save_to_bytes(doc.as_ref(), &previews)?, warnings: Vec::new() });
+        return Ok(ExportResult { bytes: photocraft_format::save_to_bytes(doc.as_ref(), &previews)?, warnings: Vec::new() }.into());
     }
     if ext == "psd" || ext == "psb" {
         let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", maximize_compatibility: opts.psd_maximize_compatibility, ..Default::default() };
+        // The preview is rendered first, while only the document is in memory: its full-size
+        // render would otherwise come on top of the finished file model (#6607).
+        let preview = opts.image_previews.then(|| psd_thumbnail::resource(doc));
         let (mut file, mut warnings) = with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(doc, &o, ctl));
         // A cancelled conversion stops early with an incomplete model: never write it.
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -419,8 +495,8 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
             warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
         }
         warnings.extend(tiff_layers::strip_foreign_order_blocks(&mut file));
-        if opts.image_previews {
-            match psd_thumbnail::resource(doc) {
+        if let Some(preview) = preview {
+            match preview {
                 // Beside the other resources Photoshop writes ahead of the version info.
                 Ok(r) => {
                     let at = file.resources.iter().position(|r| r.id == photocraft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());
@@ -431,14 +507,13 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         }
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
-        let bytes = file.to_bytes()?;
-        return Ok(ExportResult { bytes, warnings });
+        return Ok(EncodedExport { encoded: Encoded::Psd(Box::new(file)), warnings });
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
-        return tiff_layers::export_layered(doc, opts, ctl);
+        return tiff_layers::export_layered(doc, opts, ctl).map(EncodedExport::from);
     }
-    flat::export_flat_with(doc, format, opts, ctl)
+    flat::export_flat_with(doc, format, opts, ctl).map(EncodedExport::from)
 }
 
 /// The PSD's merged composite as straight RGBA floats (row-major), converted

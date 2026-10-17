@@ -767,15 +767,18 @@ impl PcraftWriter {
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
         let p = self.prepare(doc, opts)?;
         let mut stats = p.stats;
-        let mut z = ZipWriter::new();
+        // New objects are compressed on all cores first (zstd dominates a full save).
+        let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
+        let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
+        // Every entry's size is known now: the archive is allocated once (#6607).
+        let sizes = p.objects.keys().map(|path| (path.as_str(), self.compressed.get(path).or_else(|| fresh.get(path)).map_or(0, |d| d.len())));
+        let mut z =
+            ZipWriter::for_entries(std::iter::once((MANIFEST, p.manifest.len())).chain(p.previews.iter().map(|(name, data)| (*name, data.len()))).chain(sizes));
         z.add(MANIFEST, &p.manifest)?;
         for (name, data) in &p.previews {
             z.add(name, data)?;
         }
         let mut next = HashMap::with_capacity(p.objects.len());
-        // New objects are compressed on all cores first (zstd dominates a full save).
-        let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
-        let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
         for (path, obj) in &p.objects {
             let data = match self.compressed.get(path) {
                 Some(d) => {

@@ -1,13 +1,15 @@
 //! The top-level [`PsdFile`] model, parser and writer.
 
+use std::io::{Seek, Write};
+
 use crate::compression::{Compression, MAX_DECODED_BYTES, decode_planes, validate_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{ColorMode, Header, Version};
 use crate::image_data::ImageData;
-use crate::io::{Reader, WriteExt};
+use crate::io::{Reader, Sink, WriteExt};
 use crate::layer::{LayerInfo, LayerRecord};
 use crate::resources::{self, ImageResource, ResourceData, ids};
-use crate::tagged::{TaggedBlock, read_blocks_with, uses_long_length, write_blocks};
+use crate::tagged::{TaggedBlock, read_blocks_with, uses_long_length, write_blocks_to};
 
 /// Where the layer info was stored in the file.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -231,17 +233,44 @@ impl PsdFile {
 
     /// Serializes the file.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let v = self.header.version;
-        let psb = v.is_psb();
-        // Reserve the pixel data up front: appending it to an empty Vec reallocates and copies
-        // repeatedly. Everything else (headers, resources, records) is small by comparison.
-        let hint = self.layer_info.as_ref().map_or(0, LayerInfo::channel_data_len).saturating_add(self.image_data.data.len());
+        // Reserve the whole file up front: appending to an empty Vec reallocates and copies
+        // repeatedly, and a reserve that is a few bytes short makes the last append double the
+        // buffer, copying the whole file once more (2x the file's size, #6607).
+        let hint = self.size_bound();
         let mut out = Vec::new();
         out.try_reserve(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
-        self.header.write(&mut out);
-        out.put_len(self.color_mode_data.len() as u64, false)?;
-        out.put(&self.color_mode_data);
-        resources::write_section(&mut out, &self.resources)?;
+        self.write_to(&mut std::io::Cursor::new(&mut out)).map_err(PsdError::from_io)?;
+        Ok(out)
+    }
+
+    /// Serializes the file into `w` as it goes, starting at its current position: the bytes of
+    /// [`Self::to_bytes`] without ever holding them all (#6607). Length fields are back-patched
+    /// by seeking. A serializer error (a section too large for PSD, too many layers) comes back
+    /// as `InvalidData` carrying the [`PsdError`]; `w` then holds a partial file.
+    pub fn write_to<W: Write + Seek + ?Sized>(&self, w: &mut W) -> std::io::Result<()> {
+        let mut out = Sink::new(w)?;
+        self.write_staging(&mut out)?;
+        out.finish()
+    }
+
+    /// [`Self::write_to`] writing out every `stage` staged bytes (tests: tiny stages make every
+    /// length field a back-patch through the stream).
+    #[cfg(test)]
+    pub(crate) fn write_to_staging<W: Write + Seek + ?Sized>(&self, w: &mut W, stage: usize) -> std::io::Result<()> {
+        let mut out = Sink::staging(w, stage)?;
+        self.write_staging(&mut out)?;
+        out.finish()
+    }
+
+    fn write_staging<W: Write + Seek + ?Sized>(&self, out: &mut Sink<'_, W>) -> std::io::Result<()> {
+        let v = self.header.version;
+        let psb = v.is_psb();
+        out.small(|o| {
+            self.header.write(o);
+            o.put_len(self.color_mode_data.len() as u64, false)
+        })?;
+        out.put(&self.color_mode_data)?;
+        out.small(|o| resources::write_section(o, &self.resources))?;
 
         let in_block = matches!(self.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. });
         // An entirely empty section is written as a zero length. (A section
@@ -249,48 +278,71 @@ impl PsdFile {
         // the model and is normalized to this form.)
         let section_empty =
             self.layer_info.is_none() && self.global_layer_mask.is_none() && self.global_blocks.is_empty() && self.layer_mask_trailing.is_empty();
-        let at = out.begin_len(psb);
+        let at = out.begin_len(psb)?;
         if !section_empty {
-            let li = out.begin_len(psb);
+            let li = out.begin_len(psb)?;
             if let (Some(info), false) = (&self.layer_info, in_block) {
-                info.write_body(&mut out, v)?;
+                info.write_body_to(out, v)?;
             }
             out.end_len(li, psb)?;
             let need_mask_field = self.global_layer_mask.is_some() || !self.global_blocks.is_empty() || (in_block && self.layer_info.is_some());
             if need_mask_field {
                 let gm = self.global_layer_mask.as_ref().map_or(&[][..], |g| &g.data[..]);
-                out.put_len(gm.len() as u64, false)?;
-                out.put(gm);
+                out.small(|o| o.put_len(gm.len() as u64, false))?;
+                out.put(gm)?;
             }
             match (&self.layer_info, &self.layer_info_placement) {
                 (Some(info), LayerInfoPlacement::GlobalBlock { index, signature, key, padding }) => {
                     let (before, after) = self.global_blocks.split_at((*index).min(self.global_blocks.len()));
-                    write_blocks(&mut out, before, v, 4)?;
-                    // Write into the final buffer: a temporary LayerInfo payload and a clone
-                    // of all neighboring opaque blocks otherwise double the save's memory.
-                    out.put(signature);
-                    out.put(key);
+                    write_blocks_to(out, before, v, 4)?;
+                    // Written in place: a temporary LayerInfo payload and a clone of all
+                    // neighboring opaque blocks otherwise double the save's memory.
+                    out.put(signature)?;
+                    out.put(key)?;
                     let long = uses_long_length(v, key);
-                    let at = out.begin_len(long);
-                    let start = out.len();
-                    info.write_body(&mut out, v)?;
-                    let len = out.len() - start;
+                    let at = out.begin_len(long)?;
+                    let start = out.pos();
+                    info.write_body_to(out, v)?;
+                    let len = out.pos() - start;
                     out.end_len(at, long)?;
                     match padding {
-                        Some(bytes) => out.put(bytes),
-                        None => out.extend(std::iter::repeat_n(0u8, (4 - len % 4) % 4)),
+                        Some(bytes) => out.put(bytes)?,
+                        None => out.zeros(((4 - len % 4) % 4) as usize)?,
                     }
-                    write_blocks(&mut out, after, v, 4)?;
+                    write_blocks_to(out, after, v, 4)?;
                 }
-                _ => write_blocks(&mut out, &self.global_blocks, v, 4)?,
+                _ => write_blocks_to(out, &self.global_blocks, v, 4)?,
             }
-            out.put(&self.layer_mask_trailing);
+            out.put(&self.layer_mask_trailing)?;
         }
         out.end_len(at, psb)?;
 
-        out.put_u16(self.image_data.compression.as_u16());
-        out.put(&self.image_data.data);
-        Ok(out)
+        out.small(|o| {
+            o.put_u16(self.image_data.compression.as_u16());
+            Ok(())
+        })?;
+        out.put(&self.image_data.data)?;
+        Ok(())
+    }
+
+    /// An upper bound of [`Self::to_bytes`]'s length: the pixel data plus every variable-length
+    /// part, each with generous room for its fixed fields, lengths and padding. Saturates.
+    pub fn size_bound(&self) -> usize {
+        // Per item: signature, key or id, length fields and padding fit easily.
+        const ITEM: usize = 32;
+        let blocks = |b: &[crate::tagged::TaggedBlock]| {
+            b.iter().fold(0usize, |n, t| n.saturating_add(t.data.len()).saturating_add(t.padding.as_ref().map_or(0, Vec::len)).saturating_add(ITEM))
+        };
+        let mut n: usize = 1024; // file header and section lengths
+        n = n.saturating_add(self.color_mode_data.len());
+        n = self.resources.iter().fold(n, |n, r| n.saturating_add(r.data.len()).saturating_add(r.name.len()).saturating_add(ITEM));
+        n = n.saturating_add(self.layer_info.as_ref().map_or(0, LayerInfo::size_bound));
+        n = n.saturating_add(self.global_layer_mask.as_ref().map_or(0, |g| g.data.len()));
+        n = n.saturating_add(blocks(&self.global_blocks)).saturating_add(self.layer_mask_trailing.len());
+        if let LayerInfoPlacement::GlobalBlock { padding: Some(p), .. } = &self.layer_info_placement {
+            n = n.saturating_add(p.len()).saturating_add(ITEM);
+        }
+        n.saturating_add(self.image_data.data.len())
     }
 
     /// Layer records in file order (bottom-most first); empty if none.
@@ -390,8 +442,9 @@ impl PsdFile {
     /// Writes the file to disk (native targets only).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-        let b = self.to_bytes().map_err(std::io::Error::other)?;
-        std::fs::write(path, b)
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+        self.write_to(&mut f)?;
+        f.flush()
     }
 }
 
@@ -399,6 +452,94 @@ impl PsdFile {
 mod write_tests {
     use super::*;
     use crate::{Compression, testgen};
+
+    /// #6607: the output is allocated once. A reserve a few bytes short of the file made the last
+    /// append double the buffer, copying the whole file once more at the save's peak.
+    #[test]
+    fn serializing_allocates_the_output_once() {
+        for case in testgen::all_cases() {
+            let bound = case.file.size_bound();
+            let bytes = case.file.to_bytes().unwrap();
+            assert!(bytes.len() <= bound, "{}: {} > bound {bound}", case.name, bytes.len());
+            assert_eq!(bytes.capacity(), bound, "{}: the buffer grew past its first allocation", case.name);
+        }
+    }
+
+    /// A stream that records the length of every write it gets.
+    struct Recorder {
+        inner: std::io::Cursor<Vec<u8>>,
+        writes: Vec<usize>,
+    }
+
+    impl Write for Recorder {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.writes.push(b.len());
+            self.inner.write(b)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for Recorder {
+        fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    /// #6607: streaming into a file writes exactly the bytes of `to_bytes`, wherever the stream
+    /// starts and however little is staged, so every length field is back-patched through the
+    /// stream (both placements of the layer info, PSD and PSB, every mode and depth).
+    #[test]
+    fn streaming_writes_the_same_bytes_with_lengths_patched_by_seeking() {
+        for case in testgen::all_cases() {
+            let want = case.file.to_bytes().unwrap();
+            for stage in [0, 1, 7, 4096] {
+                let mut w = std::io::Cursor::new(b"pre".to_vec());
+                w.set_position(3);
+                case.file.write_to_staging(&mut w, stage).unwrap();
+                assert_eq!(&w.get_ref()[..3], b"pre", "{} stage {stage}", case.name);
+                assert!(w.get_ref()[3..] == want[..], "{} stage {stage}: streamed bytes differ", case.name);
+                assert_eq!(w.position(), 3 + want.len() as u64, "{} stage {stage}: the stream must end at the file's end", case.name);
+            }
+            let mut w = std::io::Cursor::new(Vec::new());
+            case.file.write_to(&mut w).unwrap();
+            assert!(w.into_inner() == want, "{}: write_to differs from to_bytes", case.name);
+        }
+    }
+
+    /// #6607: pixel data goes to the stream as it is, never through a staging copy, so a save
+    /// holds the model and a short buffer, not a second copy of the file.
+    #[test]
+    fn streaming_passes_channel_and_merged_data_straight_through() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        let big = 3 * crate::io::STAGE_FOR_TESTS;
+        file.image_data.data = vec![5; big];
+        let info = file.layer_info.as_mut().unwrap();
+        info.layers[0].channels[0] = crate::layer::ChannelData { id: 0, compression: Some(Compression::Raw), data: vec![6; big + 1] };
+        let mut w = Recorder { inner: std::io::Cursor::new(Vec::new()), writes: Vec::new() };
+        file.write_to(&mut w).unwrap();
+        assert!(w.writes.contains(&big), "merged image data was staged: {:?}", w.writes);
+        assert!(w.writes.contains(&(big + 1)), "channel data was staged: {:?}", w.writes);
+        assert!(w.writes.iter().filter(|&&n| n != big && n != big + 1).all(|&n| n < crate::io::STAGE_FOR_TESTS * 2), "{:?}", w.writes);
+        let bytes = w.inner.into_inner();
+        assert_eq!(PsdFile::from_bytes(&bytes).unwrap(), file);
+        assert!(bytes == file.to_bytes().unwrap());
+    }
+
+    /// A serializer error in the middle of a stream comes back as the same `PsdError` `to_bytes`
+    /// reports, inside an `InvalidData` I/O error.
+    #[test]
+    fn streaming_reports_serializer_errors() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        let info = file.layer_info.as_mut().unwrap();
+        let layer = info.layers[0].clone();
+        info.layers = vec![layer; 32768];
+        let want = file.to_bytes().unwrap_err();
+        let e = file.write_to(&mut std::io::Cursor::new(Vec::new())).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(PsdError::from_io(e), want);
+    }
 
     #[test]
     fn global_blocks_default_to_four_byte_padding() {

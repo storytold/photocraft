@@ -204,12 +204,15 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // keeps straight alpha) and uncompressed (its planes are interleaved below).
     let psd_opts =
         PsdExportOptions { force_psb: opts.force_psb || big, merged_matte: false, merged_compression: Compression::Raw, maximize_compatibility: true };
-    let (file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
+    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
     let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
-    let (layers, w) = ImageSourceData::from_psd(&file).to_bytes(order)?;
+    let has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
+    // The layers move out of the model rather than being copied, and are freed once written
+    // (#6607).
+    let (layers, w) = ImageSourceData::take_from_psd(&mut file).into_bytes(order)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(TIFF_LAYERS_DONE);
     warnings.extend(w.into_iter().map(|w| format!("layer data: {w}")));
@@ -221,7 +224,6 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
 
     let fmt = doc.pixel_format();
     let cc = fmt.mode.color_channels();
-    let has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
     let channels = cc + usize::from(has_alpha);
     let extra = usize::from(file.header.channels).saturating_sub(channels);
     if extra > 0 {
@@ -231,6 +233,8 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let (w, h) = (doc.size.width, doc.size.height);
     let cmyk = fmt.mode == ColorMode::Cmyk;
     let data = interleave(&file.image_data.data, w, h, channels, cc, sample, cmyk)?;
+    // Likewise the planar composite, now interleaved.
+    drop(file);
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(TIFF_COMPOSITE_DONE);
     let layout = layout_for(fmt.mode, has_alpha);

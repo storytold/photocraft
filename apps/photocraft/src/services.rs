@@ -293,9 +293,15 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
-/// [`write_atomic`] reporting the fraction written (a background save's progress, #3389).
-fn write_atomic_progress(path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> Result<(), String> {
-    photocraft_format::atomic_write_progress(path, bytes, progress).map_err(|e| e.to_string())
+/// [`write_atomic`] for an encoded save, reporting the fraction written (a background save's
+/// progress, #3389). A PSD/PSB is serialized straight into the temporary file, so the whole file
+/// is never held in memory next to its model (#6607).
+fn write_encoded_atomic(path: &Path, encoded: &photocraft_io::Encoded, progress: &dyn Fn(f32)) -> Result<(), String> {
+    match encoded {
+        photocraft_io::Encoded::Bytes(bytes) => photocraft_format::atomic_write_progress(path, bytes, progress),
+        photocraft_io::Encoded::Psd(_) => photocraft_format::atomic_write_stream_progress(path, encoded.len_hint(), progress, &mut |w| encoded.write_to(w)),
+    }
+    .map_err(|e| e.to_string())
 }
 
 fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
@@ -307,26 +313,26 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
 const ENCODE_SHARE: f32 = 0.85;
 
 /// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
-/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
-/// once writing starts the save can't be cancelled. The encoder's progress fills the first
+/// encode, then write through `write` (a PSD/PSB is serialized as it is written). Cancelling
+/// while encoding leaves the target untouched; once writing starts the save can't be cancelled. The encoder's progress fills the first
 /// [`ENCODE_SHARE`] of the job's progress, so the status bar and tab read "Saving NN%" (#3389).
 fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
-    write: impl Fn(&str, &[u8], &dyn Fn(f32)) -> Result<(), String>,
+    write: impl Fn(&str, &photocraft_io::Encoded, &dyn Fn(f32)) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let cancelled = || ctl.check().is_err();
     let progress = |f: f32| ctl.progress(f * ENCODE_SHARE, "");
     let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
-    let r = crate::crash_guard::guard("Save", || photocraft_io::export_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
+    let r = crate::crash_guard::guard("Save", || photocraft_io::encode_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(ENCODE_SHARE, "Writing");
     // The last bit is the flush and rename after the last chunk: 100% only once they're done.
-    write(path, &r.bytes, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
+    write(path, &r.encoded, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
     ctl.progress(1.0, "");
     Ok(r.warnings)
 }
@@ -337,7 +343,7 @@ fn save_file(
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress))
+    save_through(doc, path, settings, ctl, |p, encoded, progress| write_encoded_atomic(Path::new(p), encoded, progress))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -483,7 +489,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()))
+            save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write(p, &encoded.bytes().map_err(|e| e.to_string())?).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
@@ -659,6 +665,40 @@ mod tests {
     use photocraft_format::list_recovery;
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
+
+    /// #6607: a PSD/PSB save streams the file model into the temporary file, which then holds
+    /// exactly the exported bytes; a serializer error halfway leaves the old file and no
+    /// temporary file behind.
+    #[test]
+    fn a_psd_save_streams_the_exported_bytes_and_keeps_the_old_file_on_error() {
+        let dir = temp("stream");
+        let mut doc = Document::new("streamed", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+        let fmt = doc.pixel_format();
+        let px: Vec<u8> = (0..64 * 48 * fmt.bytes_per_pixel()).map(|i| (i * 7 % 251) as u8).collect();
+        doc.layers.push(Layer::new("A", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::from_interleaved(fmt, doc.bounds(), &px))));
+        let opts = photocraft_io::ExportOptions::default();
+        for name in ["a.psd", "a.psb"] {
+            let path = dir.join(name);
+            std::fs::write(&path, b"old").unwrap();
+            let want = photocraft_io::export(&doc, name, &opts).unwrap().bytes;
+            let r = photocraft_io::encode_with(&doc, name, &opts, &photocraft_raster::Interrupt::NONE).unwrap();
+            let photocraft_io::Encoded::Psd(mut file) = r.encoded else { panic!("{name}: not streamed") };
+            let seen = std::cell::RefCell::new(Vec::new());
+            write_encoded_atomic(&path, &photocraft_io::Encoded::Psd(file.clone()), &|f| seen.borrow_mut().push(f)).unwrap();
+            assert!(std::fs::read(&path).unwrap() == want, "{name}: the saved file differs from the export");
+            assert_eq!(seen.borrow().last().copied(), Some(1.0), "{name}");
+
+            let info = file.layer_info.as_mut().unwrap();
+            let layer = info.layers[0].clone();
+            info.layers = vec![layer; 32768];
+            let e = write_encoded_atomic(&path, &photocraft_io::Encoded::Psd(file), &|_| {}).unwrap_err();
+            assert!(e.contains("32767") && e.contains("not changed"), "{name}: {e}");
+            assert!(std::fs::read(&path).unwrap() == want, "{name}: a failed save replaced the file");
+            let temps: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().ends_with(".tmp")).collect();
+            assert!(temps.is_empty(), "{name}: left behind {temps:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// #6121: the file type picked in the save dialog gives the name its extension where the
     /// dialog left the one it opened with, and only there.
