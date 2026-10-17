@@ -1417,7 +1417,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
 /// Show/hide every selected layer in one step.
 pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
     let sel = selected(s);
-    s.edit(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
+    s.edit_visibility(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
         for id in &sel {
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.visible = visible;
         }

@@ -3121,6 +3121,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let entries = st.history.entries();
     let current = entries.len() - 1;
     let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let non_linear = st.history.non_linear;
     let selected_snap = selected_snapshot(ui.ctx(), st);
     let ctx = ui.ctx().clone();
     // A row dragged onto the trash (#5324); a drag that never saw its release must not outlive it.
@@ -3155,8 +3156,9 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         for (i, (e, is_redo)) in all.enumerate() {
             // The current state shows selected unless a snapshot is (Photoshop highlights one row).
             let selected = i == current && selected_snap.is_none();
-            // Past states can be dragged onto the trash; the oldest one can't be deleted.
-            let sense = if is_redo || i == 0 { Sense::click() } else { Sense::click_and_drag() };
+            // Past states can be dragged onto the trash; the oldest one can't be deleted. With
+            // Allow Non-Linear History a later (dimmed) state can be deleted too.
+            let sense = if (is_redo && !non_linear) || i == 0 { Sense::click() } else { Sense::click_and_drag() };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), sense);
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &e));
             if resp.drag_started() {

@@ -3868,6 +3868,11 @@ layerLabel	No Color	Sem cor
 	Set Colors	Definir cores
 	Switch Foreground and Background Colors	Alternar cores de primeiro plano e plano de fundo
 	Target	Alvo
+
+# History panel › History Options… (#2966)
+	History Options…	Opções do histórico…
+	Allow Non-Linear History	Permitir histórico não linear
+	Make Layer Visibility Changes Undoable	Permitir desfazer alterações de visibilidade das camadas
 # Print dialog (#2697)
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções

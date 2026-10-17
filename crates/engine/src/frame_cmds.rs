@@ -54,11 +54,8 @@ fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         Err(e) => {
             // The group couldn't be framed: take the grouping back, leaving nothing to redo and
             // no grouping step to record.
-            s.undo();
+            s.rollback();
             s.journal.truncate(journal);
-            if let Some(st) = s.active_mut() {
-                st.history.clear_redo();
-            }
             Err(e)
         }
     }

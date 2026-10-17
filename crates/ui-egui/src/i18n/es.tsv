@@ -2764,6 +2764,11 @@ curves	Smooth	Suavizar
 	Click to place · Alt-click or drag off-canvas to remove	Clic para colocar · Alt-clic o arrastrar fuera del lienzo para quitar
 	No document open	Ningún documento abierto
 	{n} of {max} sample points	{n} de {max} puntos de muestreo
+
+# History panel › History Options… (#2966)
+	History Options…	Opciones de historia…
+	Allow Non-Linear History	Permitir historia no lineal
+	Make Layer Visibility Changes Undoable	Permitir deshacer los cambios de visibilidad de capas
 # Print dialog (#2697)
 	Emulsion Down	Emulsión hacia abajo
 	Functions	Funciones

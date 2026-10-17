@@ -32,6 +32,7 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active_job().is_some() {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
     }
+    let keep_visibility = !s.visibility_undoable();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if target == past {
         return Ok(json!({ "state": target, "changed": false }));
@@ -56,6 +57,10 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     // Save As changes file identity outside history, as Edit › Undo keeps it.
     if doc.name != start.name {
         std::sync::Arc::make_mut(&mut doc).name.clone_from(&start.name);
+    }
+    // Visibility changes that are not history states stay as they are (History Options).
+    if keep_visibility {
+        crate::carry_visibility(&start, &mut doc);
     }
     let damage = crate::layer_multi_cmds::step_damage(&start, &doc);
     st.doc = doc;

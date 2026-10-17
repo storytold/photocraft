@@ -3026,6 +3026,11 @@ curves	Smooth	Сгладить
 	Click to place · Alt-click or drag off-canvas to remove	Щёлкните, чтобы разместить · Alt-щелчок или перетаскивание за пределы холста для удаления
 	No document open	Документ не открыт
 	{n} of {max} sample points	{n} из {max} точек замера
+
+# History panel › History Options… (#2966)
+	History Options…	Параметры истории…
+	Allow Non-Linear History	Разрешить нелинейную историю
+	Make Layer Visibility Changes Undoable	Разрешить отмену изменений видимости слоёв
 # Print dialog (#2697)
 	Emulsion Down	Эмульсией вниз
 	Functions	Функции

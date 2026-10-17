@@ -3083,6 +3083,11 @@ curves	Smooth	Haluskan
 	Click to place · Alt-click or drag off-canvas to remove	Klik untuk menempatkan · Alt-klik atau seret ke luar kanvas untuk menghapus
 	No document open	Tidak ada dokumen yang terbuka
 	{n} of {max} sample points	{n} dari {max} titik sampel
+
+# History panel › History Options… (#2966)
+	History Options…	Opsi Riwayat…
+	Allow Non-Linear History	Izinkan Riwayat Non-Linier
+	Make Layer Visibility Changes Undoable	Perubahan Visibilitas Layer Dapat Diurungkan
 # Print dialog (#2697)
 	Emulsion Down	Emulsi di Bawah
 	Functions	Fungsi

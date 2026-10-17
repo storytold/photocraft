@@ -90,7 +90,9 @@ fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
     match app.run("layer.duplicate", json!({"inPlace": true})) {
-        Ok(_) => Some(before),
+        // The state just before the copy's: in non-linear history the copy's step also moved
+        // the later states in front of it (`History::record`), and those must stay.
+        Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
         Err(e) => {
             app.ui.status = e;
             None
@@ -164,7 +166,8 @@ pub fn finish(app: &mut PhotocraftApp) {
 /// ⌥-drag's copy is taken back.
 pub fn abandon(app: &mut PhotocraftApp) {
     if std::mem::take(&mut app.move_mods).dup_from.is_some() {
-        app.session.undo();
+        // Exactly, also in non-linear history (where an undo would land on a later state).
+        app.session.rollback();
     }
 }
 
@@ -396,6 +399,22 @@ mod tests {
         let st = app.session.active().unwrap();
         assert_eq!(st.doc.layers.len(), n0 + 1);
         assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(22, 8, 38, 24));
+    }
+
+    /// Allow Non-Linear History: the copy's step moves the later states in front of it, and
+    /// folding the copy and the move into one step must keep them.
+    #[test]
+    fn alt_drag_keeps_the_later_states_in_non_linear_history() {
+        let mut app = app_with_layer();
+        app.session.execute("history.options", json!({"allowNonLinearHistory": true})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
+        assert!(app.session.undo());
+        let mut expected = app.session.active().unwrap().history.entries();
+        expected.extend(app.session.active().unwrap().history.redo_labels().map(str::to_string));
+        expected.push(DUPLICATE_MOVE_LABEL.into());
+        drag(&mut app, &[[16.0, 16.0], [20.0, 16.0], [26.0, 21.0]], egui::Modifiers::ALT);
+        assert_eq!(app.session.active().unwrap().history.entries(), expected, "the later state stays");
     }
 
     #[test]

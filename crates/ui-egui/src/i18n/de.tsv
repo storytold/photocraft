@@ -2722,6 +2722,11 @@ curves	Smooth	Glätten
 	Click to place · Alt-click or drag off-canvas to remove	Klicken zum Platzieren · Alt-Klick oder Ziehen außerhalb der Arbeitsfläche zum Entfernen
 	No document open	Kein Dokument geöffnet
 	{n} of {max} sample points	{n} von {max} Messpunkten
+
+# History panel › History Options… (#2966)
+	History Options…	Protokolloptionen…
+	Allow Non-Linear History	Nicht-lineare Protokolle zulassen
+	Make Layer Visibility Changes Undoable	Änderungen der Ebenensichtbarkeit widerrufbar machen
 # Print dialog (#2697)
 	Emulsion Down	Schichtseite unten
 	Functions	Funktionen

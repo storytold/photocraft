@@ -12,8 +12,9 @@
 //! OS config directory; the web shell: browser storage) and restore it with
 //! [`Session::load_prefs_json`].
 //!
-//! Engine-side values are applied by [`Session::apply_prefs`]: the history state limit (every
-//! open document), the effect-cache memory budget, and units for commands that report lengths.
+//! Engine-side values are applied by [`Session::apply_prefs`]: the history state limit and
+//! History Options › Allow Non-Linear History (every open document), the effect-cache memory
+//! budget, and units for commands that report lengths.
 //! Colour settings (`colorSettings`) are stored with the colour state
 //! ([`crate::color_cmds::ColorSettings`]) and persisted in the same document.
 
@@ -889,6 +890,24 @@ impl Default for Integrations {
     }
 }
 
+/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
+/// Photoshop's snapshot options come with #3634.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HistoryOptions {
+    /// Allow Non-Linear History: editing after selecting an earlier state keeps the later
+    /// states (the new step is appended at the end), and deleting a state deletes only it.
+    pub allow_non_linear_history: bool,
+    /// Make Layer Visibility Changes Undoable: showing or hiding a layer is a history state.
+    pub make_layer_visibility_changes_undoable: bool,
+}
+
+impl Default for HistoryOptions {
+    fn default() -> Self {
+        Self { allow_non_linear_history: false, make_layer_visibility_changes_undoable: true }
+    }
+}
+
 /// Edit › Menus: hidden items and item colours, by command id.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -943,6 +962,8 @@ pub struct Preferences {
     pub enhanced_controls: EnhancedControls,
     pub raw_defaults: RawDefaults,
     pub integrations: Integrations,
+    /// History panel › History Options… (`history.options`).
+    pub history_options: HistoryOptions,
     /// Edit › Keyboard Shortcuts: command id → shortcut (`Cmd+Shift+N` notation); an empty
     /// string removes the default shortcut.
     pub shortcuts: BTreeMap<String, String>,
@@ -1618,15 +1639,17 @@ impl Session {
         r
     }
 
-    /// Push engine-relevant preferences into live state: every document's history limit, the
-    /// layer-effect cache budget and the text engine's missing-glyph protection.
+    /// Push engine-relevant preferences into live state: every document's history limit and
+    /// linearity, the layer-effect cache budget and the text engine's missing-glyph protection.
     pub fn apply_prefs(&mut self) {
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;
+        let non_linear = self.prefs().history_options.allow_non_linear_history;
         for st in &mut self.docs {
             st.history.max_states = n;
             st.history.max_bytes = bytes;
+            st.history.non_linear = non_linear;
             st.trim_history();
         }
         photocraft_compose::set_effect_cache_budget(budget << 20);

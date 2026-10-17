@@ -3268,6 +3268,11 @@ curves	Smooth	매끄럽게
 	Click to place · Alt-click or drag off-canvas to remove	클릭하여 배치 · Alt-클릭 또는 캔버스 밖으로 드래그하여 제거
 	No document open	열린 문서 없음
 	{n} of {max} sample points	{max}개 중 {n}개의 샘플 지점
+
+# History panel › History Options… (#2966)
+	History Options…	작업 내역 옵션…
+	Allow Non-Linear History	비선형 작업 내역 허용
+	Make Layer Visibility Changes Undoable	레이어 표시 여부 변경을 실행 취소할 수 있게 하기
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능

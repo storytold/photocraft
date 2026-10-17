@@ -3625,6 +3625,10 @@ curves	Smooth	Làm mượt
 	Step {step} is waiting for its dialog	Bước {step} đang chờ hộp thoại của nó
 @plural	{n} action|{n} actions	{n} hành động
 	Background (Default)	Nền (mặc định)
+# History panel › History Options… (#2966)
+	History Options…	Tùy chọn lịch sử…
+	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
+	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
 # Batch / Image Processor
 	Include All Subfolders	Bao gồm tất cả thư mục con

@@ -2674,6 +2674,11 @@ curves	Smooth	平滑
 	Click to place · Alt-click or drag off-canvas to remove	按一下以放置 · Alt 按一下或拖曳至畫布外以移除
 	No document open	未開啟任何文件
 	{n} of {max} sample points	{max} 個取樣點中的 {n} 個
+
+# History panel › History Options… (#2966)
+	History Options…	步驟記錄選項…
+	Allow Non-Linear History	允許非線性步驟記錄
+	Make Layer Visibility Changes Undoable	允許復原圖層可見度變更
 # Print dialog (#2697)
 	Emulsion Down	感光乳劑面朝下
 	Functions	功能

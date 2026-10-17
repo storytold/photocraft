@@ -3096,6 +3096,11 @@ curves	Smooth	Lisser
 	Click to place · Alt-click or drag off-canvas to remove	Cliquez pour placer · Alt-clic ou glisser hors du canevas pour supprimer
 	No document open	Aucun document ouvert
 	{n} of {max} sample points	{n} sur {max} points d'échantillonnage
+
+# History panel › History Options… (#2966)
+	History Options…	Options d'historique…
+	Allow Non-Linear History	Autoriser l'historique non linéaire
+	Make Layer Visibility Changes Undoable	Permettre d'annuler les changements de visibilité des calques
 # Print dialog (#2697)
 	Emulsion Down	Émulsion verso
 	Functions	Fonctions

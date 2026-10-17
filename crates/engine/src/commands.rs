@@ -816,7 +816,11 @@ fn build() -> Vec<CommandSpec> {
                 let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 // Clipping and channel changes reach the layers around it: recomposite everything.
                 let local = p.get("clipped").is_none() && p.get("channels").is_none();
-                s.edit(label, |doc, _| {
+                // The eye: a history state only with History Options › Make Layer Visibility
+                // Changes Undoable.
+                let only_visibility = changed.as_slice() == ["visible"];
+                let record = !only_visibility || s.visibility_undoable();
+                s.edit_with(label, record, |doc, _| {
                     // The Background has no opacity, fill or blend mode: like Photoshop, setting
                     // one that changes its look turns it into a normal layer ("Layer 0") first.
                     let num = |k: &str| p.get(k).and_then(Value::as_f64).is_some_and(|v| v < 1.0);
@@ -1467,6 +1471,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
     v.extend(crate::history_cmds::specs());
+    v.extend(crate::history_options_cmds::specs());
     v.extend(crate::history_select_cmds::specs());
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
