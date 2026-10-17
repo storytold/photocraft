@@ -156,7 +156,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_screen: impl Fn([f6
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let deg = (-dy).atan2(dx).to_degrees();
     if let Some(h) = hover.filter(|_| deg.is_finite() && (dx != 0.0 || dy != 0.0)) {
-        crate::canvas::draw_value_readout(app, painter.ctx(), "crop-straighten-readout", h, ["Angle:"], [format!("{deg:.1}°")]);
+        crate::canvas::draw_value_readout(app, painter.ctx(), "crop-straighten-readout", h, ["Angle:"], [crate::canvas::angle_readout(deg)]);
     }
 }
 
@@ -229,6 +229,17 @@ mod tests {
         assert_eq!(frame_angle([5.0, 5.0], [6.0, 6.0], 3.0), None);
         assert_eq!(frame_angle([f64::NAN, 0.0], [10.0, 0.0], 1.0), None);
         assert_eq!(frame_angle([0.0, 0.0], [f64::INFINITY, 1.0], 1.0), None);
+    }
+
+    #[test]
+    fn the_angle_readout_never_shows_minus_zero_or_minus_180() {
+        use crate::canvas::angle_readout;
+        assert_eq!(angle_readout(-0.03), "0.0°");
+        assert_eq!(angle_readout(0.0), "0.0°");
+        assert_eq!(angle_readout(-179.97), "180.0°");
+        assert_eq!(angle_readout(179.97), "180.0°");
+        assert_eq!(angle_readout(12.34), "12.3°");
+        assert_eq!(angle_readout(-12.36), "-12.4°");
     }
 
     #[test]

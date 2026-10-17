@@ -398,6 +398,20 @@ fn draw_marquee_readout(app: &PhotocraftApp, ctx: &egui::Context, cursor: Pos2, 
     draw_value_readout(app, ctx, "marquee-readout", cursor, ["W:", "H:"], values);
 }
 
+/// A turn of `deg` degrees as the readout beside the pointer shows it, to 0.1° in (-180, 180].
+/// Rounded first so a hair below zero never reads "-0.0°" and a hair above -180 reads "180.0°".
+pub(crate) fn angle_readout(deg: f64) -> String {
+    let d = (deg * 10.0).round() / 10.0;
+    let d = if d == 0.0 {
+        0.0
+    } else if d == -180.0 {
+        180.0
+    } else {
+        d
+    };
+    format!("{d:.1}°")
+}
+
 /// A transformation-values readout beside the pointer (a marquee's or the crop frame's size, an
 /// angle), unless Preferences › Tools › Show Transformation Values is off, as in Photoshop (#204).
 /// The brush HUD isn't one: Show Transformation Values doesn't hide it, so it calls [`draw_readout`].
@@ -4713,7 +4727,7 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
         }
         // The frame's angle beside the pointer while it turns (#1792).
         if let (Some(a), Some(h)) = (crate::crop_ui::turning(app), hover) {
-            draw_value_readout(app, painter.ctx(), "crop-angle-readout", h, ["Angle:"], [format!("{a:.1}°")]);
+            draw_value_readout(app, painter.ctx(), "crop-angle-readout", h, ["Angle:"], [angle_readout(a)]);
         } else if let (Some([w, h]), Some(at)) = (crate::crop_ui::sizing(app), hover) {
             // Its W × H while it is drawn or resized (#1919), like the marquee's.
             draw_marquee_readout(app, painter.ctx(), at, size_readout(app, [0.0, 0.0, w, h]));
