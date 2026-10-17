@@ -103,6 +103,11 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
             def.layer = new_id;
         }
     }
+    for slice in &mut doc.slices.list {
+        if let Some(&new_id) = slice.layer.and_then(|layer| ids.get(&layer)) {
+            slice.layer = Some(new_id);
+        }
+    }
 }
 
 /// Scale every size and distance of a style by `k` (Image Size's Scale Styles, Layer Style ›
