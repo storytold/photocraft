@@ -3137,6 +3137,9 @@ curves	Smooth	Haluskan
 # Batch / Image Processor
 	Include All Subfolders	Sertakan semua subfolder
 	Auto Add/Delete	Tambah/Hapus Otomatis
+	Install Plug-in	Pasang Plug-in
+	Plug-in Installed	Plug-in Terinstal
+	The plug-in is now available under Filter › Plug-ins.	Plug-in kini tersedia di bawah Filter › Plug-in.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Jangan aktifkan juga Gambar Cermin di Pengaturan Cetak: kedua pembalikan saling meniadakan.

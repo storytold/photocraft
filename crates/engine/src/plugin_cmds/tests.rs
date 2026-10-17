@@ -223,6 +223,19 @@ fn preference_folder_is_loaded() {
     registry::remove("test.cmds.folder");
     let r = s.execute("plugin.reload", json!({})).unwrap();
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
+    assert!(s.poll_plugin_folder().is_none(), "no change on disk -> no reload");
+    // Adding a new .wasm file while a document is open hot-reloads it without touching the document.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    std::fs::write(dir.join("hot.wasm"), wat_plugin("test.cmds.hot", "{}", GREY)).unwrap();
+    let r = s.poll_plugin_folder().expect("new file detected");
+    assert_eq!(r["loaded"], json!(["test.cmds.folder", "test.cmds.hot"]));
+    assert!(registry::get("test.cmds.hot").is_some());
+    assert_eq!(s.documents().len(), 1, "open document is untouched");
+    // Removing a .wasm file on disk uninstalls it on the next poll.
+    std::fs::remove_file(dir.join("hot.wasm")).unwrap();
+    let r = s.poll_plugin_folder().expect("deleted file detected");
+    assert_eq!(r["removed"], json!(["test.cmds.hot"]));
+    assert!(registry::get("test.cmds.hot").is_none());
     registry::remove("test.cmds.folder");
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -3754,6 +3754,9 @@ navigator	Zoom	Zvětšení
 # Batch / Image Processor
 	Include All Subfolders	Zahrnout všechny podsložky
 	Auto Add/Delete	Automaticky přidat/odstranit
+	Install Plug-in	Instalovat zásuvný modul
+	Plug-in Installed	Zásuvný modul nainstalován
+	The plug-in is now available under Filter › Plug-ins.	Zásuvný modul je nyní dostupný v nabídce Filtr › Zásuvné moduly.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nezapínejte současně zrcadlení v nastavení tisku: obě převrácení se navzájem zruší.

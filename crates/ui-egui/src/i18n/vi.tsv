@@ -3632,6 +3632,9 @@ curves	Smooth	Làm mượt
 	Import .GRD	Nhập .GRD
 	Choose a gradient file (.grd).	Chọn tệp chuyển sắc (.grd).
 	Auto Add/Delete	Tự động thêm/xóa
+	Install Plug-in	Cài đặt plug-in
+	Plug-in Installed	Đã cài đặt plug-in
+	The plug-in is now available under Filter › Plug-ins.	Plug-in hiện đã có sẵn trong Bộ lọc › Plug-in.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Đừng bật thêm Ảnh phản chiếu trong thiết lập in: hai lần lật sẽ triệt tiêu nhau.

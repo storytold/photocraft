@@ -3145,6 +3145,9 @@ curves	Smooth	Glätten
 # Batch / Image Processor
 	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
+	Install Plug-in	Plug-in installieren
+	Plug-in Installed	Zusatzmodul installiert
+	The plug-in is now available under Filter › Plug-ins.	Das Zusatzmodul ist jetzt unter Filter › Zusatzmodule verfügbar.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Aktiviere nicht zusätzlich das Spiegelbild in den Druckeinstellungen: Die beiden Spiegelungen heben sich auf.

@@ -4205,6 +4205,8 @@ shape	Appearance	Izgled
 	Import .GRD	Uvezi .GRD
 	Choose a gradient file (.grd).	Izaberite datoteku gradijenta (.grd).
 	Auto Add/Delete	Automatsko dodavanje/brisanje
+	Plug-in Installed	Dodatak je instaliran
+	The plug-in is now available under Filter › Plug-ins.	Dodatak je sada dostupan u meniju Filter › Dodaci.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nemojte uključiti i ogledalsku sliku u podešavanjima štampanja: dva preslikavanja se poništavaju.

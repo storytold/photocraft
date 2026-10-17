@@ -3844,6 +3844,8 @@ curves	Smooth	Εξομάλυνση
 # Batch / Image Processor
 	Include All Subfolders	Συμπερίληψη όλων των υποφακέλων
 	Auto Add/Delete	Αυτόματη προσθήκη/διαγραφή
+	Plug-in Installed	Η προσθήκη εγκαταστάθηκε
+	The plug-in is now available under Filter › Plug-ins.	Η προσθήκη είναι πλέον διαθέσιμη στο μενού Φίλτρο › Προσθήκες.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Μην ενεργοποιείτε επίσης τον κατοπτρισμό στις ρυθμίσεις εκτύπωσης: οι δύο αναστροφές αλληλοαναιρούνται.

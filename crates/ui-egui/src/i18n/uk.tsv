@@ -3845,6 +3845,8 @@ curves	Smooth	Згладити
 # Batch / Image Processor
 	Include All Subfolders	Включити всі вкладені папки
 	Auto Add/Delete	Автододавання/видалення
+	Plug-in Installed	Плагін установлено
+	The plug-in is now available under Filter › Plug-ins.	Плагін тепер доступний у меню Фільтр › Плагіни.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не вмикайте також дзеркальне відображення в параметрах друку: два відображення скасовують одне одного.

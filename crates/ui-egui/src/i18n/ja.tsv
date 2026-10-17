@@ -3819,6 +3819,8 @@ curves	Smooth	スムーズ
 	Layer Mask Hides Effects	レイヤーマスクで効果を隠す
 	Vector Mask Hides Effects	ベクトルマスクで効果を隠す
 	Auto Add/Delete	自動追加・削除
+	Plug-in Installed	プラグインをインストールしました
+	The plug-in is now available under Filter › Plug-ins.	プラグインは「フィルター › プラグイン」から利用できます。
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	印刷設定の「鏡像」も有効にしないでください。2回反転すると元に戻ります。

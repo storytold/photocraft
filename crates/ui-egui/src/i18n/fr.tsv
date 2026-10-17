@@ -3150,6 +3150,9 @@ curves	Smooth	Lisser
 # Batch / Image Processor
 	Include All Subfolders	Inclure tous les sous-dossiers
 	Auto Add/Delete	Ajout/suppr. auto
+	Install Plug-in	Installer une extension
+	Plug-in Installed	Module externe installé
+	The plug-in is now available under Filter › Plug-ins.	Le module externe est désormais disponible sous Filtre › Modules externes.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Ne cochez pas aussi Image miroir dans les paramètres d’impression : les deux inversions s’annulent.

@@ -2743,6 +2743,9 @@ curves	Smooth	平滑
 # Batch / Image Processor
 	Include All Subfolders	包含所有子資料夾
 	Auto Add/Delete	自動增加/刪除
+	Install Plug-in	安裝增效模組
+	Plug-in Installed	增效模組已安裝
+	The plug-in is now available under Filter › Plug-ins.	該增效模組現可在「濾鏡 › 增效模組」中使用。
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	請勿同時勾選列印設定中的鏡像：兩次翻轉會互相抵消。

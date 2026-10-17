@@ -11,6 +11,8 @@ const PREFIX: &str = "plugin.filter.";
 
 /// Inserts the installed plug-ins into Filter › Plug-ins, above "Install Plug-in…".
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = app.session.poll_plugin_folder();
     let plugins = photocraft_plugins::registry::list();
     let Some(at) = items.iter().position(|i| i.id == "plugin.install") else { return };
     // `MenuItem::path` is the untranslated English path from the command's engine spec: the menu
@@ -70,6 +72,144 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     Some(Ok(json!({"dialog": d})))
 }
 
+/// Whether `fields` belongs to the `Filter › Plug-ins › Install Plug-in…` (`plugin.install`) dialog.
+pub fn owns(fields: &Map<String, Value>) -> bool {
+    fields.get("__command").and_then(Value::as_str) == Some("plugin.install")
+}
+
+/// Whether `fields` belongs to the post-install confirmation modal (`Plug-in Installed`).
+pub fn owns_installed_notice(fields: &Map<String, Value>) -> bool {
+    fields.get("__plugin_installed").and_then(Value::as_bool) == Some(true)
+}
+
+/// `Install Plug-in…` can confirm once a file path or base64 payload has been entered.
+pub fn can_confirm(fields: &Map<String, Value>) -> bool {
+    if !owns(fields) {
+        return true;
+    }
+    let has_path = fields.get("path").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
+    let has_data = fields.get("data").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
+    has_path || has_data
+}
+
+/// Renders the `Install Plug-in` dialog body with a file path field, a native `Browse…` button
+/// (supporting `.wasm`, `.afs`, and `.8bf` plug-ins), and the `Replace` checkbox.
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let mut path = fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut browse_clicked = false;
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::filter_dialog::label("path")).color(t.text_dim));
+        ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0));
+        if crate::widgets::secondary_button(ui, tl!("Browse…"), 92.0).clicked() {
+            browse_clicked = true;
+        }
+    });
+    if path.trim().is_empty() {
+        fields.remove("path");
+    } else {
+        fields.insert("path".into(), json!(path));
+    }
+
+    ui.add_space(4.0);
+    let mut replace = fields.get("replace").and_then(Value::as_bool).unwrap_or(true);
+    crate::widgets::checkbox(ui, &mut replace, &crate::filter_dialog::label("replace"));
+    fields.insert("replace".into(), json!(replace));
+
+    if browse_clicked {
+        let req = crate::FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["wasm".into(), "afs".into(), "8bf".into()]) };
+        let _ = app.ask_file(req, |app, answer| {
+            if let Some(d) = app.ui.dialogs.iter_mut().rev().find(|d| owns(&d.fields)) {
+                match answer {
+                    crate::FileDialogAnswer::Paths(paths) => {
+                        if let Some(chosen) = paths.into_iter().next() {
+                            d.fields.insert("path".into(), json!(chosen));
+                            d.fields.remove("data");
+                        }
+                    }
+                    crate::FileDialogAnswer::Contents(name, bytes) => {
+                        d.fields.insert("path".into(), json!(name));
+                        d.fields.insert("data".into(), json!(b64_encode(&bytes)));
+                    }
+                    crate::FileDialogAnswer::ContentsMany(files) => {
+                        if let Some((name, bytes)) = files.into_iter().next() {
+                            d.fields.insert("path".into(), json!(name));
+                            d.fields.insert("data".into(), json!(b64_encode(&bytes)));
+                        }
+                    }
+                    crate::FileDialogAnswer::FolderTo(chosen) => {
+                        d.fields.insert("path".into(), json!(chosen));
+                        d.fields.remove("data");
+                    }
+                    crate::FileDialogAnswer::SaveTo(_) | crate::FileDialogAnswer::Unavailable(_) => {}
+                }
+            }
+            Ok(Value::Null)
+        });
+    }
+}
+
+/// Renders the confirmation modal shown after a plug-in is imported via `Install Plug-in…`.
+pub fn installed_notice_body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let name = fields.get("name").and_then(Value::as_str).unwrap_or("Plug-in");
+    let version = fields.get("version").and_then(Value::as_str).unwrap_or("1.0.0");
+    let desc = fields.get("description").and_then(Value::as_str).unwrap_or("");
+
+    ui.label(egui::RichText::new(format!("{name} (v{version})")).strong().color(t.text));
+    if !desc.trim().is_empty() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(desc).color(t.text_dim));
+    }
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!("The plug-in is now available under Filter › Plug-ins.")).color(t.text_dim));
+}
+
+/// Confirms the `Install Plug-in…` dialog, installs the plug-in, refreshes the menu cache, and
+/// opens a confirmation modal reporting the installed plug-in.
+pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    let mut params = crate::filter_dialog::params_of(fields);
+    if let Some(obj) = params.as_object_mut()
+        && let Some(data) = fields.get("data").cloned()
+    {
+        obj.insert("data".into(), data);
+    }
+    let result = app.run("plugin.install", params)?;
+    app.menu_cache = None;
+
+    let mut notice = Map::new();
+    notice.insert("__plugin_installed".into(), json!(true));
+    notice.insert("__label".into(), json!("Plug-in Installed"));
+    if let Some(name) = result.get("name").cloned() {
+        notice.insert("name".into(), name);
+    }
+    if let Some(version) = result.get("version").cloned() {
+        notice.insert("version".into(), version);
+    }
+    if let Some(desc) = result.get("description").cloned() {
+        notice.insert("description".into(), desc);
+    }
+    app.ui.open_dialog(crate::state::DialogKind::Command, notice);
+    Ok(result)
+}
+
+fn b64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(char::from(TABLE[((n >> 18) & 0x3f) as usize]));
+        out.push(char::from(TABLE[((n >> 12) & 0x3f) as usize]));
+        out.push(if chunk.len() > 1 { char::from(TABLE[((n >> 6) & 0x3f) as usize]) } else { '=' });
+        out.push(if chunk.len() > 2 { char::from(TABLE[(n & 0x3f) as usize]) } else { '=' });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,7 +235,12 @@ mod tests {
         assert!(crate::menus::invoke(&mut app, &ctx, "plugin.filter.not.installed", json!({})).is_err());
         // Install Plug-in… without params opens its dialog instead of failing.
         let r = crate::menus::invoke(&mut app, &ctx, "plugin.install", json!({})).unwrap();
-        assert!(r.get("dialog").is_some());
+        let dlg_id = r.get("dialog").and_then(Value::as_u64).expect("Install Plug-in dialog id");
+        app.ui.dialog_mut(dlg_id).unwrap().fields.insert("path".into(), json!(path));
+        crate::dialogs::confirm(&mut app, dlg_id).unwrap();
+        let notice = app.ui.dialogs.last().expect("Plug-in Installed confirmation modal opened");
+        assert!(owns_installed_notice(&notice.fields));
+        assert_eq!(notice.fields.get("name").and_then(Value::as_str), Some("Invert (WebAssembly)"));
     }
 
     /// Plug-in rows carry the untranslated English menu path like every other item, so they still

@@ -4107,6 +4107,8 @@ navigator	Zoom	Zoom
 # Batch / Image Processor
 	Include All Subfolders	Incluir todas las subcarpetas
 	Auto Add/Delete	Añadir/eliminar automáticamente
+	Plug-in Installed	Plug-in instalado
+	The plug-in is now available under Filter › Plug-ins.	El plug-in ya está disponible en Filtro › Plug-ins.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	No actives también Imagen especular en Ajustes de impresión: las dos inversiones se anulan.

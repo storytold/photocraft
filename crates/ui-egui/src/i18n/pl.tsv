@@ -3744,6 +3744,8 @@ curves	Smooth	Wygładź
 # Batch / Image Processor
 	Include All Subfolders	Uwzględnij wszystkie podfoldery
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
+	Plug-in Installed	Zainstalowano wtyczkę
+	The plug-in is now available under Filter › Plug-ins.	Wtyczka jest teraz dostępna w menu Filtr › Wtyczki.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nie włączaj też odbicia lustrzanego w ustawieniach druku: oba odbicia wzajemnie się znoszą.

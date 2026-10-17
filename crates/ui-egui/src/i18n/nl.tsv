@@ -3906,6 +3906,8 @@ curves	Smooth	Vloeiend maken
 # Batch / Image Processor
 	Include All Subfolders	Alle submappen opnemen
 	Auto Add/Delete	Automatisch toevoegen/verwijderen
+	Plug-in Installed	Plug-in geïnstalleerd
+	The plug-in is now available under Filter › Plug-ins.	De plug-in is nu beschikbaar onder Filter › Plug-ins.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Schakel niet ook Spiegelbeeld in bij de afdrukinstellingen: de twee spiegelingen heffen elkaar op.

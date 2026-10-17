@@ -463,6 +463,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     autosave(app);
     #[cfg(not(target_arch = "wasm32"))]
     link_updates(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_updates(app, ctx);
     history_log(app);
 }
 
@@ -633,6 +635,51 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let wait = if app.session.link_scan.is_some() { 100 } else { 2000 };
     ctx.request_repaint_after(std::time::Duration::from_millis(wait));
+}
+
+/// Hot-reloads WebAssembly filter plug-ins installed, updated, repaired, or uninstalled on disk
+/// (for example via ArtCraft Launcher) while PhotoCraft is running, without closing or losing any
+/// open document or undo history.
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let (last_key, focus_key) = (egui::Id::new("pluginWatch.lastScan"), egui::Id::new("pluginWatch.focused"));
+    let now = ctx.input(|i| i.time);
+    let focused = ctx.input(|i| i.focused);
+    let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
+    ctx.data_mut(|d| d.insert_temp(focus_key, focused));
+    let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
+    if now - last < 1.5 && !(focused && !was_focused) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(last_key, now));
+
+    // If the Plug-ins folder wasn't configured when PhotoCraft launched, check whether an external
+    // manager (ArtCraft Launcher) enabled `plugIns.additionalPluginsFolder` in `preferences.json`.
+    let needs_folder = {
+        let pi = &app.session.prefs().plug_ins;
+        !pi.use_additional_plugins_folder || pi.additional_plugins_folder.trim().is_empty()
+    };
+    if needs_folder
+        && app.session.prefs.rev() == app.prefs_rt.saved_rev
+        && let Some(stored) = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        && let Some(pi_val) = stored.get("plugIns")
+        && let Ok(disk_pi) = serde_json::from_value::<prefs::PlugIns>(pi_val.clone())
+        && disk_pi.use_additional_plugins_folder
+        && !disk_pi.additional_plugins_folder.trim().is_empty()
+    {
+        app.session.edit_prefs(|p| p.plug_ins = disk_pi);
+        app.prefs_rt.saved_rev = app.session.prefs.rev();
+        app.prefs_rt.saved_value = Some(app.session.prefs_value());
+        app.menu_cache = None;
+        ctx.request_repaint();
+        return;
+    }
+
+    if app.session.poll_plugin_folder().is_some() {
+        app.menu_cache = None;
+        ctx.request_repaint();
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(1500));
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).

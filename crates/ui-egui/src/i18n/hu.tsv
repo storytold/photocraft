@@ -4058,6 +4058,8 @@ cameraRaw	Yellow	Sárga
 	Loaded Camera Raw settings from {file}	Camera Raw-beállítások betöltve innen: {file}
 	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-beállítások betöltve innen: {file} ({n} nem támogatott)
 	Auto Add/Delete	Automatikus hozzáadás/törlés
+	Plug-in Installed	Bővítmény telepítve
+	The plug-in is now available under Filter › Plug-ins.	A bővítmény mostantól a Szűrő › Bővítmények menüben érhető el.
 
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	A nyomtatási beállításokban ne jelöld be a tükrözést is: a két tükrözés kioltja egymást.
