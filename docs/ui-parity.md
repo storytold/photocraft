@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (tool-option persistence note corrected; slider knobs now token-driven; Pro light faint-text contrast strengthened; UI counts to be regenerated) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -12,10 +12,10 @@ Status: **done** (behaves as in Photoshop, with a test), **partial** (exists, di
 **missing**. Evidence is a file under `crates/ui-egui/src/` unless another path is given, a
 scorecard id, or an issue. Modifier names are macOS first (⌘ ⌥ ⇧); Windows/Linux use Ctrl and Alt.
 
-**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 56/68
-present (82%, measured). Free Transform modifiers and Crop are close to Photoshop; the gaps are
+**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 67/68
+present (99%, measured); only Art History Brush is missing. Free Transform modifiers and Crop are close to Photoshop; the gaps are
 in the long tail of modifiers, in-transform UI, spring-loaded tools, panels and preferences.
-Remaining: 60–110 h for transforms and modifiers (gap G5), 60–100 h for tools (G6), 150–250 h
+Remaining: 60–110 h for transforms and modifiers (gap G5), 2–9 h for the remaining tool (G6), 150–250 h
 for panels and workspace (G9).
 
 ## Tools
@@ -205,17 +205,17 @@ Paragraph; the rest open as in-app floating windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
+| Panel groups float and tear off into OS windows | partial | UI-217-5, #1828, #1213 — in-app floating groups, drag-out/redock and workspace persistence are implemented; tear-off into separate OS windows remains missing |
 | Drag panels to reorder and regroup | partial | #2272, #2305 |
 | Docked resize pushes the neighbour | partial | #2573 |
-| Color panel wheel and RGB/HSB/CMYK/Lab sliders | missing | UI-217-17, #2569 |
+| Color panel wheel and RGB/HSB/CMYK/Lab controls | partial | UI-217-17, #2569 — saturation/brightness field, hue strip, hex input and inline RGB/HSB numeric selector exist; circular wheel and inline CMYK/Lab/Gray/Web controls remain missing (the Color Picker dialog supports these models) |
 | Window size and dock width remembered | done | UI-217-2 |
 | Command palette with recents | done | UI-217-7 |
 | Menu bar from the keyboard: Alt / F10 focus the bar, ← → ↓ ↩ drive it, Alt+letter opens a menu, underlined mnemonics run items | done | `menu_keys.rs`, #4988; macOS uses the native bar |
-| Every preference takes effect | partial | 46 of 149 do nothing (scorecard) |
-| UI scale presets | missing | UI-217-9, #2492 |
+| Every preference takes effect | partial | 26 of 166 preferences remain unimplemented and are hidden from Preferences until implemented (scorecard / `HIDDEN_UNTIL_IMPLEMENTED`) |
+| UI scale presets | done | UI-217-9, `prefs_ui.rs` display-scale presets |
 | History snapshots: camera button, snapshot rows (click returns and selects, rename, delete; the trash deletes the selected snapshot, and a snapshot or state dragged onto it, #5324), `history.*Snapshot` commands | partial | `history_cmds.rs`, `snapshot_rows` in `panels.rs`; New Snapshot dialog, first snapshot and History Options to come (#2966) |
-| Themes: Photoshop's four greys | partial | five themes; #2661 |
+| Themes: Photoshop's four greys | partial | Pro, Pro Medium, Pro Light Gray and Pro Light are available alongside Studio, Classic and other desktop palettes; #2661 |
 | Document tabs: overflow, context menu, reorder | done | UI-217-6; middle-click close #2570 |
 | Layers panel: wheel steps blend modes, drop on New/Trash | partial | UI-217-14 |
 | Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name and Mode; the other six missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
@@ -227,6 +227,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Updated preferences/persistence notes and documented theme-token slider knobs; contrast and UI counts refreshed |
 | 2026-10-13 | minor | Menu bar from the keyboard: Alt / F10 focus, Alt+letter, underlined mnemonics (#4988) |
 | 2026-10-13 | minor | Layers panel filter row: Kind is a real dropdown with Kind, Name and Mode filters, drivable by `ui.set {layerFilter}` (#5048); row added as partial |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |

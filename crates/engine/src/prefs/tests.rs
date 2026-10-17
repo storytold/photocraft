@@ -311,6 +311,21 @@ fn json_round_trip_tolerates_unknown_and_missing_keys() {
 }
 
 #[test]
+fn malformed_color_settings_are_rejected_without_resetting_existing_state() {
+    let mut s = session();
+    s.execute("edit.colorSettings", json!({"workingRgb": "display-p3", "policyRgb": "convert"})).unwrap();
+    s.execute("prefs.set", json!({"path": "performance.historyStates", "value": 23})).unwrap();
+    let color_before = serde_json::to_value(&s.color.settings).unwrap();
+    let prefs_before = s.prefs().clone();
+
+    let result = s.load_prefs_json(r#"{"performance":{"historyStates":7},"colorSettings":{"workingRgb":42}}"#);
+
+    assert!(result.is_err(), "malformed colorSettings must return a recoverable error");
+    assert_eq!(serde_json::to_value(&s.color.settings).unwrap(), color_before);
+    assert_eq!(s.prefs(), &prefs_before, "other preferences must not partially load");
+}
+
+#[test]
 fn low_resolution_previews_default_on_and_switch_off() {
     // A preferences file from before the setting keeps the fast previews.
     let mut s = Session::new();

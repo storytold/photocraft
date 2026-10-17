@@ -1677,7 +1677,7 @@ impl Session {
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let prefs: Preferences = serde_json::from_value(v).map_err(|e| format!("preferences: {e}"))?;
         if let Some(c) = color {
-            self.color.settings = serde_json::from_value(c).unwrap_or_default();
+            self.color.settings = serde_json::from_value(c).map_err(|e| format!("preferences.colorSettings: {e}"))?;
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
         }
         self.prefs.edit(|p| *p = prefs);

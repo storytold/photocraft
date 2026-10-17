@@ -70,8 +70,9 @@ numeric input leaves the last valid style in effect. Fill and Stroke use clickab
 and the existing compact colour picker, preserving alpha and offering No Color. The style
 button remains available when no stroke is set; deliberately choosing a stroke colour or
 style enables a 3 px stroke. Colours, borders and selection treatments come from theme tokens.
-These tool defaults are serde state, but are not restored across app restarts. See
-[`shape-strokes.md`](shape-strokes.md) for geometry, colour-management and persistence limits.
+These tool defaults are serde state, remembered in Preferences, and restored across app restarts
+through the tool-options snapshot. See [`shape-strokes.md`](shape-strokes.md) for geometry and
+colour-management limits.
 
 While editing type, hold Ctrl (Windows/Linux) or Command (macOS) for an oriented transform
 frame. Drag inside to move, a corner to scale (Shift keeps proportions; Alt/Option scales about

@@ -240,7 +240,7 @@ impl Tokens {
                 pressed: Color32::from_rgb(170, 170, 170),
                 text: Color32::from_rgb(20, 20, 20),
                 text_dim: Color32::from_rgb(52, 52, 52),
-                text_faint: Color32::from_rgb(96, 96, 96),
+                text_faint: Color32::from_rgb(84, 84, 84),
                 icon: Color32::from_rgb(38, 38, 38),
                 accent_soft: Color32::from_rgb(208, 208, 208),
                 accent_text: Color32::from_rgb(0, 66, 150),
@@ -265,7 +265,7 @@ impl Tokens {
                 pressed: Color32::from_rgb(206, 206, 206),
                 text: Color32::from_rgb(20, 20, 20),
                 text_dim: Color32::from_rgb(64, 64, 64),
-                text_faint: Color32::from_rgb(120, 120, 120),
+                text_faint: Color32::from_rgb(108, 108, 108),
                 icon: Color32::from_rgb(46, 46, 46),
                 accent_soft: Color32::from_rgb(214, 214, 214),
                 accent_text: Color32::from_rgb(16, 98, 196),
@@ -1175,8 +1175,8 @@ mod tests {
                 assert!(contrast(t.text, bg) >= 4.5, "{kind:?} text on {bg:?}: {}", contrast(t.text, bg));
                 assert!(contrast(t.icon, bg) >= 3.0, "{kind:?} icon on {bg:?}");
                 assert!(contrast(t.text_dim, bg) >= 3.0, "{kind:?} dim text on {bg:?}");
+                assert!(contrast(t.text_faint, bg) >= 3.0, "{kind:?} faint text on {bg:?}: {}", contrast(t.text_faint, bg));
             }
-            assert!(contrast(t.text_faint, t.card) >= 2.0, "{kind:?} faint text");
             assert!(contrast(t.accent_text, t.card) >= 3.0, "{kind:?} accent text");
         }
         // The four Pro levels step from darkest to lightest, as in Photoshop.

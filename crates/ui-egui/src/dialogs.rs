@@ -387,7 +387,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.add_space(8.0);
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                ui.with_layout(crate::direction::trailing().with_cross_align(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     if matches!(d.kind, DialogKind::About | DialogKind::Error) {
                         // ↩ is OK too, as on every other dialog (#4872), from the frame after the

@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (menu/tool/corpus metrics refreshed; P12 crash wording corrected to reflect the regression guard and stale baseline) · **Target:** Adobe Photoshop 2026
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -15,7 +15,7 @@ dimension and area) and the ranked work list in [`gaps.md`](gaps.md); the one-pa
 [`ROADMAP.md`](../ROADMAP.md). Measured numbers: [`scorecard.md`](scorecard.md)
 (`cargo xtask scorecard`: performance budgets, corpus floors, per-area checklists, dead
 preferences) and [`parity-checklist.md`](parity-checklist.md) (`cargo xtask parity`: menu wiring,
-628/628, which says nothing about behaviour).
+631/631, which says nothing about behaviour).
 
 Status legend: ✅ done · 🟡 in progress · ⬜ not started. Hours are Opus 5.5 agent wall-clock hours
 for one agent working sequentially (calibration in
@@ -32,11 +32,11 @@ that blocks the workflow, would make PhotoCraft pre-alpha.
 | Core workflow | Works end to end? | Evidence | Hours to pass |
 |---|---|---|---:|
 | Photo retouch: open JPEG/raw, heal/clone/remove, adjustment layers, export JPEG, save and reopen | yes | Spot Healing, Healing, Clone, Patch, Remove tools; 16 adjustment layers; raw for DNG/CR2/NEF/ARW/RAF; JPEG export; MCP workflow tests (`automation/tests/agent_tasks.rs`). Quality complaints (#1092, #2104) and no CR3 don't stop the workflow | 0 |
-| Composite: layers, masks, selections, blend modes, smart objects; save as PSD and `.pcraft` and reopen | yes | PSD round trip ≥ 169/170, 308/309, 258/256 corpus files; `.pcraft` atomic save and crash recovery. Multi-layer Smart Object conversion (#2604) and mask targeting (#2458) are partial but have workarounds | 0 |
+| Composite: layers, masks, selections, blend modes, smart objects; save as PSD and `.pcraft` and reopen | yes | PSD round trip ≥ 169/170, 308/309, 258/258 corpus files; `.pcraft` atomic save and crash recovery. Multi-layer Smart Object conversion (#2604) and mask targeting (#2458) are partial but have workarounds | 0 |
 | Cut-out: select a subject, refine the edge, mask, export PNG with transparency | partial (not blocking) | Object/Quick Selection, Select Subject (classical), Refine Edge dialog, layer masks, PNG export. Select and Mask is a dialog, not the workspace; no Refine Hair (#2671) | 0 (depth: 80–140 h, G7) |
 | Design: type, shapes, layer styles, artboards; export PNG/JPEG; save and reopen | partial (not blocking) | Point/paragraph type, shapes with stroke controls, all 10 layer effects, artboards, Export As. One macOS report of a 60 s freeze on choosing the Type tool (#2518, not reproduced); no type on a path | 0 (fix #2518: 2–6 h) |
 | Paint with a pen tablet: pressure brushes, layers, save and reopen | partial (not blocking) | Pressure, tilt, rotation on macOS (AppKit monitor); every Brush Settings section. Lag with big brushes (#2619) and feel gaps ([brush-parity.md](brush-parity.md)) | 0 (feel: 100–180 h, G4) |
-| Exchange PSDs with Photoshop users: open a client PSD, edit, send a PSD back | partial (not blocking for alpha; blocking for beta) | Photoshop-authored oracle 133/256 render as Photoshop does; most exports open in Photoshop (smart objects verified), but some don't (#1281, #2469) | 0 for alpha; 150–250 h for beta (G1) |
+| Exchange PSDs with Photoshop users: open a client PSD, edit, send a PSD back | partial (not blocking for alpha; blocking for beta) | Photoshop-authored oracle 188/258 render as Photoshop does; most exports open in Photoshop (smart objects verified), but some don't (#1281, #2469) | 0 for alpha; 150–250 h for beta (G1) |
 
 **Result: passes.** Every core workflow completes end to end and the work saves and reopens in
 PhotoCraft; the partial rows are depth and fidelity gaps with workarounds, not blockers. Ready for
@@ -54,7 +54,7 @@ real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 | M5 GPU compositor | 🟡 | wgpu compositor drives the canvas, layer effects, vector masks, artboards, pattern fills and every clip case included (≤1/255 vs CPU); Multichannel documents fall back to the CPU |
 | M6 Paint + select | 🟡 | brush engine, all selection tools, multi-layer selection, snapping + smart guides, free transform + warp; stylus pressure on Windows (WM_POINTER via winit), the web (Pointer Events, with tilt/twist), macOS (AppKit event monitor: pressure, tilt, rotation, eraser end) and Linux X11 (XInput2 raw valuators); on Linux Wayland a pen opens the window through Xwayland (native tablet-v2 still open, #79) |
 | M7 Adjust + filters | 🟡 | 16 adjustment layers + destructive-only adjustments, 70+ filters incl. Blur Gallery, Actions record/replay, Fade |
-| M8 PSD v2 | 🟡 | adjustments (incl. Selective Color, Color Lookup), fills, effects, patterns, text, shapes, smart objects, alpha channels; oracle floors 146/170 (io), 236/309 (psd-tools), 133/256 (Photoshop-authored) |
+| M8 PSD v2 | 🟡 | adjustments (incl. Selective Color, Color Lookup), fills, effects, patterns, text, shapes, smart objects, alpha channels; oracle floors 148/170 (io), 249/309 (psd-tools), 188/258 (Photoshop-authored) |
 | M9 Text, vector, styles | 🟡 | type engine + Warp Text, shapes / pen / paths, all 10 effects on CPU and GPU (parity ≤1/255, 30/31 corpus effect files on the GPU) |
 | M10 Smart features | 🟡 | classical Select Subject / Object, content-aware fill and scale, healing, auto-align / auto-blend; ML backend not started |
 | M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; JP2 / DICOM / DPX / C2PA pending |
@@ -69,18 +69,20 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 
 1. **PSD that Photoshop trusts** ([G1](gaps.md#g1-psd-fidelity-and-photoshop-acceptance)):
    fix Photoshop refusing our files (#1281, #2469; text-layer case #2374 closed); add a
-   Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 133/256 → 200+. 150–250 h.
+   Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 188/258 → 200+. 150–250 h.
 2. **Performance budgets** ([G2](gaps.md#g2-interactive-performance)): the 22 over-budget
-   scenarios, the P12 GPU crash at 150 layers, brush and cursor lag (#2619, #2566). 200–350 h.
+   scenarios, re-benchmarking the P12 GPU submission-bound fix on the reference machine, brush
+   and cursor lag (#2619, #2566). 200–350 h.
    Local adaptive [Unsharp Mask optimisation](unsharp-mask-performance.md) improves native
    threshold-zero 24 MP RGBA CPU application by 37–102x at radii 300–1000, with measured
    rounding differences and an exact fallback; no published budget is closed by that measurement.
-3. **User bug backlog** ([G3](gaps.md#g3-user-reported-bug-backlog)): 579 open issues, most from
-   0.5/0.6 users; triage weekly, fix regressions first. 250–400 h.
+3. **User bug backlog** ([G3](gaps.md#g3-user-reported-bug-backlog)): 953 open issues in the
+   2026-10-13 snapshot, most from 0.5/0.6 users; refresh the count before using it as current.
+   Triage weekly, fix regressions first. 250–400 h.
 4. **Brush and transform feel** ([G4](gaps.md#g4-brush-feel), [G5](gaps.md#g5-transform-handles-and-modifiers)):
    [`brush-parity.md`](brush-parity.md) and [`ui-parity.md`](ui-parity.md) rows marked partial
    or missing. 150–250 h.
-5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 14 of Photoshop's 68. 60–100 h.
+5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): one of Photoshop's 68 remains (Art History Brush). 2–9 h.
 
 ## What's next, with estimates
 
@@ -88,7 +90,7 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 |---|---|---:|
 | 0.7 "files you can trust" | Current focus 1 plus JPEG Options, AVIF read, Photoshop PDF read | 200–320 h |
 | 0.8 "fast enough" | Current focus 2; GPU tiling past the texture limit (#49); complex layout documents | 200–350 h |
-| 0.9 "feels like Photoshop" | Current focus 4 and 5; transform context menu; floating panels; Color panel | 300–500 h |
+| 0.9 "feels like Photoshop" | Current focus 4 and 5; transform context menu; OS-window panel tear-off; circular wheel and alternate Color panel models | 300–500 h |
 | Beta | All of the above, type depth, Select and Mask / Content-Aware Fill workspaces, Hindi/Arabic/Vietnamese + RTL, bug backlog under 100 | 1,100–1,800 h total |
 | Later, needs owner decisions | AI backend (#41), plug-in hosting (.8BF / UXP), scripting compatibility | 550–1,050 h |
 
@@ -116,6 +118,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Refreshed menu/tool/corpus metrics; the 700-layer GPU regression passes locally, but P12 benchmark baseline still needs a reference-machine rerun |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate from the progress-docs standard): passes, stage stays alpha |

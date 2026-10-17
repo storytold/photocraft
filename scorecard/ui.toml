@@ -10,7 +10,7 @@ id = "UI-217-1"
 target = "Tool options, last Export As / Save for Web / Fill settings and font recents persist"
 status = "partial"
 issue = 217
-note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their settings in Preferences (prefs.dialogs); no tool_options/export fields in Preferences; export_dialog.rs:21 png/85. Each painting tool keeps its own brush (paint_mouse.rs sync_tool_brush, #218), but those live in UiState, so they are lost at quit like the other tool options"
+note = "tool_memory.rs stores the selected tool and non-default ToolOptions in Preferences, restores them field-by-field at launch, and flushes on exit; shape-stroke defaults are included. Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) also retain dialog settings. Export As / Save for Web settings and font recents still need persistence."
 
 [[item]]
 id = "UI-217-2"
@@ -36,9 +36,9 @@ note = "See the prefs audit and BUG-204-*"
 [[item]]
 id = "UI-217-5"
 target = "Panel groups can float (menu + drag out of the dock) and are restored at launch"
-status = "missing"
+status = "done"
 issue = 217
-note = "No floating groups in dock.rs/panels.rs"
+note = "panel_docking.rs implements menu/command floating and drag-out; dock.rs persists and restores the custom tree, floating geometry and hidden panel placement when Remember Workspace Changes is enabled. panel_docking_tests.rs covers drag-to-float/redock, geometry changes, invalid-action atomicity and saved workspace restoration. Tear-off into separate OS windows remains missing."
 
 [[item]]
 id = "UI-217-6"
@@ -78,9 +78,9 @@ note = "interface.enableAnimations (prefs_ui.rs sync_animations, #3273) zeroes e
 [[item]]
 id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
-status = "partial"
+status = "done"
 issue = 217
-note = "theme.rs ThemeKind has fourteen themes: the twelve earlier ones plus Soft Dark and Soft Light (low-contrast Studio-layout palettes, text at 4.5:1, selectable in Preferences with the existing theme-card previews, ui.set {theme}, Window > Theme); outlined knobs in the light themes are still missing"
+note = "theme.rs ThemeKind has fourteen themes, including Soft Dark and Soft Light; all are selectable in Preferences with theme-card previews, ui.set {theme}, and Window > Theme. Slider knobs now use theme tokens for fill, outline and shadow across Pro and Studio palettes."
 
 [[item]]
 id = "UI-217-12"
@@ -120,9 +120,9 @@ note = "saturation_track/lightness_track (adjust_editors.rs): grey -> the hue an
 [[item]]
 id = "UI-217-17"
 target = "Color panel: wheel plus RGB/HSB/CMYK/Lab/Gray/Web slider modes; resizes with its group"
-status = "missing"
+status = "partial"
 issue = 217
-note = "panels.rs:1837 single field + hex/RGB readout"
+note = "panels.rs: color field/hue strip, hex readout, and inline RGB/HSB numeric selector are implemented and resize with the group; circular wheel and inline CMYK/Lab/Gray/Web modes remain missing (the Color Picker dialog supports these models)."
 
 [[item]]
 id = "UI-217-18"

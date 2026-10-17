@@ -297,7 +297,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if t.pro {
                 ui.add_space(8.0);
 
-                let layout = if double { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
+                let layout = if double { crate::direction::row().with_cross_align(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
 
                 ui.with_layout(layout, |ui| {
                     let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
@@ -1321,7 +1321,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if pick_shield_color {
                             crate::crop_shield::pick_custom_color(app);
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.with_layout(crate::direction::trailing(), |ui| {
                             if icons::button(
                                 ui,
                                 "check",
@@ -3752,7 +3752,7 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
-        if color_readout(ui, ui.id().with(("color-field", bg_active)), &mut c) {
+        if color_readout(ui, ui.id().with(("color-field", bg_active)), &mut c, bg_active) {
             if bg_active {
                 app.session.tools.background = c;
             } else {
@@ -3795,29 +3795,61 @@ fn hsva_color32(h: egui::ecolor::Hsva) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// The Color panel's editable colour readout: a hex field and R, G, B fields, all drawn like the
+/// The Color panel's editable colour readout: a hex field and RGB or HSB fields, all drawn like the
 /// dock's [`widgets::value_field`] so they sit in the theme. Editing any of them sets `color`
 /// (sRGB-encoded floats) and returns `true`.
-fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4]) -> bool {
+fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4], background: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut changed = false;
+    let model_key = egui::Id::new("color-panel-readout-model");
+    let mut hsb_mode = ui.data(|d| d.get_temp::<bool>(model_key)).unwrap_or(false);
     // Wrapped so the fields fold onto a second line in a narrow dock instead of being clipped.
     ui.horizontal_wrapped(|ui| {
         // Docks zero the item spacing; keep the fields apart.
         ui.spacing_mut().item_spacing.x = 4.0;
+        ui.selectable_value(&mut hsb_mode, false, "RGB");
+        ui.selectable_value(&mut hsb_mode, true, "HSB");
         ui.label(RichText::new("#").font(theme::mono(12.0)).color(t.text_faint));
         changed = hex_edit(ui, id.with("hex"), color);
-        let [mut r, mut g, mut b] = srgb_bytes(*color).map(f32::from);
-        let mut rgb = false;
-        for (label, v) in [("R", &mut r), ("G", &mut g), ("B", &mut b)] {
-            ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
-            rgb |= widgets::value_field(ui, v, 0.0..=255.0, "", 38.0).changed();
-        }
-        if rgb {
-            *color = [r / 255.0, g / 255.0, b / 255.0, 1.0];
-            changed = true;
+        if hsb_mode {
+            let hsva_key = id.with("hsva");
+            // Preserve undefined hue/saturation for greys and black, where RGB cannot carry them.
+            let stored: Option<egui::ecolor::Hsva> = ui.data(|d| d.get_temp(hsva_key));
+            let hsva0 = stored.filter(|h| srgb_bytes(hsva_srgb(*h)) == srgb_bytes(*color)).unwrap_or_else(|| srgb_hsva(*color));
+            let mut hue = hsva0.h * 360.0;
+            let mut saturation = hsva0.s * 100.0;
+            let mut brightness = hsva0.v * 100.0;
+            let mut hsb_changed = false;
+            for (label, value, range, suffix) in
+                [("H", &mut hue, 0.0..=360.0, "°"), ("S", &mut saturation, 0.0..=100.0, "%"), ("B", &mut brightness, 0.0..=100.0, "%")]
+            {
+                ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
+                hsb_changed |= widgets::value_field(ui, value, range, suffix, 38.0).changed();
+            }
+            if hsb_changed {
+                let hsva =
+                    egui::ecolor::Hsva::new((hue / 360.0).clamp(0.0, 1.0), (saturation / 100.0).clamp(0.0, 1.0), (brightness / 100.0).clamp(0.0, 1.0), 1.0);
+                *color = hsva_srgb(hsva);
+                ui.data_mut(|d| {
+                    d.insert_temp(hsva_key, hsva);
+                    d.insert_temp(egui::Id::new(("color-field-hue", background)), (hsva.h, hsva.s));
+                });
+                changed = true;
+            }
+        } else {
+            let [mut r, mut g, mut b] = srgb_bytes(*color).map(f32::from);
+            let mut rgb_changed = false;
+            for (label, value) in [("R", &mut r), ("G", &mut g), ("B", &mut b)] {
+                ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
+                rgb_changed |= widgets::value_field(ui, value, 0.0..=255.0, "", 38.0).changed();
+            }
+            if rgb_changed {
+                *color = [r / 255.0, g / 255.0, b / 255.0, 1.0];
+                changed = true;
+            }
         }
     });
+    ui.data_mut(|d| d.insert_temp(model_key, hsb_mode));
     changed
 }
 
@@ -4481,6 +4513,68 @@ mod color_tests {
         h.key_press(egui::Key::Tab);
         h.run_steps(2);
         assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0x00, 0x80, 0x00]);
+    }
+
+    /// The inline HSB model edits the same colour and remembers hue while the colour is black.
+    #[test]
+    fn color_readout_hsb_fields_keep_hue_on_black() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+        let mut h = field_harness(app);
+        h.get_by_label("HSB").click();
+        h.run_steps(2);
+        for (field, typed) in [(0, "120"), (1, "100"), (2, "100")] {
+            h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(field).unwrap().click();
+            h.run_steps(1);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run_steps(1);
+            for ch in typed.chars() {
+                h.event(egui::Event::Text(ch.to_string()));
+                h.run_steps(1);
+            }
+            h.key_press(egui::Key::Tab);
+            h.run_steps(2);
+        }
+        assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0, 255, 0]);
+    }
+
+    /// The HSB readout edits the active background chip without changing the foreground.
+    #[test]
+    fn color_readout_hsb_fields_edit_the_active_background_chip() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+        app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 120.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let mut color = app.session.tools.background;
+                if color_readout(ui, ui.id().with(("color-field", true)), &mut color, true) {
+                    app.session.tools.background = color;
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(2);
+        h.get_by_label("HSB").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("H").is_some(), "HSB fields replace RGB fields");
+        assert!(h.query_by_label("R").is_none(), "RGB fields are hidden in HSB mode");
+        for (field, typed) in [(0, "120"), (1, "100"), (2, "100")] {
+            h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(field).unwrap().click();
+            h.run_steps(1);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run_steps(1);
+            for ch in typed.chars() {
+                h.event(egui::Event::Text(ch.to_string()));
+                h.run_steps(1);
+            }
+            h.key_press(egui::Key::Tab);
+            h.run_steps(2);
+        }
+        assert_eq!(srgb_bytes(h.state().session.tools.background), [0, 255, 0]);
+        assert_eq!(srgb_bytes(h.state().session.tools.foreground), [255, 0, 0]);
     }
 
     /// The pro Color panel's hex readout edits the foreground too.
