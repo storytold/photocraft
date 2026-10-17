@@ -43,6 +43,11 @@ roxmltree = "0.20"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3"
 
+# `file.print` loads Windows.Data.Pdf.dll before calling into it (#5884): the safe binding
+# ui-egui and craft-print already use, pinned to the same version.
+[target.'cfg(target_os = "windows")'.dependencies]
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
+
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.
