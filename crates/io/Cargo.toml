@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[build-dependencies]
+flate2 = { workspace = true }
+tar = "0.4"
+
 [lints]
 workspace = true
 
@@ -43,6 +47,9 @@ roxmltree = "0.20"
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# PDF import (pdf_import.rs): pdfium-render binds to PDFium (Chromium's PDF engine) at runtime.
+# Native only: pdfium-render doesn't support wasm32. Uses `pdfium_6996` for pre-generated bindings.
+pdfium-render = { version = "0.9", default-features = false, features = ["thread_safe", "image_latest", "pdfium_6996"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }

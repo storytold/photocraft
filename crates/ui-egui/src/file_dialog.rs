@@ -21,6 +21,24 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::file_open::display_name;
 
+/// File extensions supported by File › Open (lowercase, without dot).
+/// Includes all formats that `photocraft_io::import` can read.
+pub(crate) const OPEN_EXTENSIONS: &[&str] = &[
+    // Native format
+    "pcraft", // Photoshop
+    "psd", "psb", // Codecs (raster formats)
+    "png", "apng", "jpg", "jpeg", "jpe", "jfif", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga", "icb", "vda", "vst", "ico", "pnm", "pbm", "pgm", "ppm",
+    "pam", "pfm", "pcx", "xpm", "dds", "qoi", "exr", "hdr", "avif", "heic", "heif", "hif", "fits", "fit", "fts", "dpx", // Affinity
+    "af", "afphoto", "afdesign", "afpub", // OpenRaster
+    "ora",   // Krita
+    "kra", "krz", // Paint.NET
+    "pdn", // SVG
+    "svg", "svgz", // PDF
+    "pdf",  // Camera Raw (common extensions)
+    "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "3fr", "mef", "mfw", "iiq", "nrw", "rwl", "srw", "mrw", "nef", "orf", "pef", "raf", "srf", "x3f", "arw",
+    "sr2", "srf", "rw2",
+];
+
 /// What a file or folder dialog asks the user for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
@@ -209,7 +227,8 @@ impl PhotocraftApp {
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        let extensions = Some(OPEN_EXTENSIONS.iter().map(|s| (*s).to_string()).collect());
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);

@@ -72,6 +72,9 @@ contents:
   - src: ${STAGE}/usr/bin/photocraft-cli
     dst: /usr/bin/photocraft-cli
     file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/lib/photocraft/
+    dst: /usr/lib/photocraft/
+    type: tree
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

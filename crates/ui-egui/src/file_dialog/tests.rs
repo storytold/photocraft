@@ -279,7 +279,7 @@ fn open_starts_in_the_last_used_folder() {
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(
-        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None }, _)] if dir == "/pics"),
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: Some(_) }, _)] if dir == "/pics"),
         "{:?}",
         open.borrow().first().map(|(r, _)| r.clone())
     );

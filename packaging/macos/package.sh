@@ -69,6 +69,21 @@ for bin in photocraft photocraft-cli; do
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
   lipo -info "$WORK/bin/$bin"
 done
+pdfium_inputs=()
+for t in "${TARGETS[@]}"; do
+  input="$CARGO_TARGET_DIR/$t/release/libpdfium.dylib"
+  if [ ! -f "$input" ] || [ ! -f "$CARGO_TARGET_DIR/$t/release/PDFium-LICENSE.txt" ] || [ ! -f "$CARGO_TARGET_DIR/$t/release/PDFium-Third-Party-Licenses.txt" ]; then
+    echo "error: PDFium runtime or license notices are missing for $t" >&2
+    exit 1
+  fi
+  pdfium_inputs+=("$input")
+done
+if [ "${#pdfium_inputs[@]}" -eq 1 ]; then
+  cp "${pdfium_inputs[0]}" "$WORK/bin/libpdfium.dylib"
+else
+  lipo -create -output "$WORK/bin/libpdfium.dylib" "${pdfium_inputs[@]}"
+fi
+lipo -info "$WORK/bin/libpdfium.dylib"
 
 # ---- signing helpers ---------------------------------------------------------------------------
 sign() {
@@ -100,8 +115,12 @@ notarize() {
 # ---- PhotoCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/Frameworks"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
+cp "$WORK/bin/libpdfium.dylib" "$APP/Contents/Frameworks/libpdfium.dylib"
+cp "$CARGO_TARGET_DIR/${TARGETS[0]}/release/PDFium-LICENSE.txt" "$APP/Contents/Frameworks/PDFium-LICENSE.txt"
+cp "$CARGO_TARGET_DIR/${TARGETS[0]}/release/PDFium-Third-Party-Licenses.txt" "$APP/Contents/Frameworks/PDFium-Third-Party-Licenses.txt"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
@@ -115,7 +134,8 @@ plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
-# Today the only nested code is the main executable; frameworks/helpers would be signed here too.
+# Sign bundled native code before the application executable.
+sign --options runtime "$APP/Contents/Frameworks/libpdfium.dylib"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
@@ -159,9 +179,13 @@ echo "==> building $CLI_ZIP"
 CLI_DIR="$WORK/photocraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
 cp "$WORK/bin/photocraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/libpdfium.dylib" "$CLI_DIR/"
+cp "$CARGO_TARGET_DIR/${TARGETS[0]}/release/PDFium-LICENSE.txt" "$CLI_DIR/"
+cp "$CARGO_TARGET_DIR/${TARGETS[0]}/release/PDFium-Third-Party-Licenses.txt" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
 # Same Developer ID and hardened runtime as the app, with an explicit reverse-DNS identifier
 # (codesign would otherwise use the bare file name).
+sign --options runtime "$CLI_DIR/libpdfium.dylib"
 sign --options runtime --identifier ai.storyteller.photocraft-cli "$CLI_DIR/photocraft-cli"
 codesign --verify --strict --verbose=2 "$CLI_DIR/photocraft-cli"
 rm -f "$CLI_ZIP"

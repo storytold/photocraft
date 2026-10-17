@@ -52,6 +52,7 @@ mod ora;
 pub use ora::losses as ora_losses;
 pub mod pattern_map;
 pub mod pdf;
+mod pdf_import;
 mod pdn;
 pub mod pixels;
 mod psd_export;
@@ -115,6 +116,9 @@ pub enum IoError {
     /// A background import or save was cancelled ([`import_with`], [`export_with`]).
     #[error("cancelled")]
     Cancelled,
+    /// A catch-all for errors not covered by other variants.
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Result of [`import`].
@@ -310,6 +314,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
+    if is_pdf_input(name, bytes) {
+        return pdf_import::import_pdf(name, bytes, max_group_depth);
+    }
     flat::import_flat(name, bytes)
 }
 
@@ -323,6 +330,21 @@ fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     svg::is_svg(bytes)
         || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
         || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
+}
+
+fn is_pdf(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
+}
+
+/// Returns true if the input appears to be a PDF file (by magic bytes or extension).
+pub(crate) fn is_pdf_input(name: &str, bytes: &[u8]) -> bool {
+    // Check by magic bytes first
+    if is_pdf(bytes) {
+        return true;
+    }
+    // Then check by extension, but only if the codecs don't detect it as something else.
+    // Note: PDF is not in the codecs Format enum, so photocraft_codecs::detect will return None for PDF.
+    has_extension(name, "pdf") && photocraft_codecs::detect(bytes).is_none()
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -534,5 +556,20 @@ mod tests {
         assert!(is_svg_input("drawing.svg", b"<?xml version=\"1.0\"?><svg/>"));
         assert!(is_svg_input("drawing.svgz", &[0x1f, 0x8b, 0, 0]));
         assert!(!is_svg_input("drawing.svgz", webp_header));
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn pdf_import_not_supported_on_wasm() {
+        // On wasm32, PDF import is not supported
+        let name = "test.pdf";
+        let bytes = b"%PDF-1.4\n%test";
+        let result = super::import(name, bytes);
+        assert!(result.is_err());
+        if let Err(super::IoError::Other(msg)) = result {
+            assert!(msg.contains("not supported on wasm32"));
+        } else {
+            panic!("Expected IoError::Other with 'not supported on wasm32' message, got {:?}", result);
+        }
     }
 }

@@ -717,7 +717,7 @@ fn autosave(app: &mut PhotocraftApp) {
 
 /// Force the autosave timer to fire on the next tick (tests, `prefs` changes).
 pub fn autosave_now(app: &mut PhotocraftApp) {
-    app.prefs_rt.next_autosave_ms = f64::MIN_POSITIVE;
+    app.prefs_rt.next_autosave_ms = -1.0;
 }
 
 /// History Log preference: append executed commands to a text file.

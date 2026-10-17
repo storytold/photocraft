@@ -88,6 +88,12 @@ $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
+$Pdfium = Join-Path $Bin 'pdfium.dll'
+if (-not (Test-Path -PathType Leaf $Pdfium)) { throw "PDFium runtime not found at $Pdfium; rebuild with network access or PDFIUM_DYNAMIC_LIB_PATH" }
+foreach ($file in @($Pdfium, (Join-Path $Bin 'PDFium-LICENSE.txt'), (Join-Path $Bin 'PDFium-Third-Party-Licenses.txt'))) {
+  if (-not (Test-Path -PathType Leaf $file)) { throw "PDFium license notice not found at $file" }
+  Copy-Item $file $Stage
+}
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
 
@@ -150,7 +156,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 $Portable = Join-Path $TargetDir "windows-package\photocraft-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
-Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item (Join-Path $Stage '*.exe'), (Join-Path $Stage 'pdfium.dll'), (Join-Path $Stage 'PDFium-*.txt') $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

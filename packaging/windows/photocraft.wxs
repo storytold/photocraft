@@ -87,6 +87,9 @@
               Description="PhotoCraft image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
               Icon="PhotocraftIcon.exe" IconIndex="0" />
         </File>
+        <File Id="PdfiumDll" Source="$(var.BinDir)\pdfium.dll" />
+        <File Id="PdfiumLicense" Source="$(var.BinDir)\PDFium-LICENSE.txt" />
+        <File Id="PdfiumThirdPartyLicenses" Source="$(var.BinDir)\PDFium-Third-Party-Licenses.txt" />
 
         <!-- .pcraft: PhotoCraft's own format; PhotoCraft is its default app. -->
         <ProgId Id="Photocraft.Document" Description="PhotoCraft Document" Icon="PhotocraftExe" IconIndex="0">

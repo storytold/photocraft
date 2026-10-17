@@ -63,6 +63,17 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/photocraft" "$STAGE/usr/bin/photocraft"
 install -Dm755 "$BIN/photocraft-cli" "$STAGE/usr/bin/photocraft-cli"
+PDFIUM_DIR="$STAGE/usr/lib/photocraft"
+if [ -f "$BIN/libpdfium.so" ] && [ -f "$BIN/PDFium-LICENSE.txt" ] && [ -f "$BIN/PDFium-Third-Party-Licenses.txt" ]; then
+  install -Dm755 "$BIN/libpdfium.so" "$PDFIUM_DIR/libpdfium.so"
+  install -Dm644 "$BIN/PDFium-LICENSE.txt" "$PDFIUM_DIR/PDFium-LICENSE.txt"
+  install -Dm644 "$BIN/PDFium-Third-Party-Licenses.txt" "$PDFIUM_DIR/PDFium-Third-Party-Licenses.txt"
+elif [ "$ARCH" != riscv64 ]; then
+  echo "error: PDFium runtime or license notices are missing from $BIN" >&2
+  exit 1
+else
+  warn "PDF import is unavailable on riscv64 because PDFium publishes no binary for that architecture"
+fi
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
