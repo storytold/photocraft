@@ -4225,6 +4225,10 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+
+# Move tool options (#3631)
+	Show Bounding Box	Prikaži granični okvir
+	Active Layers	Aktivni slojevi
 	Response curve	Kriva odziva
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Koristi ugrađeni profil ({profile})

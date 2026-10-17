@@ -2704,6 +2704,8 @@ curves	Smooth	平滑
 	Click to place · Alt-click or drag off-canvas to remove	单击以放置 · Alt 单击或拖到画布外以移除
 	No document open	未打开任何文档
 	{n} of {max} sample points	{max} 个取样点中的 {n} 个
+	Show Bounding Box	显示定界框
+	Active Layers	现用图层
 # Print dialog (#2697)
 	Emulsion Down	药膜朝下
 	Functions	功能

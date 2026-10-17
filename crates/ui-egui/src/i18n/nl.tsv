@@ -3838,6 +3838,8 @@ curves	Smooth	Vloeiend maken
 # Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Klik om te plaatsen · Alt-klik of sleep buiten het canvas om te verwijderen
 	{n} of {max} sample points	{n} van {max} steekproefpunten
+	Show Bounding Box	Selectiekader tonen
+	Active Layers	Actieve lagen
 # Print dialog (#2697)
 	Emulsion Down	Emulsie omlaag
 	Functions	Functies

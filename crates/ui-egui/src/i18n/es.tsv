@@ -2764,6 +2764,8 @@ curves	Smooth	Suavizar
 	Click to place · Alt-click or drag off-canvas to remove	Clic para colocar · Alt-clic o arrastrar fuera del lienzo para quitar
 	No document open	Ningún documento abierto
 	{n} of {max} sample points	{n} de {max} puntos de muestreo
+	Show Bounding Box	Mostrar cuadro delimitador
+	Active Layers	Capas activas
 # Print dialog (#2697)
 	Emulsion Down	Emulsión hacia abajo
 	Functions	Funciones

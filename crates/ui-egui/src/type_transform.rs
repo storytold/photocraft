@@ -126,6 +126,7 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
         path: None,
         made: None,
         mode: Default::default(),
+        layers: Vec::new(),
         content_aware: None,
         skew_v: 0.0,
     })

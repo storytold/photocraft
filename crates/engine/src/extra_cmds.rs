@@ -342,8 +342,16 @@ fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         Some(surf) => (crate::transform_cmds::target_bounds(&d.doc, surf), json!({"target": p.get("target")})),
         None => {
             let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-            let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            (crate::transform_cmds::transform_bounds(&d.doc, l), json!({"layer": id.0}))
+            // Several selected layers turn together around their shared box (#3592), unless a
+            // `layer` is named.
+            let many = if p.get("layer").is_none() { crate::transform_cmds::multi_targets(&d.doc, &d.selected_layers()) } else { Vec::new() };
+            if many.len() > 1 {
+                (crate::transform_cmds::multi_bounds(&d.doc, &many), json!({"layers": many.iter().map(|l| l.0).collect::<Vec<_>>()}))
+            } else {
+                let id = p.get("layer").and_then(Value::as_u64).map_or(id, LayerId);
+                let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+                (crate::transform_cmds::transform_bounds(&d.doc, l), json!({"layer": id.0}))
+            }
         }
     };
     if b.is_empty() {

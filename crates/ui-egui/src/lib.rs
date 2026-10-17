@@ -113,6 +113,7 @@ pub mod kys_import;
 pub mod lasso_ui;
 pub(crate) mod last_brush;
 pub mod layer_filter_ui;
+pub mod layer_hover;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
 pub mod layer_picker;
@@ -592,6 +593,8 @@ pub struct PhotocraftApp {
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
+    /// Show Highlight on Rollover: the hovered Layers panel row (`layer_hover`).
+    pub(crate) panel_hover: Option<layer_hover::PanelHover>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
@@ -855,6 +858,7 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            panel_hover: None,
             object_finder: None,
             blend_preview: None,
             patch_preview: None,

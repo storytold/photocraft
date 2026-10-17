@@ -3590,6 +3590,9 @@ curves	Smooth	Làm mượt
 	Stroke Path…	Đi nét đường dẫn…
 	Apply mask to layer before removing?	Áp dụng mặt nạ vào lớp trước khi xóa?
 	Delete the vector mask?	Xóa mặt nạ vectơ?
+# Move tool options (#3631)
+	Show Bounding Box	Hiển thị khung bao
+	Active Layers	Các lớp đang hoạt động
 	Add Shortcut	Thêm phím tắt
 	Response curve	Đường cong phản hồi
 	Object Finder	Trình tìm đối tượng

@@ -778,6 +778,48 @@ pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> 
     Some((params, path))
 }
 
+/// Path Selection › Select: All Layers (#3631): the topmost visible, not fully locked shape layer
+/// whose drawn shape is under `p` (document px) or whose outline passes within `tol` px of it.
+pub(crate) fn shape_at(doc: &Document, p: [f64; 2], tol: f64) -> Option<photocraft_doc::LayerId> {
+    let painted = photocraft_engine::pick_cmds::layers_at(doc, p[0].floor() as i32, p[1].floor() as i32);
+    let rows = doc.walk();
+    rows.iter().rev().find_map(|(path, _, l)| {
+        let LayerContent::Shape(sh) = &l.content else { return None };
+        if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) || doc.effective_locks(l.id).all {
+            return None;
+        }
+        let near = photocraft_vector::edit::hit(&sh.path, photocraft_geom::Point::new(p[0], p[1]), tol, &[]).is_some();
+        (near || painted.contains(&l.id)).then_some(l.id)
+    })
+}
+
+/// Whether a Path Selection click picks the shape layer under the pointer: Select: All Layers,
+/// and no vector mask targeted (that is edited where it is).
+pub(crate) fn path_picks(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::PathSelection && app.ui.tool_options.path_select_all && !app.ui.vector_mask_target
+}
+
+/// Path Selection press with Select: All Layers (#3631): make the shape layer under the pointer
+/// active, so the drag that follows moves its path (like the Move tool's Auto-Select). Revealing
+/// the row opens its closed groups (`layer_reveal`). Never consumes the event.
+pub(crate) fn path_selection_pick(app: &mut PhotocraftApp, ev: crate::canvas::ToolEvent) {
+    let crate::canvas::ToolEvent::Down { x, y, .. } = ev else { return };
+    if !path_picks(app) {
+        return;
+    }
+    let tol = f64::from(PICK_PX) / f64::from(app.point_zoom().max(1e-3));
+    let Some(st) = app.session.active() else { return };
+    let Some(id) = shape_at(&st.doc, [x, y], tol) else { return };
+    if st.active_layer != Some(id)
+        && let Err(e) = app.run("layer.select", json!({"layer": id.0}))
+    {
+        app.ui.status = e;
+    }
+}
+
+/// How near (screen px) a shape's outline must pass for a Path Selection click to pick it.
+pub(crate) const PICK_PX: f32 = 4.0;
+
 fn point_in_subpath(sp: &photocraft_doc::vector::Subpath, pt: [f64; 2]) -> bool {
     if !sp.closed || sp.knots.len() < 3 {
         return false;
@@ -858,17 +900,18 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     if dx.abs() + dy.abs() < 0.5 {
-        let Some(st) = app.session.active() else { return };
+        let Some(st) = app.session.active().filter(|_| path_picks(app)) else { return };
         if let Some(id) = pick_shape_at(&st.doc, start, tol) {
             let _ = app.run("layer.select", json!({"layer": id.0}));
         }
         return;
     }
-    if target_path(app).is_none() {
-        let Some(st) = app.session.active() else { return };
-        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
-            let _ = app.run("layer.select", json!({"layer": id.0}));
-        }
+    if target_path(app).is_none()
+        && path_picks(app)
+        && let Some(st) = app.session.active()
+        && let Some(id) = pick_shape_at(&st.doc, start, tol)
+    {
+        let _ = app.run("layer.select", json!({"layer": id.0}));
     }
     let Some((target, path)) = target_path(app) else { return };
     let _ = match target {
@@ -1106,6 +1149,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     };
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
+    if tool == Tool::PathSelection {
+        lbl(ui, tl!("Select:"));
+        let mut all = if o.path_select_all { "all".to_string() } else { "active".to_string() };
+        let opts = [("active".to_string(), tl!("Active Layers")), ("all".to_string(), tl!("All Layers"))];
+        crate::widgets::dropdown(ui, "path-select-layers", &mut all, &opts, 110.0);
+        o.path_select_all = all == "all";
+        crate::widgets::vline(ui, 22.0);
+        crate::widgets::checkbox(ui, &mut o.path_show_bounding_box, tl!("Show Bounding Box"));
+        crate::widgets::vline(ui, 22.0);
+    }
     if tool == Tool::PathSelection && target.is_none() {
         lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the active shape's path or the Work Path") });
         return true;

@@ -3268,6 +3268,8 @@ curves	Smooth	매끄럽게
 	Click to place · Alt-click or drag off-canvas to remove	클릭하여 배치 · Alt-클릭 또는 캔버스 밖으로 드래그하여 제거
 	No document open	열린 문서 없음
 	{n} of {max} sample points	{max}개 중 {n}개의 샘플 지점
+	Show Bounding Box	경계 상자 표시
+	Active Layers	활성 레이어
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능

@@ -3096,6 +3096,8 @@ curves	Smooth	Lisser
 	Click to place · Alt-click or drag off-canvas to remove	Cliquez pour placer · Alt-clic ou glisser hors du canevas pour supprimer
 	No document open	Aucun document ouvert
 	{n} of {max} sample points	{n} sur {max} points d'échantillonnage
+	Show Bounding Box	Afficher le cadre de sélection
+	Active Layers	Calques actifs
 # Print dialog (#2697)
 	Emulsion Down	Émulsion verso
 	Functions	Fonctions

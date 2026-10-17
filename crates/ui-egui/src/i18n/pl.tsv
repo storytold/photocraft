@@ -3691,6 +3691,8 @@ curves	Smooth	Wygładź
 	Click to place · Alt-click or drag off-canvas to remove	Kliknij, aby umieścić · Alt-kliknij lub przeciągnij poza obszar roboczy, aby usunąć
 	No document open	Brak otwartego dokumentu
 	{n} of {max} sample points	{n} z {max} punktów próbkowania
+	Show Bounding Box	Pokaż obwiednię
+	Active Layers	Aktywne warstwy
 # Print dialog (#2697)
 	Emulsion Down	Emulsja w dół
 	Functions	Funkcje

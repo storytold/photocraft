@@ -3776,6 +3776,8 @@ curves	Smooth	Εξομάλυνση
 # Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Κλικ για τοποθέτηση · Alt-κλικ ή σύρσιμο εκτός καμβά για αφαίρεση
 	{n} of {max} sample points	{n} από {max} σημεία δειγματοληψίας
+	Show Bounding Box	Εμφάνιση πλαισίου οριοθέτησης
+	Active Layers	Ενεργά επίπεδα
 # Print dialog (#2697)
 	Emulsion Down	Γαλάκτωμα προς τα κάτω
 	Functions	Λειτουργίες

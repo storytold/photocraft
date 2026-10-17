@@ -71,9 +71,22 @@ fn active_board(app: &PhotocraftApp) -> Option<(LayerId, [i64; 4])> {
 }
 
 /// The topmost board under a document point.
-fn board_at(doc: &Document, p: [f64; 2]) -> Option<(LayerId, [i64; 4])> {
+pub(crate) fn board_at(doc: &Document, p: [f64; 2]) -> Option<(LayerId, [i64; 4])> {
     let inside = |r: [f64; 4]| p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3];
     doc.artboards().iter().rev().map(|b| (b.0, edges(b.2.rect))).find(|b| inside(as_f64(b.1)))
+}
+
+/// Auto-Select's Layer target (#3631): the layer a click at `p` picks, as the Move tool's
+/// Auto-Select does (`pick_cmds::auto_select_target`), when it sits on a board.
+pub(crate) fn layer_at(doc: &Document, p: [f64; 2]) -> Option<LayerId> {
+    let id = photocraft_engine::pick_cmds::auto_select_target(doc, p[0].floor() as i32, p[1].floor() as i32, false)?;
+    doc.artboard_of(id).filter(|b| *b != id).map(|_| id)
+}
+
+/// A board's edges as a document rect (for the rollover outline).
+pub(crate) fn board_rect(r: [i64; 4]) -> photocraft_geom::Rect {
+    let c = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    photocraft_geom::Rect::new(c(r[0]), c(r[1]), c(r[2]), c(r[3]))
 }
 
 fn tolerance(app: &PhotocraftApp) -> f64 {
@@ -185,6 +198,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     if app.ui.tool != Tool::Artboard {
         return false;
     }
+    // ⌘/Ctrl held at the press inverts Auto-Select for that click, as with the Move tool.
+    let auto = app.ui.tool_options.artboard_auto_select != mods.command;
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -198,11 +213,21 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
             app.ui.artboard_tool.drag = Some(if let Some((id, rect, hx, hy)) = handle_at(app, p) {
                 ArtboardDrag::Resize { id, rect, hx, hy, start: p, cur: p, keep: mods.shift }
-            } else if let Some((id, rect)) = board_at(&doc, p) {
-                if app.session.active().and_then(|st| st.active_layer) != Some(id) {
-                    let r = app.run("layer.select", json!({"layer": id.0}));
+            } else if let Some((id, rect)) = board_at(&doc, p).filter(|_| auto) {
+                // Auto-Select (#3631): the board, or with the Layer target the layer under the
+                // pointer on it (the board itself where it has none). The drag moves the board.
+                let pick = if app.ui.tool_options.artboard_target == "layer" {
+                    layer_at(&doc, p).filter(|l| doc.artboard_of(*l) == Some(id)).unwrap_or(id)
+                } else {
+                    id
+                };
+                if app.session.active().and_then(|st| st.active_layer) != Some(pick) {
+                    let r = app.run("layer.select", json!({"layer": pick.0}));
                     report(app, r);
                 }
+                ArtboardDrag::Move { id, rect, start: p, cur: p }
+            } else if let Some((id, rect)) = active_board(app).filter(|_| !auto && board_at(&doc, p).is_some()) {
+                // Auto-Select off: a drag on any board moves the selected one, as in Photoshop.
                 ArtboardDrag::Move { id, rect, start: p, cur: p }
             } else {
                 ArtboardDrag::New { start: p, cur: p }
@@ -293,6 +318,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return false;
     }
     let t = Tokens::get(ui.ctx());
+    // Auto-Select (#3631), as in Photoshop's Artboard tool: pick the board or the layer clicked.
+    let o = &mut app.ui.tool_options;
+    crate::widgets::checkbox(ui, &mut o.artboard_auto_select, tl!("Auto-Select:"));
+    crate::widgets::dropdown(
+        ui,
+        "artboard-target",
+        &mut o.artboard_target,
+        &[("artboard".to_string(), tl!("Artboard")), ("layer".to_string(), tl!("Layer"))],
+        86.0,
+    );
+    crate::widgets::vline(ui, 22.0);
     let board = active_board(app);
     let preset = board.and_then(|(id, _)| app.session.active()?.doc.layer(id)?.artboard().map(|a| a.preset.clone()));
     let mut edit: Option<Value> = None;

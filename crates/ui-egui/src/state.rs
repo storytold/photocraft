@@ -612,6 +612,21 @@ pub struct ToolOptions {
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Path Selection › Show Bounding Box (#3631): off, as in Photoshop.
+    #[serde(default)]
+    pub path_show_bounding_box: bool,
+    /// Path Selection › Select (#3631): `false` = Active Layers (a drag moves the active shape's
+    /// path; clicks never pick another layer), `true` = All Layers (a click picks the topmost
+    /// shape layer under the pointer, which the drag then moves; rollover outlines it). All Layers
+    /// is the default, keeping main's click-to-select-shapes behaviour (#3915).
+    #[serde(default = "yes")]
+    pub path_select_all: bool,
+    /// Artboard tool › Auto-Select (#3631): a click picks the board (`"artboard"`) or the layer
+    /// (`"layer"`) under the pointer. On, with the Artboard target, as in Photoshop.
+    #[serde(default = "yes")]
+    pub artboard_auto_select: bool,
+    #[serde(default = "default_artboard_target")]
+    pub artboard_target: String,
     /// Crop options bar: aspect ratio ("" = Ratio/unconstrained, "w:h", or "original") and
     /// Delete Cropped Pixels.
     #[serde(default)]
@@ -720,6 +735,10 @@ fn default_crop_resolution_unit() -> String {
     crate::crop_size::PX_PER_IN.into()
 }
 
+fn default_artboard_target() -> String {
+    "artboard".into()
+}
+
 fn default_move_target() -> String {
     "group".into()
 }
@@ -823,6 +842,10 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            path_show_bounding_box: false,
+            path_select_all: true,
+            artboard_auto_select: true,
+            artboard_target: default_artboard_target(),
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,
             crop_custom_ratio_height: 0.0,
@@ -928,6 +951,10 @@ pub struct TransformSession {
     /// Edit › Transform › Rotate / Skew / Distort / Perspective (`Free` for Free Transform and Scale).
     #[serde(default)]
     pub mode: TransformMode,
+    /// Free Transform of several selected layers at once (#3592): every layer the box moves, bottom
+    /// to top, around one shared frame (`layer` stays the active one). Empty for a single layer.
+    #[serde(default)]
+    pub layers: Vec<u64>,
     /// Edit › Content-Aware Scale (#3096): the box only scales and moves, and OK runs
     /// `edit.contentAwareScale` with these options instead of `edit.transform`.
     #[serde(default)]

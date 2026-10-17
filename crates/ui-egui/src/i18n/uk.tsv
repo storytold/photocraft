@@ -3777,6 +3777,8 @@ curves	Smooth	Згладити
 	Click to place · Alt-click or drag off-canvas to remove	Клацніть, щоб розмістити · Alt-клацання або перетягування за межі полотна для видалення
 	No document open	Документ не відкрито
 	{n} of {max} sample points	{n} з {max} точок вимірювання
+	Show Bounding Box	Показати обмежувальну рамку
+	Active Layers	Активні шари
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції
