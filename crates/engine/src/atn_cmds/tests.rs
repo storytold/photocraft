@@ -174,6 +174,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
         ("filter.noise.median", json!({"radius": 2})),
         ("filter.blur.motionBlur", json!({"angle": 45, "distance": 20})),
+        ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
         (
@@ -412,7 +413,6 @@ fn every_mapped_command_exports_and_imports_back() {
         "filter.blur.blurMore",
         "filter.blur.boxBlur",
         "filter.blur.radialBlur",
-        "filter.blur.smartBlur",
         "filter.blur.surfaceBlur",
         "filter.noise.despeckle",
         "filter.noise.dustAndScratches",
@@ -955,4 +955,71 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     let bottom = st.doc.layers.first().unwrap();
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
+}
+
+/// Smart Blur's quality uses Photoshop's `SmBQ` codes (`SBQL`/`SBQM`/`SBQH`): measured in
+/// Photoshop, the old `Hgh `/`Mdm `/`Low ` play back as its fallback quality. Old codes still read.
+#[test]
+fn smart_blur_quality_uses_photoshop_codes() {
+    let smart_blur =
+        |quality: D, mode: &str| desc("null").with("Rds ", D::Double(6.0)).with("Thsh", D::Double(60.0)).with("SmBQ", quality).with("SmBM", enm("SmBM", mode));
+    // Every quality writes Photoshop's code, as a double radius/threshold and both enums,
+    // and reads back as the same step.
+    for (quality, code) in [("low", "SBQL"), ("medium", "SBQM"), ("high", "SBQH")] {
+        let params = json!({"radius": 6, "threshold": 60, "quality": quality, "mode": "edgeOnly"});
+        let a = Action::new("Q", vec![("filter.blur.smartBlur".into(), params.clone())]);
+        let (bytes, skipped) = export("S", &[&a], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let file = atn::parse(&bytes).unwrap();
+        let it = &file.actions[0].items[0];
+        assert_eq!(it.event.id(), "SmrB");
+        assert_eq!(it.descriptor.as_ref(), Some(&smart_blur(enm("SmBQ", code), "SBME")), "{quality}");
+        let back = import(&bytes).unwrap();
+        assert!(back.unsupported.is_empty(), "{quality}");
+        assert_eq!(back.actions[0].steps, vec![("filter.blur.smartBlur".to_string(), params)]);
+    }
+
+    // Photoshop-shaped steps (each quality and mode, as Photoshop stores them) and the codes
+    // PhotoCraft wrote before this fix read as the right quality.
+    let cases = [
+        ("SBQH", "SBMN", "high", "normal"),
+        ("SBQM", "SBMO", "medium", "overlayEdge"),
+        ("SBQL", "SBME", "low", "edgeOnly"),
+        ("Hgh ", "SBMN", "high", "normal"),
+        ("Mdm ", "SBMN", "medium", "normal"),
+        ("Low ", "SBMN", "low", "normal"),
+    ];
+    let items = cases.iter().map(|(q, m, _, _)| item("SmrB", "Smart Blur", Some(smart_blur(enm("SmBQ", q), m)))).collect();
+    let data = set_of("Blurs", vec![("Smart", items)]);
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    for ((q, _, quality, mode), (id, p)) in cases.iter().zip(steps) {
+        assert_eq!(id, "filter.blur.smartBlur", "{q}");
+        assert_eq!(p, &json!({"radius": 6, "threshold": 60, "quality": quality, "mode": mode}), "{q}");
+    }
+
+    // An unknown code, a quality of the wrong type, NaN and a missing quality never panic: the
+    // unknown ones stay Photoshop steps, kept verbatim.
+    let odd = [
+        smart_blur(enm("SmBQ", "Xxxx"), "SBMN"),
+        smart_blur(D::Integer(2), "SBMN"),
+        smart_blur(enm("SmBQ", "SBQH"), "Xxxx"),
+        desc("null").with("Rds ", D::Double(f64::NAN)).with("SmBQ", enm("SmBQ", "SBQM")),
+        desc("null"),
+    ];
+    let items: Vec<AtnItem> = odd.iter().map(|d| item("SmrB", "Smart Blur", Some(d.clone()))).collect();
+    let imported = import(&photocraft_paint::tile::b64_decode(&set_of("Odd", vec![("Odd", items)])).unwrap()).unwrap();
+    let steps = &imported.actions[0].steps;
+    assert_eq!(steps.len(), odd.len());
+    assert_eq!(steps[0].0, PHOTOSHOP_STEP, "an unknown quality is kept verbatim");
+    assert_eq!(steps[2].0, PHOTOSHOP_STEP, "an unknown mode is kept verbatim");
+    assert_eq!(imported.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), [0, 2]);
+    // A wrong-type quality is left out (the filter's default applies), as for every enum field.
+    assert_eq!(steps[1], ("filter.blur.smartBlur".to_string(), json!({"radius": 6, "threshold": 60, "mode": "normal"})));
+    // An unknown quality or a non-string one is not exported.
+    for bad in [json!({"quality": "best"}), json!({"quality": 3}), json!({"radius": "x"})] {
+        let a = Action::new("Bad", vec![("filter.blur.smartBlur".into(), bad.clone())]);
+        assert!(export("S", &[&a], &[], false).is_err(), "{bad}");
+    }
 }

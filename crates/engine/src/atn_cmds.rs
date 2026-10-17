@@ -915,7 +915,10 @@ const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"
 const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AbsC", "absolute")];
 const PROFILES: &[(&str, &str)] =
     &[("sRGB IEC61966-2.1", "srgb"), ("Display P3", "display-p3"), ("Adobe RGB (1998)", "adobe-rgb-compat"), ("ProPhoto RGB", "prophoto-compat")];
-const SMART_BLUR_QUALITY: &[(&str, &str)] = &[("Hgh ", "high"), ("Mdm ", "medium"), ("Low ", "low")];
+/// Smart Blur quality. Photoshop's codes come first, so they are what an export writes (measured in
+/// Photoshop: `Hgh `/`Mdm `/`Low ` play back as its fallback, low quality). The old codes after
+/// them still read, for actions PhotoCraft wrote before.
+const SMART_BLUR_QUALITY: &[(&str, &str)] = &[("SBQL", "low"), ("SBQM", "medium"), ("SBQH", "high"), ("Hgh ", "high"), ("Mdm ", "medium"), ("Low ", "low")];
 const SMART_BLUR_MODE: &[(&str, &str)] = &[("SBMN", "normal"), ("SBME", "edgeOnly"), ("SBMO", "overlayEdge")];
 const RADIAL_METHOD: &[(&str, &str)] = &[("Spn ", "spin"), ("Zm  ", "zoom")];
 const RADIAL_QUALITY: &[(&str, &str)] = &[("Drft", "draft"), ("Gd  ", "good"), ("Bst ", "best")];
