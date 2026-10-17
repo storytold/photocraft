@@ -462,6 +462,7 @@ impl Layouter {
         let vertical = t.orientation == Orientation::Vertical;
         let mut out = TextLayout { px_per_pt: k, vertical, ..Default::default() };
         // Resolve families (PostScript names from PSDs, unknown families).
+        let mut substitutes: Vec<Option<String>> = Vec::with_capacity(runs.len());
         for r in &runs {
             let mut s = r.style.clone();
             if let Some(ps) = s.postscript_name.clone()
@@ -475,10 +476,12 @@ impl Layouter {
                     s.italic = f.italic;
                 }
             }
-            // Drawn with a fallback for now; a host that serves this family fetches it (`served`).
+            // Drawn with an installed substitute or the fallback for now; a host that serves this
+            // family fetches it (`served`). The style keeps the requested family name.
             if !fonts.has_family(&s.font_family) {
                 crate::served::request(&s.font_family);
             }
+            substitutes.push(fonts.substitute_family(&s.font_family));
             fonts.select_named_face(&mut s);
             out.styles.push(s);
         }
@@ -585,7 +588,7 @@ impl Layouter {
                 // Paragraph-start style as the default (covers the direction mark and empty
                 // paragraphs), then every run piece intersecting this paragraph.
                 let si0 = style_at(prange.start);
-                for p in style_props(&out.styles[si0], k, &fallback, si0 as u32, small_caps[si0]) {
+                for p in style_props(&out.styles[si0], substitutes[si0].as_deref(), k, &fallback, si0 as u32, small_caps[si0]) {
                     b.push_default(p);
                 }
                 // Paragraph text breaks a word wider than the box at the box edge, as Photoshop
@@ -601,7 +604,7 @@ impl Layouter {
                         continue;
                     }
                     let range = (a - prange.start + prefix.len())..(z - prange.start + prefix.len());
-                    for p in style_props(st, k, &fallback, ri as u32, small_caps[ri]) {
+                    for p in style_props(st, substitutes[ri].as_deref(), k, &fallback, ri as u32, small_caps[ri]) {
                         b.push(p, range.clone());
                     }
                     if vertical {
@@ -1299,12 +1302,21 @@ fn variation_list(st: &CharStyle) -> Vec<String> {
     vars
 }
 
-fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32, small_caps: SmallCapsMode) -> Vec<StyleProperty<'static, RunBrush>> {
+/// `substitute` is the installed family drawing a missing `st.font_family` ([`FontDb::substitute_family`]).
+fn style_props(
+    st: &CharStyle,
+    substitute: Option<&str>,
+    k: f32,
+    fallback: &[String],
+    idx: u32,
+    small_caps: SmallCapsMode,
+) -> Vec<StyleProperty<'static, RunBrush>> {
     let px = (st.size_pt * k).max(0.01);
     let mut fam: Vec<String> = Vec::new();
     if !st.font_family.is_empty() {
         fam.push(quote(&st.font_family));
     }
+    fam.extend(substitute.map(quote));
     // Serif runs fall back to a Mincho face for Japanese (craft-fonts), others to a Gothic one.
     if crate::craft_fonts::is_serif_family(&st.font_family) {
         fam.extend(crate::craft_fonts::mincho_first(fallback).iter().map(|f| quote(f)));

@@ -112,6 +112,23 @@ pub const INDIC_FAMILIES: &[&[&str]] = &[
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
 
+/// Installed substitutes for a missing family, tried in order (#6741): the metric-compatible
+/// Microsoft/Apple core font replacements (same advance widths, so line breaks match), and faces
+/// of the right class for the CSS generic families.
+const FAMILY_SUBSTITUTES: &[(&str, &[&str])] = &[
+    ("Calibri", &["Carlito"]),
+    ("Cambria", &["Caladea"]),
+    ("Arial", &["Liberation Sans", "Arimo"]),
+    ("Helvetica", &["Liberation Sans", "Arimo", "Arial"]),
+    ("Times New Roman", &["Liberation Serif", "Tinos"]),
+    ("Times", &["Liberation Serif", "Tinos", "Times New Roman"]),
+    ("Courier New", &["Liberation Mono", "Cousine"]),
+    ("Courier", &["Liberation Mono", "Cousine", "Courier New"]),
+    ("serif", &["Liberation Serif", "Tinos", "Noto Serif", "DejaVu Serif", "Times New Roman", "Times", "Georgia"]),
+    ("sans-serif", &[DEFAULT_FAMILY]),
+    ("monospace", &["Liberation Mono", "Cousine", "Noto Sans Mono", "DejaVu Sans Mono", "Courier New", "Menlo", "Consolas", MONO_FAMILY]),
+];
+
 /// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]).
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
@@ -197,6 +214,9 @@ pub struct FontDb {
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
+    /// `fc-match` answers by family name ([`Self::substitute_family`]).
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    fc_match_cache: HashMap<String, Option<String>>,
 }
 
 impl Default for FontDb {
@@ -218,6 +238,8 @@ impl FontDb {
             face_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
+            #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+            fc_match_cache: HashMap::new(),
         };
         for (_, bytes) in BUNDLED {
             db.register_static_font(bytes.as_slice());
@@ -399,12 +421,47 @@ impl FontDb {
         self.fcx.collection.family_id(name).is_some()
     }
 
+    /// The installed family that draws `name` when it isn't installed (#6741): a metric-compatible
+    /// or same-class substitute from [`FAMILY_SUBSTITUTES`], else (on Linux) Fontconfig's match for
+    /// the name if this database has it. `None` when `name` is installed or nothing fits; the text
+    /// then falls back to [`DEFAULT_FAMILY`]. Documents keep the requested name.
+    pub fn substitute_family(&mut self, name: &str) -> Option<String> {
+        if name.is_empty() || self.has_family(name) {
+            return None;
+        }
+        let listed = FAMILY_SUBSTITUTES.iter().find(|(f, _)| f.eq_ignore_ascii_case(name.trim()));
+        if let Some((_, subs)) = listed {
+            return subs.iter().find(|s| self.has_family(s)).map(|s| s.to_string());
+        }
+        #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+        if self.system_loaded {
+            // Fontconfig answers every unknown name with its default sans; only a real alias
+            // (a different answer) is a substitute, otherwise the bundled default stays.
+            let default = self.fc_match("sans-serif");
+            let matched = self.fc_match(name);
+            return matched.filter(|m| Some(m) != default.as_ref() && self.has_family(m));
+        }
+        None
+    }
+
+    /// `fc-match`'s family for `name`, cached per database.
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    fn fc_match(&mut self, name: &str) -> Option<String> {
+        if let Some(m) = self.fc_match_cache.get(name) {
+            return m.clone();
+        }
+        let m = fontconfig_match_family(name);
+        self.fc_match_cache.insert(name.to_string(), m.clone());
+        m
+    }
+
     /// Whether the face selected for a character style exposes an OpenType GSUB feature.
     ///
     /// This deliberately checks the matched face, rather than every face in the family: a
     /// regular face can lack a feature that its italic or bold sibling has (or vice versa).
     pub(crate) fn selected_face_has_feature(&mut self, family: &str, weight: u16, italic: bool, feature: Tag) -> bool {
-        let family = if family.is_empty() || !self.has_family(family) { DEFAULT_FAMILY } else { family };
+        let substitute = self.substitute_family(family);
+        let family = if family.is_empty() || !self.has_family(family) { substitute.as_deref().unwrap_or(DEFAULT_FAMILY) } else { family };
         let Some(info) = self.fcx.collection.family_by_name(family) else {
             return false;
         };
@@ -725,6 +782,20 @@ fn fontconfig_font_paths() -> Vec<std::path::PathBuf> {
         return Vec::new();
     }
     fontconfig_paths_from_output(&output.stdout).into_iter().filter(|path| path.is_file()).collect()
+}
+
+/// Fontconfig's best family for a family name (its alias rules, e.g. Calibri → Carlito), if
+/// `fc-match` is installed.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn fontconfig_match_family(name: &str) -> Option<String> {
+    // Escape Fontconfig's pattern syntax, so a name like "Arial-Bold" isn't read as size "Bold".
+    let pattern: String = name.chars().flat_map(|c| if matches!(c, '\\' | '-' | ':' | ',') { vec!['\\', c] } else { vec![c] }).collect();
+    let output = std::process::Command::new("fc-match").args(["--format=%{family[0]}", &pattern]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let family = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!family.is_empty()).then_some(family)
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]

@@ -2080,3 +2080,55 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
 }
+
+/// `source` with its name table replaced, so it registers as family `family` (#6741).
+fn renamed_font(source: &[u8], family: &str, ps: &str) -> Vec<u8> {
+    let mut bytes = source.to_vec();
+    let count = u16::from_be_bytes(bytes[4..6].try_into().unwrap()) as usize;
+    let name_record = (0..count).map(|i| 12 + i * 16).find(|&r| &bytes[r..r + 4] == b"name").unwrap();
+    let names = [(1u16, family), (2, "Regular"), (6, ps)];
+    let mut table = Vec::new();
+    let mut strings = Vec::new();
+    for value in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+        table.extend(value.to_be_bytes());
+    }
+    for (id, value) in names {
+        let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, encoded.len() as u16, strings.len() as u16] {
+            table.extend(n.to_be_bytes());
+        }
+        strings.extend(encoded);
+    }
+    table.extend(strings);
+    let offset = bytes.len() as u32;
+    bytes[name_record + 8..name_record + 12].copy_from_slice(&offset.to_be_bytes());
+    bytes[name_record + 12..name_record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+    bytes.extend(table);
+    bytes
+}
+
+#[test]
+fn missing_microsoft_and_generic_families_use_installed_substitutes() {
+    let sample = "Hxgilm0O Sample";
+    let layer = |family: &str| styled(sample, CharStyle { font_family: family.into(), size_pt: 28.0, ..Default::default() });
+    let ids = |l: &crate::TextLayout| l.glyphs.iter().map(|g| g.id).collect::<Vec<_>>();
+
+    // Generic `monospace` renders in the installed monospaced face, not Inter.
+    let mut e = TextEngine::new();
+    let mono = e.layout(&layer(fonts::MONO_FAMILY), 72.0);
+    let inter = e.layout(&layer("Inter"), 72.0);
+    let generic = e.layout(&layer("monospace"), 72.0);
+    assert_ne!(width(&mono), width(&inter));
+    assert_eq!(width(&generic), width(&mono), "generic 'monospace' renders in {}", fonts::MONO_FAMILY);
+
+    // A missing Courier New renders in its installed metric-compatible substitute.
+    let names = e.fonts.register_font_data(renamed_font(fonts::JETBRAINS_MONO_REGULAR.as_slice(), "Liberation Mono", "LiberationMono-Regular"));
+    assert_eq!(names, ["Liberation Mono"]);
+    assert!(!e.fonts.has_family("Courier New"));
+    let substitute = e.layout(&layer("Liberation Mono"), 72.0);
+    let courier = e.layout(&layer("Courier New"), 72.0);
+    assert_eq!(ids(&courier), ids(&substitute));
+    assert_eq!(width(&courier), width(&substitute), "Courier New renders as Liberation Mono, not Inter");
+    // The style keeps the requested family name.
+    assert_eq!(courier.styles[0].font_family, "Courier New");
+}
