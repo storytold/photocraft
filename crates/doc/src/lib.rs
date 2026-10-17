@@ -16,6 +16,7 @@ pub mod comps;
 pub mod effects;
 pub mod mode;
 pub mod pattern;
+pub mod saved_history;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -40,6 +41,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use saved_history::{SavedHistory, SavedState};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
@@ -915,6 +917,10 @@ pub struct Document {
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless), so
     /// a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
+    /// Undo history on its way to or from a `.pcraft` file (see [`saved_history`]): set by the
+    /// native loader and taken by the session when the document opens, or set on the copy a save
+    /// writes. `None` for every document being edited and every history state.
+    pub saved_history: Option<Arc<SavedHistory>>,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -978,6 +984,7 @@ impl Document {
             variables: Variables::default(),
             timeline: None,
             file_encoding: FileEncoding::default(),
+            saved_history: None,
         }
     }
 

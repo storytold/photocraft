@@ -221,7 +221,8 @@ impl Headless {
         let i = self.doc_index(index)?;
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
-            (state.path.clone(), state.doc.clone())
+            // With Save History in Document on, a copy that carries the undo history (#6053).
+            (state.path.clone(), self.session.document_to_save(i).unwrap_or_else(|| state.doc.clone()))
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),

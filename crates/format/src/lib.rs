@@ -8,6 +8,7 @@
 //! blobs/<blake3>.zst       content-addressed binary data (ICC, EXIF, PSD blocks, smart objects)
 //! thumb.png                optional thumbnail (caller-rendered)
 //! composite/preview.png    optional flattened preview (caller-rendered)
+//! history.json             optional undo history (see [`saved_history`])
 //! ```
 //!
 //! A bundle is either a ZIP archive (STORE entries) or a directory with the
@@ -29,6 +30,7 @@ mod finite;
 pub mod manifest;
 mod migrate;
 pub mod read;
+pub mod saved_history;
 mod store;
 pub mod zip;
 

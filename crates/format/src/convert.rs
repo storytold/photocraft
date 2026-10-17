@@ -660,6 +660,8 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
+            // Filled by the bundle loader from the optional history section, not the manifest.
+            saved_history: None,
         })
     }
 

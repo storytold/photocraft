@@ -1965,6 +1965,8 @@
 	Gutter	Mezisloupec
 	History Log	Protokol historie
 	History states	Počet stavů historie
+	Save history in document	Uložit historii do dokumentu
+	History in document mb	Historie v dokumentu (MB)
 	Ignore exif profile tag	Ignorovat značku profilu EXIF
 	Image interpolation	Interpolace obrazu
 	Image previews	Náhledy obrázků

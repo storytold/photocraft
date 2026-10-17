@@ -1939,6 +1939,8 @@
 	Gutter	Steg
 	History Log	Protokolldatei
 	History states	Protokollschritte
+	Save history in document	Protokoll im Dokument speichern
+	History in document mb	Protokoll im Dokument (MB)
 	Ignore exif profile tag	EXIF-Profil-Tag ignorieren
 	Image interpolation	Bildinterpolation
 	Image previews	Bildvorschauen

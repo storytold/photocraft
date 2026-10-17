@@ -1915,6 +1915,8 @@
 	Gutter	단 사이 간격
 	History Log	작업 내역 로그
 	History states	작업 내역 상태 수
+	Save history in document	작업 내역을 문서에 저장
+	History in document mb	문서의 작업 내역 (MB)
 	Ignore exif profile tag	EXIF 프로파일 태그 무시
 	Image interpolation	이미지 보간
 	Image previews	이미지 미리 보기

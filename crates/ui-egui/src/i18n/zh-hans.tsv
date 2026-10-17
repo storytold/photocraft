@@ -1963,6 +1963,8 @@
 	Gutter	栏间距
 	History Log	历史记录日志
 	History states	历史记录状态数
+	Save history in document	在文档中存储历史记录
+	History in document mb	文档中的历史记录 (MB)
 	Ignore exif profile tag	忽略 EXIF 配置文件标签
 	Image interpolation	图像插值
 	Image previews	图像预览

@@ -1916,6 +1916,8 @@
 	Gutter	Gutter
 	History Log	Log Riwayat
 	History states	Status riwayat
+	Save history in document	Simpan riwayat di dokumen
+	History in document mb	Riwayat di dokumen (MB)
 	Ignore exif profile tag	Abaikan tag profil EXIF
 	Image interpolation	Interpolasi gambar
 	Image previews	Pratinjau gambar

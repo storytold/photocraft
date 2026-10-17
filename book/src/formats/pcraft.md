@@ -8,9 +8,16 @@ tiles/<blake3>.zst
 blobs/<blake3>.zst
 thumb.png
 composite/preview.png
+history.json            (optional)
 ```
 
 The manifest is versioned and describes the document tree. Tiles and blobs are content-addressed. Loaders verify ZIP entry bounds and CRCs; document content also uses stored hashes to detect mismatched or corrupted tile/blob content. Unsupported newer format versions fail explicitly.
+
+## Saved undo history
+
+With Preferences › Performance › Save History in Document on (off by default), a save also writes `history.json`: the document's undo states, oldest first, each with its History panel label, the layers it targeted and its document tree in the same schema as the manifest's `document` (at the history's `format_version`, migrated the same way). The states' tiles and blobs are the bundle's own content-addressed objects, so pixels a step did not change are stored once. Only the newest states whose extra pixels fit History in Document (MB) are written; redo states are not.
+
+`history.json` is optional, and `manifest.json` is byte-for-byte the same with or without it, so a version that doesn't know it opens the document as before. Its `base` is the BLAKE3 hash of the `manifest.json` it was written with: when another writer replaces the manifest (an older version saving a directory bundle), the stale history no longer matches and is ignored. A history that is missing, has a newer `history_version`, does not parse or decode, references missing objects, would exceed the load limits, or can't keep the file's ids is dropped, and the document opens without it. Opening restores the history as the document's undo history (within History States and Memory Usage); a colour conversion on open drops it.
 
 ## Implemented load limits
 

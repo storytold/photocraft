@@ -1956,6 +1956,8 @@
 	Gutter	欄距
 	History Log	步驟記錄檔
 	History states	步驟記錄數量
+	Save history in document	在文件中儲存步驟記錄
+	History in document mb	文件中的步驟記錄 (MB)
 	Ignore exif profile tag	忽略 EXIF 描述檔標籤
 	Image interpolation	影像插補
 	Image previews	影像預視

@@ -2369,6 +2369,8 @@
 	Gutter	Интервал
 	History Log	Журнал истории
 	History states	Состояния истории
+	Save history in document	Сохранять историю в документе
+	History in document mb	История в документе (МБ)
 	Ignore exif profile tag	Игнорировать цветовой профиль EXIF
 	Image interpolation	Интерполяция изображения
 	Image previews	Предпросмотр изображений

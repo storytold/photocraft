@@ -159,6 +159,28 @@ impl History {
         self.undo.len()
     }
 
+    /// The past states, oldest first (what a save with history writes, #6053).
+    pub fn past_states(&self) -> impl DoubleEndedIterator<Item = &HistoryState> + ExactSizeIterator {
+        self.undo.iter()
+    }
+
+    /// Label and layers of the current state.
+    pub fn current(&self) -> (&str, &LayerTarget) {
+        (&self.current_label, &self.current_layers)
+    }
+
+    /// Replace the history with `past` (oldest first) leading up to a current document made by
+    /// step `label` with `layers` targeted, as when a document opens with its saved history.
+    /// There is nothing to redo. Only the newest [`History::max_states`] states are kept; the
+    /// caller trims to the byte budget.
+    pub fn restore(&mut self, past: Vec<HistoryState>, label: impl Into<String>, layers: LayerTarget) {
+        self.clear();
+        let skip = past.len().saturating_sub(self.max_states);
+        self.undo = past.into_iter().skip(skip).collect();
+        self.current_label = label.into();
+        self.current_layers = layers;
+    }
+
     /// Rename the current step (e.g. after folding several steps into one with [`Self::purge_last`]).
     pub fn set_current_label(&mut self, label: impl Into<String>) {
         self.current_label = label.into();
@@ -321,6 +343,22 @@ mod tests {
         f(&mut d);
         *cur = Arc::new(d);
         h.record(label, before, LayerTarget::default());
+    }
+
+    #[test]
+    fn restore_keeps_the_newest_states_and_undoes_into_them() {
+        let mut h = History::new(2);
+        let docs: Vec<Arc<Document>> = (0..3).map(|_| Arc::new(base())).collect();
+        let state = |i: usize| HistoryState { label: format!("s{i}"), doc: docs[i].clone(), layers: LayerTarget::default() };
+        let target = LayerTarget { active: Some(LayerId(7)), selected: vec![LayerId(7)] };
+        h.restore((0..3).map(state).collect(), "now", target.clone());
+        assert_eq!(h.entries(), ["s1", "s2", "now"]);
+        assert_eq!(h.current(), ("now", &target));
+        assert_eq!(h.past_states().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["s1", "s2"]);
+        assert!(!h.can_redo());
+        let (back, _) = h.undo(Arc::new(base())).unwrap();
+        assert!(Arc::ptr_eq(&back, &docs[2]));
+        assert_eq!(h.redo_label(), Some("now"));
     }
 
     #[test]

@@ -1949,6 +1949,8 @@
 	Gutter	余白
 	History Log	ヒストリーログ
 	History states	ヒストリーの数
+	Save history in document	ヒストリーをドキュメントに保存
+	History in document mb	ドキュメント内のヒストリー (MB)
 	Ignore exif profile tag	EXIF のプロファイルタグを無視
 	Image interpolation	画像の補間方法
 	Image previews	画像のプレビュー

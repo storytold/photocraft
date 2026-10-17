@@ -271,7 +271,9 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    // With Save History in Document on, the snapshot carries the undo history (#6053).
+    let snapshot = app.session.active_index().and_then(|i| app.session.document_to_save(i)).unwrap_or_else(|| Arc::clone(&st.doc));
+    let (doc, revision) = (st.doc.id, st.revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();

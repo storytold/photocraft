@@ -545,6 +545,12 @@ pub struct Performance {
     /// Memory budget of the layer-effect cache, in MB.
     pub effect_cache_mb: u32,
     pub legacy_compositing: bool,
+    /// Save the undo history in `.pcraft` documents, so it is still there when the document is
+    /// opened again (#6053). Off: saves write no history.
+    pub save_history_in_document: bool,
+    /// Most pixels, in MB (uncompressed), that a saved history may add to a document: the newest
+    /// states that fit are saved.
+    pub history_in_document_mb: u32,
 }
 
 impl Performance {
@@ -557,6 +563,11 @@ impl Performance {
     /// the oldest history states are dropped.
     pub fn history_budget_bytes(&self) -> usize {
         (self.memory_usage_mb as usize).saturating_mul(1 << 20)
+    }
+
+    /// [`Self::history_in_document_mb`] in bytes.
+    pub fn history_in_document_bytes(&self) -> u64 {
+        u64::from(self.history_in_document_mb).saturating_mul(1 << 20)
     }
 }
 
@@ -576,6 +587,8 @@ impl Default for Performance {
             gpu_memory_mb: 0,
             effect_cache_mb: 768,
             legacy_compositing: false,
+            save_history_in_document: false,
+            history_in_document_mb: 1024,
         }
     }
 }
@@ -1114,6 +1127,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
         "performance.gpuMemoryMb" => (0.0, 1_048_576.0),
         "performance.historyStates" => (1.0, 1000.0),
+        "performance.historyInDocumentMb" => (1.0, 65_536.0),
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
         "performance.effectCacheMb" => (16.0, 65536.0),

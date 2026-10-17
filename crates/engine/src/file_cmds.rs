@@ -246,7 +246,11 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    Ok(r.document)
+    // A saved undo history (#6053) belongs to a document opened in its own tab, not to one
+    // placed, reverted to or processed: don't carry it along.
+    let mut doc = r.document;
+    doc.saved_history = None;
+    Ok(doc)
 }
 
 /// What a headless save writes beyond the format: JPEG quality, TIFF layers, Targa bits, PSD
@@ -528,7 +532,9 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    let src = imported.document;
+    let mut src = imported.document;
+    // The placed contents are not opened for editing: a saved undo history (#6053) stays behind.
+    src.saved_history = None;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);

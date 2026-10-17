@@ -1117,7 +1117,13 @@ impl Session {
     /// convert to the working space, or discard the embedded profile). Returns the document
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
     pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
+        let colour = doc.saved_history.is_some().then(|| (doc.icc_profile.clone(), doc.mode, doc.depth));
         let report = self.color.open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
+        // A saved history (#6053) leads to the document as it was saved: one converted or
+        // stripped of its profile on the way in no longer follows from those states.
+        if colour.is_some_and(|c| c != (doc.icc_profile.clone(), doc.mode, doc.depth)) {
+            doc.saved_history = None;
+        }
         (self.add_document(doc, path), report)
     }
 }
