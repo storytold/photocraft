@@ -146,8 +146,9 @@ pub(crate) fn lens_flare(src: &Image, out: Rect, ctx: &Ctx, brightness: f32, cen
         let mut c = rgba(ctx, px);
         for k in 0..3 {
             let a = (f[k] * bright).max(0.0);
-            // Screen keeps highlights below white for display-referred values.
-            c[k] = 1.0 - (1.0 - c[k]) * (1.0 - a.min(1.0));
+            // Screen (c + a·(1 − c)) keeps display-referred values below white; a 32-bit
+            // value already above white is left as is rather than pulled down towards it.
+            c[k] += a.min(1.0) * (1.0 - c[k]).max(0.0);
         }
         set_rgba(ctx, px, c);
     }

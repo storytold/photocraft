@@ -436,6 +436,35 @@ fn lens_flare_is_brightest_at_its_centre() {
 }
 
 #[test]
+fn lens_flare_never_darkens_32_bit_values_above_one() {
+    // #5785: the screen formula turned 2.0 into 1.5 (and 1.0 at the core).
+    let p = FilterParams::LensFlare { brightness: 150.0, center_x: 0.25, center_y: 0.5, lens: LensType::Zoom };
+    let out = run(&flat(SampleType::F32, R, [2.0, 2.0, 2.0, 1.0]), &p);
+    for px in out.read_region(R).as_chunks::<4>().0 {
+        assert!(px[..3].iter().all(|&v| v >= 2.0), "{px:?}");
+    }
+}
+
+#[test]
+fn lens_flare_8_bit_result_is_the_screen_blend() {
+    // The flare amount per pixel, read from a black 32-bit image (screen over 0 is the amount).
+    let p = FilterParams::LensFlare { brightness: 150.0, center_x: 0.25, center_y: 0.5, lens: LensType::Zoom };
+    let amount = run(&flat(SampleType::F32, R, [0.0, 0.0, 0.0, 1.0]), &p).read_region(R);
+    let src = pattern(SampleType::U8, R);
+    let base = src.read_region(R);
+    let expected: Vec<f32> = base
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(amount.as_chunks::<4>().0)
+        .flat_map(|(c, a)| [0, 1, 2].map(|k| 1.0 - (1.0 - c[k]) * (1.0 - a[k].min(1.0))).into_iter().chain([c[3]]))
+        .collect();
+    let mut want = Surface::new(fmt(SampleType::U8));
+    want.write_region(R, &expected);
+    assert_eq!(run(&src, &p).read_region(R), want.read_region(R));
+}
+
+#[test]
 fn lighting_point_light_falls_off() {
     let s = flat(SampleType::F32, R, [0.8, 0.8, 0.8, 1.0]);
     let light = Light { kind: LightKind::Point, x: 0.1, y: 0.5, z: 0.2, radius: 1.0, intensity: 50.0, ..Light::default() };
