@@ -41,6 +41,8 @@ struct Faulty {
     /// Fail the first N renames with PermissionDenied (a transient lock), then succeed.
     locked_renames: Cell<u32>,
     renames: Cell<u32>,
+    /// Fail copying the destination's extended attributes (#6603).
+    fail_xattrs: bool,
 }
 
 impl AtomicFs for Faulty {
@@ -71,6 +73,15 @@ impl AtomicFs for Faulty {
     }
     fn copy_permissions(&self, from: &Path, to: &Path) -> io::Result<()> {
         RealFs.copy_permissions(from, to)
+    }
+    fn copy_created_time(&self, from: &Path, to: &Path) -> io::Result<()> {
+        RealFs.copy_created_time(from, to)
+    }
+    fn copy_xattrs(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if self.fail_xattrs {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "injected: no extended attributes here"));
+        }
+        RealFs.copy_xattrs(from, to)
     }
 }
 
@@ -264,4 +275,114 @@ fn sync_file_flushes_a_local_file() {
     // Opened for writing, as the saves do: Windows can't flush a read-only handle.
     let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
     sync_file(&file).unwrap();
+}
+
+/// #6603: a save that can't copy the old file's extended attributes still saves.
+#[test]
+fn failed_attribute_copy_does_not_fail_the_save() {
+    let d = TempDir::new("xattr-fail");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    let fs = Faulty { fail_xattrs: true, ..Faulty::default() };
+    atomic_write_with(&fs, NO_RETRY, &p, b"new bytes").unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), b"new bytes");
+    assert_no_temp(&d.0);
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+mod xattr {
+    use super::*;
+
+    /// Attribute names to carry across a save: a Finder tag on macOS, a plain user attribute everywhere.
+    #[cfg(target_vendor = "apple")]
+    const NAMES: &[&str] = &["com.apple.metadata:_kMDItemUserTags", "user.pc-test"];
+    #[cfg(not(target_vendor = "apple"))]
+    const NAMES: &[&str] = &["user.pc-test"];
+
+    fn read(p: &Path, name: &str) -> Option<Vec<u8>> {
+        let mut buf = vec![0u8; 256];
+        let n = rustix::fs::getxattr(p, name, &mut buf[..]).ok()?;
+        buf.truncate(n);
+        Some(buf)
+    }
+
+    /// Give `p` every attribute in [`NAMES`]. `false` when this file system has no extended
+    /// attributes (a tmpfs before Linux 6.6, some sandboxes), so the test skips rather than fails.
+    fn tag(p: &Path) -> bool {
+        NAMES.iter().all(|n| rustix::fs::setxattr(p, *n, n.as_bytes(), rustix::fs::XattrFlags::empty()).is_ok())
+    }
+
+    /// #6603: Finder tags and other extended attributes survive a save.
+    #[test]
+    fn save_keeps_extended_attributes() {
+        let d = TempDir::new("xattr");
+        let p = d.0.join("doc.psd");
+        std::fs::write(&p, ORIGINAL).unwrap();
+        if !tag(&p) {
+            eprintln!("skipped: this file system has no extended attributes");
+            return;
+        }
+        atomic_write(&p, b"new bytes").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new bytes");
+        for n in NAMES {
+            assert_eq!(read(&p, n).as_deref(), Some(n.as_bytes()), "{n} was lost by the save");
+        }
+        assert_no_temp(&d.0);
+    }
+
+    /// An attribute is kept when the save goes through a symlink, on the file the link points at.
+    #[test]
+    fn save_through_a_symlink_keeps_extended_attributes() {
+        let d = TempDir::new("xattr-link");
+        let real = d.0.join("real.psd");
+        let link = d.0.join("link.psd");
+        std::fs::write(&real, ORIGINAL).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        if !tag(&real) {
+            eprintln!("skipped: this file system has no extended attributes");
+            return;
+        }
+        atomic_write(&link, b"new bytes").unwrap();
+        assert_eq!(std::fs::read(&real).unwrap(), b"new bytes");
+        for n in NAMES {
+            assert_eq!(read(&real, n).as_deref(), Some(n.as_bytes()), "{n} was lost by the save");
+        }
+    }
+
+    /// A file with no attributes saves as before, and gains none.
+    #[test]
+    fn save_without_attributes_adds_none() {
+        let d = TempDir::new("xattr-none");
+        let p = d.0.join("doc.psd");
+        std::fs::write(&p, ORIGINAL).unwrap();
+        atomic_write(&p, b"new bytes").unwrap();
+        for n in NAMES {
+            assert_eq!(read(&p, n), None, "{n} appeared from nowhere");
+        }
+    }
+}
+
+/// #6603: a save keeps the file's creation time ("Date Created" in Finder).
+#[cfg(any(target_os = "macos", windows))]
+#[test]
+fn save_keeps_the_creation_time() {
+    #[cfg(target_os = "macos")]
+    use std::os::macos::fs::FileTimesExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::FileTimesExt;
+    let d = TempDir::new("created");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800); // 2000-01-01
+    std::fs::File::options().write(true).open(&p).unwrap().set_times(std::fs::FileTimes::new().set_created(old)).unwrap();
+    atomic_write(&p, b"new bytes").unwrap();
+    assert_eq!(std::fs::metadata(&p).unwrap().created().unwrap(), old, "the save reset the creation time");
+    assert_eq!(std::fs::read(&p).unwrap(), b"new bytes");
+}
+
+/// The skipped integrity hashes are never copied; everything else on the list is.
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+#[test]
+fn stale_integrity_attributes_are_not_copied() {
+    assert!(xattrs::STALE.contains(&&b"security.ima"[..]) && xattrs::STALE.contains(&&b"security.evm"[..]));
 }
