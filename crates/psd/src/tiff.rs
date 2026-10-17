@@ -2230,6 +2230,31 @@ mod tests {
     }
 
     #[test]
+    fn psb_foreign_order_long_key_block_keeps_its_8_byte_length() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let d = ImageSourceData {
+            version: Version::Psb,
+            global_blocks: vec![
+                TaggedBlock { signature: *b"MIB8", ..TaggedBlock::new(*b"Mt16", data.clone()) },
+                TaggedBlock::new(*b"lyid", 7u32.to_be_bytes().to_vec()),
+            ],
+            ..Default::default()
+        };
+        let (little, w) = d.to_bytes(ByteOrder::Little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let mut block = b"MIB861tM".to_vec();
+        block.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        block.extend_from_slice(&data);
+        assert!(little.windows(block.len()).any(|x| x == block), "8-byte little-endian length");
+        let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let kept = back.global_blocks.iter().find(|b| &b.key == b"Mt16").expect("kept");
+        assert!(kept.is_foreign_order());
+        assert_eq!(kept.data, data);
+        assert_eq!(back.global_blocks.iter().find(|b| &b.key == b"lyid").expect("lyid").data, 7u32.to_be_bytes());
+    }
+
+    #[test]
     fn rle_counts_follow_the_container_and_samples_do_not() {
         let file = testgen::layered(Version::Psd, ColorMode::Rgb, 16, Compression::Rle);
         let d = ImageSourceData::from_psd(&file);
