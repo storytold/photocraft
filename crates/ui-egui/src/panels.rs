@@ -5696,6 +5696,24 @@ mod toolbar_tests {
         assert_eq!(h.state().ui.tool, Tool::Zoom);
         assert!(h.state().session.active().is_none());
     }
+
+    /// A press and release with no pointer move before it (first click after focus, a pen or
+    /// touch tap) picks the tool: the button doesn't need to have been hovered (#2603).
+    #[test]
+    fn a_click_without_a_prior_hover_picks_the_tool() {
+        for tool in [Tool::Brush, Tool::Type] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.tool = Tool::Move;
+            let mut h = toolbar_harness(app);
+            let p = tool_button(&h, tool);
+            assert!(h.ctx.input(|i| i.pointer.latest_pos()).is_none(), "the pointer has not entered the window");
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+            assert_eq!(h.state().ui.tool, tool);
+        }
+    }
 }
 
 #[cfg(test)]
