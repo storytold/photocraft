@@ -13,6 +13,10 @@
 //!   if it does anyway, the save fails with a clear error. It never falls back to writing the
 //!   destination in place.
 //! - **Unwritable folder:** the save fails with a clear error instead of writing in place.
+//! - **Extended attributes and creation time:** the rename replaces the file, so its Finder tags
+//!   and other extended attributes (macOS, Linux) and its creation time (macOS, Windows) are
+//!   copied onto the temporary file first (#6603). A failed copy never fails the save. Windows
+//!   alternate data streams (#7094), Windows ACLs (#7096) and macOS ACLs (#7073) are not kept yet.
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
@@ -47,6 +51,19 @@ pub trait AtomicFs {
     /// Copy the destination's permissions onto the temporary file, so replacing a file keeps its
     /// mode. Best effort.
     fn copy_permissions(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Copy the destination's extended attributes (macOS Finder tags and quarantine flag, Linux
+    /// `user.*` attributes and ACLs) onto the temporary file, so replacing a file keeps them
+    /// (#6603). Best effort. The default copies nothing.
+    fn copy_xattrs(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let _ = (from, to);
+        Ok(())
+    }
+    /// Give the temporary file the destination's creation time ("Date Created" in Finder), which
+    /// the rename would otherwise reset to now (#6603). Best effort. The default copies nothing.
+    fn copy_created_time(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let _ = (from, to);
+        Ok(())
+    }
 }
 
 /// The real file system.
@@ -90,6 +107,95 @@ impl AtomicFs for RealFs {
     fn copy_permissions(&self, from: &Path, to: &Path) -> io::Result<()> {
         let perms = std::fs::metadata(from)?.permissions();
         std::fs::set_permissions(to, perms)
+    }
+    fn copy_xattrs(&self, from: &Path, to: &Path) -> io::Result<()> {
+        #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+        {
+            xattrs::copy(from, to)
+        }
+        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+        {
+            let _ = (from, to);
+            Ok(())
+        }
+    }
+    fn copy_created_time(&self, from: &Path, to: &Path) -> io::Result<()> {
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            #[cfg(target_os = "macos")]
+            use std::os::macos::fs::FileTimesExt;
+            #[cfg(windows)]
+            use std::os::windows::fs::FileTimesExt;
+            let created = std::fs::metadata(from)?.created()?;
+            std::fs::File::options().write(true).open(to)?.set_times(std::fs::FileTimes::new().set_created(created))
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = (from, to);
+            Ok(())
+        }
+    }
+}
+
+/// Extended attributes, through `rustix`'s safe wrappers (the workspace forbids `unsafe`).
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+mod xattrs {
+    use rustix::fs::{XattrFlags, getxattr, listxattr, setxattr};
+    use std::ffi::CStr;
+    use std::io;
+    use std::path::Path;
+
+    /// The longest attribute value copied. A larger one (a huge resource fork) is skipped, so a
+    /// hostile or odd file can't make a save allocate without bound.
+    const MAX_VALUE: usize = 64 << 20;
+    /// The longest list of attribute names read.
+    const MAX_NAMES: usize = 1 << 20;
+    /// Linux integrity hashes of the old bytes. Copied onto the new bytes they are stale, and a
+    /// root save under IMA appraisal could then make the saved file unreadable.
+    pub(super) const STALE: &[&[u8]] = &[b"security.ima", b"security.evm"];
+
+    /// Read what `read` fills in: ask for the size, allocate it, read again. The size can change
+    /// between the two calls (`ERANGE`), so try a few times.
+    fn read_sized(mut read: impl FnMut(&mut [u8]) -> rustix::io::Result<usize>, cap: usize) -> io::Result<Vec<u8>> {
+        for _ in 0..4 {
+            let need = read(&mut [])?;
+            if need == 0 {
+                return Ok(Vec::new());
+            }
+            if need > cap {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("extended attribute of {need} bytes is too large to copy")));
+            }
+            let mut buf = vec![0u8; need];
+            match read(&mut buf) {
+                Ok(n) => {
+                    buf.truncate(n);
+                    return Ok(buf);
+                }
+                Err(rustix::io::Errno::RANGE) => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(io::Error::other("extended attributes changed while they were read"))
+    }
+
+    /// Copy every extended attribute of `from` onto `to`. One that can't be copied (the target
+    /// file system refuses it, or it is too large) doesn't stop the rest; the first error is
+    /// returned at the end.
+    pub fn copy(from: &Path, to: &Path) -> io::Result<()> {
+        let names = read_sized(|buf| listxattr(from, buf), MAX_NAMES)?;
+        let mut first_err = None;
+        for name in names.split_inclusive(|b| *b == 0) {
+            let Ok(name) = CStr::from_bytes_with_nul(name) else { continue };
+            if STALE.contains(&name.to_bytes()) {
+                continue;
+            }
+            let copied = read_sized(|buf| getxattr(from, name, buf), MAX_VALUE)
+                .and_then(|value| setxattr(to, name, &value, XattrFlags::empty()).map_err(io::Error::from));
+            if let Err(e) = copied {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
     }
 }
 
@@ -190,9 +296,14 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     }
     let tmp = tmp.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: could not create a temporary file", dir.display())))?;
 
-    // Keep the existing file's mode (e.g. 0600) instead of the process default.
+    // Keep the existing file's mode (e.g. 0600), extended attributes (Finder tags) and creation
+    // time instead of the process default. The attributes go first: on Linux an ACL attribute also
+    // sets the mode. They are set after `write_new` flushed the data, so they are not flushed
+    // before the rename; the file systems that have them commit metadata in order.
     if target.exists() {
+        let _ = fs.copy_xattrs(&target, &tmp);
         let _ = fs.copy_permissions(&target, &tmp);
+        let _ = fs.copy_created_time(&target, &tmp);
     }
 
     if let Err(e) = retry_rename(retry, || fs.rename(&tmp, &target)) {
