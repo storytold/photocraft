@@ -562,6 +562,69 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[test]
+fn scatter_header_edits_route_to_the_correct_brush_block_and_disabled_sections_ignore_input() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for section in [2, 4] {
+        let block = if section == 2 { "scattering" } else { "dualBrush" };
+        let mut h = harness(0, section);
+        let mut initial = json!({});
+        initial[block] = if section == 2 {
+            json!({"enabled": true, "bothAxes": false, "scatter": {"jitter": 2.137, "control": "penPressure"}, "count": 5})
+        } else {
+            json!({"enabled": true, "bothAxes": false, "scatter": 2.137, "count": 7})
+        };
+        h.state_mut().run("tools.setBrush", json!({"brush": initial})).unwrap();
+        h.run_steps(3);
+        let journal = h.state().session.journal.len();
+        let before = h.state().session.tools.brush.clone();
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        let mut expected = json!({});
+        expected[block] = json!({"bothAxes": true});
+        assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        let mut after = before;
+        if section == 2 {
+            after.scattering.both_axes = true;
+        } else {
+            after.dual_brush.both_axes = true;
+        }
+        assert_eq!(h.state().session.tools.brush, after, "toggle changes only the matching axis flag");
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        expected[block] = if section == 2 { json!({"scatter": {"jitter": 2.15_f32}}) } else { json!({"scatter": 2.15_f32}) };
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        if section == 2 {
+            after.scattering.scatter.jitter = 2.15;
+        } else {
+            after.dual_brush.scatter = 2.15;
+        }
+        assert_eq!(h.state().session.tools.brush, after);
+        assert_eq!(h.state().session.journal.len(), journal + 2);
+        let mut off = json!({});
+        off[block] = json!({"enabled": false});
+        h.state_mut().run("tools.setBrush", json!({"brush": off})).unwrap();
+        h.run_steps(2);
+        let before = h.state().session.tools.brush.clone();
+        let journal = h.state().session.journal.len();
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(215.0)).unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("999".into()));
+        h.key_press(egui::Key::Enter);
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush, before, "the disabled header retains both values");
+        assert_eq!(h.state().session.journal.len(), journal, "disabled edits add no command");
+    }
+}
+
 fn toggle_value(app: &PhotocraftApp, section: usize) -> bool {
     let brush = serde_json::to_value(&app.session.tools.brush).unwrap();
     let path = match section {

@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (Both Axes on Scatter headers; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -21,6 +21,7 @@ tablets against Photoshop side by side.
 | Brush Tip Shape: size, angle, roundness, hardness, spacing, flip X/Y | done | `brush.rs` |
 | Shape Dynamics (size/angle/roundness jitter, pen pressure/tilt/rotation/wheel controls, minimums, flip jitter, brush projection) | done | #174 |
 | Scattering (both axes, count, count jitter) | done | |
+| Scattering and Dual Brush place Both Axes between the Scatter label and percentage | done | #3825 (Both Axes header placement only); all-theme UI regressions cover both axis values, fractional-value retention, percentage limits, label scrubbing, amount-track edits and existing command routing. |
 | Texture (pattern, scale, brightness, contrast, mode, depth, each tip) | done | |
 | Dual Brush | done | |
 | Color Dynamics (FG/BG, hue/sat/brightness jitter, purity, per tip) | done | |
@@ -123,4 +124,5 @@ tablets against Photoshop side by side.
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
+| 2026-10-13 | minor | Scattering and Dual Brush place Both Axes on the shared Scatter header (#3825, partial), preserving label scrubbing and values. No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
