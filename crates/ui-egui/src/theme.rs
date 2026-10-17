@@ -346,7 +346,9 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
+                // Studio Dark uses the compact overlapping square foreground/background
+                // chips rather than the large stacked circles (#3494).
+                round_chips: false,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
@@ -1238,6 +1240,14 @@ mod tests {
             apply(&ctx, ThemeKind::ProMedium);
             assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
         }
+    }
+
+    #[test]
+    fn studio_dark_keeps_square_colour_chips() {
+        assert!(!Tokens::for_kind(ThemeKind::Studio).round_chips);
+        // Only the dark variant changes; the light palette retains its layout.
+        assert!(Tokens::for_kind(ThemeKind::StudioLight).round_chips);
+        assert!(!Tokens::for_kind(ThemeKind::Pro).round_chips);
     }
 
     #[test]
