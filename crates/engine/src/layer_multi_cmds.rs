@@ -1365,6 +1365,9 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
+        for id in &ids {
+            crate::commands::check_delete_unlocked(doc, *id)?;
+        }
         let neighbours = active.map(|id| deletion_neighbours(doc, id)).unwrap_or_default();
         let before = crate::clip_group::Before::read(doc, &ids);
         for id in &ids {

@@ -569,6 +569,72 @@ fn delete_without_a_selection_deletes_every_selected_layer() {
     assert_eq!(names(&h).len(), n - 2);
 }
 
+/// Background's implicit transparency and position locks do not protect it from deletion.
+#[test]
+fn delete_shortcuts_allow_background_deletion_without_conversion() {
+    for key in ["Delete", "Backspace"] {
+        let mut h = harness();
+        put_focus(&mut h, Place::Canvas);
+        let s = &mut h.state_mut().session;
+        s.execute("select.deselect", json!({})).unwrap();
+        let background = s.active().unwrap().doc.layers[0].id;
+        let locks = s.active().unwrap().doc.layer(background).unwrap().locks;
+        assert!(locks.transparency && locks.position && !locks.all);
+        s.execute("layer.select", json!({"layer": background.0})).unwrap();
+        h.run_steps(2);
+        let before = names(&h);
+        press(&mut h, key);
+        assert_eq!(take_log(&h.ctx), vec![("layer.delete".into(), Outcome::Ran)], "{key}");
+        assert!(h.state().session.active().unwrap().doc.layer(background).is_none());
+        press(&mut h, "Cmd+Z");
+        assert_eq!(names(&h), before);
+        assert_eq!(h.state().session.active().unwrap().doc.layer(background).unwrap().locks, locks);
+    }
+}
+
+#[test]
+fn delete_shortcuts_refuse_lock_all_atomically() {
+    for key in ["Delete", "Backspace"] {
+        for multi in [false, true] {
+            let mut h = harness();
+            put_focus(&mut h, Place::Canvas);
+            let s = &mut h.state_mut().session;
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute("layer.setProps", json!({"locked": true})).unwrap();
+            if multi {
+                let background = s.active().unwrap().doc.layers[0].id;
+                s.execute("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+            }
+            h.run_steps(2);
+            let st = h.state().session.active().unwrap();
+            let before = (st.doc.clone(), st.selected_layers(), st.active_layer, st.history.past_len());
+            press(&mut h, key);
+            assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Failed(why))] if id == "layer.delete" && why.contains("is locked")), "{key}");
+            let st = h.state().session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&before.0, &st.doc));
+            assert_eq!((st.selected_layers(), st.active_layer, st.history.past_len()), (before.1, before.2, before.3));
+        }
+    }
+}
+
+#[test]
+fn delete_shortcuts_keep_the_final_layer_guard() {
+    for key in ["Delete", "Backspace"] {
+        let mut h = harness();
+        put_focus(&mut h, Place::Canvas);
+        let s = &mut h.state_mut().session;
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "transparent"})).unwrap();
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        let before = (st.doc.clone(), st.active_layer, st.history.past_len());
+        press(&mut h, key);
+        assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Failed(why))] if id == "layer.delete" && why.contains("at least one layer")), "{key}");
+        let st = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before.0, &st.doc));
+        assert_eq!((st.active_layer, st.history.past_len()), (before.1, before.2));
+    }
+}
+
 /// #4025: with several layers selected and no selection, a targeted mask on the active one doesn't
 /// take the key: Delete removes the selected layers in one press, as it does with the layer
 /// targeted. A selection still fills the targeted mask.
