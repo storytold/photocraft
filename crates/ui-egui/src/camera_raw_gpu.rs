@@ -1,12 +1,12 @@
-//! Camera Raw's preview develop on the GPU (#6916). When the settings use only stages that read
-//! their own pixel, plus Shadows and Highlights, the proxy develops in wgpu passes
+//! Camera Raw's preview develop on the GPU (#6916). When the settings don't use Detail
+//! (sharpening, noise reduction), the proxy develops in wgpu passes
 //! (`photocraft_gpu::CameraRawDevelop`) on the canvas's device and is read back once for the
-//! histogram, scopes and display conversion. Other spatial stages (Dehaze, Texture, Clarity,
-//! Detail), Rendering Mode CPU, `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a
-//! device fault or a failed develop all keep the CPU develop on the worker.
+//! histogram, scopes and display conversion. Detail, Rendering Mode CPU,
+//! `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a device fault or a failed
+//! develop all keep the CPU develop on the worker.
 //!
-//! The pipeline builds on a thread the first time a dialog opens (DX12's shader compiler takes
-//! about 0.35 s, #6419); frames develop on the CPU until it is ready.
+//! The pipelines build on a thread the first time a dialog opens (DX12's shader compiler takes
+//! about a second, #6419); frames develop on the CPU until they are ready.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -118,9 +118,8 @@ impl CameraRawGpu {
         CameraRawGpu { device, queue, health, pass, failed: Arc::default(), points: Arc::default() }
     }
 
-    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: a spatial stage other than
-    /// Shadows and Highlights, the pass still building, a fault, or a GPU error (logged; the
-    /// dialog then stays on the CPU). `key` names the pixels when they are the dialog's unchanged
+    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Detail, the pass still
+    /// building, a fault, or a GPU error (logged; the dialog then stays on the CPU). `key` names the pixels when they are the dialog's unchanged
     /// proxy ([`source_key`]), so they upload once.
     pub(crate) fn develop(&self, px: &[[f32; 4]], key: Option<u64>, w: usize, h: usize, p: &CameraRaw, float: bool) -> Option<Vec<[f32; 4]>> {
         if self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
@@ -149,8 +148,8 @@ impl CameraRawGpu {
         }
     }
 
-    /// The image's black and white points for Whites and Blacks, measured on the CPU. With
-    /// Shadows and Highlights the GPU measures them after the filter instead.
+    /// The image's black and white points for Whites and Blacks, measured on the CPU. With a
+    /// spatial stage the GPU measures them after it instead.
     #[cfg(not(target_arch = "wasm32"))]
     fn points(&self, px: &[[f32; 4]], key: Option<u64>, w: usize, h: usize, p: &CameraRaw) -> Option<(f32, f32)> {
         if (p.whites == 0.0 && p.blacks == 0.0) || p.spatial() {
@@ -264,9 +263,20 @@ mod tests {
             assert_eq!(backend, "gpu", "{depth}-bit, Shadows and Highlights");
             let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
             assert!(worst <= TOL, "{depth}-bit, Shadows and Highlights: off by {worst}");
-            // Another spatial stage develops the whole frame on the CPU.
-            for spatial in [CameraRaw { clarity: 30.0, ..toned.clone() }, CameraRaw { dehaze: 20.0, ..per_pixel.clone() }] {
-                let (backend, shown, cpu) = developed(&mut app, &ctx, spatial);
+            // So do Dehaze, Clarity and Texture, with Whites and Blacks measured after them.
+            for spatial in [
+                CameraRaw { clarity: 30.0, texture: 25.0, dehaze: 20.0, ..toned.clone() },
+                CameraRaw { dehaze: -25.0, ..per_pixel.clone() },
+                CameraRaw { clarity: -40.0, texture: 35.0, ..per_pixel.clone() },
+            ] {
+                let (backend, gpu, cpu) = developed(&mut app, &ctx, spatial.clone());
+                assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
+                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
+            }
+            // Detail develops the whole frame on the CPU.
+            for detail in [CameraRaw { sharpen_amount: 40.0, ..toned.clone() }, CameraRaw { noise_luminance: 30.0, dehaze: 20.0, ..per_pixel.clone() }] {
+                let (backend, shown, cpu) = developed(&mut app, &ctx, detail);
                 assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
             }
             // A device fault: the CPU, from the next frame on.

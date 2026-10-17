@@ -1,6 +1,7 @@
 //! Camera Raw's preview develop on the 858×572 proxy of a 6000×4000 image: the CPU develop
-//! against the GPU passes (upload, render, readback), for per-pixel settings and for Shadows and
-//! Highlights with them.
+//! against the GPU passes (upload, render, readback), for per-pixel settings and for the spatial
+//! stages (Dehaze, Shadows and Highlights, Clarity, Texture) with them. "Source uploaded every
+//! time" also makes Dehaze's copy on the CPU every time, as a white balance drag does.
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
 
@@ -83,10 +84,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Shadows +50", CameraRaw { shadows: 50.0, pixel_scale: scale, ..Default::default() }),
         ("Highlights -50", CameraRaw { highlights: -50.0, pixel_scale: scale, ..Default::default() }),
         ("Shadows +50, Highlights -50", CameraRaw { shadows: 50.0, highlights: -50.0, pixel_scale: scale, ..Default::default() }),
-        ("Shadows +50, Highlights -50, every per-pixel stage", CameraRaw { shadows: 50.0, highlights: -50.0, ..per_pixel_stages }),
+        ("Shadows +50, Highlights -50, every per-pixel stage", CameraRaw { shadows: 50.0, highlights: -50.0, ..per_pixel_stages.clone() }),
+        ("Clarity +50", CameraRaw { clarity: 50.0, pixel_scale: scale, ..Default::default() }),
+        ("Texture +50", CameraRaw { texture: 50.0, pixel_scale: scale, ..Default::default() }),
+        ("Dehaze +40", CameraRaw { dehaze: 40.0, pixel_scale: scale, ..Default::default() }),
+        ("Clarity +50, Texture +50, Dehaze +40, every per-pixel stage", CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, ..per_pixel_stages.clone() }),
+        (
+            "Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
+            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages },
+        ),
     ];
     for (name, p) in &sets {
-        let toned = p.shadows != 0.0 || p.highlights != 0.0;
+        let toned = p.spatial();
         let cpu = time(if toned { runs.min(10) } else { runs }, || {
             let mut px = src.clone();
             develop(&mut px, w, h, p, false);
