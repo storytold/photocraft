@@ -3,6 +3,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod command_file;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +29,8 @@ USAGE:
   photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
+  photocraft-cli run --control <port> [--control-token-file <path>] <script.jsonl>
+      Run a JSON-lines command file against a running control server (docs/cli-command-files.md).
   photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Apply an action list to every image in a directory. A Photoshop Actions file (.atn) is a
       set: its action --action names plays, as below. JSON steps are [id, params] pairs,
@@ -73,7 +77,19 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand { name: "info", values: &[], bare: &["--compact"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &[
+            "--new",
+            "--cmd",
+            "--params",
+            "--out",
+            "--format",
+            "--quality",
+            "--tga-bits",
+            "--dpx-bits",
+            "--control",
+            "--control-token-file",
+            "--token-file",
+        ],
         bare: &["--tiff-layers"],
         run: run_cmds,
     },
@@ -296,6 +312,12 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
 }
 
 fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
+    if a.has("--control") {
+        return command_file::run(a, out);
+    }
+    if a.has("--control-token-file") || a.has("--token-file") {
+        return Err("control credentials require --control <port>".into());
+    }
     let opts = export_opts(a)?;
     let mut h = Headless::trusted_local();
     // Opening, running commands and exporting can all notice the same missing font:
