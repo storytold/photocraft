@@ -697,9 +697,11 @@ fn channel_mixer_to(p: &Value) -> Option<Descriptor> {
     Some(d.with("Mnch", D::Boolean(jbool(p, "monochrome").unwrap_or(false))))
 }
 
+/// Photoshop's `Clrs` colour-range enumeration. Yellows is `Ylws` (`Yllw` is the yellow ink
+/// key); earlier PhotoCraft builds wrote `Yllw`, which import still reads (#6745).
 const SELECTIVE_RANGES: &[(&str, &str)] = &[
     ("Rds", "reds"),
-    ("Yllw", "yellows"),
+    ("Ylws", "yellows"),
     ("Grns", "greens"),
     ("Cyns", "cyans"),
     ("Bls", "blues"),
@@ -716,7 +718,8 @@ fn selective_from(d: &Descriptor) -> Option<Value> {
     }
     for e in get_list(d, "ClrC").unwrap_or(&[]) {
         let D::Descriptor(e) = e else { return None };
-        let name = lookup(SELECTIVE_RANGES, &get_enum(e, "Clrs")?)?;
+        let range = get_enum(e, "Clrs")?;
+        let name = lookup(SELECTIVE_RANGES, if range == "Yllw" { "Ylws" } else { &range })?;
         let v = |k: &str| get_num(e, k).unwrap_or(0.0);
         out.insert(name.into(), json!([v("Cyn "), v("Mgnt"), v("Yllw"), v("Blck")]));
     }
@@ -982,6 +985,14 @@ fn pattern_desc(p: &Value) -> Option<Descriptor> {
     Some(t)
 }
 
+/// Layer › Layer Mask: the `UsrM` value of an Add Layer Mask `Mk` ↔ its command.
+const MASK_USING: &[(&str, &str)] = &[
+    ("RvlA", "layer.layerMask.revealAll"),
+    ("HdAl", "layer.layerMask.hideAll"),
+    ("RvlS", "layer.layerMask.revealSelection"),
+    ("HdSl", "layer.layerMask.hideSelection"),
+];
+
 fn make_from(d: &Descriptor) -> Mapped {
     // Duplicate layer/group into a new document: `Mk` with a document class, a layer
     // `Usng`, an optional `Nm` (the new document's name) and an optional `LyrN`
@@ -1002,6 +1013,16 @@ fn make_from(d: &Descriptor) -> Mapped {
             p.insert("name".into(), n.into());
         }
         return step("layer.duplicate", Value::Object(p));
+    }
+    // Add Layer Mask: a `Chnl` class made at the mask channel, `Usng` what it reveals.
+    if let Some(D::Class(c)) = d.get("Nw  ")
+        && trimmed(&c.class_id) == "Chnl"
+    {
+        let at_mask = get_ref(d, "At  ").is_some_and(|r| ref_class(r).as_deref() == Some("Chnl") && matches!(target(r), Target::Ordinal(o) if o == "Msk"));
+        return match get_enum(d, "Usng").and_then(|u| lookup(MASK_USING, &u)) {
+            Some(id) if at_mask => none(id),
+            _ => Mapped::Unsupported { harmless: false },
+        };
     }
     if let Some(nw) = get_obj(d, "Nw  ") {
         // Layer via Copy / Cut (`Usng` = the selection), or a new document.
@@ -1152,6 +1173,14 @@ fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
             }
             d
         }
+        "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => {
+            // Photoshop adds the mask to the target layer only.
+            if p.get("layer").is_some() {
+                return None;
+            }
+            let at = D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code("Msk ") }]);
+            desc("null").with("Nw  ", D::Class(class("Chnl"))).with("At  ", at).with("Usng", enm("UsrM", lookup_back(MASK_USING, id)?))
+        }
         "file.newFromClipboard" => desc("null").with("Nw  ", D::Descriptor(desc("Dcmn").with("preset", text("Clipboard")))),
         "file.new" => {
             let mut n = desc("Dcmn");
@@ -1228,6 +1257,15 @@ fn set_from(d: &Descriptor) -> Mapped {
                 step("select.rect", p)
             }
             _ => unsupported,
+        },
+        // The foreground or background colour (Color Picker, Swatches). Colours in other models
+        // (Lab, CMYK, a colour book) stay unsupported.
+        (Some("Clr"), Target::Property(p)) if p == "FrgC" || p == "BckC" => match get_obj(d, "T   ").and_then(color_hex) {
+            Some(c) => {
+                let which = if p == "FrgC" { "foreground" } else { "background" };
+                step("tools.setColors", json!({ which: c }))
+            }
+            None => unsupported,
         },
         // Quick Mask mode on (`set` of the document's quick-mask property); `clearEvent` turns it off.
         (Some("Prpr"), Target::Property(p)) if p == "QucM" => step("select.editInQuickMaskMode", json!({"on": true})),
@@ -1372,6 +1410,18 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
                 return None;
             }
             desc("null").with("null", layer_ref(p)).with("T   ", D::Descriptor(t))
+        }
+        "tools.setColors" => {
+            let (key, hex) = match (jstr(p, "foreground"), jstr(p, "background")) {
+                (Some(f), None) => ("FrgC", f),
+                (None, Some(b)) => ("BckC", b),
+                _ => return None,
+            };
+            if p.as_object()?.len() != 1 {
+                return None;
+            }
+            let r = D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new(key) }]);
+            desc("null").with("null", r).with("T   ", D::Descriptor(color_desc(hex)?))
         }
         "layer.new.layerFromBackground" => {
             let bckg = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: Id::new("Bckg") }]);
@@ -2543,6 +2593,141 @@ fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
     fields_to(p, fields, desc("null").with("GEfk", enm("GEft", code)))
 }
 
+/// Select and Mask as Photoshop CC 2015.5 and later record it (`smartBrushWorkspace`); the
+/// older Refine Edge event is [`REFINE_EDGE`], which is also what Select and Mask exports as.
+const SMART_BRUSH: &[F] = &[
+    F("smartBrushRadius", "radius", Kind::Px),
+    F("smartBrushUseSmartRadius", "smartRadius", Kind::Bool),
+    F("smartBrushSmooth", "smooth", Kind::Long),
+    F("smartBrushFeather", "feather", Kind::Px),
+    F("smartBrushContrast", "contrast", Kind::Pct),
+    F("smartBrushShiftEdge", "shiftEdge", Kind::Pct),
+    F("smartBrushDecontaminate", "decontaminate", Kind::Bool),
+    F("smartBrushDeconAmount", "amount", Kind::Pct),
+    F("refineEdgeOutput", "output", Kind::Enum("refineEdgeOutput", REFINE_OUTPUT)),
+    F("sampleAllLayers", "sampleAllLayers", Kind::Bool),
+];
+
+/// Select › Color Range's `Clrs` presets ↔ `select.colorRange`'s `select`.
+const COLOR_RANGE: &[(&str, &str)] = &[
+    ("Rds", "reds"),
+    ("Ylws", "yellows"),
+    ("Grns", "greens"),
+    ("Cyns", "cyans"),
+    ("Bls", "blues"),
+    ("Mgnt", "magentas"),
+    ("Hghl", "highlights"),
+    ("Mdtn", "midtones"),
+    ("Shdw", "shadows"),
+    ("OtOf", "outOfGamut"),
+    ("skinTone", "skinTones"),
+];
+
+/// The Color Range keys the converter reads (or that don't change a preset's result:
+/// `colorModel` is the model of sampled colours).
+const COLOR_RANGE_KEYS: &[&str] = &[
+    "Clrs",
+    "Fzns",
+    "Invr",
+    "colorModel",
+    "shadowsFuzziness",
+    "shadowsUpperLimit",
+    "midtonesFuzziness",
+    "midtonesLowerLimit",
+    "midtonesUpperLimit",
+    "highlightsFuzziness",
+    "highlightsLowerLimit",
+];
+
+/// Color Range (`ClrR`) with a preset. Sampled Colors records Lab minimum and maximum colours,
+/// which `select.colorRange` (eyedropper points on the image) can't reproduce, and an unknown
+/// key (Detect Faces, Localized Color Clusters…) could change the result: both stay
+/// unsupported.
+fn color_range_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    if d.items.iter().any(|(k, _)| !COLOR_RANGE_KEYS.contains(&trimmed(k).as_str())) {
+        return unsupported;
+    }
+    let Some(preset) = get_enum(d, "Clrs").and_then(|c| lookup(COLOR_RANGE, &c)) else { return unsupported };
+    let mut p = Map::new();
+    p.insert("select".into(), preset.into());
+    let key = |suffix: &str| get_num(d, &format!("{preset}{suffix}"));
+    match preset {
+        "skinTones" => {
+            if let Some(f) = get_num(d, "Fzns") {
+                p.insert("fuzziness".into(), f.into());
+            }
+        }
+        "shadows" | "midtones" | "highlights" => {
+            if let Some(f) = key("Fuzziness") {
+                p.insert("fuzziness".into(), f.into());
+            }
+            let range = match (preset, key("LowerLimit"), key("UpperLimit")) {
+                ("shadows", _, hi) => hi.map(Value::from),
+                ("highlights", lo, _) => lo.map(Value::from),
+                (_, Some(lo), Some(hi)) => Some(json!([lo, hi])),
+                (_, None, None) => None,
+                _ => return unsupported,
+            };
+            if let Some(r) = range {
+                p.insert("tonalRange".into(), r);
+            }
+        }
+        _ => {}
+    }
+    if get_bool(d, "Invr") == Some(true) {
+        p.insert("invert".into(), true.into());
+    }
+    step("select.colorRange", Value::Object(p))
+}
+
+fn color_range_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let preset = jstr(p, "select")?;
+    if p.as_object()?.keys().any(|k| !matches!(k.as_str(), "select" | "fuzziness" | "tonalRange" | "invert")) {
+        return None;
+    }
+    let mut d = desc("null").with("Clrs", enm("Clrs", lookup_back(COLOR_RANGE, preset)?));
+    let tonal = matches!(preset, "shadows" | "midtones" | "highlights");
+    if let Some(f) = jnum(p, "fuzziness") {
+        match preset {
+            "skinTones" => d = d.with("Fzns", long(f)),
+            _ if tonal => d = d.with(&format!("{preset}Fuzziness"), long(f)),
+            _ => {}
+        }
+    }
+    if let Some(r) = p.get("tonalRange") {
+        match preset {
+            "shadows" => d = d.with("shadowsUpperLimit", long(r.as_f64()?)),
+            "highlights" => d = d.with("highlightsLowerLimit", long(r.as_f64()?)),
+            "midtones" => {
+                let a = r.as_array()?;
+                d = d.with("midtonesLowerLimit", long(a.first()?.as_f64()?)).with("midtonesUpperLimit", long(a.get(1)?.as_f64()?));
+            }
+            _ => return None,
+        }
+    }
+    if jbool(p, "invert") == Some(true) {
+        d = d.with("Invr", D::Boolean(true));
+    }
+    Some(d)
+}
+
+/// Create / Release Clipping Mask (`groupEvent` / `ungroup`) on the target or a named layer.
+fn clipping_from(d: &Descriptor, id: &str) -> Mapped {
+    match get_ref(d, "null") {
+        None => none(id),
+        Some(r) if ref_class(r).as_deref() == Some("Lyr") => match layer_target(r) {
+            Some(p) => step(id, Value::Object(p)),
+            None => Mapped::Unsupported { harmless: false },
+        },
+        Some(_) => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn clipping_to(_: &str, p: &Value) -> Option<Descriptor> {
+    Some(desc("null").with("null", layer_ref(p)))
+}
+
 /// Every Photoshop event PhotoCraft maps. The order matters only for the panel label.
 const EVENTS: &[Event] = &[
     // Filters.
@@ -2760,6 +2945,10 @@ const EVENTS: &[Event] = &[
             "layer.newAdjustmentLayer.channelMixer",
             "layer.newAdjustmentLayer.selectiveColor",
             "layer.newAdjustmentLayer.gradientMap",
+            "layer.layerMask.revealAll",
+            "layer.layerMask.hideAll",
+            "layer.layerMask.revealSelection",
+            "layer.layerMask.hideSelection",
             "file.new",
             "file.newFromClipboard",
         ],
@@ -2784,6 +2973,7 @@ const EVENTS: &[Event] = &[
             "layer.setAdjustment",
             "layer.fill.pattern.set",
             "layer.new.layerFromBackground",
+            "tools.setColors",
         ],
         from: set_from,
         to: set_to,
@@ -2841,6 +3031,22 @@ const EVENTS: &[Event] = &[
         to: merge_visible_to,
     },
     ev!("Mrg2", "mergeLayersNew", "Merge Layers", "layer.mergeLayers", &[]),
+    Event {
+        code: "GrpL",
+        name: "groupEvent",
+        label: "Create Clipping Mask",
+        ids: &["layer.createClippingMask"],
+        from: |d| clipping_from(d, "layer.createClippingMask"),
+        to: clipping_to,
+    },
+    Event {
+        code: "Ungr",
+        name: "ungroup",
+        label: "Release Clipping Mask",
+        ids: &["layer.releaseClippingMask"],
+        from: |d| clipping_from(d, "layer.releaseClippingMask"),
+        to: clipping_to,
+    },
     ev!("CpTL", "copyToLayer", "Layer Via Copy", "layer.new.layerViaCopy", &[]),
     ev!("CtTL", "cutToLayer", "Layer Via Cut", "layer.new.layerViaCut", &[]),
     ev!("", "rasterizeLayer", "Rasterize", "layer.rasterize.layer", &[]),
@@ -2872,6 +3078,9 @@ const EVENTS: &[Event] = &[
     ev!("Grow", "grow", "Grow", "select.grow", &[F("Tlrn", "tolerance", Kind::Long)]),
     ev!("Smlr", "similar", "Similar", "select.similar", &[F("Tlrn", "tolerance", Kind::Long)]),
     ev!("", "refineSelectionEdge", "Select and Mask", "select.refineEdge", REFINE_EDGE),
+    ev!("", "smartBrushWorkspace", "Select and Mask", "select.refineEdge", SMART_BRUSH),
+    ev!("", "autoCutout", "Select Subject", "select.subject", &[F("sampleAllLayers", "sampleAllLayers", Kind::Bool)]),
+    Event { code: "ClrR", name: "colorRange", label: "Color Range", ids: &["select.colorRange"], from: color_range_from, to: color_range_to },
     // Edit.
     Event { code: "Fl  ", name: "fill", label: "Fill", ids: &["edit.fill", "paint.bucket"], from: fill_from, to: fill_to },
     ev!("Strk", "stroke", "Stroke", "edit.stroke", STROKE),

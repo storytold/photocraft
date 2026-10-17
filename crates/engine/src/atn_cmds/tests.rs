@@ -198,7 +198,20 @@ fn every_mapped_command_exports_and_imports_back() {
             json!({"reds": 40, "yellows": 60, "greens": 40, "cyans": 60, "blues": 20, "magentas": 80, "tint": true, "tintColor": "#e4d5b0"}),
         ),
         ("image.adjustments.channelMixer", json!({"red": [100, 0, 0, 0], "green": [0, 90, 10, 0], "blue": [0, 0, 100, 5], "monochrome": false})),
-        ("image.adjustments.selectiveColor", json!({"method": "absolute", "reds": [10, 0, -5, 0], "neutrals": [0, 0, 0, 3]})),
+        ("image.adjustments.selectiveColor", json!({"method": "absolute", "reds": [10, 0, -5, 0], "yellows": [0, 5, 0, 0], "neutrals": [0, 0, 0, 3]})),
+        ("select.subject", json!({"sampleAllLayers": false})),
+        ("select.colorRange", json!({"select": "midtones", "fuzziness": 30, "tonalRange": [90, 160], "invert": true})),
+        ("select.colorRange", json!({"select": "skinTones", "fuzziness": 40})),
+        ("select.colorRange", json!({"select": "highlights", "tonalRange": 200})),
+        ("select.colorRange", json!({"select": "reds"})),
+        ("layer.createClippingMask", json!({})),
+        ("layer.releaseClippingMask", json!({"layer": "Shadow"})),
+        ("layer.layerMask.revealAll", json!({})),
+        ("layer.layerMask.hideAll", json!({})),
+        ("layer.layerMask.revealSelection", json!({})),
+        ("layer.layerMask.hideSelection", json!({})),
+        ("tools.setColors", json!({"foreground": "#336699"})),
+        ("tools.setColors", json!({"background": "#ffffff"})),
         ("image.adjustments.desaturate", json!({})),
         ("image.autoTone", json!({})),
         ("image.imageSize", json!({"width": 800, "height": 600, "resolution": 72, "resample": "bicubicSharper"})),
@@ -477,6 +490,95 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
     assert_eq!(imp.unsupported.len(), 5);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
+}
+
+/// #6745: the events of a Photoshop 2026 retouching set (ID-photo background swap, whitening,
+/// highlight cleanup, high-pass sharpening), in the stringID form Photoshop wrote them.
+#[test]
+fn retouching_set_events_map_to_their_commands() {
+    let smart_brush = desc("null")
+        .with("smartBrushRadius", px(3.0))
+        .with("smartBrushSmooth", long(2.0))
+        .with("smartBrushFeather", px(0.5))
+        .with("smartBrushContrast", pct(10.0))
+        .with("smartBrushShiftEdge", pct(-20.0))
+        .with("sampleAllLayers", D::Boolean(false))
+        .with("smartBrushUseSmartRadius", D::Boolean(true))
+        .with("smartBrushDecontaminate", D::Boolean(false))
+        .with("smartBrushDeconAmount", pct(100.0))
+        .with("refineEdgeOutput", enm("refineEdgeOutput", "refineEdgeOutputUserMask"));
+    let selective = desc("null").with("Mthd", enm("CrcM", "Rltv")).with(
+        "ClrC",
+        D::List(vec![
+            D::Descriptor(
+                desc("ClrC").with("Clrs", enm("Clrs", "Ylws")).with("Cyn ", pct(-30.0)).with("Mgnt", pct(0.0)).with("Yllw", pct(-40.0)).with("Blck", pct(0.0)),
+            ),
+            D::Descriptor(
+                desc("ClrC").with("Clrs", enm("Clrs", "Whts")).with("Cyn ", pct(0.0)).with("Mgnt", pct(0.0)).with("Yllw", pct(0.0)).with("Blck", pct(-10.0)),
+            ),
+        ]),
+    );
+    let lab = |l: f64| D::Descriptor(desc("LbCl").with("Lmnc", D::Double(l)).with("A   ", D::Double(0.0)).with("B   ", D::Double(0.0)));
+    let sampled = desc("null").with("Fzns", long(40.0)).with("Mnm ", lab(80.0)).with("Mxm ", lab(95.0)).with("colorModel", long(0.0));
+    let mask = desc("null")
+        .with("Nw  ", D::Class(class("Chnl")))
+        .with("At  ", D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code("Msk ") }]))
+        .with("Usng", enm("UsrM", "RvlS"));
+    let fg = desc("null")
+        .with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("FrgC") }]))
+        .with("T   ", D::Descriptor(desc("RGBC").with("Rd  ", D::Double(0.0)).with("Grn ", D::Double(0.0)).with("Bl  ", D::Double(255.0))));
+    let lab_fg = desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("BckC") }])).with("T   ", lab(50.0));
+    let items = vec![
+        item("autoCutout", "Select Subject", Some(desc("null").with("sampleAllLayers", D::Boolean(false)))),
+        item("smartBrushWorkspace", "Select and Mask", Some(smart_brush)),
+        item("selectiveColor", "Selective Color", Some(selective)),
+        item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "skinTone")).with("Fzns", long(40.0)))),
+        item("colorRange", "Color Range", Some(sampled)),
+        item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "Rds ")).with("UsFc", D::Boolean(true)))),
+        item("make", "Make", Some(mask)),
+        item("set", "Set", Some(fg)),
+        item("set", "Set", Some(lab_fg)),
+        item("groupEvent", "Create Clipping Mask", Some(desc("null").with("null", target_ref("Lyr ")))),
+        item("someFutureEvent", "Something New", Some(desc("null").with("Amnt", long(5.0)))),
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Retouch"),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
+        warnings: vec![],
+    };
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    let steps = &imp.actions[0].steps;
+    let expected = [
+        ("select.subject", json!({"sampleAllLayers": false})),
+        (
+            "select.refineEdge",
+            json!({"radius": 3, "smartRadius": true, "smooth": 2, "feather": 0.5, "contrast": 10, "shiftEdge": -20, "decontaminate": false, "amount": 100, "output": "layerMask", "sampleAllLayers": false}),
+        ),
+        ("image.adjustments.selectiveColor", json!({"method": "relative", "yellows": [-30, 0, -40, 0], "whites": [0, 0, 0, -10]})),
+        ("select.colorRange", json!({"select": "skinTones", "fuzziness": 40})),
+        (PHOTOSHOP_STEP, Value::Null),
+        (PHOTOSHOP_STEP, Value::Null),
+        ("layer.layerMask.revealSelection", json!({})),
+        ("tools.setColors", json!({"foreground": "#0000ff"})),
+        (PHOTOSHOP_STEP, Value::Null),
+        ("layer.createClippingMask", json!({})),
+        (PHOTOSHOP_STEP, Value::Null),
+    ];
+    assert_eq!(steps.len(), expected.len(), "{steps:?}");
+    for ((id, params), (want_id, want)) in steps.iter().zip(&expected) {
+        assert_eq!(id, want_id, "{steps:?}");
+        if *want_id != PHOTOSHOP_STEP {
+            assert_eq!(params, want, "{id}");
+        }
+    }
+    // Sampled Colors (Lab range), an unknown Color Range key, a Lab colour and an unknown
+    // event stay unsupported rather than play with other values.
+    let unsupported: Vec<(&str, usize)> = imp.unsupported.iter().map(|u| (u.event.as_str(), u.step)).collect();
+    assert_eq!(unsupported, [("colorRange", 4), ("colorRange", 5), ("set", 8), ("someFutureEvent", 10)]);
+    // A legacy PhotoCraft export's `Yllw` yellows still read.
+    let legacy = desc("null").with("ClrC", D::List(vec![D::Descriptor(desc("ClrC").with("Clrs", enm("Clrs", "Yllw")).with("Cyn ", pct(5.0)))]));
+    assert_eq!(selective_from(&legacy), Some(json!({"yellows": [5.0, 0.0, 0.0, 0.0]})));
 }
 
 #[test]
