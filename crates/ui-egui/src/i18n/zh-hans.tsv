@@ -1647,6 +1647,7 @@
 	Brush Pose	画笔姿态
 	Brush Tip Shape	画笔笔尖形状
 	Brush Tool	画笔工具
+	Pencil Tool	铅笔工具
 	Build-up	累积
 	Burn Tool	加深工具
 	Centimeters	厘米
@@ -1701,6 +1702,7 @@
 	ExtraBold	特粗
 	ExtraLight	特细
 	Eyedropper Tool	吸管工具
+	Color Sampler Tool	颜色取样器工具
 	Fade	渐隐
 	Fill Opacity	填充不透明度
 	Film & Video	电影与视频
@@ -1717,6 +1719,7 @@
 	Highlights from:	高光下限：
 	History Brush Tool	历史记录画笔工具
 	Horizontal Type Tool	横排文字工具
+	Vertical Type Tool	直排文字工具
 	Horizontal Type Mask Tool	横排文字蒙版工具
 	Vertical Type Mask Tool	直排文字蒙版工具
 	Image Size:	图像大小：
