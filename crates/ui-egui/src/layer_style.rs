@@ -282,28 +282,27 @@ fn values_of(e: &Effect, light: f32) -> Value {
         Effect::GradientOverlay { common, gradient: g, .. } => {
             set(&mut v, "blend", json!(common.blend.label()));
             set(&mut v, "opacity", json!((common.opacity * 100.0).round()));
-            // The From/To fields model a plain two-stop gradient; anything richer
-            // (more stops, transparency stops) is carried by the snapshot instead.
-            if g.stops.len() == 2 && g.opacity_stops.is_empty() {
-                set(&mut v, "from", json!(hex(&g.stops[0].1)));
-                set(&mut v, "to", json!(hex(&g.stops[1].1)));
-                set(&mut v, "reverse", json!(g.reverse));
-                set(
-                    &mut v,
-                    "style",
-                    json!(match g.style {
-                        photocraft_doc::effects::GradientStyle::Radial => "radial",
-                        photocraft_doc::effects::GradientStyle::Angle => "angle",
-                        photocraft_doc::effects::GradientStyle::Reflected => "reflected",
-                        photocraft_doc::effects::GradientStyle::Diamond => "diamond",
-                        photocraft_doc::effects::GradientStyle::Linear => "linear",
-                    }),
-                );
-                set(&mut v, "angle", json!(g.angle));
-                set(&mut v, "scale", json!((g.scale * 100.0).round()));
-            } else {
-                drop_keys(&mut v, &["from", "to", "reverse", "style", "angle", "scale"]);
+            // Endpoint colours and geometry always load into the dialog. A baked curve
+            // (classic interpolation, PSD import) keeps its interior stops in `fx`;
+            // `overlay_gradient` only retints the ends unless `method` is present.
+            if let (Some(first), Some(last)) = (g.stops.first(), g.stops.last()) {
+                set(&mut v, "from", json!(hex(&first.1)));
+                set(&mut v, "to", json!(hex(&last.1)));
             }
+            set(&mut v, "reverse", json!(g.reverse));
+            set(
+                &mut v,
+                "style",
+                json!(match g.style {
+                    photocraft_doc::effects::GradientStyle::Radial => "radial",
+                    photocraft_doc::effects::GradientStyle::Angle => "angle",
+                    photocraft_doc::effects::GradientStyle::Reflected => "reflected",
+                    photocraft_doc::effects::GradientStyle::Diamond => "diamond",
+                    photocraft_doc::effects::GradientStyle::Linear => "linear",
+                }),
+            );
+            set(&mut v, "angle", json!(g.angle));
+            set(&mut v, "scale", json!((g.scale * 100.0).round()));
         }
         Effect::PatternOverlay { common, name, id, scale, angle, link, phase } => {
             set(&mut v, "blend", json!(common.blend.label()));
@@ -1612,6 +1611,26 @@ mod tests {
         let items = &d.doc.layer(id).unwrap().effects.items;
         assert_eq!(items.len(), 1, "configured but switched off stays");
         assert!(!items[0].enabled());
+    }
+
+    #[test]
+    fn baked_gradient_overlay_keeps_endpoint_colours_on_reopen() {
+        let mut s = session();
+        s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#ff0000", "to": "#0000ff", "method": "classic"})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &layer.effects.items[0] else { panic!() };
+        assert!(gradient.stops.len() > 2, "classic bakes intermediate stops");
+        let f = initial_fields(layer, Some("gradientOverlay"), st.doc.global_light.angle);
+        let params = &effects_of(&f)[0]["params"];
+        assert_eq!(params["from"], json!("#ff0000"));
+        assert_eq!(params["to"], json!("#0000ff"));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0] else { panic!() };
+        assert!(gradient.stops.len() > 2);
+        assert_eq!(gradient.stops.first().unwrap().1, photocraft_color::Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(gradient.stops.last().unwrap().1, photocraft_color::Color::rgb(0.0, 0.0, 1.0));
     }
 
     #[test]
