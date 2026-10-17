@@ -290,7 +290,7 @@ id = "TOOL-1053-1"
 target = "Shape stroke controls: solid/dashed/dotted, custom dash/gap/offset, caps, joins, alignment, miter limit and opacity"
 status = "done"
 issue = 1053
-note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; existing shape.create/edit/info; serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Gradient fill UI and saved stroke libraries remain open; Line retains filled-bar geometry"
+note = "shape_stroke_ui.rs: shared staged editor, renderer samples, cached Properties canvas preview; shape_paint_ui.rs: independent Solid/Gradient/Pattern/No Color fill and stroke pickers; shape.create/edit/info, serde tool defaults, ui.set shapeStroke; pcraft and vstk style round trips. Saved stroke libraries remain open; Line retains filled-bar geometry"
 
 [[item]]
 id = "TOOL-213-19"

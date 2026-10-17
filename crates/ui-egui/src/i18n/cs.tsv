@@ -1327,6 +1327,7 @@
 	Offset	Posun
 	Only Web Colors	Pouze webové barvy
 	Opacity	Krytí
+	Stop opacity	Krytí zarážky
 	Opacity Jitter	Kolísání krytí
 	Opacity:	Krytí:
 	Open a document to define variables.	Chcete-li definovat proměnné, otevřete dokument.
@@ -2626,6 +2627,9 @@ cameraData	Lens	Objektiv
 	Add New Artboard	Přidat novou kreslicí plochu
 	W	Š
 	H	V
+	Recent Colors	Naposledy použité barvy
+	No recent colors	Žádné nedávno použité barvy
+	Color opacity	Krytí barvy
 	Freeform Pen Tool	Nástroj pero od ruky
 	Curvature Pen Tool	Nástroj pero křivosti
 	Curve Fit:	Přizpůsobení křivky:

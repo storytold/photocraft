@@ -174,7 +174,7 @@ fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// offset of the latest Move drag frame drawn ([`display_doc`]) when the layer moves with the drag,
 /// so its Layer Edges outline moves in lockstep with its pixels (#2413). `None` when it shows
 /// where it is.
-pub(crate) fn shown_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
+pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
     let p = app.move_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision && !p.floating && p.shown.is_some())?;
     if !p.moving.contains(&id) {
         return None;

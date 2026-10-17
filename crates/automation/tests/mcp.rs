@@ -272,18 +272,24 @@ async fn command_ids_in_tool_schemas_exist() {
     client.cancel().await.unwrap();
 }
 
-/// `UI_SET_FIELDS` in `crates/ui-egui/src/control.rs`, read from source. The desktop shell owns the
+/// Core and Shape `ui.set` field arrays in `crates/ui-egui/src/control.rs`, read from source. The desktop shell owns the
 /// list; this crate describes it over MCP without depending on the UI crate (both are L6).
 /// Anchored on the declaration, not on the doc comment that mentions it first, and checked against
 /// the declared array length so a mis-parse fails loudly instead of testing the wrong names.
 fn ui_set_fields() -> Vec<String> {
     let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ui-egui/src/control.rs")).expect("ui-egui control.rs");
-    let (_, rest) = src.split_once("UI_SET_FIELDS: [&str; ").expect("UI_SET_FIELDS is declared");
-    let declared: usize = rest.split_once(']').expect("declared length").0.parse().expect("declared length");
-    let body = rest.split_once('[').expect("field array").1.split_once("];").expect("terminated array").0;
-    let fields: Vec<String> = body.split('"').skip(1).step_by(2).map(str::to_string).collect();
-    assert_eq!(fields.len(), declared, "parsed {fields:?} from UI_SET_FIELDS; its source shape changed");
-    fields
+    ["UI_SET_FIELDS", "SHAPE_UI_SET_FIELDS"]
+        .into_iter()
+        .flat_map(|name| {
+            let declaration = format!("const {name}: [&str; ");
+            let (_, rest) = src.split_once(&declaration).expect("field array is declared");
+            let declared: usize = rest.split_once(']').expect("declared length").0.parse().expect("declared length");
+            let body = rest.split_once('[').expect("field array").1.split_once("];").expect("terminated array").0;
+            let fields: Vec<String> = body.split('"').skip(1).step_by(2).map(str::to_string).collect();
+            assert_eq!(fields.len(), declared, "parsed {fields:?} from {name}; its source shape changed");
+            fields
+        })
+        .collect()
 }
 
 /// #1548: `ui_set` must name every field `ui.set` accepts. An agent copies this list out of

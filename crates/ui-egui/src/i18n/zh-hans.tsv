@@ -1325,6 +1325,7 @@
 	Offset	偏移
 	Only Web Colors	仅 Web 颜色
 	Opacity	不透明度
+	Stop opacity	色标不透明度
 	Opacity Jitter	不透明度抖动
 	Opacity:	不透明度：
 	Open a document to define variables.	打开文档以定义变量。
@@ -2638,6 +2639,11 @@ cameraData	Lens	镜头
 	Add New Artboard	添加新画板
 	W	宽
 	H	高
+	Solid Color	纯色
+	Color Picker	颜色选择器
+	Recent Colors	最近使用的颜色
+	No recent colors	尚无最近使用的颜色
+	Color opacity	颜色不透明度
 	Freeform Pen Tool	自由钢笔工具
 	Curvature Pen Tool	弯度钢笔工具
 	Curve Fit:	曲线拟合：

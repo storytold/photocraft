@@ -452,6 +452,9 @@ pub struct Session {
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
+    /// Pattern tiles referenced by copied paints; surfaces retain their COW snapshots.
+    pub(crate) path_fill_pattern: Option<photocraft_doc::Pattern>,
+    pub(crate) path_stroke_pattern: Option<photocraft_doc::Pattern>,
     /// Colour management: proofing state, monitor profile, display transforms.
     pub color: color_cmds::ColorState,
     /// Open Edit Contents documents and the smart objects they update.

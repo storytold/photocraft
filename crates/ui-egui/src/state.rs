@@ -583,6 +583,16 @@ pub struct ToolOptions {
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
+    /// Shape-specific paint overrides; old settings keep following the tool colours.
+    #[serde(default)]
+    pub shape_fill_color: Option<[f32; 4]>,
+    #[serde(default)]
+    pub shape_stroke_color: Option<[f32; 4]>,
+    /// Independent full paints; absent values preserve legacy foreground/background defaults.
+    #[serde(default)]
+    pub shape_fill_paint: Option<photocraft_doc::Fill>,
+    #[serde(default)]
+    pub shape_stroke_paint: Option<photocraft_doc::Fill>,
     pub stroke_width: f32,
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
@@ -810,6 +820,10 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             shape_fill: true,
+            shape_fill_color: None,
+            shape_stroke_color: None,
+            shape_fill_paint: None,
+            shape_stroke_paint: None,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
             corner_radius: 0.0,

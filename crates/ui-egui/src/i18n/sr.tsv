@@ -23,6 +23,10 @@
 # out of noun agreement ("Broj: {n}", "slojeva: {n}") so every number reads correctly.
 
 # Guide layout dialog
+	Color opacity	Neprozirnost boje
+	No recent colors	Nema nedavnih boja
+	Recent Colors	Nedavne boje
+	Stop opacity	Neprozirnost tačke
 	Rows	Redovi
 	Number	Broj
 	Margin	Margina
