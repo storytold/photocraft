@@ -33,6 +33,8 @@ pub struct HistoryState {
     pub doc: Arc<Document>,
     /// The layers targeted when this state was created.
     pub layers: LayerTarget,
+    /// Stable while the state is held: indices shift when older states fall off, ids don't.
+    pub id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,12 @@ pub struct History {
     current_label: String,
     /// The layers targeted when the current document was created (opened or edited).
     current_layers: LayerTarget,
+    /// [`HistoryState::id`] of the current state.
+    current_id: u64,
+    /// The id the next state gets: never reused, so a discarded state's id names no other.
+    next_id: u64,
+    /// The History Brush's source state, set in the History panel (`None`: the default).
+    brush_source: Option<u64>,
 }
 
 impl Default for History {
@@ -68,6 +76,9 @@ impl History {
             max_bytes: 0,
             current_label: "Open".into(),
             current_layers: LayerTarget::default(),
+            current_id: 0,
+            next_id: 1,
+            brush_source: None,
         }
     }
 
@@ -82,10 +93,14 @@ impl History {
         }
         let prev_label = std::mem::replace(&mut self.current_label, label.into());
         let prev_layers = std::mem::replace(&mut self.current_layers, layers);
-        self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers });
+        let prev_id = std::mem::replace(&mut self.current_id, self.next_id);
+        self.next_id = self.next_id.wrapping_add(1);
+        self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers, id: prev_id });
         self.clear_redo();
         while self.undo.len() > self.max_states {
-            if let Some(state) = self.undo.pop_front()
+            // The History Brush's source doesn't fall off (as in Photoshop): the next oldest does.
+            let pinned = self.max_states > 1 && self.undo.front().is_some_and(|s| Some(s.id) == self.brush_source);
+            if let Some(state) = self.undo.remove(usize::from(pinned))
                 && let Some(tiles) = &mut self.tiles
             {
                 tiles.remove(&state.doc);
@@ -126,7 +141,8 @@ impl History {
         }
         let label = std::mem::replace(&mut self.current_label, prev.label);
         let layers = std::mem::replace(&mut self.current_layers, prev.layers.clone());
-        self.redo.push(HistoryState { label, doc: current, layers });
+        let id = std::mem::replace(&mut self.current_id, prev.id);
+        self.redo.push(HistoryState { label, doc: current, layers, id });
         Some((prev.doc, prev.layers))
     }
 
@@ -139,7 +155,8 @@ impl History {
         }
         let label = std::mem::replace(&mut self.current_label, next.label);
         let layers = std::mem::replace(&mut self.current_layers, next.layers.clone());
-        self.undo.push_back(HistoryState { label, doc: current, layers });
+        let id = std::mem::replace(&mut self.current_id, next.id);
+        self.undo.push_back(HistoryState { label, doc: current, layers, id });
         Some((next.doc, next.layers))
     }
 
@@ -152,6 +169,59 @@ impl History {
     /// the current document, which the history does not hold, so it (and any index past it) is `None`.
     pub fn state(&self, i: usize) -> Option<Arc<Document>> {
         self.undo.get(i).map(|s| s.doc.clone())
+    }
+
+    /// Id of History panel row `i`: the [`History::entries`] (0 = oldest, then the current state),
+    /// then the redo states, the next redo first ([`History::redo_labels`]). `None` past the end.
+    pub fn row_id(&self, i: usize) -> Option<u64> {
+        let past = self.undo.len();
+        match i.checked_sub(past) {
+            None => self.undo.get(i).map(|s| s.id),
+            Some(0) => Some(self.current_id),
+            Some(k) => self.redo.iter().rev().nth(k - 1).map(|s| s.id),
+        }
+    }
+
+    /// The History panel row of the state with id `id`, if it is still held.
+    pub fn row_of(&self, id: u64) -> Option<usize> {
+        let past = self.undo.len();
+        if id == self.current_id {
+            return Some(past);
+        }
+        if let Some(i) = self.undo.iter().position(|s| s.id == id) {
+            return Some(i);
+        }
+        self.redo.iter().rev().position(|s| s.id == id).map(|k| past + 1 + k)
+    }
+
+    /// Document of History panel row `i` (see [`History::row_id`]); `current` is the current
+    /// document, which the history does not hold.
+    pub fn row_doc(&self, i: usize, current: &Arc<Document>) -> Option<Arc<Document>> {
+        let past = self.undo.len();
+        match i.checked_sub(past) {
+            None => self.state(i),
+            Some(0) => Some(current.clone()),
+            Some(k) => self.redo.iter().rev().nth(k - 1).map(|s| s.doc.clone()),
+        }
+    }
+
+    /// Make row `i` the History Brush's source (the History panel's source column). It stays on
+    /// that state while older states fall off, and the state itself is kept when it would fall off
+    /// the history (by count or memory); `false` if there is no such row.
+    pub fn set_brush_source(&mut self, i: usize) -> bool {
+        let Some(id) = self.row_id(i) else { return false };
+        self.brush_source = Some(id);
+        true
+    }
+
+    /// The History Brush's source row: the oldest state held by default, else the state set with
+    /// [`History::set_brush_source`]. `None` once that state is gone (deleted, or discarded by a
+    /// new step after stepping back): as in Photoshop, there is then no source until one is set.
+    pub fn brush_source(&self) -> Option<usize> {
+        match self.brush_source {
+            None => Some(0),
+            Some(id) => self.row_of(id),
+        }
     }
 
     /// Number of past states (entries before the current one).
@@ -185,10 +255,19 @@ impl History {
         self.redo.clear();
     }
 
+    /// Forget every past and redo state (Edit › Purge › Histories). The History Brush's source
+    /// goes back to the default, the oldest state held (now the current one): a source set on a
+    /// state the purge removed would otherwise leave no source.
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
+        self.reset_brush_source();
+    }
+
+    /// Make the History Brush's source the default again (the oldest state held), pinning no state.
+    pub fn reset_brush_source(&mut self) {
+        self.brush_source = None;
     }
 
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
@@ -236,8 +315,10 @@ impl History {
 
     /// Keep pixel memory within [`History::max_bytes`]: the current document's tiles plus the
     /// tiles only history holds (newest states first). The oldest undo states that don't fit are
-    /// dropped; the most recent one is always kept so the last step can be undone. Returns how
-    /// many states were dropped.
+    /// dropped; the most recent one is always kept so the last step can be undone. The History
+    /// Brush's source state ([`History::set_brush_source`]) is never dropped: its unique tiles are
+    /// counted first, and the newest states fill what remains. Returns how many states were
+    /// dropped.
     pub fn trim(&mut self, current: &Document) -> usize {
         self.trim_with(current, &[])
     }
@@ -276,19 +357,35 @@ impl History {
         for s in self.redo.iter().rev() {
             total = total.saturating_add(tile_bytes(&s.doc, &mut seen));
         }
+        // The History Brush's source is kept whatever its age, so its own tiles come first; the
+        // newest states then fill what remains of the budget (the most recent one always).
+        let source = self.brush_source.and_then(|id| self.undo.iter().position(|s| s.id == id));
+        if let Some(state) = source.and_then(|i| self.undo.get(i)) {
+            total = total.saturating_add(tile_bytes(&state.doc, &mut seen));
+        }
         let mut keep = 0;
-        for s in self.undo.iter().rev() {
+        for (i, s) in self.undo.iter().enumerate().rev() {
+            if Some(i) == source {
+                continue;
+            }
             total = total.saturating_add(tile_bytes(&s.doc, &mut seen));
             if total > self.max_bytes && keep >= 1 {
                 break;
             }
             keep += 1;
         }
-        let drop = self.undo.len() - keep;
-        for state in self.undo.drain(..drop) {
-            tiles.remove(&state.doc);
+        let mut kept = VecDeque::with_capacity(keep + 1);
+        let mut dropped = 0;
+        for (i, state) in std::mem::take(&mut self.undo).into_iter().enumerate().rev() {
+            if Some(i) == source || kept.len() < keep + usize::from(source.is_some_and(|j| j > i)) {
+                kept.push_front(state);
+            } else {
+                tiles.remove(&state.doc);
+                dropped += 1;
+            }
         }
-        drop
+        self.undo = kept;
+        dropped
     }
 }
 
@@ -379,6 +476,115 @@ mod tests {
         cur = h.undo(cur).unwrap().0;
         h.undo(cur).unwrap();
         assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["A", "B"], "next redo first");
+    }
+
+    /// The History Brush source is a state, not an index: it stays on its state through undo,
+    /// redo and older states falling off, is kept when it would fall off itself, and is gone
+    /// (no source) once a new step discards it.
+    #[test]
+    fn brush_source_follows_its_state() {
+        let mut h = History::new(3);
+        let mut cur = Arc::new(base());
+        assert_eq!(h.brush_source(), Some(0), "default: the oldest state");
+        assert!(!h.set_brush_source(1), "no such row yet");
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+        assert!(h.set_brush_source(1));
+        assert_eq!(h.row_doc(1, &cur).unwrap().name, "a");
+        // Undo / redo: the rows stay put, and A's state is still row 1.
+        cur = h.undo(cur).unwrap().0;
+        assert_eq!((h.brush_source(), h.row_doc(1, &cur).unwrap().name.as_str()), (Some(1), "a"));
+        assert_eq!(h.row_doc(2, &cur).unwrap().name, "b", "a redo row");
+        cur = h.redo(cur).unwrap().0;
+        // Open falls off the 3-state limit: A's state moves up to row 0 and stays the source.
+        edit(&mut h, &mut cur, "C", |d| d.name = "c".into());
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert_eq!(h.entries(), ["A", "B", "C", "D"]);
+        assert_eq!(h.brush_source(), Some(0));
+        // A would fall off next: it is kept, and the states after it fall off instead.
+        edit(&mut h, &mut cur, "E", |d| d.name = "e".into());
+        edit(&mut h, &mut cur, "F", |d| d.name = "f".into());
+        assert_eq!(h.entries(), ["A", "D", "E", "F"]);
+        assert_eq!((h.brush_source(), h.row_doc(0, &cur).unwrap().name.as_str()), (Some(0), "a"));
+        // A redo state as the source, discarded by a new step: no source until one is set.
+        cur = h.undo(cur).unwrap().0;
+        assert!(h.set_brush_source(3), "the greyed F row");
+        assert_eq!((h.brush_source(), h.row_doc(3, &cur).unwrap().name.as_str()), (Some(3), "f"));
+        assert!(h.row_doc(4, &cur).is_none() && h.row_id(4).is_none());
+        edit(&mut h, &mut cur, "G", |d| d.name = "g".into());
+        assert_eq!(h.brush_source(), None);
+        // The current state as the source keeps it once it becomes a past state; once it is no
+        // longer the source, it falls off as usual.
+        assert!(h.set_brush_source(3));
+        edit(&mut h, &mut cur, "H", |d| d.name = "h".into());
+        assert_eq!((h.brush_source(), h.row_doc(2, &cur).unwrap().name.as_str()), (Some(2), "g"));
+        assert!(h.set_brush_source(1));
+        edit(&mut h, &mut cur, "I", |d| d.name = "i".into());
+        assert_eq!(h.entries(), ["E", "G", "H", "I"]);
+    }
+
+    #[test]
+    fn byte_budget_keeps_the_brush_source() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        for i in 0..5 {
+            edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+                let id = d.layers[0].id;
+                d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        assert!(h.set_brush_source(1));
+        h.max_bytes = 1;
+        let dropped = h.trim(&cur);
+        assert_eq!(h.entries(), ["paint 0", "paint 3", "paint 4"], "the source is kept with the last step");
+        assert_eq!(dropped, 3);
+        assert_eq!(h.brush_source(), Some(0));
+    }
+
+    /// The pinned source counts against the byte budget: with room for three states, the
+    /// source and the two newest are kept, never more than the budget (#3536 review).
+    #[test]
+    fn byte_budget_counts_the_brush_source_first() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        let tile = h.pixel_bytes(&cur);
+        assert!(tile > 0);
+        for i in 0..5 {
+            edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+                let id = d.layers[0].id;
+                d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        // Every state holds one tile of its own; the source is the oldest (Open).
+        assert!(h.set_brush_source(0));
+        h.max_bytes = tile * 4;
+        assert_eq!(h.trim(&cur), 2);
+        assert_eq!(h.entries(), ["Open", "paint 2", "paint 3", "paint 4"]);
+        assert!(h.pixel_bytes(&cur) <= h.max_bytes, "{} > {}", h.pixel_bytes(&cur), h.max_bytes);
+        assert_eq!(h.trim(&cur), 0, "it fits now");
+        // A new step trims to the budget again, still keeping the source.
+        edit(&mut h, &mut cur, "paint 5", |d| {
+            let id = d.layers[0].id;
+            d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[1.0, 0.0, 0.0, 1.0]);
+        });
+        assert_eq!(h.trim(&cur), 1);
+        assert_eq!(h.entries(), ["Open", "paint 3", "paint 4", "paint 5"]);
+        assert!(h.pixel_bytes(&cur) <= h.max_bytes);
+        assert_eq!(h.brush_source(), Some(0));
+    }
+
+    /// Edit › Purge › Histories clears every state: a source set on one of them goes back to the
+    /// default (the oldest state held) instead of leaving no source (#3536 review).
+    #[test]
+    fn clear_resets_the_brush_source() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+        assert!(h.set_brush_source(1));
+        h.clear();
+        assert_eq!(h.brush_source(), Some(0));
+        assert_eq!(h.row_doc(0, &cur).unwrap().name, "b");
     }
 
     #[test]

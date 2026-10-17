@@ -3103,6 +3103,9 @@ curves	Smooth	Сгладить
 	Sent to {printer}	Отправлено на {printer}
 	set in Print Settings…	задаётся в параметрах печати…
 	ICO is limited to 256 × 256 pixels	ICO ограничен размером 256 × 256 пикселей
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Рисует из исходного состояния панели «История»
+	Sets the source for the history brush	Задаёт источник для кисти истории
 
 # Dynamic selection context menu and appearance favorites
 	Select Inverse	Инвертировать выделение

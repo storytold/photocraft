@@ -3153,6 +3153,9 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Malt aus dem Quellzustand des Protokollbedienfelds
+	Sets the source for the history brush	Legt die Quelle für den Protokollpinsel fest
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Eingebettetes Profil verwenden ({profile})
 	Convert to the working space ({profile})	In den Arbeitsfarbraum konvertieren ({profile})

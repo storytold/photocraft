@@ -2176,6 +2176,8 @@
 	Burn	Yanık
 	Quick Selection	Hızlı Seçim
 	History Brush	Tarih Fırçası
+	Paints from the History panel's source state	Tarih panelinin kaynak durumundan boyar
+	Sets the source for the history brush	Tarih fırçasının kaynağını ayarlar
 	Color Replacement	Renk Değiştirme
 	New Group	Yeni Grup
 	Layer Comp	Katman Kompozisyonu

@@ -3145,6 +3145,9 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
+	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Pakai profil tertanam ({profile})
 	Convert to the working space ({profile})	Konversi ke working space ({profile})

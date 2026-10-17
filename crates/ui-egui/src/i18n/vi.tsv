@@ -3640,6 +3640,9 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Vẽ từ trạng thái nguồn của bảng Lịch sử
+	Sets the source for the history brush	Đặt nguồn cho cọ lịch sử
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Dùng hồ sơ nhúng ({profile})
 	Convert to the working space ({profile})	Chuyển sang không gian làm việc ({profile})

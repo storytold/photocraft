@@ -3853,6 +3853,9 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
+	Sets the source for the history brush	Задає джерело для пензля історії
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Використати вбудований профіль ({profile})
 	Convert to the working space ({profile})	Перетворити в робочий простір ({profile})

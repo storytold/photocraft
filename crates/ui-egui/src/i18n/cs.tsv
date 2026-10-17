@@ -3762,6 +3762,9 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Maluje ze zdrojového stavu panelu Historie
+	Sets the source for the history brush	Nastaví zdroj pro štětec historie
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Použít vložený profil ({profile})
 	Convert to the working space ({profile})	Převést do pracovního prostoru barev ({profile})

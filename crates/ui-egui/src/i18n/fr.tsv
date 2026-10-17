@@ -3158,6 +3158,9 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Peint à partir de l'état source du panneau Historique
+	Sets the source for the history brush	Définit la source du pinceau d'historique
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Utiliser le profil incorporé ({profile})
 	Convert to the working space ({profile})	Convertir vers l'espace de travail ({profile})

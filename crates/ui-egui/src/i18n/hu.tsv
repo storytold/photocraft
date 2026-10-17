@@ -1114,6 +1114,8 @@
 	Height:	Magasság:
 	Hide Auto Slices	Automatikus szeletek elrejtése
 	History Brush	Előzményecset
+	Paints from the History panel's source state	Az Előzmények panel forrásállapotából fest
+	Sets the source for the history brush	Beállítja az előzményecset forrását
 	Horizontal scale	Vízszintes méretarány
 	Horizontal type	Vízszintes szöveg
 	Hue Jitter	Színárnyalat ingadozása

@@ -1711,6 +1711,8 @@
 	Overlay	Preklapanje
 	Paint Bucket Tool	Alatka kofica s bojom
 	Paints from the document's opening state	Slika iz stanja dokumenta pri otvaranju
+	Paints from the History panel's source state	Slika iz izvornog stanja panela Istorija
+	Sets the source for the history brush	Postavlja izvor za četkicu istorije
 	Path Selection Tool	Alatka za selekciju putanje
 	Direct Selection Tool	Alatka za direktnu selekciju
 	Add Anchor Point Tool	Alatka za dodavanje sidrišne tačke

@@ -2766,6 +2766,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	从历史记录面板的源状态绘画
+	Sets the source for the history brush	设置历史记录画笔的源
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	使用嵌入的配置文件（{profile}）
 	Convert to the working space ({profile})	转换到工作空间（{profile}）

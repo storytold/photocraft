@@ -612,16 +612,12 @@ fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(clone_result(dmg, off, aligned, p, &stroke))
 }
 
-/// The History Brush's source: the targeted surface (pixels, mask, channel) as it was in history
-/// state `state` (default: the oldest state still held, the "Open" snapshot unless trimmed).
+/// The History Brush's source: the targeted surface (pixels, mask, channel) as it was in History
+/// panel row `state` or snapshot `snapshot` (default: the source set in the History panel,
+/// `history.setSource`, else the oldest state still held, the "Open" state unless trimmed).
 fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let explicit = p.get("state").and_then(Value::as_u64).map(|v| v as usize);
-    let source_doc = match explicit {
-        Some(i) if i == st.history.past_len() => st.doc.clone(),
-        Some(i) => st.history.state(i).ok_or_else(|| bad(cmd, format!("no history state {i} (0..={})", st.history.past_len())))?,
-        None => st.history.state(0).unwrap_or_else(|| st.doc.clone()),
-    };
+    let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
     crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
         .cloned()
         .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))
@@ -1363,7 +1359,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "History Brush",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","state":index (into history.entries; default 0 = the oldest held state, normally the Open snapshot)"#),
+            params: brush_params!(
+                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error)"#
+            ),
             enabled: has_pixel_layer,
             run: history_brush,
             journal: true,

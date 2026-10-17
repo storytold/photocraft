@@ -3944,6 +3944,9 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Pinta a partir do estado de origem do painel Histórico
+	Sets the source for the history brush	Define a origem do pincel do histórico
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usar o perfil incorporado ({profile})
 	Convert to the working space ({profile})	Converter para o espaço de trabalho ({profile})

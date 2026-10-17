@@ -3914,6 +3914,9 @@ curves	Smooth	Vloeiend maken
 	Sent to {printer}	Verzonden naar {printer}
 	set in Print Settings…	instellen in de afdrukinstellingen…
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
+	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Het ingesloten profiel gebruiken ({profile})
 	Convert to the working space ({profile})	Omzetten naar de werkruimte ({profile})

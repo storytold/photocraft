@@ -3,6 +3,7 @@
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerContent, LayerId};
+use photocraft_engine::history_source_cmds::HistorySource;
 use serde_json::{Value, json};
 
 use crate::mask_thumbs_ui::MaskKind;
@@ -3121,6 +3122,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let entries = st.history.entries();
     let current = entries.len() - 1;
     let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let source = photocraft_engine::history_source_cmds::source(st);
     let selected_snap = selected_snapshot(ui.ctx(), st);
     let ctx = ui.ctx().clone();
     // A row dragged onto the trash (#5324); a drag that never saw its release must not outlive it.
@@ -3144,6 +3146,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let mut snap_cmd = None;
     let mut target: Option<usize> = None;
+    let mut set_source: Option<usize> = None;
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
@@ -3186,6 +3189,9 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if is_redo { t.text_faint } else { t.icon },
             );
             ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
+            if history_source_column(ui, rect, egui::Id::new(("history-source", i)), source == Some(HistorySource::State(i))) {
+                set_source = Some(i);
+            }
             if resp.clicked() && i != current {
                 target = Some(i);
             } else if resp.clicked() && selected_snap.is_some() {
@@ -3194,6 +3200,12 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
     });
+    if let Some(i) = set_source
+        && let Err(e) = app.run("history.setSource", json!({"state": i}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if let Some(drag) = drag
         && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
     {
@@ -3266,6 +3278,21 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The History panel's source column at the left of a state or snapshot row: the History Brush
+/// icon on the source; a click makes the row the source (`history.setSource`). It sits above the
+/// row, so the click doesn't also step to the state or snapshot.
+fn history_source_column(ui: &mut egui::Ui, row: Rect, salt: egui::Id, is_source: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let cell = Rect::from_min_size(row.min, vec2(24.0, row.height()));
+    let resp = ui.interact(cell, ui.id().with(salt), Sense::click()).on_hover_text(tl!("Sets the source for the history brush"));
+    if is_source {
+        icons::paint(ui, cell.shrink(4.0), icons::tool_icon(Tool::HistoryBrush), 12.0, t.icon);
+    } else if resp.hovered() {
+        icons::paint(ui, cell.shrink(4.0), icons::tool_icon(Tool::HistoryBrush), 12.0, t.text_faint);
+    }
+    resp.clicked()
+}
+
 /// A History panel row being dragged, for a drop on the trash (#5324).
 #[derive(Clone, Copy, Debug)]
 enum HistoryDrag {
@@ -3312,6 +3339,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
     let t = Tokens::get(ui.ctx());
     let st = app.session.active()?;
     let (doc_id, snaps) = (st.doc.id, st.snapshots.clone());
+    let source = photocraft_engine::history_source_cmds::source(st);
     let live: Vec<u64> = snaps.iter().map(|s| s.id).collect();
     // Per document: snapshot ids restart in each, and a tab switch must not carry the edit over.
     let rename_id = egui::Id::new(("history-snapshot-rename", doc_id));
@@ -3359,7 +3387,9 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
                 ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &snap.name, egui::FontId::proportional(12.0), t.text);
             }
         }
-        if resp.double_clicked() {
+        if history_source_column(ui, rect, egui::Id::new(("history-snapshot-source", snap.id)), source == Some(HistorySource::Snapshot(snap.id))) {
+            cmd = Some(("history.setSource", json!({"snapshot": snap.id})));
+        } else if resp.double_clicked() {
             renaming = Some((snap.id, snap.name.clone()));
         } else if resp.clicked() {
             cmd = Some(("history.selectSnapshot", json!({"snapshot": snap.id})));
@@ -4782,6 +4812,51 @@ mod history_transform_tests {
         let st = h.state().session.active().unwrap();
         assert_eq!(st.history.entries().len(), steps - 1, "trash deletes the current state");
         assert!(!st.history.can_redo(), "and it can't be redone");
+    }
+
+    /// The source column at the left of each state (#2966): a click makes that state the History
+    /// Brush's source through `history.setSource`, without stepping to it.
+    #[test]
+    fn history_source_column_sets_the_history_brush_source() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+        h.run_steps(2);
+        // The column cells are the only 24 pt squares, one per state, top to bottom.
+        let mut cells: Vec<Rect> = h
+            .ctx
+            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(24.0, 24.0)).map(|w| w.rect).collect());
+        cells.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+        cells.dedup();
+        assert_eq!(cells.len(), 3, "Open, Fill, Fill: {cells:?}");
+        assert_eq!(h.state().session.active().unwrap().history.brush_source(), Some(0), "the default source");
+        click(&mut h, cells[1].center());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.history.brush_source(), Some(1), "the clicked state is the source");
+        assert_eq!((st.history.entries().len(), st.history.can_redo()), (3, false), "and the document did not step back");
+    }
+
+    /// Snapshot rows have the source column too: a click makes the snapshot the source without
+    /// returning to it.
+    #[test]
+    fn history_source_column_on_a_snapshot_row() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("history.newSnapshot", json!({})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+        h.run_steps(2);
+        // The snapshot row's cell is the only 24×38 one (the opening row has no column).
+        let cells: Vec<Rect> = h
+            .ctx
+            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(24.0, 38.0)).map(|w| w.rect).collect());
+        let cell = *cells.first().expect("a snapshot source cell");
+        click(&mut h, cell.center());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(photocraft_engine::history_source_cmds::source(st), Some(HistorySource::Snapshot(1)));
+        assert_eq!(st.history.entries().len(), 2, "the document did not return to the snapshot");
     }
 }
 
