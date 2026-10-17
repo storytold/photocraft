@@ -10,6 +10,8 @@
 #
 # Benches run in release with `--json <file>` appended. `quick_args` = also runs in
 # `cargo xtask perf --quick` (small synthetic documents; budgets don't apply there).
+# `cpu_args` = also runs in `cargo xtask perf --cpu` (CPU canvas only, for runners without a real
+# GPU) with these added; benches without it are GPU-only and skipped there.
 
 [settings]
 # A scenario regresses when its p50 grows by more than this share of the baseline…
@@ -20,12 +22,14 @@ regression_min_ms = 1.0
 [[bench]]
 name = "perf_scenarios"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 quick_args = ["--quick"]
 note = "the #209/#210/#211 rows: layered 20 MP, 150 layers, 16/32-bit, open, retouch, selection"
 
 [[bench]]
 name = "interactive_bench"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 args = ["--reps", "5"]
 note = "36 MP photo: dabs, filters, adjustment previews, saves"
 
@@ -45,18 +49,21 @@ note = "chisel bevel size change (a dragged slider) on a 12 MP ellipse and a tex
 [[bench]]
 name = "camera_raw_bench"
 package = "photocraft-ui-egui"
+cpu_args = []
 quick_args = ["--quick"]
 note = "36 MP dense RGB layer: CPU develop, histogram, ICC vectorscope, clipping, nine Lab probes and egui tessellation; excludes GPU upload/presentation"
 
 [[bench]]
 name = "type_bench"
 package = "photocraft-ui-egui"
+cpu_args = []
 quick_args = ["--size", "2000x1500", "--layers", "20", "--steps", "15"]
 note = "font-size drag on 50 type layers"
 
 [[bench]]
 name = "large_image_bench"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 args = ["--size", "14000x14000", "--op", "refresh"]
 note = "196 MP: open and full refresh"
 

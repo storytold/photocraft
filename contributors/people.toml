@@ -72,6 +72,9 @@ sync_github_name = true
 [people.maxm11]
 sync_github_name = true
 
+[people.1Git2Clone]
+sync_github_name = true
+
 [people.skraus2]
 sync_github_name = true
 

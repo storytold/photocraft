@@ -2,17 +2,26 @@
 //! by scenario id, and check it against `perf/budgets.toml` and `perf/baseline.json` (#221).
 //!
 //! ```text
-//! cargo xtask perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
+//! cargo xtask perf [--quick] [--update-baseline] [--baseline PATH] [--advisory-budgets] [--threshold PCT] [--bench NAME]... [--cpu] [--skip-build] [--reuse]
 //! ```
 //!
 //! - `--quick`: only the benches with `quick_args` (small synthetic documents; minutes, not tens
 //!   of minutes). Quick numbers are compared only with a quick baseline, and budgets don't apply
 //!   (they are set for the full-size documents).
 //! - `--update-baseline`: write this run into `perf/baseline.json` (the only way it changes).
+//! - `--baseline PATH`: the baseline file to compare with and update (default `perf/baseline.json`).
+//!   `{class}` in it is replaced by the machine class, one file per class; a class without a file
+//!   yet gets one written (the nightly uses `perf/baselines/{class}.json`: hosted runners rotate
+//!   CPUs, and each CPU is its own class).
+//! - `--advisory-budgets`: a broken enforced budget is reported, not a failure (CI runners are
+//!   slower than the machine the budgets were set on; only regressions fail there).
 //! - `--threshold PCT`: the regression threshold (default `settings.regression_pct`, 15 %).
-//! - `--bench NAME`: run only these benches (repeatable).
+//! - `--bench NAME`: run only these benches (repeatable; an unknown name is an error). A narrowed
+//!   run never records a new per-class baseline: it would leave the other scenarios out.
+//! - `--cpu`: CPU canvas only: benches with `cpu_args` get them, the others are skipped (their
+//!   scenarios read "not run"). For runners whose only GPU is a slow software one (WARP).
 //! - `--skip-build`: don't run `cargo build` first. `--reuse`: don't run the benches either;
-//!   re-evaluate the reports already in `target/perf/`.
+//!   re-evaluate the reports already in `target/perf/`, with the CPU canary their run measured.
 //!
 //! Output: `target/perf/results.json` (everything), `target/perf/summary.md` (the table the
 //! nightly job posts as its summary) and one `target/perf/<bench>.json` per bench.
@@ -74,6 +83,8 @@ pub struct BenchSpec {
     pub args: Vec<String>,
     /// Arguments of a `--quick` run; absent = the bench is skipped in quick mode.
     pub quick_args: Option<Vec<String>>,
+    /// Arguments added in `--cpu` mode (e.g. `["--cpu"]`); absent = the bench is skipped there.
+    pub cpu_args: Option<Vec<String>>,
     /// Source file that must exist for the bench to run (a bench that lives on another branch):
     /// skipped, not failed, while it is missing.
     pub requires: Option<String>,
@@ -313,6 +324,11 @@ pub fn verdict(sc: &Scenario, stats: &Stats, base: Option<&Stats>, settings: &Se
     {
         return Status::Regressed;
     }
+    budget_verdict(sc, stats, budgets_apply)
+}
+
+/// The budget half of [`verdict`], without the baseline.
+fn budget_verdict(sc: &Scenario, stats: &Stats, budgets_apply: bool) -> Status {
     match (budgets_apply, sc.budget_ms, stats.metric(sc.metric)) {
         (true, Some(budget), Some(v)) if v > budget => {
             if sc.enforce {
@@ -325,6 +341,16 @@ pub fn verdict(sc: &Scenario, stats: &Stats, base: Option<&Stats>, settings: &Se
         (true, Some(_), None) => Status::Missing(format!("no {} in the bench row", sc.metric.label())),
         _ => Status::Tracked,
     }
+}
+
+/// Whether an outcome fails the run. On a slow host (`slow`) a regression alone is reported, not
+/// failed, but an enforced budget it also breaks still fails ([`verdict`] reports the regression
+/// first), unless budgets don't apply or are advisory (`enforce_budgets` false).
+pub fn fails_run(sc: &Scenario, oc: &Outcome, slow: bool, enforce_budgets: bool) -> bool {
+    if slow && oc.status == Status::Regressed {
+        return enforce_budgets && oc.stats.as_ref().is_some_and(|st| budget_verdict(sc, st, true) == Status::Broken);
+    }
+    oc.status.fails()
 }
 
 /// Evaluates every scenario against the bench reports (`bench name → report`, `None` when the
@@ -603,11 +629,92 @@ pub fn updated_baseline(old: Option<&Value>, results: &Value) -> Value {
             "commit": results.get("commit"),
             "load_avg_start": results.get("load_avg_start"),
             "load_avg_end": results.get("load_avg_end"),
+            "canary_ms": results.get("canary_ms"),
             "scenarios": scenarios,
             "failed": failed,
         }),
     );
     json!({"schema": 1, "machine_class": class, "machine": results.get("machine"), "modes": modes})
+}
+
+/// Rounds of the CPU canary's inner loop: about 100 ms on a current desktop core.
+const CANARY_ITERS: u64 = 50_000_000;
+
+/// How fast this machine's CPU is right now: a fixed single-threaded workload (a xorshift and
+/// multiply chain), best of five rounds, in ms. Unlike the load average it sees whatever slows the
+/// CPU (other VMs on a shared host, throttling, background work), and our own build and bench
+/// processes, which have exited by the time it runs, don't count.
+pub fn canary_ms() -> f64 {
+    let mut best = f64::INFINITY;
+    for _ in 0..5 {
+        let t = Instant::now();
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..std::hint::black_box(CANARY_ITERS) {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        }
+        std::hint::black_box(x);
+        best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    best
+}
+
+/// A run is too slow to judge regressions when its CPU canary (the slower of the start and end
+/// measurements) is more than this share slower than the baseline's.
+pub const SLOW_PCT: f64 = 20.0;
+
+/// A run is steady enough to record as a new baseline when its start and end canaries differ by
+/// at most this share (with no baseline yet, there is nothing else to compare against).
+pub const STEADY_PCT: f64 = 15.0;
+
+/// `Some(why)` when this run's canary says the machine is slower than when the baseline was
+/// recorded: every scenario would read slower, so regressions are reported, not failed.
+pub fn machine_slow(now_ms: Option<f64>, baseline_ms: Option<f64>) -> Option<String> {
+    let (n, b) = (now_ms?, baseline_ms?);
+    (n.is_finite() && b.is_finite() && b > 0.0 && n > b * (1.0 + SLOW_PCT / 100.0)).then(|| {
+        format!("machine slow (CPU canary {n:.0} ms vs {b:.0} ms in the baseline, +{:.0} %): regressions are reported, not failed", (n / b - 1.0) * 100.0)
+    })
+}
+
+/// Whether the canary held steady over the run (start and end within [`STEADY_PCT`]).
+pub fn canary_steady(start_ms: f64, end_ms: f64) -> bool {
+    let lo = start_ms.min(end_ms);
+    lo.is_finite() && lo > 0.0 && (start_ms - end_ms).abs() <= lo * STEADY_PCT / 100.0
+}
+
+/// The canary a baseline recorded for `mode` (the slower of its start and end measurements).
+pub fn baseline_canary(baseline: &Value, mode: &str) -> Option<f64> {
+    baseline.get("modes")?.get(mode)?.get("canary_ms")?.as_array()?.iter().filter_map(Value::as_f64).reduce(f64::max)
+}
+
+/// Whether a run measured everything its mode and canvas plan to: not narrowed with `--bench`,
+/// something measured at all, and every scenario measured with a p50 (and its budget's metric) or
+/// left out on purpose (its bench doesn't run in this mode, or it isn't measurable yet). A failed
+/// bench or a missing row fails it.
+pub fn complete_coverage(outcomes: &[Outcome], filtered: bool) -> bool {
+    !filtered
+        && outcomes.iter().any(|o| o.stats.is_some())
+        && outcomes.iter().all(|o| match o.status {
+            Status::NotRun | Status::NotMeasurable(_) => true,
+            Status::Missing(_) => false,
+            _ => o.stats.as_ref().is_some_and(|s| s.p50.is_some()),
+        })
+}
+
+/// Whether a run records a baseline its machine class doesn't have yet for this mode (full or
+/// quick): only with a per-class `--baseline` path, only from a [`complete_coverage`] run (a
+/// failed bench, a missing row or `--bench` would leave scenarios out, and they'd never be
+/// compared), and only when the canary held steady (a machine that slowed down during the run
+/// would record inflated numbers).
+pub fn records_new_baseline(have_mode: bool, per_class: bool, complete: bool, steady: bool) -> bool {
+    !have_mode && per_class && complete && steady
+}
+
+/// `--baseline` with `{class}` replaced by the machine class (one baseline file per class).
+pub fn baseline_path(pattern: &str, class: &str) -> String {
+    pattern.replace("{class}", class)
 }
 
 // ---- running ---------------------------------------------------------------------------------
@@ -619,15 +726,29 @@ struct Opts {
     benches: Vec<String>,
     skip_build: bool,
     reuse: bool,
+    baseline: String,
+    advisory_budgets: bool,
+    cpu: bool,
 }
 
 fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
-    let mut o = Opts { quick: false, update_baseline: false, threshold: None, benches: Vec::new(), skip_build: false, reuse: false };
+    let mut o = Opts {
+        quick: false,
+        update_baseline: false,
+        threshold: None,
+        benches: Vec::new(),
+        skip_build: false,
+        reuse: false,
+        baseline: BASELINE.into(),
+        advisory_budgets: false,
+        cpu: false,
+    };
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match *a {
             "--quick" => o.quick = true,
             "--update-baseline" => o.update_baseline = true,
+            "--advisory-budgets" => o.advisory_budgets = true,
             "--skip-build" => o.skip_build = true,
             "--reuse" => {
                 o.reuse = true;
@@ -637,7 +758,9 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
                 let v = it.next().and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).ok_or("--threshold needs a percentage > 0")?;
                 o.threshold = Some(v);
             }
+            "--cpu" => o.cpu = true,
             "--bench" => o.benches.push(it.next().ok_or("--bench needs a name")?.to_string()),
+            "--baseline" => o.baseline = it.next().ok_or("--baseline needs a path")?.to_string(),
             other => return Err(format!("perf: unknown option `{other}`")),
         }
     }
@@ -657,13 +780,19 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
 }
 
 pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
-    let o = parse_opts(rest)?;
+    run_in(root, &target_dir()?, &parse_opts(rest)?)
+}
+
+/// [`run`] with the target directory given (the tests use a scratch one).
+fn run_in(root: &Path, target: &Path, o: &Opts) -> Result<(), String> {
     let text = std::fs::read_to_string(root.join(BUDGETS)).map_err(|e| format!("read {BUDGETS}: {e}"))?;
     let budgets = parse_budgets(&text)?;
     let mode = if o.quick { "quick" } else { "full" };
     let threshold = o.threshold.unwrap_or(budgets.settings.regression_pct);
-    let target = target_dir()?;
     let out_dir = target.join("perf");
+    if let Some(name) = o.benches.iter().find(|n| !budgets.bench.iter().any(|b| &b.name == *n)) {
+        return Err(format!("perf: unknown bench `{name}` (not in {BUDGETS})"));
+    }
 
     // Which benches run in this mode.
     let mut plan: Vec<(&BenchSpec, Vec<String>)> = Vec::new();
@@ -672,7 +801,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         if !o.benches.is_empty() && !o.benches.contains(&b.name) {
             continue;
         }
-        let args = if o.quick {
+        let mut args = if o.quick {
             match &b.quick_args {
                 Some(a) => a.clone(),
                 None => continue,
@@ -680,6 +809,15 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         } else {
             b.args.clone()
         };
+        if o.cpu {
+            match &b.cpu_args {
+                Some(a) => args.extend(a.iter().cloned()),
+                None => {
+                    skipped.push((b.name.clone(), "no cpu_args: not run with --cpu".into()));
+                    continue;
+                }
+            }
+        }
         if let Some(req) = &b.requires
             && !root.join(req).exists()
         {
@@ -704,7 +842,17 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         }
     }
 
+    // `--reuse` re-evaluates saved reports: they go with the canary their own run measured (kept in
+    // its results.json), not with how fast this machine is now. Without it the run is neither slow
+    // nor steady: no regression is excused and no baseline recorded.
+    let saved_canary = o
+        .reuse
+        .then(|| std::fs::read_to_string(out_dir.join("results.json")).ok())
+        .flatten()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|r| Some((r.get("canary_ms")?.get(0)?.as_f64()?, r.get("canary_ms")?.get(1)?.as_f64()?)));
     let load_start = load_avg();
+    let canary_start = if o.reuse { saved_canary.map(|c| c.0) } else { Some(canary_ms()) };
     let mut reports: BTreeMap<String, Result<Value, String>> = BTreeMap::new();
     let mut bench_meta = serde_json::Map::new();
     for (b, args) in &plan {
@@ -758,6 +906,8 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         bench_meta.insert(name.clone(), json!({"status": "skipped", "error": why}));
     }
     let load_end = load_avg();
+    let canary_end = if o.reuse { saved_canary.map(|c| c.1) } else { Some(canary_ms()) };
+    let canary = canary_start.zip(canary_end);
 
     let mut m = machine();
     let gpu = reports
@@ -776,13 +926,45 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         obj.insert("class".into(), json!(class));
     }
 
-    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(BASELINE)).ok().and_then(|t| serde_json::from_str(&t).ok());
-    let (baseline, baseline_note) = match baseline_value.as_ref().map(|b| baseline_for(b, &class, mode)) {
+    let baseline_path = baseline_path(&o.baseline, &class);
+    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(&baseline_path)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    // A slowed-down host slows every scenario at once (a shared CI VM read +17..+1040 % on 39
+    // scenarios): measured by the CPU canary against the baseline's, regressions are then
+    // reported, not failures, and an unsteady run is never recorded as a new baseline.
+    let steady = canary.is_some_and(|(start, end)| canary_steady(start, end));
+    let slow = machine_slow(canary.map(|(start, end)| start.max(end)), baseline_value.as_ref().and_then(|b| baseline_canary(b, mode)));
+
+    // A per-class path (`{class}`) records a machine class (or mode) it hasn't seen yet instead of
+    // only skipping: hosted runners rotate CPUs, so each one gets its own baseline file to commit.
+    let per_class = baseline_path != o.baseline;
+    let found = baseline_value.as_ref().map(|b| baseline_for(b, &class, mode));
+    let have_mode = matches!(found, Some(Ok(_)));
+    let (baseline, why) = match found {
         Some(Ok(b)) => (Some(b), None),
         Some(Err(e)) => (None, Some(e)),
-        None => (None, Some(format!("no {BASELINE}: regression check skipped"))),
+        None => (None, Some(format!("no {baseline_path} yet: regression check skipped"))),
     };
-    let outcomes = evaluate(&budgets, &reports, baseline.as_ref(), threshold, !o.quick);
+    let mut outcomes = evaluate(&budgets, &reports, baseline.as_ref(), threshold, !o.quick);
+    let benches_ok = reports.iter().all(|(_, r)| r.is_ok());
+    let complete = benches_ok && complete_coverage(&outcomes, !o.benches.is_empty());
+    let record_new = records_new_baseline(have_mode, per_class, complete, steady);
+    let baseline_note = why.map(|why| {
+        if record_new {
+            format!("{why}; this run recorded it in {baseline_path} (commit it to compare against it)")
+        } else if per_class && !complete {
+            format!("{why}; not recorded because the run didn't measure every scenario (a bench failed, a row is missing, or --bench)")
+        } else if per_class && !steady {
+            format!("{why}; not recorded because the CPU canary moved more than {STEADY_PCT:.0} % during the run")
+        } else {
+            why
+        }
+    });
+    if o.advisory_budgets {
+        // Budgets are set for a developer machine; on slower CI hardware only regressions fail.
+        for oc in outcomes.iter_mut().filter(|oc| oc.status == Status::Broken) {
+            oc.status = Status::Over;
+        }
+    }
 
     let scenarios: serde_json::Map<String, Value> = budgets
         .scenario
@@ -809,7 +991,23 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             (sc.id.clone(), v)
         })
         .collect();
-    let failures: Vec<String> = outcomes.iter().filter(|o| o.status.fails()).map(|o| format!("{} {}: {}", o.id, o.title, o.status.label())).collect();
+    let baseline_note = match (slow.clone(), baseline_note) {
+        (Some(why), Some(n)) => Some(format!("{n}; {why}")),
+        (Some(why), None) => Some(why),
+        (None, n) => n,
+    };
+    let enforce_budgets = !o.quick && !o.advisory_budgets;
+    let failures: Vec<String> = budgets
+        .scenario
+        .iter()
+        .zip(&outcomes)
+        .filter(|(sc, oc)| fails_run(sc, oc, slow.is_some(), enforce_budgets))
+        .map(|(_, oc)| {
+            // On a slow host a regression that still fails does so for its broken budget.
+            let status = if slow.is_some() && oc.status == Status::Regressed { Status::Broken } else { oc.status.clone() };
+            format!("{} {}: {}", oc.id, oc.title, status.label())
+        })
+        .collect();
     let bench_failures: Vec<String> = reports.iter().filter_map(|(n, r)| r.as_ref().err().map(|e| format!("bench {n}: {e}"))).collect();
     let commit = git(root, &["rev-parse", "HEAD"]);
     let dirty = git(root, &["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
@@ -822,6 +1020,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         "machine": m,
         "load_avg_start": load_start,
         "load_avg_end": load_end,
+        "canary_ms": canary.map(|(start, end)| [start, end]),
         "threshold_pct": threshold,
         "baseline_note": baseline_note,
         "benches": bench_meta,
@@ -836,11 +1035,18 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     println!("\n{summary}");
     println!("wrote {}", out_dir.join("results.json").display());
 
-    if o.update_baseline {
+    if o.update_baseline || record_new {
         let nb = updated_baseline(baseline_value.as_ref(), &results);
         let text = serde_json::to_string_pretty(&nb).map_err(|e| format!("encode baseline: {e}"))?;
-        write(&root.join(BASELINE), &format!("{text}\n"))?;
-        println!("updated {BASELINE} ({mode}, machine class {class})");
+        write(&root.join(&baseline_path), &format!("{text}\n"))?;
+        println!("updated {baseline_path} ({mode}, machine class {class})");
+        if !steady {
+            let canary = canary.map_or_else(
+                || "wasn't measured (reused reports without their run's canary)".into(),
+                |(start, end)| format!("moved more than {STEADY_PCT:.0} % during this run ({start:.0} -> {end:.0} ms)"),
+            );
+            println!("warning: the CPU canary {canary}; the baseline may be inflated, re-record it on a steady run");
+        }
     }
     let all: Vec<&String> = failures.iter().chain(&bench_failures).collect();
     if all.is_empty() { Ok(()) } else { Err(format!("{} perf failure(s):\n  {}", all.len(), all.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  "))) }
@@ -887,7 +1093,7 @@ pub fn render_summary(results: &Value, outcomes: &[Outcome], baseline_note: Opti
     let s = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("unknown").to_string();
     let ram = m.get("ram_bytes").and_then(Value::as_u64).map_or_else(|| "?".into(), |b| format!("{} GB", b >> 30));
     let mut out = format!(
-        "## Performance ({} run)\n\n- Machine: {} ({} cores, {ram}), GPU {}, {} {}; class `{}`\n- Commit {}{}, {}\n- Load average (1/5/15 min): {} at start, {} at end\n",
+        "## Performance ({} run)\n\n- Machine: {} ({} cores, {ram}), GPU {}, {} {}; class `{}`\n- Commit {}{}, {}\n- Load average (1/5/15 min): {} at start, {} at end\n- CPU canary: {} ms (start / end)\n",
         s(results.get("mode")),
         s(m.get("cpu")),
         m.get("cores").and_then(Value::as_u64).unwrap_or(0),
@@ -900,6 +1106,10 @@ pub fn render_summary(results: &Value, outcomes: &[Outcome], baseline_note: Opti
         s(results.get("date")),
         fmt_load(results.get("load_avg_start")),
         fmt_load(results.get("load_avg_end")),
+        results
+            .get("canary_ms")
+            .and_then(Value::as_array)
+            .map_or_else(|| "n/a".into(), |a| a.iter().filter_map(Value::as_f64).map(|x| format!("{x:.0}")).collect::<Vec<_>>().join(" / ")),
     );
     if let Some(n) = baseline_note {
         out.push_str(&format!("- {n}\n"));
@@ -1103,5 +1313,129 @@ not_measurable = "needs a frame harness"
         assert!(o.quick && o.reuse && o.skip_build);
         assert_eq!(o.threshold, Some(20.0));
         assert_eq!(o.benches, ["a"]);
+        assert_eq!(o.baseline, BASELINE);
+        assert!(!o.advisory_budgets && parse_opts(&["--advisory-budgets"]).unwrap().advisory_budgets);
+        assert!(parse_opts(&["--baseline"]).is_err());
+        assert!(!o.cpu && parse_opts(&["--cpu"]).unwrap().cpu);
+        // The canary: slower than the baseline's by more than 20 % = slow; no baseline canary = unknown.
+        assert!(machine_slow(Some(130.0), Some(100.0)).is_some());
+        assert!(machine_slow(Some(115.0), Some(100.0)).is_none());
+        assert!(machine_slow(Some(80.0), Some(100.0)).is_none(), "a faster machine is never slow");
+        assert!(machine_slow(Some(500.0), None).is_none(), "an old baseline without a canary");
+        assert!(machine_slow(Some(f64::NAN), Some(100.0)).is_none());
+        assert!(canary_steady(100.0, 110.0) && canary_steady(110.0, 100.0));
+        assert!(!canary_steady(100.0, 130.0));
+        assert!(!canary_steady(0.0, 0.0) && !canary_steady(f64::INFINITY, 100.0));
+        let with_canary = json!({"modes": {"full": {"canary_ms": [100.0, 120.0]}}});
+        assert_eq!(baseline_canary(&with_canary, "full"), Some(120.0));
+        assert_eq!(baseline_canary(&with_canary, "quick"), None);
+        let c = canary_ms();
+        assert!(c.is_finite() && c > 0.0);
+        assert_eq!(baseline_path("perf/baselines/{class}.json", "linux-x86-64-epyc"), "perf/baselines/linux-x86-64-epyc.json");
+        assert_eq!(baseline_path(BASELINE, "linux-x86-64-epyc"), BASELINE);
+        // A new class is recorded only from a complete run, and only with a per-class path.
+        assert!(records_new_baseline(false, true, true, true));
+        assert!(!records_new_baseline(false, true, false, true), "an incomplete run would leave scenarios out");
+        assert!(!records_new_baseline(false, true, true, false), "a run that slowed down would record inflated numbers");
+        assert!(!records_new_baseline(true, true, true, true));
+        assert!(!records_new_baseline(false, false, true, true));
+        // A class file with only a quick run has no full baseline: a full run records one.
+        let quick_only = json!({"machine_class": "c", "modes": {"quick": {"scenarios": {}}}});
+        assert!(baseline_for(&quick_only, "c", "full").is_err());
+        assert!(baseline_for(&quick_only, "c", "quick").is_ok());
+        assert_eq!(parse_opts(&["--baseline", "perf/baseline-linux.json"]).unwrap().baseline, "perf/baseline-linux.json");
+    }
+
+    // ---- whole runs (`--reuse`: saved reports, no build, no benches) ----
+
+    /// A scratch repo root (with `target/` inside) holding [`TOML`], the saved report of bench `b`
+    /// and the results.json of the run that saved it (its CPU canary, start and end).
+    fn scratch(name: &str, rows: Value, canary: [f64; 2]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-perf-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join(BUDGETS), TOML).unwrap();
+        write(&dir.join("target/perf/b.json"), &report(rows).to_string()).unwrap();
+        write(&dir.join("target/perf/results.json"), &json!({"canary_ms": canary}).to_string()).unwrap();
+        dir
+    }
+
+    fn reuse(dir: &Path, args: &[&str]) -> Result<(), String> {
+        run_in(dir, &dir.join("target"), &parse_opts(&[&["--reuse", "--baseline", "perf/baselines/{class}.json"], args].concat()).unwrap())
+    }
+
+    /// This machine's class for reports without a GPU adapter (as [`run_in`] derives it).
+    fn this_class() -> String {
+        let m = machine();
+        let s = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        machine_class(&s("os"), &s("arch"), &s("cpu"), "cpu-canvas")
+    }
+
+    /// A full-mode baseline for this machine with P1 and P2 at `p50` ms and its CPU canary.
+    fn write_baseline(dir: &Path, p50: f64, canary: f64) {
+        let class = this_class();
+        let scenarios = json!({"P1": {"p50_ms": p50}, "P2": {"p50_ms": p50}});
+        let b = json!({"machine_class": class, "modes": {"full": {"canary_ms": [canary, canary], "scenarios": scenarios}}});
+        write(&dir.join(format!("perf/baselines/{class}.json")), &b.to_string()).unwrap();
+    }
+
+    #[test]
+    fn only_complete_runs_record_a_new_baseline() {
+        let both = json!([{"name": "move row", "samples_ms": [10.0]}, {"name": "opacity row", "samples_ms": [10.0]}]);
+        let recorded = |dir: &Path| dir.join(format!("perf/baselines/{}.json", this_class())).exists();
+        // A row missing from the report fails the run, and leaves no partial baseline behind.
+        let dir = scratch("record-incomplete", json!([{"name": "move row", "samples_ms": [10.0]}]), [100.0, 100.0]);
+        let err = reuse(&dir, &[]).unwrap_err();
+        assert!(err.contains("P2 opacity"), "{err}");
+        assert!(!recorded(&dir), "a row is missing");
+        // A run narrowed with --bench measures part of the mode: it passes, but records nothing.
+        std::fs::write(dir.join("target/perf/b.json"), report(both.clone()).to_string()).unwrap();
+        reuse(&dir, &["--bench", "b"]).unwrap();
+        assert!(!recorded(&dir), "--bench narrows the run");
+        // A misspelt --bench is an error, not an empty run that records an empty baseline.
+        assert!(reuse(&dir, &["--bench", "nope"]).unwrap_err().contains("unknown bench `nope`"));
+        assert!(!recorded(&dir));
+        // The complete run records it.
+        reuse(&dir, &[]).unwrap();
+        assert!(recorded(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Measured nothing at all (every scenario not run or not measurable): not complete.
+        let b = parse_budgets(TOML).unwrap();
+        assert!(!complete_coverage(&evaluate(&b, &BTreeMap::new(), None, 15.0, true), false));
+        let mut reports = BTreeMap::new();
+        reports.insert("b".to_string(), Ok(report(both)));
+        assert!(complete_coverage(&evaluate(&b, &reports, None, 15.0, true), false));
+        assert!(!complete_coverage(&evaluate(&b, &reports, None, 15.0, true), true));
+    }
+
+    #[test]
+    fn a_slow_host_excuses_regressions_not_enforced_budgets() {
+        // The canary is twice the baseline's: the host is slow. P1 and P2 regressed (100 vs 10 ms);
+        // P1 also breaks its enforced 25 ms budget, P2 only its unenforced one.
+        let rows = json!([{"name": "move row", "samples_ms": [100.0]}, {"name": "opacity row", "samples_ms": [100.0]}]);
+        let dir = scratch("slow-budget", rows, [200.0, 200.0]);
+        write_baseline(&dir, 10.0, 100.0);
+        let err = reuse(&dir, &[]).unwrap_err();
+        assert!(err.contains("1 perf failure(s)") && err.contains("P1 move: **BUDGET BROKEN**"), "{err}");
+        // With advisory budgets only the regressions are left, and the slow host excuses them.
+        reuse(&dir, &["--advisory-budgets"]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reuse_judges_saved_reports_by_their_own_canary() {
+        // Saved with a 1 ms canary, as fast as the baseline's: any live canary is far slower, and
+        // must not excuse the saved +900 % regression.
+        let rows = json!([{"name": "move row", "samples_ms": [10.0]}, {"name": "opacity row", "samples_ms": [10.0]}]);
+        let dir = scratch("reuse-canary", rows, [1.0, 1.0]);
+        write_baseline(&dir, 1.0, 1.0);
+        let err = reuse(&dir, &[]).unwrap_err();
+        assert!(err.contains("P1 move: **REGRESSED**"), "{err}");
+        let results: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("target/perf/results.json")).unwrap()).unwrap();
+        assert_eq!(results["canary_ms"], json!([1.0, 1.0]), "kept for the next --reuse");
+        // Saved without a canary: nothing says the host was slow, so the regression still fails.
+        write(&dir.join("target/perf/results.json"), "{}").unwrap();
+        assert!(reuse(&dir, &[]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
