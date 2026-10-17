@@ -85,7 +85,7 @@ Priorities: important infrastructure first, then low-hanging parity, then the lo
    settings that do nothing. Its numbers are measured; prefer them to estimates.
 2. `docs/roadmap.md` → **Current focus**.
 3. `cargo xtask parity` → `docs/parity-checklist.md` lists every missing menu item, grouped by menu. Low-hanging fruit is usually a missing command whose algorithm already exists in `algo`, `paint`, `vector` or `text`.
-4. `log/devlog.md` → the "Still open" bullets of recent entries.
+4. Open issues and PR descriptions → shared remaining-work notes; for work on the same machine, also check the "Still open" bullets in local `log/devlog.md` (gitignored).
 
 When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower it).
 
@@ -111,7 +111,7 @@ While iterating, run less and keep the full commands above as the final gate: `c
 
 Commands must **never panic** on bad input (Rule 9): every `run` closure and the code it calls returns `Err`, not a panic, for any params or document state. New commands come with a graceful-failure test (empty/out-of-range/wrong-type params → `Err`, not a crash).
 
-Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still open). Sessions can end abruptly (crashes, context limits), so the dev log plus a green tree is how the next agent picks up. Keep the tree building at every step.
+For a local development session, append a terse entry to `log/devlog.md` (what landed, numbers, what's still open). This file is gitignored and stays on that machine; it is **not** a shared handoff. For a contributed pull request, put the same handoff in the **PR description**: summarize the change, verification results (including checks not run), and remaining work. Update that description if subsequent commits change the status. Other contributors and fresh clones should use the shared PR discussion and linked issues rather than relying on `log/devlog.md`. Sessions can end abruptly (crashes, context limits), so keep the tree building at every step.
 
 ## 6. Parallel agents
 
