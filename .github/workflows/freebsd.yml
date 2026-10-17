@@ -5,12 +5,14 @@
 # uploaded and no secrets are used.
 name: FreeBSD
 
-# The VM build takes one to several hours, so it runs nightly on main rather than on every push
-# or dependency change: a drifted dependency still shows up within a day. PRs that change the
-# FreeBSD packaging itself still run it.
+# The VM build is slow, so it runs nightly on main and on pushes to `release`, not on every push
+# or dependency change: a drifted dependency still shows up within a day, and always before a
+# release ships. PRs that change the FreeBSD packaging itself still run it.
 on:
   schedule:
     - cron: "17 2 * * *"
+  push:
+    branches: [release]
   pull_request:
     paths:
       - .github/workflows/freebsd.yml
