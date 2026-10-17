@@ -102,7 +102,9 @@ fn caps_are_internally_consistent() {
         let c = caps(f);
         assert!(!c.depths.is_empty() && !c.layouts.is_empty(), "{f:?}");
         assert_eq!(c.alpha, c.layouts.iter().any(|l| l.has_alpha()), "{f:?} alpha flag vs layouts");
-        assert!(!f.extensions().is_empty() && !f.name().is_empty() && f.mime_type().starts_with("image/"));
+        // DICOM's registered media type is `application/dicom`; every other format is an image.
+        let mime_ok = f.mime_type().starts_with("image/") || (f == Format::Dicom && f.mime_type() == "application/dicom");
+        assert!(!f.extensions().is_empty() && !f.name().is_empty() && mime_ok, "{f:?}");
     }
 }
 
@@ -204,6 +206,19 @@ fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x18ftypmif1\0\0\0\0mif1avif"), Some(Format::Avif), "compatible brand");
     assert_eq!(detect(b"\0\0\0\x18ftypisom\0\0\0\0isommp41"), None, "mp4 is not avif");
 }
+#[test]
+fn detect_magic_dicom() {
+    let mut b = vec![0u8; 128];
+    b.extend_from_slice(b"DICM");
+    assert_eq!(detect(&b), Some(Format::Dicom));
+    assert_eq!(from_extension("scan.DCM"), Some(Format::Dicom));
+    assert_eq!(from_extension("scan.dc3"), Some(Format::Dicom));
+    assert!(caps(Format::Dicom).read && !caps(Format::Dicom).write);
+    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Dicom));
+    // A bare magic is an error, never a panic.
+    assert!(decode_as(Format::Dicom, &b).is_err());
+}
+
 #[test]
 fn detect_tga_heuristic() {
     // Uncompressed true-colour 2x2, 24 bpp.

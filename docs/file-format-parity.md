@@ -44,7 +44,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | SVG | R (rasterize) | yes, as editable shape layers or a vector smart object | no | Better than Photoshop for editing; gradients approximated (FILE-215-9) |
 | JPEG 2000 | R/W | no (#1047) | no | |
 | Cineon / DPX | R (DPX), R/W (CIN) | DPX: luma, RGB, RGBA at 8/10/12/16 bits, both byte orders (#1049); Cineon: 10-bit gray/RGB, read-only | DPX: 8/10/12/16 bits (`dpxBits`, `--dpx-bits`); Cineon no | Writes DPX, which Photoshop only reads; header fields (creator, project, copyright, transfer, frame rate, time code…) round-trip; Cineon read-only, no RLE |
-| DICOM | R/W | no | no | |
+| DICOM | R/W | yes (#1048) | no | Read-only, uncompressed syntaxes: MONOCHROME1/2, RGB, YBR_FULL |
 | PCX | R/W | no | no | |
 | Pixar | R/W | no | no | |
 | Amiga IFF | R/W | no | no | |
