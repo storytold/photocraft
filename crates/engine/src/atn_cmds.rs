@@ -1089,9 +1089,30 @@ fn make_from(d: &Descriptor) -> Mapped {
             let id = if get_ref(d, "From").is_some() { "layer.groupLayers" } else { "layer.new.group" };
             step(id, Value::Object(p))
         }
+        // History panel › New Snapshot (of the current state).
+        Some("SnpS") => {
+            let mut p = Map::new();
+            if let Some(n) = get_text(d, "Nm  ") {
+                p.insert("name".into(), n.into());
+            }
+            match get_enum(d, "Usng").as_deref().map(|u| lookup(SNAPSHOT_FROM, u)) {
+                None => {}
+                Some(Some(f)) => {
+                    p.insert("from".into(), f.into());
+                }
+                Some(None) => return Mapped::Unsupported { harmless: false },
+            }
+            if get_bool(d, "replaceExisting") == Some(true) {
+                p.insert("replaceExisting".into(), true.into());
+            }
+            step("history.newSnapshot", Value::Object(p))
+        }
         _ => Mapped::Unsupported { harmless: false },
     }
 }
+
+/// New Snapshot's From: the full document, the layers merged, or the current layer.
+const SNAPSHOT_FROM: &[(&str, &str)] = &[("FllD", "fullDocument"), ("MrgL", "mergedLayers"), ("CrnL", "currentLayer")];
 
 fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     let with_name = |cls: &str| {
@@ -1153,6 +1174,18 @@ fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
             d
         }
         "file.newFromClipboard" => desc("null").with("Nw  ", D::Descriptor(desc("Dcmn").with("preset", text("Clipboard")))),
+        "history.newSnapshot" => {
+            let current = D::Reference(vec![ReferenceItem::Property { class: class("HstS"), key: code("CrnH") }]);
+            let mut d = desc("null").with("null", class_ref("SnpS")).with("From", current);
+            if let Some(n) = jstr(p, "name") {
+                d = d.with("Nm  ", text(n));
+            }
+            d = d.with("Usng", enm("HstS", lookup_back(SNAPSHOT_FROM, jstr(p, "from").unwrap_or("fullDocument"))?));
+            if jbool(p, "replaceExisting") == Some(true) {
+                d = d.with("replaceExisting", D::Boolean(true));
+            }
+            d
+        }
         "file.new" => {
             let mut n = desc("Dcmn");
             if let Some(name) = jstr(p, "name") {
@@ -1182,6 +1215,56 @@ fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
             desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(t))))
         }
     })
+}
+
+/// The Layers panel lock buttons (`layerLocking`) ↔ `layer.lockLayers` params.
+const LOCKS: &[(&str, &str)] = &[
+    ("protectTransparency", "transparency"),
+    ("protectComposite", "pixels"),
+    ("protectPosition", "position"),
+    ("protectArtboardAutonest", "artboard"),
+    ("protectAll", "all"),
+];
+
+/// Blending Options' Advanced checkboxes ↔ `layer.layerStyle.blendingOptions` params.
+const ADVANCED_BLENDING: &[(&str, &str)] = &[("blendClipped", "blendClippedLayersAsGroup"), ("transparencyShapesLayer", "transparencyShapesLayer")];
+
+fn lock_params(locks: &Descriptor) -> Option<Map<String, Value>> {
+    let mut m = Map::new();
+    // "Unlock all" clears every lock.
+    if get_bool(locks, "protectNone") == Some(true) {
+        for (_, param) in LOCKS {
+            m.insert((*param).into(), false.into());
+        }
+    }
+    for (key, param) in LOCKS {
+        if let Some(b) = get_bool(locks, key) {
+            m.insert((*param).into(), b.into());
+        }
+    }
+    (!m.is_empty()).then_some(m)
+}
+
+/// `applyLocking`: a lock button in the Layers panel, on the target layer.
+fn locking_from(d: &Descriptor) -> Mapped {
+    let on_target = get_ref(d, "null").is_none_or(|r| ref_class(r).as_deref() == Some("Lyr") && matches!(target(r), Target::Ordinal(o) if o == "Trgt"));
+    match get_obj(d, "layerLocking").and_then(lock_params) {
+        Some(l) if on_target => step("layer.lockLayers", Value::Object(l)),
+        _ => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn locking_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let mut locks = desc("layerLocking");
+    for (key, param) in LOCKS {
+        if let Some(b) = jbool(p, param) {
+            locks = locks.with(key, D::Boolean(b));
+        }
+    }
+    if locks.items.is_empty() {
+        return None;
+    }
+    Some(desc("null").with("null", target_ref("Lyr ")).with("layerLocking", D::Descriptor(locks)))
 }
 
 fn set_from(d: &Descriptor) -> Mapped {
@@ -1287,10 +1370,65 @@ fn set_from(d: &Descriptor) -> Mapped {
             if let Some(vis) = get_bool(t, "Vsbl") {
                 p.insert("visible".into(), vis.into());
             }
+            // Lock buttons and Blending Options' Advanced checkboxes act on the target layer.
+            let targeted = !p.contains_key("layer");
+            if let Some(locks) = get_obj(t, "layerLocking") {
+                match lock_params(locks) {
+                    Some(l) if targeted => v.push(("layer.lockLayers", Value::Object(l))),
+                    _ => return unsupported,
+                }
+            }
+            let mut advanced = Map::new();
+            for (key, param) in ADVANCED_BLENDING {
+                if let Some(b) = get_bool(t, key) {
+                    advanced.insert((*param).into(), b.into());
+                }
+            }
+            if !advanced.is_empty() {
+                if !targeted {
+                    return unsupported;
+                }
+                v.push(("layer.layerStyle.blendingOptions", Value::Object(advanced)));
+            }
             if p.keys().any(|k| k != "layer") {
                 v.push(("layer.setProps", Value::Object(p)));
             }
-            if v.is_empty() { unsupported } else { steps(v) }
+            // The Layer Style dialog's OK on a layer without effects records only the effects'
+            // scale (`Lefx` = {Scl}); an empty `T` is an OK that changed nothing. Neither changes
+            // the document.
+            let no_effect = t.items.iter().all(|(k, val)| match val {
+                D::Descriptor(fx) if k.is("Lefx") => fx.items.iter().all(|(fk, _)| fk.is("Scl ")),
+                _ => false,
+            });
+            if !v.is_empty() {
+                steps(v)
+            } else if no_effect {
+                Mapped::Unsupported { harmless: true }
+            } else {
+                unsupported
+            }
+        }
+        // Layer › Smart Filter › Blending Options (`indx` counts the filters from 1, bottom first).
+        (Some("filterFX"), _) => {
+            let index = match r.first() {
+                Some(ReferenceItem::Index { index, .. }) if *index >= 1 => index - 1,
+                _ => return unsupported,
+            };
+            let on_target =
+                matches!(r.get(1..), Some(rest) if ref_class(rest).as_deref() == Some("Lyr") && matches!(target(rest), Target::Ordinal(o) if o == "Trgt"));
+            if !on_target {
+                return unsupported;
+            }
+            let Some(opts) = get_obj(d, "filterFX").and_then(|f| get_obj(f, "blendOptions")) else { return unsupported };
+            let mut p = json!({"index": index});
+            if let Some(o) = get_num(opts, "Opct") {
+                p["opacity"] = json!(o / 100.0);
+            }
+            if let Some(m) = get_enum(opts, "Md  ") {
+                let Some(label) = blend_label(&m) else { return unsupported };
+                p["blend"] = json!(label);
+            }
+            step("layer.smartFilter.blendingOptions", p)
         }
         // A Pattern Fill layer's pattern (double-click its thumbnail).
         (Some("contentLayer"), Target::Ordinal(o)) if o == "Trgt" => match get_obj(d, "T   ") {
@@ -1383,6 +1521,39 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             }
             desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(pattern_desc(p)?))
         }
+        "layer.layerStyle.blendingOptions" => {
+            let o = p.as_object()?;
+            let mut t = desc("Lyr ");
+            for (key, param) in ADVANCED_BLENDING {
+                if let Some(b) = jbool(p, param) {
+                    t = t.with(key, D::Boolean(b));
+                }
+            }
+            // Only the Advanced checkboxes export: Photoshop records the dialog's other options
+            // differently.
+            if t.items.is_empty() || t.items.len() != o.len() {
+                return None;
+            }
+            desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Descriptor(t))
+        }
+        "layer.smartFilter.blendingOptions" => {
+            if p.get("layer").is_some() {
+                return None;
+            }
+            let index = u32::try_from(p.get("index")?.as_u64()?).ok()?.checked_add(1)?;
+            let mut opts = desc("blendOptions");
+            if let Some(o) = jnum(p, "opacity") {
+                opts = opts.with("Opct", pct(o * 100.0));
+            }
+            if let Some(m) = jstr(p, "blend") {
+                opts = opts.with("Md  ", enm("BlnM", blend_ps(m)?));
+            }
+            let r = D::Reference(vec![
+                ReferenceItem::Index { class: class("filterFX"), index },
+                ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code("Trgt") },
+            ]);
+            desc("null").with("null", r).with("filterFX", D::Descriptor(desc("filterFX").with("blendOptions", D::Descriptor(opts))))
+        }
         "layer.setAdjustment" => {
             // The adjustment kind isn't in the params: Photoshop needs it, so only steps that
             // name one (`kind`) export.
@@ -1406,6 +1577,8 @@ fn select_from(d: &Descriptor) -> Mapped {
             match get_enum(d, "selectionModifier").as_deref() {
                 Some("addToSelection") => p["mode"] = json!("add"),
                 Some("removeFromSelection") => p["mode"] = json!("remove"),
+                // Shift-click: every layer between the active one and this one.
+                Some("addToSelectionContinuous") => p["mode"] = json!("range"),
                 _ => {}
             }
             step("layer.select", p)
@@ -1449,6 +1622,7 @@ fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
                 None | Some("replace") => {}
                 Some("add") => d = d.with("selectionModifier", enm("selectionModifierType", "addToSelection")),
                 Some("remove") => d = d.with("selectionModifier", enm("selectionModifierType", "removeFromSelection")),
+                Some("range") => d = d.with("selectionModifier", enm("selectionModifierType", "addToSelectionContinuous")),
                 Some(_) => return None,
             }
             d.with("MkVs", D::Boolean(false))
@@ -1483,6 +1657,15 @@ fn delete_from(d: &Descriptor) -> Mapped {
         // The targeted channel of a layer is its mask (what Photoshop records after making an
         // adjustment layer over a selection and discarding the mask).
         Some(r) if ref_class(r).as_deref() == Some("Chnl") && matches!(target(r), Target::Ordinal(o) if o == "Trgt") => none("layer.layerMask.delete"),
+        // The mask Photoshop adds to a new fill or adjustment layer, or to a smart object's filters.
+        Some(r) if ref_class(r).as_deref() == Some("Chnl") => match target(r) {
+            Target::Ordinal(o) if o == "Msk" => none("layer.layerMask.delete"),
+            // Photoshop adds an empty filter mask with the first smart filter; PhotoCraft doesn't.
+            Target::Ordinal(o) if o == "filterMask" => step("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
+            _ => Mapped::Unsupported { harmless: false },
+        },
+        // Timeline frames: PhotoCraft has no frame animation, so there is nothing to delete.
+        Some(r) if ref_class(r).as_deref() == Some("animationClass") => Mapped::Unsupported { harmless: true },
         Some(_) => Mapped::Unsupported { harmless: false },
     }
 }
@@ -1497,6 +1680,8 @@ fn quick_mask_ref() -> D {
 fn clear_from(d: &Descriptor) -> Mapped {
     match get_ref(d, "null").map(target) {
         Some(Target::Property(p)) if p == "QucM" => step("select.editInQuickMaskMode", json!({"on": false})),
+        // History panel menu › Clear History.
+        Some(Target::Property(p)) if p == "HsSt" => none("history.clear"),
         None => none("edit.clear"),
         _ => Mapped::Unsupported { harmless: false },
     }
@@ -1505,6 +1690,13 @@ fn clear_from(d: &Descriptor) -> Mapped {
 fn clear_to(id: &str, p: &Value) -> Option<Descriptor> {
     match id {
         "select.editInQuickMaskMode" if jbool(p, "on") == Some(false) => Some(desc("null").with("null", quick_mask_ref())),
+        "history.clear" => Some(desc("null").with(
+            "null",
+            D::Reference(vec![
+                ReferenceItem::Property { class: class("Prpr"), key: code("HsSt") },
+                ReferenceItem::Enumerated { class: class("Dcmn"), type_id: code("Ordn"), value: code("Trgt") },
+            ]),
+        )),
         _ => None,
     }
 }
@@ -1816,6 +2008,8 @@ fn delete_to(id: &str, p: &Value) -> Option<Descriptor> {
         "edit.clear" => desc("null"),
         "layer.delete" => desc("null").with("null", layer_ref(p)),
         "layer.layerMask.delete" => desc("null").with("null", target_ref("Chnl")),
+        "layer.smartFilter.deleteFilterMask" => desc("null")
+            .with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: Id::new("filterMask") }])),
         _ => return None,
     })
 }
@@ -2501,6 +2695,7 @@ macro_rules! adjustment_event {
     };
 }
 
+const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly"), ("LghO", "lightenOnly"), ("Anst", "anisotropic")];
 const RIPPLE_SIZE: &[(&str, &str)] = &[("Sml", "small"), ("Mdm", "medium"), ("Lrg", "large")];
 
 /// Select and Mask (`refineSelectionEdge`). Smart Radius, decontamination and the output follow
@@ -2523,6 +2718,8 @@ const REFINE_OUTPUT: &[(&str, &str)] = &[
     ("refineEdgeOutputNewLayerWithMask", "newLayerWithMask"),
     ("refineEdgeOutputNewDocument", "newDocument"),
     ("refineEdgeOutputNewDocumentWithMask", "newDocumentWithMask"),
+    // Newer Photoshop's name for Output To: Selection.
+    ("selectionOutputToSelection", "selection"),
 ];
 
 /// Filter Gallery effects (`GEfc` with the effect in `GEfk`): Photoshop's effect code, the
@@ -2608,6 +2805,7 @@ const EVENTS: &[Event] = &[
     ),
     ev!("Rple", "ripple", "Ripple", "filter.distort.ripple", &[F("Amnt", "amount", Kind::Long), F("RplS", "size", Kind::Enum("RplS", RIPPLE_SIZE))]),
     ev!("Crst", "crystallize", "Crystallize", "filter.pixelate.crystallize", &[F("ClSz", "cellSize", Kind::Long)]),
+    ev!("Dfs ", "diffuse", "Diffuse", "filter.stylize.diffuse", &[F("Md  ", "mode", Kind::Enum("DfsM", DIFFUSE_MODE)), F("FlRs", "seed", Kind::Long)]),
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
     // Adjustments (Image › Adjustments).
     Event {
@@ -2762,6 +2960,7 @@ const EVENTS: &[Event] = &[
             "layer.newAdjustmentLayer.gradientMap",
             "file.new",
             "file.newFromClipboard",
+            "history.newSnapshot",
         ],
         from: make_from,
         to: make_to,
@@ -2784,6 +2983,8 @@ const EVENTS: &[Event] = &[
             "layer.setAdjustment",
             "layer.fill.pattern.set",
             "layer.new.layerFromBackground",
+            "layer.layerStyle.blendingOptions",
+            "layer.smartFilter.blendingOptions",
         ],
         from: set_from,
         to: set_to,
@@ -2807,8 +3008,37 @@ const EVENTS: &[Event] = &[
         from: select_from,
         to: select_to,
     },
-    Event { code: "Dlt ", name: "delete", label: "Delete", ids: &["layer.delete", "edit.clear", "layer.layerMask.delete"], from: delete_from, to: delete_to },
-    Event { code: "", name: "clearEvent", label: "Clear", ids: &["select.editInQuickMaskMode"], from: clear_from, to: clear_to },
+    Event {
+        code: "Dlt ",
+        name: "delete",
+        label: "Delete",
+        ids: &["layer.delete", "edit.clear", "layer.layerMask.delete", "layer.smartFilter.deleteFilterMask"],
+        from: delete_from,
+        to: delete_to,
+    },
+    Event {
+        code: "GrpL",
+        name: "groupEvent",
+        label: "Create Clipping Mask",
+        ids: &["layer.createClippingMask"],
+        from: |d| match get_ref(d, "null").map(target) {
+            None => none("layer.createClippingMask"),
+            Some(Target::Ordinal(o)) if o == "Trgt" => none("layer.createClippingMask"),
+            _ => Mapped::Unsupported { harmless: false },
+        },
+        to: |_, p| p.as_object().is_some_and(|o| o.is_empty()).then(|| desc("null").with("null", target_ref("Lyr "))),
+    },
+    Event { code: "", name: "applyLocking", label: "Apply Locking", ids: &["layer.lockLayers"], from: locking_from, to: locking_to },
+    // Timeline › Make Frames from Layers: no frame animation in PhotoCraft, no document change.
+    Event {
+        code: "",
+        name: "animationFramesFromLayers",
+        label: "Make Frames from Layers",
+        ids: &[],
+        from: |_| Mapped::Unsupported { harmless: true },
+        to: |_, _| None,
+    },
+    Event { code: "", name: "clearEvent", label: "Clear", ids: &["select.editInQuickMaskMode", "history.clear"], from: clear_from, to: clear_to },
     Event {
         code: "Trnf",
         name: "transform",

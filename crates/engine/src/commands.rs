@@ -1547,9 +1547,13 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
     }
 }
 
+/// Bring to Front / Send to Back of a layer already there: nothing to do, which isn't an error
+/// (a Photoshop action plays it without complaint).
+const ALREADY_THERE: &str = "the layer is already at the front or back";
+
 fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     let id = layer_param(s, p)?;
-    s.edit("Arrange", |doc, _| {
+    let edited = s.edit("Arrange", |doc, _| {
         // The Background stays at the bottom: it doesn't move and nothing goes below it.
         let bg = crate::background_cmds::background_id(doc);
         if bg == Some(id) {
@@ -1574,12 +1578,16 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
             moved = true;
         }
         if !moved {
-            return Err(EngineError::Other("layer can't move further".into()));
+            let end = matches!(delta, i32::MAX | i32::MIN);
+            return Err(EngineError::Other(if end { ALREADY_THERE } else { "layer can't move further" }.into()));
         }
         crate::clip_group::settle(doc, &[id], &before, false);
         Ok(())
-    })?;
-    Ok(Value::Null)
+    });
+    match edited {
+        Err(EngineError::Other(m)) if m == ALREADY_THERE => Ok(json!({"moved": false})),
+        r => r.map(|_| Value::Null),
+    }
 }
 
 /// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take

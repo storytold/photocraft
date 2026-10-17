@@ -128,6 +128,14 @@ pub fn shell_save_command(id: &str) -> bool {
     matches!(id, "file.save" | "file.saveAs" | "file.saveACopy")
 }
 
+/// Save in an Edit Contents document writes it back into its smart object, as File › Save does
+/// there: the step needs no file and plays headless too.
+pub fn saves_smart_contents(s: &Session, id: &str) -> bool {
+    id == "file.save" && s.is_enabled(SAVE_CONTENTS)
+}
+
+pub const SAVE_CONTENTS: &str = "layer.smartObjects.saveContents";
+
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
 /// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
@@ -317,7 +325,8 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
         }
-        match s.execute(id, params.clone()) {
+        let result = if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, params.clone()) };
+        match result {
             Ok(value) => {
                 if let Some(error) = nested_failure(id, &value) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));
@@ -690,6 +699,30 @@ mod tests {
 
     fn pixel(s: &Session, layer: usize, x: i32, y: i32) -> Vec<f32> {
         s.active().unwrap().doc.layers[layer].surface().unwrap().pixel(x, y)
+    }
+
+    /// CopyCat's shape: Edit Contents, change the contents, Save. The Save step has no file to
+    /// write: it updates the smart object, headless too.
+    #[test]
+    fn save_in_edit_contents_updates_the_smart_object() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+        let steps = vec![("edit.fill".to_string(), json!({"contents": "color", "color": "#0000ff"})), ("file.save".to_string(), json!({}))];
+        s.actions.list.push(Action::new("Edit and save", steps));
+        let played = s.execute("actions.play", json!({"action": "Edit and save"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        s.set_active(0);
+        let doc = &s.active().unwrap().doc;
+        let flat = crate::file_cmds::flattened(doc, doc.pixel_format());
+        let p = flat.pixel(2, 2);
+        assert!(p[0] < 0.01 && p[2] > 0.99, "the smart object shows the saved contents: {p:?}");
+        // With no Edit Contents document, Save stays the shell's (it needs the document's file).
+        s.actions.list.push(Action::new("Save", vec![("file.save".to_string(), json!({}))]));
+        assert!(s.execute("actions.play", json!({"action": "Save"})).unwrap().get("failed").is_some());
     }
 
     #[test]

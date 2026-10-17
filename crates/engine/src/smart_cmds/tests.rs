@@ -328,6 +328,13 @@ fn selection_becomes_the_filter_mask() {
     s.execute("layer.smartFilter.deleteFilterMask", json!({})).unwrap();
     assert!(active_smart(&s).filter_mask.is_none());
     assert!(!s.is_enabled("layer.smartFilter.deleteFilterMask"));
+    // A Photoshop action deletes the mask Photoshop adds by default: with `ifPresent`, no mask
+    // is no step and no error. A layer that isn't a smart object still refuses.
+    let steps = s.active().unwrap().history.past_len();
+    assert_eq!(s.execute("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})).unwrap(), Value::Null);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.execute("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})).is_err());
 }
 
 /// Scales `id` to 10 % around the origin and back, returning the composite.

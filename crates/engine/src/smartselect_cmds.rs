@@ -961,8 +961,9 @@ mod tests {
     #[test]
     fn refine_edge_shift_and_contrast() {
         let mut s = blurred_edge_selected();
+        // A hard selection moves 1 px at 100%: no band of several pixels.
         s.execute("select.refineEdge", json!({"shiftEdge": 100})).unwrap();
-        assert!(cov(&s, 42, 20) > 0.99);
+        assert!(cov(&s, 40, 20) > 0.99 && cov(&s, 41, 20) < 0.01);
         s.execute("edit.undo", json!({})).unwrap();
         s.execute("select.refineEdge", json!({"feather": 8, "contrast": 100})).unwrap();
         assert!(cov(&s, 38, 20) == 1.0 && cov(&s, 42, 20) == 0.0);

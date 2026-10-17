@@ -121,6 +121,8 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
             }
             if id == "actions.play" {
                 play(app, p)
+            } else if actions_cmds::saves_smart_contents(&app.session, id) {
+                app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())
             } else if actions_cmds::shell_save_command(id) {
                 // Write synchronously, so the next step doesn't meet a document locked by a
                 // background save.

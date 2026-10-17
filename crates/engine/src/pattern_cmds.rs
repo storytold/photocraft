@@ -22,11 +22,14 @@ use crate::{EngineError, Result, Session};
 #[derive(Clone, Debug)]
 pub struct PatternLibrary {
     pub items: Vec<Pattern>,
+    /// Saved patterns held as a small preview until used, by id: their full size. The preset
+    /// store reads the pixels ([`full`]); everything that paints goes through [`resolve`].
+    pub stored: std::collections::HashMap<String, (u32, u32)>,
 }
 
 impl Default for PatternLibrary {
     fn default() -> Self {
-        PatternLibrary { items: builtin() }
+        PatternLibrary { items: builtin(), stored: std::collections::HashMap::new() }
     }
 }
 
@@ -110,24 +113,59 @@ fn has_pattern(s: &Session) -> std::result::Result<(), String> {
     if s.patterns.items.is_empty() && s.active().is_none_or(|d| d.doc.patterns.is_empty()) { Err("no patterns".into()) } else { Ok(()) }
 }
 
-/// Finds a pattern by id or name: the active document's first, then the library. An empty key
-/// picks the first library pattern (Photoshop's default).
-pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
-    if key.is_empty() {
-        // The Patterns panel's selection, else the first library pattern.
-        return crate::presets::patterns::current(s).or(s.patterns.items.first()).cloned();
+/// `p` with its full pixels: a saved pattern held as a preview is read from the preset store.
+pub fn full(s: &Session, p: &Pattern) -> std::result::Result<Pattern, String> {
+    if !s.patterns.stored.contains_key(&p.id) {
+        return Ok(p.clone());
     }
-    if let Some(d) = s.active()
+    let st = s.preset_store.as_ref().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
+    let mut f = st.load_pattern(&p.id).map_err(|e| format!("pattern \"{}\" could not be loaded: {e}", p.display_name()))?;
+    f.name = p.name.clone();
+    Ok(f)
+}
+
+/// The library pattern `key` names (the panel's selection or the first for an empty key).
+fn library_pattern<'a>(s: &'a Session, key: &str) -> Option<&'a Pattern> {
+    if key.is_empty() {
+        return crate::presets::patterns::current(s).or(s.patterns.items.first());
+    }
+    photocraft_doc::pattern::find(&s.patterns.items, key, key)
+}
+
+/// The id of the pattern [`resolve`] finds, without reading a saved pattern's pixels: for checks
+/// and lookups that don't paint.
+pub fn resolve_id(s: &Session, key: &str) -> Option<String> {
+    if !key.is_empty()
+        && let Some(d) = s.active()
+        && let Some(p) = photocraft_doc::pattern::find(&d.doc.patterns, key, key)
+    {
+        return Some(p.id.clone());
+    }
+    library_pattern(s, key).map(|p| p.id.clone())
+}
+
+/// Finds a pattern by id or name: the active document's first, then the library. An empty key
+/// picks the first library pattern (Photoshop's default). `None` also when a saved pattern's
+/// pixels can't be read (see [`resolve_param`] for the reason).
+pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
+    if !key.is_empty()
+        && let Some(d) = s.active()
         && let Some(p) = photocraft_doc::pattern::find(&d.doc.patterns, key, key)
     {
         return Some(p.clone());
     }
-    photocraft_doc::pattern::find(&s.patterns.items, key, key).cloned()
+    full(s, library_pattern(s, key)?).ok()
 }
 
 pub(crate) fn resolve_param(s: &Session, cmd: &str, p: &Value) -> Result<Pattern> {
     let key = p.get("pattern").and_then(Value::as_str).unwrap_or("");
-    resolve(s, key).ok_or_else(|| bad(cmd, format!("no pattern \"{key}\" (see pattern.list)")))
+    if let Some(pat) = resolve(s, key) {
+        return Ok(pat);
+    }
+    match library_pattern(s, key).map(|lp| full(s, lp)) {
+        Some(Err(e)) => Err(bad(cmd, e)),
+        _ => Err(bad(cmd, format!("no pattern \"{key}\" (see pattern.list)"))),
+    }
 }
 
 /// Copies `pat` into the document's patterns unless it is already there (by id).
@@ -152,10 +190,10 @@ pub fn resolve_effect(s: &Session, fx: photocraft_doc::Effect) -> Result<(photoc
     }
 }
 
-fn info(p: &Pattern, in_doc: bool, in_library: bool) -> Value {
+fn info(p: &Pattern, size: (u32, u32), in_doc: bool, in_library: bool) -> Value {
     let f = p.surface.format();
     json!({
-        "id": p.id, "name": p.display_name(), "storedName": p.name, "width": p.width, "height": p.height,
+        "id": p.id, "name": p.display_name(), "storedName": p.name, "width": size.0, "height": size.1,
         "mode": format!("{:?}", f.mode), "depth": format!("{:?}", f.sample), "alpha": f.alpha,
         "inDocument": in_doc, "inLibrary": in_library,
     })
@@ -163,8 +201,9 @@ fn info(p: &Pattern, in_doc: bool, in_library: bool) -> Value {
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let doc_pats: Vec<Pattern> = s.active().map(|d| d.doc.patterns.clone()).unwrap_or_default();
-    let mut out: Vec<Value> = s.patterns.items.iter().map(|p| info(p, doc_pats.iter().any(|d| d.id == p.id), true)).collect();
-    out.extend(doc_pats.iter().filter(|d| !s.patterns.items.iter().any(|p| p.id == d.id)).map(|p| info(p, true, false)));
+    let size = |p: &Pattern| s.patterns.stored.get(&p.id).copied().unwrap_or((p.width, p.height));
+    let mut out: Vec<Value> = s.patterns.items.iter().map(|p| info(p, size(p), doc_pats.iter().any(|d| d.id == p.id), true)).collect();
+    out.extend(doc_pats.iter().filter(|d| !s.patterns.items.iter().any(|p| p.id == d.id)).map(|p| info(p, (p.width, p.height), true, false)));
     Ok(Value::Array(out))
 }
 
@@ -228,7 +267,7 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let pat = Pattern::new(name, surf, r.width(), r.height());
     let id = pat.id.clone();
-    let out = info(&pat, false, true);
+    let out = info(&pat, (pat.width, pat.height), false, true);
     if !s.patterns.items.iter().any(|q| q.id == id) {
         s.patterns.items.push(pat);
     }
@@ -263,6 +302,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let i = library_index(s, "pattern.delete", p)?;
     let pat = s.patterns.items.remove(i);
+    s.patterns.stored.remove(&pat.id);
     Ok(json!({"deleted": pat.id}))
 }
 
@@ -278,6 +318,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ids = Vec::new();
     for pat in pats {
         ids.push(pat.id.clone());
+        s.patterns.stored.remove(&pat.id);
         match s.patterns.items.iter_mut().find(|q| q.id == pat.id) {
             Some(q) => *q = pat,
             None => s.patterns.items.push(pat),
@@ -293,7 +334,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(keys) => {
             keys.iter().filter_map(Value::as_str).map(|k| resolve(s, k).ok_or_else(|| bad(cmd, format!("no pattern \"{k}\"")))).collect::<Result<_>>()?
         }
-        None => s.patterns.items.clone(),
+        None => s.patterns.items.iter().map(|p| full(s, p).map_err(|e| bad(cmd, e))).collect::<Result<_>>()?,
     };
     let bytes = photocraft_io::pattern_map::write_pat(&pats).map_err(EngineError::Other)?;
     crate::file_cmds::write_file(path, &bytes)?;

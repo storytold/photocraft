@@ -703,3 +703,126 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
 }
+
+fn user_patterns(s: &Session) -> Vec<(String, u32)> {
+    let builtins: Vec<String> = crate::pattern_cmds::builtin().into_iter().map(|p| p.id).collect();
+    s.patterns.items.iter().filter(|p| !builtins.contains(&p.id)).map(|p| (p.name.clone(), p.width)).collect()
+}
+
+fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {
+    s.execute("file.new", json!({"width": width, "height": 6})).unwrap();
+    s.execute("edit.fill", json!({"color": color})).unwrap();
+    s.execute("edit.definePattern", json!({"name": name})).unwrap();
+}
+
+/// Imported and defined patterns survive a restart: one file each, written once, plus the index;
+/// a rename rewrites only the index, a delete removes the file.
+#[test]
+fn patterns_survive_a_restart() {
+    let dir = TempDir::new("patterns");
+    let (mut s, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    define_pattern(&mut s, "Grit", "#202020", 8);
+    define_pattern(&mut s, "Paper", "#f0e0c0", 12);
+    let pattern_files = |d: &TempDir| d.files().into_iter().filter(|f| f.starts_with("pattern-")).collect::<Vec<_>>();
+    assert_eq!(pattern_files(&dir).len(), 2);
+    assert!(dir.files().contains(&PATTERNS_FILE.to_string()));
+    assert!(!dir.files().iter().any(|f| f.contains("Checkerboard")), "built-ins are never written");
+
+    let (mut t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(user_patterns(&t), [("Grit".to_string(), 8), ("Paper".to_string(), 12)]);
+    // The pixels come back too.
+    let paper = t.patterns.items.iter().find(|p| p.name == "Paper").unwrap();
+    let px = paper.surface.pixel(3, 3);
+    assert!((px[0] - 240.0 / 255.0).abs() < 0.01, "{px:?}");
+
+    let before = std::fs::metadata(dir.0.join(&pattern_files(&dir)[0])).unwrap().modified().unwrap();
+    t.execute("pattern.rename", json!({"pattern": "Grit", "name": "Toner"})).unwrap();
+    assert_eq!(std::fs::metadata(dir.0.join(&pattern_files(&dir)[0])).unwrap().modified().unwrap(), before, "a rename rewrites only the index");
+    t.execute("pattern.delete", json!({"pattern": "Paper"})).unwrap();
+    assert_eq!(pattern_files(&dir).len(), 1, "the deleted pattern's file is gone");
+
+    let (u, _) = session(&dir);
+    assert_eq!(user_patterns(&u), [("Toner".to_string(), 8)]);
+}
+
+/// A corrupt pattern file is skipped with a warning and left on disk; the others load, and later
+/// saves never delete or overwrite it. A corrupt index is never overwritten.
+#[test]
+fn corrupt_pattern_files_are_skipped_and_kept() {
+    let dir = TempDir::new("patterns-corrupt");
+    let (mut s, _) = session(&dir);
+    define_pattern(&mut s, "Grit", "#202020", 8);
+    define_pattern(&mut s, "Paper", "#f0e0c0", 12);
+    let grit = s.patterns.items.iter().find(|p| p.name == "Grit").unwrap().id.clone();
+    let file = dir.0.join(patterns::file_name_for_test(&grit));
+    std::fs::write(&file, b"not a pattern").unwrap();
+
+    let (mut t, w) = session(&dir);
+    assert!(w.iter().any(|w| w.contains("Grit")), "{w:?}");
+    assert_eq!(user_patterns(&t), [("Paper".to_string(), 12)]);
+    define_pattern(&mut t, "Ink", "#000000", 4);
+    assert_eq!(std::fs::read(&file).unwrap(), b"not a pattern", "the unreadable file is left alone");
+    let index = std::fs::read_to_string(dir.0.join(PATTERNS_FILE)).unwrap();
+    assert!(index.contains("Grit") && index.contains("Ink"), "{index}");
+
+    std::fs::write(dir.0.join(PATTERNS_FILE), b"{").unwrap();
+    let (mut u, w) = session(&dir);
+    assert!(w.iter().any(|w| w.contains(PATTERNS_FILE)), "{w:?}");
+    assert!(user_patterns(&u).is_empty());
+    define_pattern(&mut u, "Late", "#808080", 4);
+    assert_eq!(std::fs::read(dir.0.join(PATTERNS_FILE)).unwrap(), b"{", "an unreadable index is never overwritten");
+}
+
+/// A large pattern opens as a small preview (texture libraries run to gigabytes) and is read at
+/// full size when it is used; its preview file goes with it on delete.
+#[test]
+fn large_patterns_load_on_use() {
+    let dir = TempDir::new("patterns-large");
+    let (mut s, _) = session(&dir);
+    s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    s.execute("select.rect", json!({"x": 250, "y": 150, "width": 50, "height": 50})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("edit.definePattern", json!({"name": "Big"})).unwrap();
+    assert_eq!(dir.files().iter().filter(|f| f.ends_with(".preview.pat")).count(), 1);
+
+    let (mut t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    let held = t.patterns.items.iter().find(|p| p.name == "Big").unwrap();
+    assert!(held.width <= PATTERN_PREVIEW_SIDE && held.height <= PATTERN_PREVIEW_SIDE, "held as a preview: {}x{}", held.width, held.height);
+    let listed = t.execute("pattern.list", json!({})).unwrap();
+    let big = listed.as_array().unwrap().iter().find(|p| p["name"] == "Big").unwrap();
+    assert_eq!((big["width"].as_u64(), big["height"].as_u64()), (Some(300), Some(200)), "the list reports the full size");
+    // Checks that only need the pattern's id (Pattern Stamp's enabled state) don't read its file.
+    let id = t.patterns.items.iter().find(|p| p.name == "Big").unwrap().id.clone();
+    let file = dir.0.join(patterns::file_name_for_test(&id));
+    let moved = file.with_extension("moved");
+    std::fs::rename(&file, &moved).unwrap();
+    assert_eq!(crate::pattern_cmds::resolve_id(&t, "Big"), Some(id.clone()));
+    assert!(crate::pattern_cmds::resolve(&t, "Big").is_none(), "the full pixels come from the file");
+    std::fs::rename(&moved, &file).unwrap();
+    let full = crate::pattern_cmds::resolve(&t, "Big").unwrap();
+    assert_eq!((full.width, full.height), (300, 200));
+    assert!(full.surface.pixel(280, 180)[1] < 0.01 && full.surface.pixel(10, 10)[1] > 0.99, "full pixels");
+    // Once read, it is kept: using it again doesn't read the file.
+    std::fs::rename(&file, &moved).unwrap();
+    assert_eq!(crate::pattern_cmds::resolve(&t, "Big").map(|p| p.width), Some(300));
+    std::fs::rename(&moved, &file).unwrap();
+    // A Pattern Fill layer gets the full pattern into the document.
+    t.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    t.execute("layer.newFillLayer.pattern", json!({"pattern": "Big"})).unwrap();
+    let doc_pat = &t.active().unwrap().doc.patterns[0];
+    assert_eq!((doc_pat.width, doc_pat.height), (300, 200));
+    // Exporting the library writes full pixels too.
+    let out = dir.0.join("export.pat");
+    t.execute("pattern.export", json!({"path": out.to_string_lossy()})).unwrap();
+    let back = photocraft_io::pattern_map::read_pat(&std::fs::read(&out).unwrap()).unwrap();
+    assert!(back.iter().any(|p| p.name == "Big" && p.width == 300));
+    std::fs::remove_file(&out).unwrap();
+
+    t.execute("pattern.delete", json!({"pattern": "Big"})).unwrap();
+    assert!(!dir.files().iter().any(|f| f.starts_with("pattern-")), "{:?}", dir.files());
+}

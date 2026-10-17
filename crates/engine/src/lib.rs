@@ -752,6 +752,9 @@ impl Session {
         if spec.id == "layer.new.layerFromBackground" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
             return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
         }
+        if spec.id == "layer.smartFilter.deleteFilterMask" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
+            return smart_cmds::smart_layer_active(self);
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 

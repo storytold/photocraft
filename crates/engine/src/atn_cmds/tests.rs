@@ -314,6 +314,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("edit.undo", json!({})),
         ("edit.redo", json!({})),
         ("layer.select", json!({"layer": "YELLOW", "mode": "remove"})),
+        ("layer.select", json!({"layer": "Or paste photocopy texture here", "mode": "range"})),
         ("layer.translate", json!({"dx": 0.36, "dy": -1.08, "units": "pt"})),
         ("select.loadSelection", json!({"channel": "targeted"})),
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
@@ -321,6 +322,15 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
+        // COPYCAT, AJ_Actions2023 and the Line and Color tutorial set.
+        ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
+        ("layer.smartFilter.blendingOptions", json!({"index": 1, "opacity": 0.5, "blend": "Darken"})),
+        ("layer.layerStyle.blendingOptions", json!({"blendClippedLayersAsGroup": false, "transparencyShapesLayer": false})),
+        ("layer.createClippingMask", json!({})),
+        ("layer.lockLayers", json!({"transparency": true})),
+        ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
+        ("history.clear", json!({})),
+        ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
     ];
     for (id, params) in &cases {
         let item = export_item(id, params, "S").unwrap_or_else(|| panic!("{id} does not export"));

@@ -566,6 +566,10 @@ fn arrange_and_group() {
     let names: Vec<String> = s.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, ["Background", "B", "A"]);
     assert!(s.execute("layer.arrange.bringForward", json!({})).is_err());
+    // Bring to Front of the front layer does nothing: no error (an action plays it), no step.
+    let steps = s.active().unwrap().history.past_len();
+    assert_eq!(s.execute("layer.arrange.bringToFront", json!({})).unwrap(), json!({"moved": false}));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
     s.execute("layer.groupLayers", json!({})).unwrap();
     let doc = s.execute("document.inspect", json!({})).unwrap();
     assert_eq!(doc["layers"][0]["kind"], "Group");

@@ -110,6 +110,16 @@ fn name_param(cmd: &str, p: &Value) -> Result<Option<String>> {
     }
 }
 
+/// History panel menu › Clear History: drops every state of the active document but its current
+/// one, keeping the snapshots (Edit › Purge › Histories clears every open document). Undoable in
+/// Photoshop only by its own Undo; here, as with Purge, it is not.
+fn clear_history(s: &mut Session, _: &Value) -> Result<Value> {
+    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.history.clear();
+    st.coalesce = None;
+    Ok(Value::Null)
+}
+
 /// History panel › Create new snapshot (the camera button): a named copy of the document,
 /// "Snapshot N" by default. `from` is the New Snapshot dialog's From: the full document (default),
 /// its layers merged into one, or only the active layer. Not a history state.
@@ -143,6 +153,10 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let id = st.next_snapshot;
     st.next_snapshot = id.saturating_add(1);
     let name = name.unwrap_or_else(|| format!("Snapshot {id}"));
+    // An action's New Snapshot with "replace existing": a snapshot of that name gives way.
+    if p.get("replaceExisting").and_then(Value::as_bool) == Some(true) {
+        st.snapshots.retain(|snap| snap.name != name);
+    }
     st.snapshots.push(Snapshot { id, name: name.clone(), doc, layers });
     Ok(json!({ "snapshot": id, "name": name }))
 }
@@ -259,9 +273,19 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Snapshot",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str?="Snapshot N","from":"fullDocument"|"mergedLayers"|"currentLayer"="fullDocument"} → {snapshot,name}: a named copy of the document for the session (not a history state)"##,
+            params: r##"{"name":str?="Snapshot N","from":"fullDocument"|"mergedLayers"|"currentLayer"="fullDocument","replaceExisting":bool=false (drop snapshots of the same name first)} → {snapshot,name}: a named copy of the document for the session (not a history state)"##,
             enabled: has_doc,
             run: new_snapshot,
+            journal: true,
+        },
+        CommandSpec {
+            id: "history.clear",
+            label: "Clear History",
+            menu: &[],
+            shortcut: None,
+            params: "{} (the active document's states; snapshots stay)",
+            enabled: has_doc,
+            run: clear_history,
             journal: true,
         },
         CommandSpec {
@@ -414,6 +438,24 @@ mod tests {
         let r = s.execute("history.newSnapshot", json!({"name": "Before green"})).unwrap();
         assert_eq!(r, json!({"snapshot": 2, "name": "Before green"}));
         assert_eq!(snapshots(&s), json!([{"id": 1, "name": "Snapshot 1"}, {"id": 2, "name": "Before green"}]));
+    }
+
+    #[test]
+    fn replace_existing_snapshot_and_clear_history() {
+        let mut s = session();
+        s.execute("history.newSnapshot", json!({"name": "Result"})).unwrap();
+        s.execute("history.newSnapshot", json!({"name": "Other"})).unwrap();
+        s.execute("history.newSnapshot", json!({"name": "Result", "replaceExisting": true})).unwrap();
+        assert_eq!(snapshots(&s), json!([{"id": 2, "name": "Other"}, {"id": 3, "name": "Result"}]));
+        let pixel = top_pixel(&s);
+        s.execute("history.clear", json!({})).unwrap();
+        assert_eq!(entries(&s).len(), 1, "only the current state is left");
+        assert!(!s.active().unwrap().history.can_undo());
+        assert_eq!(top_pixel(&s), pixel, "the document is unchanged");
+        assert_eq!(snapshots(&s).as_array().map(Vec::len), Some(2), "snapshots stay");
+        // Nothing left to clear is not an error (an action may clear twice).
+        s.execute("history.clear", json!({})).unwrap();
+        assert!(Session::new().execute("history.clear", json!({})).is_err(), "no document");
     }
 
     #[test]
