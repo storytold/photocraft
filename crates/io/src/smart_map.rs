@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 16] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -155,6 +155,8 @@ const KNOWN: [Known; 14] = [
     Known { class: "Mxm ", filter_id: code(b"Mxm "), name: "Maximum...", command: "filter.other.maximum" },
     Known { class: "Mnm ", filter_id: code(b"Mnm "), name: "Minimum...", command: "filter.other.minimum" },
     Known { class: "Msc ", filter_id: code(b"Msc "), name: "Mosaic...", command: "filter.pixelate.mosaic" },
+    Known { class: "Mztn", filter_id: code(b"Mztn"), name: "Mezzotint...", command: "filter.pixelate.mezzotint" },
+    Known { class: "ClrH", filter_id: code(b"ClrH"), name: "Color Halftone...", command: "filter.pixelate.colorHalftone" },
     Known { class: "Embs", filter_id: code(b"Embs"), name: "Emboss...", command: "filter.stylize.emboss" },
     Known { class: "Lvls", filter_id: code(b"Lvls"), name: "Levels...", command: "image.adjustments.levels" },
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
@@ -169,6 +171,28 @@ fn known_by_command(command: &str) -> Option<&'static Known> {
 /// RGB channel references in Levels/Curves (`Chnl` enum) and their parameter keys ("" = the
 /// composite: top-level keys).
 const CHANNELS: [(&[u8; 4], &str); 4] = [(b"Cmps", ""), (b"Rd  ", "red"), (b"Grn ", "green"), (b"Bl  ", "blue")];
+
+/// Mezzotint's `MztT` enum codes and our `type` values (measured in Photoshop by rendering each).
+const MEZZOTINT_TYPES: [(&[u8; 4], &str); 10] = [
+    (b"FnDt", "fineDots"),
+    (b"MdmD", "mediumDots"),
+    (b"GrnD", "grainyDots"),
+    (b"CrsD", "coarseDots"),
+    (b"ShrL", "shortLines"),
+    (b"MdmL", "mediumLines"),
+    (b"LngL", "longLines"),
+    (b"ShSt", "shortStrokes"),
+    (b"MdmS", "mediumStrokes"),
+    (b"LngS", "longStrokes"),
+];
+
+/// Color Halftone's `Rds ` (max radius) and `Ang1`..`Ang4` (screen angles) longs, read within
+/// the dialog's ranges; anything else is kept verbatim.
+fn color_halftone_params(f: &Descriptor) -> Option<J> {
+    let radius = int(f, "Rds ").filter(|r| (4..=127).contains(r))?;
+    let angle = |k: &str| int(f, k).filter(|a| (-360..=360).contains(a));
+    Some(json!({"maxRadius": radius, "channel1": angle("Ang1")?, "channel2": angle("Ang2")?, "channel3": angle("Ang3")?, "channel4": angle("Ang4")?}))
+}
 
 fn px(d: &Descriptor, key: &str) -> Option<f64> {
     num(d.get(key)).filter(|v| v.is_finite())
@@ -281,6 +305,11 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
             json!({"amount": px(f, "Nose")?, "distribution": dist, "monochromatic": mono, "seed": int(f, "FlRs").unwrap_or(0)})
         }
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
+        ("Mztn", Some(f)) => {
+            let t = enum_of(f, "MztT")?;
+            json!({"type": MEZZOTINT_TYPES.iter().find(|(c, _)| t == &c[..])?.1})
+        }
+        ("ClrH", Some(f)) => color_halftone_params(f)?,
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
@@ -594,6 +623,21 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
                 .with("FlRs", pi(p, "seed", 0.0))
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
+        // Photoshop's Mezzotint has no seed (it is random on every render), so `seed` is not saved.
+        "Mztn" => {
+            let t = p.get("type").and_then(J::as_str).unwrap_or("fineDots");
+            let code = MEZZOTINT_TYPES.iter().find(|(_, k)| *k == t).map_or(b"FnDt", |(c, _)| *c);
+            d.with("MztT", Value::Enumerated { type_id: Id::new("MztT"), value: Id::Code(*code) })
+        }
+        "ClrH" => {
+            // Longs within the dialog's ranges (what the engine accepts: radius 4..127, angles ±360).
+            let long = |key: &str, default: f64, lo: f64, hi: f64| Value::Integer(pf(p, key, default).round().clamp(lo, hi) as i32);
+            d.with("Rds ", long("maxRadius", 8.0, 4.0, 127.0))
+                .with("Ang1", long("channel1", 108.0, -360.0, 360.0))
+                .with("Ang2", long("channel2", 162.0, -360.0, 360.0))
+                .with("Ang3", long("channel3", 90.0, -360.0, 360.0))
+                .with("Ang4", long("channel4", 45.0, -360.0, 360.0))
+        }
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
@@ -1062,6 +1106,8 @@ mod tests {
             sf("filter.other.maximum", json!({"radius": 2.0})),
             sf("filter.other.minimum", json!({"radius": 2.0})),
             sf("filter.pixelate.mosaic", json!({"cellSize": 8.0})),
+            sf("filter.pixelate.mezzotint", json!({"type": "mediumStrokes"})),
+            sf("filter.pixelate.colorHalftone", json!({"maxRadius": 6, "channel1": 10, "channel2": 20, "channel3": 30, "channel4": 40})),
             sf("filter.stylize.emboss", json!({"angle": 135, "height": 3, "amount": 100})),
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
@@ -1078,6 +1124,122 @@ mod tests {
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
         }
+    }
+
+    /// A `filterFX` item holding `fltr`, as Photoshop writes a filter with options.
+    fn measured_item(name: &str, fltr: Descriptor, filter_id: i32) -> Descriptor {
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "Nrml"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(0.0))
+            .with("BckC", rgbc(255.0))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(filter_id))
+    }
+
+    #[test]
+    fn mezzotint_round_trips_every_type_and_reads_photoshops_shape() {
+        for (code, ty) in MEZZOTINT_TYPES {
+            let f = sf("filter.pixelate.mezzotint", json!({"type": ty}));
+            let d = item_for_filter(&f).unwrap();
+            assert_eq!(int(&d, "filterID"), Some(1_299_870_830));
+            let fltr = get_desc(&d, "Fltr").unwrap();
+            assert!(fltr.class_id.is("Mztn"));
+            assert_eq!(enum_of(fltr, "MztT"), Some(&code[..]));
+            assert!(matches!(fltr.get("MztT"), Some(Value::Enumerated { type_id, .. }) if type_id.is("MztT")));
+            assert_eq!(filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap()), f, "{ty}");
+        }
+        // Measured in Photoshop: `{'_class': 'Mztn', 'MztT': 'MztT.CrsD'}` and `LngS`, filterID 1299870830.
+        for (code, ty) in [("CrsD", "coarseDots"), ("LngS", "longStrokes")] {
+            let item = measured_item("Mezzotint...", Descriptor::new("Mztn").with("MztT", enumv("MztT", code)), 1_299_870_830);
+            let f = filter_from_item(&item);
+            assert_eq!((f.command.as_str(), &f.params), ("filter.pixelate.mezzotint", &json!({"type": ty})));
+        }
+        // No type or an unknown type is Fine Dots, like the engine; the seed
+        // (PhotoCraft only) is not saved.
+        for p in [json!({}), json!({"type": "sparkles"}), json!({"type": "fineDots", "seed": 77})] {
+            let d = item_for_filter(&sf("filter.pixelate.mezzotint", p)).unwrap();
+            let fltr = get_desc(&d, "Fltr").unwrap();
+            assert_eq!(enum_of(fltr, "MztT"), Some(&b"FnDt"[..]));
+            assert_eq!(fltr.items.len(), 1);
+        }
+    }
+
+    #[test]
+    fn color_halftone_round_trips_and_reads_photoshops_shape() {
+        for p in [
+            json!({"maxRadius": 8, "channel1": 108, "channel2": 162, "channel3": 90, "channel4": 45}),
+            json!({"maxRadius": 4, "channel1": -360, "channel2": 0, "channel3": 360, "channel4": -45}),
+            json!({"maxRadius": 127, "channel1": 1, "channel2": 2, "channel3": 3, "channel4": 4}),
+        ] {
+            let f = sf("filter.pixelate.colorHalftone", p);
+            let d = item_for_filter(&f).unwrap();
+            assert_eq!(int(&d, "filterID"), Some(1_131_180_616));
+            let fltr = get_desc(&d, "Fltr").unwrap();
+            assert!(fltr.class_id.is("ClrH"));
+            for k in ["Rds ", "Ang1", "Ang2", "Ang3", "Ang4"] {
+                assert!(matches!(fltr.get(k), Some(Value::Integer(_))), "{k} is a long");
+            }
+            assert_eq!(filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap()), f);
+        }
+        // Measured in Photoshop: `{'_class': 'ClrH', 'Rds ': 6, 'Ang1': 10, 'Ang2': 20, 'Ang3': 30, 'Ang4': 40}`.
+        let measured = Descriptor::new("ClrH")
+            .with("Rds ", Value::Integer(6))
+            .with("Ang1", Value::Integer(10))
+            .with("Ang2", Value::Integer(20))
+            .with("Ang3", Value::Integer(30))
+            .with("Ang4", Value::Integer(40));
+        let item = measured_item("Color Halftone...", measured.clone(), 1_131_180_616);
+        let f = filter_from_item(&item);
+        assert_eq!(f.command, "filter.pixelate.colorHalftone");
+        assert_eq!(f.params, json!({"maxRadius": 6, "channel1": 10, "channel2": 20, "channel3": 30, "channel4": 40}));
+        assert_eq!(get_desc(&item_for_filter(&f).unwrap(), "Fltr"), Some(&measured));
+        // Defaults and hostile values write longs within the dialog's ranges.
+        let d = item_for_filter(&sf("filter.pixelate.colorHalftone", json!({"maxRadius": f64::NAN, "channel1": 1e12, "channel2": -1e12, "channel3": "x"})))
+            .unwrap();
+        let fltr = get_desc(&d, "Fltr").unwrap();
+        let got: Vec<_> = ["Rds ", "Ang1", "Ang2", "Ang3", "Ang4"].iter().map(|k| int(fltr, k)).collect();
+        assert_eq!(got, [Some(8), Some(360), Some(-360), Some(90), Some(45)]);
+    }
+
+    #[test]
+    fn malformed_pixelate_filters_stay_verbatim() {
+        let mz = |v: Value| Descriptor::new("Mztn").with("MztT", v);
+        let ch = |rds: Value, ang1: Value| {
+            Descriptor::new("ClrH")
+                .with("Rds ", rds)
+                .with("Ang1", ang1)
+                .with("Ang2", Value::Integer(20))
+                .with("Ang3", Value::Integer(30))
+                .with("Ang4", Value::Integer(40))
+        };
+        let cases = [
+            measured_item("Mezzotint...", Descriptor::new("Mztn"), code(b"Mztn")),
+            measured_item("Mezzotint...", mz(enumv("MztT", "Sprk")), code(b"Mztn")),
+            measured_item("Mezzotint...", mz(Value::Integer(1)), code(b"Mztn")),
+            measured_item("Color Halftone...", Descriptor::new("ClrH"), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Double(6.0), Value::Integer(10)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(unit(b"#Pxl", 6.0), Value::Integer(10)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Integer(3), Value::Integer(10)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Integer(128), Value::Integer(10)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Integer(6), Value::Integer(361)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Integer(6), Value::Integer(i32::MIN)), code(b"ClrH")),
+            measured_item("Color Halftone...", ch(Value::Integer(6), Value::Double(f64::NAN)), code(b"ClrH")),
+        ];
+        for item in cases {
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{:?}", get_desc(&item, "Fltr"));
+            // Written back with its own settings (blending is rewritten from the model).
+            let back = item_for_filter(&f).unwrap();
+            // Compared as bytes: a NaN setting is not equal to itself.
+            let fltr = |d: &Descriptor| get_desc(d, "Fltr").map(Descriptor::to_bytes);
+            assert_eq!((fltr(&back), int(&back, "filterID")), (fltr(&item), int(&item, "filterID")));
+        }
+        // Without a `Fltr` the filter has no settings to read: kept verbatim too.
+        let bare = Descriptor::new("filterFX").with("filterID", Value::Integer(code(b"ClrH")));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
     }
 
     #[test]
