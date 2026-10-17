@@ -43,6 +43,7 @@ pub mod comps_map;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;
+pub mod gif_anim;
 mod gradient_bake;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod kra;
@@ -398,6 +399,12 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     }
     if ext == "pdf" {
         return pdf::export(doc);
+    }
+    // A document with a frame animation saves as an animated GIF, each frame with its own delay.
+    if ext == "gif"
+        && let Some(bytes) = gif_anim::export(doc, ctl)?
+    {
+        return Ok(ExportResult { bytes, warnings: Vec::new() });
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

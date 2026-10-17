@@ -21,6 +21,12 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     if format == Some(Format::Tiff) {
         return import_tiff_page(name, bytes, None);
     }
+    // An animated GIF opens with every frame as its own layer, to edit by hand.
+    if format == Some(Format::Gif)
+        && let Some(r) = import_gif_layers(name, bytes)?
+    {
+        return Ok(r);
+    }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
     // A palette BMP or PNG opens in Indexed Color mode with its colour table, as in Photoshop
     // (#3802, #4804).
@@ -52,6 +58,52 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         };
     }
     Ok(r)
+}
+
+/// An animated GIF as one document with a raster layer per frame ("Frame 1" at the bottom), each
+/// a full picture of the canvas, and a frame animation that shows one layer per frame with the
+/// GIF's delays. `None` for a still GIF, which opens as any flat image does.
+fn import_gif_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
+    let frames = codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?;
+    if frames.len() < 2 {
+        return Ok(None);
+    }
+    let mut result: Option<ImportResult> = None;
+    let mut delays = Vec::with_capacity(frames.len());
+    for (i, f) in frames.into_iter().enumerate() {
+        let mut r = image_to_document(name, &f.image)?;
+        let Some(mut layer) = r.document.layers.pop() else { continue };
+        layer.name = format!("Frame {}", i + 1);
+        layer.locks = photocraft_doc::Locks::default();
+        delays.push(f.delay_ms);
+        match result.as_mut() {
+            Some(first) => first.document.layers.push(layer),
+            None => {
+                r.document.layers.push(layer);
+                result = Some(r);
+            }
+        }
+    }
+    if let Some(r) = result.as_mut() {
+        let doc = &mut r.document;
+        let ids: Vec<_> = doc.layers.iter().map(|l| l.id).collect();
+        let animation = photocraft_doc::FrameAnimation {
+            frames: delays
+                .iter()
+                .enumerate()
+                .map(|(shown, &delay_ms)| {
+                    let mut hidden: Vec<_> = ids.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, id)| *id).collect();
+                    hidden.sort();
+                    photocraft_doc::AnimFrame { delay_ms, hidden }
+                })
+                .collect(),
+            current: 0,
+            loops: photocraft_doc::LoopCount::Forever,
+        };
+        animation.apply(0, &mut doc.layers);
+        doc.frame_animation = Some(animation);
+    }
+    Ok(result)
 }
 
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in

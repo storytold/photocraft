@@ -700,14 +700,31 @@ fn gif_frames(frames: usize) -> Vec<u8> {
     b
 }
 
-/// #523: an animation opens its first frame, unchanged, with a warning that the rest was left out.
+/// An animated GIF opens with every frame as its own layer, "Frame 1" at the bottom; a still GIF
+/// opens as a single Background layer.
 #[test]
-fn animation_imports_the_first_frame_with_a_warning() {
+fn animation_imports_every_frame_as_a_layer() {
     let one = import("a.gif", &gif_frames(1)).unwrap();
     assert_eq!(one.warnings, Vec::<String>::new());
+    assert_eq!(one.document.layers.len(), 1);
     let three = import("a.gif", &gif_frames(3)).unwrap();
-    assert_eq!(three.warnings, ["only the first of 3 frames was imported"]);
-    pixels_eq(&one.document, &three.document, 0.0);
+    assert_eq!(three.warnings, Vec::<String>::new());
+    let names: Vec<&str> = three.document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Frame 1", "Frame 2", "Frame 3"]);
+    assert!(three.document.layers.iter().all(|l| !l.locks.transparency && !l.locks.position));
+    // The frame animation shows one layer per frame.
+    let visible: Vec<bool> = three.document.layers.iter().map(|l| l.visible).collect();
+    assert_eq!(visible, [true, false, false]);
+    let a = three.document.frame_animation.as_ref().unwrap();
+    assert_eq!((a.frames.len(), a.current), (3, 0));
+    for (i, f) in a.frames.iter().enumerate() {
+        assert_eq!(f.hidden.len(), 2, "frame {i}");
+        assert!(!f.hidden.contains(&three.document.layers[i].id), "frame {i} shows its own layer");
+    }
+    assert!(one.document.frame_animation.is_none());
+    let ids: std::collections::HashSet<_> = three.document.layers.iter().map(|l| l.id).collect();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(three.document.size, one.document.size);
 }
 
 /// Alpha channel values for the #2124 tests: white (selected) on the left, mid grey, black.

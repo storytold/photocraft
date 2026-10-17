@@ -703,6 +703,7 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         slices: _,
         variables: _,
         timeline: _,
+        frame_animation: _,
         file_encoding: _,
     } = a;
     *size == b.size

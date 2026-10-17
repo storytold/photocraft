@@ -87,6 +87,9 @@ pub struct DocM {
     /// Window › Timeline.
     #[serde(default)]
     pub timeline: Option<photocraft_doc::Timeline>,
+    /// Window › Timeline in frame-animation mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_animation: Option<photocraft_doc::FrameAnimation>,
     /// The JPEG quality / WebP encoding File › Save reuses.
     #[serde(default, skip_serializing_if = "photocraft_doc::FileEncoding::is_empty")]
     pub file_encoding: photocraft_doc::FileEncoding,

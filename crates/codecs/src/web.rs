@@ -159,9 +159,24 @@ pub struct GifFrame {
     pub delay_cs: u16,
 }
 
+/// How many times an animated GIF plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GifLoops {
+    /// Plays through once: no looping extension.
+    Once,
+    Forever,
+    /// Plays this many times in all (two or more; the file stores the repeats after the first).
+    Times(u16),
+}
+
 /// Encode an animated GIF (GIF89a). Each frame carries its own local colour table; `loop_forever`
 /// adds the NETSCAPE2.0 looping extension.
 pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_forever: bool) -> Result<Vec<u8>, CodecError> {
+    encode_gif_animated_loops(width, height, frames, if loop_forever { GifLoops::Forever } else { GifLoops::Once })
+}
+
+/// [`encode_gif_animated`] with a play count.
+pub fn encode_gif_animated_loops(width: u32, height: u32, frames: &[GifFrame], loops: GifLoops) -> Result<Vec<u8>, CodecError> {
     let (w, h) = (width as usize, height as usize);
     if width == 0 || height == 0 || width > 65535 || height > 65535 {
         return Err(gif_err("GIF size must be 1..=65535"));
@@ -175,10 +190,17 @@ pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_fo
     out.push(0x70); // no global colour table, 8-bit colour resolution
     out.push(0); // background colour index
     out.push(0); // pixel aspect ratio
-    if loop_forever {
+    let repeats = match loops {
+        GifLoops::Once => None,
+        GifLoops::Forever => Some(0u16), // loop count 0 = forever
+        GifLoops::Times(n) => Some(n.max(2) - 1),
+    };
+    if let Some(repeats) = repeats {
         out.extend([0x21, 0xFF, 0x0B]);
         out.extend_from_slice(b"NETSCAPE2.0");
-        out.extend([0x03, 0x01, 0x00, 0x00, 0x00]); // loop count 0 = forever
+        out.extend([0x03, 0x01]);
+        out.extend(repeats.to_le_bytes());
+        out.push(0x00);
     }
     for f in frames {
         if f.palette.is_empty() || f.palette.len() > 256 || f.indices.len() != w * h || f.indices.iter().any(|&i| usize::from(i) >= f.palette.len()) {

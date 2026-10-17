@@ -419,6 +419,23 @@ pub fn render_video_with(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
+    // A frame animation renders as one animated GIF with each frame's own delay and the loop count.
+    if format.eq_ignore_ascii_case("gif")
+        && let Some(a) = &base.frame_animation
+    {
+        let n = a.frames.len();
+        let stem = base.name.rsplit_once('.').map_or(base.name.as_str(), |(a, _)| a).to_string();
+        if !progress(0, n) {
+            return Err(EngineError::Other("render cancelled".into()));
+        }
+        let bytes = photocraft_io::gif_anim::export(&base, &photocraft_raster::Interrupt::NONE)
+            .map_err(|e| EngineError::Other(e.to_string()))?
+            .ok_or_else(|| EngineError::Other("the document has no frame animation".into()))?;
+        let name = format!("{stem}.gif");
+        write(&name, &bytes)?;
+        progress(n, n);
+        return Ok(json!({"frames": n, "file": format!("{dir}/{name}")}));
+    }
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
     if frames > crate::timeline_cmds::MAX_DURATION {
@@ -492,20 +509,8 @@ pub fn render_video_with(
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
 /// under 50 % opacity get the frame's transparent index, the rest are drawn opaque, and the
 /// palette is built from the visible pixels with one entry kept for transparency.
-fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraft_codecs::web::GifFrame> {
-    use photocraft_algo::quantize::{self, Dither, Forced, PaletteKind};
-    let transparent = px.iter().any(|p| p[3] < 0.5);
-    let visible: Vec<[f32; 4]> = px.iter().filter(|p| p[3] >= 0.5).map(|p| [p[0], p[1], p[2], 1.0]).collect();
-    // A fully transparent frame still needs a palette.
-    let src = if visible.is_empty() { &px } else { &visible };
-    let mut pal = quantize::build_palette(src, PaletteKind::Adaptive, if transparent { 255 } else { 256 }, Forced::None).map_err(EngineError::Other)?;
-    let t = transparent.then(|| {
-        pal.truncate(255);
-        pal.push(pal.first().copied().unwrap_or([0, 0, 0]));
-        pal.len() - 1
-    });
-    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t);
-    Ok(photocraft_codecs::web::GifFrame { indices, palette: pal, transparent: t.map(|i| i as u8), delay_cs })
+fn gif_frame(px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraft_codecs::web::GifFrame> {
+    photocraft_io::gif_anim::quantized_frame(px, w, delay_cs).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 macro_rules! spec {
