@@ -1329,11 +1329,23 @@ fn box_line(src: &[f64], x0: i64, dst: &mut [f64], bw: f32) {
         }
         return;
     }
-    let mut inner: f64 = (x0 - (r - 1)..=x0 + (r - 1)).map(at).sum();
+    let window = x0 - (r - 1)..=x0 + (r - 1);
+    let mut inner: f64 = window.clone().map(at).sum();
+    let mut last_covered = window.rev().find(|&x| at(x) != 0.0).unwrap_or(i64::MIN);
     for (k, d) in dst.iter_mut().enumerate() {
         let x = x0 + k as i64;
         *d = (inner + f * (at(x - r) + at(x + r))) * norm;
-        inner += at(x + r) - at(x - r + 1);
+        let entering = at(x + r);
+        inner += entering - at(x - r + 1);
+        if entering != 0.0 {
+            last_covered = x + r;
+        }
+        // Cancellation can leave positive residue after the last covered pixel leaves.
+        // Noise amplifies even that residue into visible speckles (#5638). Reset only
+        // truly empty windows, preserving arbitrarily faint real coverage.
+        if last_covered < x - r + 2 {
+            inner = 0.0;
+        }
     }
 }
 
@@ -3191,6 +3203,37 @@ mod tests {
         // Full noise can punch holes even in the solid part.
         let heavy = shadow(1.0, (0, 0));
         assert!(heavy.v.iter().any(|v| *v < 0.5) && heavy.v.iter().any(|v| *v > 0.5), "heavy noise spans the range",);
+    }
+
+    #[test]
+    fn box_blur_preserves_faint_coverage_and_empty_gaps() {
+        let src = [0.0, 0.3, 0.7, 0.0, 0.0, 0.0, 0.0, 1e-20, 0.0, 0.0, 0.0];
+        let mut actual = [0.0; 11];
+        box_line(&src, 0, &mut actual, 3.0);
+        assert_eq!(actual[5], 0.0, "an empty window must be exactly empty");
+        assert_eq!(actual[10], 0.0, "the second tail must also be empty");
+        assert!((actual[7] - 1e-20 / 3.0).abs() < 1e-30, "real faint coverage is not rounded away");
+    }
+
+    #[test]
+    fn effect_noise_does_not_light_up_empty_blur_tails() {
+        // A sloping antialiased shape leaves rounding residue in a running-sum blur.
+        // The direct finite-support convolution is the oracle for untouched pixels.
+        for size in [5.0, 5.5, 13.0] {
+            let mut shape = Map::new(96, 64, 0.0);
+            for y in 8..48 {
+                for x in 8..48 {
+                    shape.v[y * shape.w + x] = ((x as f32 - y as f32 * 0.7) * 0.3).clamp(0.0, 1.0);
+                }
+            }
+            let mut direct = shape.clone();
+            tent_direct(&mut direct, size);
+            let mut actual = shape;
+            blur(&mut actual, size);
+            noise(&mut actual, 0.26, 0, 0);
+            let stray = direct.v.iter().zip(&actual.v).filter(|(reference, noisy)| **reference == 0.0 && **noisy > 1e-5).count();
+            assert_eq!(stray, 0, "noise created {stray} visible pixels outside a size-{size} blur");
+        }
     }
 
     #[test]
