@@ -256,7 +256,11 @@ fn fit_frame(app: &mut PhotocraftApp) {
         // W x H x Resolution can change output size even when the frame already fits.
         && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi).is_some())
     {
-        keyed(app, fitted);
+        // Fit the rect only. `keyed` would mark this as a user-drawn frame, so picking another
+        // tool would crop. Photoshop leaves a ratio-fitted opening frame until ↵ (#6750).
+        if fitted.iter().all(|v| v.is_finite()) {
+            app.ui.crop_rect = Some(fitted);
+        }
     }
 }
 
@@ -1670,6 +1674,24 @@ mod tests {
             assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps), "selection: {select}");
             assert_eq!(app.ui.crop_rect, None);
         }
+    }
+
+    /// #6750: a saved crop ratio fits the opening frame, but it is still the default. Switching
+    /// tools (V) must not crop; Photoshop waits for ↵.
+    #[test]
+    fn another_tool_does_not_commit_a_ratio_fitted_opening_frame() {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options.crop_ratio = "1:1".into();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]));
+        assert!(app.crop.default_frame, "fitting a ratio is not a drawn crop");
+        let steps = app.session.active().unwrap().history.past_len();
+        app.ui.tool = Tool::Move;
+        ensure_frame(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps));
+        assert_eq!(app.ui.crop_rect, None);
+        assert_eq!(app.ui.tool, Tool::Move);
     }
 
     /// The pen's eraser end stands in for the Crop tool only until the tip comes back (`stylus`),
