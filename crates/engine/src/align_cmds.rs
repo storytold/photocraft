@@ -43,6 +43,12 @@ fn selected_pixel_layers(s: &Session) -> Vec<LayerId> {
     st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
 }
 
+/// Whether a lock keeps the layer `id` from being moved or warped: lock all, position or pixels.
+fn pinned(doc: &Document, id: LayerId) -> bool {
+    let l = doc.effective_locks(id);
+    l.all || l.position || l.pixels
+}
+
 fn two_layers(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document open")?;
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
@@ -62,7 +68,8 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
-        None => ids[0],
+        // As in Photoshop, a locked layer stays put: it becomes the reference (#7080).
+        None => ids.iter().copied().find(|id| pinned(&doc, *id)).unwrap_or(ids[0]),
     };
     let ref_idx = ids.iter().position(|i| *i == reference).unwrap_or(0);
     let area = doc.bounds();
@@ -98,6 +105,9 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let failed: Vec<u64> = (0..ids.len()).filter(|&i| al.placements[i].is_none()).map(|i| ids[i].0).collect();
     if moves.is_empty() {
         return Err(EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into()));
+    }
+    if let Some(l) = moves.iter().find(|&&i| pinned(&doc, ids[i])).and_then(|&i| doc.layer(ids[i])) {
+        return Err(EngineError::Other(format!("Auto-Align can't move the locked layer \"{}\"", l.name)));
     }
     let warped: Vec<(LayerId, Surface, Option<Surface>)> = moves
         .iter()
@@ -382,6 +392,43 @@ mod tests {
         assert!((m[2] + 6.0).abs() < 1.0 && (m[5] + 5.0).abs() < 1.0, "{r}");
         assert!(s.execute("edit.autoAlignLayers", json!({"projection": "sideways"})).is_err());
         assert!(s.execute("edit.autoAlignLayers", json!({"reference": u64::MAX})).is_err());
+    }
+
+    /// As in Photoshop, a locked layer stays where it is: it becomes the reference and the
+    /// others move onto it (#7080).
+    #[test]
+    fn auto_align_keeps_a_locked_layer_as_the_reference() {
+        for lock in ["all", "position", "pixels"] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 300, "height": 240, "background": "transparent"})).unwrap();
+            let a = texture_layer(&mut s, "A", 20, 20);
+            let b = texture_layer(&mut s, "B", 31, 13);
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(b).unwrap().locks.set(lock, true);
+                Ok(())
+            })
+            .unwrap();
+            select(&mut s, &[a, b]);
+            let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).unwrap();
+            assert_eq!(r["reference"], b.0, "{lock}: {r}");
+            let doc = &s.active().unwrap().doc;
+            let bb = doc.layer(b).unwrap().surface().unwrap().content_bounds();
+            assert_eq!((bb.x0, bb.y0), (31, 13), "{lock}: the locked layer stays put");
+            let ab = doc.layer(a).unwrap().surface().unwrap().content_bounds();
+            assert!((ab.x0 - 31).abs() <= 1 && (ab.y0 - 13).abs() <= 1, "{lock}: {ab:?} {r}");
+            // An explicit reference that would move the locked layer is refused.
+            s.undo();
+            assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": a.0})).is_err());
+            // Two locked layers: nothing may move.
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(a).unwrap().locks.set(lock, true);
+                Ok(())
+            })
+            .unwrap();
+            assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).is_err());
+            let bb = s.active().unwrap().doc.layer(a).unwrap().surface().unwrap().content_bounds();
+            assert_eq!((bb.x0, bb.y0), (20, 20));
+        }
     }
 
     #[test]
