@@ -19,6 +19,28 @@ pub const FAUX_BOLD_RADIUS: f32 = 0.036;
 /// Largest raster we produce (pixels), as a guard against absurd sizes.
 const MAX_PIXELS: u64 = 256 * 1024 * 1024;
 
+/// Maps raw area-coverage to the opacity Photoshop's anti-alias modes imply. Exponents above 1 thin
+/// the fringe (sharper); below 1 widen it (stronger smoothing).
+fn shape_antialias_coverage(cv: f32, mode: AntiAlias) -> f32 {
+    if !cv.is_finite() {
+        return 0.0;
+    }
+    let cv = cv.clamp(0.0, 1.0);
+    match mode {
+        AntiAlias::None => {
+            if cv >= 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        AntiAlias::Smooth => cv,
+        AntiAlias::Strong => cv.powf(0.55),
+        AntiAlias::Crisp => cv.powf(1.35),
+        AntiAlias::Sharp | AntiAlias::Windows | AntiAlias::WindowsLcd => cv.powf(2.2),
+    }
+}
+
 /// Rendered text: pixels in document space plus the covered rectangle.
 pub struct Rendered {
     pub surface: Surface,
@@ -277,7 +299,7 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
         let comps = color_in(&format, c);
         let a = c.alpha.clamp(0.0, 1.0);
         for (i, &cv) in cov.iter().enumerate() {
-            let cv = if antialias == AntiAlias::None { if cv >= 0.5 { 1.0 } else { 0.0 } } else { cv };
+            let cv = shape_antialias_coverage(cv, antialias);
             let s = cv * a;
             if s <= 0.0 {
                 continue;

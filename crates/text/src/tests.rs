@@ -1968,6 +1968,30 @@ fn engine_data_antialias_numbers_match_photoshop() {
     }
 }
 
+/// Anti-alias modes must change edge coverage (storytold/photocraft#5902).
+#[test]
+fn antialias_modes_change_edge_fringe() {
+    use photocraft_doc::text::AntiAlias;
+
+    let fringe_mass = |mode: AntiAlias| {
+        let mut e = TextEngine::new();
+        let layer = TextLayer { antialias: mode, ..point("O", 48.0) };
+        let (_, r) = e.render(&layer, 72.0, PixelFormat::RGBA8);
+        let n = r.surface.channels();
+        r.surface.read_region(r.rect).chunks_exact(n).map(|p| f64::from(p[n - 1])).filter(|&a| a > 0.02 && a < 0.98).sum::<f64>()
+    };
+
+    let none = fringe_mass(AntiAlias::None);
+    let sharp = fringe_mass(AntiAlias::Sharp);
+    let smooth = fringe_mass(AntiAlias::Smooth);
+    let strong = fringe_mass(AntiAlias::Strong);
+
+    assert_eq!(none, 0.0, "aliased-off edges are hard");
+    assert!(strong > smooth + 1.0, "strong smooths more than smooth: {strong} vs {smooth}");
+    assert!(smooth > sharp + 0.5, "sharp thins the fringe vs smooth: {sharp} vs {smooth}");
+    assert!(sharp > 0.0);
+}
+
 /// Type on a path (#218): along a vertical line the type runs top to bottom with its glyphs
 /// turned, along a curve it follows the curve, and glyphs beyond the end are not drawn.
 #[test]
