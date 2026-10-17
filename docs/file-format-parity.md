@@ -68,7 +68,7 @@ supports many more, including CR3).
 | Canon CR3 | detected, unsupported | `crates/raw/src/lib.rs:219` |
 | Nikon NEF/NRW (lossless, lossy) | yes; "lossy after split" no | #50; D5100 and D90 image areas measured (14-bit NEFs); [validation](nikon-nef-development.md) |
 | Sony ARW/SR2/SRF (incl. compressed) | yes | |
-| Panasonic RW2, Pentax PEF | yes | |
+| Panasonic RW2, Pentax PEF | yes; RW2 RawFormat 3/4 vendor-compressed no (see `docs/rw2-rawformat4-notes.md`) | |
 | Olympus ORF | uncompressed only | |
 | Fujifilm RAF (Bayer and X-Trans) | uncompressed only; no Fuji colour calibration | |
 | Others (CRW, 3FR, IIQ, X3F, SRW, MRW, ERF…) | embedded preview only | |

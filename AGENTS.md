@@ -17,6 +17,7 @@ PhotoCraft is an open-source, native, Photoshop-comparable image editor written 
 | `docs/roadmap.md` | Milestones, **current focus**, what's next with estimates |
 | `docs/ui-parity.md`, `docs/brush-parity.md`, `docs/context-menu-parity.md`, `docs/file-format-parity.md`, `docs/hardware-parity.md`, `docs/localization-parity.md` | Per-dimension parity checklists |
 | `docs/parity-checklist.md` | Generated list of every Photoshop menu item, live or missing |
+| `docs/rw2-rawformat4-notes.md` | Measured facts about Panasonic RW2 RawFormat 3/4 (vendor-compressed 12-bit); why a positional decoder cannot be built from black-box measurement alone |
 | `docs/scorecard.md` | Generated scorecard: performance budgets and numbers, corpus floors, per-area checklists (tools, files, UI, type, automation, reliability, distribution), settings that do nothing |
 | `crates/<name>/README.md` (where present) | Public API of that crate |
 | [photocraft-corpus](https://github.com/storytold/photocraft-corpus) + `docs/development.md` › Test corpora | Real-file test oracles (our Photoshop-authored PSDs); with psd-tools, ag-psd and PngSuite fetched into `corpus/` by `cargo xtask corpus --all` at the pins in `xtask/src/corpus_pins.rs` |
