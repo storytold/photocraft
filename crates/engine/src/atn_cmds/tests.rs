@@ -144,7 +144,7 @@ fn save_round_trips_through_photoshop_events() {
     assert_eq!(file.name.to_string_lossy(), "Test Set");
     assert_eq!(file.actions[0].function_key, 3);
     let events: Vec<String> = file.actions[0].items.iter().map(|i| i.event.id()).collect();
-    assert_eq!(events, ["GsnB", "Mk  ", "setd", "slct", "slct", "Stop", "syntheticFill", "Ply ", "Fltn"]);
+    assert_eq!(events, ["GsnB", "Mk  ", "setd", "slct", "slct", "Stop", "syntheticFill", "Ply ", "FltI"]);
     assert!(file.actions[0].items[0].with_dialog);
     assert!(!file.actions[0].items[8].enabled);
     // The kept Photoshop step is written back byte for byte.
@@ -955,4 +955,75 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     let bottom = st.doc.layers.first().unwrap();
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
+}
+
+/// Measured in Photoshop: `executeAction` fails for the codes `BoxB`, `SrfB`, `Fltn` and
+/// `BlnW` ("the command is not currently available"), while the names `boxblur`,
+/// `surfaceBlur`, `flattenImage`, `blackAndWhite` and the code `FltI` run.
+#[test]
+fn events_photoshop_only_runs_by_name_export_by_name_and_old_codes_still_import() {
+    let bw = json!({"reds": 40, "yellows": 60, "greens": 40, "cyans": 60, "blues": 20, "magentas": 80, "tint": false, "tintColor": "#e4d5b0"});
+    let cases = [
+        ("filter.blur.boxBlur", json!({"radius": 3}), "boxblur", "BoxB"),
+        ("filter.blur.surfaceBlur", json!({"radius": 5, "threshold": 15}), "surfaceBlur", "SrfB"),
+        ("layer.flattenImage", json!({}), "FltI", "Fltn"),
+        ("image.adjustments.blackWhite", bw, "blackAndWhite", "BlnW"),
+    ];
+    for (id, params, written, legacy) in &cases {
+        let exported = export_item(id, params, "S").unwrap_or_else(|| panic!("{id} does not export"));
+        assert_eq!(exported.event.id(), *written, "{id} exports under an id Photoshop runs");
+        assert_eq!(matches!(exported.event, AtnEvent::Name(_)), written.len() != 4, "{id}: a name is written as a name");
+        let d = exported.descriptor.clone();
+        // The written id, the name for Flatten Image, and the old code all import to the command.
+        let name = if *id == "layer.flattenImage" { "flattenImage" } else { written };
+        for event in [*written, name, *legacy] {
+            let e = event_for(&item(event, "", None).event).unwrap_or_else(|| panic!("{event} does not import"));
+            assert!(e.ids.contains(id), "{event} imports as {:?}, not {id}", e.ids);
+            match (e.from)(d.as_ref().unwrap()) {
+                Mapped::Steps(steps) => {
+                    assert_eq!(steps.len(), 1, "{event}: {steps:?}");
+                    assert_eq!(steps[0].0, *id, "{event}");
+                    let mut back = steps[0].1.clone();
+                    normalise(&mut back);
+                    assert_eq!(back, *params, "{event}");
+                }
+                Mapped::Unsupported { .. } => panic!("{event} does not import back"),
+            }
+        }
+    }
+
+    // A whole set of Photoshop-shaped steps (names, FltI) and old PhotoCraft-shaped ones
+    // (legacy codes) loads to the same commands.
+    let blur = |event: &str| item(event, "Box Blur", Some(desc("null").with("Rds ", px(3.0))));
+    let surface = |event: &str| item(event, "Surface Blur", Some(desc("null").with("Rds ", px(5.0)).with("Thsh", long(15.0))));
+    let photoshop = vec![blur("boxblur"), surface("surfaceBlur"), item("FltI", "Flatten Image", None), item("flattenImage", "Flatten Image", None)];
+    let legacy = vec![blur("BoxB"), surface("SrfB"), item("Fltn", "Flatten Image", None)];
+    let data = set_of("S", vec![("Photoshop", photoshop), ("Legacy", legacy)]);
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    let ids = |i: usize| s.actions.list[i].steps.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(0), ["filter.blur.boxBlur", "filter.blur.surfaceBlur", "layer.flattenImage", "layer.flattenImage"]);
+    assert_eq!(ids(1), ["filter.blur.boxBlur", "filter.blur.surfaceBlur", "layer.flattenImage"]);
+    assert_eq!(s.actions.list[1].steps[1].1, json!({"radius": 5, "threshold": 15}));
+    // Saving them writes the ids Photoshop runs, never the old codes.
+    let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
+    let file = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let events: Vec<String> = file.actions.iter().flat_map(|a| a.items.iter().map(|i| i.event.id())).collect();
+    assert_eq!(events, ["boxblur", "surfaceBlur", "FltI", "FltI", "boxblur", "surfaceBlur", "FltI"]);
+
+    // Unknown ids, near misses and the legacy codes written as names stay Photoshop steps,
+    // never a panic or a wrong command.
+    for event in ["BoxBlur", "boxBlur", "BOXB", "Fltn ", "FLTI", "", "\u{0}\u{0}\u{0}\u{0}", "BlnWx"] {
+        let e = event_for(&item(event, "", None).event);
+        assert!(e.is_none(), "{event:?} maps to {:?}", e.map(|e| e.ids));
+    }
+    // A legacy code with a broken descriptor is unsupported, not a crash.
+    let e = event_for(&item("SrfB", "", None).event).unwrap();
+    assert!(matches!((e.from)(&desc("null").with("Rds ", D::Double(f64::NAN))), Mapped::Unsupported { .. } | Mapped::Steps(_)));
+    // A wrong-typed key is skipped like any other unreadable field: the step keeps the defaults.
+    match (e.from)(&desc("null").with("Rds ", text("x"))) {
+        Mapped::Steps(steps) => assert!(steps.iter().all(|(_, p)| p.get("radius").is_none()), "{steps:?}"),
+        Mapped::Unsupported { .. } => {}
+    }
 }

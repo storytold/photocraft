@@ -2570,8 +2570,8 @@ const EVENTS: &[Event] = &[
     ev!("DstS", "dustAndScratches", "Dust & Scratches", "filter.noise.dustAndScratches", &[F("Rds ", "radius", Kind::Px), F("Thsh", "threshold", Kind::Long)]),
     ev!("Dspc", "despeckle", "Despeckle", "filter.noise.despeckle", &[]),
     ev!("MtnB", "motionBlur", "Motion Blur", "filter.blur.motionBlur", &[F("Angl", "angle", Kind::Ang), F("Dstn", "distance", Kind::Px)]),
-    ev!("BoxB", "boxblur", "Box Blur", "filter.blur.boxBlur", &[F("Rds ", "radius", Kind::Px)]),
-    ev!("SrfB", "surfaceBlur", "Surface Blur", "filter.blur.surfaceBlur", &[F("Rds ", "radius", Kind::Px), F("Thsh", "threshold", Kind::Long)]),
+    ev!("", "boxblur", "Box Blur", "filter.blur.boxBlur", &[F("Rds ", "radius", Kind::Px)]),
+    ev!("", "surfaceBlur", "Surface Blur", "filter.blur.surfaceBlur", &[F("Rds ", "radius", Kind::Px), F("Thsh", "threshold", Kind::Long)]),
     ev!(
         "SmrB",
         "smartBlur",
@@ -2639,7 +2639,7 @@ const EVENTS: &[Event] = &[
     adjustment_event!("Exps", "Exps", "exposure", "Exposure"),
     adjustment_event!("PhtF", "PhtF", "photoFilter", "Photo Filter"),
     Event {
-        code: "BlnW",
+        code: "",
         name: "blackAndWhite",
         label: "Black & White",
         ids: &["image.adjustments.blackWhite"],
@@ -2831,7 +2831,7 @@ const EVENTS: &[Event] = &[
         from: move_from,
         to: move_to,
     },
-    ev!("Fltn", "flattenImage", "Flatten Image", "layer.flattenImage", &[]),
+    ev!("FltI", "flattenImage", "Flatten Image", "layer.flattenImage", &[]),
     Event {
         code: "MrgV",
         name: "mergeVisible",
@@ -2917,9 +2917,20 @@ const EVENTS: &[Event] = &[
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
 ];
 
+/// Four-char codes PhotoCraft once exported for events Photoshop only runs by name (or by
+/// another code), with the name they stand for. Measured in Photoshop: `executeAction` with
+/// these codes fails ("the command is not currently available"), and `Fltn` is the
+/// `flatness` property, not the flatten event. Import keeps accepting them so actions saved
+/// before still load; export never writes them.
+const LEGACY_CODES: &[(&str, &str)] = &[("BoxB", "boxblur"), ("SrfB", "surfaceBlur"), ("Fltn", "flattenImage"), ("BlnW", "blackAndWhite")];
+
 fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
-    EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id)
+    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id);
+    find(&id).or_else(|| match item {
+        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
+        AtnEvent::Name(_) => None,
+    })
 }
 
 /// The event `id` exports as: the first event listing it whose converter accepts the params
