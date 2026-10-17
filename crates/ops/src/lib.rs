@@ -296,7 +296,8 @@ impl History {
 fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
     let mut n = 0usize;
     tiles::surfaces(doc, |surface| {
-        for (_, tile) in surface.tiles() {
+        // A lazy surface still pending holds no tiles: `loaded_tiles` doesn't decode it.
+        for (_, tile) in surface.loaded_tiles() {
             if seen.insert(Arc::as_ptr(tile) as usize) {
                 n = n.saturating_add(tile.bytes().len());
             }

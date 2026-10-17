@@ -831,6 +831,8 @@ pub struct PhotocraftApp {
 
 impl PhotocraftApp {
     pub fn new(session: Session, services: Services) -> Self {
+        // History stays within this machine's memory (Memory Usage is capped at 70 % of it).
+        photocraft_engine::prefs::set_physical_memory(crate::gpu_canvas::physical_memory());
         let mut app = Self {
             session,
             ui: UiState::default(),
@@ -2273,7 +2275,11 @@ impl PhotocraftApp {
         let img = thumb_image(frame, 64, |x, y| {
             let Some(s) = layer.surface() else { return [0.0; 4] };
             let n = s.channels();
-            s.read_pixel(x, y, &mut px[..n]);
+            // A lazy (hidden) layer shows its reduced preview, so drawing the panel doesn't
+            // decode it.
+            if !s.read_preview_pixel(x, y, &mut px[..n]) {
+                s.read_pixel(x, y, &mut px[..n]);
+            }
             photocraft_raster::to_rgba(&s.format(), &px[..n])
         });
         self.thumb_frames.insert(layer.id, frame);
@@ -2340,6 +2346,11 @@ impl PhotocraftApp {
 /// `Arc` pointers. The default pixel matters: inverting or filling a tile-less mask only changes
 /// it (#2117).
 pub fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
+    // A lazy surface not decoded yet: its identity (reading its tiles would decode it). Once
+    // decoded the fingerprint changes, so the thumbnail is redrawn from the pixels.
+    if let Some(id) = s.pending_id() {
+        return (id as u64).wrapping_mul(0x100_0000_01b3) ^ 0x9e37_79b9_7f4a_7c15;
+    }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ s.tile_count() as u64;
     for &b in s.default_bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
@@ -2357,7 +2368,10 @@ fn layer_thumb_frame(layer: &photocraft_doc::Layer, canvas: photocraft_geom::Rec
     if !clip {
         return canvas;
     }
-    let bounds = layer.surface().map_or(photocraft_geom::Rect::EMPTY, photocraft_compose::bounds::content_bounds).intersect(&canvas);
+    let bounds = layer
+        .surface()
+        .map_or(photocraft_geom::Rect::EMPTY, |s| s.pending_bounds().unwrap_or_else(|| photocraft_compose::bounds::content_bounds(s)))
+        .intersect(&canvas);
     if bounds.is_empty() { canvas } else { bounds }
 }
 

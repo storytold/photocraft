@@ -102,7 +102,7 @@ fn clipboard_batch_and_same_document_duplicates_keep_sources() {
                 .metadata
                 .psd_global_blocks
                 .iter()
-                .any(|(_, dk, dd)| { dk == key && Arc::ptr_eq(dd, data) })),
+                .any(|(_, dk, dd)| { dk == key && dd.ptr_eq(data) })),
             "an exclusive linked block should stay shared, including large PSBs"
         );
         s.execute("edit.paste", json!({})).unwrap();
@@ -196,10 +196,10 @@ fn copy_excludes_unselected_linked_records_from_native_save() {
     // Files may put both selected and unselected entries in one global linked-layer block.
     let (_, _, block) = doc.metadata.psd_global_blocks.iter_mut().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
     let selected_record = block.clone();
-    let mut combined = block.to_vec();
+    let mut combined = block.resident().to_vec();
     combined.extend(photocraft_io::linked::encode_linked_file(&private_source));
     combined.extend([0, 0, 0, 0, 0, 0, 1, 0, 9]); // unrelated unreadable tail
-    *block = Arc::new(combined);
+    *block = photocraft_doc::Blob::new(combined);
     let (mut s, _) = source_session(doc);
     s.execute("edit.copy", json!({})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
@@ -212,7 +212,7 @@ fn copy_excludes_unselected_linked_records_from_native_save() {
     assert!(retained.is_none(), "copying one selected layer must not retain another unselected smart object's embedded file in saved destination .pcraft");
     let linked: Vec<_> = back.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")).collect();
     assert_eq!(linked.len(), 1);
-    assert_eq!(hash(&linked[0].2), hash(&selected_record), "unidentified tail bytes must not follow the selected record");
+    assert_eq!(hash(linked[0].2.resident()), hash(selected_record.resident()), "unidentified tail bytes must not follow the selected record");
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn copy_keeps_selected_external_alias_and_unknown_records_without_reading_their_
             let LayerContent::Smart(sm) = &doc.layer(id).unwrap().content else { panic!("smart") };
             let source = sm.source.clone();
             let (_, _, raw) = doc.metadata.psd_global_blocks.iter().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
-            let mut selected = raw.to_vec();
+            let mut selected = raw.resident().to_vec();
             selected[8..12].copy_from_slice(&kind);
             selected[12..16].copy_from_slice(&42u32.to_be_bytes());
             let mut data = photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
@@ -234,7 +234,7 @@ fn copy_keeps_selected_external_alias_and_unknown_records_without_reading_their_
             });
             data.extend(&selected);
             doc.metadata.psd_global_blocks.retain(|(_, k, _)| !matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE"));
-            doc.metadata.psd_global_blocks.push((*b"8BIM", key, Arc::new(data)));
+            doc.metadata.psd_global_blocks.push((*b"8BIM", key, photocraft_doc::Blob::new(data)));
             let (mut s, _) = source_session(doc);
             s.execute("edit.copy", json!({})).unwrap();
             s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
@@ -245,7 +245,7 @@ fn copy_keeps_selected_external_alias_and_unknown_records_without_reading_their_
             let linked: Vec<_> = back.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")).collect();
             assert_eq!(linked.len(), 1);
             assert_eq!(linked[0].1, key);
-            assert_eq!(hash(&linked[0].2), hash(&selected));
+            assert_eq!(hash(linked[0].2.resident()), hash(&selected));
         }
     }
 }
@@ -257,9 +257,9 @@ fn copy_refuses_a_truncated_selected_record_without_changing_document_or_clipboa
     let before_clip = s.clipboard.clone().unwrap();
     s.edit("truncate selected linked record", |doc, _| {
         let (_, _, block) = doc.metadata.psd_global_blocks.iter_mut().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
-        let mut truncated = block.to_vec();
+        let mut truncated = block.resident().to_vec();
         truncated[..8].copy_from_slice(&u64::MAX.to_be_bytes());
-        *block = Arc::new(truncated);
+        *block = photocraft_doc::Blob::new(truncated);
         Ok(())
     })
     .unwrap();
@@ -279,19 +279,19 @@ fn repeated_same_document_subset_pastes_do_not_duplicate_embedded_files() {
     let expected = bytes(&doc, original);
     let (_, _, block) = doc.metadata.psd_global_blocks.iter_mut().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
     let selected_record = block.clone();
-    let mut combined = block.to_vec();
+    let mut combined = block.resident().to_vec();
     combined.extend(photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
         uuid: "unselected".into(),
         file_name: "another.psb".into(),
         bytes: expected.to_vec(),
     }));
-    *block = Arc::new(combined);
+    *block = photocraft_doc::Blob::new(combined);
     let (mut s, _) = source_session(doc);
     let metadata = s.active().unwrap().doc.metadata.psd_global_blocks.clone();
     s.execute("edit.copy", json!({})).unwrap();
     let copied = s.clipboard.as_ref().unwrap().layers.as_ref().unwrap();
     assert_eq!(copied.metadata.psd_global_blocks.len(), 1);
-    assert_eq!(hash(&copied.metadata.psd_global_blocks[0].2), hash(&selected_record));
+    assert_eq!(hash(copied.metadata.psd_global_blocks[0].2.resident()), hash(selected_record.resident()));
     for _ in 0..3 {
         let before = s.active().unwrap().doc.clone();
         let pasted = LayerId(s.execute("edit.paste", json!({})).unwrap()["layer"].as_u64().unwrap());
@@ -301,7 +301,7 @@ fn repeated_same_document_subset_pastes_do_not_duplicate_embedded_files() {
         for ((signature, key, bytes), (expected_signature, expected_key, expected_bytes)) in after.metadata.psd_global_blocks.iter().zip(&metadata) {
             assert_eq!(signature, expected_signature);
             assert_eq!(key, expected_key);
-            assert_eq!(hash(bytes), hash(expected_bytes));
+            assert_eq!(hash(bytes.resident()), hash(expected_bytes.resident()));
         }
         assert!(s.undo());
         assert_eq!(s.active().unwrap().doc, before);
@@ -309,7 +309,7 @@ fn repeated_same_document_subset_pastes_do_not_duplicate_embedded_files() {
         assert_eq!(s.active().unwrap().doc, after);
     }
     let back = roundtrip(&s.active().unwrap().doc, "pcraft");
-    let ids: Vec<_> = back.metadata.psd_global_blocks.iter().flat_map(|(_, _, data)| photocraft_io::linked::block_uuids(data)).collect();
+    let ids: Vec<_> = back.metadata.psd_global_blocks.iter().flat_map(|(_, _, data)| photocraft_io::linked::block_uuids(data.resident())).collect();
     assert_eq!(ids.len(), 2, "one record per original file after native save/reopen");
 }
 
@@ -330,7 +330,7 @@ fn empty_source_ids_do_not_carry_unidentified_global_files() {
             doc.metadata.psd_global_blocks.push((
                 *b"8BIM",
                 *b"lnk2",
-                Arc::new(photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
+                photocraft_doc::Blob::new(photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
                     uuid: String::new(),
                     file_name: "unidentified-private.pcraft".into(),
                     bytes: bytes.clone(),
@@ -379,7 +379,7 @@ fn ambiguous_invalid_utf8_ids_do_not_replace_the_clipboard() {
         second[17] = 0xfe;
         first.extend(second);
         sm.source = SmartSource::Linked { path: "\u{fffd}".into() };
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(first)));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(first)));
         Ok(())
     })
     .unwrap();
@@ -387,7 +387,7 @@ fn ambiguous_invalid_utf8_ids_do_not_replace_the_clipboard() {
     let copied = s.execute("edit.copy", json!({}));
     if copied.is_ok() {
         let data = &s.clipboard.as_ref().unwrap().layers.as_ref().unwrap().metadata.psd_global_blocks[0].2;
-        let files = photocraft_io::linked::parse_linked_files(data);
+        let files = photocraft_io::linked::parse_linked_files(data.resident());
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].uuid, files[1].uuid);
         eprintln!("two distinct malformed raw IDs were retained under one lossy source label");

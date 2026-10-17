@@ -48,9 +48,11 @@ pub(crate) fn surfaces(doc: &Document, mut visit: impl FnMut(&Surface)) {
 }
 
 impl Tiles {
+    // A lazy surface's tiles (see `Surface::lazy`) are not counted per state: they are not in
+    // memory until decoded, and decoded ones are counted once, with the current document.
     pub(crate) fn add(&mut self, doc: &Document) {
         surfaces(doc, |surface| {
-            for (_, tile) in surface.tiles() {
+            for (_, tile) in surface.owned_tiles() {
                 let count = self.refs.entry(Arc::as_ptr(tile) as usize).or_insert_with(|| {
                     self.bytes += tile.bytes().len() as u128;
                     (0, tile.bytes().len())
@@ -62,7 +64,7 @@ impl Tiles {
 
     pub(crate) fn remove(&mut self, doc: &Document) {
         surfaces(doc, |surface| {
-            for (_, tile) in surface.tiles() {
+            for (_, tile) in surface.owned_tiles() {
                 let key = Arc::as_ptr(tile) as usize;
                 if let Some(count) = self.refs.get_mut(&key) {
                     count.0 -= 1;
@@ -85,11 +87,21 @@ impl Tiles {
     pub(crate) fn bytes_with(&self, current: &Document) -> u128 {
         let mut total = self.bytes;
         let mut seen = HashSet::new();
+        let mut lazy = HashSet::new();
         surfaces(current, |surface| {
-            for (_, tile) in surface.tiles() {
+            for (_, tile) in surface.owned_tiles() {
                 let key = Arc::as_ptr(tile) as usize;
                 if !self.refs.contains_key(&key) && seen.insert(key) {
                     total += tile.bytes().len() as u128;
+                }
+            }
+            if let Some((id, tiles)) = surface.lazy_decoded()
+                && lazy.insert(id)
+            {
+                for (_, tile) in tiles {
+                    if seen.insert(Arc::as_ptr(tile) as usize) {
+                        total += tile.bytes().len() as u128;
+                    }
                 }
             }
         });

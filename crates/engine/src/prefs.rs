@@ -554,10 +554,40 @@ impl Performance {
     }
 
     /// Pixel memory a document and its History may hold (Memory Usage), in bytes: beyond it
-    /// the oldest history states are dropped.
+    /// the oldest history states are dropped. Never more than [`MEMORY_USAGE_SHARE`] of this
+    /// machine's memory when the shell has reported it ([`set_physical_memory`]): the 8 GB
+    /// default would otherwise let History fill an 8 GB machine.
     pub fn history_budget_bytes(&self) -> usize {
-        (self.memory_usage_mb as usize).saturating_mul(1 << 20)
+        self.history_budget_for(physical_memory())
     }
+
+    /// [`Self::history_budget_bytes`] on a machine with `ram` bytes (`None`: unknown).
+    pub fn history_budget_for(&self, ram: Option<u64>) -> usize {
+        let pref = (self.memory_usage_mb as usize).saturating_mul(1 << 20);
+        match ram.filter(|&r| r > 0) {
+            Some(ram) => pref.min(usize::try_from(ram / 10 * MEMORY_USAGE_SHARE_TENTHS).unwrap_or(usize::MAX)),
+            None => pref,
+        }
+    }
+}
+
+/// Share of the machine's memory Memory Usage is capped at, in tenths: 70 %, Photoshop's default.
+pub const MEMORY_USAGE_SHARE_TENTHS: u64 = 7;
+
+/// [`MEMORY_USAGE_SHARE_TENTHS`] as a fraction.
+pub const MEMORY_USAGE_SHARE: f64 = MEMORY_USAGE_SHARE_TENTHS as f64 / 10.0;
+
+static PHYSICAL_MEMORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tells the engine this machine's memory (bytes; the shell detects it), so the History budget
+/// stays within it. `None` or 0 means unknown: the Memory Usage preference applies as set.
+pub fn set_physical_memory(bytes: Option<u64>) {
+    PHYSICAL_MEMORY.store(bytes.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The memory [`set_physical_memory`] reported, if any.
+pub fn physical_memory() -> Option<u64> {
+    Some(PHYSICAL_MEMORY.load(std::sync::atomic::Ordering::Relaxed)).filter(|&b| b > 0)
 }
 
 impl Default for Performance {

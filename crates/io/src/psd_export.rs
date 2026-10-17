@@ -188,11 +188,11 @@ const FX_KEYS: [&[u8; 4]; 2] = [b"FEid", b"FXid"];
 impl SmartOut {
     fn new(doc: &Document, depth: u32) -> Self {
         let globals = doc.metadata.psd_global_blocks.clone();
-        let known = globals.iter().filter(|(_, k, _)| LINK_KEYS.contains(&k)).flat_map(|(_, _, d)| crate::linked::block_uuids(d)).collect();
+        let known = globals.iter().filter(|(_, k, _)| LINK_KEYS.contains(&k)).flat_map(|(_, _, d)| crate::linked::block_uuids(d.resident())).collect();
         let old_fx = globals
             .iter()
             .filter(|(_, k, _)| FX_KEYS.contains(&k))
-            .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d).ok())
+            .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d.resident()).ok())
             .flat_map(|fx| fx.items)
             .collect();
         let mut linked_contents = std::collections::HashMap::new();
@@ -222,7 +222,7 @@ impl SmartOut {
     /// date: unreferenced files dropped (when every reference is known), new files appended,
     /// filter caches kept or regenerated per smart object. Unchanged blocks stay byte-identical.
     fn finish(&self, blocks: Vec<photocraft_doc::PsdGlobalBlock>) -> Vec<photocraft_doc::PsdGlobalBlock> {
-        use std::sync::Arc;
+        use photocraft_doc::Blob;
         let keep = |u: &str| !self.prune_ok || self.used.contains(u);
         let mut out = Vec::with_capacity(blocks.len() + 2);
         let mut added = false;
@@ -231,13 +231,13 @@ impl SmartOut {
             if LINK_KEYS.contains(&&key) {
                 let add: &[crate::linked::LinkedFile] = if !added && &key == b"lnk2" { &self.add } else { &[] };
                 added |= &key == b"lnk2";
-                match crate::linked::rebuild_block(&data, &keep, add) {
+                match crate::linked::rebuild_block(data.resident(), &keep, add) {
                     None => out.push((sig, key, data)),
                     Some(d) if d.is_empty() => {}
-                    Some(d) => out.push((sig, key, Arc::new(d))),
+                    Some(d) => out.push((sig, key, Blob::new(d))),
                 }
             } else if FX_KEYS.contains(&&key) {
-                let Ok(mut fx) = photocraft_psd::filter_effects::FilterEffects::parse(&data) else {
+                let Ok(mut fx) = photocraft_psd::filter_effects::FilterEffects::parse(data.resident()) else {
                     out.push((sig, key, data));
                     continue;
                 };
@@ -251,7 +251,7 @@ impl SmartOut {
                 if fx.items.len() == before && !fresh {
                     out.push((sig, key, data));
                 } else if !fx.items.is_empty() {
-                    out.push((sig, key, Arc::new(padded_fx(&fx))));
+                    out.push((sig, key, Blob::new(padded_fx(&fx))));
                 }
             } else {
                 out.push((sig, key, data));
@@ -259,21 +259,23 @@ impl SmartOut {
         }
         if !added && !self.add.is_empty() {
             let data: Vec<u8> = self.add.iter().flat_map(crate::linked::encode_linked_file).collect();
-            out.push((*b"8BIM", *b"lnk2", Arc::new(data)));
+            out.push((*b"8BIM", *b"lnk2", Blob::new(data)));
         }
         for (sig, key, data) in self.linked_copies.values() {
             if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| s == sig && k == key) {
-                Arc::make_mut(block).extend_from_slice(data);
+                let mut joined = block.resident().to_vec();
+                joined.extend_from_slice(data.resident());
+                *block = Blob::new(joined);
             } else {
                 out.push((*sig, *key, data.clone()));
             }
         }
         if !fx_placed && !self.new_fx.is_empty() {
             let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
-            out.push((*b"8BIM", *b"FEid", Arc::new(padded_fx(&fx))));
+            out.push((*b"8BIM", *b"FEid", Blob::new(padded_fx(&fx))));
             if !out.iter().any(|(_, k, _)| k == b"FMsk") {
                 // Filter mask overlay: RGB red at 50 %, Photoshop's default.
-                out.push((*b"8BIM", *b"FMsk", Arc::new(vec![0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 50])));
+                out.push((*b"8BIM", *b"FMsk", Blob::new(vec![0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 50])));
             }
         }
         out
@@ -340,7 +342,7 @@ impl Ex {
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
         ChannelData::encode(id, compression, plane, w, h, depth, self.version)
             .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData { id, compression: Some(Compression::Raw), data: plane.to_vec() })
+            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()))
     }
 
     fn empty_channels(&self) -> Vec<ChannelData> {
@@ -862,7 +864,7 @@ impl Ex {
         }
         // Placed as the importer places it (the same source size, from the same file, and the
         // same frame: a custom warp's control-point box, #3677).
-        let size = crate::linked::source_size_in_blocks(self.smart.globals.iter().map(|(_, k, d)| (k, d.as_slice())), &id, &photocraft_raster::Interrupt::NONE);
+        let size = crate::linked::source_size_in_blocks(self.smart.globals.iter().map(|(_, k, d)| (k, d.resident())), &id, &photocraft_raster::Interrupt::NONE);
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
     }
 
@@ -915,9 +917,9 @@ impl Ex {
                             .find_map(|(sig, k, data)| {
                                 LINK_KEYS
                                     .contains(&k)
-                                    .then(|| crate::linked::copy_item(data, path, &uuid))
+                                    .then(|| crate::linked::copy_item(data.resident(), path, &uuid))
                                     .flatten()
-                                    .map(|data| (*sig, *k, std::sync::Arc::new(data)))
+                                    .map(|data| (*sig, *k, photocraft_doc::Blob::new(data)))
                             })
                             .ok_or_else(|| format!("the linked source {path} has no readable record to copy independently"))?;
                         self.smart.linked_copies.insert(key, copy);
@@ -1483,7 +1485,7 @@ pub(crate) fn estimate_psd_size(doc: &Document) -> Option<u64> {
         structural_bytes = structural_bytes.checked_add(u64::try_from(name.len()).ok()?)?.checked_add(u64::try_from(data.len()).ok()?)?;
     }
     for (_, _, data) in &doc.metadata.psd_global_blocks {
-        structural_bytes = structural_bytes.checked_add(u64::try_from(data.len()).ok()?)?;
+        structural_bytes = structural_bytes.checked_add(data.len())?;
     }
 
     estimate_encoded_size(raw_bytes, rows, structural_bytes)
@@ -1657,7 +1659,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
     let mcomp = if sample == SampleType::F32 { Compression::Raw } else { opts.merged_compression };
     let image_data = ImageData::encode(mcomp, &planes, &header)
         .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
-        .unwrap_or(ImageData { compression: Compression::Raw, data: planes });
+        .unwrap_or(ImageData::new(Compression::Raw, planes));
     ctl.progress(1.0);
 
     // Resources.
@@ -1714,7 +1716,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
             _ => None,
         })
         .collect();
-    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
+    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.resident().to_vec())).flatten();
     // A fresh document of ordinary (Metrics) text has nothing to put in `Txt2`, and Photoshop never
     // writes its empty `<< /0 << >> >>` stub — readers such as Photopea reject it (#3514). Keep the
     // block when the file had one (round-trip its pen positions/extras) or a layer is Optical (the
@@ -1731,7 +1733,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
         if !ex.records.is_empty() && matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
             continue;
         }
-        global_blocks.push(global_block(block_signature(sig, version), key, &data));
+        global_blocks.push(global_block(block_signature(sig, version), key, data.resident()));
     }
     if let Some(txt2) = txt2 {
         let mut tb = TaggedBlock::new(*b"Txt2", txt2.clone());
@@ -1905,7 +1907,7 @@ mod tests {
             let mut s = Surface::new(doc.pixel_format());
             s.fill_rect(photocraft_geom::Rect::new(1, 1, 5, 4), &[0.5, 0.2, 0.9, 1.0]);
             doc.layers.push(Layer::new("Layer 1", LayerContent::Raster(s)));
-            doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", std::sync::Arc::new(Vec::new())), (*b"8BIM", marker, std::sync::Arc::new(Vec::new()))];
+            doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", photocraft_doc::Blob::new(Vec::new())), (*b"8BIM", marker, photocraft_doc::Blob::new(Vec::new()))];
             let saved = PsdFile::from_bytes(&document_to_psd(&doc).to_bytes().unwrap()).unwrap();
             let LayerInfoPlacement::GlobalBlock { index, key: written, .. } = saved.layer_info_placement else { panic!("{depth:?}: a global layer block") };
             assert_eq!(written, key);
@@ -1915,7 +1917,7 @@ mod tests {
         // Without a marker the layer block stays first.
         let mut doc = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::F32);
         doc.layers.push(Layer::new("Layer 1", LayerContent::Raster(Surface::new(doc.pixel_format()))));
-        doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", std::sync::Arc::new(Vec::new()))];
+        doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", photocraft_doc::Blob::new(Vec::new()))];
         let saved = PsdFile::from_bytes(&document_to_psd(&doc).to_bytes().unwrap()).unwrap();
         assert!(matches!(saved.layer_info_placement, LayerInfoPlacement::GlobalBlock { index: 0, .. }));
     }
@@ -2038,8 +2040,8 @@ mod tests {
         // version"); they came from re-saving a PSB as PSD with its global FMsk and cinf kept.
         let mut doc = document(4, 4);
         doc.metadata.psd_global_blocks = vec![
-            (*b"8B64", *b"FMsk", std::sync::Arc::new(vec![0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50])),
-            (*b"8BIM", *b"Patt", std::sync::Arc::new(Vec::new())),
+            (*b"8B64", *b"FMsk", photocraft_doc::Blob::new(vec![0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50])),
+            (*b"8BIM", *b"Patt", photocraft_doc::Blob::new(Vec::new())),
         ];
         let signatures = |force_psb| {
             let opts = PsdExportOptions { force_psb, ..PsdExportOptions::default() };

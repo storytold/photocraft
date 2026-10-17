@@ -915,3 +915,17 @@ fn a_stranded_backup_is_named_in_the_error() {
     assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Memory Usage is capped at 70 % of the machine's memory: the 8 GB default holds on a 16 GB
+/// machine, an 8 GB one gets 5.6 GB, and an unknown machine the preference as set.
+#[test]
+fn history_budget_stays_within_the_machine() {
+    let p = Performance::default();
+    let gib = 1u64 << 30;
+    assert_eq!(p.history_budget_for(None), 8192 << 20);
+    assert_eq!(p.history_budget_for(Some(0)), 8192 << 20);
+    assert_eq!(p.history_budget_for(Some(16 * gib)), 8192 << 20);
+    assert_eq!(p.history_budget_for(Some(8 * gib)), (8 * gib / 10 * 7) as usize);
+    let small = Performance { memory_usage_mb: 1024, ..Performance::default() };
+    assert_eq!(small.history_budget_for(Some(8 * gib)), 1024 << 20);
+}

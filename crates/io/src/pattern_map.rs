@@ -4,7 +4,6 @@
 //! the raw blocks verbatim while they still decode to the document's patterns (byte-exact round
 //! trips); otherwise they are replaced by one block written from the document.
 
-use std::sync::Arc;
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Pattern};
@@ -118,7 +117,7 @@ pub fn from_global_blocks(doc: &Document) -> Vec<Pattern> {
         .psd_global_blocks
         .iter()
         .filter(|(_, k, _)| PATTERN_KEYS.contains(k))
-        .filter_map(|(_, _, d)| parse_pattern_block_with(d, &mut budget).ok())
+        .filter_map(|(_, _, d)| parse_pattern_block_with(d.resident(), &mut budget).ok())
         .flatten()
         .filter_map(|p| from_psd(&p))
         .collect()
@@ -138,7 +137,7 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
     for b in raw {
         if PATTERN_KEYS.contains(&b.1) {
             if !placed {
-                out.push((*b"8BIM", key, Arc::new(fresh.clone())));
+                out.push((*b"8BIM", key, photocraft_doc::Blob::new(fresh.clone())));
                 placed = true;
             }
         } else {
@@ -146,7 +145,7 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
         }
     }
     if !placed && !doc.patterns.is_empty() {
-        out.push((*b"8BIM", key, Arc::new(fresh)));
+        out.push((*b"8BIM", key, photocraft_doc::Blob::new(fresh)));
     }
     out
 }
@@ -204,7 +203,7 @@ mod tests {
         let mut d = Document::new("x", photocraft_geom::Size { width: 4, height: 4 }, ColorMode::Rgb, SampleType::U8);
         let p = pattern(ColorMode::Rgb, SampleType::U8, false);
         let raw = write_pattern_block(&[to_psd(&p)]).unwrap();
-        d.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", Arc::new(vec![1])), (*b"8BIM", *b"Patt", Arc::new(raw.clone()))];
+        d.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(vec![1])), (*b"8BIM", *b"Patt", photocraft_doc::Blob::new(raw.clone()))];
         d.patterns = from_global_blocks(&d);
         assert_eq!(d.patterns.len(), 1);
         assert_eq!(export_global_blocks(&d), d.metadata.psd_global_blocks);

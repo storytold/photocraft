@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{
-    AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, PsdGlobalBlock, ShapeLayer, SmartContentsId, SmartObject, SmartSource,
+    TextLayer,
 };
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_psd::layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK};
@@ -46,6 +47,8 @@ pub(crate) const REGENERATED: [&[u8; 4]; 9] = [b"luni", b"lyid", b"lsct", b"lsdk
 
 pub(crate) struct Ctx<'a> {
     pub file: &'a PsdFile,
+    /// The file's global blocks, as the document keeps them.
+    pub global: Vec<PsdGlobalBlock>,
     pub fmt: PixelFormat,
     pub mask_fmt: PixelFormat,
     pub cc: usize,
@@ -65,7 +68,150 @@ pub(crate) struct Ctx<'a> {
     pub ctl: photocraft_raster::Interrupt<'a>,
     /// Layer records decoded so far, out of `total` (progress).
     pub done: usize,
+    /// Tiles of one pixel value, shared by every surface the import decodes.
+    pub uniform: photocraft_raster::TileInterner,
+    /// Hidden layers stay undecoded until used (`Surface::lazy`): set when the channels stay in
+    /// the opened file ([`crate::import_file`]).
+    pub lazy_hidden: bool,
     pub total: usize,
+}
+
+/// A global block's data left in the file it was opened from (see [`photocraft_doc::Blob`]).
+struct StoredBlock(photocraft_psd::Stored);
+
+impl photocraft_doc::DeferredBytes for StoredBlock {
+    fn len(&self) -> u64 {
+        self.0.len
+    }
+
+    fn read(&self, at: u64, len: u64) -> Result<Vec<u8>, photocraft_doc::BlobError> {
+        self.0.read_part(at, len).map_err(|e| photocraft_doc::BlobError(e.to_string()))
+    }
+
+    fn origin(&self) -> String {
+        format!("{} bytes at offset {} of the opened file", self.0.len, self.0.offset)
+    }
+}
+
+/// What turning a layer's channels into pixels needs besides the channels.
+#[derive(Clone, Copy)]
+struct LayerShape {
+    fmt: PixelFormat,
+    /// Colour channels (the transparency follows them).
+    cc: usize,
+    /// PSD stores CMYK as `max - ink`.
+    cmyk: bool,
+}
+
+impl LayerShape {
+    fn fill_invert(&self) -> (Vec<Vec<u8>>, Vec<bool>) {
+        let s = self.fmt.sample;
+        let mut fill: Vec<Vec<u8>> = vec![zero_sample(s); self.cc];
+        fill.push(max_sample(s));
+        let mut invert = vec![self.cmyk; self.cc];
+        invert.push(false);
+        (fill, invert)
+    }
+
+    fn finish(&self, bytes: &mut [u8]) {
+        if self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16 {
+            crate::pixels::lab16_chroma(bytes, self.cc + 1, true);
+        }
+    }
+}
+
+/// A layer's pixels from its channel decoders (colour channels, then transparency; `None` for one
+/// not in the file), decoded and interleaved a band of rows at a time straight into tiles. The
+/// first band that fails names its channel.
+fn decode_bands(
+    decoders: &[Option<&photocraft_psd::RowDecoder<'_>>],
+    ids: &[i16],
+    r: photocraft_psd::Rect,
+    w: usize,
+    h: usize,
+    shape: LayerShape,
+) -> Result<Surface, (i16, String)> {
+    let s = shape.fmt.sample;
+    let (fill, invert) = shape.fill_invert();
+    let mut surf = Surface::new(shape.fmt);
+    for (b0, b1) in band_rows(r.top, h, w * (shape.cc + 1) * s.bytes()) {
+        let planes: Vec<Option<photocraft_psd::Result<Vec<u8>>>> = crate::pixels::par_map(decoders.to_vec(), |d| d.map(|d| d.rows(b0, b1)));
+        let mut refs: Vec<Option<&[u8]>> = Vec::with_capacity(planes.len());
+        for (&id, p) in ids.iter().zip(&planes) {
+            match p {
+                Some(Err(e)) => return Err((id, e.to_string())),
+                Some(Ok(p)) => refs.push(Some(p)),
+                None => refs.push(None),
+            }
+        }
+        let mut bytes = interleave(&refs, &fill, w * (b1 - b0), s, &invert);
+        shape.finish(&mut bytes);
+        surf.write_interleaved(Rect::new(r.left, r.top + b0 as i32, r.right, r.top + b1 as i32), &bytes);
+    }
+    surf.prune();
+    Ok(surf)
+}
+
+/// Longest side of a lazy layer's preview (its thumbnail's source), in pixels.
+const LAZY_PREVIEW_SIDE: usize = 64;
+
+/// A `w × h` layer reduced `k` times (`k` fitting it in [`LAZY_PREVIEW_SIDE`]) from every `k`-th
+/// sample of every `k`-th row: what [`Surface::lazy`] samples for a thumbnail. Pixel `(0, 0)` is
+/// the layer's corner.
+fn layer_preview(decoders: &[Option<&photocraft_psd::RowDecoder<'_>>], w: usize, h: usize, shape: LayerShape) -> Result<(u32, Surface), (i16, String)> {
+    let s = shape.fmt.sample;
+    let bps = match s {
+        SampleType::U8 => 1,
+        SampleType::U16 => 2,
+        _ => 4,
+    };
+    let k = w.max(h).div_ceil(LAZY_PREVIEW_SIDE).max(1);
+    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+    let (fill, invert) = shape.fill_invert();
+    let mut out = Surface::new(shape.fmt);
+    let ids: Vec<i16> = (0..shape.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
+    for j in 0..ph {
+        let src = j * k;
+        let mut planes: Vec<Option<Vec<u8>>> = Vec::with_capacity(decoders.len());
+        for (d, &id) in decoders.iter().zip(&ids) {
+            planes.push(match d {
+                Some(d) => {
+                    let row = d.rows(src, src + 1).map_err(|e| (id, e.to_string()))?;
+                    Some((0..pw).flat_map(|x| row.get(x * k * bps..(x * k + 1) * bps).unwrap_or(&[]).to_vec()).collect())
+                }
+                None => None,
+            });
+        }
+        let refs: Vec<Option<&[u8]>> = planes.iter().map(|p| p.as_deref()).collect();
+        let mut bytes = interleave(&refs, &fill, pw, s, &invert);
+        shape.finish(&mut bytes);
+        out.write_interleaved(Rect::new(0, j as i32, pw as i32, j as i32 + 1), &bytes);
+    }
+    Ok((k as u32, out))
+}
+
+/// Bytes of interleaved pixels a band decoded into tiles at once aims at: whole layers up to this
+/// size decode in one band, larger ones in bands of whole tile rows.
+const BAND_BYTES: usize = 32 << 20;
+
+/// Row ranges (`0..h`, relative to a layer whose first row is at document row `top`) to decode a
+/// layer in: each ends on a tile row boundary, so no tile is written by two bands, and holds
+/// about [`BAND_BYTES`] of `row_bytes`-byte rows.
+fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
+    let tile = TILE_SIZE as usize;
+    let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
+    // The first band ends at the first tile boundary at least `rows` rows in.
+    let into_tile = usize::try_from(top.rem_euclid(TILE_SIZE)).unwrap_or(0);
+    let mut out = Vec::new();
+    let mut r0 = 0;
+    let mut r1 = rows - into_tile;
+    while r0 < h {
+        let end = r1.min(h);
+        out.push((r0, end));
+        r0 = end;
+        r1 = end + rows;
+    }
+    out
 }
 
 fn doc_mode(m: PsdMode) -> Option<ColorMode> {
@@ -142,11 +288,11 @@ impl Ctx<'_> {
                 return Placement::default();
             }
         };
-        let (file, ctl) = (self.file, self.ctl);
+        let (global, ctl) = (&self.global, self.ctl);
         let size = *self
             .plld_sizes
             .entry(id.clone())
-            .or_insert_with(|| crate::linked::source_size_in_blocks(file.global_blocks.iter().map(|b| (&b.key, b.data.as_slice())), &id, &ctl));
+            .or_insert_with(|| crate::linked::source_size_in_globals(global, &id, &ctl));
         // Without the source (missing or unreadable), it is taken as placed at 100 %.
         let (transform, perspective) = blocks::plld_transform(&p, size, warp.as_ref());
         Placement { id, transform, perspective, warp }
@@ -163,61 +309,82 @@ impl Ctx<'_> {
         }
     }
 
-    /// [`Self::channel_plane`] without the warnings sink, so a layer's channels decode
-    /// concurrently (their RLE rows are the bulk of the open time on full-canvas layers).
-    fn channel_plane_decoded(&self, rec: &LayerRecord, id: i16) -> Option<Vec<u8>> {
-        rec.channel(id)?;
-        rec.decode_channel(id, self.file.header.depth, self.file.header.version).ok()
-    }
-
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
         let r = rec.rect;
         if r.is_empty() || r.size().is_err() {
             return Surface::new(self.fmt);
         }
         let (w, h) = r.size().unwrap_or((0, 0));
-        let s = self.fmt.sample;
+        let (depth, version) = (self.file.header.depth, self.file.header.version);
         let ids: Vec<i16> = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
-        let planes: Vec<Option<Vec<u8>>> = if cfg!(target_arch = "wasm32") {
-            ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
-        } else {
-            // The channels decode independently; their RLE rows are the bulk of the open
-            // time for full-canvas layers, so they run side by side and the warnings land
-            // in the same order afterwards.
-            // par_map reuses the crate's worker pool (one OS thread per channel per layer
-            // would spawn thousands on a file with many layers).
-            let decoded: Vec<Option<Vec<u8>>> = crate::pixels::par_map(ids.to_vec(), |id| self.channel_plane_decoded(rec, id));
-            let mut planes: Vec<Option<Vec<u8>>> = Vec::with_capacity(decoded.len());
-            for (&id, p) in ids.iter().zip(decoded) {
-                if p.is_none() && rec.channel(id).is_some() {
-                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded; treated as empty"));
-                }
-                planes.push(p);
+        // A decoder per channel present (a ZIP channel is inflated here, the channels side by
+        // side); the rows are then decoded and interleaved a band at a time straight into the
+        // tiles, so no buffer of the whole layer (planes or interleaved) is ever held.
+        // par_map reuses the crate's worker pool (one OS thread per channel per layer would
+        // spawn thousands on a file with many layers).
+        let decoders: Vec<Option<photocraft_psd::Result<photocraft_psd::RowDecoder<'_>>>> =
+            crate::pixels::par_map(ids.to_vec(), |id| rec.channel(id).map(|ch| ch.row_decoder(w, h, depth, version)));
+        let mut failed = false;
+        for (&id, d) in ids.iter().zip(&decoders) {
+            if let Some(Err(e)) = d {
+                self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                failed = true;
             }
-            planes
-        };
+        }
         // A channel that is in the file but could not be decoded leaves the layer empty, as the
         // warning says. Filling in for it would paint an opaque black layer over the document.
-        if ids.iter().zip(planes.iter()).any(|(&id, p)| p.is_none() && rec.channel(id).is_some()) {
+        if failed {
             return Surface::new(self.fmt);
         }
         // Only decoded channel data justifies a buffer: the decoders bound their output by the
         // bytes in the file, but a bare rectangle can declare 300000² pixels in a few bytes (#755).
-        if planes.iter().all(Option::is_none) {
+        if decoders.iter().all(Option::is_none) {
             self.warn(format!("layer \"{name}\": no channel data for its {w}x{h} bounds; treated as empty"));
             return Surface::new(self.fmt);
         }
-        let refs: Vec<Option<&[u8]>> = planes.iter().map(|p| p.as_deref()).collect();
-        let mut fill: Vec<Vec<u8>> = vec![zero_sample(s); self.cc];
-        fill.push(max_sample(s));
-        let mut invert = vec![self.cmyk; self.cc];
-        invert.push(false);
-        let mut bytes = interleave(&refs, &fill, w * h, s, &invert);
-        if self.fmt.mode == ColorMode::Lab && s == SampleType::U16 {
-            crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, true);
+        let shape = LayerShape { fmt: self.fmt, cc: self.cc, cmyk: self.cmyk };
+        // A hidden layer opened from a file (`import_file`) is decoded when first used: until
+        // then it holds no pixels, only a 64-pixel preview of sampled rows for its thumbnail.
+        if self.lazy_hidden && !rec.is_visible() && ids.iter().filter_map(|&id| rec.channel(id)).all(|c| c.stored.is_some() || c.compression.is_none()) {
+            let refs: Vec<Option<&photocraft_psd::RowDecoder<'_>>> = decoders.iter().map(|d| d.as_ref().and_then(|d| d.as_ref().ok())).collect();
+            match layer_preview(&refs, w, h, shape) {
+                Ok(preview) => {
+                    let chans: Vec<Option<photocraft_psd::ChannelData>> = ids.iter().map(|&id| rec.channel(id).cloned()).collect();
+                    let ids = ids.clone();
+                    let bounds = Rect::new(r.left, r.top, r.right, r.bottom);
+                    return Surface::lazy(
+                        self.fmt,
+                        bounds,
+                        Some(preview),
+                        Box::new(move || {
+                            let mut decoders = Vec::with_capacity(chans.len());
+                            for (c, id) in chans.iter().zip(&ids) {
+                                decoders.push(match c {
+                                    Some(c) => Some(c.row_decoder(w, h, depth, version).map_err(|e| format!("channel {id} could not be decoded ({e})"))?),
+                                    None => None,
+                                });
+                            }
+                            let refs: Vec<Option<&photocraft_psd::RowDecoder<'_>>> = decoders.iter().map(Option::as_ref).collect();
+                            decode_bands(&refs, &ids, r, w, h, shape).map_err(|(id, e)| format!("channel {id} could not be decoded ({e})"))
+                        }),
+                    );
+                }
+                Err((id, e)) => {
+                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                    return Surface::new(self.fmt);
+                }
+            }
         }
-        let mut surf = Surface::from_interleaved(self.fmt, Rect::new(r.left, r.top, r.right, r.bottom), &bytes);
-        surf.prune();
+        let refs: Vec<Option<&photocraft_psd::RowDecoder<'_>>> = decoders.iter().map(|d| d.as_ref().and_then(|d| d.as_ref().ok())).collect();
+        let mut surf = match decode_bands(&refs, &ids, r, w, h, shape) {
+            Ok(surf) => surf,
+            Err((id, e)) => {
+                self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                return Surface::new(self.fmt);
+            }
+        };
+        // A white background, a solid fill's cache: one tile per value, shared across layers.
+        surf.share_uniform_tiles(&mut self.uniform);
         surf
     }
 
@@ -239,6 +406,7 @@ impl Ctx<'_> {
             let bytes = interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]);
             surface.write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
             surface.prune();
+            surface.share_uniform_tiles(&mut self.uniform);
         }
         let params = m.parameters;
         Some(LayerMask {
@@ -777,6 +945,49 @@ pub(crate) fn psd_to_document_decoded(
     ctl: &photocraft_raster::Interrupt,
     decoded: Option<photocraft_psd::Result<Vec<u8>>>,
 ) -> Option<(Document, Vec<String>)> {
+    let mut global = Vec::with_capacity(file.global_blocks.len());
+    for b in &file.global_blocks {
+        let data = match &b.stored {
+            Some(s) => photocraft_doc::Blob::deferred(Arc::new(StoredBlock(s.clone()))),
+            None => photocraft_doc::Blob::new(b.data.clone()),
+        };
+        global.push((b.signature, b.key, data));
+    }
+    psd_to_document_global(file, ctl, decoded, global, false)
+}
+
+/// [`psd_to_document_decoded`] taking the file: its global blocks move into the document rather
+/// than being copied (an embedded smart object's `lnk2` block can be most of a file).
+pub(crate) fn psd_to_document_owned(
+    mut file: PsdFile,
+    ctl: &photocraft_raster::Interrupt,
+    decoded: Option<photocraft_psd::Result<Vec<u8>>>,
+    lazy_hidden: bool,
+) -> Option<(Document, Vec<String>)> {
+    let global = file
+        .global_blocks
+        .iter_mut()
+        .map(|b| {
+            let data = match &b.stored {
+                // Left in the file (`import_file`): read when a smart object's contents are.
+                Some(s) => photocraft_doc::Blob::deferred(Arc::new(StoredBlock(s.clone()))),
+                // A layer block is still read by `unreadable_layer_block` (to say why it failed).
+                None if matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr") => photocraft_doc::Blob::new(b.data.clone()),
+                None => photocraft_doc::Blob::new(std::mem::take(&mut b.data)),
+            };
+            (b.signature, b.key, data)
+        })
+        .collect();
+    psd_to_document_global(&file, ctl, decoded, global, lazy_hidden)
+}
+
+fn psd_to_document_global(
+    file: &PsdFile,
+    ctl: &photocraft_raster::Interrupt,
+    decoded: Option<photocraft_psd::Result<Vec<u8>>>,
+    global: Vec<PsdGlobalBlock>,
+    lazy_hidden: bool,
+) -> Option<(Document, Vec<String>)> {
     let h = &file.header;
     let mut warnings = Vec::new();
     let mode = doc_mode(h.color_mode).unwrap_or_else(|| {
@@ -836,9 +1047,7 @@ pub(crate) fn psd_to_document_decoded(
             id => doc.metadata.psd_resources.push((id, String::from_utf8_lossy(&r.name).into_owned(), Arc::new(r.data.clone()))),
         }
     }
-    for b in &file.global_blocks {
-        doc.metadata.psd_global_blocks.push((b.signature, b.key, Arc::new(b.data.clone())));
-    }
+    doc.metadata.psd_global_blocks.extend(global.iter().cloned());
     // A 16/32-bit file whose layer block can't be parsed would otherwise open as a flattened
     // file without a word (#2700). The raw block is kept, but a PSD save writes the document's
     // own layers in its place (see `psd_export`).
@@ -862,28 +1071,31 @@ pub(crate) fn psd_to_document_decoded(
     let cc = fmt.mode.color_channels();
     let mut cx = Ctx {
         file,
+        global: global.clone(),
         fmt,
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, depth, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
         warnings,
         dpi: doc.resolution_dpi,
-        txt2: file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)),
+        txt2: global.iter().find(|(_, k, _)| k == b"Txt2").and_then(|(_, _, d)| photocraft_text::psd::parse_txt2(d.resident())),
         filter_effects: Vec::new(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         ctl: *ctl,
         done: 0,
+        uniform: Default::default(),
+        lazy_hidden,
         total: file.layers().len(),
     };
-    for b in file.global_blocks.iter().filter(|b| matches!(&b.key, b"FEid" | b"FXid")) {
+    for (_, key, data) in cx.global.clone().iter().filter(|(_, k, _)| matches!(k, b"FEid" | b"FXid")) {
         // Smart-filter caches can be large: a cancelled open stops between blocks.
         if ctl.cancelled() {
             return None;
         }
-        match photocraft_psd::filter_effects::FilterEffects::parse(&b.data) {
+        match photocraft_psd::filter_effects::FilterEffects::parse(data.resident()) {
             Ok(fx) => cx.filter_effects.extend(fx.items),
-            Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", b.key_str())),
+            Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", String::from_utf8_lossy(key))),
         }
     }
     if ctl.cancelled() {
@@ -1124,5 +1336,26 @@ mod tests {
         assert_eq!(merged_plane(&all, 1, 2), Some(&[3u8, 4][..]));
         assert_eq!(merged_plane(&all, 2, 2), None);
         assert_eq!(merged_plane(&all, usize::MAX, 2), None);
+    }
+
+    #[test]
+    fn layer_bands_end_on_tile_rows_and_cover_the_layer() {
+        let t = TILE_SIZE as usize;
+        for (top, h, row_bytes) in [(0, 2000, 8000), (-37, 15000, 80_000), (100, 5, 4), (255, 1, 4), (-256, 40_000, 1 << 20), (7, 0, 4)] {
+            let bands = band_rows(top, h, row_bytes);
+            let mut next = 0;
+            for &(a, b) in &bands {
+                assert_eq!(a, next);
+                assert!(b > a);
+                if b < h {
+                    assert_eq!((top + b as i32).rem_euclid(TILE_SIZE), 0, "{top} {h}: band ends inside a tile row");
+                    assert!((b - a) * row_bytes <= BAND_BYTES + t * row_bytes || b - a <= t);
+                }
+                next = b;
+            }
+            assert_eq!(next, h);
+        }
+        // A small layer is one band.
+        assert_eq!(band_rows(0, 2000, 8000), vec![(0, 2000)]);
     }
 }

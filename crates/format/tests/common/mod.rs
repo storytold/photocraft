@@ -238,7 +238,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     d.metadata.text = vec![("Author".into(), "Synthetic é 雪".into()), ("Comment".into(), "first".into()), ("Comment".into(), "second".into())];
     d.metadata.exif = Some(blob(15, 64));
     d.metadata.psd_resources.push((1036, "thumb".into(), blob(16, 20)));
-    d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", blob(17, 50)));
+    d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", blob(17, 50).into()));
     d.global_light = GlobalLight { angle: 120.0, altitude: 30.0 };
     d.paths.push(NamedPath { name: "Path 1".into(), path: vector_path(), psd_raw: Some(blob(18, 52)) });
     d.paths.push(NamedPath { name: "Empty".into(), path: Path::default(), psd_raw: None });

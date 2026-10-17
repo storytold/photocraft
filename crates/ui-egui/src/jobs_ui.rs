@@ -168,7 +168,14 @@ pub struct JobsUi {
     pub focus: Option<JobId>,
     /// The job the latest [`run`] started (the control channel waits on it).
     pub(crate) last_started: Option<JobId>,
+    /// Pictures of files opening from a path, from their merged image (PSD/PSB), shown behind
+    /// the open card while the layers decode. Filled by a thread per open; `None` inside when the
+    /// file has none to show.
+    pub(crate) previews: std::collections::HashMap<JobId, Arc<std::sync::OnceLock<Option<photocraft_io::PsdPreview>>>>,
 }
+
+/// Longest side of an open preview, in pixels.
+const OPEN_PREVIEW_SIDE: u32 = 1024;
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
@@ -197,6 +204,19 @@ pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, sou
         // Inline (wasm): finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
         Started::Job(job) => {
+            #[cfg(any(unix, windows))]
+            if let Some(p) = path.clone() {
+                // The merged image's sampled rows, read beside the open (a few megabytes of the
+                // file), so a large file shows its picture within a moment.
+                let slot: Arc<std::sync::OnceLock<Option<photocraft_io::PsdPreview>>> = Arc::default();
+                let fill = slot.clone();
+                let spawned = std::thread::Builder::new().name("open-preview".into()).spawn(move || {
+                    let _ = fill.set(photocraft_io::psd_preview(std::path::Path::new(&p), OPEN_PREVIEW_SIDE));
+                });
+                if spawned.is_ok() {
+                    app.jobs.previews.insert(job, slot);
+                }
+            }
             app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot: None, order: None });
             app.jobs.focus = Some(job);
             app.ui.chrome.home = None;
@@ -472,6 +492,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     if e.command == OPEN_JOB {
+        // The picture's texture goes with it (up to 4 MB of video memory per open).
+        app.jobs.previews.remove(&e.id);
+        ctx.data_mut(|d| d.remove::<Arc<egui::TextureHandle>>(egui::Id::new(("open-preview", e.id))));
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
         match e.outcome {
@@ -773,6 +796,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let t = Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
     ui.painter().rect_filled(area, 0.0, t.canvas);
+    open_preview(app, ui, job, area);
     // Centre the card at the height its content needed last frame; the background is painted
     // once the rows are laid out, so a taller content (a long translation) still gets a card.
     let height_id = egui::Id::new(("open-card-height", job));
@@ -814,6 +838,30 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     if cancel_it {
         cancel(app, job);
     }
+}
+
+/// The opening file's picture (see [`JobsUi::previews`]), fitted in `area` and dimmed behind the
+/// card, once its thread has read it.
+fn open_preview(app: &PhotocraftApp, ui: &egui::Ui, job: JobId, area: Rect) {
+    let Some(Some(p)) = app.jobs.previews.get(&job).and_then(|slot| slot.get()) else {
+        if app.jobs.previews.contains_key(&job) {
+            // Still reading: look again shortly.
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        return;
+    };
+    let key = egui::Id::new(("open-preview", job));
+    let tex = ui.ctx().data(|d| d.get_temp::<Arc<egui::TextureHandle>>(key)).unwrap_or_else(|| {
+        let img = egui::ColorImage::from_rgba_unmultiplied([p.width as usize, p.height as usize], &p.rgba);
+        let tex = Arc::new(ui.ctx().load_texture("open-preview", img, egui::TextureOptions::LINEAR));
+        ui.ctx().data_mut(|d| d.insert_temp(key, tex.clone()));
+        tex
+    });
+    let room = area.shrink(24.0);
+    let k = (room.width() / p.width as f32).min(room.height() / p.height as f32).min(1.0);
+    let r = Rect::from_center_size(area.center(), vec2(p.width as f32 * k, p.height as f32 * k));
+    let uv = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+    ui.painter().image(tex.id(), r, uv, Color32::from_white_alpha(140));
 }
 
 /// Open tabs for the tab strips: (job, title, progress).

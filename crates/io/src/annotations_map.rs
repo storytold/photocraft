@@ -16,7 +16,6 @@
 //! * Count information: image resource 1080 is kept verbatim (its layout is not public) unless
 //!   the document has its own count markers, which only `.pcraft` stores.
 
-use std::sync::Arc;
 
 use photocraft_doc::{Color, Document, MeasurementScale, Note};
 use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
@@ -231,12 +230,12 @@ pub fn write_anno(notes: &[Note], raw_extra: &[Vec<u8>]) -> Vec<u8> {
 
 /// The document's notes from its raw global blocks (empty when there is no `Anno` block).
 pub fn notes_from_blocks(doc: &Document) -> Vec<Note> {
-    doc.metadata.psd_global_blocks.iter().find(|(_, k, _)| *k == ANNO).and_then(|(_, _, d)| parse_anno(d)).unwrap_or_default()
+    doc.metadata.psd_global_blocks.iter().find(|(_, k, _)| *k == ANNO).and_then(|(_, _, d)| parse_anno(d.resident())).unwrap_or_default()
 }
 
 /// Whether the document holds an `Anno` block that doesn't parse (its notes can't be shown).
 pub fn anno_unreadable(doc: &Document) -> bool {
-    doc.metadata.psd_global_blocks.iter().find(|(_, k, _)| *k == ANNO).is_some_and(|(_, _, d)| parse_entries(d).is_none())
+    doc.metadata.psd_global_blocks.iter().find(|(_, k, _)| *k == ANNO).is_some_and(|(_, _, d)| parse_entries(d.resident()).is_none())
 }
 
 /// Global blocks to write: the raw `Anno` block while it still describes `doc.notes` (or doesn't
@@ -245,7 +244,7 @@ pub fn anno_unreadable(doc: &Document) -> bool {
 pub fn export_blocks(doc: &Document, mut blocks: Vec<photocraft_doc::PsdGlobalBlock>) -> Vec<photocraft_doc::PsdGlobalBlock> {
     let at = blocks.iter().position(|(_, k, _)| *k == ANNO);
     let raw = at.map(|i| blocks[i].2.clone());
-    let entries = raw.as_deref().and_then(|d| parse_entries(d));
+    let entries = raw.as_ref().and_then(|d| parse_entries(d.resident()));
     let parsed: Option<Vec<Note>> = entries.as_ref().map(|e| e.iter().filter_map(|e| if let Entry::Text(n) = e { Some(n.clone()) } else { None }).collect());
     // Compare in stored precision (colours are 16-bit, positions whole pixels, empty popups get a
     // default rectangle).
@@ -263,7 +262,7 @@ pub fn export_blocks(doc: &Document, mut blocks: Vec<photocraft_doc::PsdGlobalBl
         return blocks;
     }
     let extra: Vec<Vec<u8>> = entries.unwrap_or_default().into_iter().filter_map(|e| if let Entry::Raw(r) = e { Some(r) } else { None }).collect();
-    let fresh = (!doc.notes.is_empty() || !extra.is_empty()).then(|| Arc::new(write_anno(&doc.notes, &extra)));
+    let fresh = (!doc.notes.is_empty() || !extra.is_empty()).then(|| photocraft_doc::Blob::new(write_anno(&doc.notes, &extra)));
     match (at, fresh) {
         (Some(i), Some(f)) => blocks[i].2 = f,
         (Some(i), None) => {
@@ -399,10 +398,10 @@ mod tests {
         d.notes.push(Note { text: "héllo ✓".into(), author: "me".into(), position: [3.0, 4.0], ..Default::default() });
         let out = export_blocks(&d, vec![]);
         assert_eq!(out.len(), 1);
-        assert_eq!(parse_anno(&out[0].2).unwrap()[0].text, "héllo ✓");
+        assert_eq!(parse_anno(out[0].2.resident()).unwrap()[0].text, "héllo ✓");
         // Unchanged → the very same bytes.
         d.metadata.psd_global_blocks = out.clone();
-        assert!(Arc::ptr_eq(&export_blocks(&d, out.clone())[0].2, &out[0].2));
+        assert!(export_blocks(&d, out.clone())[0].2.ptr_eq(&out[0].2));
         d.notes.clear();
         assert!(export_blocks(&d, out).is_empty());
         assert!(parse_anno(&[0, 2, 0, 1, 0, 0, 0, 9]).is_none());
@@ -412,16 +411,16 @@ mod tests {
     #[test]
     fn export_blocks_keeps_an_unreadable_block() {
         let mut d = Document::new("n", photocraft_doc::Size::new(10, 10), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
-        let bad: Vec<photocraft_doc::PsdGlobalBlock> = vec![(*b"8BIM", ANNO, Arc::new(vec![0, 2, 0, 1, 0, 0, 0, 9]))];
+        let bad: Vec<photocraft_doc::PsdGlobalBlock> = vec![(*b"8BIM", ANNO, photocraft_doc::Blob::new(vec![0, 2, 0, 1, 0, 0, 0, 9]))];
         d.metadata.psd_global_blocks = bad.clone();
         assert!(anno_unreadable(&d) && notes_from_blocks(&d).is_empty());
         let out = export_blocks(&d, bad.clone());
         assert_eq!(out.len(), 1);
-        assert!(Arc::ptr_eq(&out[0].2, &bad[0].2));
+        assert!(out[0].2.ptr_eq(&bad[0].2));
         // A note added by the user still writes a fresh block in its place.
         d.notes.push(Note { text: "new".into(), ..Default::default() });
         let out = export_blocks(&d, bad);
-        assert_eq!(parse_anno(&out[0].2).unwrap()[0].text, "new");
+        assert_eq!(parse_anno(out[0].2.resident()).unwrap()[0].text, "new");
         // A readable block is not reported.
         d.metadata.psd_global_blocks = out;
         assert!(!anno_unreadable(&d));
@@ -450,7 +449,7 @@ mod tests {
         let mut d = Document::new("n", photocraft_doc::Size::new(10, 10), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
         assert!(fresh_scale_resource(&d).is_none());
         // An unparseable resource stays while the scale is untouched.
-        d.metadata.psd_resources.push((MEASUREMENT_SCALE, String::new(), Arc::new(vec![0, 0, 0, 16, 1])));
+        d.metadata.psd_resources.push((MEASUREMENT_SCALE, String::new(), std::sync::Arc::new(vec![0, 0, 0, 16, 1])));
         assert!(keep_resource(&d, MEASUREMENT_SCALE) && fresh_scale_resource(&d).is_none());
         d.measurement.scale = s.clone();
         assert!(!keep_resource(&d, MEASUREMENT_SCALE));

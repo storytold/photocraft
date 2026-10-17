@@ -70,20 +70,75 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
         return;
     }
     let fmt = s.format();
-    let done: Vec<_> = s
-        .take_tiles(r)
+    let tiles = s.take_tiles(r);
+    // Without a selection a whole tile's result depends on its pixels alone, so a tile shared
+    // across coordinates (a filled background) is adjusted once and its result stays shared.
+    let shared_once = selection.is_none();
+    let mut first: std::collections::HashMap<*const photocraft_raster::Tile, usize> = std::collections::HashMap::new();
+    let mut work = Vec::with_capacity(tiles.len());
+    let mut copies = Vec::new();
+    for (i, (tc, tile)) in tiles.iter().enumerate() {
+        let whole = tc.rect().intersect(&r) == tc.rect();
+        match first.get(&std::sync::Arc::as_ptr(tile)) {
+            Some(&j) if shared_once && whole => copies.push((*tc, j)),
+            _ => {
+                if whole {
+                    first.insert(std::sync::Arc::as_ptr(tile), i);
+                }
+                work.push(i);
+            }
+        }
+    }
+    let done: Vec<(usize, Vec<PlacedTile>)> = work
         .into_par_iter()
-        .flat_map_iter(|(tc, tile)| {
+        .map(|i| {
+            let (tc, tile) = &tiles[i];
             // A one-tile surface, so `adjusted` reads and writes this tile only.
             let mut one = Surface::new(fmt);
-            one.put_tiles([(tc, tile)]);
+            one.put_tiles([(*tc, tile.clone())]);
             let tr = tc.rect().intersect(&r);
             let out = adjusted(&one, tr, adj, selection, mode);
             one.write_region(tr, &out);
-            one.take_tiles(tc.rect())
+            (i, one.take_tiles(tc.rect()))
         })
         .collect();
-    s.put_tiles(done);
+    let by_index: std::collections::HashMap<usize, std::sync::Arc<photocraft_raster::Tile>> =
+        done.iter().filter_map(|(i, t)| t.first().map(|(_, t)| (*i, t.clone()))).collect();
+    drop(tiles);
+    s.put_tiles(done.into_iter().flat_map(|(_, t)| t));
+    s.put_tiles(copies.into_iter().filter_map(|(tc, j)| by_index.get(&j).map(|t| (tc, t.clone()))));
+}
+
+/// A tile and where it goes.
+type PlacedTile = (photocraft_geom::TileCoord, std::sync::Arc<photocraft_raster::Tile>);
+
+/// `src`'s tiles over `r`, each with `adj` applied over its part of `r`, as tiles of a surface
+/// whose default pixel is `default`: one tile's buffers per thread at a time rather than float
+/// copies of the whole region.
+fn adjusted_tiles(
+    src: &Surface,
+    r: Rect,
+    default: &[f32],
+    adj: &Adjustment,
+    selection: Option<&Surface>,
+    mode: photocraft_color::ColorMode,
+) -> Vec<PlacedTile> {
+    use rayon::prelude::*;
+    let fmt = src.format();
+    r.tiles()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .flat_map_iter(|tc| {
+            let tr = tc.rect().intersect(&r);
+            let out = adjusted(src, tr, adj, selection, mode);
+            let mut one = Surface::with_default(fmt, default);
+            if let Some(t) = src.tile(tc) {
+                one.put_tiles([(tc, t.clone())]);
+            }
+            one.write_region(tr, &out);
+            one.take_tiles(tc.rect())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -98,21 +153,24 @@ mod tests;
 /// reaches past the canvas: Invert turns a reveal-all mask into a hide-all one (#780).
 pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>) {
     let mode = photocraft_color::ColorMode::Grayscale;
+    // Tile by tile: a whole-mask region in floats is about 40 bytes per pixel (12 GB for a
+    // 20000×15000 mask).
     if let Some(sel) = selection {
         let r = sel.content_bounds();
         if !r.is_empty() {
-            let out = adjusted(s, r, adj, Some(sel), mode);
-            s.write_region(r, &out);
+            let done = adjusted_tiles(s, r, &s.default_pixel(), adj, Some(sel), mode);
+            s.put_tiles(done);
             s.prune();
         }
         return;
     }
     let fmt = s.format();
     let unit = Rect::from_xywh(0, 0, 1, 1);
-    let mut out = Surface::with_default(fmt, &adjusted(&Surface::with_default(fmt, &s.default_pixel()), unit, adj, None, mode));
+    let default = adjusted(&Surface::with_default(fmt, &s.default_pixel()), unit, adj, None, mode);
+    let mut out = Surface::with_default(fmt, &default);
     let r = s.tile_bounds();
     if !r.is_empty() {
-        out.write_region(r, &adjusted(s, r, adj, None, mode));
+        out.put_tiles(adjusted_tiles(s, r, &default, adj, None, mode));
     }
     out.prune();
     *s = out;
