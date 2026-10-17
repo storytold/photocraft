@@ -34,6 +34,9 @@ and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.stor
    Quote numbers with the baseline's machine and load average.
 6. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
    pre-release suffix (`-rc.1`) are marked as pre-releases.
+7. **Update the [changelog index](../CHANGELOG.md)** with the published version, date and release
+   link, and advance its comparison link to the new tag. Generated notes use the categories in
+   [`.github/release.yml`](../.github/release.yml); unlabeled PRs remain included under Other changes.
 
 Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
 After the draft is published, the workflow refuses to touch that version again, so bump it first.
