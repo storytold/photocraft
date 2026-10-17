@@ -403,6 +403,17 @@ pub fn cancel(app: &mut PhotocraftApp) {
     crate::crop_straighten::reset(app);
 }
 
+/// Reset the pending frame to the whole canvas, upright (the crop menu's Reset, #6561). The frame
+/// stays a real pending one, so ↵ on it crops nothing and the tool keeps behaving as during a crop.
+pub fn reset(app: &mut PhotocraftApp) {
+    let Some(st) = app.session.active() else { return };
+    let b = st.doc.bounds();
+    app.ui.crop_angle = 0.0;
+    keyed(app, [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]);
+    crate::crop_mode::sync(app, None);
+    crate::crop_mode::sync_frame(app);
+}
+
 /// Drop the box's own Undo/Redo (leaving the tool, cancelling or committing a crop).
 pub fn clear_history(app: &mut PhotocraftApp) {
     app.crop.undo.clear();

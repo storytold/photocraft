@@ -1,6 +1,6 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (layer-mask thumbnail menu, #4575) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (crop canvas menu, #6561) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
@@ -22,7 +22,7 @@ The “PhotoCraft at branch point” column records behavior before this PR. Pic
 |---|---|---|---|
 | Move | Choose a layer at the point; an auto-select choice also exists in the options bar | Layers | P0; [Adobe layer movement](https://helpx.adobe.com/photoshop/using/moving-stacking-locking-layers.html); exact pop-up layout requires capture |
 | Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: making a selection | Quick Selection: Picker (a brush tool, as in Photoshop); the other six: the selection menu below (#614, #738) | P1; no-selection variant still needs a dated capture |
-| Crop | During crop: ratio/preset, overlay, clear/reset, commit/cancel **(inferred context placement)** | No tool menu | P1; pending crop target |
+| Crop | During crop: ratio/preset, overlay, clear/reset, commit/cancel **(inferred context placement)** | Crop menu on a pending frame (#6561): the options-bar ratios (Original Ratio, 1 : 1, 4 : 5, 5 : 7, 2 : 3, 16 : 9; the current one checked), the saved crop presets, the gear options Use Classic Mode / Show Cropped Area / Auto Center Preview (checked; the last two greyed in Classic Mode), and Reset / Cancel / Commit. Rows route through the same functions as the options bar. No menu on the untouched default frame or outside the image (pasteboard menu wins) | P1; pending crop target; exact Photoshop label/order still needs a dated capture |
 | Eyedropper | Sample-size/source choices **(inferred)** | No tool menu | P2; [Adobe illustration uses Eyedropper](https://helpx.adobe.com/photoshop/using/panels-menus.html), but does not publish item text |
 | Ruler, Note, Count | Unit / measurement, note edit/delete, count-group operations **(inferred)** | No tool menu | P2 |
 | Brush, Pencil, Eraser, Background Eraser, Spot Healing, Healing, Clone Stamp, History Brush, Blur, Sharpen, Smudge, Dodge, Burn, Sponge | Brush preset, size and hardness where applicable | Picker | P0; [Adobe Brush Settings](https://helpx.adobe.com/photoshop/desktop/apply-painting-techniques/brushes-presets/create-brush-set-painting-options.html). Alt+secondary-drag on Windows and Control+Option-drag on macOS adjust size/hardness ([Adobe cursor shortcuts](https://helpx.adobe.com/in/photoshop/desktop/get-started/settings-and-preferences/change-tool-pointers.html)) |
@@ -100,6 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Crop canvas menu on a pending frame (#6561) |
 | 2026-10-13 | minor | Layer-mask thumbnail menu (#4575) |
 | 2026-10-10 | trivial | Status line, revision history |
 | 2026-10-09 | minor | Selection canvas reference and tool matrix updates |

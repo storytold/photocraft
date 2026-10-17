@@ -59,7 +59,7 @@ id = "UI-217-8"
 target = "Tool-specific canvas right-click menu; right-click spelling suggestions in text fields"
 status = "partial"
 issue = 217
-note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; text_field_menu.rs gives every text field its right-click Undo/Cut/Copy/Paste/Delete/Select All menu (#2921); other tools missing; the Type tool's edit menu starts with spelling suggestions and Add to Dictionary over a misspelled word (#4370); Ignore / Ignore All, suggestions in the non-editing type menu and in generic text fields are not there yet"
+note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; text_field_menu.rs gives every text field its right-click Undo/Cut/Copy/Paste/Delete/Select All menu (#2921); the Crop tool opens its menu on a pending frame (ratios, saved crop presets, gear options, Reset/Cancel/Commit, #6561); other tools missing; the Type tool's edit menu starts with spelling suggestions and Add to Dictionary over a misspelled word (#4370); Ignore / Ignore All, suggestions in the non-editing type menu and in generic text fields are not there yet"
 
 [[item]]
 id = "UI-217-9"

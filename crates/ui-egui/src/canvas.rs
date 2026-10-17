@@ -3561,6 +3561,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // menu belongs to the selected Zoom or Hand, not to Space or a held zoom key.
             if crate::canvas_tool_menu::pasteboard_at(app, tool, xf.to_doc(p)) {
                 crate::canvas_tool_menu::open_pasteboard(app, &ctx, tool, [p.x, p.y]);
+            } else if tool == Tool::Crop && crate::crop_ui::pending(app) {
+                // On a pending crop frame: the crop menu (#6561).
+                crate::canvas_tool_menu::open_crop(app, &ctx, [p.x, p.y]);
             } else if crate::canvas_tool_menu::is_view_tool(tool) {
                 if tool == app.ui.tool {
                     crate::canvas_tool_menu::open_view(app, &ctx, tool, [p.x, p.y], xf.to_doc(p));
