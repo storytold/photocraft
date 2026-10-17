@@ -336,6 +336,63 @@ fn path_to_selection_matches_analytic_shape() {
 }
 
 #[test]
+fn path_make_selection_rejects_invalid_options_without_changing_history() {
+    let mut s = session(80, 80, 8);
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60], [12, 60]]}]}})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 12, "height": 12})).unwrap();
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    for opts in [
+        json!({"feather": -1}),
+        json!({"feather": 1001}),
+        json!({"feather": 1e100}),
+        json!({"feather": "4"}),
+        json!({"feather": true}),
+        json!({"antiAlias": "false"}),
+        json!({"antiAlias": 1}),
+        json!({"mode": "union"}),
+        json!({"mode": 42}),
+    ] {
+        assert!(s.execute("path.toSelection", opts.clone()).is_err(), "accepted invalid Make Selection options: {opts}");
+        assert_eq!(*doc(&s), before, "invalid Make Selection modified the document: {opts}");
+        assert_eq!(s.active().unwrap().history.past_len(), history, "invalid Make Selection changed history: {opts}");
+    }
+}
+
+#[test]
+fn open_pen_paths_make_the_same_selection_as_closed_paths() {
+    // The pen's unfinished work path should be implicitly closed when rasterized into a selection.
+    let mut s = session(80, 80, 8);
+    let knots = json!([[12, 12], [52, 12], [52, 52], [12, 52]]);
+    for (aa, feather) in [(false, 0.0), (true, 0.0), (false, 3.0), (true, 3.0)] {
+        let mut masks = Vec::new();
+        for closed in [false, true] {
+            s.execute("path.set", json!({"path": {"subpaths": [{"closed": closed, "knots": knots}]}})).unwrap();
+            s.execute("path.toSelection", json!({"antiAlias": aa, "feather": feather, "mode": "replace"})).unwrap();
+            masks.push(selection_mask(&s));
+        }
+        assert_eq!(masks[0], masks[1], "open and closed paths differ (antiAlias={aa}, feather={feather})");
+        assert!(masks[0][32 * 80 + 32] > 0.99);
+        assert_eq!(masks[0][4 * 80 + 4], 0.0);
+        if feather > 0.0 {
+            assert!(masks[0].iter().any(|v| *v > 0.0 && *v < 1.0), "feather did not soften the selection");
+        }
+    }
+
+    // All boolean operations should use the same selection semantics for an open Pen path.
+    for mode in ["replace", "add", "subtract", "intersect"] {
+        s.execute("select.rect", json!({"x": 30, "y": 30, "width": 34, "height": 25})).unwrap();
+        s.execute("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": knots}]}})).unwrap();
+        s.execute("path.toSelection", json!({"mode": mode, "antiAlias": false})).unwrap();
+        let mask = selection_mask(&s);
+        let at = |x: usize, y: usize| mask[y * 80 + x];
+        assert_eq!(at(20, 20), if matches!(mode, "replace" | "add") { 1.0 } else { 0.0 }, "{mode}: path-only");
+        assert_eq!(at(60, 40), if matches!(mode, "add" | "subtract") { 1.0 } else { 0.0 }, "{mode}: previous-only");
+        assert_eq!(at(40, 40), if mode == "subtract" { 0.0 } else { 1.0 }, "{mode}: overlap");
+    }
+}
+
+#[test]
 fn selection_to_work_path_roundtrip_iou() {
     let mut s = session(240, 180, 8);
     // An anti-aliased donut plus a rectangle, from a path, as the selection.

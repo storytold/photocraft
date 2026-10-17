@@ -1091,9 +1091,25 @@ fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
-    let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
-    let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
-    let mode = SelectionMode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("replace"));
+    // Validate before rasterizing or touching selection history. An unchecked feather value
+    // could silently become zero (negative/string), or expand into an excessive blur.
+    let feather = match p.get("feather") {
+        None => 0.0,
+        Some(v) => v
+            .as_f64()
+            .filter(|n| n.is_finite() && (0.0..=1000.0).contains(n))
+            .ok_or_else(|| bad("path.toSelection", "`feather` must be a finite number within 0..1000"))? as f32,
+    };
+    let aa = match p.get("antiAlias") {
+        None => true,
+        Some(Value::Bool(v)) => *v,
+        _ => return Err(bad("path.toSelection", "`antiAlias` must be a boolean")),
+    };
+    let mode = match p.get("mode") {
+        None => SelectionMode::Replace,
+        Some(Value::String(v)) if matches!(v.as_str(), "replace" | "add" | "subtract" | "intersect") => SelectionMode::parse(v),
+        _ => return Err(bad("path.toSelection", "`mode` must be replace, add, subtract or intersect")),
+    };
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let mut mask = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE).render(area);
     if !aa {
