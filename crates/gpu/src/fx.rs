@@ -682,6 +682,8 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
             surface_fp(&m.surface, h, pin);
         }
         format!("{:?}{:?}", l.vector_mask, l.effects).hash(h);
+        l.blend_if.hash(h);
+        l.advanced.hash(h);
         h.write_u8(0xfe);
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -695,6 +697,7 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(&mut h);
                 surface_fp(&m.surface, &mut h, pin);
             }
+            format!("{:?}", layer.vector_mask).hash(&mut h);
         }
         _ => walk(layer, &mut h, pin),
     }
@@ -719,6 +722,36 @@ mod tests {
         assert_eq!(a.key, b.key);
         s.size += 1.0;
         assert_ne!(a.key, program(&Effect::DropShadow(s), &light, false).key);
+    }
+
+    /// A styled group's effect shape follows its own vector mask and its children's Blend If and
+    /// Advanced Blending, so the cached shape must be rebuilt when any of them changes.
+    #[test]
+    fn group_key_follows_vector_mask_blend_if_and_advanced() {
+        use photocraft_doc::{BlendRange, Knockout, Path, PixelFormat, Subpath, VectorMask};
+        let light = GlobalLight::default();
+        let group = Layer::group("g", vec![Layer::raster("child", PixelFormat::RGBA8)]);
+        let base = group_key(&group, &light, &mut |_| {});
+
+        let mask = |x: f64| VectorMask::new(Path::new(vec![Subpath::polygon(&[(x, 0.0), (x + 10.0, 0.0), (x + 10.0, 10.0)])]));
+        let mut masked = group.clone();
+        masked.vector_mask = Some(mask(0.0));
+        let with_mask = group_key(&masked, &light, &mut |_| {});
+        assert_ne!(base, with_mask, "adding the group's vector mask");
+        masked.vector_mask = Some(mask(5.0));
+        assert_ne!(with_mask, group_key(&masked, &light, &mut |_| {}), "moving the group's vector mask");
+
+        fn child_mut(g: &mut Layer) -> &mut Layer {
+            let LayerContent::Group(gr) = &mut g.content else { unreachable!() };
+            &mut gr.children[0]
+        }
+        let mut blend_if = group.clone();
+        child_mut(&mut blend_if).blend_if.ranges = vec![[BlendRange { black: [128, 128], white: [255, 255] }, BlendRange::FULL]];
+        assert_ne!(base, group_key(&blend_if, &light, &mut |_| {}), "a child's Blend If");
+
+        let mut advanced = group.clone();
+        child_mut(&mut advanced).advanced.knockout = Knockout::Deep;
+        assert_ne!(base, group_key(&advanced, &light, &mut |_| {}), "a child's Advanced Blending");
     }
 
     #[test]
