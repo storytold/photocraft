@@ -1580,3 +1580,37 @@ fn merge_down_on_a_group_merges_the_group() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(group)).is_some());
 }
+
+/// #4535: every edit snapshots the document into history. The large payloads it carries (the
+/// XMP packet, Duotone's PSD data, an unsupported adjustment's bytes) are shared between the
+/// snapshot and the document, not copied per state.
+#[test]
+fn history_states_share_large_document_payloads() {
+    use photocraft_doc::{Adjustment, Duotone, DuotoneInk, Layer, LayerContent};
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let raw_id = {
+        let st = s.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        doc.metadata.xmp = Some("x".repeat(1 << 20).into());
+        doc.duotone = Some(Duotone { inks: vec![DuotoneInk::new("Black", [0.0; 3])], psd_raw: Some(vec![7u8; 1 << 16].into()) });
+        let layer = Layer::new("kept", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "abcd".into(), raw: vec![9u8; 1 << 16].into() }));
+        let id = layer.id;
+        doc.layers.push(layer);
+        id
+    };
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let before = st.history.state(st.history.past_len() - 1).unwrap();
+    let (now, then) = (&st.doc, &before);
+    assert!(!std::sync::Arc::ptr_eq(now, then), "the edit made a new document");
+    let xmp = |d: &Document| d.metadata.xmp.clone().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&xmp(now), &xmp(then)), "the XMP packet is shared");
+    let duotone = |d: &Document| d.duotone.as_ref().and_then(|d| d.psd_raw.clone()).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&duotone(now), &duotone(then)), "the Duotone data is shared");
+    let raw = |d: &Document| match &d.layer(raw_id).unwrap().content {
+        LayerContent::Adjustment(Adjustment::Unsupported { raw, .. }) => raw.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(std::sync::Arc::ptr_eq(&raw(now), &raw(then)), "the adjustment's bytes are shared");
+}

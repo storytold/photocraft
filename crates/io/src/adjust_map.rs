@@ -29,7 +29,7 @@ fn bef32(d: &[u8], at: usize) -> Option<f32> {
 }
 
 fn unsupported(key: &[u8; 4], data: &[u8]) -> Adjustment {
-    Adjustment::Unsupported { psd_key: String::from_utf8_lossy(key).into_owned(), raw: data.to_vec() }
+    Adjustment::Unsupported { psd_key: String::from_utf8_lossy(key).into_owned(), raw: data.into() }
 }
 
 fn levels_rec(d: &[u8], at: usize) -> Option<LevelsChannel> {
@@ -787,7 +787,7 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();
             if k.len() == 4 {
-                return vec![([k[0], k[1], k[2], k[3]], raw.clone())];
+                return vec![([k[0], k[1], k[2], k[3]], raw.to_vec())];
             }
         }
     }
@@ -990,7 +990,7 @@ mod tests {
         let inkl = Adjustment::Levels { master: lc(0, 255), per_channel: [lc(0, 255), lc(5, 250), lc(0, 255)], space: ToneSpace::Cmyk, black: lc(30, 255) };
         let b = write(&inkl);
         assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
-        rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3] });
+        rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true });
         rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
@@ -1304,7 +1304,7 @@ mod tests {
             assert_eq!(*t, photocraft_cms::lutfile::LutFile::identity(2).data);
         }
         // Every kind except a malformed Unsupported key has an encoding.
-        assert!(write(&Adjustment::Unsupported { psd_key: "abc".into(), raw: vec![] }).is_empty());
+        assert!(write(&Adjustment::Unsupported { psd_key: "abc".into(), raw: Vec::new().into() }).is_empty());
     }
 
     #[test]

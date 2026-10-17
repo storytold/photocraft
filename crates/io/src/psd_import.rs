@@ -801,7 +801,7 @@ pub(crate) fn psd_to_document_decoded(
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(r.data.clone())),
-            ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&r.data).into_owned()),
+            ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&r.data).into()),
             ids::EXIF => doc.metadata.exif = Some(Arc::new(r.data.clone())),
             1032 => parse_guides(&r.data, &mut doc),
             ids::GLOBAL_ANGLE | ids::GLOBAL_ALTITUDE => {
@@ -1004,8 +1004,10 @@ pub(crate) fn psd_to_document_decoded(
             doc.color_table = Some(photocraft_doc::ColorTable { colors, transparent: None });
         } else if h.color_mode == PsdMode::Duotone && !file.color_mode_data.is_empty() {
             // The duotone ink block is undocumented: keep it raw; the image shows as its gray plate.
-            doc.duotone =
-                Some(photocraft_doc::Duotone { inks: vec![photocraft_doc::DuotoneInk::new("Black", [0.0; 3])], psd_raw: Some(file.color_mode_data.clone()) });
+            doc.duotone = Some(photocraft_doc::Duotone {
+                inks: vec![photocraft_doc::DuotoneInk::new("Black", [0.0; 3])],
+                psd_raw: Some(file.color_mode_data.as_slice().into()),
+            });
             cx.warn("duotone inks are not interpreted (shown as grayscale)");
         } else if !file.color_mode_data.is_empty() {
             cx.warn("color mode data is not preserved");

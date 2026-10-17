@@ -505,7 +505,7 @@ fn file_info_translations_survive_undo_and_psd_round_trip() {
     for depth in [8, 16, 32] {
         let mut s = session(8, 8, depth);
         s.edit("Set metadata", |doc, _| {
-            doc.metadata.xmp = Some(MULTILINGUAL_XMP.to_string());
+            doc.metadata.xmp = Some(MULTILINGUAL_XMP.into());
             Ok(())
         })
         .unwrap();
@@ -515,7 +515,7 @@ fn file_info_translations_survive_undo_and_psd_round_trip() {
         assert!(s.undo());
         assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(MULTILINGUAL_XMP));
         assert!(s.redo());
-        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(edited.as_str()));
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(&*edited));
         let (bytes, _) = encode(doc(&s), "x.psd", None).unwrap();
         let back = photocraft_io::import("x.psd", &bytes).unwrap().document;
         assert_translations_kept(back.metadata.xmp.as_deref().unwrap());

@@ -235,7 +235,7 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     doc.layers.push(layer);
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
-    doc.metadata.xmp = img.meta.xmp.clone();
+    doc.metadata.xmp = img.meta.xmp.as_deref().map(Arc::from);
     doc.metadata.text = img.meta.text.clone();
     if let Some((x, y)) = img.meta.dpi {
         doc.resolution_dpi = x;
@@ -458,7 +458,7 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
     };
     let meta = codecs::Metadata {
         exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
-        xmp: doc.metadata.xmp.clone(),
+        xmp: doc.metadata.xmp.as_deref().map(str::to_owned),
         text: doc.metadata.text.clone(),
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         ..Default::default()

@@ -850,7 +850,7 @@ fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
         let xmp = s.active().ok_or(EngineError::NoDocument)?.doc.metadata.xmp.clone();
         let new = write_file_info(xmp.as_deref(), p);
         s.edit("File Info", |doc, _| {
-            doc.metadata.xmp = Some(new);
+            doc.metadata.xmp = Some(new.into());
             Ok(())
         })?;
     }

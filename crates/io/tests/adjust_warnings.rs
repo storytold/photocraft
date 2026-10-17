@@ -17,7 +17,7 @@ fn reopen(adj: Adjustment, path: &str, opts: &ExportOptions) -> (Document, Vec<S
 #[test]
 fn unreadable_adjustments_warn_on_open() {
     // A Color Lookup that uses a profile, not a LUT file: kept verbatim, not applied.
-    let profile = Adjustment::Unsupported { psd_key: "clrL".into(), raw: vec![0, 2, 0, 0] };
+    let profile = Adjustment::Unsupported { psd_key: "clrL".into(), raw: vec![0, 2, 0, 0].into() };
     for (path, opts) in [("x.psd", ExportOptions::default()), ("x.psb", ExportOptions { force_psb: true, ..Default::default() })] {
         let (doc, warnings) = reopen(profile.clone(), path, &opts);
         assert!(matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::Unsupported { .. })), "{path}");
@@ -26,7 +26,7 @@ fn unreadable_adjustments_warn_on_open() {
         assert!(w[0].contains("Color Lookup") && w[0].contains("version 2") && w[0].contains("no effect"), "{path}: {}", w[0]);
     }
     // Another kind without a specific reason still names the layer and the adjustment.
-    let (_, warnings) = reopen(Adjustment::Unsupported { psd_key: "levl".into(), raw: vec![0, 9] }, "x.psd", &ExportOptions::default());
+    let (_, warnings) = reopen(Adjustment::Unsupported { psd_key: "levl".into(), raw: vec![0, 9].into() }, "x.psd", &ExportOptions::default());
     assert!(warnings.iter().any(|w| w.contains("Teal Look") && w.contains("Levels settings could not be read;")), "{warnings:?}");
 }
 

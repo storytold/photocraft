@@ -241,7 +241,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         // importer reads it back from there unchanged. A second copy in `meta.exif` (the codec's
         // Exif directory) would be read back in its place, rebuilt without the thumbnail and IFD0
         // orientation (#1545).
-        xmp: doc.metadata.xmp.clone().filter(|_| opts.xmp == crate::XmpEmbed::All),
+        xmp: doc.metadata.xmp.as_deref().map(str::to_owned).filter(|_| opts.xmp == crate::XmpEmbed::All),
         text: if opts.xmp == crate::XmpEmbed::All { doc.metadata.text.clone() } else { Vec::new() },
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         photoshop_resources: Some(resources),
