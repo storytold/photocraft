@@ -100,6 +100,34 @@ pub enum PngCompression {
     Best,
 }
 
+/// How a PNG's `sTER` chunk pairs its two views (PNG Extensions 1.4.0, §3.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngStereo {
+    /// Left and right views side by side, left first.
+    Horizontal,
+    /// Left and right views stacked, left on top.
+    Vertical,
+}
+
+impl PngStereo {
+    /// The view for an `sTER` mode byte; reserved and unknown values are `None`.
+    pub fn from_mode(mode: u8) -> Option<Self> {
+        match mode {
+            0 => Some(Self::Horizontal),
+            1 => Some(Self::Vertical),
+            _ => None,
+        }
+    }
+
+    /// The `sTER` mode byte.
+    pub fn mode(self) -> u8 {
+        match self {
+            Self::Horizontal => 0,
+            Self::Vertical => 1,
+        }
+    }
+}
+
 /// TIFF strip compression. The default is none, as in Photoshop: uncompressed strips are the
 /// only kind every TIFF reader opens (Deflate and the predictor are not baseline TIFF, #4484).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,6 +192,9 @@ pub struct EncodeOptions {
     pub png_compression: PngCompression,
     /// Write Adam7-interlaced PNG.
     pub png_interlaced: bool,
+    /// Write an `sTER` chunk marking the image as a stereo pair (PNG Extensions 1.4.0, §3.6),
+    /// so a stereo PNG keeps its mark when saved again (#6063).
+    pub png_stereo: Option<PngStereo>,
     /// WebP: lossless (VP8L, via `image-webp`) or lossy (our VP8 encoder, see
     /// `codecs::vp8`) with [`Self::webp_quality`].
     pub webp_lossless: bool,
@@ -189,6 +220,7 @@ impl Default for EncodeOptions {
             jpeg_chroma_subsampling: true,
             png_compression: PngCompression::Default,
             png_interlaced: false,
+            png_stereo: None,
             webp_lossless: true,
             webp_quality: 80,
             tiff_compression: TiffCompression::None,

@@ -67,8 +67,9 @@ pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
-/// (estimated from its quantisation tables) and a WebP's lossless or lossy encoding with its
-/// quality. A lossy WebP whose quality can't be read gets [`DEFAULT_LOSSY_WEBP_QUALITY`].
+/// (estimated from its quantisation tables), a WebP's lossless or lossy encoding with its
+/// quality, and a PNG's `sTER` stereo pairing. A lossy WebP whose quality can't be read gets
+/// [`DEFAULT_LOSSY_WEBP_QUALITY`].
 pub fn file_encoding(bytes: &[u8]) -> photocraft_doc::FileEncoding {
     file_encoding_as(codecs::detect(bytes), bytes)
 }
@@ -78,6 +79,7 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
     let mut e = photocraft_doc::FileEncoding::default();
     match format {
         Some(Format::Jpeg) => e.jpeg_quality = codecs::jpeg_quality(bytes),
+        Some(Format::Png) => e.png_stereo = codecs::png_stereo(bytes).map(codecs::PngStereo::mode),
         Some(Format::WebP) => match codecs::webp_encoding(bytes) {
             Some(codecs::WebpEncoding::Lossless) => e.webp_lossless = Some(true),
             Some(codecs::WebpEncoding::Lossy { quality }) => {
@@ -95,8 +97,8 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
 pub const DEFAULT_LOSSY_WEBP_QUALITY: u8 = 75;
 
 /// Applies the settings `doc`'s file was encoded with (see [`file_encoding`]) to `opts`: what a
-/// save that chose no quality writes, so a JPEG keeps its quality and a WebP stays lossy or
-/// lossless.
+/// save that chose no quality writes, so a JPEG keeps its quality, a WebP stays lossy or lossless,
+/// and a stereo PNG keeps its `sTER` pairing (#6063).
 pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     let e = &doc.file_encoding;
     if let Some(q) = e.jpeg_quality {
@@ -108,6 +110,7 @@ pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     if let Some(q) = e.webp_quality {
         opts.webp_quality = q.min(100);
     }
+    opts.png_stereo = e.png_stereo.and_then(codecs::PngStereo::from_mode);
 }
 
 /// Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1" channel holding the
@@ -820,7 +823,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             });
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
-            let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi)?;
+            let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());

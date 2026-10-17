@@ -28,7 +28,7 @@ pub mod web;
 
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
-pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette};
+pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo};
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
@@ -38,7 +38,7 @@ pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect,
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, Image, Metadata, SampleType,
 };
-pub use crate::options::{DecodeOptions, DpxBits, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
+pub use crate::options::{DecodeOptions, DpxBits, EncodeOptions, ExrCompression, Limits, PngCompression, PngStereo, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};

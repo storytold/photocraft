@@ -7,7 +7,7 @@ use crate::Format;
 use crate::error::CodecError;
 use crate::fidelity::Plan;
 use crate::image::{ChannelLayout, DecodeWarning, Image, Metadata, SampleType};
-use crate::options::{EncodeOptions, Limits, PngCompression, alloc_zeroed};
+use crate::options::{EncodeOptions, Limits, PngCompression, PngStereo, alloc_zeroed};
 
 const F: Format = Format::Png;
 pub(crate) const XMP_KEYWORD: &str = "XML:com.adobe.xmp";
@@ -125,6 +125,38 @@ pub fn palette(bytes: &[u8]) -> Result<Option<PngPalette>, CodecError> {
         }
     }
     Ok(Some(PngPalette { colors, transparent }))
+}
+
+/// The stereo pairing a PNG declares in its `sTER` chunk (PNG Extensions 1.4.0, §3.6), read
+/// from the headers without decoding pixels. `None` when the file has no CRC-valid `sTER` with a
+/// defined mode byte. The first valid chunk wins, as a later one would contradict it.
+pub fn stereo(bytes: &[u8]) -> Option<PngStereo> {
+    let mut rest = bytes.get(8..)?;
+    while let Some((length, tail)) = rest.split_first_chunk::<4>() {
+        let Some((kind, tail)) = tail.split_first_chunk::<4>() else { break };
+        let length = u32::from_be_bytes(*length);
+        if length > i32::MAX as u32 {
+            break;
+        }
+        let Ok(length) = usize::try_from(length) else { break };
+        let Some(data) = tail.get(..length) else { break };
+        let Some((checksum, next)) = tail.get(length..).and_then(|t| t.split_first_chunk::<4>()) else { break };
+        rest = next;
+        if kind == b"IEND" {
+            break;
+        }
+        if kind != b"sTER" || data.len() != 1 {
+            continue;
+        }
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        if crc.sum() != u32::from_be_bytes(*checksum) {
+            continue;
+        }
+        return PngStereo::from_mode(data[0]);
+    }
+    None
 }
 
 fn map_png_err(e: png::DecodingError) -> CodecError {
@@ -346,6 +378,10 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             }
         }
         let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
+        if let Some(stereo) = opts.png_stereo {
+            // Ancillary chunk before IDAT, as the spec recommends for `sTER`.
+            writer.write_chunk(png::chunk::ChunkType(*b"sTER"), &[stereo.mode()]).map_err(|e| CodecError::encode(F, e))?;
+        }
         if opts.png_interlaced {
             let bpp = img.layout().channels() * img.sample_type().bytes();
             let idat = adam7_idat(&data, w as usize, h as usize, bpp, opts.png_compression)?;
@@ -574,6 +610,7 @@ pub fn encode_indexed(
     palette: &[[u8; 3]],
     transparent: Option<u8>,
     dpi: Option<(f32, f32)>,
+    stereo: Option<PngStereo>,
 ) -> Result<Vec<u8>, CodecError> {
     if width == 0 || height == 0 || indices.len() != width as usize * height as usize {
         return Err(CodecError::InvalidImage("index data does not match the size".into()));
@@ -603,10 +640,93 @@ pub fn encode_indexed(
     {
         let encoder = png::Encoder::with_info(&mut out, info).map_err(|e| CodecError::encode(F, e))?;
         let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
+        if let Some(stereo) = stereo {
+            writer.write_chunk(png::chunk::ChunkType(*b"sTER"), &[stereo.mode()]).map_err(|e| CodecError::encode(F, e))?;
+        }
         writer.write_image_data(indices).map_err(|e| CodecError::encode(F, e))?;
         writer.finish().map_err(|e| CodecError::encode(F, e))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod stereo_tests {
+    use super::*;
+
+    /// One CRC-valid chunk as it appears in a file.
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.extend_from_slice(&crc.sum().to_be_bytes());
+        out
+    }
+
+    fn png_with(stereo: &[u8]) -> Vec<u8> {
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        out.extend_from_slice(&chunk(b"IHDR", &[0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0]));
+        if !stereo.is_empty() {
+            out.extend_from_slice(&chunk(b"sTER", stereo));
+        }
+        out.extend_from_slice(&chunk(b"IDAT", &[0x78, 0x01, 0x01, 0x00, 0xff, 0xff, 0, 3, 1, 0, 0]));
+        out.extend_from_slice(&chunk(b"IEND", &[]));
+        out
+    }
+
+    #[test]
+    fn reads_both_defined_views() {
+        assert_eq!(stereo(&png_with(&[0])), Some(PngStereo::Horizontal));
+        assert_eq!(stereo(&png_with(&[1])), Some(PngStereo::Vertical));
+        assert_eq!(stereo(&png_with(&[])), None);
+        // Reserved and unknown mode bytes are not a pairing we can keep.
+        assert_eq!(stereo(&png_with(&[2])), None);
+        assert_eq!(stereo(&png_with(&[255])), None);
+        // A two-byte payload is not sTER data.
+        assert_eq!(stereo(&png_with(&[0, 0])), None);
+        assert_eq!(stereo(b"not a png"), None);
+    }
+
+    #[test]
+    fn a_broken_crc_is_not_a_stereo_mark() {
+        let mut bytes = png_with(&[0]);
+        let kind = bytes.windows(4).position(|w| w == b"sTER").unwrap();
+        // The CRC trails the type and the one-byte payload of the chunk.
+        bytes[kind + 8] ^= 0xff;
+        assert_eq!(stereo(&bytes), None);
+    }
+
+    #[test]
+    fn encode_writes_the_chunk_before_idat_and_it_reads_back() {
+        let img = Image::from_raw(2, 1, ChannelLayout::Rgb, SampleType::U8, vec![9; 6]).unwrap();
+        for view in [PngStereo::Horizontal, PngStereo::Vertical] {
+            let opts = EncodeOptions { png_stereo: Some(view), ..Default::default() };
+            let bytes = crate::encode(&img, Format::Png, &opts).unwrap();
+            assert_eq!(stereo(&bytes), Some(view));
+            let back = decode(&bytes, &Limits::default()).unwrap();
+            assert_eq!(back.data(), img.data());
+            let ter = bytes.windows(4).position(|w| w == b"sTER").unwrap();
+            let idat = bytes.windows(4).position(|w| w == b"IDAT").unwrap();
+            assert!(ter < idat, "sTER before IDAT");
+        }
+        let plain = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+        assert_eq!(stereo(&plain), None);
+    }
+
+    #[test]
+    fn interlaced_and_indexed_encoders_keep_the_mark() {
+        let img = Image::from_raw(2, 2, ChannelLayout::Rgb, SampleType::U8, vec![9; 12]).unwrap();
+        let opts = EncodeOptions { png_stereo: Some(PngStereo::Vertical), png_interlaced: true, ..Default::default() };
+        let bytes = crate::encode(&img, Format::Png, &opts).unwrap();
+        assert_eq!(stereo(&bytes), Some(PngStereo::Vertical));
+        let pal = [[255, 0, 0], [0, 0, 255]];
+        let bytes = encode_indexed(2, 1, &[0, 1], &pal, None, None, Some(PngStereo::Horizontal)).unwrap();
+        assert_eq!(stereo(&bytes), Some(PngStereo::Horizontal));
+        assert_eq!(palette(&bytes).unwrap().map(|p| p.colors), Some(pal.to_vec()));
+    }
 }
 
 #[cfg(test)]
@@ -617,14 +737,14 @@ mod indexed_tests {
     fn png8_roundtrips_through_the_decoder() {
         let pal = [[255, 0, 0], [0, 0, 255], [0, 0, 0]];
         let idx = [0u8, 1, 2, 1, 0, 2];
-        let bytes = encode_indexed(3, 2, &idx, &pal, Some(2), None).unwrap();
+        let bytes = encode_indexed(3, 2, &idx, &pal, Some(2), None, None).unwrap();
         let img = decode(&bytes, &Limits::default()).unwrap();
         assert_eq!(img.dimensions(), (3, 2));
         let px = img.convert(ChannelLayout::Rgba, SampleType::U8);
         assert_eq!(&px.data()[..8], &[255, 0, 0, 255, 0, 0, 255, 255]);
         assert_eq!(px.data()[11], 0, "transparent entry");
-        assert!(encode_indexed(3, 2, &[9; 6], &pal, None, None).is_err());
-        assert!(encode_indexed(3, 3, &idx, &pal, None, None).is_err());
+        assert!(encode_indexed(3, 2, &[9; 6], &pal, None, None, None).is_err());
+        assert!(encode_indexed(3, 3, &idx, &pal, None, None, None).is_err());
     }
 
     fn png(color: png::ColorType, trns: Option<&[u8]>) -> Vec<u8> {
@@ -643,7 +763,7 @@ mod indexed_tests {
 
     #[test]
     fn palette_reads_the_table_and_its_one_transparent_entry() {
-        let bytes = encode_indexed(2, 1, &[0, 1], &[[1, 2, 3], [4, 5, 6]], Some(1), None).unwrap();
+        let bytes = encode_indexed(2, 1, &[0, 1], &[[1, 2, 3], [4, 5, 6]], Some(1), None, None).unwrap();
         let colors = vec![[1, 2, 3], [4, 5, 6]];
         assert_eq!(palette(&bytes).unwrap(), Some(PngPalette { colors: colors.clone(), transparent: Some(1) }));
         assert_eq!(palette(&png(png::ColorType::Indexed, None)).unwrap(), Some(PngPalette { colors, transparent: None }));

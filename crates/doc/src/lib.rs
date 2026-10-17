@@ -912,8 +912,8 @@ pub struct Document {
     pub variables: Variables,
     /// Window › Timeline (None until a video timeline is created).
     pub timeline: Option<Timeline>,
-    /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless), so
-    /// a save writes it back the same way rather than at fixed defaults.
+    /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
+    /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
 }
 
@@ -932,6 +932,10 @@ pub struct FileEncoding {
     /// Lossy WebP quality.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webp_quality: Option<u8>,
+    /// PNG stereo pairing (the `sTER` chunk's mode byte, PNG Extensions 1.4.0 §3.6): `Some(0)`
+    /// side by side, `Some(1)` stacked, so saving a stereo PNG keeps the mark (#6063).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub png_stereo: Option<u8>,
 }
 
 impl FileEncoding {

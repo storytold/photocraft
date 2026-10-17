@@ -105,7 +105,7 @@ fn indexed_bmp_opens_with_its_color_table() {
 #[test]
 fn indexed_png_opens_with_its_color_table() {
     let pal = [[10, 20, 30], [200, 100, 50], [7, 8, 9], [0, 255, 0]];
-    let png = photocraft_codecs::encode_png_indexed(2, 2, &[1, 0, 2, 1], &pal, Some(2), None).unwrap();
+    let png = photocraft_codecs::encode_png_indexed(2, 2, &[1, 0, 2, 1], &pal, Some(2), None, None).unwrap();
     let doc = import("indexed.png", &png).unwrap().document;
     assert_eq!(doc.mode, ColorMode::Indexed);
     assert_eq!(doc.depth, SampleType::U8);
@@ -396,8 +396,8 @@ fn transparent_flat_images_open_as_layer_0() {
         ("ga.png", enc(ChannelLayout::GrayA, CS::U8, Format::Png), true),
         ("a.tif", enc(ChannelLayout::Rgba, CS::U8, Format::Tiff), true),
         ("ga.tif", enc(ChannelLayout::GrayA, CS::U16, Format::Tiff), true),
-        ("pal.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], Some(0), None).unwrap(), true),
-        ("pal_opaque.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], None, None).unwrap(), false),
+        ("pal.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], Some(0), None, None).unwrap(), true),
+        ("pal_opaque.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], None, None, None).unwrap(), false),
         ("rgb.png", enc(ChannelLayout::Rgb, CS::U8, Format::Png), false),
         ("g.png", enc(ChannelLayout::Gray, CS::U16, Format::Png), false),
         ("rgb.tif", enc(ChannelLayout::Rgb, CS::U8, Format::Tiff), false),
@@ -1082,4 +1082,23 @@ fn a_lab_document_with_one_layer_is_not_reported_as_flattened() {
     two.layers.push(raster("Top", fmt, two.bounds(), 5, true));
     let r = export(&two, "tif", &ExportOptions::default()).unwrap();
     assert!(r.warnings.iter().any(|w| w.contains("2 layer(s) flattened")), "{:?}", r.warnings);
+}
+
+#[test]
+fn a_stereo_png_keeps_its_stereo_mark_on_save() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, PngStereo, SampleType as CS};
+    let img = Image::from_raw(4, 2, ChannelLayout::Rgb, CS::U8, vec![40u8; 24]).unwrap();
+    for view in [PngStereo::Horizontal, PngStereo::Vertical] {
+        let bytes = photocraft_codecs::encode(&img, Format::Png, &EncodeOptions { png_stereo: Some(view), ..Default::default() }).unwrap();
+        let doc = import("stereo.png", &bytes).unwrap().document;
+        assert_eq!(doc.file_encoding.png_stereo, Some(view.mode()));
+        // What File > Save does: reuse the settings the file was opened with (#6063).
+        let mut opts = ExportOptions::default();
+        apply_file_encoding(&doc, &mut opts.encode);
+        let r = export(&doc, "png", &opts).unwrap();
+        assert_eq!(photocraft_codecs::png_stereo(&r.bytes), Some(view), "{view:?}");
+    }
+    // An ordinary PNG gains no mark.
+    let plain = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
+    assert_eq!(photocraft_codecs::png_stereo(&plain.bytes), None);
 }
