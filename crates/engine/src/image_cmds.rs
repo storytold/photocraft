@@ -16,7 +16,8 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Applies `f` to every pixel surface of a layer tree: content (raster or
-/// cached text/shape/smart pixels), fill caches, and (if `masks`) masks.
+/// cached text/shape/smart pixels), fill caches, stored video frames (current and original),
+/// and (if `masks`) masks.
 pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn FnMut(&mut Surface, bool)) {
     for l in layers {
         if masks && let Some(m) = &mut l.mask {
@@ -24,6 +25,13 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
         }
         if let Some(fc) = &mut l.fill_cache {
             f(&mut fc.surface, false);
+        }
+        // The displayed content is only a copy of the frame at the playhead; the other frames
+        // would keep the old geometry and depth and come back stale when scrubbing (#4956).
+        if let Some(v) = &mut l.video {
+            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+                f(frame, false);
+            }
         }
         match &mut l.content {
             LayerContent::Raster(s) => f(s, false),
@@ -905,6 +913,28 @@ mod tests {
 
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc
+    }
+
+    /// Document-wide conversions must move every stored video frame, not just the displayed one (#4956).
+    #[test]
+    fn crop_moves_stored_video_frames() {
+        let mut s = session();
+        s.edit("video", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let frame = l.surface().unwrap().clone();
+            let mut v = photocraft_doc::VideoData::new(vec![frame.clone(), frame.clone()], 24.0);
+            v.original_frames = Some(vec![frame.clone(), frame]);
+            l.video = Some(v);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.crop", json!({"x": -10, "y": -5, "width": 60, "height": 30})).unwrap();
+        let v = doc(&s).layers[1].video.as_ref().unwrap();
+        let red = vec![1.0, 0.0, 0.0, 1.0];
+        for frame in v.frames.iter().chain(v.original_frames.iter().flatten()) {
+            assert_eq!(frame.pixel(20, 10), red);
+            assert_eq!(frame.pixel(5, 5)[3], 0.0);
+        }
     }
 
     /// Resample on with only a new resolution keeps the print size, as Photoshop's Image Size

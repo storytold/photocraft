@@ -270,6 +270,30 @@ fn arbitrary_rotation_moves_marks_and_unlinked_vector_masks() {
     assert!(mean < 3.0 / 255.0 && big < 0.02, "mean {mean} big {big}");
 }
 
+/// A canvas turn moves every stored video frame, not just the displayed one (#4956).
+#[test]
+fn turns_move_stored_video_frames() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |x, y| if (x, y) == (1, 2) { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.edit("video", |doc, active| {
+        let l = doc.layer_mut(active.unwrap()).unwrap();
+        let frame = l.surface().unwrap().clone();
+        let mut v = photocraft_doc::VideoData::new(vec![frame.clone(), frame.clone()], 24.0);
+        v.original_frames = Some(vec![frame.clone(), frame]);
+        l.video = Some(v);
+        Ok(())
+    })
+    .unwrap();
+    s.execute(command(Turn::FlipHorizontal), json!({})).unwrap();
+    let v = doc(&s).layers[1].video.as_ref().unwrap();
+    for frame in v.frames.iter().chain(v.original_frames.iter().flatten()) {
+        assert_eq!(frame.pixel(W as i32 - 2, 2), vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(frame.pixel(1, 2)[3], 0.0);
+    }
+}
+
 #[test]
 fn turns_on_empty_and_tiny_documents_never_panic() {
     for (w, h) in [(1, 1), (1, 7), (5, 1)] {

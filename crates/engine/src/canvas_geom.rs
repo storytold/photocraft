@@ -238,7 +238,8 @@ impl Turn {
 }
 
 /// Every pixel surface a canvas turn moves: content, rendered caches (type, shape, smart object,
-/// fill), masks (layer, smart filter), alpha channels, Quick Mask and the selection.
+/// fill), stored video frames (current and original), masks (layer, smart filter), alpha
+/// channels, Quick Mask and the selection.
 fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
     fn rec(layers: &mut [Layer], map: &dyn Fn(i32, i32) -> (i32, i32)) {
         let re = |s: &mut Surface| *s = remap_surface(s, map);
@@ -248,6 +249,10 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
             }
             if let Some(fc) = &mut l.fill_cache {
                 re(&mut fc.surface);
+            }
+            // Frames away from the playhead come back on scrubbing; they turn with the canvas (#4956).
+            if let Some(v) = &mut l.video {
+                v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()).for_each(re);
             }
             match &mut l.content {
                 LayerContent::Raster(s) => re(s),
