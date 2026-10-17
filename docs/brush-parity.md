@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (compact tip grids, size-capture choices and rejected-tip selection safety; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -19,6 +19,7 @@ tablets against Photoshop side by side.
 | Section | Status | Evidence |
 |---|---|---|
 | Brush Tip Shape: size, angle, roundness, hardness, spacing, flip X/Y | done | `brush.rs` |
+| Brush Tip Shape tip grid: eight 32-point columns, adjoining borders, two-point selection and a permanent scrollbar; shared Dual Brush geometry/scrollbar | done | #3825 (grid item only); `brush_tip_grid_tests.rs` covers pointer selection in all 14 themes, named look-alike presets, keyboard selection, empty/short lists, disabled input and virtual scrolling through 2,500 tips. The grid takes half of the available options viewport. Primary tip selection honors Capture Brush Size in Preset and preserves uncaptured fractional sizes, with command-journal replay coverage. A rejected tip load keeps the working brush/current identity and Update availability; accepted brush changes precede identity recording, while unchanged look-alikes still select by name. Dual Brush retains its existing unselected-tip behavior. |
 | Shape Dynamics (size/angle/roundness jitter, pen pressure/tilt/rotation/wheel controls, minimums, flip jitter, brush projection) | done | #174 |
 | Scattering (both axes, count, count jitter) | done | |
 | Texture (pattern, scale, brightness, contrast, mode, depth, each tip) | done | |
@@ -123,4 +124,5 @@ tablets against Photoshop side by side.
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
+| 2026-10-14 | minor | Brush Tip Shape and Dual Brush use compact eight-column tip grids with bounded visible-row work. Brush Settings adapts its options height and keeps the preview/actions reachable at 900×600; primary tip picking preserves uncaptured size and rejects unavailable tips without changing selection (#3825 and #3477, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |

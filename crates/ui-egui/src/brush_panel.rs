@@ -162,25 +162,25 @@ pub fn section_lock(b: &mut BrushSettings, i: usize) -> Option<&mut bool> {
 
 /// Send the panel's edits (`before` → `after`) through `tools.setBrush`.
 pub fn commit(app: &mut PhotocraftApp, before: &BrushSettings, after: &BrushSettings) {
-    send(app, before, after, None);
+    if let Err(e) = send(app, before, after, None) {
+        app.ui.status = e;
+    }
 }
 
-fn send(app: &mut PhotocraftApp, before: &BrushSettings, after: &BrushSettings, key: Option<String>) -> bool {
+fn send(app: &mut PhotocraftApp, before: &BrushSettings, after: &BrushSettings, key: Option<String>) -> Result<bool, String> {
     if before == after {
-        return false;
+        return Ok(false);
     }
     let patch = brush_patch(before, after);
     if patch.as_object().is_some_and(Map::is_empty) {
-        return false;
+        return Ok(false);
     }
     let mut p = json!({ "brush": patch });
     if let Some(k) = key {
         p["coalesce"] = json!(k);
     }
-    if let Err(e) = app.run("tools.setBrush", p) {
-        app.ui.status = e;
-    }
-    true
+    app.run("tools.setBrush", p)?;
+    Ok(true)
 }
 
 const GESTURE: &str = "brush-set-gesture";
@@ -204,10 +204,17 @@ fn gesture(ctx: &egui::Context) -> u64 {
 /// the engine journals the drag as a single `tools.setBrush` (Rule 1: one command per gesture).
 /// Call it every frame (it tracks presses even when nothing changed).
 pub fn commit_gesture(app: &mut PhotocraftApp, ctx: &egui::Context, before: &BrushSettings, after: &BrushSettings) {
+    if let Err(e) = try_commit_gesture(app, ctx, before, after) {
+        app.ui.status = e;
+    }
+}
+
+fn try_commit_gesture(app: &mut PhotocraftApp, ctx: &egui::Context, before: &BrushSettings, after: &BrushSettings) -> Result<(), String> {
     let g = gesture(ctx);
-    if send(app, before, after, Some(format!("brush-ui:{g}"))) && !ctx.input(|i| i.pointer.any_down()) {
+    if send(app, before, after, Some(format!("brush-ui:{g}")))? && !ctx.input(|i| i.pointer.any_down()) {
         ctx.data_mut(|d| d.get_temp_mut_or_default::<(u64, u64)>(egui::Id::new(GESTURE)).0 += 1);
     }
+    Ok(())
 }
 
 /// Group label for presets saved without a group.
@@ -345,7 +352,7 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
 
 fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let before = app.session.tools.brush.clone();
+    let mut before = app.session.tools.brush.clone();
     let mut b = before.clone();
     // Older UI state and control clients could select any of the 13 entries. Switch rows no
     // longer have a properties pane, so those selections recover to Brush Tip Shape.
@@ -353,24 +360,40 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.brush_section = 0;
     }
     let section = app.ui.brush_section;
+    // Reserve the preview/actions and separators before giving the list and options a viewport.
+    // The inner tip grid takes half of this finite height; other controls keep outer scrolling.
+    let footer = STRIP.1 as f32 + 4.0 * ui.spacing().item_spacing.y + 13.0;
+    let available = ui.available_height();
+    let body_height = if available.is_finite() { (available - footer).max(360.0) } else { 450.0 };
     ui.horizontal_top(|ui| {
         section_list(app, ui, &mut b);
-        widgets::vline(ui, 482.0);
+        widgets::vline(ui, body_height);
         ui.vertical(|ui| {
             ui.set_width(WIDTH - 190.0);
             // No title above the options (#3477): the selected row in the list names them, as
             // in Photoshop, and the line is better spent on the options.
             let on = section_flag(&mut b, section).is_none_or(|f| *f);
-            egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(450.0).auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(body_height).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(WIDTH - 204.0);
+                ui.set_max_height(body_height);
                 // A section that's off shows its options greyed out (Photoshop). A tip picked in
                 // the grid copies the tip fields only — the dynamics sections stay (Photoshop).
                 // The picked preset is recorded by name (`brush.presets.setCurrent`, identity, so
                 // look-alike duplicates stay distinct), since the engine can't infer it from the
                 // brush afterwards.
-                ui.add_enabled_ui(on, |ui| section_body(ui, &mut b, section, &app.session.tools.presets, app.session.tools.current_preset.as_deref()))
-                    .inner
-                    .inspect(|name| run_or_status(app, "brush.presets.setCurrent", json!({ "name": name })));
+                let picked = ui
+                    .add_enabled_ui(on, |ui| section_body(ui, &mut b, section, &app.session.tools.presets, app.session.tools.current_preset.as_deref()))
+                    .inner;
+                if let Some(name) = picked {
+                    // A missing tip must not mark its preset current or enable Update. Commit
+                    // the tip first; an unchanged look-alike can still change preset identity.
+                    match try_commit_gesture(app, ui.ctx(), &before, &b) {
+                        Ok(()) => run_or_status(app, "brush.presets.setCurrent", json!({ "name": name })),
+                        Err(e) => app.ui.status = e,
+                    }
+                    b = app.session.tools.brush.clone();
+                    before = b.clone();
+                }
             });
         });
     });
@@ -506,7 +529,9 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::new("brush-settings"))
         .title_bar(false)
-        .resizable(false)
+        .resizable([false, true])
+        .default_height(800.0)
+        .max_height((ctx.content_rect().height() - 40.0).max(0.0))
         .frame(frame)
         .default_pos(egui::pos2((canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0), canvas.top() + 24.0))
         .show(ctx, |ui| {

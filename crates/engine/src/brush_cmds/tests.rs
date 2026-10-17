@@ -350,6 +350,91 @@ fn set_brush_merges_fields() {
 }
 
 #[test]
+fn failed_preset_tip_load_preserves_selection_colors_and_command_state() {
+    use std::sync::Arc;
+    let snapshot = |s: &Session| {
+        (
+            s.tools.brush.clone(),
+            s.tools.current_preset.clone(),
+            s.tools.foreground,
+            s.tools.background,
+            s.tools.brush_rev,
+            s.tools.brush_saved_rev,
+            s.tools.presets_rev,
+            s.tools.brush_gesture.clone(),
+            s.tools.presets.clone(),
+            s.journal.clone(),
+            s.prefs().last_brush.clone(),
+        )
+    };
+    for component in 0..3 {
+        for had_current in [true, false] {
+            for capture_color in [true, false] {
+                let mut s = session(10, 10);
+                let stored =
+                    StoredTile { key: "unavailable-tip".into(), width: 16, height: 16, preview: Arc::new(GrayTile::from_fn(1, 1, |_, _| 1.0)), full: None };
+                let mut preset = BrushPreset {
+                    name: "Unavailable tip".into(),
+                    brush: BrushSettings { size: 73.0, color: [1.0, 0.0, 0.0, 1.0], ..Default::default() },
+                    builtin: false,
+                    group: "Synthetic".into(),
+                    folder: Vec::new(),
+                    captures: PresetCaptures { color: capture_color, ..Default::default() },
+                };
+                match component {
+                    0 => preset.brush.tip = TipShape::Stored(stored),
+                    1 => {
+                        preset.brush.dual_brush.enabled = true;
+                        preset.brush.dual_brush.tip = TipShape::Stored(stored);
+                    }
+                    _ => {
+                        preset.brush.texture.enabled = true;
+                        preset.brush.texture.pattern = Pattern::Stored(stored);
+                    }
+                }
+                s.tools.presets.push(preset);
+                if had_current {
+                    s.execute("tools.setBrush", json!({"preset":"Hard Round"})).unwrap();
+                }
+                s.execute("tools.setBrush", json!({"size":17.25,"opacity":0.37,"noise":true})).unwrap();
+                s.execute("tools.setColors", json!({"foreground":"#00ff00","background":"#0000ff"})).unwrap();
+                let before = snapshot(&s);
+                let error = s.execute("tools.setBrush", json!({"preset":"Unavailable tip"})).unwrap_err();
+                assert!(error.to_string().contains("no preset store"));
+                assert_eq!(snapshot(&s), before, "component {component}, current={had_current}, color={capture_color}: a failed pick must be atomic");
+
+                // Already-loaded resources remain selectable, including after a rejected pick.
+                let p = s.tools.presets.last_mut().unwrap();
+                let reference = match component {
+                    0 => match &mut p.brush.tip {
+                        TipShape::Stored(r) => Some(r),
+                        _ => None,
+                    },
+                    1 => match &mut p.brush.dual_brush.tip {
+                        TipShape::Stored(r) => Some(r),
+                        _ => None,
+                    },
+                    _ => match &mut p.brush.texture.pattern {
+                        Pattern::Stored(r) => Some(r),
+                        _ => None,
+                    },
+                }
+                .unwrap();
+                reference.full = Some(Arc::new(GrayTile::from_fn(16, 16, |_, _| 1.0)));
+                let expected = s.tools.presets.last().unwrap().picked_over(&s.tools.brush);
+                let journal = s.journal.len();
+                s.execute("tools.setBrush", json!({"preset":"Unavailable tip"})).unwrap();
+                assert_eq!(s.tools.brush, expected);
+                assert_eq!(s.tools.current_preset.as_deref(), Some("Unavailable tip"));
+                assert_eq!(s.tools.foreground, if capture_color { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0, 1.0] });
+                assert_eq!(s.tools.background, [0.0, 0.0, 1.0, 1.0]);
+                assert_eq!(s.journal.len(), journal + 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn resizing_a_brush_resizes_its_enabled_secondary_tip() {
     let mut s = session(64, 64);
     s.execute("tools.setBrush", json!({"size": 40, "dualBrush": {"enabled": true, "size": 12}})).unwrap();

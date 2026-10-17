@@ -258,41 +258,71 @@ pub fn thumb_scale(size: f32) -> f32 {
 /// Photoshop's scrolling grid of preset tips with their sizes; `highlight` is the selected
 /// preset (by identity: look-alike duplicates must stay distinct). Returns the clicked index.
 fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], highlight: Option<usize>) -> Option<usize> {
+    const COLUMNS: usize = 8;
+    const CELL: egui::Vec2 = vec2(32.0, 40.0);
     let t = Tokens::get(ui.ctx());
+    let available = ui.available_height();
+    // A finite options viewport comes from the window; standalone scroll callers can be unbounded.
+    let height = if available.is_finite() { (available * 0.5).max(CELL.y) } else { 225.0 };
+    let grid_id = ui.make_persistent_id(id);
     let mut clicked = None;
-    let frame = egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm as u8).inner_margin(egui::Margin::same(3));
-    frame.show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(id).max_height(104.0).auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                for (i, p) in presets.iter().enumerate() {
-                    let (cell, resp) = ui.allocate_exact_size(vec2(44.0, 50.0), Sense::click());
-                    if !ui.is_rect_visible(cell) {
-                        continue;
-                    }
-                    if highlight == Some(i) {
-                        ui.painter().rect_filled(cell, 3.0, t.accent_soft);
-                        ui.painter().rect_stroke(cell, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(cell, 3.0, t.hover);
-                    }
-                    let (tip, size, hard, angle, round, _) = preset_tip(p);
-                    let tex = brush_preview::tip_texture(ui.ctx(), &format!("{id}:{}", p.name), tip, (hard, angle, round), 34, t.text);
-                    let ir = egui::Rect::from_center_size(pos2(cell.center().x, cell.top() + 20.0), vec2(34.0, 34.0) * thumb_scale(size));
-                    ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-                    ui.painter().text(
-                        pos2(cell.center().x, cell.bottom() - 6.0),
-                        egui::Align2::CENTER_CENTER,
-                        format!("{}", size.round() as i64),
-                        egui::FontId::proportional(9.5),
-                        t.text_dim,
-                    );
-                    if resp.on_hover_text(&p.name).clicked() {
-                        clicked = Some(i);
-                    }
+    // Straight, touching seams are part of the tip grid's geometry, not rounded button chrome.
+    egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.field_border)).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        ui.spacing_mut().scroll.floating = false;
+        // The theme's inactive widget fill equals the track. Use a contrasting themed
+        // foreground for the solid handle so AlwaysVisible also stays visible at rest.
+        ui.spacing_mut().scroll.foreground_color = true;
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = t.text_dim;
+        ui.spacing_mut().scroll.content_margin = egui::Margin::ZERO;
+        ui.set_width(COLUMNS as f32 * CELL.x + ui.spacing().scroll.allocated_width());
+        egui::ScrollArea::vertical()
+            .id_salt(id)
+            .max_height(height)
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .show_rows(ui, CELL.y, presets.len().div_ceil(COLUMNS), |ui, rows| {
+                for row in rows {
+                    ui.horizontal(|ui| {
+                        let start = row.saturating_mul(COLUMNS);
+                        for i in start..start.saturating_add(COLUMNS).min(presets.len()) {
+                            let Some(p) = presets.get(i) else { continue };
+                            let (_, cell) = ui.allocate_space(CELL);
+                            if !ui.is_rect_visible(cell) {
+                                continue;
+                            }
+                            // Stable across virtual rows, scrolling and resizing. A look-alike
+                            // tip remains distinct by its preset identity, not its bitmap.
+                            let resp = ui.interact(cell, grid_id.with(i), Sense::click());
+                            let selected = highlight == Some(i);
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, &p.name));
+                            if selected {
+                                ui.painter().rect_filled(cell, 0.0, t.accent_soft);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(cell, 0.0, t.hover);
+                            }
+                            ui.painter().rect_stroke(cell, 0.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+                            if selected {
+                                ui.painter().rect_stroke(cell, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+                            }
+                            let (tip, size, hard, angle, round, _) = preset_tip(p);
+                            let tex = brush_preview::tip_texture(ui.ctx(), &format!("{id}:{}", p.name), tip, (hard, angle, round), 24, t.text);
+                            let ir = egui::Rect::from_center_size(pos2(cell.center().x, cell.top() + 15.0), vec2(24.0, 24.0) * thumb_scale(size));
+                            ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                            ui.painter().text(
+                                pos2(cell.center().x, cell.bottom() - 6.0),
+                                egui::Align2::CENTER_CENTER,
+                                format!("{}", size.round() as i64),
+                                egui::FontId::proportional(9.5),
+                                t.text_dim,
+                            );
+                            if resp.on_hover_text(&p.name).clicked() {
+                                clicked = Some(i);
+                            }
+                        }
+                    });
                 }
             });
-        });
     });
     ui.add_space(6.0);
     clicked
@@ -308,7 +338,9 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
     if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, highlight).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         b.tip = pt.clone();
-        b.size = ps;
+        if p.captures.size {
+            b.size = ps;
+        }
         b.hardness = ph;
         b.angle = pa;
         b.roundness = pr;
@@ -802,3 +834,7 @@ mod tests {
         assert_eq!(r, 1.0);
     }
 }
+
+#[cfg(test)]
+#[path = "brush_tip_grid_tests.rs"]
+mod tip_grid_tests;
