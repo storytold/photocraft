@@ -1885,6 +1885,44 @@ mod tests {
         }
     }
 
+    /// #5996: a real key press comes as a key and its text. A letter typed into Help › Search is
+    /// text for the field, not a mnemonic: "S" ran System Info and "A" the ArtCraft website.
+    #[test]
+    fn help_search_letters_are_not_mnemonics() {
+        use egui::{Event, Key, Modifiers, PointerButton};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+        });
+        h.run_steps(4);
+        let help = h.get_by_label("Help").rect().center();
+        h.event(Event::PointerMoved(help));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: help, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "Help opened");
+        for c in "DeSelect all".chars() {
+            let key = Key::from_name(&c.to_ascii_uppercase().to_string());
+            if let Some(key) = key {
+                h.event(Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+            }
+            h.event(Event::Text(c.to_string()));
+            h.run_steps(1);
+            if let Some(key) = key {
+                h.event(Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+            }
+        }
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "typing keeps Help open");
+        let query: String = h.ctx.data(|d| d.get_temp(egui::Id::new("help-menu-search"))).unwrap_or_default();
+        assert_eq!(query, "DeSelect all", "every letter reached the field");
+        assert!(h.state().ui.dialogs.is_empty(), "no menu command ran: {:?}", h.state().ui.dialogs);
+    }
+
     #[test]
     fn dropdown_items_have_room() {
         use egui_kittest::{Harness, kittest::Queryable};

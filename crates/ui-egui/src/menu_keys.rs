@@ -207,8 +207,10 @@ impl Keys {
             return;
         }
         if open {
-            // A letter runs the row with that mnemonic in the level the arrows are in.
-            let letter = events.iter().find_map(|e| match e {
+            // A letter runs the row with that mnemonic in the level the arrows are in, unless it is
+            // typed into a field in the menu: Help › Search took "S" for System Info (#5996).
+            let typing = ctx.text_edit_focused();
+            let letter = events.iter().filter(|_| !typing).find_map(|e| match e {
                 Event::Key { key, pressed: true, modifiers, .. } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
                     key_char(*key).map(|c| (*key, c))
                 }
