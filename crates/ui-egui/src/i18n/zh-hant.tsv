@@ -2617,6 +2617,15 @@ cameraData	Lens	鏡頭
 	Snap to Origin	靠齊原點
 	Search settings…	搜尋設定…
 	No matching settings	沒有符合的設定
+
+# Smart Filter editors
+	Blending Options ({filter})	混合選項 ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	隱藏圖層效果和智慧型濾鏡  （{key} 點擊：所有圖層）
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	顯示圖層效果和智慧型濾鏡  （{key} 點擊：所有圖層）
+	Wait for the current job to finish.	請等待目前的工作完成。
+	The document or Smart Filter changed. Reopen its dialog.	文件或智慧型濾鏡已變更。請重新開啟其對話框。
+	Opacity must be between 0% and 100%.	不透明度必須介於 0% 和 100% 之間。
+
 	Loading fonts…	正在載入字體…
 	Response curve	回應曲線
 	Tool	工具

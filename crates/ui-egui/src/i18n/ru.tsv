@@ -2975,6 +2975,15 @@ cameraData	Lens	Объектив
 	Rasterize Layer Style	Растрировать стиль слоя
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
+
+# Smart Filter editors
+	Blending Options ({filter})	Параметры наложения ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Скрыть эффекты слоя и смарт-фильтры  ({key}-клик: все слои)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Показать эффекты слоя и смарт-фильтры  ({key}-клик: все слои)
+	Wait for the current job to finish.	Дождитесь завершения текущей задачи.
+	The document or Smart Filter changed. Reopen its dialog.	Документ или смарт-фильтр изменился. Откройте его диалог заново.
+	Opacity must be between 0% and 100%.	Непрозрачность должна быть от 0% до 100%.
+
 	Loading fonts…	Загрузка шрифтов…
 	Response curve	Кривая отклика
 	Tool	Инструмент

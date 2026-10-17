@@ -344,6 +344,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
                 // Image Size and Canvas Size open on Width, selected (#2329).
                 DialogKind::Command if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, &mut fields)),
+                DialogKind::Command if crate::smart_filter_dialog::owns(&fields) => crate::smart_filter_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::adjust_dialog::owns(&fields) => crate::adjust_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::blur_pins::owns(&fields) => crate::blur_pins::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__filter") => {
@@ -563,6 +564,9 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
 
 /// The dialog title as shown: [`title`] in the UI language.
 fn display_title(d: &Dialog) -> String {
+    if crate::smart_filter_dialog::owns(&d.fields) {
+        return crate::smart_filter_dialog::title(&d.fields);
+    }
     match d.kind {
         DialogKind::Command => {
             let label = d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command");
@@ -641,7 +645,13 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.filter_preview = None;
                 return Err("dialog has no command".into());
             };
-            let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
+            let (cmd, params) = match crate::smart_ui::confirm_command(app, &d.fields, cmd, crate::filter_dialog::params_of(&d.fields)) {
+                Ok(edit) => edit,
+                Err(e) => {
+                    app.filter_preview = None;
+                    return Err(e);
+                }
+            };
             let result = app.run(&cmd, params.clone());
             // A filter that runs as a background job keeps its preview on screen until the job
             // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.

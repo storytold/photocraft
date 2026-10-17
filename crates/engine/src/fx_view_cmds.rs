@@ -1,8 +1,8 @@
-//! Layers panel: showing or hiding a layer's effects list under its row (the triangle beside
-//! the fx badge, #144). View state ([`crate::DocState::fx_collapsed`]): no history step, and a
+//! Layers panel: showing or hiding a layer's effects and Smart Filters under its row (the
+//! shared disclosure triangle). View state ([`crate::DocState::fx_collapsed`]): no history step, and a
 //! clean document stays clean.
 
-use photocraft_doc::LayerId;
+use photocraft_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -16,7 +16,11 @@ fn bad(msg: impl Into<String>) -> EngineError {
 
 fn has_effects(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    if d.doc.walk().iter().any(|(_, _, l)| !l.effects.items.is_empty()) { Ok(()) } else { Err("no layer has effects".into()) }
+    if d.doc.walk().iter().any(|(_, _, l)| has_children(l)) { Ok(()) } else { Err("no layer has effects or smart filters".into()) }
+}
+
+fn has_children(l: &Layer) -> bool {
+    !l.effects.items.is_empty() || matches!(&l.content, LayerContent::Smart(sm) if !sm.smart_filters.is_empty())
 }
 
 fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>> {
@@ -37,12 +41,12 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => Some(st.active_layer.ok_or_else(|| bad("no layer given and no active layer"))?),
         Some(v) => Some(LayerId(v.as_u64().ok_or_else(|| bad("`layer` must be a layer id"))?)),
     };
-    let with_fx: Vec<LayerId> = st.doc.walk().iter().filter(|(_, _, l)| !l.effects.items.is_empty()).map(|(_, _, l)| l.id).collect();
+    let with_fx: Vec<LayerId> = st.doc.walk().iter().filter(|(_, _, l)| has_children(l)).map(|(_, _, l)| l.id).collect();
     let current = match layer {
         Some(id) => {
             let l = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            if l.effects.items.is_empty() {
-                return Err(bad(format!("layer {} has no effects", id.0)));
+            if !has_children(l) {
+                return Err(bad(format!("layer {} has no effects or smart filters", id.0)));
             }
             !st.fx_collapsed.contains(&id)
         }
@@ -65,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Expand/Collapse Effects",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"expanded":bool?,"all":bool?} (no expanded: toggle; all: every layer with effects; view state, not an undo step)"##,
+        params: r##"{"layer":id?,"expanded":bool?,"all":bool?} (no expanded: toggle; all: every layer with effects or smart filters; view state, not an undo step)"##,
         enabled: has_effects,
         run: set_expanded,
         journal: false,
@@ -90,6 +94,28 @@ mod tests {
 
     fn open(s: &Session, id: u64) -> bool {
         !s.active().unwrap().fx_collapsed.contains(&LayerId(id))
+    }
+
+    #[test]
+    fn smart_filters_share_the_effects_disclosure_without_an_edit() {
+        let (mut s, a, b) = session();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        let smart = s.active().unwrap().active_layer.unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let steps = s.active().unwrap().history.past_len();
+        s.execute(ID, json!({"layer": smart.0, "expanded": false})).unwrap();
+        assert!(!open(&s, smart.0));
+        assert!(open(&s, b));
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        s.execute(ID, json!({"expanded": false, "all": true})).unwrap();
+        assert!(!open(&s, smart.0) && !open(&s, b));
+        s.execute(ID, json!({"expanded": true, "all": true})).unwrap();
+        assert!(s.active().unwrap().fx_collapsed.is_empty());
     }
 
     #[test]

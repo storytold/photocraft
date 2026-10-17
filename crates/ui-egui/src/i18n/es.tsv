@@ -2717,6 +2717,15 @@ cameraData	Lens	Objetivo
 	Snap to Origin	Ajustar a origen
 	Search settings…	Buscar ajustes…
 	No matching settings	No hay ajustes que coincidan
+
+# Smart Filter editors
+	Blending Options ({filter})	Opciones de fusión ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Ocultar efectos de capa y filtros inteligentes  ({key}-clic: todas las capas)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Mostrar efectos de capa y filtros inteligentes  ({key}-clic: todas las capas)
+	Wait for the current job to finish.	Espere a que termine la tarea actual.
+	The document or Smart Filter changed. Reopen its dialog.	El documento o el filtro inteligente ha cambiado. Vuelva a abrir su diálogo.
+	Opacity must be between 0% and 100%.	La opacidad debe estar entre 0% y 100%.
+
 	Loading fonts…	Cargando fuentes…
 	Response curve	Curva de respuesta
 	Tool	Herramienta

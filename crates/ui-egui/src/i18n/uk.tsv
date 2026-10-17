@@ -3722,6 +3722,15 @@ cameraData	Lens	Об'єктив
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+
+# Smart Filter editors
+	Blending Options ({filter})	Параметри накладання ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Приховати ефекти шару та смарт-фільтри  ({key}-клік: усі шари)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Показати ефекти шару та смарт-фільтри  ({key}-клік: усі шари)
+	Wait for the current job to finish.	Дочекайтеся завершення поточного завдання.
+	The document or Smart Filter changed. Reopen its dialog.	Документ або смарт-фільтр змінився. Відкрийте його діалог знову.
+	Opacity must be between 0% and 100%.	Непрозорість має бути від 0% до 100%.
+
 	Loading fonts…	Завантаження шрифтів…
 	Response curve	Крива відгуку
 	Simulate Pressure	Імітувати натиск

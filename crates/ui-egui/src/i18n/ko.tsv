@@ -3219,6 +3219,15 @@ cameraData	Lens	렌즈
 	Snap to Origin	원점에 스냅
 	Search settings…	설정 검색…
 	No matching settings	일치하는 설정 없음
+
+# Smart Filter editors
+	Blending Options ({filter})	혼합 옵션 ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	레이어 효과 및 스마트 필터 숨기기  ({key}+클릭: 모든 레이어)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	레이어 효과 및 스마트 필터 표시  ({key}+클릭: 모든 레이어)
+	Wait for the current job to finish.	현재 작업이 완료될 때까지 기다리세요.
+	The document or Smart Filter changed. Reopen its dialog.	문서 또는 스마트 필터가 변경되었습니다. 대화 상자를 다시 여세요.
+	Opacity must be between 0% and 100%.	불투명도는 0%에서 100% 사이여야 합니다.
+
 	Loading fonts…	글꼴 불러오는 중…
 	Response curve	응답 곡선
 	Simulate Pressure	압력 시뮬레이션

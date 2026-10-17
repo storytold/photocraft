@@ -2675,6 +2675,15 @@ cameraData	Lens	Objektiv
 	Snap to Origin	An Ursprung ausrichten
 	Search settings…	Einstellungen durchsuchen…
 	No matching settings	Keine passenden Einstellungen
+
+# Smart Filter editors
+	Blending Options ({filter})	Fülloptionen ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Ebeneneffekte und Smartfilter ausblenden  ({key}-Klick: alle Ebenen)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Ebeneneffekte und Smartfilter einblenden  ({key}-Klick: alle Ebenen)
+	Wait for the current job to finish.	Warten Sie, bis der aktuelle Auftrag abgeschlossen ist.
+	The document or Smart Filter changed. Reopen its dialog.	Das Dokument oder der Smartfilter wurde geändert. Öffnen Sie den Dialog erneut.
+	Opacity must be between 0% and 100%.	Die Deckkraft muss zwischen 0% und 100% liegen.
+
 	Loading fonts…	Schriften werden geladen…
 	Response curve	Reaktionskurve
 	Tool	Werkzeug

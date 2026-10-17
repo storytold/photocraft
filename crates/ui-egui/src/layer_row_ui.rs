@@ -33,6 +33,7 @@ pub enum Indicator {
     Lock,
     FxTriangle,
     Fx,
+    SmartFilters,
     Link,
     Blend,
 }
@@ -74,8 +75,15 @@ pub fn reserved_width(l: &Layer) -> f32 {
     if l.locks.any() {
         w += ICON_W + GAP;
     }
+    let smart = crate::smart_ui::has_filters(l);
+    if !l.effects.items.is_empty() || smart {
+        w += TRIANGLE_W + GAP;
+    }
     if !l.effects.items.is_empty() {
-        w += TRIANGLE_W + 1.0 + 13.0 + GAP;
+        w += 13.0 + GAP;
+    }
+    if smart {
+        w += ICON_W + GAP;
     }
     if l.link_group.is_some() {
         w += ICON_W + GAP;
@@ -130,6 +138,7 @@ pub fn indicators(
     let fx_font = theme::semibold(11.0);
     let blend_font = FontId::proportional(10.5);
     let has_fx = !l.effects.items.is_empty();
+    let has_smart = crate::smart_ui::has_filters(l);
     let show_blend = l.blend != BlendMode::Normal && l.blend != BlendMode::PassThrough;
     let fx_galley = has_fx.then(|| painter.layout_no_wrap("fx".into(), fx_font, t.text_dim));
     let blend_galley = show_blend.then(|| painter.layout_no_wrap(tl!(l.blend.label()).into(), blend_font, t.text_faint));
@@ -137,8 +146,13 @@ pub fn indicators(
     if locked {
         items.push((Indicator::Lock, ICON_W));
     }
-    if let Some(g) = &fx_galley {
+    if has_fx || has_smart {
         items.push((Indicator::FxTriangle, TRIANGLE_W));
+    }
+    if has_smart {
+        items.push((Indicator::SmartFilters, ICON_W));
+    }
+    if let Some(g) = &fx_galley {
         items.push((Indicator::Fx, g.size().x));
     }
     if l.link_group.is_some() {
@@ -164,6 +178,11 @@ pub fn indicators(
                     painter.galley(pos2(r.left(), cy - g.size().y / 2.0), g, t.text_faint);
                 }
             }
+            Indicator::SmartFilters => {
+                let enabled = matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if sm.filters_enabled);
+                crate::smart_ui::paint_badge(painter, r.center(), if enabled { t.icon } else { t.text_faint });
+                ui.interact(r, ui.id().with(("smart-filters-badge", l.id.0)), Sense::hover()).on_hover_text(tl!("Smart Filters"));
+            }
             Indicator::FxTriangle => {
                 let resp = ui.interact(r, ui.id().with(("fx-disclosure", l.id.0)), Sense::click());
                 paint_triangle(painter, r.center(), fx_open, if resp.hovered() { t.text } else { t.icon });
@@ -173,7 +192,11 @@ pub fn indicators(
                     actions.push(("layer.setEffectsExpanded".into(), json!({"layer": l.id.0, "expanded": !fx_open, "all": all})));
                 }
                 let (verb, name) = (if fx_open { tl!("Collapse") } else { tl!("Expand") }, l.name.clone());
-                let tip = if fx_open {
+                let tip = if has_smart && fx_open {
+                    tl!("Hide the layer's effects and Smart Filters  ({key}-click: all layers)")
+                } else if has_smart {
+                    tl!("Show the layer's effects and Smart Filters  ({key}-click: all layers)")
+                } else if fx_open {
                     tl!("Hide the layer's effects  ({key}-click: all layers)")
                 } else {
                     tl!("Show the layer's effects  ({key}-click: all layers)")

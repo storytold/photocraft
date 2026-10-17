@@ -2404,7 +2404,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !l.effects.items.is_empty() && fx_collapsed.iter().all(|id| *id != l.id) {
                     effect_rows(app, ui, l, depth, &mut actions);
                 }
-                crate::smart_ui::filter_rows(app, ui, l, depth, &mut actions);
+                if !fx_collapsed.contains(&l.id) {
+                    crate::smart_ui::filter_rows(app, ui, &doc, l, depth, &mut actions);
+                }
             }
             // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
             // between two rows lands above the lower one, the empty space below the bottom-most

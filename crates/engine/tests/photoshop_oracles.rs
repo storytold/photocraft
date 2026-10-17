@@ -81,6 +81,18 @@ fn rerender(doc: &mut Document) -> Result<usize, String> {
 }
 
 #[test]
+fn screen_motion_blur_retains_input_coverage() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/smart-filters/sf-blend-screen-100.psd");
+    let bytes = std::fs::read(&path).expect("Screen/Motion Blur oracle missing: run cargo xtask corpus --all");
+    let file = PsdFile::from_bytes(&bytes).expect("parse Screen/Motion Blur oracle");
+    let mut doc = photocraft_io::import("sf-blend-screen-100.psd", &bytes).expect("import Screen/Motion Blur oracle").document;
+    assert!(rerender(&mut doc).expect("re-render Screen/Motion Blur oracle") > 0);
+    let merged = photocraft_io::merged_composite(&file).expect("Photoshop merged composite");
+    let (error, bad) = max_diff(&photocraft_compose::flatten(&doc).px, &merged);
+    assert!(error <= PASS_TOL, "Screen/Motion Blur error {error}, {bad}% pixels exceed 2/255");
+}
+
+#[test]
 fn photoshop_oracles_rerendered() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop");
     assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --all`", root.display());

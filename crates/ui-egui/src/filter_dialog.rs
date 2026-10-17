@@ -327,7 +327,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") {
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
@@ -898,19 +898,67 @@ pub(crate) fn preview_document_for_target(
     // Warp Text renders the type again from the layer model (font size, position), which a
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
-    let proxy = crate::proxy::proxy_document(doc, run_k);
+    let mut proxy = crate::proxy::proxy_document(doc, run_k);
+    let mut p = params.clone();
+    if is_smart_edit(command) {
+        let layer = photocraft_doc::LayerId(params.get("layer")?.as_u64()?);
+        let index = usize::try_from(params.get("index")?.as_u64()?).ok()?;
+        let photocraft_doc::LayerContent::Smart(sm) = &mut proxy.layer_mut(layer)?.content else { return None };
+        // Proxy_document scales the cache, placement and shared mask (#5766). Editing a filter
+        // re-renders its source: scale every filter's lengths and the mask's feather as well.
+        if run_k > 1 {
+            if let Some(mask) = &mut sm.filter_mask {
+                mask.feather /= run_k as f32;
+            }
+            for f in &mut sm.smart_filters {
+                scale_preview_params(&f.command, &mut f.params, run_k);
+            }
+            if command == "layer.smartFilter.setParams" {
+                let f = sm.smart_filters.get(index)?;
+                scale_preview_params(&f.command, p.get_mut("params")?, run_k);
+            }
+        }
+    } else {
+        scale_preview_params(command, &mut p, run_k);
+    }
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());
     let doc_id = proxy.id;
     s.add_document(proxy, None);
-    let mut p = params.clone();
     add_source_documents(&mut s, doc_id, command, &mut p, documents, run_k);
     if let Some(id) = active {
         s.select_layer(id).ok()?;
     }
     s.active_mut()?.channel_view.target = target;
-    if run_k > 1
-        && let Some(o) = p.as_object_mut()
+    s.execute(command, p).ok()?;
+    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
+}
+
+fn is_smart_edit(command: &str) -> bool {
+    matches!(command, "layer.smartFilter.setParams" | "layer.smartFilter.blendingOptions")
+}
+
+/// Each stage constrains the proxy factor; an unscalable filter keeps full-resolution preview.
+pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value, k: u32) -> u32 {
+    if !is_smart_edit(command) {
+        return preview_factor(command, params, k);
+    }
+    let Some(layer) = params.get("layer").and_then(Value::as_u64).and_then(|id| doc.layer(photocraft_doc::LayerId(id))) else { return 1 };
+    let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { return 1 };
+    let mut factor = sm.smart_filters.iter().fold(k, |k, f| preview_factor(&f.command, &f.params, k));
+    if command == "layer.smartFilter.setParams"
+        && let Some(index) = params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())
+        && let Some(f) = sm.smart_filters.get(index)
+        && let Some(p) = params.get("params")
+    {
+        factor = preview_factor(&f.command, p, factor);
+    }
+    factor
+}
+
+fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
+    if k > 1
+        && let Some(o) = params.as_object_mut()
     {
         let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
         for (key, v) in o.iter_mut() {
@@ -926,17 +974,15 @@ pub(crate) fn preview_document_for_target(
                 let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
                 // Negative lengths (Offset's left/up shift, Displace's inverted scale) keep their
                 // sign: the floor that keeps a radius positive turned them into +0.1 (#2063).
-                let x = x / run_k as f64;
+                let x = x / k as f64;
                 *v = json!(if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) });
             }
         }
     }
     // Blur Gallery pins carry their blur in document pixels too.
     if command.starts_with("filter.blurGallery.") {
-        crate::blur_pins::scale_for_proxy(&mut p, run_k);
+        crate::blur_pins::scale_for_proxy(params, k);
     }
-    s.execute(command, p).ok()?;
-    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
 }
 
 /// The preview session holds only the proxy of the edited document (index 0), so a document param

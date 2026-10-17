@@ -3731,6 +3731,15 @@ cameraData	Lens	Φακός
 	Snap to Origin	Προσκόλληση στην αρχή
 	Search settings…	Αναζήτηση ρυθμίσεων…
 	No matching settings	Δεν βρέθηκαν ρυθμίσεις
+
+# Smart Filter editors
+	Blending Options ({filter})	Επιλογές ανάμειξης ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Απόκρυψη εφέ επιπέδου και έξυπνων φίλτρων  ({key}-κλικ: όλα τα επίπεδα)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Εμφάνιση εφέ επιπέδου και έξυπνων φίλτρων  ({key}-κλικ: όλα τα επίπεδα)
+	Wait for the current job to finish.	Περιμένετε να ολοκληρωθεί η τρέχουσα εργασία.
+	The document or Smart Filter changed. Reopen its dialog.	Το έγγραφο ή το έξυπνο φίλτρο άλλαξε. Ανοίξτε ξανά το παράθυρό του.
+	Opacity must be between 0% and 100%.	Η αδιαφάνεια πρέπει να είναι μεταξύ 0% και 100%.
+
 	Loading fonts…	Φόρτωση γραμματοσειρών…
 	Response curve	Καμπύλη απόκρισης
 	Simulate Pressure	Προσομοίωση πίεσης

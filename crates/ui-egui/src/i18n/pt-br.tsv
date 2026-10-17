@@ -3054,6 +3054,15 @@ cameraData	Lens	Lente
 	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
+
+# Smart Filter editors
+	Blending Options ({filter})	Opções de mesclagem ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Ocultar efeitos da camada e Filtros Inteligentes  ({key}-clique: todas as camadas)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Mostrar efeitos da camada e Filtros Inteligentes  ({key}-clique: todas as camadas)
+	Wait for the current job to finish.	Aguarde a conclusão da tarefa atual.
+	The document or Smart Filter changed. Reopen its dialog.	O documento ou o Filtro Inteligente mudou. Reabra sua caixa de diálogo.
+	Opacity must be between 0% and 100%.	A opacidade deve estar entre 0% e 100%.
+
 	Loading fonts…	Carregando fontes…
 	Response curve	Curva de resposta
 	Tool	Ferramenta

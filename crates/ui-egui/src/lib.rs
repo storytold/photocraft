@@ -190,6 +190,7 @@ pub mod shortcuts;
 mod single_line_drag;
 mod sizing;
 pub mod slice_ui;
+pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
 pub(crate) mod solid_fill_ui;
@@ -690,6 +691,7 @@ pub struct PhotocraftApp {
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
@@ -900,6 +902,7 @@ impl PhotocraftApp {
             proxy_uploaded: None,
             outline_cache: None,
             filter_preview: None,
+            smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
@@ -2220,6 +2223,9 @@ impl PhotocraftApp {
                 if layer.vector_mask.is_some() {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_VECTOR));
                 }
+                if matches!(&layer.content, photocraft_doc::LayerContent::Smart(sm) if sm.filter_mask.is_some()) {
+                    live.insert((layer.id, mask_thumbs_ui::THUMB_SMART_MASK));
+                }
                 if let Some(children) = layer.children() {
                     pending.extend(children);
                 }
@@ -2304,8 +2310,19 @@ impl PhotocraftApp {
     }
 
     pub fn mask_thumb(&mut self, ctx: &egui::Context, doc: &Document, id: photocraft_doc::LayerId, mask: &photocraft_doc::LayerMask) -> egui::TextureId {
+        self.mask_thumb_kind(ctx, doc, id, mask, mask_thumbs_ui::THUMB_MASK)
+    }
+
+    pub(crate) fn mask_thumb_kind(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        id: photocraft_doc::LayerId,
+        mask: &photocraft_doc::LayerMask,
+        kind: u8,
+    ) -> egui::TextureId {
         let rev = surface_fingerprint(&mask.surface) ^ (doc.size.width as u64) << 40;
-        let key = (id, mask_thumbs_ui::THUMB_MASK);
+        let key = (id, kind);
         if let Some((r, tex)) = self.thumbs.get(&key)
             && *r == rev
         {

@@ -22,6 +22,7 @@ pub const CHAIN_W: f32 = 12.0;
 pub const THUMB_LAYER: u8 = 0;
 pub const THUMB_MASK: u8 = 1;
 pub const THUMB_VECTOR: u8 = 2;
+pub const THUMB_SMART_MASK: u8 = 3;
 
 /// Which of a layer's masks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

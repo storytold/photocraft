@@ -3674,6 +3674,14 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+
+# Layers panel options and Smart Filter editors
+	Blending Options ({filter})	Tùy chọn hòa trộn ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Ẩn hiệu ứng và bộ lọc thông minh của lớp  ({key}-bấm: tất cả các lớp)
+	Opacity must be between 0% and 100%.	Độ mờ phải nằm trong khoảng từ 0% đến 100%.
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Hiện hiệu ứng và bộ lọc thông minh của lớp  ({key}-bấm: tất cả các lớp)
+	The document or Smart Filter changed. Reopen its dialog.	Tài liệu hoặc bộ lọc thông minh đã thay đổi. Hãy mở lại hộp thoại của nó.
+	Wait for the current job to finish.	Hãy chờ tác vụ hiện tại hoàn tất.
 	Accept and Go to Conflict	Chấp nhận và đến xung đột
 	Changes undone.	Đã hoàn tác thay đổi.
 	Choose a new shortcut for this command, or leave it without one.	Chọn phím tắt mới cho lệnh này, hoặc để lệnh không có phím tắt.

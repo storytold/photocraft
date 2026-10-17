@@ -3038,6 +3038,15 @@ cameraData	Lens	Lensa
 	Snap to Origin	Jepret ke Titik Asal
 	Search settings…	Cari pengaturan…
 	No matching settings	Tidak ada pengaturan yang cocok
+
+# Smart Filter editors
+	Blending Options ({filter})	Opsi Pencampuran ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Sembunyikan efek lapisan dan Filter Cerdas  (klik-{key}: semua lapisan)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Tampilkan efek lapisan dan Filter Cerdas  (klik-{key}: semua lapisan)
+	Wait for the current job to finish.	Tunggu hingga tugas saat ini selesai.
+	The document or Smart Filter changed. Reopen its dialog.	Dokumen atau Filter Cerdas berubah. Buka kembali dialognya.
+	Opacity must be between 0% and 100%.	Opasitas harus antara 0% dan 100%.
+
 	Loading fonts…	Memuat font…
 	Response curve	Kurva respons
 	Tool	Alat

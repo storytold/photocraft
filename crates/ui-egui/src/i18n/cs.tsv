@@ -2642,6 +2642,14 @@ cameraData	Lens	Objektiv
 	Search settings…	Hledat nastavení…
 	No matching settings	Žádná odpovídající nastavení
 
+# Smart Filter editors
+	Blending Options ({filter})	Volby prolnutí ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Skrýt efekty vrstvy a inteligentní filtry  (kliknutí s {key}: všechny vrstvy)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Zobrazit efekty vrstvy a inteligentní filtry  (kliknutí s {key}: všechny vrstvy)
+	Wait for the current job to finish.	Počkejte na dokončení aktuální úlohy.
+	The document or Smart Filter changed. Reopen its dialog.	Dokument nebo inteligentní filtr se změnil. Znovu otevřete jeho dialog.
+	Opacity must be between 0% and 100%.	Krytí musí být mezi 0% a 100%.
+
 # Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
 # choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
 # measurement columns, file info fields and the macOS application menu. Translated the same way as

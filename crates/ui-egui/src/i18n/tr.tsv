@@ -3918,6 +3918,14 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+
+# Layers panel options and Smart Filter editors
+	Blending Options ({filter})	Karışım Seçenekleri ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Katmanın efektlerini ve Akıllı Filtrelerini gizle  ({key}-tık: tüm katmanlar)
+	Opacity must be between 0% and 100%.	Opaklık %0 ile %100 arasında olmalıdır.
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Katmanın efektlerini ve Akıllı Filtrelerini göster  ({key}-tık: tüm katmanlar)
+	The document or Smart Filter changed. Reopen its dialog.	Belge veya Akıllı Filtre değişti. İletişim kutusunu yeniden açın.
+	Wait for the current job to finish.	Geçerli işin bitmesini bekleyin.
 	Accept and Go to Conflict	Kabul Et ve Çakışmaya Git
 	Changes undone.	Değişiklikler geri alındı.
 	Choose a new shortcut for this command, or leave it without one.	Bu komut için yeni bir kısayol seçin veya kısayolsuz bırakın.
