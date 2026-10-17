@@ -1156,6 +1156,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// The document the pen path is drawn on; switching away commits it to that Work Path.
+    #[serde(default)]
+    pub pen_doc: Option<photocraft_doc::DocId>,
     #[serde(default)]
     pub stroke_editor: Option<crate::shape_stroke_ui::StrokeEditor>,
     /// Direct Selection tool: selected anchors and the drag in progress (#790).
@@ -1353,6 +1356,7 @@ impl Default for UiState {
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
             pen: None,
+            pen_doc: None,
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,

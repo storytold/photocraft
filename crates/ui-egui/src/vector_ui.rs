@@ -222,7 +222,13 @@ pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles). With ⇧ a new anchor
 /// lands on the nearest 45° ray from the previous one, at the pointer's projection onto it.
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
+    if !cancel_stale(app) {
+        return;
+    }
     let tol = 6.0 / app.point_zoom().max(0.01) as f64;
+    if app.ui.pen.is_none() {
+        app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
+    }
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
     if let Some(first) = pen.knots.first().map(|k| k[0])
         && on_closing_anchor(pen, x, y, tol)
@@ -285,6 +291,9 @@ fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
 /// clicking the first anchor commits the path. Therefore Cmd/Ctrl+Z must consume one
 /// knot rather than undoing an unrelated, already committed document operation.
 pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
+    if !cancel_stale(app) {
+        return false;
+    }
     let Some(pen) = app.ui.pen.as_mut() else { return false };
     if pen.knots.pop().is_none() {
         return false;
@@ -423,9 +432,50 @@ pub(crate) fn pen_replace(app: &mut PhotocraftApp, path: &Path) {
     }
 }
 
+/// Preserve a foreign document's draft as its Work Path before another document can edit it.
+/// A failed commit retains the draft and blocks the caller until it can be retried.
+pub fn cancel_stale(app: &mut PhotocraftApp) -> bool {
+    let active = app.session.active().map(|st| st.doc.id);
+    if app.ui.pen.is_none() {
+        app.ui.pen_doc = None;
+        return true;
+    }
+    let Some(owner) = app.ui.pen_doc.filter(|d| Some(*d) != active) else { return true };
+    if let Some(index) = app.session.documents().iter().position(|d| d.doc.id == owner) {
+        let Some(mut pen) = app.ui.pen.clone() else { return true };
+        if pen.curvature {
+            curvature_refresh(&mut pen, false);
+        }
+        let active = app.session.active_index();
+        app.session.set_active(index);
+        // Bypass shell targets and sync_views: both belong to the newly active document.
+        let result = app.session.execute("path.set", json!({"name": "work", "op": "combine", "path": pen_to_json(&pen, false)}));
+        if let Some(index) = active {
+            app.session.set_active(index);
+        }
+        if let Err(e) = result {
+            app.ui.status = e.to_string();
+            app.ui.status_error = true;
+            return false;
+        }
+    }
+    app.ui.pen = None;
+    app.ui.pen_doc = None;
+    if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
+        app.ui.direct_selection = Default::default();
+    }
+    true
+}
+
 /// Finish the pen path: a work path (Path mode) or a new shape layer (Shape mode).
 pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
+    // The control channel is drained after `sync_views`, so a document switch in this frame has
+    // not been seen yet: never commit the path into the document it was not drawn on.
+    if !cancel_stale(app) {
+        return;
+    }
     let Some(mut pen) = app.ui.pen.take() else { return };
+    app.ui.pen_doc = None;
     if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
         // Its anchors are no longer the Pen's: the committed path is another path.
         app.ui.direct_selection = Default::default();
@@ -592,6 +642,9 @@ fn curvature_hit(app: &PhotocraftApp, x: f64, y: f64) -> Option<usize> {
 /// Curvature Pen press: clicking the first anchor closes the path, pressing another anchor
 /// grabs it to move, anywhere else adds a smooth anchor (still draggable until the release).
 pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if !cancel_stale(app) {
+        return;
+    }
     if app.ui.pen.as_ref().is_some_and(|p| !p.curvature) {
         pen_commit(app, false);
     }
@@ -599,6 +652,9 @@ pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     if hit == Some(0) && app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 3) {
         pen_commit(app, true);
         return;
+    }
+    if app.ui.pen.is_none() {
+        app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
     }
     let pen = app.ui.pen.get_or_insert_with(|| PenPath { curvature: true, ..Default::default() });
     if hit.is_none() {
@@ -994,7 +1050,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     // Free Transform Path draws the path through its box instead (transform_tool).
     let paths = app.ui.view.shows(app.ui.view.show.target_path) && app.ui.transform.as_ref().is_none_or(|t| t.path.is_none());
-    if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
+    if app.session.active().is_some_and(|st| st.doc.id == doc.id) && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
         if paths {
@@ -1021,7 +1077,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     // Pen path in progress, with handles of the last knot and a rubber band to the pointer. While
     // ⌘/Ctrl drags it, Direct Selection draws its preview instead.
     let edited = matches!(&app.ui.direct_selection.drag, Some(crate::direct_select::Drag::Edit { target: crate::direct_select::PathRef::Pen, .. }));
-    if let Some(pen) = app.ui.pen.as_ref().filter(|_| !edited) {
+    // Only on the document it is drawn on: a view of another document never shows it (#5373).
+    if let Some(pen) = app.ui.pen.as_ref().filter(|_| !edited).filter(|_| app.ui.pen_doc.is_none_or(|d| d == doc.id)) {
         let mut pts = Vec::new();
         // A close-drag shows the first segment bending with the handle being pulled out.
         let mut knots = pen.knots.clone();
@@ -2236,6 +2293,287 @@ mod tests {
         let k = app.ui.pen.as_ref().unwrap().knots[2];
         assert!(k.iter().all(|p| *p == [200.0, 100.0]), "{k:?}");
         pen_up(&mut app);
+    }
+
+    /// #5373: an unfinished path stays with its own document through same-frame switches.
+    #[test]
+    fn an_unclosed_path_stays_with_its_document() {
+        // Both pens claim the document at their first anchor.
+        let open_path = |app: &mut PhotocraftApp| {
+            for (x, y) in [(20.0, 20.0), (120.0, 60.0)] {
+                if app.ui.tool == Tool::CurvaturePen {
+                    curvature_down(app, x, y);
+                    curvature_up(app);
+                } else {
+                    pen_down(app, x, y, false);
+                    pen_up(app);
+                }
+            }
+        };
+        let work = |app: &PhotocraftApp, i: usize| app.session.documents()[i].doc.work_path.clone();
+        // File › New commits the path to its original document.
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            let mut app = app();
+            app.ui.tool = tool;
+            open_path(&mut app);
+            assert!(app.ui.pen.is_some() && app.ui.pen_doc.is_some(), "{tool:?}: claimed by its document");
+            app.run("file.new", json!({"width": 300, "height": 150})).unwrap();
+            assert!(app.ui.pen.is_none() && app.ui.pen_doc.is_none(), "{tool:?}: the first document's path is gone");
+            assert!(work(&app, 0).is_some(), "{tool:?}: the original keeps its Work Path");
+            assert_eq!(work(&app, 1), None, "{tool:?}: the new document is blank");
+        }
+        // Two documents; the path below is drawn on the second (active) one.
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.run("file.new", json!({"width": 300, "height": 150})).unwrap();
+        open_path(&mut app);
+        assert!(app.session.set_active(0));
+        pen_commit(&mut app, false);
+        assert!(app.ui.pen.is_none());
+        assert!(work(&app, 0).is_none(), "the active document stays untouched");
+        assert!(work(&app, 1).is_some(), "the owner keeps its Work Path");
+        // Staying on its own document, the path still commits there.
+        open_path(&mut app);
+        pen_commit(&mut app, false);
+        assert!(work(&app, 0).is_some(), "it commits to the document it was drawn on");
+        assert!(work(&app, 1).is_some());
+        for act in [0, 1, 2] {
+            open_path(&mut app);
+            assert!(app.session.set_active(1));
+            match act {
+                0 => pen_down(&mut app, 50.0, 50.0, false),
+                1 => curvature_down(&mut app, 50.0, 50.0),
+                _ => assert!(!pen_undo_last_point(&mut app), "nothing of this document's to undo"),
+            }
+            let knots = app.ui.pen.as_ref().map_or(0, |p| p.knots.len());
+            assert!(knots <= 1, "act {act}: a new path, not the other document's (knots {knots})");
+            // The two drawing entry points start a path of their own here; undo has none to take.
+            let expected = if act == 2 { None } else { app.session.active().map(|st| st.doc.id) };
+            assert_eq!(app.ui.pen_doc, expected, "act {act}");
+            app.ui.pen = None;
+            app.ui.pen_doc = None;
+            assert!(app.session.set_active(0));
+        }
+        open_path(&mut app);
+        let shapes = |app: &PhotocraftApp| {
+            let ctx = egui::Context::default();
+            let doc = app.session.active().unwrap().doc.clone();
+            let xf = ViewXform {
+                rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0)),
+                zoom: 1.0,
+                center: [100.0, 75.0],
+                flip: false,
+                rotation: 0.0,
+                aspect: 1.0,
+            };
+            let mut out = ctx.run_ui(Default::default(), |ui| draw_overlay(app, ui.painter(), &xf, &doc));
+            out.textures_delta.clear();
+            out.shapes.len()
+        };
+        // Same view, pen present vs absent: the difference is the path itself, nothing else.
+        let drawn = |app: &mut PhotocraftApp| {
+            let with_pen = shapes(app);
+            let pen = app.ui.pen.take();
+            let without = shapes(app);
+            app.ui.pen = pen;
+            with_pen - without
+        };
+        assert!(drawn(&mut app) > 0, "its own document draws the path");
+        assert!(app.session.set_active(1));
+        assert_eq!(drawn(&mut app), 0, "the other document draws nothing of it");
+        assert!(app.session.set_active(0));
+        app.ui.pen = None;
+        app.ui.pen_doc = None;
+        open_path(&mut app);
+        app.ui.direct_selection.target = Some(crate::direct_select::PathRef::Pen);
+        app.ui.direct_selection.anchors = vec![[0, 1]];
+        app.run("file.new", json!({"width": 120, "height": 90})).unwrap();
+        assert_eq!(app.ui.direct_selection, Default::default(), "the anchors went with the path");
+    }
+
+    #[test]
+    fn pen_overlay_uses_the_view_document_even_during_direct_selection() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_up(&mut app);
+        pen_down(&mut app, 80.0, 60.0, false);
+        pen_up(&mut app);
+        let owner = app.session.active().unwrap().doc.clone();
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let other = app.session.active().unwrap().doc.clone();
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let shapes = |app: &PhotocraftApp, doc: &Document, modifiers| {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::ModifiersChanged(modifiers)], ..Default::default() }, |ui| {
+                draw_overlay(app, ui.painter(), &xf, doc)
+            });
+            output.textures_delta.clear();
+            output.shapes.len()
+        };
+        for active in [0, 1] {
+            assert!(app.session.set_active(active));
+            for tool in [Tool::Pen, Tool::DirectSelection] {
+                app.ui.tool = tool;
+                for modifiers in [egui::Modifiers::NONE, egui::Modifiers::COMMAND] {
+                    for (doc, visible) in [(&owner, true), (&other, false)] {
+                        let with_pen = shapes(&app, doc, modifiers);
+                        let pen = app.ui.pen.take();
+                        let without = shapes(&app, doc, modifiers);
+                        app.ui.pen = pen;
+                        assert_eq!(with_pen > without, visible, "active {active}, {tool:?}, {modifiers:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_stale_pen_commit_preserves_the_draft_until_retry() {
+        for action in ["pen", "curvature", "undo", "commit", "command"] {
+            let mut app = app();
+            app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[5, 5], [10, 10]]}]}})).unwrap();
+            let original = app.session.active().unwrap().doc.work_path.clone().unwrap();
+            app.ui.tool = Tool::Pen;
+            for (x, y) in [(20.0, 20.0), (80.0, 60.0)] {
+                pen_down(&mut app, x, y, false);
+                pen_up(&mut app);
+            }
+            let draft = app.ui.pen.clone();
+            let owner = app.ui.pen_doc;
+            app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+            app.ui.tool_options.vector_mode = "shape".into();
+            app.ui.selected_path = Some("foreign named path".into());
+            app.session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("test rejection".into())));
+            match action {
+                "pen" => pen_down(&mut app, 150.0, 150.0, false),
+                "curvature" => curvature_down(&mut app, 150.0, 150.0),
+                "undo" => assert!(!pen_undo_last_point(&mut app)),
+                "commit" => pen_commit(&mut app, true),
+                _ => {
+                    assert!(app.run("file.close", json!({})).is_err());
+                }
+            }
+            assert_eq!(app.ui.pen, draft, "{action}: failed save retains all anchors");
+            assert_eq!(app.ui.pen_doc, owner);
+            assert_eq!(app.session.active_index(), Some(1));
+            assert_eq!(app.session.documents()[0].doc.work_path.as_ref(), Some(&original));
+            assert!(app.session.documents()[1].doc.work_path.is_none());
+            assert!(app.ui.status_error);
+            assert!(!crate::direct_select::candidates(&app).iter().any(|(target, _)| *target == crate::direct_select::PathRef::Pen));
+            app.session.authorize = None;
+            app.sync_views();
+            assert!(app.ui.pen.is_none());
+            assert_eq!(app.session.active_index(), Some(1));
+            assert_eq!(app.ui.selected_path.as_deref(), Some("foreign named path"));
+            let saved = app.session.documents()[0].doc.work_path.clone().unwrap();
+            assert_eq!(saved.subpaths.len(), original.subpaths.len() + 1);
+            assert_eq!(saved.subpaths[0], original.subpaths[0]);
+            app.sync_views();
+            assert_eq!(app.session.documents()[0].doc.work_path.as_ref(), Some(&saved), "retry never duplicates the path");
+            assert!(app.session.set_active(0));
+            assert!(app.session.undo());
+            assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&original));
+        }
+    }
+
+    #[test]
+    fn new_document_reports_a_failed_work_path_save_and_retains_the_draft() {
+        let mut app = app();
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_up(&mut app);
+        pen_down(&mut app, 80.0, 60.0, false);
+        pen_up(&mut app);
+        let draft = app.ui.pen.clone();
+        app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("test rejection".into())) } else { Ok(()) });
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        assert!(app.ui.status_error);
+        assert!(app.ui.status.contains("test rejection"));
+        assert_eq!(app.ui.pen, draft);
+        assert_eq!(app.session.active_index(), Some(1));
+        assert!(app.session.documents().iter().all(|d| d.doc.work_path.is_none()));
+        app.session.authorize = None;
+        app.sync_views();
+        assert!(app.ui.pen.is_none());
+        assert!(app.session.documents()[0].doc.work_path.is_some());
+        assert!(app.session.documents()[1].doc.work_path.is_none());
+    }
+
+    #[test]
+    fn new_document_preserves_a_single_pen_anchor_as_a_work_path() {
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            let mut app = app();
+            app.ui.tool = tool;
+            if tool == Tool::Pen {
+                pen_down(&mut app, 20.0, 30.0, false);
+                pen_up(&mut app);
+            } else {
+                curvature_down(&mut app, 20.0, 30.0);
+                curvature_up(&mut app);
+            }
+            app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+            assert!(app.ui.pen.is_none());
+            let path = app.session.documents()[0].doc.work_path.as_ref().unwrap();
+            assert_eq!(path.subpaths[0].knots.len(), 1);
+            assert_eq!(path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(20.0, 30.0));
+            assert!(app.session.active().unwrap().doc.work_path.is_none());
+        }
+    }
+
+    #[test]
+    fn stale_pen_commits_to_its_owner_across_document_changes() {
+        use photocraft_doc::{ColorMode, SampleType, Size};
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            for action in ["switch", "open", "closeOther", "pen", "curvature", "undo", "commit"] {
+                let mut app = app();
+                app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+                app.ui.tool = tool;
+                for (x, y) in [(20.0, 20.0), (80.0, 60.0), (120.0, 30.0)] {
+                    if tool == Tool::Pen {
+                        pen_down(&mut app, x, y, false);
+                        pen_up(&mut app);
+                    } else {
+                        curvature_down(&mut app, x, y);
+                        curvature_up(&mut app);
+                    }
+                }
+                let owner = app.ui.pen_doc.unwrap();
+                let expected = photocraft_engine::vector_cmds::parse_path(&pen_to_json(app.ui.pen.as_ref().unwrap(), false)).unwrap();
+                app.ui.direct_selection.target = Some(crate::direct_select::PathRef::Pen);
+                app.ui.direct_selection.anchors = vec![[0, 1]];
+                assert!(app.session.set_active(0));
+                match action {
+                    "open" => {
+                        app.services.import =
+                            Some(Box::new(|name, _, _| Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))));
+                        app.open_file("synthetic.png", &[]).unwrap();
+                    }
+                    "closeOther" => {
+                        app.run("file.close", json!({"document": 0})).unwrap();
+                    }
+                    "pen" => pen_down(&mut app, 150.0, 150.0, false),
+                    "curvature" => curvature_down(&mut app, 150.0, 150.0),
+                    "undo" => assert!(!pen_undo_last_point(&mut app)),
+                    "commit" => pen_commit(&mut app, true),
+                    _ => app.sync_views(),
+                }
+                let source = app.session.documents().iter().find(|d| d.doc.id == owner).unwrap();
+                let path = source.doc.work_path.as_ref().expect("the owner keeps the unfinished path");
+                assert_eq!(path, &expected, "{tool:?} {action}");
+                assert!(app.session.documents().iter().filter(|d| d.doc.id != owner).all(|d| d.doc.work_path.is_none()));
+                if action != "closeOther" {
+                    assert_ne!(app.session.active().unwrap().doc.id, owner, "the active document is restored");
+                }
+                assert_eq!(app.ui.direct_selection, Default::default());
+                let index = app.session.documents().iter().position(|d| d.doc.id == owner).unwrap();
+                assert!(app.session.set_active(index));
+                assert!(app.session.undo());
+                assert!(app.session.active().unwrap().doc.work_path.is_none());
+                assert!(app.session.redo());
+                assert!(app.session.active().unwrap().doc.work_path.is_some());
+            }
+        }
     }
 
     /// #4721: a second Pen path joins the Work Path it was drawn after (still selected), as a new
