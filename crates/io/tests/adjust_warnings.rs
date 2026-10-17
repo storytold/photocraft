@@ -33,7 +33,8 @@ fn unreadable_adjustments_warn_on_open() {
 #[test]
 fn readable_adjustments_open_without_warnings() {
     let lut: Vec<f32> = (0..8).flat_map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32]).collect();
-    let lookup = Adjustment::ColorLookup { name: "id.cube".into(), size: 2, lut: Some(std::sync::Arc::new(lut)), tetrahedral: false, dither: false };
+    let lookup =
+        Adjustment::ColorLookup { name: "id.cube".into(), size: 2, lut: Some(std::sync::Arc::new(lut)), tetrahedral: false, dither: false, source: None };
     for adj in [lookup, Adjustment::Invert] {
         let (doc, warnings) = reopen(adj, "x.psd", &ExportOptions::default());
         assert!(!matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::Unsupported { .. })));

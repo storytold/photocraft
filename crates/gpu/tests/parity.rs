@@ -649,7 +649,7 @@ fn lookup(n: usize, tetrahedral: bool, dither: bool) -> Adjustment {
             }
         }
     }
-    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither }
+    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither, source: None }
 }
 
 #[test]
