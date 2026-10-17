@@ -254,7 +254,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // A moving selection never snaps back to where it started.
         targets = targets.filtered(|k| k != SnapKind::Selection);
     }
-    let smart = if matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
+    let smart = if snap_on(app) && matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
 }
 
@@ -282,7 +282,7 @@ fn pixel_round(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
 fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let tol = tolerance(app);
     let Some(snap) = app.prefs_rt.snap.as_ref() else { return p };
-    if snap.disabled {
+    if !snap_on(app) || snap.disabled {
         app.prefs_rt.snap_lines.clear();
         return p;
     }
@@ -678,6 +678,20 @@ mod tests {
         // ⌘ on the Mac is not the override.
         let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
         assert!(!override_held(cmd) && override_held(ctrl));
+    }
+
+    #[test]
+    fn snap_off_disables_all_snapping_even_with_smart_guides() {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Move;
+        assert!(app.ui.view.show.smart_guides);
+        app.ui.extras.snap = false;
+        app.ui.tool_options.move_auto_select = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
+        assert_eq!(mover_bounds(&app).x0, 303);
+        assert!(app.prefs_rt.snap_lines.is_empty());
     }
 
     #[test]

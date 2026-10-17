@@ -302,6 +302,9 @@ fn remembered(app: &PhotocraftApp) -> Value {
     if e.guides != def.guides {
         m.insert("guides".into(), Value::Bool(e.guides));
     }
+    if e.snap != def.snap {
+        m.insert("snap".into(), Value::Bool(e.snap));
+    }
     if let Some(show) = changed_flags(v.show, Show::default(), &SHOW_KEYS, show_slot) {
         m.insert("show".into(), show);
     }
@@ -341,6 +344,9 @@ pub fn restore(app: &mut PhotocraftApp) {
     }
     if let Some(on) = flag("guides") {
         app.ui.extras.guides = on;
+    }
+    if let Some(on) = flag("snap") {
+        app.ui.extras.snap = on;
     }
     for (k, v) in saved.get("show").and_then(Value::as_object).into_iter().flatten() {
         if let (Some(slot), Some(on)) = (show_slot(&mut app.ui.view.show, k), v.as_bool()) {
