@@ -167,10 +167,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             };
             if multiple {
                 let picked = dialog.pick_files();
-                Box::pin(async move { picked.await.map(|files| FileDialogAnswer::Paths(files.iter().map(path_of).collect())) })
+                Box::pin(async move { picked.await.map(|files| answer(files.iter().map(|f| f.path()), false, FileDialogAnswer::Paths)) })
             } else {
                 let picked = dialog.pick_file();
-                Box::pin(async move { picked.await.map(|file| FileDialogAnswer::Paths(vec![path_of(&file)])) })
+                Box::pin(async move { picked.await.map(|file| answer([file.path()], false, FileDialogAnswer::Paths)) })
             }
         }
         FileDialogRequest::Folder { initial_dir } => {
@@ -178,7 +178,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 dialog = dialog.set_directory(dir);
             }
             let picked = dialog.pick_folder();
-            Box::pin(async move { picked.await.map(|folder| FileDialogAnswer::FolderTo(path_of(&folder))) })
+            Box::pin(async move { picked.await.map(|folder| answer_one(folder.path(), true, FileDialogAnswer::FolderTo)) })
         }
         FileDialogRequest::Save { suggested } => {
             let filters = save_filters(&suggested);
@@ -213,10 +213,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                         .map_err(|e| e.to_string())
                         .and_then(|conn| crate::portal_save::save_as(&conn, req));
                     match portal {
-                        Ok(path) => path.map(|p| FileDialogAnswer::SaveTo(p.to_string_lossy().into_owned())),
+                        Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
                         Err(e) => {
                             log::info!("portal save dialog unavailable ({e}), using rfd");
-                            dialog.save_file().await.map(|file| FileDialogAnswer::SaveTo(path_of(&file)))
+                            dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
                         }
                     }
                 })
@@ -225,7 +225,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             {
                 let _ = filters;
                 let picked = dialog.save_file();
-                Box::pin(async move { picked.await.map(|file| FileDialogAnswer::SaveTo(path_of(&file))) })
+                Box::pin(async move { picked.await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo)) })
             }
         }
     };
@@ -239,8 +239,22 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
     }
 }
 
-fn path_of(file: &rfd::FileHandle) -> String {
-    file.path().to_string_lossy().into_owned()
+/// The dialog's answer for the chosen `paths`, or the error for one whose name isn't valid
+/// Unicode, which a lossy copy would turn into another file's name (#6601). `saving`: the paths
+/// are to be written to.
+fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: impl FnOnce(Vec<String>) -> FileDialogAnswer) -> FileDialogAnswer {
+    match paths.into_iter().map(|p| photocraft_ui_egui::file_open::path_text(p, saving)).collect() {
+        Ok(paths) => make(paths),
+        Err(e) => FileDialogAnswer::Unavailable(e),
+    }
+}
+
+/// [`answer`] for a dialog that picks one path.
+fn answer_one(path: &Path, saving: bool, make: impl FnOnce(String) -> FileDialogAnswer) -> FileDialogAnswer {
+    match photocraft_ui_egui::file_open::path_text(path, saving) {
+        Ok(path) => make(path),
+        Err(e) => FileDialogAnswer::Unavailable(e),
+    }
 }
 
 /// Runs `future` to completion on this thread, sleeping until it is woken.
@@ -659,6 +673,31 @@ mod tests {
     use photocraft_format::list_recovery;
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
+
+    /// #6601: a chosen path whose name isn't valid Unicode is reported, never handed on lossily
+    /// (Open would fail with "No such file", Save would write a second, renamed file).
+    #[test]
+    fn a_chosen_path_that_is_not_valid_unicode_is_an_error_not_another_name() {
+        #[cfg(unix)]
+        let bad = {
+            use std::os::unix::ffi::OsStrExt;
+            std::env::temp_dir().join(std::ffi::OsStr::from_bytes(b"img\xFF.png"))
+        };
+        #[cfg(windows)]
+        let bad = {
+            use std::os::windows::ffi::OsStringExt;
+            let mut wide: Vec<u16> = "img".encode_utf16().collect();
+            wide.push(0xD800);
+            wide.extend(".png".encode_utf16());
+            std::env::temp_dir().join(std::ffi::OsString::from_wide(&wide))
+        };
+        let good = std::env::temp_dir().join("ok.png");
+        let save = |path: &Path| answer_one(path, true, FileDialogAnswer::SaveTo);
+        assert!(matches!(save(&bad), FileDialogAnswer::Unavailable(e) if e.contains("not valid Unicode") && e.contains("another name")));
+        assert!(matches!(save(&good), FileDialogAnswer::SaveTo(p) if p == good.to_str().unwrap()));
+        let open = answer([good.as_path(), bad.as_path()], false, FileDialogAnswer::Paths);
+        assert!(matches!(open, FileDialogAnswer::Unavailable(e) if e.contains("open it again")));
+    }
 
     /// #6121: the file type picked in the save dialog gives the name its extension where the
     /// dialog left the one it opened with, and only there.

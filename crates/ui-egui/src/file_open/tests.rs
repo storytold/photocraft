@@ -958,6 +958,37 @@ fn opening_type_in_a_missing_font_warns() {
     assert_eq!(app.open_bytes("warned.psd", b"x").unwrap(), vec![warning]);
 }
 
+/// A file name that isn't valid Unicode on this platform: non-UTF-8 bytes on Unix, an unpaired
+/// surrogate on Windows.
+fn non_unicode_path() -> std::path::PathBuf {
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"img\xFF.png").to_owned()
+    };
+    #[cfg(windows)]
+    let name = {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = "img".encode_utf16().collect();
+        wide.push(0xD800);
+        wide.extend(".png".encode_utf16());
+        std::ffi::OsString::from_wide(&wide)
+    };
+    std::env::temp_dir().join(name)
+}
+
+/// #6601: a lossy copy of such a name is another file's name, so it is refused instead.
+#[test]
+fn a_path_that_is_not_valid_unicode_is_refused_not_rewritten() {
+    let bad = non_unicode_path();
+    let open = path_text(&bad, false).unwrap_err();
+    assert!(open.contains("not valid Unicode") && open.contains("open it again"), "{open}");
+    let save = path_text(&bad, true).unwrap_err();
+    assert!(save.contains("not valid Unicode") && save.contains("another name"), "{save}");
+    let good = std::env::temp_dir().join("img é.png");
+    assert_eq!(path_text(&good, true).as_deref(), Ok(good.to_str().unwrap()));
+}
+
 /// #6598: opening a file that is already open shows its document, as Photoshop does, rather than
 /// a second copy bound to the same file (saving one would overwrite the other). The path is
 /// compared as the file it names: another spelling of it, a symlink to it or, with background

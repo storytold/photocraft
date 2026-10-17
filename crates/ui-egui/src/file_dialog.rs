@@ -46,8 +46,9 @@ pub enum FileDialogAnswer {
     SaveTo(String),
     /// The selected folder's path (desktop).
     FolderTo(String),
-    /// No dialog could be shown (on Linux: no desktop portal and no zenity, #3354); the message
-    /// says what to install. Reported as an error rather than taken for Cancel.
+    /// No dialog could be shown (on Linux: no desktop portal and no zenity, #3354; the message
+    /// says what to install), or the file chosen can't be used (a name that isn't valid Unicode,
+    /// #6601). Reported as an error rather than taken for Cancel.
     Unavailable(String),
 }
 
