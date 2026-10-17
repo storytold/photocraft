@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_doc::ColorMode;
+use photocraft_doc::{ColorMode, LayerContent, LayerId};
 
 fn session(w: u32, h: u32, depth: u32) -> Session {
     let mut s = Session::new();
@@ -353,6 +353,27 @@ fn place_scale_marker_builds_one_group_in_one_step() {
     assert!(s.undo());
     assert!(s.undo());
     assert!(d(&s).layers.iter().all(|l| l.name != "Measurement Scale Marker"));
+}
+
+#[test]
+fn place_scale_marker_lays_out_its_label_in_points_at_high_resolution() {
+    // `fontSize` is in points and `type.create` renders it at resolution/72 px per point, but the
+    // layout treated it as pixels: at 300 ppi a 12 pt label (50 px) overlapped the bar.
+    for res in [72.0, 300.0] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1200, "height": 900, "resolution": res, "background": "white"})).unwrap();
+        let r = s.execute("image.analysis.placeScaleMarker", json!({"fontSize": 12, "textPosition": "bottom"})).unwrap();
+        let bar_bottom = r["barRect"][3].as_f64().unwrap();
+        let doc = d(&s);
+        let Some(LayerContent::Text(t)) = doc.layer(LayerId(r["text"].as_u64().unwrap())).map(|l| &l.content) else { panic!("a type layer: {r}") };
+        assert_eq!(t.size_pt, 12.0, "{res} ppi: type.create still gets points");
+        let layout = photocraft_text::shared().lock().unwrap().layout(t, doc.resolution_dpi);
+        let b = layout.bounds().expect("the label has a line");
+        let ty = t.transform.m[5];
+        let (top, bottom) = (f64::from(b[1]) + ty, f64::from(b[3]) + ty);
+        assert!(top >= bar_bottom - 0.5, "{res} ppi: label top {top} overlaps the bar ending at {bar_bottom}: {r}");
+        assert!(bottom <= 900.5, "{res} ppi: label bottom {bottom} stays on the canvas: {r}");
+    }
 }
 
 #[test]
