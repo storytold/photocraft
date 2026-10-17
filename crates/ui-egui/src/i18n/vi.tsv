@@ -3624,6 +3624,11 @@ curves	Smooth	Làm mượt
 	Action playback stopped	Đã dừng phát hành động
 	Step {step} is waiting for its dialog	Bước {step} đang chờ hộp thoại của nó
 @plural	{n} action|{n} actions	{n} hành động
+# History panel menu (#2966)
+	Step Forward	Tiến một bước
+	New Snapshot…	Ảnh chụp trạng thái mới…
+	Clear History	Xóa lịch sử
+	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
 	Presentation	Trình bày
 # Batch / Image Processor

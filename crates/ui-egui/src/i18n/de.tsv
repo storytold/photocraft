@@ -2722,6 +2722,13 @@ curves	Smooth	Glätten
 	Click to place · Alt-click or drag off-canvas to remove	Klicken zum Platzieren · Alt-Klick oder Ziehen außerhalb der Arbeitsfläche zum Entfernen
 	No document open	Kein Dokument geöffnet
 	{n} of {max} sample points	{n} von {max} Messpunkten
+
+# History panel menu (#2966)
+	Step Forward	Schritt vorwärts
+	Step Backward	Schritt zurück
+	Clear History	Protokoll löschen
+	New Snapshot…	Neuer Schnappschuss…
+	History Options…	Protokolloptionen…
 # Print dialog (#2697)
 	Emulsion Down	Schichtseite unten
 	Functions	Funktionen

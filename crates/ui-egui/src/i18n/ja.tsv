@@ -3689,6 +3689,10 @@ curves	Smooth	スムーズ
 	Click to place · Alt-click or drag off-canvas to remove	クリックで配置 · Alt キーを押しながらクリック、またはカンバス外へドラッグで削除
 	No document open	ドキュメントが開かれていません
 	{n} of {max} sample points	{max} 個中 {n} 個のサンプルポイント
+
+# History panel menu (#2966)
+	New Snapshot…	新規スナップショット…
+	History Options…	ヒストリーオプション…
 # Print dialog (#2697)
 	Emulsion Down	乳剤面を下
 	Functions	機能

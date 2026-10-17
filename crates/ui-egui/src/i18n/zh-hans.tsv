@@ -2704,6 +2704,13 @@ curves	Smooth	平滑
 	Click to place · Alt-click or drag off-canvas to remove	单击以放置 · Alt 单击或拖到画布外以移除
 	No document open	未打开任何文档
 	{n} of {max} sample points	{max} 个取样点中的 {n} 个
+
+# History panel menu (#2966)
+	Step Forward	前进一步
+	Step Backward	后退一步
+	Clear History	清除历史记录
+	New Snapshot…	新建快照…
+	History Options…	历史记录选项…
 # Print dialog (#2697)
 	Emulsion Down	药膜朝下
 	Functions	功能

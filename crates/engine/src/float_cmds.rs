@@ -218,14 +218,17 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
         return Ok(None);
     }
     match id {
-        "edit.undo" | "edit.stepBackward" => {
+        // Edit › Undo and the History panel's Step Backward step back over the move itself.
+        "edit.undo" | "edit.stepBackward" | "history.stepBackward" => {
             st.floating = None;
             Ok(Some(json!({"floating": "returned"})))
         }
-        // Returning to a History state puts the piece back too (it never reached the document),
-        // and then moves the history: dropping it first would add a step and discard the redo
-        // states the jump may be heading for.
-        "history.selectState" => {
+        // Redo / Step Forward with nothing to step to leave the piece floating (and are refused).
+        "edit.redo" | "history.stepForward" if !st.history.can_redo() => Ok(None),
+        // Returning to a History state, or stepping forward to one, puts the piece back too (it
+        // never reached the document), and then moves the history: dropping it first would add
+        // a step and discard the redo states the step is heading for.
+        "history.selectState" | "edit.redo" | "history.stepForward" => {
             st.floating = None;
             Ok(None)
         }

@@ -3268,6 +3268,13 @@ curves	Smooth	매끄럽게
 	Click to place · Alt-click or drag off-canvas to remove	클릭하여 배치 · Alt-클릭 또는 캔버스 밖으로 드래그하여 제거
 	No document open	열린 문서 없음
 	{n} of {max} sample points	{max}개 중 {n}개의 샘플 지점
+
+# History panel menu (#2966)
+	Step Forward	한 단계 앞으로
+	Step Backward	한 단계 뒤로
+	Clear History	작업 내역 지우기
+	New Snapshot…	새 스냅샷…
+	History Options…	작업 내역 옵션…
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능

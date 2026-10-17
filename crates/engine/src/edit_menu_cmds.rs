@@ -202,7 +202,7 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = f32_or(p, "opacity", 100.0).clamp(0.0, 100.0) / 100.0;
     let mode = blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let prev = st.history.state(st.history.past_len() - 1).ok_or_else(|| bad(cmd, "no previous state"))?;
+    let prev = st.history.past_len().checked_sub(1).and_then(|i| st.history.state(i)).ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.layer, src.mask).cloned().ok_or_else(|| EngineError::Other("the layer did not exist before this step".into()))?;
     let now = surface_of(&st.doc, src.layer, src.mask).ok_or(EngineError::NoLayer(src.layer))?;
     if now.format() != before.format() {

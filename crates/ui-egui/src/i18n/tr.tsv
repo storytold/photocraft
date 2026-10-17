@@ -2682,6 +2682,8 @@ cameraRaw	Color	Renk
 	Create Snapshot	Anlık Görüntü Oluştur
 	Delete Snapshot	Anlık Görüntüyü Sil
 	New Snapshot	Yeni Anlık Görüntü
+	New Snapshot…	Yeni Anlık Görüntü…
+	History Options…	Geçmiş Seçenekleri…
 	Snapshot 1	Anlık Görüntü 1
 	Nonlinear History	Doğrusal Olmayan Geçmiş
 	Set New Snapshot as Default	Yeni Anlık Görüntüyü Varsayılan Olarak Ayarla

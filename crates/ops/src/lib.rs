@@ -50,7 +50,20 @@ pub struct History {
     current_label: String,
     /// The layers targeted when the current document was created (opened or edited).
     current_layers: LayerTarget,
+    /// The states History panel › Clear History took off the list, kept so the next undo puts
+    /// them back (Clear History is itself undoable). Any new step drops them.
+    cleared: Option<Box<Cleared>>,
 }
+
+/// The undo and redo states [`History::clear_states`] removed.
+#[derive(Clone, Debug)]
+struct Cleared {
+    undo: VecDeque<HistoryState>,
+    redo: Vec<HistoryState>,
+}
+
+/// The undo label of the step [`History::clear_states`] adds (Edit › Undo Clear History).
+pub const CLEAR_HISTORY_LABEL: &str = "Clear History";
 
 impl Default for History {
     fn default() -> Self {
@@ -68,6 +81,7 @@ impl History {
             max_bytes: 0,
             current_label: "Open".into(),
             current_layers: LayerTarget::default(),
+            cleared: None,
         }
     }
 
@@ -75,6 +89,10 @@ impl History {
     /// `layers` targeted.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
         if self.max_bytes == 0 {
+            self.tiles = None;
+        }
+        // The tile counter also counted the cleared states this step forgets: rebuild it lazily.
+        if self.cleared.take().is_some() {
             self.tiles = None;
         }
         if let Some(tiles) = &mut self.tiles {
@@ -94,12 +112,15 @@ impl History {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+        !self.undo.is_empty() || self.cleared.is_some()
     }
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
     pub fn undo_label(&self) -> Option<&str> {
+        if self.cleared.is_some() {
+            return Some(CLEAR_HISTORY_LABEL);
+        }
         self.can_undo().then_some(self.current_label.as_str())
     }
     pub fn redo_label(&self) -> Option<&str> {
@@ -119,6 +140,14 @@ impl History {
     /// Undo: `current` becomes redoable; returns the document to make current and the layers it
     /// targeted when it was created.
     pub fn undo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
+        // Undo Clear History: the cleared states come back; the document doesn't change.
+        if let Some(cleared) = self.cleared.take() {
+            let Cleared { undo, redo } = *cleared;
+            self.undo = undo;
+            self.redo = redo;
+            self.tiles = None;
+            return Some((current, self.current_layers.clone()));
+        }
         let prev = self.undo.pop_back()?;
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&prev.doc);
@@ -168,6 +197,10 @@ impl History {
     /// last step can no longer be undone and its pixels are released.
     pub fn purge_last(&mut self) -> bool {
         self.clear_redo();
+        if self.cleared.take().is_some() {
+            self.tiles = None;
+            return true;
+        }
         let Some(state) = self.undo.pop_back() else { return false };
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
@@ -189,13 +222,49 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
+        self.cleared = None;
+    }
+
+    /// History panel › Clear History: take every state but the current one off the list without
+    /// changing the document. Unlike [`Self::clear`] (Edit › Purge › Histories) it is undoable:
+    /// the next [`Self::undo`] puts the states back, and the next recorded step forgets them.
+    /// Returns false (and changes nothing) when the current state is the only one.
+    pub fn clear_states(&mut self) -> bool {
+        if self.undo.is_empty() && self.redo.is_empty() {
+            return false;
+        }
+        let undo = std::mem::take(&mut self.undo);
+        let redo = std::mem::take(&mut self.redo);
+        self.cleared = Some(Box::new(Cleared { undo, redo }));
+        self.tiles = None;
+        true
+    }
+
+    /// Whether the last change to the list was Clear History (so undo restores the states).
+    pub fn is_cleared(&self) -> bool {
+        self.cleared.is_some()
+    }
+
+    /// The undo and redo states history holds: the cleared ones while Clear History can still be
+    /// undone (the list is then empty), so memory figures and the byte budget count them.
+    fn held(&self) -> (&VecDeque<HistoryState>, &Vec<HistoryState>) {
+        match &self.cleared {
+            Some(c) => (&c.undo, &c.redo),
+            None => (&self.undo, &self.redo),
+        }
+    }
+
+    /// Every state history holds, cleared ones included (see [`Self::held`]).
+    fn held_states(&self) -> impl Iterator<Item = &HistoryState> {
+        let (undo, redo) = self.held();
+        undo.iter().chain(redo.iter())
     }
 
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
     pub fn unique_bytes(&self, current: &Document) -> usize {
         let mut seen = HashSet::new();
         tile_bytes(current, &mut seen);
-        self.undo.iter().chain(self.redo.iter()).map(|s| tile_bytes(&s.doc, &mut seen)).sum()
+        self.held_states().map(|s| tile_bytes(&s.doc, &mut seen)).sum()
     }
 
     /// Pixel bytes of `current` plus the tiles only history holds (what [`History::trim`]
@@ -206,7 +275,7 @@ impl History {
         }
         let mut seen = HashSet::new();
         let own = tile_bytes(current, &mut seen);
-        self.undo.iter().chain(self.redo.iter()).fold(own, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
+        self.held_states().fold(own, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
     }
 
     /// Bytes of the tiles only `extra` documents hold (History panel snapshots, #4530): not
@@ -217,7 +286,7 @@ impl History {
         }
         let mut seen = HashSet::new();
         tile_bytes(current, &mut seen);
-        for s in self.undo.iter().chain(self.redo.iter()) {
+        for s in self.held_states() {
             tile_bytes(&s.doc, &mut seen);
         }
         extra.iter().fold(0, |n, d| n.saturating_add(tile_bytes(d, &mut seen)))
@@ -231,7 +300,7 @@ impl History {
         for d in keep {
             tile_bytes(d, &mut seen);
         }
-        self.undo.iter().chain(self.redo.iter()).fold(0, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
+        self.held_states().fold(0, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
     }
 
     /// Keep pixel memory within [`History::max_bytes`]: the current document's tiles plus the
@@ -246,7 +315,13 @@ impl History {
     /// snapshots, which outlive the states) against the budget too, so they can't take memory
     /// beyond it unseen (#4530). The most recent state is still always kept.
     pub fn trim_with(&mut self, current: &Document, pinned: &[&Document]) -> usize {
-        if self.max_bytes == 0 || self.undo.len() <= 1 {
+        // While Clear History can be undone, the cleared states are what history holds: the
+        // oldest of them go first, as the list's would.
+        let (undo, redo) = match &mut self.cleared {
+            Some(c) => (&mut c.undo, &c.redo),
+            None => (&mut self.undo, &self.redo),
+        };
+        if self.max_bytes == 0 || undo.len() <= 1 {
             return 0;
         }
         // An upper bound of what only `pinned` holds (some of it may be in states too): if the
@@ -260,7 +335,7 @@ impl History {
         };
         let tiles = self.tiles.get_or_insert_with(|| {
             let mut tiles = tiles::Tiles::default();
-            for state in self.undo.iter().chain(&self.redo) {
+            for state in undo.iter().chain(redo) {
                 tiles.add(&state.doc);
             }
             tiles
@@ -273,19 +348,19 @@ impl History {
         for d in pinned {
             total = total.saturating_add(tile_bytes(d, &mut seen));
         }
-        for s in self.redo.iter().rev() {
+        for s in redo.iter().rev() {
             total = total.saturating_add(tile_bytes(&s.doc, &mut seen));
         }
         let mut keep = 0;
-        for s in self.undo.iter().rev() {
+        for s in undo.iter().rev() {
             total = total.saturating_add(tile_bytes(&s.doc, &mut seen));
             if total > self.max_bytes && keep >= 1 {
                 break;
             }
             keep += 1;
         }
-        let drop = self.undo.len() - keep;
-        for state in self.undo.drain(..drop) {
+        let drop = undo.len() - keep;
+        for state in undo.drain(..drop) {
             tiles.remove(&state.doc);
         }
         drop
@@ -609,7 +684,7 @@ mod tests {
         assert_eq!(counter.bytes_with(current), total as u128);
         assert_eq!(h.pixel_bytes(current), total);
         let mut seen = HashSet::new();
-        let retained: usize = h.undo.iter().chain(&h.redo).map(|s| tile_bytes(&s.doc, &mut seen)).sum();
+        let retained: usize = h.held_states().map(|s| tile_bytes(&s.doc, &mut seen)).sum();
         let empty = Document::new("empty", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
         assert_eq!(counter.bytes_with(&empty), retained as u128);
     }
@@ -848,5 +923,87 @@ mod tests {
         h.record("B", before, LayerTarget::default());
         assert_eq!(h.trim(&current), 1, "current alone exceeds the budget; only the mandatory undo survives");
         assert_counter(&h, &current);
+    }
+
+    #[test]
+    fn clear_states_keeps_the_document_and_undo_brings_the_list_back() {
+        let mut h = History::new(10);
+        let mut cur = Arc::new(base());
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+        edit(&mut h, &mut cur, "C", |d| d.name = "c".into());
+        let (d, _) = h.undo(cur.clone()).unwrap();
+        cur = d;
+        let entries = h.entries();
+        assert_eq!(entries, ["Open", "A", "B"]);
+        assert!(h.clear_states());
+        assert_eq!(h.entries(), ["B"], "only the current state is left");
+        assert!(!h.can_redo() && h.can_undo() && h.is_cleared());
+        assert_eq!(h.undo_label(), Some(CLEAR_HISTORY_LABEL));
+        assert!(!h.clear_states(), "nothing left to clear");
+        assert!(h.is_cleared(), "and the cleared states are still held");
+        let (d, _) = h.undo(cur.clone()).unwrap();
+        assert!(Arc::ptr_eq(&d, &cur), "undoing Clear History doesn't change the document");
+        assert_eq!(h.entries(), entries);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["C"], "the redo state is back too");
+        assert!(!h.is_cleared());
+    }
+
+    #[test]
+    fn cleared_states_still_count_in_the_memory_figures_and_the_budget() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        let tile = 256 * 256 * 4;
+        for i in 0..5 {
+            edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+                let id = d.layers[0].id;
+                d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        cur = h.undo(cur).unwrap().0;
+        let (unique, pixels) = (h.unique_bytes(&cur), h.pixel_bytes(&cur));
+        assert_eq!(unique, 5 * tile, "four undo states and one redo state");
+        assert!(h.clear_states());
+        assert_eq!(h.unique_bytes(&cur), unique, "Clear History frees nothing while it can be undone");
+        assert_eq!(h.pixel_bytes(&cur), pixels);
+        assert_eq!(h.extra_bytes(&cur, &[&base()]), tile, "a snapshot's own tile, not the cleared states'");
+        assert_eq!(h.unique_bytes_besides(&cur, &[]), unique);
+        // The budget counts them too: the oldest cleared states go first.
+        h.max_bytes = 4 * tile;
+        assert_eq!(h.trim(&cur), 2);
+        assert_counter(&h, &cur);
+        assert_eq!(h.pixel_bytes(&cur), 4 * tile);
+        assert!(h.is_cleared() && h.past_len() == 0, "the list stays cleared");
+        h.undo(cur.clone()).unwrap();
+        assert_eq!(h.entries(), ["paint 1", "paint 2", "paint 3"], "undo brings back what the budget kept");
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["paint 4"]);
+        // A new step after Clear History forgets the cleared states, and the counter with them.
+        assert!(h.clear_states());
+        h.trim(&cur);
+        edit(&mut h, &mut cur, "paint 5", |d| {
+            let id = d.layers[0].id;
+            d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[1.0, 0.0, 0.0, 1.0]);
+        });
+        assert_eq!(h.unique_bytes(&cur), tile, "only the state before the new step");
+        assert_eq!(h.pixel_bytes(&cur), 2 * tile);
+    }
+
+    #[test]
+    fn a_new_step_or_purge_forgets_the_cleared_states() {
+        let mut h = History::new(10);
+        let mut cur = Arc::new(base());
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        assert!(h.clear_states());
+        edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+        assert_eq!(h.entries(), ["A", "B"]);
+        assert!(!h.is_cleared());
+        assert!(h.undo(cur.clone()).is_some());
+        assert!(!h.can_undo(), "the cleared states are gone");
+        let mut h = History::new(10);
+        edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+        assert!(h.clear_states());
+        assert!(h.purge_last());
+        assert!(!h.can_undo() && !h.is_cleared());
+        assert!(!h.clear_states(), "a single state can't be cleared");
     }
 }

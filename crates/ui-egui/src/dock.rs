@@ -612,6 +612,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::swatches_ui::panel_menu(app, ui);
                 ui.separator();
             }
+            if tabs.get(sel) == Some(&"History") {
+                crate::history_menu_ui::panel_menu(app, ui);
+                ui.separator();
+            }
             if tabs.get(sel) == Some(&"Brush Settings") {
                 crate::brush_panel::panel_menu(app, ui);
                 ui.separator();

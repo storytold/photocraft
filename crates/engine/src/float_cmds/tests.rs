@@ -65,6 +65,43 @@ fn any_other_command_drops_it_and_undo_puts_it_back() {
     assert!(alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 35, 20) == 1.0);
 }
 
+/// The History panel's Step Backward / Step Forward treat a floating piece like Edit › Undo /
+/// Redo: no Move step is recorded and the redo states survive.
+#[test]
+fn history_panel_steps_put_the_piece_back_and_keep_the_redo_states() {
+    for back in ["edit.undo", "history.stepBackward"] {
+        let (mut s, id) = session();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        assert_eq!(s.execute(back, json!({})).unwrap()["floating"], json!("returned"), "{back}");
+        let st = s.active().unwrap();
+        assert!(floating(st).is_none() && alpha(&st.doc, id, 12, 12) == 1.0, "{back}: piece back");
+        assert_eq!((st.history.past_len(), st.history.can_redo()), (steps, false), "{back}: no Move step");
+    }
+    for forward in ["edit.redo", "history.stepForward"] {
+        let (mut s, id) = session();
+        // A redo state (the deselection), then a moved piece over the selection undo restored.
+        s.execute("select.deselect", json!({})).unwrap();
+        s.undo();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        s.execute(forward, json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(floating(st).is_none(), "{forward}: piece back");
+        assert_eq!(alpha(&st.doc, id, 12, 12), 1.0, "{forward}: the move never reached the document");
+        assert!(st.doc.selection.is_none(), "{forward}: stepped forward to the deselection");
+        assert_eq!((st.history.past_len(), st.history.can_redo()), (steps + 1, false), "{forward}: no Move step");
+        // Nothing to step forward to: refused, and the piece keeps floating.
+        let (mut s, _) = session();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        assert!(s.execute(forward, json!({})).is_err(), "{forward}: nothing to redo");
+        let st = s.active().unwrap();
+        assert_eq!(floating(st).map(|f| f.offset), Some((20, 0)), "{forward}: still floating");
+        assert_eq!(st.history.past_len(), steps);
+    }
+}
+
 #[test]
 fn needs_a_selection_and_an_unlocked_pixel_layer() {
     let mut s = Session::new();

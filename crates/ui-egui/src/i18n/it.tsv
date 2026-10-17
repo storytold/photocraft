@@ -2752,6 +2752,10 @@ curves	Smooth	Leviga
 	Click to place · Alt-click or drag off-canvas to remove	Fai clic per posizionare · Alt-clic o trascina fuori dal quadro per rimuovere
 	No document open	Nessun documento aperto
 	{n} of {max} sample points	{n} di {max} punti di campionamento
+
+# History panel menu (#2966)
+	New Snapshot…	Nuova istantanea…
+	History Options…	Opzioni cronologia…
 # Print dialog (#2697)
 	Emulsion Down	Emulsione sotto
 	Functions	Funzioni

@@ -3251,7 +3251,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The snapshot stays selected while the document is the state the click made.
             Ok(_) => {
                 if let (Some(id), Some(st)) = (picked, app.session.active()) {
-                    ctx.data_mut(|d| d.insert_temp::<SelectedSnapshot>(selected_snapshot_key(st.doc.id), (id, history_spot(st))));
+                    select_snapshot(&ctx, st, id);
                 }
             }
         }
@@ -3290,10 +3290,15 @@ fn selected_snapshot_key(doc: photocraft_doc::DocId) -> egui::Id {
     egui::Id::new(("history-snapshot-selected", doc))
 }
 
+/// Select snapshot `id` at the history's current state, as a click on its row does.
+pub(crate) fn select_snapshot(ctx: &egui::Context, st: &photocraft_engine::DocState, id: u64) {
+    ctx.data_mut(|d| d.insert_temp::<SelectedSnapshot>(selected_snapshot_key(st.doc.id), (id, history_spot(st))));
+}
+
 /// The selected snapshot: the one last clicked, while it still exists and the history is still at
 /// the state that click made. Any other step (an edit, Undo, a state row) deselects it, as in
 /// Photoshop.
-fn selected_snapshot(ctx: &egui::Context, st: &photocraft_engine::DocState) -> Option<u64> {
+pub(crate) fn selected_snapshot(ctx: &egui::Context, st: &photocraft_engine::DocState) -> Option<u64> {
     let key = selected_snapshot_key(st.doc.id);
     let (id, spot) = ctx.data(|d| d.get_temp::<SelectedSnapshot>(key))?;
     let live = spot == history_spot(st) && st.snapshots.iter().any(|s| s.id == id);

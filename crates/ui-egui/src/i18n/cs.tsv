@@ -3530,6 +3530,12 @@ curves	Smooth	Vyhladit
 	Click to place · Alt-click or drag off-canvas to remove	Kliknutím umístíte · Alt-kliknutím nebo přetažením mimo plátno odeberete
 	No document open	Není otevřen žádný dokument
 	{n} of {max} sample points	{n} z {max} bodů měření
+
+# History panel menu (#2966)
+	Step Forward	Krok vpřed
+	Clear History	Vymazat historii
+	New Snapshot…	Nový snímek…
+	History Options…	Volby historie…
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Táhněte (laso) nebo klikejte na body (mnohoúhelník) · {add} přidat · {sub} odečíst
 	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v Okno › Přechody)
 # Canvas context menus, Channels panel menu, Layer Style blending page (labels rendered through a variable).
