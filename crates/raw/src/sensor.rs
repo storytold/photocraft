@@ -255,6 +255,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
     }
     limits.check(width as u64, height as u64, samples as u64 * 2)?;
     let segments = segments(t, ifd, width, height)?;
+    retained_segment_bytes(&segments, samples, limits)?;
     let le = t.le;
     let tiled = t.tag_uint(ifd, tag::TILE_WIDTH).is_some();
     let decoded: Vec<Result<Vec<u16>>> = par::map(segments.len(), |i| {
@@ -332,6 +333,29 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         }
     }
     Ok(Plane { width, height, samples, bits, data })
+}
+
+/// Bytes of decoded samples the segments hold at once.
+///
+/// Each segment is charged against `limits` on its own just before it decodes, but every decoded
+/// tile is retained until the scatter at the end of [`read_plane`], so the peak is their sum and
+/// not the largest of them. A segment's geometry is declared independently of the image, so a
+/// file can carry many segments that are each admissible and together are not (#4959). For a
+/// well-formed file the segments tile the image, so their sum is about its own size, which
+/// `limits.check` has already bounded.
+fn retained_segment_bytes(segments: &[Segment], samples: usize, limits: &Limits) -> Result<u64> {
+    let mut total: u64 = 0;
+    for s in segments {
+        let bytes = (s.w as u64)
+            .checked_mul(s.h as u64)
+            .and_then(|px| px.checked_mul(samples as u64 * 2))
+            .ok_or_else(|| RawError::LimitExceeded("a raw segment is too large to decode".into()))?;
+        total = total.saturating_add(bytes);
+        if total > limits.max_alloc {
+            return Err(RawError::LimitExceeded(format!("{total} bytes of decoded segments exceed {}", limits.max_alloc)));
+        }
+    }
+    Ok(total)
 }
 
 pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Result<Vec<Segment>> {
@@ -479,6 +503,29 @@ fn unpack(src: &[u8], w: usize, rows: usize, samples: usize, bits: u32, le: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4959: a decoded segment is retained until the scatter, so the segments are charged
+    /// together. Each of these is far inside the budget on its own; their sum is not.
+    #[test]
+    fn segments_are_charged_together_rather_than_one_at_a_time() {
+        let limits = Limits { max_alloc: 8 << 20, ..Limits::default() };
+        // 1024 x 512 samples, two bytes each: one mebibyte a tile.
+        let tile = |i: usize| Segment { x: 0, y: i * 512, w: 1024, h: 512, offset: 0, len: 0 };
+        let eight: Vec<Segment> = (0..8).map(tile).collect();
+        assert_eq!(retained_segment_bytes(&eight, 1, &limits).unwrap(), 8 << 20, "the budget is spent exactly");
+
+        let nine: Vec<Segment> = (0..9).map(tile).collect();
+        assert!(matches!(retained_segment_bytes(&nine, 1, &limits), Err(RawError::LimitExceeded(_))), "one tile over");
+        assert!(retained_segment_bytes(&eight, 3, &limits).is_err(), "more samples a pixel cost proportionally more");
+
+        // A segment whose own geometry overflows is refused rather than wrapping to a small sum.
+        let huge = [Segment { x: 0, y: 0, w: usize::MAX, h: usize::MAX, offset: 0, len: 0 }];
+        assert!(matches!(retained_segment_bytes(&huge, 1, &limits), Err(RawError::LimitExceeded(_))));
+
+        // A normal tiled frame is unaffected: 6000 x 4000 in 512-pixel tiles, padding included.
+        let normal: Vec<Segment> = (0..12 * 8).map(|i| Segment { x: (i % 12) * 512, y: (i / 12) * 512, w: 512, h: 512, offset: 0, len: 0 }).collect();
+        assert!(retained_segment_bytes(&normal, 1, &Limits::default()).is_ok());
+    }
 
     #[test]
     fn bayer_patterns() {
