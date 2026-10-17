@@ -1493,3 +1493,51 @@ fn an_aliased_stroke_at_partial_opacity_is_one_flat_colour() {
         assert_eq!(s.rgba(x, 5), first, "pixel {x} of the Pencil line");
     }
 }
+
+/// Photoshop (measured): a 100 px brush with a 20 px Dual Brush tip resized to 50 / 2 / 1 px has a
+/// 10 / 0.4 / 0.2 px dual tip, unrounded and with no floor, and back at 100 px it is 20 px again; past
+/// 5000 px the dual tip is capped there and the proportion is lost (#4809).
+#[test]
+fn resizing_scales_the_dual_tip_like_photoshop() {
+    let mut b = BrushSettings { size: 100.0, ..brush() };
+    b.dual_brush.enabled = true;
+    b.dual_brush.size = 20.0;
+    for (main, dual) in [(50.0, 10.0), (2.0, 0.4), (1.0, 0.2), (100.0, 20.0), (240.0, 48.0), (100.0, 20.0)] {
+        b.resize_with_dual_brush(main);
+        assert_eq!(b.size, main);
+        assert!((b.dual_brush.size - dual).abs() < 1e-4, "main {main}: dual {} != {dual}", b.dual_brush.size);
+    }
+    // The cap: 300 px at 100 px would be 15000 px at 5000 px; Photoshop stores 5000 and scales from it.
+    b.dual_brush.size = 300.0;
+    b.resize_with_dual_brush(MAX_BRUSH_SIZE);
+    assert_eq!(b.dual_brush.size, MAX_BRUSH_SIZE);
+    b.resize_with_dual_brush(100.0);
+    assert_eq!(b.dual_brush.size, 100.0);
+    // A sub-pixel dual tip renders at the renderer's smallest diameter.
+    b.dual_brush.size = 20.0;
+    b.resize_with_dual_brush(1.0);
+    assert_eq!(b.bounded_for_render().dual_brush.size, 0.5);
+}
+
+#[test]
+fn resizing_with_bad_sizes_leaves_the_dual_tip_alone() {
+    let mut b = BrushSettings { size: 100.0, ..brush() };
+    b.dual_brush.enabled = true;
+    b.dual_brush.size = 20.0;
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -5.0] {
+        b.size = 100.0;
+        b.resize_with_dual_brush(bad);
+        assert_eq!(b.dual_brush.size, 20.0, "{bad}");
+    }
+    for bad_dual in [f32::NAN, 0.0, -3.0] {
+        b.size = 100.0;
+        b.dual_brush.size = bad_dual;
+        b.resize_with_dual_brush(50.0);
+        assert_eq!(b.dual_brush.size.to_bits(), bad_dual.to_bits(), "a bad dual size {bad_dual} is left as it was");
+    }
+    // A disabled dual tip keeps its size.
+    b.dual_brush = DualBrush { enabled: false, size: 20.0, ..Default::default() };
+    b.size = 100.0;
+    b.resize_with_dual_brush(50.0);
+    assert_eq!(b.dual_brush.size, 20.0);
+}

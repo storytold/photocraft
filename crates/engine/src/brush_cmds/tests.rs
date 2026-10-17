@@ -371,6 +371,57 @@ fn resizing_a_brush_resizes_its_enabled_secondary_tip() {
     assert_eq!((s.tools.brush.size, s.tools.brush.dual_brush.size), (40.0, 9.0));
 }
 
+/// Every way of changing the main size scales the Dual Brush tip as Photoshop does (#4809): `[` /
+/// `]`, the options bar / Brushes panel / Alt+right-drag (`tools.setBrush` with only a size), down
+/// to 1 px and back without losing the proportion to a floor.
+#[test]
+fn every_size_change_scales_the_dual_tip_and_keeps_its_proportion() {
+    let mut s = session(32, 32);
+    s.execute("tools.setBrush", json!({"brush": {"size": 100, "dualBrush": {"enabled": true, "size": 20}}})).unwrap();
+    let sizes = |s: &Session| (s.tools.brush.size, s.tools.brush.dual_brush.size);
+    s.execute("tools.decreaseBrushSize", json!({})).unwrap();
+    assert_eq!(sizes(&s), (80.0, 16.0));
+    s.execute("tools.increaseBrushSize", json!({})).unwrap();
+    assert_eq!(sizes(&s), (100.0, 20.0));
+    // A coalesced drag (options bar slider, Alt+right-drag) is a run of size-only patches.
+    for size in [60, 10, 1] {
+        s.execute("tools.setBrush", json!({"brush": {"size": size}, "coalesce": "drag"})).unwrap();
+    }
+    assert_eq!(s.tools.brush.size, 1.0);
+    assert!((s.tools.brush.dual_brush.size - 0.2).abs() < 1e-5, "no 0.5 px floor: {}", s.tools.brush.dual_brush.size);
+    s.execute("tools.setBrush", json!({"brush": {"size": 100}})).unwrap();
+    assert_eq!(s.tools.brush.size, 100.0);
+    assert!((s.tools.brush.dual_brush.size - 20.0).abs() < 1e-3, "back to 20 px: {}", s.tools.brush.dual_brush.size);
+    // Painting with the sub-pixel dual tip works (the renderer bounds it).
+    s.execute("tools.setBrush", json!({"brush": {"size": 1}})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[4, 16], [28, 16]]})).unwrap();
+}
+
+/// Picking a preset that captured its size sets both diameters from the preset: the dual tip is
+/// not scaled on top of that.
+#[test]
+fn a_captured_preset_size_is_not_scaled_twice() {
+    let mut s = session(32, 32);
+    s.execute("tools.setBrush", json!({"size": 40, "dualBrush": {"enabled": true, "size": 10}})).unwrap();
+    s.execute("brush.presets.save", json!({"name": "Dual40"})).unwrap();
+    s.execute("tools.setBrush", json!({"size": 200})).unwrap();
+    assert_eq!(s.tools.brush.dual_brush.size, 50.0);
+    s.execute("tools.setBrush", json!({"preset": "Dual40"})).unwrap();
+    assert_eq!((s.tools.brush.size, s.tools.brush.dual_brush.size), (40.0, 10.0));
+}
+
+#[test]
+fn bad_sizes_fail_and_leave_the_dual_tip_alone() {
+    let mut s = session(32, 32);
+    s.execute("tools.setBrush", json!({"brush": {"size": 100, "dualBrush": {"enabled": true, "size": 20}}})).unwrap();
+    for bad in [json!(1e30), json!("big"), json!([1]), json!({"x": 1}), json!(null)] {
+        let _ = s.execute("tools.setBrush", json!({"brush": {"size": bad}}));
+        assert_eq!(s.tools.brush.dual_brush.size, 20.0, "{bad}");
+        assert_eq!(s.tools.brush.size, 100.0, "{bad}");
+    }
+    assert!(s.execute("tools.setBrush", json!({"brush": {"size": 1e30}})).is_err());
+}
+
 #[test]
 fn an_uncaptured_preset_size_keeps_dual_brush_proportions() {
     let mut s = session(32, 32);

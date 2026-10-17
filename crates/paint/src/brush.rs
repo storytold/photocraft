@@ -589,9 +589,19 @@ impl Default for BrushSettings {
 impl BrushSettings {
     /// Resize the primary tip and keep an enabled Dual Brush tip at the same relative size.
     /// An explicit Dual Brush size edit should bypass this and retain the requested diameter.
+    ///
+    /// As in Photoshop, the dual diameter is multiplied by the size ratio unrounded and only capped
+    /// at the top ([`MAX_BRUSH_SIZE`]): a 100 px brush with a 20 px dual tip shrunk to 1 px has a
+    /// 0.2 px dual tip and grows back to exactly 20 px. A sub-pixel floor here would lose the
+    /// proportion on the way back up (#4809); rendering bounds the diameter itself
+    /// ([`Self::bounded_for_render`]).
     pub fn resize_with_dual_brush(&mut self, new_size: f32) {
         if self.dual_brush.enabled && self.size.is_finite() && self.size > 0.0 && new_size.is_finite() && new_size > 0.0 {
-            self.dual_brush.size = (self.dual_brush.size * (new_size / self.size)).clamp(0.5, MAX_BRUSH_SIZE);
+            let scaled = self.dual_brush.size * (new_size / self.size);
+            // NaN fails the comparison; infinity is capped.
+            if scaled > 0.0 {
+                self.dual_brush.size = scaled.min(MAX_BRUSH_SIZE);
+            }
         }
         self.size = new_size;
     }
