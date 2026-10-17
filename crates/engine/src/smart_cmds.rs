@@ -453,9 +453,20 @@ pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Re
 }
 
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
-/// unavailable (the cache is then left alone).
+/// unavailable or a visible filter can't be applied (the cache is then left alone).
 pub fn refresh_layer(doc: &Document, l: &mut Layer) -> Result<bool> {
+    if matches!(&l.content, LayerContent::Smart(sm) if !unapplied_filters(sm).is_empty()) {
+        return Ok(false);
+    }
     refresh_layer_in(doc, l, &JobCtx::new())
+}
+
+fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
+    sm.smart_filters
+        .iter()
+        .filter(|f| sm.filters_enabled && f.visible && crate::commands::find(&f.command).is_none())
+        .map(|f| f.params.get("name").and_then(Value::as_str).unwrap_or(&f.command).to_string())
+        .collect()
 }
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
@@ -805,24 +816,27 @@ fn set_source(s: &mut Session, p: &Value, label: &str, keep_psd: bool, make: imp
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
 fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
-    let (parent, contents_id, changed) = s.edit(label, |doc, _| {
+    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
+        let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
             smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
+            warnings
+                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
             refresh_or_fail(doc, instance)?;
         }
-        Ok((doc.id, contents_id, changed))
+        Ok((doc.id, contents_id, changed, warnings))
     })?;
     // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
     // document open, but the next Edit Contents opens the replacement source.
     s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
     // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
     // command once per copy (#4075).
-    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>()}))
+    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
 }
 
 fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
