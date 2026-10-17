@@ -836,6 +836,7 @@ pub(crate) fn psd_to_document_decoded(
             id => doc.metadata.psd_resources.push((id, String::from_utf8_lossy(&r.name).into_owned(), Arc::new(r.data.clone()))),
         }
     }
+    crate::guides_map::apply_colors(&mut doc);
     for b in &file.global_blocks {
         doc.metadata.psd_global_blocks.push((b.signature, b.key, Arc::new(b.data.clone())));
     }
