@@ -97,11 +97,15 @@ pub fn validate_token(token: &str) -> Result<(), AutomationError> {
 }
 
 /// Compare fixed-width tokens without an early exit on a mismatching byte.
+///
+/// Hex letters match in either case: [`validate_token`] accepts uppercase, and the server keeps
+/// the token lowercased, so a client sending the token exactly as it was configured must still
+/// authenticate (#6425). Only `A`–`Z` fold, so a non-hex byte never matches a hex digit.
 pub fn token_matches(expected: &str, supplied: &str) -> bool {
     if expected.len() != TOKEN_HEX_LEN || supplied.len() != TOKEN_HEX_LEN {
         return false;
     }
-    expected.bytes().zip(supplied.bytes()).fold(0u8, |different, (a, b)| different | (a ^ b)) == 0
+    expected.bytes().zip(supplied.bytes()).fold(0u8, |different, (a, b)| different | (a.to_ascii_lowercase() ^ b.to_ascii_lowercase())) == 0
 }
 
 /// Validate the first TCP frame without exposing any control method before authentication.
@@ -366,6 +370,45 @@ mod tests {
         let (reply, authenticated) = authentication_reply(&line, &token);
         assert!(authenticated);
         assert_eq!(reply["result"]["authenticated"], true);
+    }
+
+    fn auth_line(token: &str) -> String {
+        json!({"id": 1, "method": AUTH_METHOD, "params": {"token": token}}).to_string()
+    }
+
+    /// #6425: `validate_token` accepts uppercase hex and the server keeps the token lowercased, so a
+    /// client sending the token exactly as it was configured was refused.
+    #[test]
+    fn a_token_authenticates_in_any_letter_case() {
+        let configured = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        let mixed = "0123456789AbCdEf0123456789aBcDeF0123456789ABCDEF0123456789abcdef";
+        let expected = server_token(Some(configured), None).unwrap();
+        for supplied in [configured, &configured.to_ascii_lowercase(), mixed] {
+            let (reply, authenticated) = authentication_reply(&auth_line(supplied), &expected);
+            assert!(authenticated, "{supplied}: {reply}");
+            assert_eq!(reply["result"]["authenticated"], true);
+        }
+        // The comparison is case-insensitive in both directions.
+        assert!(token_matches(configured, &configured.to_ascii_lowercase()));
+
+        // A different token, or a non-hex character that only folds to a hex one, still fails.
+        let other = "1123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        let (_, authenticated) = authentication_reply(&auth_line(other), &expected);
+        assert!(!authenticated);
+        let not_hex = "0123456789ABCDEG0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        assert!(!token_matches(&expected, not_hex));
+    }
+
+    /// #6425: the same for a token file whose contents are uppercase.
+    #[test]
+    fn an_uppercase_token_file_authenticates_its_exact_contents() {
+        let path = std::env::temp_dir().join(format!("photocraft-control-token-upper-{}-{}.txt", std::process::id(), generate_token().unwrap()));
+        let contents = generate_token().unwrap().to_ascii_uppercase();
+        std::fs::write(&path, format!("{contents}\n")).unwrap();
+        let expected = server_token(None, Some(&path));
+        std::fs::remove_file(&path).unwrap();
+        let (reply, authenticated) = authentication_reply(&auth_line(&contents), &expected.unwrap());
+        assert!(authenticated, "{reply}");
     }
 
     #[test]
