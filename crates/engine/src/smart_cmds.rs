@@ -1056,6 +1056,9 @@ fn delete_filter(s: &mut Session, p: &Value) -> Result<Value> {
     edit_filters(s, p, "Delete Smart Filter", |sm| {
         let i = filter_index("layer.smartFilter.delete", p, sm)?;
         sm.smart_filters.remove(i);
+        if sm.smart_filters.is_empty() {
+            sm.filter_mask = None;
+        }
         Ok(())
     })
 }
@@ -1125,6 +1128,9 @@ fn transfer_filters(s: &mut Session, p: &Value) -> Result<Value> {
                 match index {
                     Some(i) => {
                         src.smart_filters.remove(i);
+                        if src.smart_filters.is_empty() {
+                            src.filter_mask = None;
+                        }
                     }
                     None => {
                         src.smart_filters.clear();

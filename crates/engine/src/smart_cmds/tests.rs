@@ -330,6 +330,37 @@ fn selection_becomes_the_filter_mask() {
     assert!(!s.is_enabled("layer.smartFilter.deleteFilterMask"));
 }
 
+/// #5619: deleting (or dragging away) the last smart filter removes the filter mask with it, so
+/// the next filter takes the new selection instead of the old one.
+#[test]
+fn removing_the_last_filter_removes_its_filter_mask() {
+    let mut s = session(8);
+    paint(&mut s);
+    let original = flat(&s);
+    let a = convert(&mut s);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 48})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    assert!(active_smart(&s).filter_mask.is_some());
+    s.execute("layer.smartFilter.delete", json!({})).unwrap();
+    assert!(active_smart(&s).filter_mask.is_none(), "the last filter takes its mask along");
+    s.execute("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 48})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    let px = flat(&s);
+    let at = |v: &Vec<[f32; 4]>, x: i32, y: i32| v[(y * W + x) as usize];
+    assert_eq!(at(&px, 6, 20), at(&original, 6, 20), "the old selection is not filtered");
+    assert_ne!(at(&px, 30, 20), at(&original, 30, 20), "the new selection is filtered");
+
+    // Dragging the only filter to another smart object leaves no mask behind either.
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s);
+    let b = convert(&mut s);
+    s.execute("layer.smartFilter.transfer", json!({"from": a, "to": b, "filter": 0})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let LayerContent::Smart(sm) = &doc.layer(LayerId(a)).unwrap().content else { panic!("not smart") };
+    assert!(sm.smart_filters.is_empty() && sm.filter_mask.is_none());
+}
+
 /// Scales `id` to 10 % around the origin and back, returning the composite.
 fn shrink_and_grow(s: &mut Session, id: u64) -> Vec<[f32; 4]> {
     s.execute("edit.transform", json!({"layer": id, "matrix": [0.1, 0, 0, 0.1, 0, 0]})).unwrap();
