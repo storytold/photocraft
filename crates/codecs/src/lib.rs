@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cicp;
 mod codecs;
 mod error;
 pub mod exif_color;
@@ -25,7 +26,7 @@ pub mod orientation;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
-
+pub use crate::cicp::Cicp;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette};

@@ -51,7 +51,25 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
             _ => None,
         };
     }
+    if d.icc_profile.is_none() && d.mode == ColorMode::Rgb {
+        d.icc_profile = cicp_profile(&img);
+    }
     Ok(r)
+}
+
+/// The profile a HEIF's `nclx` colour description stands for, when the file has no ICC profile
+/// (#6752): a BT.2020 or P3 image is tagged so, and a PQ or HLG one, which the decoder turned into
+/// linear light, gets a linear profile on its primaries. BT.709 SDR stays untagged, read as sRGB
+/// as before.
+fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
+    let c = img.cicp?;
+    let linear = img.sample_type().is_float();
+    if c.primaries == 1 && !linear {
+        return None;
+    }
+    // Unspecified primaries on an HDR image: BT.2100's, which PQ and HLG are defined with.
+    let primaries = if c.primaries == 2 && c.is_hdr() { 9 } else { c.primaries };
+    photocraft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
 }
 
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
@@ -840,6 +858,43 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             Ok(Some(r))
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod cicp_tests {
+    use super::*;
+    use photocraft_cms::{Builtin, Profile};
+
+    fn tagged(sample: CSample, cicp: codecs::Cicp) -> Image {
+        let mut img = Image::new(1, 1, ChannelLayout::Rgb, sample).unwrap();
+        img.cicp = Some(cicp);
+        img
+    }
+
+    fn description(p: Option<Arc<Vec<u8>>>) -> Option<String> {
+        p.map(|b| Profile::parse(&b).unwrap().description)
+    }
+
+    #[test]
+    fn hlg_bt2020_is_tagged_linear_bt2020() {
+        let hlg = codecs::Cicp { primaries: 9, transfer: codecs::Cicp::TRANSFER_HLG, matrix: 9, full_range: true };
+        let d = description(cicp_profile(&tagged(CSample::F32, hlg))).unwrap();
+        assert!(d.contains("BT.2020") && d.contains("linear"), "{d}");
+        // Unspecified primaries on HLG are BT.2100's.
+        let d = description(cicp_profile(&tagged(CSample::F32, codecs::Cicp { primaries: 2, ..hlg }))).unwrap();
+        assert!(d.contains("BT.2020"), "{d}");
+    }
+
+    #[test]
+    fn sdr_nclx_is_unchanged_or_tagged_with_its_builtin() {
+        // BT.709 / sRGB: untagged, as before.
+        for transfer in [1, 2, 13] {
+            assert_eq!(cicp_profile(&tagged(CSample::U16, codecs::Cicp { primaries: 1, transfer, matrix: 6, full_range: false })), None);
+        }
+        let p3 = codecs::Cicp { primaries: 12, transfer: 13, matrix: 6, full_range: true };
+        assert_eq!(description(cicp_profile(&tagged(CSample::U8, p3))).as_deref(), Some(Builtin::DisplayP3.description()));
+        assert_eq!(cicp_profile(&Image::new(1, 1, ChannelLayout::Rgb, CSample::U8).unwrap()), None, "no nclx, no profile");
     }
 }
 
