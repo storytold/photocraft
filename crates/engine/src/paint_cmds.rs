@@ -51,7 +51,7 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     // Other visible layers can define the region, but the fill still writes only to the target.
     let region = if all {
         let (area, img) = crate::selection_cmds::sample_rgba8(s, true)?;
-        let region = photocraft_algo::selection::wand_region(&img, area, (x, y), tol, contiguous, aa);
+        let region = photocraft_algo::paint::bucket_region(&img, area, (x, y), tol, contiguous, aa);
         drop(img);
         region
     } else {
@@ -484,6 +484,40 @@ mod tests {
             let mut s = white(8);
             s.execute(cmd, grey_fill(cmd, Value::Null)).unwrap();
             assert!((px(&s, 5, 5)[0] - 128.0 / 255.0).abs() < 0.01, "{cmd}: null opacity is 100%");
+        }
+    }
+
+    /// The Paint Bucket fills right up to a line whose edge is anti-aliased instead of leaving a
+    /// light halo between the fill and the line (the soft pixels are filled in proportion to how
+    /// much of them is the sheet's colour).
+    #[test]
+    fn bucket_fills_the_soft_edge_of_a_line_without_a_halo() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 20, "height": 6, "depth": depth, "background": "white"})).unwrap();
+            // A black line at x = 10 with a soft ramp: 75 %, 50 % white on its left.
+            for (x, grey) in [(8, "#bfbfbf"), (9, "#808080"), (10, "#000000")] {
+                s.execute("select.rect", json!({"x": x, "y": 0, "width": 1, "height": 6})).unwrap();
+                s.execute("edit.fill", json!({"color": grey})).unwrap();
+            }
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": true})).unwrap();
+            assert_eq!(&px(&s, 2, 2)[..3], &[1.0, 0.0, 0.0], "depth {depth}: flat white is filled");
+            // Green falls from 0.75 to 0.25 and from 0.5 to 0.25 of what it was: filled in proportion.
+            let (g8, g9) = (px(&s, 8, 2)[1], px(&s, 9, 2)[1]);
+            assert!(g8 < 0.35 && g9 < 0.35, "depth {depth}: the soft pixels next to the line are mostly filled: {g8} {g9}");
+            assert_eq!(&px(&s, 10, 2)[..3], &[0.0, 0.0, 0.0], "depth {depth}: the line is not painted");
+            assert_eq!(&px(&s, 15, 2)[..3], &[1.0, 1.0, 1.0], "depth {depth}: the other side of the line is another region");
+            // Without anti-alias the soft pixels are not touched.
+            let mut s2 = Session::new();
+            s2.execute("file.new", json!({"width": 20, "height": 6, "depth": depth, "background": "white"})).unwrap();
+            for (x, grey) in [(8, "#bfbfbf"), (9, "#808080"), (10, "#000000")] {
+                s2.execute("select.rect", json!({"x": x, "y": 0, "width": 1, "height": 6})).unwrap();
+                s2.execute("edit.fill", json!({"color": grey})).unwrap();
+            }
+            s2.execute("select.deselect", json!({})).unwrap();
+            s2.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": false})).unwrap();
+            assert!((px(&s2, 9, 2)[1] - 128.0 / 255.0).abs() < 0.02, "depth {depth}: unchanged without anti-alias");
         }
     }
 }
