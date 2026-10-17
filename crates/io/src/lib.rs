@@ -287,7 +287,8 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
         ctl.progress(0.05);
         let (mut document, warnings) = psd_import::psd_to_document_decoded(&file, ctl, merged).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
-        text_import::prepare(&mut document);
+        let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
+        text_import::prepare(&mut document, txt2.as_ref());
         return Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false });
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {

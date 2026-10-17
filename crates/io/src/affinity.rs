@@ -43,7 +43,7 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> 
             // Type layers draw from their model, within the import's raster bound: the sizes and
             // frames come from an untrusted file.
             let mut document = b.doc;
-            crate::text_import::prepare(&mut document);
+            crate::text_import::prepare(&mut document, None);
             // Save never writes back over the Affinity file.
             Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
         }

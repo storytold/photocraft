@@ -379,10 +379,41 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
     // writing the TySh all agree on the visible position (#1469).
     if let Some([x, y]) = legacy_point_origin(&t) {
         let [a, b, c, d, e, f] = layer.transform.m;
-        layer.transform.m = [a, b, c, d, a * x + c * y + e, b * x + d * y + f];
+        let corrected = [a, b, c, d, a * x + c * y + e, b * x + d * y + f];
+        if corrected.iter().all(|v| v.is_finite()) {
+            layer.transform.m = corrected;
+        }
     }
     layer.sync_summary();
     Some(layer)
+}
+
+/// Refines a legacy point-text estimate after imported fonts and styles have been resolved.
+/// Uses the rendering engine's font context; an accepted `Txt2` frame stays authoritative.
+pub fn refine_legacy_point_origin(layer: &mut TextLayer, dpi: f32, engine: &mut crate::TextEngine, txt2: Option<&E>) {
+    let Some(raw) = layer.psd_raw.clone() else { return };
+    let Some(t) = parse_tysh(&raw) else { return };
+    let Some([x, y]) = legacy_point_origin(&t) else { return };
+    if !matches!(layer.shape, TextShape::Point) {
+        return;
+    }
+    let guessed = t.transform.mul(&Affine::translate(x, y));
+    if layer.transform != guessed {
+        return;
+    }
+    let Some(bounds) = engine.layout(layer, dpi).bounds() else { return };
+    if !bounds.iter().all(|v| v.is_finite()) {
+        return;
+    }
+    let corrected = t.transform.mul(&Affine::translate(x - f64::from(bounds[0]), y - f64::from(bounds[1])));
+    if corrected.m.iter().all(|v| v.is_finite()) {
+        layer.transform = corrected;
+        // A valid frame can coincide with the initial estimate; numeric equality cannot tell
+        // whether it was used. Reapply it after the fallback so it always wins.
+        if let Some(txt2) = txt2 {
+            apply_txt2_frame(layer, &raw, txt2);
+        }
+    }
 }
 
 /// The local origin to fold into a legacy point-text transform, if present.
@@ -415,7 +446,11 @@ fn legacy_point_origin(t: &TySh) -> Option<[f64; 2]> {
     // A local bounding-box origin in the thousands and a transform origin beyond a normal canvas
     // are the signature of this old writer. Requiring that the bounding-box origin is closer to
     // the document prevents applying the correction again after export/import.
-    (bounds[0].abs().max(bounds[1].abs()) > 1024.0 && origin_distance > 4096.0 && shifted_distance < origin_distance).then_some([bounds[0], bounds[1]])
+    if !(bounds[0].abs().max(bounds[1].abs()) > 1024.0 && origin_distance > 4096.0 && shifted_distance < origin_distance) {
+        return None;
+    }
+
+    Some([bounds[0], bounds[1]])
 }
 
 fn descriptor_rect(text: &Descriptor, key: &str) -> Option<[f64; 4]> {
