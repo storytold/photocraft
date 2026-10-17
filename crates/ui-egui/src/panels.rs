@@ -127,7 +127,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
             let ctx = ui.ctx().clone();
             let footer = (if t.pro { 8.0 } else { 14.0 })
-                + chips_height(t.pro, t.round_chips, t.round_chips && double)
+                + chips_height(t.pro, t.round_chips, double)
                 + if t.pro { 8.0 + if double { bx } else { bx * 2.0 + 3.0 } } else { 0.0 }
                 + 6.0;
             // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
@@ -387,9 +387,15 @@ fn c32(c: [f32; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8)
 }
 
-/// Colour chips: chip size and the background chip's offset (points).
-fn chip_metrics(pro: bool) -> (f32, f32) {
-    if pro { (18.0, 10.0) } else { (21.0, 12.0) }
+/// Colour chips: chip size and the background chip's offset (points). Photoshop's two-column
+/// toolbar draws the chips a little bigger, about a third (#5664).
+fn chip_metrics(pro: bool, double: bool) -> (f32, f32) {
+    match (pro, double) {
+        (true, false) => (18.0, 10.0),
+        (true, true) => (24.0, 13.0),
+        (false, false) => (21.0, 12.0),
+        (false, true) => (28.0, 16.0),
+    }
 }
 
 /// Height of the default-colours and swap icons over the chips.
@@ -402,15 +408,15 @@ const STUDIO_ROW: f32 = 15.0;
 /// Room above the stacked round chips so Default Colors, at their top-right, clears them.
 const STUDIO_TOP: f32 = 6.0;
 
-/// Height of the colour chips block.
-fn chips_height(pro: bool, studio: bool, wide: bool) -> f32 {
-    if studio && wide {
+/// Height of the colour chips block, in one or two (`double`) tool columns.
+fn chips_height(pro: bool, studio: bool, double: bool) -> f32 {
+    if studio && double {
         return STUDIO_CHIP.0 + STUDIO_ROW;
     }
     if studio {
         return STUDIO_TOP + STUDIO_CHIP.0 + STUDIO_CHIP.1 + STUDIO_ROW;
     }
-    let (chip, step) = chip_metrics(pro);
+    let (chip, step) = chip_metrics(pro, double);
     CHIP_ICON + 3.0 + chip + step
 }
 
@@ -421,12 +427,12 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_columns: bool) {
     let t = Tokens::get(ui.ctx());
     // Studio themes: round chips stacked vertically, the controls below them.
     let studio = t.round_chips;
-    let (chip, step) = if studio { STUDIO_CHIP } else { chip_metrics(t.pro) };
+    let (chip, step) = if studio { STUDIO_CHIP } else { chip_metrics(t.pro, two_columns) };
     // With two tool columns (a short window) the round chips lie side by side, which saves height.
     let wide = studio && two_columns;
     let group = if studio && !wide { chip } else { chip + step };
     let w = ui.available_width().max(group);
-    let (rect, _) = ui.allocate_exact_size(vec2(w, chips_height(t.pro, studio, wide)), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(w, chips_height(t.pro, studio, two_columns)), Sense::hover());
     let left = (rect.left() + (w - group) / 2.0).round();
     let (fg, bg) = if wide {
         let fg = Rect::from_min_size(pos2(left, rect.top()), vec2(chip, chip));
@@ -4429,6 +4435,45 @@ mod color_tests {
         assert!(chips_height(false, true, true) < chips_height(false, true, false));
         // The Studio block is taller than Photoshop's, and the two-column check knows it.
         assert!(chips_height(false, true, false) > chips_height(false, false, false));
+    }
+
+    /// #5664: Photoshop's two-column toolbar draws the square chips a little bigger, centred
+    /// across both columns, and the toolbar reserves the taller block for them.
+    #[test]
+    fn square_color_chips_grow_in_two_tool_columns() {
+        for (kind, pro) in [(crate::theme::ThemeKind::ProMedium, true), (crate::theme::ThemeKind::Classic, false)] {
+            let bx = if pro { 30.0 } else { 36.0 };
+            let (small, big) = (chip_metrics(pro, false), chip_metrics(pro, true));
+            assert!(big.0 > small.0 && big.1 > small.1, "{kind:?}");
+            // One column holds the small block; both columns and the gap between them, the big one.
+            let w = bx * 2.0 + 2.0;
+            assert!(small.0 + small.1 <= bx && big.0 + big.1 <= w, "{kind:?}");
+            assert!(chips_height(pro, false, true) > chips_height(pro, false, false), "{kind:?}");
+            // A click just inside the big foreground chip's bottom-left corner, out of reach of
+            // where the small one would sit, opens the Color Picker for the foreground colour.
+            let top = CHIP_ICON + 3.0;
+            let at = pos2(((w - big.0 - big.1) / 2.0).round() + 1.0, top + big.0 - 1.0);
+            let small_fg = Rect::from_min_size(pos2(((w - small.0 - small.1) / 2.0).round(), top), vec2(small.0, small.0));
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(w + 40.0, 120.0)).build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    let r = Rect::from_min_size(Pos2::ZERO, vec2(w, 100.0));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| color_chips(app, ui, true));
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(2);
+            assert!(small_fg.distance_to_pos(at) > h.ctx.global_style().interaction.interact_radius, "{kind:?}");
+            h.event(egui::Event::PointerMoved(at));
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+            let picker = h.state().ui.dialogs.last().and_then(|d| d.fields.get("__colorPicker")).and_then(|t| t.as_str());
+            assert_eq!(picker, Some("foreground"), "{kind:?}");
+        }
     }
 
     /// An incomplete entry never changes the colour and the field snaps back when focus leaves.
