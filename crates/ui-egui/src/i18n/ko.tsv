@@ -507,7 +507,7 @@
 	Save Default Type Styles	기본 문자 스타일 저장
 	Deselect	선택 해제
 	Reselect	다시 선택
-	Inverse	반대로
+	Inverse	반전
 	Inverse Selection	선택 영역 반전
 	Similar	유사한 항목
 	Color Range…	색상 범위…
@@ -1399,10 +1399,10 @@
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{file}에서 단축키 {n}개를 가져왔습니다. 유지하려면 확인을 클릭하세요.
 	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
 	Keyboard shortcuts imported	키보드 단축키를 가져왔습니다
-	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	키보드 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 재설정으로 되돌릴 수 있습니다.
-	Import keyboard shortcuts?	키보드 단축키를 가져올까요?
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft가 이 컴퓨터에서 다른 이미지 편집기의 키보드 단축키 세트 {set}을(를) 찾았습니다. 단축키 {n}개가 PhotoCraft와 다릅니다. 가져올까요?
-	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	편집 › 키보드 단축키 › 모두 기본값으로 재설정으로 가져오기를 되돌릴 수 있습니다.
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	키보드 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 초기화로 되돌릴 수 있습니다.
+	Import keyboard shortcuts?	키보드 단축키를 가져오시겠습니까?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft가 이 컴퓨터에서 다른 이미지 편집기의 키보드 단축키 세트 {set}을(를) 찾았습니다. 단축키 {n}개가 PhotoCraft와 다릅니다. 가져오시겠습니까?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	편집 › 키보드 단축키 › 모두 기본값으로 초기화를 누르면 가져오기를 되돌릴 수 있습니다.
 	Don't Import	가져오지 않음
 	The keyboard shortcut set was not imported: {error}	키보드 단축키 세트를 가져오지 못했습니다: {error}
 	Reset Section	섹션 초기화
@@ -1817,8 +1817,8 @@
 	Zoom Tool	돋보기 도구
 	{name} Properties	{name} 속성
 	Revert “{name}” to the last saved version? Your changes will be lost.	“{name}”을(를) 마지막으로 저장한 버전으로 되돌릴까요? 변경 사항이 사라집니다.
-	Do you want to save the changes you made to “{name}” before quitting?	종료하기 전에 “{name}”의 변경 사항을 저장할까요?
-	Do you want to save the changes you made to “{name}” before closing?	닫기 전에 “{name}”의 변경 사항을 저장할까요?
+	Do you want to save the changes you made to “{name}” before quitting?	종료하기 전에 “{name}”의 변경 사항을 저장하시겠습니까?
+	Do you want to save the changes you made to “{name}” before closing?	닫기 전에 “{name}”의 변경 사항을 저장하시겠습니까?
 	Doc: {flat}/{layered}	문서: {flat}/{layered}
 	Scratch: {size}	스크래치: {size}
 	Untagged {mode}	프로파일 없는 {mode}
@@ -2127,12 +2127,12 @@
 	The current gradient (pick one in Window › Gradients)	현재 그레이디언트(창 › 그레이디언트에서 선택)
 	Select a type layer to edit its character and paragraph settings.	문자 및 단락 설정을 편집하려면 문자 레이어를 선택하세요.
 # Gradient Editor window, opened from the options bar's gradient swatch.
-	Gradient Editor	그라디언트 편집기
-	Gradient picker	그라디언트 선택기
-	Save As Preset	프리셋으로 저장
-	The gradient the Gradient tool paints with	그라디언트 도구가 칠하는 그라디언트입니다
-	Adds the current gradient to the Gradients panel	현재 그라디언트를 그라디언트 패널에 추가합니다
-	Gradient stops	그라디언트 스톱
+	Gradient Editor	그레이디언트 편집기
+	Gradient picker	그레이디언트 선택기
+	Save As Preset	사전 설정으로 저장
+	The gradient the Gradient tool paints with	그레이디언트 도구가 칠하는 그레이디언트입니다
+	Adds the current gradient to the Gradients panel	현재 그레이디언트를 그레이디언트 패널에 추가합니다
+	Gradient stops	그레이디언트 스톱
 	Text color	텍스트 색상
 	Type Options	문자 옵션
 	Anti-aliasing method	앤티 앨리어스 방식
@@ -3041,7 +3041,7 @@ fontWeight	Italic	기울임
 	Rotate View	보기 회전
 	Rotate View Tool	보기 회전 도구
 	Reset View	보기 재설정
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기를 회전합니다  ·  Shift는 15°로 제한
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기 회전  ·  Shift로 15° 단위 제한
 
 # Painting symmetry presets.
 	Dual Axis	이중 축
@@ -3070,7 +3070,7 @@ fontWeight	Italic	기울임
 	PhotoCraft — Screen Color Picker	PhotoCraft — 화면 색상 선택기
 
 	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
-	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 한계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
 	Rule of Thirds	삼등분 법칙
 	Golden Ratio	황금 비율
 	Golden Spiral	황금 나선
@@ -3140,15 +3140,15 @@ fontWeight	Italic	기울임
 	Dashed line	파선
 	Dash	선
 	Gap	간격
-	Dash / gap lengths × stroke width	선 / 간격 길이 × 획 너비
+	Dash / gap lengths × stroke width	선 / 간격 길이 × 획 폭
 	Add pair	쌍 추가
 	Remove pair	쌍 제거
 	Dash offset	파선 오프셋
 	Open paths use centered strokes	열린 패스는 가운데 획을 사용합니다
 	Use finite lengths and a positive pattern total	유한한 길이와 양수 패턴 합계를 사용하세요
-	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
+	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 오브젝트 선택 또는 올가미를 사용해 보세요
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
-	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
+	Object Selection found nothing there — try a tighter rectangle	오브젝트 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
 	Auto Erase	자동 지우기
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	첫 점을 클릭하거나 {key}를 눌러 닫기 · {del}로 점 제거 · Esc로 취소
