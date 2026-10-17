@@ -186,6 +186,10 @@ fn every_mapped_command_exports_and_imports_back() {
             json!({"colorize": false, "hue": 10, "saturation": -20, "lightness": 0, "reds": {"hue": 5, "saturation": 0, "lightness": 0, "range": [315, 345, 15, 45]}}),
         ),
         ("image.adjustments.brightnessContrast", json!({"brightness": 10, "contrast": -5, "legacy": false})),
+        (
+            "image.adjustments.shadowsHighlights",
+            json!({"shadowAmount": 60, "shadowTone": 40, "shadowRadius": 25, "highlightAmount": 10, "highlightTone": 50, "highlightRadius": 30, "blackClip": 0.02, "whiteClip": 0.05, "midtone": 15, "color": 20}),
+        ),
         ("image.adjustments.threshold", json!({"level": 100})),
         ("image.adjustments.posterize", json!({"levels": 4})),
         ("image.adjustments.invert", json!({})),
@@ -955,4 +959,43 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     let bottom = st.doc.layers.first().unwrap();
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
+}
+
+/// #5830: Shadows/Highlights (`adaptCorrect`) recorded by Photoshop, with string IDs, plays as
+/// Image › Adjustments › Shadows/Highlights instead of stopping as a step with no equivalent.
+#[test]
+fn photoshop_shadows_highlights_steps_play() {
+    let tones = |amount: f64, width: f64, radius: i32| {
+        D::Descriptor(desc("adaptCorrectTones").with("amount", pct(amount)).with("width", pct(width)).with("radius", D::Integer(radius)))
+    };
+    let d = desc("null")
+        .with("shadowMode", tones(35.0, 50.0, 30))
+        .with("highlightMode", tones(20.0, 40.0, 24))
+        .with("blackClip", D::Double(0.01))
+        .with("whiteClip", D::Double(0.02))
+        .with("center", D::Integer(5))
+        .with("colorCorrection", D::Integer(20));
+    let e = event_for(&item("adaptCorrect", "Sombra/Realce", None).event).expect("adaptCorrect is mapped");
+    let Mapped::Steps(steps) = (e.from)(&d) else { panic!("Shadows/Highlights maps to a step") };
+    assert_eq!(steps.len(), 1);
+    let (id, p) = &steps[0];
+    assert_eq!(id, "image.adjustments.shadowsHighlights");
+    let mut p = p.clone();
+    normalise(&mut p);
+    assert_eq!(
+        p,
+        json!({"shadowAmount": 35, "shadowTone": 50, "shadowRadius": 30, "highlightAmount": 20, "highlightTone": 40, "highlightRadius": 24, "blackClip": 0.01, "whiteClip": 0.02, "midtone": 5, "color": 20})
+    );
+    // The same settings as char IDs read the same; absent keys are left to the defaults.
+    let codes = desc("null")
+        .with("sdwM", D::Descriptor(desc("adaptCorrectTones").with("Amnt", pct(35.0)).with("Wdth", pct(50.0)).with("Rds ", D::Integer(30))))
+        .with("BlcC", D::Double(0.01));
+    let Mapped::Steps(steps) = (e.from)(&codes) else { panic!("char IDs map too") };
+    let mut q = steps[0].1.clone();
+    normalise(&mut q);
+    assert_eq!(q, json!({"shadowAmount": 35, "shadowTone": 50, "shadowRadius": 30, "blackClip": 0.01}));
+    // And it runs on a document.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#404040"})).unwrap();
+    s.execute(id, p).unwrap();
 }
