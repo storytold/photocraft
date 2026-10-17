@@ -56,13 +56,20 @@ pub fn display_session() -> DisplaySession {
 #[cfg(any(target_os = "linux", test))]
 pub fn pen_needs_xwayland(session: DisplaySession, var: impl Fn(&str) -> Option<String>, pen: impl FnOnce() -> bool, x11_libs: impl FnOnce() -> bool) -> bool {
     let set = |k: &str| var(k).is_some_and(|v| !v.is_empty() && v != "0");
-    session == DisplaySession::Wayland && !set("PHOTOCRAFT_NATIVE_WAYLAND") && set("DISPLAY") && pen() && x11_libs()
+    if session != DisplaySession::Wayland || set("PHOTOCRAFT_NATIVE_WAYLAND") || !set("DISPLAY") || !x11_libs() {
+        return false;
+    }
+    pen()
 }
 
 /// `BTN_TOOL_PEN` (linux/input-event-codes.h): the key a pen tablet's stylus, a pen display's or
 /// a pen-enabled touchscreen's reports (libinput treats such a device as a tablet tool).
 #[cfg(any(target_os = "linux", test))]
 const BTN_TOOL_PEN: u32 = 0x140;
+/// `BTN_STYLUS` (linux/input-event-codes.h): some tablet drivers (e.g. Ugee's) expose the pen
+/// with this key instead of `BTN_TOOL_PEN`.
+#[cfg(any(target_os = "linux", test))]
+const BTN_STYLUS: u32 = 0x14b;
 
 /// `ABS_X` and `ABS_Y` (linux/input-event-codes.h): the absolute axes every pen reports.
 #[cfg(any(target_os = "linux", test))]
@@ -71,8 +78,8 @@ const ABS_X: u32 = 0x00;
 const ABS_Y: u32 = 0x01;
 
 /// Is a pen among the input devices `/proc/bus/input/devices` lists? A pen is a device whose
-/// `B: KEY=` bitmap has `BTN_TOOL_PEN` *and* whose `B: ABS=` bitmap has `ABS_X` and `ABS_Y`
-/// (libinput asks the same of a tablet tool). The key alone is not enough: a virtual keyboard
+/// `B: KEY=` bitmap has `BTN_TOOL_PEN` or `BTN_STYLUS` *and* whose `B: ABS=` bitmap has `ABS_X`
+/// and `ABS_Y` (libinput asks the same of a tablet tool). The key alone is not enough: a virtual
 /// made with uinput (RustDesk's, for one) claims every key code, `BTN_TOOL_PEN` included, but
 /// has no absolute axes. Taking it for a pen sent the window through Xwayland, where a
 /// fractionally scaled Wayland desktop shows it upscaled and blurred (#1072, #639).
@@ -80,7 +87,8 @@ const ABS_Y: u32 = 0x01;
 pub fn has_pen(devices: &str) -> bool {
     devices.split("\n\n").any(|device| {
         let bitmap = |name: &str| device.lines().find_map(|l| l.strip_prefix(name));
-        bitmap("B: KEY=").is_some_and(|keys| bit_set(keys, BTN_TOOL_PEN)) && bitmap("B: ABS=").is_some_and(|axes| bit_set(axes, ABS_X) && bit_set(axes, ABS_Y))
+        bitmap("B: KEY=").is_some_and(|keys| bit_set(keys, BTN_TOOL_PEN) || bit_set(keys, BTN_STYLUS))
+            && bitmap("B: ABS=").is_some_and(|axes| bit_set(axes, ABS_X) && bit_set(axes, ABS_Y))
     })
 }
 
@@ -320,6 +328,32 @@ mod tests {
         assert!(pen_needs_xwayland(DisplaySession::Wayland, env(&zero), || true, || true));
         // X11 already gets the pen; the probes don't even run off Wayland.
         assert!(!pen_needs_xwayland(DisplaySession::X11, env(&[("DISPLAY", ":0")]), || panic!("probed"), || panic!("probed")));
+    }
+
+    #[test]
+    fn flatpak_on_wayland_without_display_stays_on_native_wayland() {
+        use std::collections::HashMap;
+        let env = |pairs: &[(&str, &str)]| {
+            let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            move |k: &str| m.get(k).cloned()
+        };
+        // Default Flatpak: Wayland socket only, no `$DISPLAY`; `FLATPAK_ID` must not force Xwayland.
+        let flatpak = [("WAYLAND_DISPLAY", "wayland-0"), ("FLATPAK_ID", "ai.storyteller.photocraft")];
+        assert!(!pen_needs_xwayland(DisplaySession::Wayland, env(&flatpak), || false, || true));
+        assert!(!pen_needs_xwayland(DisplaySession::Wayland, env(&flatpak), || true, || true));
+    }
+
+    /// Ugee and some other drivers report `BTN_STYLUS` without `BTN_TOOL_PEN` (#6194).
+    const UGEE_PEN: &str = "I: Bus=0003 Vendor=28bd Product=0942 Version=0111\n\
+        N: Name=\"UGEE M908 Pen\"\n\
+        H: Handlers=mouse3 event12 \n\
+        B: KEY=800 0 0 0 0 0\n\
+        B: ABS=1000f000003\n";
+
+    #[test]
+    fn btn_stylus_with_absolute_axes_counts_as_a_pen() {
+        assert!(has_pen(UGEE_PEN));
+        assert!(!has_pen(VIRTUAL_KEYBOARD));
     }
 
     #[test]
