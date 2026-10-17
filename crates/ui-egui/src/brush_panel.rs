@@ -323,9 +323,13 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             if let Some(lock) = section_lock(b, i) {
                 let lr = egui::Rect::from_center_size(egui::pos2(r.right() - 11.0, r.center().y), vec2(18.0, 18.0));
                 let lresp = ui.interact(lr, ui.id().with(("brush-sec-lock", i)), Sense::click());
+                lresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), *lock, format!("{}: {}", tl!("Lock"), tl!(*name))));
                 // Like Photoshop: lock icons stay visible on every lockable section row.
                 let tint = if *lock { t.text } else { t.text_faint };
                 icons::paint(ui, lr, if *lock { "lock" } else { "lock-open" }, 12.0, tint);
+                if lresp.has_focus() {
+                    ui.painter().rect_stroke(lr, t.radius_sm, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                }
                 let tip =
                     if *lock { tl!("Unlock: picking a preset replaces these settings") } else { tl!("Lock: keep these settings when picking another preset") };
                 if lresp.on_hover_text(tip).clicked() {
