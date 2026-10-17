@@ -909,6 +909,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("layer.frequencySeparation", "filter.other.colorToAlpha"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
@@ -1674,6 +1675,22 @@ mod tests {
         assert!(items[c2a].enabled, "the Background becomes a layer when the filter runs");
         let others: Vec<_> = items.iter().filter(|i| i.path.first().is_some_and(|p| p == "Filter") && i.path.len() == 2).map(|i| &i.path[1]).collect();
         assert!(!others.iter().any(|p| p.as_str() == "Other"), "no duplicate Other submenu: {others:?}");
+    }
+
+    /// Frequency Separation (#1714) is no Photoshop menu item either (it is a recorded action
+    /// there): it follows Color to Alpha in Filter › Other and asks for its radius.
+    #[test]
+    fn frequency_separation_sits_in_filter_other_after_color_to_alpha() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let items = menu_items(&app);
+        let at = |id: &str| items.iter().position(|i| i.id == id).unwrap_or_else(|| panic!("{id} missing"));
+        let (c2a, fs) = (at("filter.other.colorToAlpha"), at("layer.frequencySeparation"));
+        assert_eq!(fs, c2a + 1);
+        assert_eq!(items[fs].path, items[at("filter.other.highPass")].path);
+        assert_eq!(items[fs].label, "Frequency Separation…");
+        assert!(items[fs].enabled, "the Background is a pixel layer with pixels");
+        assert!(crate::filter_dialog::has_dialog("layer.frequencySeparation"));
     }
 
     #[test]

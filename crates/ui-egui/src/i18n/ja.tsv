@@ -3500,6 +3500,7 @@ fontWeight	Italic	斜体
 # Command id overrides
 @id	select.all	すべてを選択
 	Color to Alpha…	カラーを透明に…
+	Frequency Separation…	周波数分離…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
 	PhotoCraft — Screen Color Picker	PhotoCraft — スクリーンカラーピッカー
