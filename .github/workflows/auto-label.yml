@@ -1,0 +1,65 @@
+# Labels new issues and pull requests as they arrive.
+#
+# Almost every item in this repository's backlog is unlabelled, which makes the
+# queue impossible to work by area: you cannot ask "show me the open tablet
+# bugs" when nothing is tagged. Retro-labelling 900 items is a one-off cost; the
+# permanent fix is to classify at intake, which is what this does.
+#
+# The classifier is `scripts/pr-triage.py`, the same keyword rules that generate
+# the triage report, so a label here and a bucket there always agree. It is
+# deliberately heuristic, not an LLM: it has to run on every issue within
+# seconds, offline of any model, and a slightly wrong area label costs nothing
+# while a mislabelled security report would cost a lot. Rules it is unsure about
+# simply get no label.
+#
+# Labels are created on first use by the GitHub API, so there is no seeding step.
+#
+# Backfilling the existing backlog is a separate, deliberate act: labelling 900
+# items notifies 900 authors. Run it once, on purpose, with:
+#   scripts/pr-triage.py --apply-labels --yes
+# and expect a notification storm. This workflow only handles what arrives after.
+
+name: Auto-label
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: "Issue or PR number to (re)label"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  # Labeling is idempotent and cheap; if two runs overlap the second one simply
+  # finds nothing left to add. Cancelling would only lose work.
+  group: auto-label-${{ github.event.issue.number || inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    name: Classify and label
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply area, kind, platform and size labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || inputs.number }}
+        run: |
+          set -euo pipefail
+          # --only fetches and labels one item, so this costs three API calls
+          # rather than a scan of the whole backlog. Existing labels are never
+          # removed: a human's judgement always outranks the classifier, and if
+          # someone corrects an area by hand this run will not fight them.
+          python3 scripts/pr-triage.py --repo "$REPO" --only "$NUMBER" \
+            --apply-labels --yes

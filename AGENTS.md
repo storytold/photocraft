@@ -15,6 +15,8 @@ PhotoCraft is an open-source, native, Photoshop-comparable image editor written 
 | `docs/target-app-parity.md` | The authoritative parity assessment against Photoshop 2026: numbers, weights, evidence, hours |
 | `docs/gaps.md` | Every known shortfall, ranked: the work list to pick from |
 | `docs/roadmap.md` | Milestones, **current focus**, what's next with estimates |
+| `docs/backlog-shortcuts.md` | Clearing the issue/PR queue faster: merge-now, de-rot, dev-loop shortcuts |
+| `docs/backlog-triage.md` | Generated triage of every open issue and PR (regenerate, don't edit) |
 | `docs/ui-parity.md`, `docs/brush-parity.md`, `docs/context-menu-parity.md`, `docs/file-format-parity.md`, `docs/hardware-parity.md`, `docs/localization-parity.md` | Per-dimension parity checklists |
 | `docs/parity-checklist.md` | Generated list of every Photoshop menu item, live or missing |
 | `docs/scorecard.md` | Generated scorecard: performance budgets and numbers, corpus floors, per-area checklists (tools, files, UI, type, automation, reliability, distribution), settings that do nothing |
@@ -75,17 +77,21 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.
 
-0. **Read `ROADMAP.md`, then `docs/gaps.md`.** `docs/target-app-parity.md` says, dimension by
+0. **Check the PR queue before starting something new.** `scripts/pr-triage.py` reports
+   how many open PRs are mergeable and green versus conflicted. If there are PRs to
+   merge or rebase, that is higher-value than new code: a conflicted PR costs more to
+   review and blocks the ones behind it. See `docs/backlog-shortcuts.md`.
+1. **Read `ROADMAP.md`, then `docs/gaps.md`.** `docs/target-app-parity.md` says, dimension by
    dimension, where PhotoCraft is lacking; `docs/gaps.md` ranks the work. `docs/parity-checklist.md`
    (menu wiring) is not a measure of behaviour. When your work moves a number or closes a gap,
    update the parity doc and gap entry it belongs to, with the date, and bump their status line
    and revision history (craftrules `standards/progress-docs.md`).
-1. **Check `docs/scorecard.md`** before picking work: each area's `missing` and `partial` rows,
+2. **Check `docs/scorecard.md`** before picking work: each area's `missing` and `partial` rows,
    the performance scenarios that are over budget or not measurable yet, and the count of
    settings that do nothing. Its numbers are measured; prefer them to estimates.
-2. `docs/roadmap.md` → **Current focus**.
-3. `cargo xtask parity` → `docs/parity-checklist.md` lists every missing menu item, grouped by menu. Low-hanging fruit is usually a missing command whose algorithm already exists in `algo`, `paint`, `vector` or `text`.
-4. `log/devlog.md` → the "Still open" bullets of recent entries.
+3. `docs/roadmap.md` → **Current focus**.
+4. `cargo xtask parity` → `docs/parity-checklist.md` lists every missing menu item, grouped by menu. Low-hanging fruit is usually a missing command whose algorithm already exists in `algo`, `paint`, `vector` or `text`.
+5. `log/devlog.md` → the "Still open" bullets of recent entries.
 
 When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower it).
 
@@ -128,6 +134,10 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 - `ROADMAP.md`, `docs/target-app-parity.md`, `docs/gaps.md` and the `docs/*-parity.md` checklists: where we stand against Photoshop.
 - `docs/parity-checklist.md`: generated Photoshop menu coverage.
 - `docs/scorecard.md`: generated scorecard (sources: `scorecard/*.toml`, `perf/budgets.toml`, `perf/baseline.json`, corpus floors, prefs audit).
+- `docs/backlog-triage.md`: generated triage of every open issue and PR (regenerate with
+  `scripts/pr-triage.py -o docs/backlog-triage.md`; never edit by hand).
+- `docs/backlog-shortcuts.md`: how to clear that queue faster — merge-now, de-rot, dev-loop
+  shortcuts. Read it before starting new work while PRs are waiting.
 - `docs/releasing.md`: cutting a release (`cargo xtask version`, the `release` branch), signing secrets, packaging scripts in `packaging/`.
 - `../craftrules/release/playbook.md`: how every storytold app builds signed release binaries (the canonical recipe; `docs/release-playbook.md` just points there); `docs/releasing.md` is PhotoCraft's specifics.
 - `plan/` (local, gitignored): research, parity plan, execution plan, estimates.
