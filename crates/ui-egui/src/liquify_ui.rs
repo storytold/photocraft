@@ -574,17 +574,17 @@ fn alt_tool(t: LiquifyTool) -> LiquifyTool {
 
 /// Alt+right-drag, and Control+Alt-drag, change the Liquify brush instead of painting (#4702).
 fn brush_resize_gesture(mods: egui::Modifiers, secondary: bool) -> bool {
-    mods.alt && (secondary || mods.ctrl)
+    if secondary { crate::brush_resize::is_right_gesture(mods) } else { crate::brush_resize::is_gesture(mods) }
 }
 
 /// Horizontal motion sets the diameter (the circle's edge follows the pointer). Vertical motion
 /// sets density, Liquify's edge falloff, over the same 200 px travel the canvas uses for hardness.
-fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32) -> (f32, f32) {
-    let dx = if dx.is_finite() { dx } else { 0.0 };
-    let dy = if dy.is_finite() { dy } else { 0.0 };
-    let size = (start_size + dx).round().clamp(1.0, 15000.0);
-    let density = (start_density + dy * 100.0 / crate::brush_resize::HARDNESS_TRAVEL).clamp(0.0, 100.0);
-    (size, (density * 10.0).round() / 10.0)
+fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f32) -> (f32, f32) {
+    // Liquify stores density as 0–100; the shared brush gesture works on normalized hardness.
+    // Use the same zoom-corrected screen movement and size limits as the main canvas.
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let (size, density) = crate::brush_resize::resized((start_size, start_density / 100.0), f64::from(dx / zoom), f64::from(dy / zoom), zoom);
+    (size, (density * 100.0).round())
 }
 
 /// Pointer in document coordinates (from the preview or the control channel). Alt at
@@ -920,12 +920,30 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let line: Vec<Pos2> = pts.iter().map(|p| to_screen(d, area, *p)).collect();
             clip.add(egui::Shape::line(line, Stroke::new(1.0, color)));
         }
-        // Brush outline (the lasso has none).
+        // The resizing circle stays at the press point like the main canvas's brush HUD.
         if let Some(hp) = resp.hover_pos() {
             if d.opts.tool != LiquifyTool::LassoMask {
+                let center = d.brush_resize.map_or(hp, |(anchor, _, _)| anchor);
                 let r = d.opts.size * 0.5 * d.zoom;
-                clip.circle_stroke(hp, r, Stroke::new(1.5, Color32::BLACK));
-                clip.circle_stroke(hp, r, Stroke::new(0.75, Color32::WHITE));
+                if d.brush_resize.is_some() {
+                    crate::brush_resize::tip_preview(
+                        &clip,
+                        center,
+                        r,
+                        d.opts.density / 100.0,
+                        Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110),
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    crate::canvas::draw_readout(
+                        ui.ctx(),
+                        "liquify-brush-resize-readout",
+                        hp,
+                        [tl!("Diameter:"), tl!("Density:")],
+                        [format!("{} px", d.opts.size.round() as i64), format!("{}%", d.opts.density.round() as i64)],
+                    );
+                }
+                clip.circle_stroke(center, r, Stroke::new(1.5, Color32::BLACK));
+                clip.circle_stroke(center, r, Stroke::new(0.75, Color32::WHITE));
             }
             d.hover = Some(to_doc(d, area, hp));
         }
@@ -933,7 +951,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Mouse → strokes (Space or middle button pans). Alt+right-drag resizes the brush (#4702).
         let (pan, secondary, mods_now) =
             ui.input(|i| (i.key_down(egui::Key::Space) || i.pointer.middle_down(), i.pointer.button_down(egui::PointerButton::Secondary), i.modifiers));
-        let resize = d.brush_resize.is_some() || (resp.drag_started() && brush_resize_gesture(mods_now, secondary));
+        let resize = d.brush_resize.is_some()
+            || ((resp.drag_started_by(egui::PointerButton::Secondary) || resp.drag_started_by(egui::PointerButton::Primary))
+                && brush_resize_gesture(mods_now, secondary));
         if resize {
             if d.brush_resize.is_none()
                 && let Some(p) = resp.interact_pointer_pos()
@@ -942,13 +962,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, resp.interact_pointer_pos()) {
                 let delta = p - anchor;
-                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y);
+                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
                 d.opts.size = size;
                 d.opts.density = density;
             }
             if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
                 d.brush_resize = None;
             }
+            ctx.request_repaint();
         } else if pan && resp.dragged() {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
@@ -1061,10 +1082,13 @@ mod tests {
         assert!(brush_resize_gesture(egui::Modifiers::CTRL | egui::Modifiers::ALT, false));
         assert!(!brush_resize_gesture(egui::Modifiers::ALT, false), "Alt+left stays the tool's opposite");
         assert!(!brush_resize_gesture(egui::Modifiers::NONE, true));
-        let (size, density) = resized_brush(40.0, 50.0, 25.0, crate::brush_resize::HARDNESS_TRAVEL);
-        assert_eq!((size, density), (65.0, 100.0));
-        let (size, density) = resized_brush(40.0, 50.0, -100.0, 0.0);
+        let (size, density) = resized_brush(40.0, 50.0, 25.0, crate::brush_resize::HARDNESS_TRAVEL, 1.0);
+        assert_eq!((size, density), (90.0, 100.0), "native brush movement grows the radius by screen pixels");
+        let (size, density) = resized_brush(40.0, 50.0, -100.0, 0.0, 1.0);
         assert_eq!((size, density), (1.0, 50.0));
+        // Screen travel changes density identically at different preview zoom levels.
+        assert_eq!(resized_brush(40.0, 50.0, 25.0, 100.0, 2.0).1, 100.0);
+        assert_eq!(resized_brush(40.0, 50.0, 0.0, -100.0, 1.0).1, 0.0);
     }
 
     fn app_with_layer() -> PhotocraftApp {

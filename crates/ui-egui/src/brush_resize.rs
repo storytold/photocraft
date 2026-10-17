@@ -170,7 +170,7 @@ fn preview_tint(app: &PhotocraftApp) -> Color32 {
 
 /// A round tip of `radius` screen points: solid out to `hardness` of the radius, fading to clear
 /// at the edge. One mesh (two rings and a centre), so its cost doesn't grow with the brush.
-fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
+pub(crate) fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
     let clip = painter.clip_rect();
     if !clip.expand(radius).contains(c) {
         return;
