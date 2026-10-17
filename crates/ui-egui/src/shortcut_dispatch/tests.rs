@@ -291,6 +291,54 @@ fn common_shortcuts_work_after_clicking_panels() {
     }
 }
 
+/// A missing key-up must not turn pen contact and repeated key-downs into a stream of
+/// Undo/Redo commands. A fresh press still performs the next history step.
+#[test]
+fn repeated_undo_redo_keys_do_not_drain_history() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let count = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.walk().len();
+    let initial = count(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "one"})).unwrap();
+    h.state_mut().run("layer.new.layer", json!({"name": "two"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(count(&h), initial + 2);
+
+    let key = |h: &mut Harness<'_, PhotocraftApp>, sc: &str, repeat: bool, pressed: bool| {
+        let sc = parse(sc).unwrap();
+        let modifiers = platform(sc.modifiers);
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(egui::Event::Key { key: sc.logical_key, physical_key: None, pressed, repeat, modifiers });
+        h.run_steps(2);
+    };
+
+    take_log(&h.ctx);
+    key(&mut h, "Cmd+Z", false, true);
+    assert_eq!(count(&h), initial + 1);
+    let c = h.state().last_canvas_rect.center();
+    h.hover_at(c);
+    h.run_steps(2);
+    for _ in 0..3 {
+        key(&mut h, "Cmd+Z", true, true);
+        assert_eq!(count(&h), initial + 1, "repeated Undo must not drain more steps");
+    }
+    assert_eq!(take_log(&h.ctx).len(), 1, "only the initial Undo should dispatch");
+
+    key(&mut h, "Cmd+Z", false, false);
+    key(&mut h, "Cmd+Shift+Z", false, true);
+    assert_eq!(count(&h), initial + 2, "a fresh Redo must still run");
+    for _ in 0..3 {
+        key(&mut h, "Cmd+Shift+Z", true, true);
+        assert_eq!(count(&h), initial + 2, "repeated Redo must not replay later steps");
+    }
+    assert_eq!(take_log(&h.ctx).len(), 1, "only the initial Redo should dispatch");
+    key(&mut h, "Cmd+Shift+Z", false, false);
+
+    // A new physical Undo press is not suppressed after release.
+    key(&mut h, "Cmd+Z", false, true);
+    assert_eq!(count(&h), initial + 1);
+}
+
 #[test]
 fn a_disabled_shortcut_says_why() {
     let mut h = harness();

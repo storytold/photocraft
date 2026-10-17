@@ -233,11 +233,11 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
     let table: Vec<(String, KeyboardShortcut)> =
         bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
     let command = |e: &egui::Event| match e {
-        egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+        egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers, .. } => {
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
                 .and_then(|p| table.iter().find(|(_, sc)| sc.logical_key == p && key_matches(sc, p, *modifiers)));
-            by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab))
+            by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab, *repeat))
         }
         _ => None,
     };
@@ -248,7 +248,11 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             i.events.remove(at);
             Some(hit)
         });
-        let Some((id, tab)) = next else { break };
+        let Some((id, tab, repeat)) = next else { break };
+        // A missed key-up can turn subsequent press events into repeated history commands.
+        if repeat && matches!(id.as_str(), "edit.undo" | "edit.redo") {
+            continue;
+        }
         if tab {
             // egui already read this Tab as "focus the next widget" (Photoshop's Tab hides the
             // panels instead, #1313): the shortcut took it, so cancel that move.
