@@ -68,6 +68,7 @@ mod single_instance;
 mod tablet;
 mod ui_state;
 mod window_frame;
+mod x11_scale;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -415,6 +416,9 @@ fn main() -> eframe::Result {
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
+    // X11: prefer the desktop's DPI (Xft.dpi, then the server screen) over the
+    // panel's physical density before winit reads it; explicit user override wins.
+    x11_scale::apply();
     let mut options = native_options(custom_titlebar);
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
