@@ -104,7 +104,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     let channels = u16::try_from(img.layout().channels()).map_err(|_| IoError::Unsupported("too many channels".into()))?;
     let header = Header::new(isd.version, w, h, channels, depth, mode);
     let data = planar_big_endian(&img, color_channels, mode == PsdMode::Cmyk)?;
-    let image_data = ImageData { compression: Compression::Raw, data };
+    let image_data = ImageData::new(Compression::Raw, data);
     let file = isd.into_psd(header, resources, image_data);
     // The same nesting limit as opening a PSD (#2940).
     crate::psd_import::check_group_depth(&file)?;

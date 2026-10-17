@@ -113,7 +113,7 @@ pub fn merged_only(version: Version, mode: ColorMode, depth: u16, compression: C
     for c in 0..channels {
         planes.extend(pattern_plane(w as usize, h as usize, depth, u32::from(c)));
     }
-    let image_data = ImageData::encode(compression, &planes, &header).unwrap_or(ImageData { compression, data: Vec::new() });
+    let image_data = ImageData::encode(compression, &planes, &header).unwrap_or(ImageData::new(compression, Vec::new()));
     PsdFile {
         header,
         color_mode_data: color_mode_data(mode),
@@ -179,7 +179,7 @@ fn raster_layer(g: LayerGen<'_>) -> LayerRecord {
 
 fn group_record(header: &Header, name: &str, kind: SectionType, blend: BlendMode, id: u32) -> LayerRecord {
     let cc = mode_channels(header.color_mode) as i16;
-    let channels = (-1..cc).map(|c| ChannelData { id: c, compression: Some(Compression::Raw), data: Vec::new() }).collect();
+    let channels = (-1..cc).map(|c| ChannelData::new(c, Some(Compression::Raw), Vec::new())).collect();
     let lsct = if kind == SectionType::BoundingDivider {
         TaggedBlock::section_divider(kind, None, None)
     } else {

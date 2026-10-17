@@ -160,7 +160,7 @@ impl TaggedBlock {
         String::from_utf8_lossy(&self.key).into_owned()
     }
 
-    fn default_padding(len: usize, alignment: usize) -> usize {
+    pub(crate) fn default_padding(len: usize, alignment: usize) -> usize {
         (alignment - len % alignment) % alignment
     }
 
@@ -436,7 +436,7 @@ fn parse_section(d: &[u8]) -> Result<SectionDivider> {
 
 /// `8BIM` / `8B64`, or the markers `MIB8` / `46B8` that [`crate::tiff`] gives a block kept
 /// verbatim from a little-endian TIFF when its layout is unknown (its data is in that order).
-fn is_sig(b: &[u8]) -> bool {
+pub(crate) fn is_sig(b: &[u8]) -> bool {
     b.starts_with(b"8BIM") || b.starts_with(b"8B64") || TaggedBlock::is_foreign_order_signature(b)
 }
 

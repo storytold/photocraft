@@ -112,6 +112,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// The file could not be read.
+    #[error("{0}")]
+    Read(String),
     /// A background import or save was cancelled ([`import_with`], [`export_with`]).
     #[error("cancelled")]
     Cancelled,
@@ -268,27 +271,58 @@ pub fn import_with_svg_group_depth_and_interrupt(
     Ok(r)
 }
 
+/// The PSD/PSB part of an import, from a parse that takes [`PsdFile::from_bytes_and_merged_recovering`]'s
+/// `want` and `recover`.
+fn import_psd(
+    name: &str,
+    ctl: &photocraft_raster::Interrupt,
+    parse: impl FnOnce(&dyn Fn(&PsdFile) -> bool, &dyn Fn(&PsdFile) -> bool) -> photocraft_psd::Result<(PsdFile, Option<photocraft_psd::Result<Vec<u8>>>)>,
+) -> Result<ImportResult, IoError> {
+    // A merged image the import reads is decoded with the parse: a ZIP one is inflated once.
+    let (file, merged) = parse(&|f| psd_import::check_group_depth(f).is_ok() && psd_import::merged_needed(f), &psd_import::can_recover_layers)?;
+    // Nesting past the document model's cap could never be saved; reject the file with the
+    // actionable limit.
+    psd_import::check_group_depth(&file)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(0.05);
+    let (mut document, warnings) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    document.name = name.to_string();
+    text_import::prepare(&mut document);
+    Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+}
+
+/// Imports the file at `path`, as [`import_with_svg_group_depth_and_interrupt`] imports its
+/// bytes. A PSD/PSB is parsed from the open file ([`PsdFile::from_source`]) rather than read
+/// whole: its channel data is read layer by layer as it is decoded, so opening it needs memory
+/// for the document, not for the document plus the file. Other formats are read whole.
+#[cfg(any(unix, windows))]
+pub fn import_file(name: &str, path: &std::path::Path, max_group_depth: usize, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let source = photocraft_psd::FileSource::open(path).map_err(read_failed)?;
+    let mut magic = [0u8; 4];
+    let psd = !has_extension(name, photocraft_format::EXTENSION)
+        && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok()
+        && is_psd(&magic);
+    if !psd {
+        drop(source);
+        let bytes = photocraft_format::read_file(path).map_err(read_failed)?;
+        return import_with_svg_group_depth_and_interrupt(name, &bytes, max_group_depth, ctl);
+    }
+    let source = photocraft_psd::Source::new(source);
+    let r = import_psd(name, ctl, |want, recover| PsdFile::from_source_and_merged_recovering(source, want, recover))?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(1.0);
+    Ok(r)
+}
+
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, max_group_depth: usize) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
     }
     if is_psd(bytes) {
-        // A merged image the import reads is decoded with the parse: a ZIP one is inflated once.
-        let (file, merged) = PsdFile::from_bytes_and_merged_recovering(
-            bytes,
-            |f| psd_import::check_group_depth(f).is_ok() && psd_import::merged_needed(f),
-            psd_import::can_recover_layers,
-        )?;
-        // Nesting past the document model's cap could never be saved; reject the file with the
-        // actionable limit.
-        psd_import::check_group_depth(&file)?;
-        ctl.check().map_err(|_| IoError::Cancelled)?;
-        ctl.progress(0.05);
-        let (mut document, warnings) = psd_import::psd_to_document_decoded(&file, ctl, merged).ok_or(IoError::Cancelled)?;
-        document.name = name.to_string();
-        text_import::prepare(&mut document);
-        return Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false });
+        return import_psd(name, ctl, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);

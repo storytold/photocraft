@@ -340,7 +340,7 @@ impl Ex {
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
         ChannelData::encode(id, compression, plane, w, h, depth, self.version)
             .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData { id, compression: Some(Compression::Raw), data: plane.to_vec() })
+            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()))
     }
 
     fn empty_channels(&self) -> Vec<ChannelData> {
@@ -1657,7 +1657,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
     let mcomp = if sample == SampleType::F32 { Compression::Raw } else { opts.merged_compression };
     let image_data = ImageData::encode(mcomp, &planes, &header)
         .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
-        .unwrap_or(ImageData { compression: Compression::Raw, data: planes });
+        .unwrap_or(ImageData::new(Compression::Raw, planes));
     ctl.progress(1.0);
 
     // Resources.

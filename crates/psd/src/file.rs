@@ -174,14 +174,27 @@ impl PsdFile {
                 layer_mask_trailing = s.peek_rest().to_vec();
             }
         }
-        let image_data = ImageData { compression: Compression::Raw, data: Vec::new() };
+        let image_data = ImageData::new(Compression::Raw, Vec::new());
         let mut file =
             PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data };
+        let want = want(&file);
+        let merged = file.read_merged_section(&mut r, want, recover)?;
+        Ok((file, merged))
+    }
+
+    /// Reads the merged image section from `rest` (the bytes after the layer and mask section) as
+    /// [`Self::from_bytes_and_merged_recovering`] does, decoding it.
+    pub(crate) fn read_merged_recovering(&mut self, rest: &[u8], recover: impl FnOnce(&PsdFile) -> bool) -> Result<Option<Result<Vec<u8>>>> {
+        self.read_merged_section(&mut Reader::new(rest), true, recover)
+    }
+
+    fn read_merged_section(&mut self, r: &mut Reader<'_>, want: bool, recover: impl FnOnce(&PsdFile) -> bool) -> Result<Option<Result<Vec<u8>>>> {
+        let file = self;
         let mut encoded = r.clone();
-        let merged = if want(&file) {
-            file.read_merged_decoded(&mut r).map(Some)
+        let merged = if want {
+            file.read_merged_decoded(r).map(Some)
         } else {
-            ImageData::read(&mut r, &file.header).map(|image| {
+            ImageData::read(r, &file.header).map(|image| {
                 file.image_data = image;
                 None
             })
@@ -189,7 +202,7 @@ impl PsdFile {
         let merged = match merged {
             Ok(merged) => merged,
             Err(error) => {
-                if matches!(error, PsdError::LimitExceeded(_)) || !recover(&file) {
+                if matches!(error, PsdError::LimitExceeded(_)) || !recover(file) {
                     return Err(error);
                 }
                 let compression = Compression::from_u16(encoded.u16()?);
@@ -197,11 +210,11 @@ impl PsdFile {
                 let mut data = Vec::new();
                 data.try_reserve_exact(source.len()).map_err(|_| PsdError::LimitExceeded("not enough memory to retain the damaged merged image"))?;
                 data.extend_from_slice(source);
-                file.image_data = ImageData { compression, data };
+                file.image_data = ImageData::new(compression, data);
                 Some(Err(error))
             }
         };
-        Ok((file, merged))
+        Ok(merged)
     }
 
     /// Reads the merged image into `self.image_data` and decodes it. A ZIP stream within the
@@ -224,7 +237,7 @@ impl PsdFile {
         if decoded.is_err() {
             validate_planes(compression, data, &layout)?;
         }
-        self.image_data = ImageData { compression, data: data.to_vec() };
+        self.image_data = ImageData::new(compression, data.to_vec());
         r.skip(data.len())?;
         Ok(decoded)
     }
@@ -235,7 +248,7 @@ impl PsdFile {
         let psb = v.is_psb();
         // Reserve the pixel data up front: appending it to an empty Vec reallocates and copies
         // repeatedly. Everything else (headers, resources, records) is small by comparison.
-        let hint = self.layer_info.as_ref().map_or(0, LayerInfo::channel_data_len).saturating_add(self.image_data.data.len());
+        let hint = self.layer_info.as_ref().map_or(0, LayerInfo::channel_data_len).saturating_add(usize::try_from(self.image_data.encoded_len()).unwrap_or(usize::MAX));
         let mut out = Vec::new();
         out.try_reserve(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
         self.header.write(&mut out);
@@ -289,7 +302,7 @@ impl PsdFile {
         out.end_len(at, psb)?;
 
         out.put_u16(self.image_data.compression.as_u16());
-        out.put(&self.image_data.data);
+        out.put(&self.image_data.encoded()?);
         Ok(out)
     }
 

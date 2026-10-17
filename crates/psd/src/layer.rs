@@ -1,10 +1,13 @@
 //! Layer records, layer masks, blending ranges and per-layer channel data.
 
+use std::borrow::Cow;
+
 use crate::blend::BlendMode;
 use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
 use crate::io::{Reader, WriteExt, decode_legacy_name, read_pascal, write_pascal};
+use crate::source::Stored;
 use crate::tagged::{BlockData, SectionDivider, SectionType, TaggedBlock, read_blocks, uses_long_length, write_blocks};
 
 /// Channel id of the transparency mask.
@@ -368,7 +371,12 @@ impl BlendingRanges {
 }
 
 /// Encoded image data for one layer channel.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The encoded bytes are in `data`, or, for a file parsed by
+/// [`PsdFile::from_source`](crate::PsdFile::from_source), still in the source at `stored` (and
+/// `data` is empty). Every method here reads them from wherever they are; two channels are equal
+/// when their bytes are, wherever each one keeps them.
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChannelData {
     /// Channel id: 0.. color channels, -1 transparency, -2 user mask,
@@ -377,22 +385,65 @@ pub struct ChannelData {
     /// Compression; `None` when the stored length was 0 (no compression
     /// field at all).
     pub compression: Option<Compression>,
-    /// Encoded bytes following the compression field, kept verbatim.
+    /// Encoded bytes following the compression field, kept verbatim (empty while `stored`).
     pub data: Vec<u8>,
+    /// Where the encoded bytes are when they were left in the source: see [`Self::load`].
+    /// (Not serialized: load the channel first.)
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub stored: Option<Stored>,
 }
+
+impl PartialEq for ChannelData {
+    fn eq(&self, other: &Self) -> bool {
+        if self.id != other.id || self.compression != other.compression || self.encoded_len() != other.encoded_len() {
+            return false;
+        }
+        match (self.encoded(), other.encoded()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ChannelData {}
 
 impl ChannelData {
     /// Encodes planar samples (`height × row_bytes`).
     pub fn encode(id: i16, compression: Compression, decoded: &[u8], width: usize, height: usize, depth: u16, version: Version) -> Result<Self> {
         let layout = PlaneLayout { planes: 1, width, height, depth, version };
-        Ok(ChannelData { id, compression: Some(compression), data: encode_planes(compression, decoded, &layout)? })
+        Ok(ChannelData::new(id, Some(compression), encode_planes(compression, decoded, &layout)?))
+    }
+
+    /// A channel whose encoded bytes are in memory.
+    pub fn new(id: i16, compression: Option<Compression>, data: Vec<u8>) -> Self {
+        ChannelData { id, compression, data, stored: None }
+    }
+
+    /// The encoded bytes (after the compression field): borrowed from `data`, or read from the
+    /// source when they were left there.
+    pub fn encoded(&self) -> Result<Cow<'_, [u8]>> {
+        crate::source::encoded(&self.data, self.stored.as_ref())
+    }
+
+    /// Number of encoded bytes, wherever they are.
+    pub fn encoded_len(&self) -> u64 {
+        self.stored.as_ref().map_or(self.data.len() as u64, |s| s.len)
+    }
+
+    /// Reads bytes left in the source into `data`, so the channel no longer needs its source.
+    pub fn load(&mut self) -> Result<()> {
+        if let Some(s) = &self.stored {
+            self.data = s.read()?;
+            self.stored = None;
+        }
+        Ok(())
     }
 
     /// Decodes into planar big-endian samples.
     pub fn decode(&self, width: usize, height: usize, depth: u16, version: Version) -> Result<Vec<u8>> {
         let layout = PlaneLayout { planes: 1, width, height, depth, version };
         match self.compression {
-            Some(c) => decode_planes(c, &self.data, &layout),
+            Some(c) => decode_planes(c, &self.encoded()?, &layout),
             None => {
                 if layout.decoded_len()? == 0 {
                     Ok(Vec::new())
@@ -412,7 +463,7 @@ impl ChannelData {
 
     fn stored_len(&self) -> u64 {
         match self.compression {
-            Some(_) => 2 + self.data.len() as u64,
+            Some(_) => 2 + self.encoded_len(),
             None => 0,
         }
     }
@@ -556,7 +607,7 @@ impl LayerRecord {
         ch.decode(w, h, depth, version)
     }
 
-    fn read(r: &mut Reader<'_>, version: Version) -> Result<(Self, Vec<u64>)> {
+    pub(crate) fn read(r: &mut Reader<'_>, version: Version) -> Result<(Self, Vec<u64>)> {
         let rect = Rect::read(r)?;
         let nch = r.u16()?;
         if nch > MAX_LAYER_CHANNELS {
@@ -567,7 +618,7 @@ impl LayerRecord {
         for _ in 0..nch {
             let id = r.i16()?;
             let len = r.len_field(version.is_psb())?;
-            channels.push(ChannelData { id, compression: None, data: Vec::new() });
+            channels.push(ChannelData::new(id, None, Vec::new()));
             lens.push(len);
         }
         let sig = r.array::<4>()?;
@@ -716,7 +767,7 @@ impl LayerInfo {
             n = n.saturating_add(l.encoded_len(version)?);
         }
         for c in self.layers.iter().flat_map(|l| &l.channels).filter(|c| c.compression.is_some()) {
-            n = n.saturating_add(2).saturating_add(c.data.len() as u64);
+            n = n.saturating_add(2).saturating_add(c.encoded_len());
         }
         Ok(n)
     }
@@ -740,7 +791,7 @@ impl LayerInfo {
     /// Bytes of channel data and their compression fields: the part of the body worth reserving up
     /// front (the records are small next to the pixels). Saturates instead of overflowing.
     pub(crate) fn channel_data_len(&self) -> usize {
-        self.layers.iter().flat_map(|l| &l.channels).filter(|c| c.compression.is_some()).fold(0usize, |n, c| n.saturating_add(2).saturating_add(c.data.len()))
+        self.layers.iter().flat_map(|l| &l.channels).filter(|c| c.compression.is_some()).fold(0usize, |n, c| n.saturating_add(2).saturating_add(usize::try_from(c.encoded_len()).unwrap_or(usize::MAX)))
     }
 
     /// Serializes the body without any trailing padding (the padding field is ignored).
@@ -754,7 +805,7 @@ impl LayerInfo {
             for c in &l.channels {
                 if let Some(comp) = c.compression {
                     out.put_u16(comp.as_u16());
-                    out.put(&c.data);
+                    out.put(&c.encoded()?);
                 }
             }
         }
@@ -835,7 +886,7 @@ mod tests {
     #[test]
     fn psb_channel_lengths_are_8_bytes() {
         let mut rec = LayerRecord::default();
-        rec.channels.push(ChannelData { id: 0, compression: Some(Compression::Raw), data: vec![] });
+        rec.channels.push(ChannelData::new(0, Some(Compression::Raw), vec![]));
         let info = LayerInfo { layers: vec![rec], ..Default::default() };
         let psd = rt(&info, Version::Psd);
         let psb = rt(&info, Version::Psb);
@@ -1075,7 +1126,7 @@ mod tests {
     #[test]
     fn zero_length_channel() {
         let mut rec = LayerRecord::default();
-        rec.channels.push(ChannelData { id: 0, compression: None, data: vec![] });
+        rec.channels.push(ChannelData::new(0, None, vec![]));
         let info = LayerInfo { layers: vec![rec], ..Default::default() };
         rt(&info, Version::Psd);
         assert_eq!(info.layers[0].decode_channel(0, 8, Version::Psd).unwrap(), Vec::<u8>::new());
