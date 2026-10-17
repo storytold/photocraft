@@ -86,6 +86,7 @@ pub mod warp;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};
+pub use distort::MAX_WAVE_GENERATORS;
 pub use image::{Edge, Image};
 pub use params_ext::*;
 
