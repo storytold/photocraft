@@ -32,7 +32,7 @@ impl Key {
         Self { tip: b.tip.clone(), angle: b.angle, roundness: b.roundness, hardness: b.hardness, flip_x: b.flip_x, flip_y: b.flip_y, full }
     }
     fn matches(&self, b: &BrushSettings, full: bool) -> bool {
-        self.tip == b.tip
+        same_tip(&self.tip, &b.tip)
             && self.angle == b.angle
             && self.roundness == b.roundness
             && self.hardness == b.hardness
@@ -40,6 +40,13 @@ impl Key {
             && self.flip_y == b.flip_y
             && self.full == full
     }
+}
+
+/// Whether tips `a` and `b` have the same outline. Two stored tips (#1843) are equal when their
+/// keys are, but each draws its preview until its full bitmap is loaded.
+pub(crate) fn same_tip(a: &TipShape, b: &TipShape) -> bool {
+    let loaded = |t: &TipShape| matches!(t, TipShape::Stored(r) if r.is_loaded());
+    a == b && loaded(a) == loaded(b)
 }
 
 /// The screen vectors of one tip radius (`size / 2` document pixels) along the document's x and
@@ -67,8 +74,22 @@ pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius:
         }
         return crate::tool_cursor::outline(painter, at, pts, centre);
     }
-    let r = if normal { photocraft_paint::half_coverage_radius(radius, brush.hardness).max(1.0) } else { radius };
-    crate::tool_cursor::circle(painter, at, r, centre)
+    crate::tool_cursor::circle(painter, at, circle_radius(brush, radius, normal), centre)
+}
+
+/// [`cursor`]'s outline, without the centre mark, painted around `at` instead of shown as the OS
+/// pointer: for a tip that lands away from the pointer, as the Pencil's does on the pixel grid.
+pub(crate) fn paint(painter: &Painter, at: Pos2, brush: &BrushSettings, radius: f32, axes: [Vec2; 2], normal: bool) {
+    match rings(painter.ctx(), brush, !normal) {
+        Some(rings) => crate::tool_cursor::paint_outline(painter, at, on_screen(&rings, axes)),
+        None => crate::tool_cursor::paint_circle(painter, at, circle_radius(brush, radius, normal)),
+    }
+}
+
+/// The plain circle's radius for a tip of screen radius `radius`: its 50 % contour's for the
+/// normal cursor.
+fn circle_radius(brush: &BrushSettings, radius: f32, normal: bool) -> f32 {
+    if normal { photocraft_paint::half_coverage_radius(radius, brush.hardness).max(1.0) } else { radius }
 }
 
 /// The tip outline in radius units, cached across frames; `None` when the plain circle says it all
@@ -193,5 +214,26 @@ mod tests {
         assert!(!at(10, 10) && at(8, 10), "the hole is clear");
         assert_eq!(mask.iter().filter(|m| **m).count(), 10 * 10 - 2 * 2, "10x10 square minus the 2x2 hole");
         assert!(tip_mask(&[square], [10.0, 10.0], 10.0, [5, 5, 5, 9]).is_empty(), "an empty rect is harmless");
+    }
+
+    /// A stored tip (#1843) paints its preview until the preset store loads the full bitmap,
+    /// which can be after the cursor first traced it: the outline is traced again then.
+    #[test]
+    fn a_stored_tip_is_traced_again_once_its_full_bitmap_loads() {
+        let preview = photocraft_paint::GrayTile::from_fn(12, 12, |_, _| 1.0);
+        let ring = photocraft_paint::GrayTile::from_fn(48, 48, |x, y| {
+            let d = (x as f32 - 23.5).hypot(y as f32 - 23.5) / 24.0;
+            if (0.5..0.95).contains(&d) { 1.0 } else { 0.0 }
+        });
+        let unloaded = photocraft_paint::StoredTile { key: "ring".into(), width: 48, height: 48, preview: Arc::new(preview), full: None };
+        let loaded = photocraft_paint::StoredTile { full: Some(Arc::new(ring)), ..unloaded.clone() };
+        let before = BrushSettings { size: 24.0, tip: TipShape::Stored(unloaded), ..Default::default() };
+        let after = BrushSettings { tip: TipShape::Stored(loaded), ..before.clone() };
+        assert_eq!(before.tip, after.tip, "stored tips compare by key");
+        let traced = photocraft_paint::outline::tip_outline(&after, false);
+        assert!(traced.is_some() && photocraft_paint::outline::tip_outline(&before, false) != traced);
+        let ctx = egui::Context::default();
+        let _ = rings(&ctx, &before, false);
+        assert_eq!(rings(&ctx, &after, false).map(|r| (*r).clone()), traced, "the outline is still the preview's");
     }
 }
