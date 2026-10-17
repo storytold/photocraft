@@ -1097,7 +1097,7 @@
 	Done	完成
 	Dots	点
 	Drag a rectangle around the object	围绕对象拖出矩形
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	在图像上拖动以添加约束；按 Shift 保持水平或垂直；右键单击删除。
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	在图像上拖动以添加约束；按 Shift 保持水平或垂直；右键单击约束可更改或删除。
 	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	单击：选择锚点 · 拖动：移动锚点、手柄或线段 · {shift}-单击：添加 · {alt}-单击：整个子路径
 	Draw with the Pen tool (P) or make a work path from a selection.	使用钢笔工具（P）绘制，或从选区创建工作路径。

@@ -2069,7 +2069,7 @@ navigator	Zoom	Nagyítás mértéke
 	Distortion	Torzítás
 	Dither	Árnyalatkeverés
 	Double Line	Kettős vonal
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Húzással kényszert adhatsz a képhez; Shift: vízszintes/függőleges; jobb kattintás: törlés.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Húzással kényszert adhatsz a képhez; Shift: vízszintes/függőleges; jobb kattintás egy kényszeren: módosítás vagy törlés.
 	Dry Brush	Száraz ecset
 	Dust & Scratches	Por és karcolások
 	Dynamic color sliders	Dinamikus színcsúszkák
