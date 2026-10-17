@@ -735,6 +735,18 @@ fn groups_masks_and_clipping() {
         d.layers.extend([base, c1, c2]);
         check(&mut g, &d, &format!("clipping hidden={hidden}"));
     }
+    // #4921: a clipped Dissolve layer keeps binary coverage at partial opacity/fill.
+    for (opacity, fill) in [(0.4, 1.0), (0.8, 0.5)] {
+        let mut d = base_doc(56, 44);
+        let base = noise_layer("base", PixelFormat::RGBA8, Rect::new(5, 6, 48, 40), 45, 0.0);
+        let mut clip = noise_layer("dissolve clip", PixelFormat::RGBA8, d.bounds(), 46, 0.0);
+        clip.clipped = true;
+        clip.blend = BlendMode::Dissolve;
+        clip.opacity = opacity;
+        clip.fill_opacity = fill;
+        d.layers.extend([base, clip]);
+        check(&mut g, &d, "clipped Dissolve CPU/GPU parity");
+    }
     // Clipped group base (isolated) with a clipped layer.
     let mut d = base_doc(56, 44);
     let mut gb = Layer::group("gb", vec![child(18, BlendMode::Normal)]);

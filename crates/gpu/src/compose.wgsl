@@ -832,7 +832,12 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let base = textureLoad(tex_a, p, 0);
     if (base.a <= 0.0) { return base; }
-    let s = textureLoad(tex_b, p, 0);
+    var s = textureLoad(tex_b, p, 0);
+    if (op.mode == M_DISSOLVE) {
+        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity);
+        let r = composite(M_NORMAL, vec4(base.rgb, 1.0), s, 1.0);
+        return vec4(r.rgb, base.a);
+    }
     let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
     return vec4(r.rgb, base.a);
 }

@@ -1833,14 +1833,23 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let Some(content) = render_content(layer, rect, cx) else { return };
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
+    let width = rect.width() as usize;
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
         if alpha <= 0.0 {
             continue;
         }
-        let s = content.px[i];
+        let mut s = content.px[i];
         // Blend as if the base were opaque, then keep the base's alpha.
-        let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
+        // Dissolve needs a binary coverage decision before compositing.
+        let r = if layer.blend == BlendMode::Dissolve {
+            let x = rect.x0 + (i % width) as i32;
+            let y = rect.y0 + (i / width) as i32;
+            s[3] = if dissolve_noise(x, y) < s[3] * opacity { 1.0 } else { 0.0 };
+            blend::composite(BlendMode::Normal, [p[0], p[1], p[2], 1.0], s, 1.0)
+        } else {
+            blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma)
+        };
         *p = [r[0], r[1], r[2], alpha];
     }
 }
