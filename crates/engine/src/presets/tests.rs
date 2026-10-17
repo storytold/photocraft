@@ -308,6 +308,12 @@ fn gradient_new_rename_move_delete_groups() {
     s.execute("gradient.presets.edit", json!({"action": "delete", "preset": ["Ours", "Mine 2"]})).unwrap();
     s.execute("gradient.presets.edit", json!({"action": "deleteGroup", "group": "My Gradients"})).unwrap();
     s.execute("gradient.presets.edit", json!({"action": "deleteGroup", "group": "Blues"})).unwrap();
+    // Renaming a group to an existing group's name is refused.
+    assert!(s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "Basics"})).is_err());
+    // Renaming a group to its own name succeeds.
+    s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "Pastels"})).unwrap();
+    // Renaming to a new unique name succeeds.
+    s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "Soft Pastels"})).unwrap();
     s.execute("gradient.presets.reset", json!({})).unwrap();
     let v = s.execute("gradient.presets.list", json!({})).unwrap();
     assert!(v["groups"].as_array().unwrap().iter().any(|g| g["name"] == "Blues"));
