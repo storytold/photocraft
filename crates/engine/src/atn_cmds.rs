@@ -3033,6 +3033,12 @@ pub struct Skipped {
     pub id: String,
 }
 
+/// Events whose four-character code Photoshop's `executeAction` refuses ("the command is not
+/// currently available"): `BoxB`, `SrfB`, `Fltn` and `BlnW` resolve to nothing usable, while the
+/// string names below do run (#6330). Save Actions writes these steps under the string name;
+/// the code stays on the [`Event`] so a `.atn` recorded before this fix still imports.
+const EXPORT_BY_NAME: &[&str] = &["boxblur", "surfaceBlur", "flattenImage", "blackAndWhite"];
+
 fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
@@ -3051,7 +3057,8 @@ fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
         params["set"] = json!(set);
     }
     let (e, descriptor) = event_and_descriptor(id, &params)?;
-    let event = if e.code.is_empty() { AtnEvent::Name(e.name.to_string()) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
+    let by_name = e.code.is_empty() || EXPORT_BY_NAME.contains(&e.name);
+    let event = if by_name { AtnEvent::Name(e.name.to_string()) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
     Some(AtnItem { event, dictionary: e.label.to_string(), descriptor: Some(descriptor), ..Default::default() })
 }
 

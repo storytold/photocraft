@@ -144,7 +144,7 @@ fn save_round_trips_through_photoshop_events() {
     assert_eq!(file.name.to_string_lossy(), "Test Set");
     assert_eq!(file.actions[0].function_key, 3);
     let events: Vec<String> = file.actions[0].items.iter().map(|i| i.event.id()).collect();
-    assert_eq!(events, ["GsnB", "Mk  ", "setd", "slct", "slct", "Stop", "syntheticFill", "Ply ", "Fltn"]);
+    assert_eq!(events, ["GsnB", "Mk  ", "setd", "slct", "slct", "Stop", "syntheticFill", "Ply ", "flattenImage"]);
     assert!(file.actions[0].items[0].with_dialog);
     assert!(!file.actions[0].items[8].enabled);
     // The kept Photoshop step is written back byte for byte.
@@ -955,4 +955,51 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     let bottom = st.doc.layers.first().unwrap();
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
+}
+
+/// Box Blur, Surface Blur, Flatten Image and Black & White export under the string id Photoshop
+/// runs, not the four-character code it refuses ("the command is not currently available").
+/// Photoshop-shaped steps carrying the name import, and the legacy codes PhotoCraft wrote before
+/// #6330 still import.
+#[test]
+fn unrunnable_filter_event_codes_export_by_name_and_still_import() {
+    // Export: each step writes the string-name event, not its code.
+    for (id, name) in [
+        ("filter.blur.boxBlur", "boxblur"),
+        ("filter.blur.surfaceBlur", "surfaceBlur"),
+        ("layer.flattenImage", "flattenImage"),
+        ("image.adjustments.blackWhite", "blackAndWhite"),
+    ] {
+        let item = export_item(id, &json!({}), "S").unwrap();
+        assert_eq!(item.event.id(), name, "{id} exports as the name Photoshop runs");
+    }
+    // A Photoshop-shaped step with the string name imports to the right command.
+    for (name, id) in [
+        ("boxblur", "filter.blur.boxBlur"),
+        ("surfaceBlur", "filter.blur.surfaceBlur"),
+        ("flattenImage", "layer.flattenImage"),
+        ("blackAndWhite", "image.adjustments.blackWhite"),
+    ] {
+        let file = AtnFile {
+            name: UnicodeString::new_nul("N"),
+            expanded: false,
+            actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item(name, "Event", None)], ..Default::default() }],
+            warnings: vec![],
+        };
+        let imp = import(&atn::write(&file).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, id, "the name {name} imports");
+    }
+    // Import: the legacy codes PhotoCraft wrote before the fix still load.
+    for (code, id) in
+        [("BoxB", "filter.blur.boxBlur"), ("SrfB", "filter.blur.surfaceBlur"), ("Fltn", "layer.flattenImage"), ("BlnW", "image.adjustments.blackWhite")]
+    {
+        let file = AtnFile {
+            name: UnicodeString::new_nul("N"),
+            expanded: false,
+            actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item(code, "Event", None)], ..Default::default() }],
+            warnings: vec![],
+        };
+        let imp = import(&atn::write(&file).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, id, "the legacy code {code} imports");
+    }
 }
