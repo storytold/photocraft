@@ -49,7 +49,8 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         if let Some(value) = numeric_row(ui, "angle", "Angle", angle, -180.0..=180.0, "°") {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "angle": value}));
         }
-        if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, 10.0..=150.0, "%") {
+        let (min, max) = cmds::SCALE_RANGE;
+        if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, min * 100.0..=max * 100.0, "%") {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
         }
         ui.horizontal_wrapped(|ui| {

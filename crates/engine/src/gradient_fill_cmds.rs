@@ -28,9 +28,10 @@ pub const GET: &str = "gradient.fill.get";
 
 /// Largest coordinate accepted for a start/end point (pixels).
 const MAX_COORD: f32 = 1.0e7;
-/// Scale range of a gradient fill (a fraction): Photoshop allows 10–150 % (the PSD stores a
-/// percentage). A handle drag past it clamps, so the far handle stops where the scale does.
-const SCALE_RANGE: (f32, f32) = (0.1, 1.5);
+
+/// Scale range of a Gradient Fill layer (a fraction): Photoshop allows 1–1000 %.
+/// Gradient Overlay effects have a separate range; the live tool creates fill layers.
+pub const SCALE_RANGE: (f32, f32) = (0.01, 10.0);
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -149,7 +150,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
-fn clamp_scale(v: f32) -> f32 {
+pub(crate) fn clamp_scale(v: f32) -> f32 {
     v.clamp(SCALE_RANGE.0, SCALE_RANGE.1)
 }
 
