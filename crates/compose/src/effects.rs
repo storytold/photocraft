@@ -1864,9 +1864,33 @@ pub fn shadow_see_through(layer: &Layer) -> f32 {
 /// Blend Interior Effects as Group off (Photoshop's default): the layer's mode applies to its
 /// own pixels only, and the interior effects paint over the blended result. The layer is merged
 /// into the backdrop before they paint, so an Overlay colour overlay on a black Color-mode layer
-/// tints the grey beneath it (#3996). Normal-like modes give the same result either way.
+/// tints the grey beneath it (#3996). A Normal layer merges only when an interior effect blends
+/// in another mode: below 100 % fill that effect sees the backdrop through the layer, so a Soft
+/// Light overlay on a Fill 0 % layer soft-lights the backdrop instead of showing its own colour
+/// (#6232). Normal effects give the same result either way, and the merge would count a
+/// half-transparent backdrop twice, so those layers keep the plain composite.
 pub fn premerges_layer(layer: &Layer) -> bool {
-    !layer.advanced.blend_interior && !matches!(layer.blend, BlendMode::Normal | BlendMode::PassThrough | BlendMode::Dissolve)
+    !layer.advanced.blend_interior
+        && match layer.blend {
+            BlendMode::PassThrough | BlendMode::Dissolve => false,
+            BlendMode::Normal => blends_inside(layer),
+            _ => true,
+        }
+}
+
+/// `true` if an enabled effect painted inside the layer (with its content) blends in a mode
+/// other than Normal.
+fn blends_inside(layer: &Layer) -> bool {
+    let blends = |m: BlendMode| m != BlendMode::Normal;
+    layer.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
+        Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => blends(common.blend),
+        Effect::Satin(s) => blends(s.common.blend),
+        Effect::InnerGlow(g) => blends(g.common.blend),
+        Effect::InnerShadow(s) => blends(s.common.blend),
+        Effect::Stroke(s) => stroke_widths(s).0 > 0.0 && blends(s.common.blend),
+        Effect::BevelEmboss(b) => bevel_geom(b).paint == BevelPaint::Inner && (blends(b.highlight.blend) || blends(b.shadow.blend)),
+        Effect::DropShadow(_) | Effect::OuterGlow(_) => false,
+    })
 }
 
 /// Composites `content` (the layer's own pixels over `big`, alpha already
