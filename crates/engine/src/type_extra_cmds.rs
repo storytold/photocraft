@@ -13,7 +13,7 @@ use photocraft_geom::Point;
 use photocraft_text::render::PathEl;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, layer_param};
+use crate::commands::{CommandSpec, explicit_layer, layer_param};
 use crate::type_cmds::{
     check_text_unlocked, format_targets, has_format_target, is_auto_named, layer_name, refresh, replace_text, style_paragraphs, style_range, with_text_targets,
 };
@@ -477,7 +477,10 @@ fn toggle_opentype(s: &mut Session, p: &Value, tag: &'static str) -> Result<Valu
 // ---------- lorem ipsum / update / fonts / defaults ----------
 
 fn paste_lorem(s: &mut Session, p: &Value) -> Result<Value> {
-    if has_text(s).is_ok() && p.get("new").and_then(Value::as_bool) != Some(true) {
+    // Into the layer `with_text` edits: an explicit "layer" (an error unless it is a type layer),
+    // else the active layer when it is a type layer.
+    let new = p.get("new").and_then(Value::as_bool) == Some(true);
+    if !new && (explicit_layer(s, p)?.is_some() || has_text(s).is_ok()) {
         let caret = with_text(s, p, "Paste Lorem Ipsum", |t, _| {
             let at = p.get("at").and_then(Value::as_u64).map_or(t.text.len(), |c| byte_index(&t.text, c as usize));
             replace_text(t, at, at, LOREM_IPSUM);
