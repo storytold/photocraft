@@ -2434,6 +2434,16 @@ impl PhotocraftApp {
         self.bounds_cache.insert(key, (rev, b));
         b
     }
+
+    /// The box Properties › Transform shows for `layer` (X, Y, W, H): its pixels' bounds, but a
+    /// soft shape's path and stroke, whose Density and Feather render past them (#5846), as its
+    /// transform frame does.
+    pub fn layer_frame_bounds(&mut self, layer: &photocraft_doc::Layer, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
+        match &layer.content {
+            photocraft_doc::LayerContent::Shape(sh) if sh.has_soft_mask() => photocraft_compose::hard_shape_bounds(sh).unwrap_or(photocraft_geom::Rect::EMPTY),
+            _ => self.cached_bounds(layer.id.0, surface),
+        }
+    }
 }
 
 impl PhotocraftApp {

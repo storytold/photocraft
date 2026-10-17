@@ -803,11 +803,13 @@ pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
 /// shape's layer effects from its vector outline, not from its pixels: a stroke runs along the
 /// whole path even where a gradient fill fades out (psd-tools stroke-effects). `None` for other
 /// layers, shapes without fill, empty and inverted paths, and shapes whose vector stroke reaches
-/// past the path (their pixels give the outline: psd-tools double-stroke-effects).
+/// past the path (their pixels give the outline: psd-tools double-stroke-effects), and shapes
+/// with a density or feather.
 pub fn effect_outline(layer: &Layer) -> Option<&photocraft_doc::vector::Path> {
     let LayerContent::Shape(sh) = &layer.content else { return None };
     let stroke_inside = sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.align == photocraft_doc::vector::StrokeAlign::Inside);
-    (sh.fill.is_some() && stroke_inside && !sh.path.is_empty() && !sh.path.inverted).then_some(&sh.path)
+    // A soft (feathered or less dense) fill's own alpha is its outline.
+    (sh.fill.is_some() && stroke_inside && !sh.path.is_empty() && !sh.path.inverted && !sh.has_soft_mask()).then_some(&sh.path)
 }
 
 /// The shape a layer's effects are built from over `rect` (row-major): its content's alpha
@@ -865,8 +867,11 @@ pub fn paint_bounds(layer: &Layer) -> Option<Rect> {
     (!r.is_empty()).then_some(r)
 }
 
-/// The bounding box of a shape layer's vector content: its path control bounds plus stroke width.
-pub fn shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
+/// The bounding box of a shape layer's path and stroke, ignoring its Density and Feather: its
+/// path control bounds plus stroke width. It is the frame Free Transform and the Move tool's
+/// transform controls show for a soft shape, whose rendering reaches past it (in Photoshop a
+/// shape's transform frame follows its path whatever its mask Density and Feather).
+pub fn hard_shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
     if sh.fill.is_none() && sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.opacity <= 0.0) {
         return None;
     }
@@ -874,6 +879,20 @@ pub fn shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
     let stroke_margin = sh.stroke.as_ref().filter(|s| s.opacity > 0.0).map_or(0.0, |s| s.width.ceil()) as i32;
     let r = Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32).inflate(stroke_margin);
     (!r.is_empty()).then_some(r)
+}
+
+/// The bounding box of a shape layer's vector content: its path control bounds plus stroke width
+/// (and the reach of a soft fill).
+pub fn shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
+    let r = hard_shape_bounds(sh)?;
+    // A soft fill reaches past the path: by its feather, or everywhere below 100 % density.
+    if sh.fill.is_some() && sh.has_soft_mask() {
+        if sh.density.is_finite() && sh.density < 1.0 {
+            return Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
+        }
+        return Some(r.union(&photocraft_vector::feather::path_area(&sh.path, masks::feather_sigma(sh.feather))));
+    }
+    Some(r)
 }
 
 /// The layer's effective mask over `rect` (row-major), read once per tile: the pixel mask
@@ -1897,6 +1916,8 @@ fn blend_into_g(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f
     }
 }
 
+#[cfg(test)]
+mod soft_shape_tests;
 #[cfg(test)]
 mod stroke_tests;
 #[cfg(test)]

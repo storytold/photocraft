@@ -3474,7 +3474,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     if let Some(s) = layer.surface() {
-        let b = app.cached_bounds(layer.id.0, s);
+        let b = app.layer_frame_bounds(layer, s);
         egui::Grid::new("props-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             for (k, v) in [("X", b.x0.to_string()), ("Y", b.y0.to_string()), ("W", b.width().to_string()), ("H", b.height().to_string())] {
                 ui.label(RichText::new(k).color(t.text_dim));
@@ -3562,6 +3562,7 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         if matches!(layer.content, LayerContent::Shape(_)) {
             crate::vector_ui::shape_properties(app, ui, id);
+            crate::mask_props_ui::shape_properties(app, ui, layer);
         }
     }
 }

@@ -190,9 +190,9 @@ note = "path.stroke tool: Brush, Pencil, Eraser and every other brush-based tool
 [[item]]
 id = "TOOL-214-12"
 target = "Shapes: on-canvas corner radius handles, shape feather, selection to shape with tolerance"
-status = "partial"
+status = "done"
 issue = 214
-note = "On-canvas corner radius widgets on every selected live rectangle with Path Selection, the Rectangle tool and Move + Show Transform Controls: drag rounds every corner of every selected rectangle alike, Alt that corner on each, corner radius cursor and R: readout, one history step (corner_radius.rs, 2026-10-13); select.convertToShape with tolerance (vector_cmds.rs:1256). Missing: shape feather"
+note = "On-canvas corner radius widgets on every selected live rectangle with Path Selection, the Rectangle tool and Move + Show Transform Controls: drag rounds every corner of every selected rectangle alike, Alt that corner on each, corner radius cursor and R: readout, one history step (corner_radius.rs, 2026-10-13); select.convertToShape with tolerance (vector_cmds.rs:1256); shape Density and Feather (Properties, layer.vectorMask.edit on a shape layer; the path as the fill's soft vector mask, Photoshop's 10 px feather ramp within 1 level; PSD mask parameters and .pcraft, #5846, 2026-10-15)"
 
 [[item]]
 id = "TOOL-214-13"

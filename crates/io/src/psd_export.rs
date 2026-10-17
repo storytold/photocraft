@@ -439,7 +439,11 @@ impl Ex {
         self.warnings.extend(warnings);
         let mut mask = MaskData::None;
         // Vector mask density/feather live in the mask parameters, with or without a user mask.
-        let vector = l.vector_mask.as_ref().map(|vm| (vm.density, vm.feather));
+        // A shape layer's path is its vector mask, with the shape's own density and feather.
+        let vector = match &l.content {
+            LayerContent::Shape(sh) if l.vector_mask.is_none() => Some((sh.density, sh.feather)),
+            _ => l.vector_mask.as_ref().map(|vm| (vm.density, vm.feather)),
+        };
         if let Some(m) = &l.mask {
             let (md, ch) = self.mask(m, vector);
             mask = md;
@@ -1815,7 +1819,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
 /// every value is the default (density 1, feather 0).
 fn mask_parameters(user: Option<(f32, f32)>, vector: Option<(f32, f32)>) -> Option<MaskParameters> {
     let density = |v: Option<(f32, f32)>| v.and_then(|(d, _)| (d < 1.0).then(|| q255(d)));
-    let feather = |v: Option<(f32, f32)>| v.and_then(|(_, f)| (f != 0.0).then_some(f64::from(f)));
+    let feather = |v: Option<(f32, f32)>| v.and_then(|(_, f)| (f.is_finite() && f > 0.0).then_some(f64::from(f)));
     let p =
         MaskParameters { flags: 0, user_density: density(user), user_feather: feather(user), vector_density: density(vector), vector_feather: feather(vector) };
     let flags = u8::from(p.user_density.is_some())

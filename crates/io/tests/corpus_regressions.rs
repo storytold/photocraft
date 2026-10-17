@@ -116,9 +116,10 @@ fn real_user_mask_with_parameters_is_decoded() {
 
 /// psd-tools layer_mask_data.psd, mask-parameters-no-real-channel.psd: a shape layer whose
 /// vector mask has a density (or feather) shows its fill beyond the path at 1 - density; the
-/// stored pixels hold only the shape. It imports as a fill layer with a soft vector mask.
+/// stored pixels hold only the shape. It imports as a shape with that density (#5846), rendered
+/// from its path rather than from the stored pixels.
 #[test]
-fn shape_with_vector_mask_density_imports_as_fill_with_soft_mask() {
+fn shape_with_vector_mask_density_imports_as_soft_shape() {
     let mut d = doc(SampleType::U8);
     let mut l = Layer::new("Ellipse", LayerContent::Fill(Fill::Solid(Color::BLACK)));
     let mut vm = VectorMask::new(square(8.0, 8.0, 24.0, 24.0));
@@ -138,8 +139,9 @@ fn shape_with_vector_mask_density_imports_as_fill_with_soft_mask() {
     }
     let imp = reimport(&file);
     let l = &imp.document.layers[1];
-    assert!(matches!(l.content, LayerContent::Fill(_)), "{}", l.content.kind_name());
-    assert_eq!(l.vector_mask.as_ref().map(|v| v.density), Some(204.0 / 255.0));
+    let LayerContent::Shape(sh) = &l.content else { panic!("{}", l.content.kind_name()) };
+    assert_eq!(sh.density, 204.0 / 255.0);
+    assert!(l.vector_mask.is_none());
     let f = photocraft_compose::flatten(&imp.document);
     assert!(f.get(16, 16)[0] < 0.01, "inside the path: black");
     assert!((f.get(2, 2)[0] - 0.8).abs() < 0.01, "outside: 20% of the fill shows: {:?}", f.get(2, 2));

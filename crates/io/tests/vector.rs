@@ -171,6 +171,51 @@ fn custom_stroke_styles_roundtrip_through_psd_vstk() {
     }
 }
 
+/// A shape layer's Density and Feather (#5846) live in the PSD mask parameters, as Photoshop
+/// writes a shape's vector-mask density and feather; with and without a vector stroke, at 8 and
+/// 16 bits, the shape comes back a shape with both and renders its soft fill again.
+#[test]
+fn shape_density_and_feather_roundtrip_through_mask_parameters() {
+    let square = Path::new(vec![Subpath::polygon(&[(64.0, 64.0), (192.0, 64.0), (192.0, 192.0), (64.0, 192.0)])]);
+    for depth in [SampleType::U8, SampleType::U16] {
+        for stroke in [None, Some(ShapeStroke { width: 2.0, ..ShapeStroke::default() })] {
+            let mut d = Document::with_background("v", Size::new(256, 256), ColorMode::Rgb, depth, Color::WHITE);
+            let mut sh = ShapeLayer {
+                path: square.clone(),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                stroke: stroke.clone(),
+                density: 0.5,
+                feather: 6.0,
+                ..ShapeLayer::default()
+            };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            d.layers.push(Layer::new("Shape", LayerContent::Shape(sh)));
+            let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+            let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+            let rec = file.layers().last().unwrap();
+            let p = rec.layer_mask().and_then(|m| m.parameters).expect("mask parameters");
+            assert_eq!((p.vector_density, p.vector_feather), (Some(128), Some(6.0)), "{depth:?}");
+            assert!(rec.channel(-2).is_none(), "no user mask channel");
+            let b = import("x.psd", &bytes).unwrap().document;
+            let LayerContent::Shape(back) = &b.layers[1].content else { panic!("{depth:?} {stroke:?}: {}", b.layers[1].content.kind_name()) };
+            assert_eq!((back.density, back.feather), (128.0 / 255.0, 6.0), "{depth:?} {stroke:?}");
+            assert_eq!(back.stroke, stroke);
+            assert!(b.layers[1].mask.is_none() && b.layers[1].vector_mask.is_none());
+            let f = photocraft_compose::flatten(&b);
+            assert!(f.get(128, 128)[0] < 0.01, "inside: black");
+            assert!((f.get(4, 4)[0] - 127.0 / 255.0).abs() < 0.01, "{depth:?}: beyond the path at half density: {:?}", f.get(4, 4));
+        }
+    }
+    // Defaults write no parameters.
+    let mut d = doc();
+    d.layers.push(shape_layer(ShapeLayer { path: square, fill: Some(Fill::Solid(Color::BLACK)), ..ShapeLayer::default() }));
+    let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    assert!(file.layers().last().unwrap().layer_mask().and_then(|m| m.parameters).is_none());
+    let LayerContent::Shape(back) = &import("x.psd", &bytes).unwrap().document.layers[1].content else { panic!("a shape") };
+    assert_eq!((back.density, back.feather), (1.0, 0.0));
+}
+
 #[test]
 fn vector_mask_roundtrip_and_removal() {
     let mut d = doc();

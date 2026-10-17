@@ -488,6 +488,11 @@ fn vector_fields_roundtrip_and_default_when_absent() {
         for l in layers.as_array_mut().unwrap() {
             l.as_object_mut().unwrap().remove("vector_mask");
             let c = l["content"].as_object_mut().unwrap();
+            // A shape's density and feather (#5846) came later still.
+            if c.get("kind").and_then(|k| k.as_str()) == Some("shape") {
+                c.remove("density");
+                c.remove("feather");
+            }
             for k in ["path", "stroke", "live"] {
                 c.remove(k);
             }
@@ -500,6 +505,15 @@ fn vector_fields_roundtrip_and_default_when_absent() {
     let old: photocraft_format::manifest::DocM = serde_json::from_value(v).unwrap();
     assert!(old.paths.is_empty() && old.work_path.is_none());
     assert!(old.layers.iter().all(|l| l.vector_mask.is_none()));
+    let shapes: Vec<_> = old
+        .layers
+        .iter()
+        .filter_map(|l| match &l.content {
+            photocraft_format::manifest::ContentM::Shape { density, feather, .. } => Some((*density, *feather)),
+            _ => None,
+        })
+        .collect();
+    assert!(!shapes.is_empty() && shapes.iter().all(|s| *s == (1.0, 0.0)), "{shapes:?}");
 }
 
 /// Type kerning (#206): the auto mode and manual kerning survive .pcraft; manifests written

@@ -53,6 +53,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
     depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
+    (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
         for (k, t) in c.tiles() {
@@ -163,6 +164,7 @@ mod tests {
             live: None,
             cache: None,
             psd_raw: None,
+            ..ShapeLayer::default()
         }
     }
 

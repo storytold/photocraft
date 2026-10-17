@@ -1758,7 +1758,7 @@ fn layer_effects_on_shape_layers() {
         let path = Path::new(vec![Subpath::polygon(&[(14.3, 12.6), (70.2, 18.1), (60.7, 58.4), (24.9, 50.2)])]);
         let mut fill = Color::rgb(0.3, 0.6, 0.9);
         fill.alpha = alpha;
-        let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(fill)), stroke: None, live: None, cache: None, psd_raw: None };
+        let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(fill)), stroke: None, live: None, cache: None, psd_raw: None, ..ShapeLayer::default() };
         sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
         let mut l = Layer::new("shape", LayerContent::Shape(sh));
         l.effects.items = vec![
@@ -1796,7 +1796,7 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
                 paint: Fill::Solid(Color::rgb(0.1, 0.8, 0.2)),
                 ..ShapeStroke::default()
             });
-            let mut sh = ShapeLayer { path, fill: Some(fill), stroke: stroke_v, live: None, cache: None, psd_raw: None };
+            let mut sh = ShapeLayer { path, fill: Some(fill), stroke: stroke_v, live: None, cache: None, psd_raw: None, ..ShapeLayer::default() };
             sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
             let mut l = Layer::new("shape", LayerContent::Shape(sh));
             if masked {
@@ -2151,7 +2151,15 @@ fn stroked_shapes_with_clipped_layers() {
             d.layers.push(noise_layer("bg", d.pixel_format(), Rect::from_xywh(0, 0, 80, 64), 1, 0.3));
             let path = Path::new(vec![Subpath::polygon(&[(10.3, 8.6), (66.2, 12.1), (58.7, 54.4), (16.9, 48.2)])]);
             let stroke = ShapeStroke { width: 5.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..Default::default() };
-            let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))), stroke: Some(stroke), live: None, cache: None, psd_raw: None };
+            let mut sh = ShapeLayer {
+                path,
+                fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))),
+                stroke: Some(stroke),
+                live: None,
+                cache: None,
+                psd_raw: None,
+                ..ShapeLayer::default()
+            };
             sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
             let mut l = Layer::new("shape", LayerContent::Shape(sh));
             l.blend = blend;
@@ -2617,4 +2625,37 @@ fn pass_through_clipping_base_with_an_adjustment() {
     clip.clipped = true;
     d.layers.push(clip);
     check(&mut g, &d, "pass-through clipping base with an adjustment");
+}
+
+/// #5846: a shape's Density and Feather soften its fill (its own rendered pixels), with and
+/// without a vector stroke over clipped layers and layer effects: the GPU matches the CPU.
+#[test]
+fn soft_shapes_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (density, feather, stroked, fx) in [(1.0, 6.0, false, false), (0.4, 0.0, true, false), (0.6, 4.0, true, true), (1.0, 3.0, false, true)] {
+            let mut d = fx_doc(90, 70, depth);
+            let path = Path::new(vec![Subpath::polygon(&[(14.3, 12.6), (70.2, 18.1), (60.7, 58.4), (24.9, 50.2)])]);
+            let stroke = stroked.then(|| ShapeStroke { width: 3.0, paint: Fill::Solid(Color::rgb(0.1, 0.8, 0.2)), ..ShapeStroke::default() });
+            let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.3, 0.6, 0.9))), stroke, density, feather, ..ShapeLayer::default() };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("shape", LayerContent::Shape(sh));
+            if fx {
+                l.effects.items = vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.7, 120.0, 4.0, 5.0, 0.0))];
+            }
+            d.layers.push(l);
+            if stroked {
+                let mut c = noise_layer("clipped", d.pixel_format(), Rect::from_xywh(0, 0, 90, 70), 11, 0.9);
+                c.clipped = true;
+                d.layers.push(c);
+            }
+            let what = format!("{depth:?} density {density} feather {feather} stroked {stroked} fx {fx}");
+            if fx {
+                fx_check(&mut g, &d, &what);
+            } else {
+                check(&mut g, &d, &what);
+            }
+        }
+    }
 }
