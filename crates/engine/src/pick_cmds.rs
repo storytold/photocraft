@@ -63,7 +63,15 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
         };
         // As the compositor sees it: density applied, all ones when the mask is disabled.
         let mask = l.mask.as_ref().map_or(1.0, |m| m.value(x, y));
-        if alpha * mask > 0.0 {
+        // A group's mask hides its children too. Use the compositor's cached mask for
+        // feathers/vector masks so a visible soft edge is not rejected by the raw mask.
+        if alpha * mask > 0.0
+            && (1..path.len()).all(|n| {
+                let Some(parent) = doc.layer_at(&path[..n]) else { return false };
+                photocraft_compose::masks::combined_mask(parent, doc.bounds())
+                    .map_or_else(|| parent.mask.as_ref().is_none_or(|m| m.value(x, y) > 0.0), |mask| mask.sample_channel(x, y, 0) > 0.0)
+            })
+        {
             out.push(l.id);
         }
     }
@@ -465,5 +473,64 @@ mod tests {
         let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
         let ids: Vec<_> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].clone()).collect();
         assert_eq!(ids, vec![json!(red.0), json!(bg.0)]);
+    }
+
+    #[test]
+    fn ancestor_masks_hide_layers_from_point_picking() {
+        for nested in [false, true] {
+            let (mut s, a, _) = two_squares();
+            let bg = s.active().unwrap().doc.layers[0].id;
+            s.execute("layer.select", json!({"layer": a.0})).unwrap();
+            s.execute("layer.new.groupFromLayers", json!({"name": "Masked"})).unwrap();
+            if nested {
+                s.execute("layer.new.groupFromLayers", json!({"name": "Outer"})).unwrap();
+            }
+            s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(photocraft_compose::render(doc, Rect::from_xywh(5, 5, 1, 1)).get(5, 5), [1.0; 4]);
+            assert_eq!(layers_at(doc, 5, 5), vec![bg], "nested={nested}: hidden pixels are not hits");
+            for target in ["layer", "group"] {
+                let pick = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "target": target, "select": false})).unwrap();
+                assert_eq!(pick["layer"], bg.0, "nested={nested}, target={target}");
+            }
+            let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
+            let ids: Vec<_> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].clone()).collect();
+            assert_eq!(ids, vec![json!(bg.0)], "the context menu excludes the masked child too");
+        }
+    }
+
+    #[test]
+    fn ancestor_masks_preserve_visible_density_disabled_and_feathered_hits() {
+        let (mut s, a, _) = two_squares();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        let group = LayerId(s.execute("layer.new.groupFromLayers", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        for density in [0, 50] {
+            s.execute("layer.layerMask.edit", json!({"density": density})).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(layers_at(doc, 5, 5), vec![a, bg], "density={density}");
+            assert_eq!(auto_select_target(doc, 5, 5, true), Some(group));
+        }
+        s.execute("layer.layerMask.edit", json!({"density": 100})).unwrap();
+        s.edit("Disable group mask", |doc, _| {
+            doc.layer_mut(group).unwrap().mask.as_mut().unwrap().enabled = false;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(layers_at(&s.active().unwrap().doc, 5, 5), vec![a, bg]);
+        s.edit("Feather group mask", |doc, _| {
+            let mask = doc.layer_mut(group).unwrap().mask.as_mut().unwrap();
+            mask.enabled = true;
+            mask.feather = 2.0;
+            mask.surface.fill_rect(Rect::new(6, 0, 10, 10), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.layer(group).unwrap().mask.as_ref().unwrap().value(5, 5), 0.0, "outside the raw mask");
+        let shown = photocraft_compose::render(doc, Rect::from_xywh(5, 5, 1, 1)).get(5, 5);
+        assert!(shown[0] < 1.0 && shown[1] == 1.0, "the feather reveals green content: {shown:?}");
+        assert_eq!(layers_at(doc, 5, 5), vec![a, bg], "the visible feather remains pickable");
     }
 }
