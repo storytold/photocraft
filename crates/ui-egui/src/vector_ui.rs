@@ -1196,11 +1196,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let stroke_color = swatch(ui, stroke.as_ref().map(|s| &s.paint), bg, tl!("Stroke color"));
     if crate::widgets::value_field(ui, &mut width, 0.0..=288.0, "px", 58.0).changed() {
         o.stroke_width = width;
-        let mut p = json!({"width": width});
-        if stroke.is_none() {
-            p["color"] = json!(bg);
-        }
-        edit = Some(if width <= 0.0 { json!({"stroke": null}) } else { json!({"stroke": p, "coalesce": key("stroke-w")}) });
+        edit = Some(stroke_width_edit(width, stroke.as_ref(), &style, bg, &key));
     }
     let preview = target.as_ref().filter(|s| s.stroke.is_some()).map(|s| (s.doc, s.layer));
     if let Some(change) =
@@ -1326,6 +1322,28 @@ enum PaintChange {
 
 fn enabled_stroke_width(width: f32) -> f32 {
     if width.is_finite() && width > 0.0 { width } else { 3.0 }
+}
+
+/// Params for a shape width-field edit (`key` scopes undo coalescing).
+/// A 0 px width removes the stroke; growing it back from nothing reuses the
+/// displayed style options instead of resetting them (#6191).
+fn stroke_width_edit(
+    width: f32,
+    stroke: Option<&photocraft_doc::ShapeStroke>,
+    style: &crate::shape_stroke_ui::StrokeOptions,
+    bg: [f32; 4],
+    key: &impl Fn(&str) -> Option<String>,
+) -> Value {
+    if width <= 0.0 {
+        json!({"stroke": null})
+    } else if stroke.is_none() {
+        let mut p = style.params();
+        p["width"] = json!(width);
+        p["color"] = json!(bg);
+        json!({"stroke": p, "coalesce": key("stroke-w")})
+    } else {
+        json!({"stroke": {"width": width}, "coalesce": key("stroke-w")})
+    }
 }
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
@@ -1886,6 +1904,40 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #6191: zeroing a shape's stroke width removes the stroke, but growing
+    /// it back reuses the displayed style options instead of resetting them.
+    #[test]
+    fn stroke_width_edits_keep_options_across_zero() {
+        let key = |k: &str| Some(format!("k-{k}"));
+        let style = crate::shape_stroke_ui::StrokeOptions {
+            align: photocraft_doc::StrokeAlign::Inside,
+            cap: photocraft_doc::LineCap::Round,
+            join: photocraft_doc::LineJoin::Bevel,
+            miter_limit: 7.0,
+            dashes: vec![4.0, 2.0],
+            dash_offset: 1.0,
+            opacity: 0.5,
+        };
+        let bg = [0.0, 0.0, 1.0, 1.0];
+        // Zero removes the stroke.
+        assert_eq!(stroke_width_edit(0.0, Some(&photocraft_doc::ShapeStroke::default()), &style, bg, &key), json!({"stroke": null}));
+        // Growing back from nothing reuses the displayed options.
+        let p = stroke_width_edit(5.0, None, &style, bg, &key);
+        assert_eq!(p["stroke"]["width"], json!(5.0));
+        assert_eq!(p["stroke"]["color"], json!(bg));
+        assert_eq!(p["stroke"]["align"], json!("inside"));
+        assert_eq!(p["stroke"]["cap"], json!("round"));
+        assert_eq!(p["stroke"]["join"], json!("bevel"));
+        assert_eq!(p["stroke"]["miterLimit"], json!(7.0));
+        assert_eq!(p["stroke"]["dashes"], json!([4.0, 2.0]));
+        assert_eq!(p["stroke"]["dashOffset"], json!(1.0));
+        assert_eq!(p["stroke"]["opacity"], json!(50.0));
+        assert_eq!(p["coalesce"], json!("k-stroke-w"));
+        // Retargeting an existing stroke sends only the width.
+        let p = stroke_width_edit(2.0, Some(&photocraft_doc::ShapeStroke::default()), &style, bg, &key);
+        assert_eq!(p, json!({"stroke": {"width": 2.0}, "coalesce": "k-stroke-w"}));
+    }
 
     /// #4084: zoomed in, a curve's chords stay within a fraction of a pixel of the true curve
     /// (16 fixed chords showed corners), and a straight segment stays one chord.
