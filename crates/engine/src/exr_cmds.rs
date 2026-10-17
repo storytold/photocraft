@@ -52,7 +52,8 @@ fn open_exr_parts(s: &mut Session, p: &Value) -> Result<Value> {
         precomp: p.get("precomp").and_then(Value::as_bool).unwrap_or(false),
     };
     let bytes = read_file(&path)?;
-    let r = photocraft_io::exr_parts::import(&stem(&path), &bytes, &sel).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut r = photocraft_io::exr_parts::import(&stem(&path), &bytes, &sel).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    crate::file_cmds::tag_exr_colorspace(s, &path, &mut r.document);
     let (i, color) = s.open_document(r.document, Some(path.clone()));
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
@@ -169,6 +170,25 @@ mod tests {
             assert!((px[0] - 0.8).abs() < 1e-4, "{:?}", px);
         } else {
             panic!("expected a raster layer");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// File Handling › "Open color-less EXR as ACEScg" applies to Open EXR Parts too.
+    #[test]
+    fn open_exr_parts_honours_the_aces_cg_preference() {
+        let dir = std::env::temp_dir().join(format!("pcraft-exr-aces-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("aov.exr");
+        write_multipart(&path);
+        let linear = photocraft_cms::Builtin::LinearSrgb.profile().to_bytes();
+        let aces = photocraft_cms::Builtin::AcesCg.profile().to_bytes();
+        for (on, want) in [(false, &linear), (true, &aces)] {
+            let mut s = session();
+            s.prefs.edit(|p| p.file_handling.exr_aces_cg = on);
+            s.execute("file.openExrParts", json!({"path": path.to_str().unwrap(), "part/beauty": true})).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.icc_profile.as_deref().map(|v| v.as_slice()), Some(want.as_slice()), "exr_aces_cg = {on}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }

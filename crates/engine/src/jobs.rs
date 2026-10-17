@@ -503,7 +503,9 @@ impl Session {
                 warm_layer_bounds(&imported.document, || ctx.check())?;
                 Ok(imported)
             },
-            move |s, r: photocraft_io::ImportResult| {
+            move |s, mut r: photocraft_io::ImportResult| {
+                // File Handling's ACEScg option, before the colour prompt looks at the profile.
+                crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                 // Ask When Opening: held back until the prompt is answered (`take_held_open`). A
                 // developed raw has no embedded profile to ask about.
                 let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));

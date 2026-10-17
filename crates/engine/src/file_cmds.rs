@@ -461,7 +461,7 @@ fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
 /// With File Handling's ACEScg option on, such an EXR opens as ACEScg instead (AP1,
 /// linear) — the working space ACES render pipelines write. Only the io default is
 /// replaced; an embedded or EXIF-declared profile is kept untouched.
-fn tag_exr_colorspace(s: &Session, name: &str, doc: &mut Document) {
+pub(crate) fn tag_exr_colorspace(s: &Session, name: &str, doc: &mut Document) {
     if !name.to_ascii_lowercase().ends_with(".exr") || !s.prefs.get().file_handling.exr_aces_cg {
         return;
     }
@@ -1760,5 +1760,39 @@ mod aces_exr_tests {
         open_bytes_as(&mut s, "shot.exr", &bytes, None, None).unwrap();
         let d = &s.active().unwrap().doc;
         assert_eq!(d.icc_profile.as_deref().map(|v| v.as_slice()), Some(aces.as_slice()));
+    }
+
+    /// The desktop app opens files as background jobs (File > Open, drag-drop, Open Recent):
+    /// the ACEScg preference applies there too, not only to `file.openAs`.
+    #[test]
+    fn exr_aces_cg_preference_applies_to_background_opens() {
+        use crate::jobs::{OpenSource, Started};
+        let image = photocraft_codecs::Image::from_f32(4, 4, photocraft_codecs::ChannelLayout::Rgb, &[0.5; 48]).unwrap();
+        let bytes =
+            std::sync::Arc::new(photocraft_codecs::encode(&image, photocraft_codecs::Format::OpenExr, &photocraft_codecs::EncodeOptions::default()).unwrap());
+        let linear = photocraft_cms::Builtin::LinearSrgb.profile().to_bytes();
+        let aces = photocraft_cms::Builtin::AcesCg.profile().to_bytes();
+        for (on, want) in [(false, &linear), (true, &aces)] {
+            let mut s = Session::new();
+            s.prefs.edit(|p| p.file_handling.exr_aces_cg = on);
+            let v = match s.start_open("shot.exr", OpenSource::Bytes(std::sync::Arc::clone(&bytes))).unwrap() {
+                Started::Job(id) => s.wait_job(id).unwrap(),
+                Started::Done(v) => v,
+            };
+            // ACEScg isn't the working space, so Ask When Opening holds it for the prompt, which
+            // names the ACEScg profile; linear sRGB (io's HDR default) opens without asking.
+            let profile = match v.get("held").and_then(Value::as_u64) {
+                Some(held) => {
+                    assert!(on, "{v}");
+                    assert!(v["color"]["embedded"].as_str().unwrap().starts_with("ACEScg"), "{v}");
+                    s.take_held_open(held).unwrap().0.icc_profile
+                }
+                None => {
+                    assert!(v.get("document").is_some(), "{v}");
+                    s.active().unwrap().doc.icc_profile.clone()
+                }
+            };
+            assert_eq!(profile.as_deref().map(|v| v.as_slice()), Some(want.as_slice()), "exr_aces_cg = {on}");
+        }
     }
 }
