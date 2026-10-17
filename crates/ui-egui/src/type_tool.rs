@@ -825,8 +825,9 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                 copy_selection(app, ctx);
             }
             egui::Event::Cut => cut_selection(app, ctx),
-            egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                let keypad_enter = *physical_key == Some(crate::keyboard_tags::NUMPAD_ENTER_TAG);
                 let key = &flow_key(*key, vertical_flow);
                 match key {
                     // Photoshop's type formatting keys act on the selected characters and win
@@ -911,7 +912,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                         let to = line_edge(app, id, ed.caret, *key == Key::End);
                         set(app, to, m.shift);
                     }
-                    Key::Enter if m.command => commit_with(app, *m),
+                    Key::Enter if m.command || keypad_enter => commit_with(app, *m),
                     Key::Enter => insert(app, "\n"),
                     // Photoshop types a tab character; layout advances it to the next tab stop.
                     Key::Tab if !m.command && !m.alt && !m.shift => insert(app, "\t"),

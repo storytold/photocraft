@@ -290,6 +290,27 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
 }
 
+#[test]
+fn numpad_enter_commits_inline_type_editing() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHOHO", "size": 120, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 2, 0.2);
+    click(&mut h, p);
+    super::insert(h.state_mut(), "x");
+    assert_eq!(text(h.state(), id).text, "HOxHOHO");
+    h.event(egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: Some(crate::keyboard_tags::NUMPAD_ENTER_TAG),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(h.state().ui.text_edit.is_none(), "numpad Enter ends the session");
+    assert_eq!(text(h.state(), id).text, "HOxHOHO");
+}
+
 /// Preferences ▸ Type ▸ Use Escape to Commit (default on): with it off, Escape cancels the
 /// session like the Cancel button instead of committing.
 #[test]

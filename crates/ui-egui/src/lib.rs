@@ -109,6 +109,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+mod keyboard_tags;
 pub mod kys_import;
 pub mod lasso_ui;
 pub(crate) mod last_brush;
@@ -434,6 +435,9 @@ pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 /// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
 /// report it (native Wayland): the cursor then follows the cursor preference (#1758).
 pub type CapsLockFn = Box<dyn FnMut() -> bool>;
+/// Whether keypad Enter and main Return are held, read from the OS (`numpad_enter` in the app).
+/// `None` on web and where the platform cannot distinguish the two keys (native Wayland).
+pub type EnterKeysFn = Box<dyn FnMut() -> (bool, bool)>;
 /// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
@@ -514,6 +518,8 @@ pub struct Services {
     /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
     /// the canvas can show the precise crosshair for painting tools, whatever the preference.
     pub caps_lock: Option<CapsLockFn>,
+    /// Keypad Enter vs main Return, for inline type commit (#6007).
+    pub enter_keys: Option<EnterKeysFn>,
     /// Keeps the undecorated window borderless, so the content and the pointer stay aligned
     /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
     /// decorated or the platform needs no fixing.
@@ -1945,6 +1951,10 @@ impl eframe::App for PhotocraftApp {
         // Native menu key equivalents become the key presses they were (see `native_menu`).
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
+        }
+        if let Some(f) = self.services.enter_keys.as_mut() {
+            let (numpad, main) = f();
+            keyboard_tags::tag_numpad_enter(raw_input, numpad, main);
         }
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         // Windows precision touchpads and some Linux Wayland compositors send pinches
