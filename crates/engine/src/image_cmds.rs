@@ -698,28 +698,33 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
         return Ok(Value::Null);
     }
     s.edit("Bit Depth", |doc, _| {
-        // 32-bit documents hold linear light (as Photoshop's do: grey 128 becomes 0.2159, measured
-        // in Photoshop 27.11), so the colour samples cross the document's tone curve when the
-        // depth crosses 32 bits: decoded after widening, encoded before narrowing (so no linear
-        // value is quantised to 8 or 16 bits). Masks, alpha and channels are not colour.
-        let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
-        let to_linear = depth == SampleType::F32;
-        let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
-        if crosses && !to_linear {
-            for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
-        }
-        convert_layers_depth(&mut doc.layers, depth);
-        if crosses && to_linear {
-            for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
-        }
-        for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
-            let f = ch.surface.format().with_sample(depth);
-            ch.surface = ch.surface.convert(f);
-        }
-        doc.depth = depth;
+        change_depth(doc, depth);
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
+    let current = doc.depth;
+    // 32-bit documents hold linear light (as Photoshop's do: grey 128 becomes 0.2159, measured
+    // in Photoshop 27.11), so the colour samples cross the document's tone curve when the
+    // depth crosses 32 bits: decoded after widening, encoded before narrowing (so no linear
+    // value is quantised to 8 or 16 bits). Masks, alpha and channels are not colour.
+    let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
+    let to_linear = depth == SampleType::F32;
+    let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
+    if crosses && !to_linear {
+        for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
+    }
+    convert_layers_depth(&mut doc.layers, depth);
+    if crosses && to_linear {
+        for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
+    }
+    for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
+        let f = ch.surface.format().with_sample(depth);
+        ch.surface = ch.surface.convert(f);
+    }
+    doc.depth = depth;
 }
 
 /// Image → Duplicate.

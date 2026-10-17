@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use photocraft_algo::resample::translate_surface;
 use photocraft_algo::transform::Homography;
-use photocraft_color::{BlendMode, PixelFormat};
+use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartContentsId, SmartFilter, SmartObject, SmartSource};
 use photocraft_geom::{Affine, Rect, Size};
 use photocraft_raster::Surface;
@@ -189,6 +189,30 @@ fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surf
     s
 }
 
+fn source_surface(src: &Document, buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Result<Surface> {
+    let gray = fmt.mode == ColorMode::Grayscale && src.pixel_format().mode != ColorMode::Grayscale;
+    let linear = fmt.sample == SampleType::F32 && src.depth != SampleType::F32;
+    if !gray && !linear {
+        return Ok(buffer_to_surface(buf, fmt));
+    }
+    let mut doc = Document::new(src.name.clone(), src.size, src.mode, src.depth);
+    doc.icc_profile = src.icc_profile.clone();
+    doc.layers = vec![Layer::new("source", LayerContent::Raster(buffer_to_surface(buf, src.pixel_format())))];
+    if gray {
+        let gray_profile = crate::color_cmds::working_profile(ColorMode::Grayscale);
+        crate::color_cmds::convert_document(&mut doc, &gray_profile, photocraft_cms::Intent::RelativeColorimetric, true)?;
+    }
+    if linear {
+        crate::image_cmds::change_depth(&mut doc, SampleType::F32);
+    }
+    let surface = doc.layers.pop().and_then(|l| match l.content {
+        LayerContent::Raster(s) => Some(s),
+        _ => None,
+    });
+    let surface = surface.ok_or_else(|| other("the smart object's source could not be converted"))?;
+    Ok(if surface.format() == fmt { surface } else { surface.convert(fmt) })
+}
+
 /// An SVG source rendered at `scale` times its own size (cached per scale), so a vector smart
 /// object stays sharp however it is placed.
 pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<SourceImage> {
@@ -224,7 +248,7 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     }
     let doc = decode_source(file_name, bytes)?;
     let buf = photocraft_compose::flatten(&doc);
-    let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: doc.bounds() };
+    let img = SourceImage { surface: Arc::new(source_surface(&doc, &buf, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
 }
@@ -271,7 +295,7 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
         photocraft_doc::StackMode::Variance => Stat::Variance,
     };
     let buf = photocraft_compose::Buffer { rect: bounds, px: photocraft_algo::stack::combine(&frames, stat) };
-    let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds };
+    let img = SourceImage { surface: Arc::new(source_surface(&doc, &buf, fmt)?), bounds };
     cache_put(key, img.clone());
     Ok(img)
 }
