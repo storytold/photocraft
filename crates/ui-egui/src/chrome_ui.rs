@@ -50,6 +50,7 @@ pub const STATUS_INFO: &[(&str, &str)] = &[
     ("efficiency", "Efficiency"),
     ("tool", "Current Tool"),
     ("layers", "Layer Count"),
+    ("coordinates", "Selection / Layer Bounds"),
 ];
 
 /// Photoshop's compact byte format: "10.3M", "412.5K".
@@ -119,6 +120,22 @@ fn status_info_text_with_units(doc: &Document, key: &str, tool: &str, profile: &
     }
 }
 
+/// Report document-pixel geometry from the selection mask or active layer.
+fn status_bounds_text(doc: &Document, active_layer: Option<photocraft_doc::LayerId>) -> String {
+    let selection = doc.selection.as_ref().map(|s| s.content_bounds()).filter(|r| !r.is_empty());
+    let (label, bounds) = if let Some(r) = selection {
+        ("Selection", r)
+    } else if let Some(layer) = active_layer.and_then(|id| doc.layer(id)) {
+        ("Layer", photocraft_compose::layer_bounds(layer, doc.bounds()))
+    } else {
+        return "No selection or layer".into();
+    };
+    if bounds.is_empty() {
+        return format!("{label}: empty");
+    }
+    format!("{label}: X {}  Y {}  W {}  H {}", bounds.x0, bounds.y0, bounds.width(), bounds.height())
+}
+
 fn profile_name(doc: &Document) -> String {
     let mode = crate::canvas::mode_label(doc);
     let Some(bytes) = doc.icc_profile.as_ref() else {
@@ -147,13 +164,17 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         status_message(app, ui, &t);
         return;
     };
-    let text = status_info_text_with_units(
-        &st.doc,
-        &app.ui.chrome.status_info,
-        tl!(app.ui.tool.label()),
-        &profile_name(&st.doc),
-        &app.session.prefs().units_and_rulers,
-    );
+    let text = if app.ui.chrome.status_info == "coordinates" {
+        status_bounds_text(&st.doc, st.active_layer)
+    } else {
+        status_info_text_with_units(
+            &st.doc,
+            &app.ui.chrome.status_info,
+            tl!(app.ui.tool.label()),
+            &profile_name(&st.doc),
+            &app.session.prefs().units_and_rulers,
+        )
+    };
     let mut pct = app.ui.views[i].zoom * 100.0;
     let control_h = crate::panels::status_bar_heights(&t).1;
     if widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", vec2(64.0, control_h)).changed() {
@@ -277,6 +298,20 @@ mod tests {
     }
 
     #[test]
+    fn status_bounds_follow_the_actual_selection_and_active_layer() {
+        let d = doc();
+        let id = d.layers[0].id;
+        assert_eq!(status_bounds_text(&d, Some(id)), "Layer: X 0  Y 0  W 2400  H 1500");
+        assert_eq!(status_bounds_text(&d, None), "No selection or layer");
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(status_bounds_text(doc, None), "Selection: X 0  Y 0  W 120  H 80");
+    }
+
+    #[test]
     fn default_status_shows_dimensions_like_photoshop() {
         let d = doc();
         assert_eq!(ChromeState::default().status_info, "dimensions");
@@ -302,7 +337,7 @@ mod tests {
         ] {
             let units = UnitsAndRulers { rulers: unit, ..Default::default() };
             assert_eq!(status_info_text_with_units(&d, "dimensions", "", "", &units), expected);
-            for (key, _) in STATUS_INFO.iter().filter(|(key, _)| *key != "dimensions") {
+            for (key, _) in STATUS_INFO.iter().filter(|(key, _)| *key != "dimensions" && *key != "coordinates") {
                 assert_eq!(status_info_text_with_units(&d, key, "Brush Tool", "sRGB", &units), status_info_text(&d, key, "Brush Tool", "sRGB"));
             }
         }
