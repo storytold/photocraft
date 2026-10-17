@@ -1026,7 +1026,10 @@ fn automation_smart_contents_malformed_embedded_sources_leave_documents_unchange
         paint(&mut s);
         let id = convert(&mut s);
         s.edit("bad source", |doc, _| {
-            smart_mut(doc, LayerId(id))?.source = SmartSource::Embedded { file_name: "broken.psd".into(), bytes: Arc::new(b"8BPS".to_vec()) };
+            let sm = smart_mut(doc, LayerId(id))?;
+            sm.source = SmartSource::Embedded { file_name: "broken.psd".into(), bytes: Arc::new(b"8BPS".to_vec()) };
+            // No placed pixels either: #4085's fallback has nothing to open.
+            sm.cache = None;
             Ok(())
         })
         .unwrap();
@@ -1107,4 +1110,80 @@ fn displace_smart_filter_reads_its_map_path_on_re_render() {
         assert!(max_diff(&before, &flat(&s)) > 0.1, "shown again at {depth}-bit");
     }
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A smart object whose embedded source is present but undecodable — what PSD import produces for
+/// an Illustrator `.ai` placed layer (#4085). `cache` keeps or clears the placed pixels.
+fn with_undecodable_contents(cache: bool) -> (Session, u64, Vec<u8>) {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let bytes = b"an Illustrator file PhotoCraft cannot decode".to_vec();
+    s.edit("undecodable contents", |doc, _| {
+        let sm = smart_mut(doc, LayerId(id))?;
+        sm.source = SmartSource::Embedded { file_name: "Vector Smart Object.ai".into(), bytes: Arc::new(bytes.clone()) };
+        if !cache {
+            sm.cache = None;
+        }
+        Ok(())
+    })
+    .unwrap();
+    (s, id, bytes)
+}
+
+fn embedded_source_bytes(sm: &SmartObject) -> Vec<u8> {
+    match &sm.source {
+        SmartSource::Embedded { bytes, .. } => bytes.to_vec(),
+        _ => panic!("not embedded"),
+    }
+}
+
+/// #4085: contents whose bytes exist but can't be decoded open as their placed pixels (one
+/// raster layer, named after the source file); opening does not touch the stored source bytes.
+#[test]
+fn edit_contents_opens_undecodable_sources_rasterized_from_the_cache() {
+    let (mut s, id, bytes) = with_undecodable_contents(true);
+    let cache = active_smart(&s).cache.unwrap();
+    let (b, pixel) = (cache.content_bounds(), cache.rgba(10, 10));
+    assert_eq!(embedded_source_bytes(&active_smart(&s)), bytes);
+    let r = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    let child = r["document"].as_u64().unwrap() as usize;
+    let d = s.active().unwrap();
+    assert_eq!(d.doc.name, "Vector Smart Object.ai (rasterized)");
+    assert_eq!((d.doc.size.width, d.doc.size.height), (b.width(), b.height()), "sized to the placed pixels");
+    assert_eq!(d.doc.layers.len(), 1);
+    let LayerContent::Raster(px) = &d.doc.layers[0].content else { panic!("not raster") };
+    assert_eq!(px.rgba(10 - b.x0, 10 - b.y0), pixel, "the placed pixels are the contents");
+    // Closing the untouched contents leaves the source bytes exactly as they were.
+    s.close(child).unwrap();
+    assert!(s.smart_links.is_empty());
+    s.set_active(0);
+    let d = s.active().unwrap();
+    assert!(matches!(d.doc.layer(LayerId(id)).unwrap().content, LayerContent::Smart(_)));
+    assert_eq!(embedded_source_bytes(&active_smart(&s)), bytes, "the source bytes are untouched");
+}
+
+/// #4085: with undecodable contents and no cache there is nothing to open, and the error names
+/// the format kind instead of a bare codec message.
+#[test]
+fn edit_contents_without_a_cache_names_the_undecodable_format() {
+    let (mut s, _, _) = with_undecodable_contents(false);
+    let e = s.execute("layer.smartObjects.editContents", json!({})).unwrap_err().to_string();
+    assert!(e.contains("Illustrator"), "{e}");
+    assert!(!e.contains("unrecognized image format"), "{e}");
+    assert_eq!(s.documents().len(), 1, "no contents document opened");
+}
+
+/// #4085: a smart filter on such a layer applies to the cached placed pixels instead of failing
+/// to re-render the undecodable source.
+#[test]
+fn smart_filters_apply_to_the_cached_pixels_of_undecodable_contents() {
+    let (mut s, _, _) = with_undecodable_contents(true);
+    let before = active_smart(&s).cache.unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, "filter.blur.gaussianBlur");
+    let b = before.content_bounds();
+    assert_ne!(sm.cache.as_ref().unwrap().read_region(b), before.read_region(b), "the cache is filtered");
 }

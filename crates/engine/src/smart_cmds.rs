@@ -19,7 +19,9 @@
 //! Converting a layer embeds it as an in-memory `.pcraft` bundle of a nested document (exactly
 //! lossless, layered, any depth/model). PSD placed layers keep their source in the preserved
 //! global `lnk2` block (found by uuid), and keep Photoshop's rendering until something changes,
-//! so an unedited PSD still round-trips byte for byte. PSD export (`photocraft_io::smart_map`)
+//! so an unedited PSD still round-trips byte for byte. Contents whose bytes can't be decoded
+//! (Illustrator/PDF sources, #4085) open for editing as their placed pixels instead of failing.
+//! PSD export (`photocraft_io::smart_map`)
 //! writes every smart object back as one: its source embedded in `lnk2` (a `.pcraft` source as a
 //! PSB), its smart filters in `filterFX` and its filter mask in `FEid`.
 
@@ -227,6 +229,13 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
+}
+
+/// Whether the smart object re-renders from its source: bytes present **and** decodable.
+/// Undecodable contents (Illustrator/PDF sources PhotoCraft can't read yet) are not renderable:
+/// callers fall back to the cached placed pixels instead of failing to refresh.
+fn renderable_source(doc: &Document, sm: &SmartObject) -> bool {
+    source_bytes(&doc.metadata, &sm.source).is_some_and(|(name, bytes)| source_image(&name, &bytes, doc.pixel_format()).is_ok())
 }
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
@@ -521,7 +530,7 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 /// pixels (and still recorded).
 pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
     let canvas = doc.bounds();
-    let renderable = source_bytes(&doc.metadata, &smart(doc, id)?.source).is_some();
+    let renderable = renderable_source(doc, smart(doc, id)?);
     let sm = smart_mut(doc, id)?;
     if renderable {
         if let Some(sel) = selection
@@ -867,6 +876,40 @@ fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "fileName": name, "bytes": r.bytes.len(), "converted": true, "warnings": r.warnings}))
 }
 
+/// The placed pixels of a smart object whose source can't be decoded, as an editable document of
+/// one raster layer named after its source file: the Edit Contents fallback for Illustrator/PDF
+/// contents (#4085). The source bytes are never touched.
+fn rasterized_contents(doc: &Document, id: LayerId, file_name: &str) -> Result<Document> {
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(sm) = &l.content else { return Err(other("the layer is not a smart object")) };
+    let cache = sm.cache.as_ref().ok_or_else(|| other("the smart object has no cached pixels to open"))?;
+    let b = cache.content_bounds();
+    if b.is_empty() {
+        return Err(other("the smart object has no cached pixels to open"));
+    }
+    let mut child = Document::new(format!("{file_name} (rasterized)"), Size::new(b.width(), b.height()), doc.mode, doc.depth);
+    child.resolution_dpi = doc.resolution_dpi;
+    child.icc_profile = doc.icc_profile.clone();
+    let px = translate_surface(cache, -b.x0, -b.y0);
+    child.layers.push(Layer::new(l.name.as_str(), LayerContent::Raster(px)));
+    Ok(child)
+}
+
+/// The error for contents PhotoCraft can't decode: name the format kind and the way out, instead
+/// of a bare codec message (#4085).
+fn undecodable_contents(file_name: &str, e: EngineError) -> EngineError {
+    let ext = std::path::Path::new(file_name).extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase());
+    let kind = match ext.as_deref() {
+        Some("ai") => "an Illustrator",
+        Some("pdf") => "a PDF",
+        Some("eps") => "an EPS",
+        _ => return e,
+    };
+    other(format!(
+        "PhotoCraft can't edit {kind} smart object ({file_name}) yet. Export its contents as a PSD, PNG or another format PhotoCraft reads and use Replace Contents"
+    ))
+}
+
 fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -882,10 +925,20 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let source = &smart(&st.doc, id)?.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let mut child = match decode_source(&name, &bytes) {
+        Ok(mut child) => {
+            child.name = name.clone();
+            child
+        }
+        // Undecodable contents (Illustrator/PDF, #4085): open the placed pixels instead, so the
+        // user can still edit what is on the canvas. The stored source bytes stay untouched.
+        Err(e) => match rasterized_contents(&st.doc, id, &name) {
+            Ok(child) => child,
+            Err(_) => return Err(undecodable_contents(&name, e)),
+        },
+    };
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
-    child.name = name;
     let index = s.add_document(child, None);
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
