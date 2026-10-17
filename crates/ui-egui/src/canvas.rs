@@ -6012,6 +6012,8 @@ pub fn commit_crop(app: &mut PhotocraftApp) {
     crate::crop_ui::cancel_stale(app);
     // Committing ends the box's own Undo/Redo: from here Edit › Undo reverts the document.
     crate::crop_ui::clear_history(app);
+    // ↵ during a drag ends it: the release must not bring back the old document's frame.
+    app.crop.drag = None;
     let Some(r) = app.ui.crop_rect.take() else { return };
     // The crop's default mode leaves the view upright (`crop_mode`).
     crate::crop_mode::upright(app);

@@ -1725,6 +1725,22 @@ mod tests {
     }
 
     #[test]
+    fn enter_during_a_drag_ends_the_drag() {
+        // ↵ while the frame is still being dragged commits it; the release after must not bring
+        // back a frame in the old document's coordinates as a pending crop.
+        let mut app = app(SampleType::U8);
+        app.ui.crop_rect = Some([20.0, 20.0, 120.0, 70.0]);
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, NONE);
+        crate::canvas::commit_crop(&mut app);
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, NONE);
+        ensure_frame(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
+        assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 100.0, 50.0]));
+        assert!(!pending(&app));
+    }
+
+    #[test]
     fn degenerate_and_bad_input_never_panics() {
         let mut app = app(SampleType::U8);
         for r in [[0.0; 4], [5.0, 5.0, 5.0, 5.0], [10.0, 10.0, 0.0, 0.0], [f64::NAN, 0.0, 10.0, 10.0], [f64::INFINITY, 0.0, f64::MAX, 1e300]] {
