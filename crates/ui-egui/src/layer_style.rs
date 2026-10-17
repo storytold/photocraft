@@ -1267,6 +1267,107 @@ fn blend_quad(v: Option<&Value>) -> [u8; 4] {
     q
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BlendDrag {
+    Pair { pair: usize, origin_v: u8 },
+    Split { handle: usize, origin: u8 },
+    Single(usize),
+}
+
+pub(crate) fn step_blend_drag(mode: &mut BlendDrag, q: &[u8; 4], target: u8, alt: bool) -> [u8; 4] {
+    let mut n = *q;
+    match *mode {
+        BlendDrag::Pair { pair, origin_v } => {
+            if alt {
+                if pair == 0 {
+                    if target >= origin_v {
+                        *mode = BlendDrag::Split { handle: 1, origin: origin_v };
+                        n[0] = origin_v;
+                        n[1] = target.clamp(origin_v, q[2]);
+                    } else {
+                        *mode = BlendDrag::Split { handle: 0, origin: origin_v };
+                        n[1] = origin_v;
+                        n[0] = target.clamp(0, origin_v);
+                    }
+                } else if target <= origin_v {
+                    *mode = BlendDrag::Split { handle: 2, origin: origin_v };
+                    n[3] = origin_v;
+                    n[2] = target.clamp(q[1], origin_v);
+                } else {
+                    *mode = BlendDrag::Split { handle: 3, origin: origin_v };
+                    n[2] = origin_v;
+                    n[3] = target.clamp(origin_v, 255);
+                }
+            } else {
+                let delta = i16::from(target) - i16::from(origin_v);
+                if pair == 0 {
+                    let v = (i16::from(origin_v) + delta).clamp(0, q[2] as i16) as u8;
+                    n[0] = v;
+                    n[1] = v;
+                } else {
+                    let v = (i16::from(origin_v) + delta).clamp(q[1] as i16, 255) as u8;
+                    n[2] = v;
+                    n[3] = v;
+                }
+            }
+        }
+        BlendDrag::Split { handle, origin } => match handle {
+            1 => {
+                if target >= origin {
+                    n[0] = origin;
+                    n[1] = target.clamp(origin, q[2]);
+                } else {
+                    *mode = BlendDrag::Split { handle: 0, origin };
+                    n[1] = origin;
+                    n[0] = target.clamp(0, origin);
+                }
+            }
+            0 => {
+                if target <= origin {
+                    n[1] = origin;
+                    n[0] = target.clamp(0, origin);
+                } else {
+                    *mode = BlendDrag::Split { handle: 1, origin };
+                    n[0] = origin;
+                    n[1] = target.clamp(origin, q[2]);
+                }
+            }
+            2 => {
+                if target <= origin {
+                    n[3] = origin;
+                    n[2] = target.clamp(q[1], origin);
+                } else {
+                    *mode = BlendDrag::Split { handle: 3, origin };
+                    n[2] = origin;
+                    n[3] = target.clamp(origin, 255);
+                }
+            }
+            3 => {
+                if target >= origin {
+                    n[2] = origin;
+                    n[3] = target.clamp(origin, 255);
+                } else {
+                    *mode = BlendDrag::Split { handle: 2, origin };
+                    n[3] = origin;
+                    n[2] = target.clamp(q[1], origin);
+                }
+            }
+            _ => {}
+        },
+        BlendDrag::Single(h) => match h {
+            0 => n[0] = target.clamp(0, n[1]),
+            1 => n[1] = target.clamp(n[0], n[2]),
+            2 => n[2] = target.clamp(n[1], n[3]),
+            3 => n[3] = target.clamp(n[2], 255),
+            _ => {}
+        },
+    }
+    for i in 1..4 {
+        n[i] = n[i].max(n[i - 1]);
+    }
+    n
+}
+
 /// A Blend If slider: a black-to-white ramp with a black and a white handle, each split in two
 /// halves by Alt-dragging (the layer fades between them). Returns whether `q` changed.
 fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
@@ -1287,47 +1388,44 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     ui.painter().rect_stroke(ramp, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     // Handles: triangles under the ramp; a split handle shows two half triangles.
     let mut changed = false;
-    let drag_key = id.with("handle");
+    let drag_key = id.with("blend_drag");
+    let alt = ui.input(|i| i.modifiers.alt);
     if resp.drag_started()
         && let Some(pos) = resp.interact_pointer_pos()
     {
-        let near = (0..4).min_by(|a, b| (x_of(q[*a]) - pos.x).abs().total_cmp(&(x_of(q[*b]) - pos.x).abs())).unwrap_or(0);
-        // Between two coinciding halves, pick by the side of the pointer.
-        let near = match near {
-            0 | 1 if q[0] == q[1] => usize::from(pos.x > x_of(q[0])),
-            2 | 3 if q[2] == q[3] => 2 + usize::from(pos.x > x_of(q[2])),
-            n => n,
+        let d_black = if q[0] == q[1] { (pos.x - x_of(q[0])).abs() } else { (pos.x - (x_of(q[0]) - 2.5)).abs().min((pos.x - (x_of(q[1]) + 2.5)).abs()) };
+        let d_white = if q[2] == q[3] { (pos.x - x_of(q[2])).abs() } else { (pos.x - (x_of(q[2]) - 2.5)).abs().min((pos.x - (x_of(q[3]) + 2.5)).abs()) };
+        let mode = if d_black <= d_white {
+            if q[0] == q[1] {
+                if alt {
+                    let h = if pos.x >= x_of(q[0]) { 1 } else { 0 };
+                    BlendDrag::Split { handle: h, origin: q[0] }
+                } else {
+                    BlendDrag::Pair { pair: 0, origin_v: q[0] }
+                }
+            } else {
+                let h = if (pos.x - x_of(q[0])).abs() <= (pos.x - x_of(q[1])).abs() { 0 } else { 1 };
+                BlendDrag::Single(h)
+            }
+        } else if q[2] == q[3] {
+            if alt {
+                let h = if pos.x <= x_of(q[2]) { 2 } else { 3 };
+                BlendDrag::Split { handle: h, origin: q[2] }
+            } else {
+                BlendDrag::Pair { pair: 2, origin_v: q[2] }
+            }
+        } else {
+            let h = if (pos.x - x_of(q[2])).abs() <= (pos.x - x_of(q[3])).abs() { 2 } else { 3 };
+            BlendDrag::Single(h)
         };
-        ui.data_mut(|d| d.insert_temp(drag_key, near));
+        ui.data_mut(|d| d.insert_temp(drag_key, mode));
     }
     if resp.dragged()
-        && let (Some(h), Some(pos)) = (ui.data(|d| d.get_temp::<usize>(drag_key)), resp.interact_pointer_pos())
-        && let Some(cur) = q.get(h).copied()
+        && let (Some(mut mode), Some(pos)) = (ui.data(|d| d.get_temp::<BlendDrag>(drag_key)), resp.interact_pointer_pos())
     {
         let target = v_of(pos.x);
-        let split = ui.input(|i| i.modifiers.alt);
-        let mut n = *q;
-        let pair = if h < 2 { 0 } else { 2 };
-        if split {
-            n[h] = target;
-        } else {
-            // Unsplit: the pair moves together, keeping its spread.
-            let delta = i16::from(target) - i16::from(cur);
-            for v in &mut n[pair..pair + 2] {
-                *v = (i16::from(*v) + delta).clamp(0, 255) as u8;
-            }
-        }
-        // Keep the order black low <= black high <= white low <= white high, pushing the others.
-        for i in 0..4 {
-            if i < h {
-                n[i] = n[i].min(n[h]);
-            } else if i > h {
-                n[i] = n[i].max(n[h]);
-            }
-        }
-        for i in 1..4 {
-            n[i] = n[i].max(n[i - 1]);
-        }
+        let n = step_blend_drag(&mut mode, q, target, alt);
+        ui.data_mut(|d| d.insert_temp(drag_key, mode));
         if n != *q {
             *q = n;
             changed = true;
@@ -1805,6 +1903,39 @@ mod tests {
         assert_eq!(blend_quad(Some(&json!([200, 10, 5, 300]))), [200, 200, 200, 255]);
         assert_eq!(blend_quad(None), [0, 0, 255, 255]);
         assert_eq!(blend_quad(Some(&json!(["x", null]))), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn blend_if_alt_split_and_drag_behavior() {
+        // Case 1: Alt-drag on unsplit black handle [0, 0, 255, 255] splits the right half
+        let mut mode = BlendDrag::Pair { pair: 0, origin_v: 0 };
+        let q = [0, 0, 255, 255];
+        let q1 = step_blend_drag(&mut mode, &q, 45, true);
+        assert_eq!(q1, [0, 45, 255, 255], "Alt-drag right must split black triangle into [0, 45]");
+
+        // Case 2: Moving the split right half further to 70
+        let q2 = step_blend_drag(&mut mode, &q1, 70, false);
+        assert_eq!(q2, [0, 70, 255, 255]);
+
+        // Case 3: Dragging the split half back to 0 merges the handle
+        let q3 = step_blend_drag(&mut mode, &q2, 0, false);
+        assert_eq!(q3, [0, 0, 255, 255], "Dragging back to origin reunites the triangle");
+
+        // Case 4: Alt-drag on unsplit white handle [0, 0, 255, 255] splits the left half
+        let mut mode_w = BlendDrag::Pair { pair: 2, origin_v: 255 };
+        let qw1 = step_blend_drag(&mut mode_w, &q, 200, true);
+        assert_eq!(qw1, [0, 0, 200, 255], "Alt-drag left must split white triangle into [200, 255]");
+
+        // Case 5: Dragging without Alt moves both halves together
+        let mut mode_solid = BlendDrag::Pair { pair: 0, origin_v: 0 };
+        let qs1 = step_blend_drag(&mut mode_solid, &q, 35, false);
+        assert_eq!(qs1, [35, 35, 255, 255], "Drag without Alt moves solid handle together");
+
+        // Case 6: Clamping prevents black handle from crossing white handle
+        let q_close = [0, 100, 150, 255];
+        let mut mode_single = BlendDrag::Single(1);
+        let q_clamped = step_blend_drag(&mut mode_single, &q_close, 180, false);
+        assert_eq!(q_clamped, [0, 150, 150, 255], "Black max cannot exceed white min");
     }
 
     #[test]
