@@ -1490,6 +1490,23 @@ fn japanese_box_text_preserves_wrap_boundaries() {
     assert_eq!(end, text.text.len());
 }
 
+/// #5959: Korean box text broke between Hangul syllables, mid-word ("설 / 정이나"). Lines break at
+/// the spaces between words, as Photoshop sets Korean; a word longer than the box still breaks.
+#[test]
+fn korean_box_text_wraps_between_words() {
+    let mut engine = TextEngine::new();
+    let mut text = point("여기서는 각종 설정이나 캐릭터 제작을 진행합니다.", 12.0);
+    text.shape = TextShape::Box { x: 0.0, y: 0.0, width: 60.0, height: 1000.0 };
+    let layout = engine.layout(&text, 72.0);
+    assert!(layout.lines.len() > 2, "{}", layout.lines.len());
+    let words: Vec<&str> = text.text.split(' ').collect();
+    for line in &layout.lines {
+        let content = text.text.get(line.range.clone()).expect("UTF-8 line boundaries").trim();
+        assert!(content.split(' ').all(|w| words.contains(&w)), "a line holds whole words only: {content:?}");
+    }
+    assert_eq!(super::layout::hangul_runs("a 한국어 b"), vec![2..11]);
+}
+
 /// Which craft-fonts family drew the glyphs of `l` (matched by the embedded bytes).
 fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
     let mut v = Vec::new();

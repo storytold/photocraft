@@ -637,6 +637,11 @@ impl Layouter {
                 for (range, size) in &synthetic_small_caps {
                     b.push(StyleProperty::FontSize(*size), range.clone());
                 }
+                // Korean breaks lines at spaces, between words, as Photoshop sets it; Unicode's
+                // default rules break between any two Hangul syllables, mid-word (#5959).
+                for range in hangul_runs(&ptext) {
+                    b.push(StyleProperty::WordBreak(parley::WordBreak::KeepAll), range);
+                }
                 for (&at, &spacing) in tabs.iter().zip(tab_spacing) {
                     b.push(StyleProperty::LetterSpacing(spacing), at..at + 1);
                 }
@@ -1413,6 +1418,23 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
         }
     }
     best
+}
+
+/// Hangul (syllables and jamo).
+fn is_hangul(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7AF}' | '\u{D7B0}'..='\u{D7FF}')
+}
+
+/// The byte ranges of `text` made of Hangul, each as long as it runs.
+pub(crate) fn hangul_runs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, c) in text.char_indices().filter(|&(_, c)| is_hangul(c)) {
+        match runs.last_mut() {
+            Some(r) if r.end == i => r.end = i + c.len_utf8(),
+            _ => runs.push(i..i + c.len_utf8()),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]
