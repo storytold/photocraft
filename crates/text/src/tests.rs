@@ -1,6 +1,6 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{AntiAlias, Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
@@ -11,6 +11,38 @@ fn point(text: &str, size_pt: f32) -> TextLayer {
 
 fn styled(text: &str, style: CharStyle) -> TextLayer {
     TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() }
+}
+
+/// The rasteriser's pixel stages — composing one colour's coverage, unpremultiplying it, and
+/// converting the tiles — are per pixel: no pixel reads a slot another pixel wrote. Spreading them
+/// over threads therefore has to leave every byte as it was, which a one-thread pool checks.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn parallel_raster_matches_a_single_thread() {
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("one-thread pool");
+    let mut e = TextEngine::new();
+    let boxed = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 90.0 };
+    let paragraph = TextLayer {
+        text: "A paragraph box that wraps over several lines and covers many tiles, so the whole raster is exercised.".into(),
+        font_family: "Inter".into(),
+        size_pt: 18.0,
+        shape: boxed,
+        ..Default::default()
+    };
+    let no_aa = TextLayer { text: "No AA edge".into(), font_family: "Inter".into(), size_pt: 30.0, antialias: AntiAlias::None, ..Default::default() };
+    let cases: Vec<(TextLayer, f32, PixelFormat)> = vec![
+        (point("Parallel", 48.0), 72.0, PixelFormat::RGBA8),
+        (styled("Bold italic", CharStyle { size_pt: 40.0, faux_bold: true, faux_italic: true, ..Default::default() }), 300.0, PixelFormat::RGBA8),
+        (no_aa, 150.0, PixelFormat::RGBA16),
+        (styled("Wide gamut", CharStyle { size_pt: 36.0, color: Color::rgba(2.5, -0.25, 0.5, 0.4), ..Default::default() }), 96.0, PixelFormat::RGBA32F),
+        (with_para(paragraph, ParagraphStyle::default()), 144.0, PixelFormat::RGBA8),
+    ];
+    for (layer, dpi, format) in cases {
+        let (_, spread) = e.render(&layer, dpi, format);
+        let (_, single) = one.install(|| e.render(&layer, dpi, format));
+        assert_eq!(spread.rect, single.rect, "{}", layer.text);
+        assert_eq!(spread.surface, single.surface, "{}", layer.text);
+    }
 }
 
 #[test]

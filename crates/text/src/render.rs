@@ -12,6 +12,9 @@ use crate::layout::{GlyphOrient, PlacedGlyph, TextLayout};
 use crate::raster::{Bounds, Coverage, LineSink, Pen, Xform, rect_to};
 use crate::warp::{Placement, Warp};
 
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+
 /// Faux-italic slant in degrees (Photoshop-like).
 pub const FAUX_ITALIC_DEG: f32 = 12.0;
 /// Faux-bold ring radius as a fraction of the font size (tuned so stem weight stays close to the old summed-coverage look).
@@ -276,35 +279,57 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
         }
         let comps = color_in(&format, c);
         let a = c.alpha.clamp(0.0, 1.0);
-        for (i, &cv) in cov.iter().enumerate() {
-            let cv = if antialias == AntiAlias::None { if cv >= 0.5 { 1.0 } else { 0.0 } } else { cv };
+        composite(&mut acc, &cov, w, stride, &comps, a, antialias);
+    }
+    // Unpremultiply.
+    unpremultiply(&mut acc, n, stride, format.sample);
+    surface.write_region(rect, &acc);
+    surface.prune();
+    Rendered { surface, rect }
+}
+
+/// Composites one colour's coverage over the premultiplied accumulator, resolving `AntiAlias::None`
+/// to 0/1 first. A pixel's maths reads and writes only its own slots, so the rows are done in any
+/// order — one per thread — for exactly the same bytes.
+fn composite(acc: &mut [f32], cov: &[f32], width: usize, stride: usize, comps: &[f32], a: f32, antialias: AntiAlias) {
+    let n = comps.len();
+    let row = |acc: &mut [f32], cov: &[f32]| {
+        for (cv, px) in cov.iter().zip(acc.chunks_exact_mut(stride)) {
+            let cv = if antialias == AntiAlias::None { if *cv >= 0.5 { 1.0 } else { 0.0 } } else { *cv };
             let s = cv * a;
             if s <= 0.0 {
                 continue;
             }
-            let px = &mut acc[i * stride..(i + 1) * stride];
             let keep = 1.0 - s;
             for j in 0..n {
                 px[j] = comps[j] * s + px[j] * keep;
             }
             px[n] = s + px[n] * keep;
         }
-    }
-    // Unpremultiply.
-    for px in acc.chunks_exact_mut(stride) {
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    acc.par_chunks_mut(width * stride).zip(cov.par_chunks(width)).for_each(|(a, c)| row(a, c));
+    #[cfg(target_arch = "wasm32")]
+    acc.chunks_mut(width * stride).zip(cov.chunks(width)).for_each(|(a, c)| row(a, c));
+}
+
+/// Divides the premultiplied accumulator back to straight colour. Each pixel stands alone.
+fn unpremultiply(acc: &mut [f32], n: usize, stride: usize, sample: SampleType) {
+    let one = |px: &mut [f32]| {
         let a = px[n];
         if a > 0.0 {
             for v in &mut px[..n] {
                 let straight = *v / a;
                 // Float text can carry HDR and signed colours. Keep integer output bounded
                 // and retain the old handling of non-finite intermediate values.
-                *v = if format.sample == SampleType::F32 && straight.is_finite() { straight } else { straight.clamp(0.0, 1.0) };
+                *v = if sample == SampleType::F32 && straight.is_finite() { straight } else { straight.clamp(0.0, 1.0) };
             }
         }
-    }
-    surface.write_region(rect, &acc);
-    surface.prune();
-    Rendered { surface, rect }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    acc.par_chunks_exact_mut(stride).for_each(one);
+    #[cfg(target_arch = "wasm32")]
+    acc.chunks_exact_mut(stride).for_each(one);
 }
 
 /// One element of a glyph outline in document space (see [`outlines`]).

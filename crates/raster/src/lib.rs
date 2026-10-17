@@ -166,6 +166,55 @@ impl PartialEq for Surface {
     }
 }
 
+/// Converts the `data` span covering one tile into that tile's bytes.
+fn write_tile(t: &mut Tile, tc: TileCoord, r: Rect, data: &[f32], w: usize, n: usize, sample: SampleType) {
+    let tr = tc.rect().intersect(&r);
+    // Convert contiguous channel samples a row at a time. Dispatching on depth here removes the
+    // per-pixel channel loop and lets the compiler vectorise conversion.
+    let span = tr.width() as usize * n;
+    for y in tr.y0..tr.y1 {
+        let o = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * n;
+        let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
+        let src = &data[o..o + span];
+        let bytes = sample.bytes();
+        let dst = &mut t.data[base * bytes..(base + span) * bytes];
+        match sample {
+            SampleType::U8 => {
+                for (d, v) in dst.iter_mut().zip(src) {
+                    *d = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                }
+            }
+            SampleType::U16 => {
+                for (d, v) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src) {
+                    let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+                    d.copy_from_slice(&q.to_ne_bytes());
+                }
+            }
+            SampleType::F32 => {
+                for (d, v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
+                    d.copy_from_slice(&v.to_ne_bytes());
+                }
+            }
+        }
+    }
+}
+
+/// Converts the tiles of a region write. A tile holds no state another tile reads, so the tiles
+/// are converted on all cores; each writes only its own bytes, in the same arithmetic.
+#[cfg(not(target_arch = "wasm32"))]
+fn convert_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, data: &[f32], w: usize, n: usize, sample: SampleType) {
+    use rayon::prelude::*;
+    tiles.par_iter_mut().for_each(|(tc, t)| write_tile(Arc::make_mut(t), *tc, r, data, w, n, sample));
+}
+
+/// Serial counterpart, for the web build (there are no threads to spread tiles over).
+#[cfg(target_arch = "wasm32")]
+fn convert_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, data: &[f32], w: usize, n: usize, sample: SampleType) {
+    for (tc, t) in tiles.iter_mut() {
+        write_tile(Arc::make_mut(t), *tc, r, data, w, n, sample);
+    }
+}
+
 impl Surface {
     /// Reads a region into a newly allocated buffer, returning an error instead of aborting if
     /// the requested pixel buffer cannot be represented or reserved.
@@ -579,38 +628,13 @@ impl Surface {
         let w = r.width() as usize;
         assert_eq!(data.len(), w * r.height() as usize * n, "region data length mismatch");
         let sample = self.format.sample;
-        for tc in r.tiles() {
-            let tr = tc.rect().intersect(&r);
-            let t = self.tile_mut(tc);
-            // Convert contiguous channel samples a row at a time. Dispatching on depth here
-            // removes the per-pixel channel loop and lets the compiler vectorise conversion.
-            let span = tr.width() as usize * n;
-            for y in tr.y0..tr.y1 {
-                let o = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * n;
-                let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
-                let src = &data[o..o + span];
-                let bytes = sample.bytes();
-                let dst = &mut t.data[base * bytes..(base + span) * bytes];
-                match sample {
-                    SampleType::U8 => {
-                        for (d, v) in dst.iter_mut().zip(src) {
-                            *d = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                        }
-                    }
-                    SampleType::U16 => {
-                        for (d, v) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src) {
-                            let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-                            d.copy_from_slice(&q.to_ne_bytes());
-                        }
-                    }
-                    SampleType::F32 => {
-                        for (d, v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
-                            d.copy_from_slice(&v.to_ne_bytes());
-                        }
-                    }
-                }
-            }
-        }
+        // Each tile's own span of `data` is converted on its own: the tiles are disjoint, so
+        // converting them in any order (and on any thread) writes exactly the same bytes.
+        // `take_tiles` reserves the whole result before removing anything, and gives the missing
+        // tiles as one shared default-filled tile, copied per tile by `Arc::make_mut` below.
+        let mut tiles = self.take_tiles(r);
+        convert_tiles(&mut tiles, r, data, w, n, sample);
+        self.put_tiles(tiles);
     }
 
     /// Take the tiles covering `r` out of the surface (missing ones filled with the default
