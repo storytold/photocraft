@@ -22,9 +22,9 @@ note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both w
 [[item]]
 id = "FILE-215-3"
 target = "Filter mask can be painted directly, with undo"
-status = "missing"
+status = "done"
 issue = 215
-note = "smart_cmds.rs:382 mask only from the selection"
+note = "Clicking the filter mask thumbnail on the Smart Filters row targets it (ui.filterMaskTarget, smart_ui.rs). Painting, fills, filters and adjustments with \"target\":\"filterMask\" then edit it (a white mask starts on the first stroke) and re-render the smart object, one undo step per stroke (channel_cmds Target::FilterMask, Session::edit). ⌥-click shows it (view.layerMask \"mask\":\"filter\"), ⇧-click disables it. Kept through .pcraft and PSD FEid (smart_cmds/tests/filter_mask_paint.rs)"
 
 [[item]]
 id = "FILE-215-4"

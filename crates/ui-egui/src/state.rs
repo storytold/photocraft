@@ -1120,6 +1120,11 @@ pub struct UiState {
     /// tools edit it (#196). Never set together with `mask_target`.
     #[serde(default)]
     pub vector_mask_target: bool,
+    /// The smart object (layer id) whose filter mask is targeted (its thumbnail on the Smart
+    /// Filters row clicked): painting, fills, filters and adjustments edit that mask
+    /// (FILE-215-3). Never set together with `mask_target` or `vector_mask_target`.
+    #[serde(default)]
+    pub filter_mask_target: Option<u64>,
     /// The adjustment or fill layer (id) whose own settings Properties shows although its mask
     /// is targeted: set when that layer is created, as in Photoshop (#3369). Targeting the mask
     /// thumbnail, the layer's pixels or another layer clears it.
@@ -1324,6 +1329,7 @@ impl Default for UiState {
             layer_picker: None,
             mask_target: false,
             vector_mask_target: false,
+            filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
             brush_picker_list: crate::brush_picker::list_state(),

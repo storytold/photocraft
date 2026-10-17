@@ -188,6 +188,8 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
             let m = l.mask.as_ref().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
             Ok((!m.linked).then_some(&m.surface))
         }
+        // A filter mask is not transformed on its own (it follows its smart object).
+        Target::FilterMask => Err(EngineError::Other("Free Transform can't transform a filter mask on its own".into())),
         Target::Alpha(i) => doc
             .channels
             .get(i)

@@ -256,7 +256,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Red Eye",
         menu: &[],
         shortcut: None,
-        params: r#"{"x":px, "y":px} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
+        params: r#"{"x":px, "y":px} | {"points":[[x,y],…] (at most 64)},"pupilSize":1..100=50,"darken":0..100=50,"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i} → {"damage":[x,y,w,h], "pixels":n}"#,
         enabled,
         run: red_eye,
         journal: true,

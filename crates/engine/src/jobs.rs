@@ -219,6 +219,7 @@ struct Running {
     started_ms: f64,
     coalesce: Option<String>,
     color_restrict: Option<usize>,
+    filter_mask_layer: Option<LayerId>,
     rx: std::sync::mpsc::Receiver<Result<Payload>>,
     apply: Option<Apply>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -376,6 +377,7 @@ pub fn run<T: Send + 'static>(
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
+        filter_mask_layer: s.filter_mask_layer,
         rx,
         apply: Some(erased),
         #[cfg(not(target_arch = "wasm32"))]
@@ -716,6 +718,7 @@ impl Session {
         let run_params = self.admit(id, spec, &params)?;
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
+        self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, &run_params);
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
@@ -734,6 +737,7 @@ impl Session {
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {
@@ -813,7 +817,7 @@ impl Session {
     }
 
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
-        let Running { label, doc, snapshot, coalesce, color_restrict, command, params, journal, .. } = job;
+        let Running { label, doc, snapshot, coalesce, color_restrict, filter_mask_layer, command, params, journal, .. } = job;
         let prev_active = self.active;
         let target = match doc {
             Some(d) => {
@@ -830,6 +834,7 @@ impl Session {
         };
         self.coalesce_request = coalesce.clone();
         self.color_restrict = *color_restrict;
+        self.filter_mask_layer = *filter_mask_layer;
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
@@ -844,6 +849,7 @@ impl Session {
         }
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.

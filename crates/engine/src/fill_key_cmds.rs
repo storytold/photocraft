@@ -18,7 +18,7 @@ use crate::{EngineError, Result, Session};
 /// The fill-key command ids (routed to the Channels panel target like `edit.fill`).
 pub const IDS: [&str; 5] = ["edit.fillForeground", "edit.fillBackground", "edit.fillForegroundPreserve", "edit.fillBackgroundPreserve", "edit.fillHistory"];
 
-const PARAMS: &str = r##"{"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##;
+const PARAMS: &str = r##"{"layer":id?,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}?}"##;
 
 /// The shape or type layer the colour fill keys recolor instead of filling pixels.
 fn target_live_layer(s: &Session, p: &Value) -> Option<LayerId> {

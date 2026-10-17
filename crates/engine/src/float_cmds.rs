@@ -176,7 +176,7 @@ fn float(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if floating(st).is_none() {
         let layer = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let parts = CutParts::new(&st.doc, layer, copy, background, crate::commands::is_mask_target(p))?;
+        let parts = CutParts::new(&st.doc, layer, copy, background, crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Mask)?;
         st.floating = Some(Floating { layer, offset: (0, 0), revision: st.revision, parts: Arc::new(parts) });
     }
     let f = st.floating.as_mut().ok_or(EngineError::NoDocument)?;

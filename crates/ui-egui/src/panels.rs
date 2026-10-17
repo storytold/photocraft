@@ -2594,12 +2594,21 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if id == "ui.maskTarget" {
             app.ui.mask_target = p.as_bool().unwrap_or(false);
             app.ui.vector_mask_target = false;
+            app.ui.filter_mask_target = None;
             app.sync_mask_targets();
             continue;
         }
         if id == "ui.vectorMaskTarget" {
             app.ui.vector_mask_target = p.as_bool().unwrap_or(false);
             app.ui.mask_target = false;
+            app.ui.filter_mask_target = None;
+            app.sync_mask_targets();
+            continue;
+        }
+        if id == "ui.filterMaskTarget" {
+            app.ui.filter_mask_target = p.as_u64();
+            app.ui.mask_target = false;
+            app.ui.vector_mask_target = false;
             app.sync_mask_targets();
             continue;
         }
@@ -2881,7 +2890,10 @@ fn layer_row(
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
     // with corner brackets.
     if row.primary {
-        let target = if app.ui.vector_mask_target && vector_rect.is_some() {
+        let target = if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
+            // The Smart Filters row's filter mask thumbnail carries the brackets.
+            None
+        } else if app.ui.vector_mask_target && vector_rect.is_some() {
             vector_rect
         } else if app.ui.mask_target {
             mask_rect.or(Some(thumb))
