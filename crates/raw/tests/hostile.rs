@@ -1,8 +1,31 @@
 //! Truncated and corrupted raw files must fail cleanly, never panic, and
 //! never allocate beyond the limits.
 
-use photocraft_raw::testgen::{Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, orf, rw2, scene, sony_craw, tiff_ep};
+use photocraft_raw::testgen::{
+    Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, Val, XTRANS, mosaic, mosaic_cfa, nef_compressed, orf, rw2, scene, sony_craw, tiff_ep,
+};
 use photocraft_raw::*;
+
+/// 12-bit samples packed little-endian, `w` per row, rows byte-aligned (Nikon's packed NEF layout).
+fn pack12(values: &[u16], w: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for row in values.chunks_exact(w) {
+        let (mut acc, mut have) = (0u32, 0u32);
+        for v in row {
+            acc |= u32::from(*v) << have;
+            have += 12;
+            while have >= 8 {
+                out.push(acc as u8);
+                acc >>= 8;
+                have -= 8;
+            }
+        }
+        if have > 0 {
+            out.push(acc as u8);
+        }
+    }
+    out
+}
 
 /// Losslessly encodes 16-bit RGB as a JPEG XL codestream.
 fn jxl_rgb16(rgb: &[u16], w: usize, h: usize) -> Vec<u8> {
@@ -84,6 +107,8 @@ fn samples() -> Vec<Vec<u8>> {
         .build(),
     );
     out.push(tiff_ep("NIKON", w, h, &cfa, [0, 1, 1, 2], 12, vec![]));
+    // A Nikon NEF (packed 12-bit) whose maker note says the previews are Adobe RGB (ColorSpace 0x001E).
+    out.push(nef_compressed(w, h, 12, pack12(&cfa, w), [0, 1, 1, 2], false, vec![(0x0093, Val::Short(vec![6])), (0x001E, Val::Short(vec![2]))]));
     let codes = mosaic(&scene(64, 6), 64, [0, 1, 1, 2], 256, 1900);
     out.push(sony_craw(64, 6, &codes, [8000, 10400, 12900, 14100]));
     out.push(rw2(30, 8, &mosaic(&scene(30, 8), 30, [0, 1, 1, 2], 128, 4095), 12));
@@ -124,6 +149,12 @@ fn originals_develop() {
         let d = develop(b, &DevelopOptions::default());
         assert!(d.is_ok(), "sample {i}: {:?}", d.err());
     }
+}
+
+#[test]
+fn a_seed_states_a_maker_note_colour_space() {
+    // The truncation and corruption tests below only exercise the maker-note reader if a seed has one.
+    assert!(samples().iter().any(|b| embedded_preview_color_space(b) == Some(PreviewColorSpace::AdobeRgb)));
 }
 
 #[test]
