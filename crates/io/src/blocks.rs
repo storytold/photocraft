@@ -252,7 +252,8 @@ pub(crate) fn gradient_style_value(s: GradientStyle) -> Value {
 pub(crate) type Stops = (Vec<(f32, Color)>, Vec<(f32, f32)>);
 
 /// Stops of a `Grdn` descriptor, baked to Photoshop's interpolation (smoothness `Intr`, stop
-/// midpoints, and the parent's interpolation method when given, see [`gradient_method`]).
+/// midpoints, and the parent's interpolation method when given, see [`gradient_method`]); the
+/// opacity stops as [`baked_opacity_stops`].
 pub(crate) fn gradient_stops_with(grad: &Descriptor, method: Option<&[u8]>) -> Stops {
     let raw = gradient_stops_raw(grad);
     let stops = if raw.stops.len() >= 2 {
@@ -260,7 +261,7 @@ pub(crate) fn gradient_stops_with(grad: &Descriptor, method: Option<&[u8]>) -> S
     } else {
         raw.stops
     };
-    (stops, raw.opacity)
+    (stops, baked_opacity_stops(grad, method))
 }
 
 /// A `Grdn` descriptor's stops as stored: colour stops (sorted), the midpoint of each segment
@@ -376,26 +377,27 @@ pub(crate) fn gradient_desc_with(stops: &[(f32, Color)], opacity: &[(f32, f32)],
         .with("Trns", Value::List(trns))
 }
 
-/// Opacity stops of a `Grdn` descriptor with Photoshop's smoothness and midpoints applied (the
-/// same curve as the colour stops, Classic interpolation), densely sampled.
-fn smoothed_opacity_stops(grad: &Descriptor) -> Vec<(f32, f32)> {
+/// Opacity stops of a `Grdn` descriptor with Photoshop's smoothness, opacity midpoints and
+/// interpolation method applied (densely sampled; as stored when the interpolation is plain).
+/// Gradient fill layers and the gradient layer effects share it: Photoshop renders their
+/// transparency identically.
+fn baked_opacity_stops(grad: &Descriptor, method: Option<&[u8]>) -> Vec<(f32, f32)> {
     let mut stops = Vec::new();
     let mut mids = Vec::new();
     if let Some(Value::List(items)) = grad.get("Trns") {
         for it in items {
             if let Value::Descriptor(s) = it {
-                let a = num(s.get("Opct")).unwrap_or(100.0) as f32 / 100.0;
-                stops.push((num(s.get("Lctn")).unwrap_or(0.0) as f32 / 4096.0, Color::rgba(a, a, a, 1.0)));
+                stops.push((num(s.get("Lctn")).unwrap_or(0.0) as f32 / 4096.0, num(s.get("Opct")).unwrap_or(100.0) as f32 / 100.0));
                 mids.push(num(s.get("Mdpn")).unwrap_or(50.0) as f32 / 100.0);
             }
         }
     }
+    // Midpoint k applies to the segment after stop k (stored on the stop that ends it).
     let mut order: Vec<usize> = (0..stops.len()).collect();
     order.sort_by(|a, b| stops[*a].0.total_cmp(&stops[*b].0));
     let mids: Vec<f32> = order.iter().skip(1).filter_map(|i| mids.get(*i).copied()).collect();
     let smooth = num(grad.get("Intr")).map_or(0.0, |v| (v / 4096.0) as f32);
-    let baked = if stops.len() >= 2 { crate::gradient_bake::bake(stops, &mids, smooth, crate::gradient_bake::Method::Classic) } else { stops };
-    baked.into_iter().map(|(t, c)| (t, c.to_rgb()[0])).collect()
+    crate::gradient_bake::bake_opacity(stops, &mids, smooth, crate::gradient_bake::Method::from_code(method))
 }
 
 /// Parses a fill block (`SoCo`, `GdFl`, `PtFl`).
@@ -415,9 +417,9 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
             let scale = num(d.get("Scl ")).map_or(1.0, |v| v as f32 / 100.0);
             let raw = get_desc(d, "Grad").map(|g| gradient_stops_editable(g, gradient_method(d)));
             let (mut stops, midpoints) = raw.map(|r| (r.stops, r.mids)).unwrap_or_default();
-            // Opacity stops with Photoshop's smoothness and opacity midpoints applied (raw when
-            // the interpolation is plain); none when fully opaque.
-            let mut opacity_stops = get_desc(d, "Grad").map(smoothed_opacity_stops).unwrap_or_default();
+            // Opacity stops with Photoshop's smoothness, opacity midpoints and method applied
+            // (raw when the interpolation is plain); none when fully opaque.
+            let mut opacity_stops = get_desc(d, "Grad").map(|g| baked_opacity_stops(g, gradient_method(d))).unwrap_or_default();
             if opacity_stops.iter().all(|o| o.1 >= 1.0 - 1e-4) {
                 opacity_stops.clear();
             }

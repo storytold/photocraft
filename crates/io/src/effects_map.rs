@@ -811,6 +811,84 @@ mod tests {
         }
     }
 
+    /// A Gradient Overlay `lfx2` laid out as Photoshop writes it: one black colour, opacity
+    /// 100 → 0 % with the opacity midpoint `mid` (%), Smoothness `intr` (0..4096) and the method
+    /// enum `gs99` (Photoshop's key in layer effects; codes `Gcls`, `Lnr `, `Perc`).
+    fn overlay_lfx2(mid: i32, intr: f64, method: &str) -> Vec<u8> {
+        let black = || Descriptor::new("RGBC").with("Rd  ", Value::Double(0.0)).with("Grn ", Value::Double(0.0)).with("Bl  ", Value::Double(0.0));
+        let clr = |loc: i32| {
+            Value::Descriptor(
+                Descriptor::new("Clrt")
+                    .with("Clr ", Value::Descriptor(black()))
+                    .with("Type", Value::Enumerated { type_id: Id::new("Clry"), value: Id::new("UsrS") })
+                    .with("Lctn", Value::Integer(loc))
+                    .with("Mdpn", Value::Integer(50)),
+            )
+        };
+        let trn = |loc: i32, op: f32, mid: i32| {
+            Value::Descriptor(Descriptor::new("TrnS").with("Opct", unit(b"#Prc", op)).with("Lctn", Value::Integer(loc)).with("Mdpn", Value::Integer(mid)))
+        };
+        let grad = Descriptor::new("Grdn")
+            .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("CstS") })
+            .with("Intr", Value::Double(intr))
+            .with("Clrs", Value::List(vec![clr(0), clr(4096)]))
+            .with("Trns", Value::List(vec![trn(0, 100.0, 50), trn(4096, 0.0, mid)]));
+        let fx = Descriptor::new("GrFl")
+            .with("enab", Value::Boolean(true))
+            .with("Grad", Value::Descriptor(grad))
+            .with("Angl", unit(b"#Ang", 0.0))
+            .with("gs99", Value::Enumerated { type_id: Id::new("gradientInterpolationMethodType"), value: Id::new(method) });
+        let d = Descriptor::new("null").with("masterFXSwitch", Value::Boolean(true)).with("GrFl", Value::Descriptor(fx));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
+        data
+    }
+
+    fn overlay_opacity(data: &[u8]) -> Vec<(f32, f32)> {
+        let (_, fx) = parse_lfx2(data).unwrap();
+        let Some(Effect::GradientOverlay { gradient, .. }) = fx.first() else { panic!("overlay: {fx:?}") };
+        gradient.opacity_stops.clone()
+    }
+
+    fn opacity_at(o: &[(f32, f32)], t: f32) -> f32 {
+        let i = o.windows(2).position(|w| t >= w[0].0 && t <= w[1].0).unwrap();
+        o[i].1 + (o[i + 1].1 - o[i].1) * (t - o[i].0) / (o[i + 1].0 - o[i].0)
+    }
+
+    /// #1954: the overlay's transparency follows Smoothness, the opacity midpoints and the method
+    /// like a gradient fill layer's (Photoshop renders both identically; the values are its
+    /// composites at t = 0.25 and 0.5).
+    #[test]
+    fn gradient_overlay_opacity_follows_smoothness_midpoint_and_method() {
+        let at = |mid, intr, method: &str, t| opacity_at(&overlay_opacity(&overlay_lfx2(mid, intr, method)), t);
+        // Plain Classic stays the linear fade it is stored as.
+        assert_eq!(overlay_opacity(&overlay_lfx2(50, 0.0, "Gcls")), vec![(0.0, 1.0), (1.0, 0.0)]);
+        // Midpoint 25 %: half transparent a quarter of the way.
+        assert!((at(25, 0.0, "Gcls", 0.25) - 0.5).abs() < 0.01);
+        // Smoothness 100 % eases the ends (Photoshop: 0.796 at a quarter).
+        assert!((at(50, 4096.0, "Gcls", 0.25) - 0.796).abs() < 0.015);
+        // The method bends the transparency ramp too, not only the colours (Photoshop at the
+        // middle: 0.631 Linear, 0.255 Perceptual).
+        assert!((at(50, 0.0, "Lnr ", 0.5) - 0.631).abs() < 0.015);
+        assert!((at(50, 0.0, "Perc", 0.5) - 0.255).abs() < 0.015);
+        assert!((at(25, 4096.0, "Perc", 0.25) - 0.255).abs() < 0.015);
+    }
+
+    /// A regenerated `lfx2` carries the baked ramp as plain (Classic, Smoothness 0) stops, so it
+    /// reads back unchanged.
+    #[test]
+    fn baked_overlay_opacity_round_trips() {
+        let data = overlay_lfx2(25, 4096.0, "Perc");
+        let (master, fx) = parse_lfx2(&data).unwrap();
+        let a = overlay_opacity(&data);
+        let b = overlay_opacity(&write_lfx2(master, &fx));
+        assert!(a.len() > 2);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x.0 - y.0).abs() < 1e-3 && (x.1 - y.1).abs() < 1e-4, "{x:?} vs {y:?}");
+        }
+    }
+
     #[test]
     fn garbage_is_none() {
         assert!(parse_lfx2(&[0, 0]).is_none());
