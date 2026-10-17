@@ -38,6 +38,13 @@ pub trait AtomicFs {
         let _ = progress;
         self.write_new(tmp, bytes)
     }
+    /// [`write_new_progress`](Self::write_new_progress), giving `tmp` the permissions of `like`
+    /// (when given) before any byte is written, so a confidential file never sits in a more open
+    /// temporary file. By default it just writes; the permissions are copied afterwards.
+    fn write_new_like(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32), like: Option<&Path>) -> io::Result<()> {
+        let _ = like;
+        self.write_new_progress(tmp, bytes, progress)
+    }
     /// Rename `from` over `to`, replacing it.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Remove a (temporary) file.
@@ -45,7 +52,7 @@ pub trait AtomicFs {
     /// Flush a directory entry change (Unix); a no-op elsewhere.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
     /// Copy the destination's permissions onto the temporary file, so replacing a file keeps its
-    /// mode. Best effort.
+    /// mode. If it fails, the save fails instead of publishing the file with other permissions.
     fn copy_permissions(&self, from: &Path, to: &Path) -> io::Result<()>;
 }
 
@@ -61,7 +68,13 @@ impl AtomicFs for RealFs {
         self.write_new_progress(tmp, bytes, &|_| {})
     }
     fn write_new_progress(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
+        self.write_new_like(tmp, bytes, progress, None)
+    }
+    fn write_new_like(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32), like: Option<&Path>) -> io::Result<()> {
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)?;
+        if let Some(like) = like {
+            f.set_permissions(std::fs::metadata(like)?.permissions())?;
+        }
         let mut written = 0usize;
         for chunk in bytes.chunks(WRITE_CHUNK) {
             f.write_all(chunk)?;
@@ -173,9 +186,10 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // Create a fresh temporary file next to the target (same directory, so the rename never
     // crosses a device). The name is unique per process and call; retry a few on collisions.
     let mut tmp = None;
+    let like = target.exists().then_some(target.as_path());
     for _ in 0..8 {
         let candidate = dir.join(temp_name(&name.to_string_lossy()));
-        match fs.write_new_progress(&candidate, bytes, progress) {
+        match fs.write_new_like(&candidate, bytes, progress, like) {
             Ok(()) => {
                 tmp = Some(candidate);
                 break;
@@ -190,9 +204,13 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     }
     let tmp = tmp.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: could not create a temporary file", dir.display())))?;
 
-    // Keep the existing file's mode (e.g. 0600) instead of the process default.
-    if target.exists() {
-        let _ = fs.copy_permissions(&target, &tmp);
+    // Keep the existing file's mode (e.g. 0600) instead of the process default. Failing to do so
+    // must not publish the file with looser permissions, so it fails the save.
+    if like.is_some()
+        && let Err(e) = fs.copy_permissions(&target, &tmp)
+    {
+        let _ = fs.remove(&tmp);
+        return Err(context(e, format!("cannot save {}: could not keep the file's permissions; {UNCHANGED}", path.display())));
     }
 
     if let Err(e) = retry_rename(retry, || fs.rename(&tmp, &target)) {
