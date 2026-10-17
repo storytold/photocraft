@@ -1745,7 +1745,9 @@
 	Measurement Scale	測量比例
 	Measurement Scale Marker	測量比例標記
 	Millimeters	公釐
-	Mobile	行動裝置
+	Mobile (iOS)	行動裝置 (iOS)
+	Mobile (Android)	行動裝置 (Android)
+	Billboard	廣告看板
 	Move Tool	移動工具
 	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
 	Could not complete the Free Transform command because the layer is locked.	無法完成「任意變形」指令，因為圖層已鎖定。

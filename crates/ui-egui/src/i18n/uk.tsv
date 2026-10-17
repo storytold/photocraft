@@ -1495,7 +1495,9 @@
 	Photo	Фото
 	Print	Друк
 	Art & Illustration	Мистецтво та ілюстрація
-	Mobile	Мобільні пристрої
+	Mobile (iOS)	Мобільні пристрої (iOS)
+	Mobile (Android)	Мобільні пристрої (Android)
+	Billboard	Білборди
 	Film & Video	Фільм і відео
 	Default PhotoCraft Size	Типовий розмір PhotoCraft
 	Clipboard	Буфер обміну

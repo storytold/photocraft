@@ -2840,7 +2840,9 @@ cameraRaw	Yellow	Sárga
 	Metadata	Metaadatok
 	Metal	Metal
 	Millimeters	Milliméter
-	Mobile	Mobil
+	Mobile (iOS)	Mobil (iOS)
+	Mobile (Android)	Mobil (Android)
+	Billboard	Óriásplakát
 	Model	Modell
 	Models	Modellek
 	modified	módosítva

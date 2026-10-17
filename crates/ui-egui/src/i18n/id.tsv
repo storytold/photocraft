@@ -1707,7 +1707,9 @@
 	Measurement Scale	Skala Pengukuran
 	Measurement Scale Marker	Penanda Skala Pengukuran
 	Millimeters	Milimeter
-	Mobile	Seluler
+	Mobile (iOS)	Seluler (iOS)
+	Mobile (Android)	Seluler (Android)
+	Billboard	Papan reklame
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
 	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.

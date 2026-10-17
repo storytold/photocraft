@@ -1732,7 +1732,9 @@
 	Measurement Scale	Scala misurazione
 	Measurement Scale Marker	Indicatore scala misurazione
 	Millimeters	Millimetri
-	Mobile	Mobile
+	Mobile (iOS)	Mobile (iOS)
+	Mobile (Android)	Mobile (Android)
+	Billboard	Cartelloni
 	Move Tool	Strumento Sposta
 	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
 	Could not complete the Free Transform command because the layer is locked.	Impossibile completare il comando Trasformazione libera perché il livello è bloccato.

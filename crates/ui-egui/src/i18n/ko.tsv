@@ -1706,7 +1706,9 @@
 	Measurement Scale	측정 비율
 	Measurement Scale Marker	측정 비율 마커
 	Millimeters	밀리미터
-	Mobile	모바일
+	Mobile (iOS)	모바일 (iOS)
+	Mobile (Android)	모바일 (Android)
+	Billboard	빌보드
 	Move Tool	이동 도구
 	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
 	Could not complete the Free Transform command because the layer is locked.	레이어가 잠겨 있어 자유 변형 명령을 완료할 수 없습니다.

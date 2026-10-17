@@ -1686,7 +1686,9 @@
 	Measurement Scale	Ölçüm Ölçeği
 	Measurement Scale Marker	Ölçüm Ölçeği İşaretleyicisi
 	Millimeters	Milimetre
-	Mobile	Mobil
+	Mobile (iOS)	Mobil (iOS)
+	Mobile (Android)	Mobil (Android)
+	Billboard	Bilbord
 	Move Tool	Taşıma Aracı
 	Could not use the move tool because the layer is locked.	Katman kilitli olduğundan taşıma aracı kullanılamadı.
 	Could not complete the Free Transform command because the layer is locked.	Katman kilitli olduğundan Serbest Dönüştürme komutu tamamlanamadı.

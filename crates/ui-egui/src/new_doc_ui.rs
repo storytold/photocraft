@@ -42,6 +42,19 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
             ("B4", 2953, 4169, 300.0),
         ],
     ),
+    // Large-format outdoor print, at the full printed size. Billboards are seen from far away, so
+    // printers ask for about 20-30 ppi at full size (OAAA: 18-25 ppi for outdoor; UK 96/48-sheet:
+    // 300 dpi at 1:10 scale = 30 ppi), and street-level City Light Posters for 80-100 ppi.
+    (
+        LARGE_FORMAT,
+        &[
+            ("Billboard, 350 x 200 cm", 4134, 2362, 30.0),
+            ("Bulletin, 48 x 14 ft", 11520, 3360, 20.0),
+            ("Bulletin, 36 x 10.5 ft", 8640, 2520, 20.0),
+            ("City Light, 118 x 175 cm", 4646, 6890, 100.0),
+            ("Megaboard, 12 x 6 m", 9449, 4724, 20.0),
+        ],
+    ),
     (
         "Art & Illustration",
         &[("Poster", 5400, 7200, 300.0), ("Postcard", 1800, 1200, 300.0), ("Comic Book", 1988, 3075, 300.0), ("Square, 12 x 12", 3600, 3600, 300.0)],
@@ -57,13 +70,30 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
         ],
     ),
     (
-        "Mobile",
+        "Mobile (iOS)",
         &[
             ("iPhone 16", 1179, 2556, 72.0),
-            ("iPhone 16 Pro Max", 1320, 2868, 72.0),
+            ("iPhone 16-17-18 Pro", 1206, 2622, 72.0),
+            ("iPhone 16-17-18 Pro Max", 1320, 2868, 72.0),
             ("iPad Pro 13\"", 2064, 2752, 72.0),
-            ("Android 1080p", 1080, 1920, 72.0),
             ("Apple Watch 45mm", 396, 484, 72.0),
+        ],
+    ),
+    (
+        "Mobile (Android)",
+        &[
+            ("S26 Ultra", 1440, 3120, 72.0),
+            ("S26", 1080, 2340, 72.0),
+            ("A56", 1080, 2340, 72.0),
+            ("Pixel 10 Pro XL", 1344, 2992, 72.0),
+            ("Pixel 10", 1080, 2424, 72.0),
+            ("Z Fold7 Cover", 1080, 2520, 72.0),
+            ("Z Fold7 Open", 1968, 2184, 72.0),
+            ("Z Flip7 Main", 1080, 2520, 72.0),
+            ("Mate XT Single", 1008, 2232, 72.0),
+            ("Mate XT Dual", 2048, 2232, 72.0),
+            ("Mate XT Triple", 2232, 3184, 72.0),
+            ("Android 1080p", 1080, 2400, 72.0),
         ],
     ),
     (
@@ -200,6 +230,19 @@ fn preset_unit(p: &Preset, f: &Map<String, Value>) -> String {
     }
 }
 
+/// The large-format print category: billboards at their full printed size.
+const LARGE_FORMAT: &str = "Billboard";
+
+/// A Billboard preset is a printed size at a large-format resolution (20-100 ppi), neither a print
+/// preset (300 ppi, in inches) nor a screen one (pixels): the Print Resolution would make a 48 ft
+/// bulletin hundreds of thousands of pixels wide, and the Screen Resolution would keep its pixels
+/// but change its printed size. So it keeps its listed pixels and ppi, like the Clipboard preset,
+/// in either orientation (the Orientation buttons turn the presets, see [`oriented`]).
+fn is_large_format(p: &Preset) -> bool {
+    let turned = (p.0, p.2, p.1, p.3);
+    CATEGORIES.iter().find(|c| c.0 == LARGE_FORMAT).is_some_and(|c| c.1.contains(p) || c.1.contains(&turned))
+}
+
 /// A built-in preset at Preferences › Units & Rulers › New Document Preset Resolutions, as in
 /// Photoshop: a print preset keeps its size in inches at the Print Resolution (Letter at 200 ppi is
 /// 1700 x 2200 px), a screen preset keeps its pixels at the Screen Resolution. The Clipboard preset
@@ -207,7 +250,7 @@ fn preset_unit(p: &Preset, f: &Map<String, Value>) -> String {
 /// number leaves the preset as listed.
 pub fn at_pref_resolutions(p: &Preset, units: &UnitsAndRulers) -> Preset {
     let ppi = (if is_print(p) { units.print_resolution } else { units.screen_resolution }) as f32;
-    if p.0 == CLIPBOARD || !(ppi.is_finite() && ppi > 0.0) {
+    if p.0 == CLIPBOARD || is_large_format(p) || !(ppi.is_finite() && ppi > 0.0) {
         return *p;
     }
     if !is_print(p) {
@@ -492,20 +535,40 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     }
 }
 
+/// Horizontal gap between the category tabs.
+const TAB_GAP: f32 = 18.0;
+
+/// The selected category tab. "Mobile" was split into "Mobile (iOS)" and "Mobile (Android)": an
+/// agent or script that still sets `__category` to "Mobile" gets the iOS tab, which keeps the
+/// presets that tab used to open on, instead of a tab bar with nothing selected.
+fn category(f: &Map<String, Value>) -> String {
+    match get_s(f, "__category", "Recent").as_str() {
+        "Mobile" => "Mobile (iOS)".into(),
+        c => c.into(),
+    }
+}
+
 /// Returns whether a preset double-click requested creation, after applying its settings.
 /// A recent category click can make egui count the preset double-click as a triple-click.
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let t = Tokens::get(ui.ctx());
-    let cat = get_s(f, "__category", "Recent");
+    let cat = category(f);
     let mut create = false;
-    // Category tabs.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
+    // Category tabs. They wrap onto a second row when a language's labels are wider than the
+    // dialog (Greek already was; the iOS / Android / Billboard tabs made more languages so).
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(TAB_GAP, 10.0);
         for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
             let on = cat == name;
             let label = if name == "Saved" { tl!("Saved") } else { tl!(name) };
+            // Extend: a tab moves to the next row whole rather than breaking inside its label.
             let r = ui
-                .add(egui::Label::new(RichText::new(label).size(13.0).color(if on { t.text } else { t.text_dim })).selectable(false).sense(Sense::click()))
+                .add(
+                    egui::Label::new(RichText::new(label).size(13.0).color(if on { t.text } else { t.text_dim }))
+                        .wrap_mode(egui::TextWrapMode::Extend)
+                        .selectable(false)
+                        .sense(Sense::click()),
+                )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if on {
                 ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(2.0, t.text));
@@ -900,6 +963,119 @@ mod tests {
         let huge = UnitsAndRulers { print_resolution: 1e9, ..stock };
         let (_, w, h, _) = at_pref_resolutions(&find("Art & Illustration", "Poster"), &huge);
         assert_eq!((w, h), (300_000, 300_000), "clamped to the file.new limit");
+    }
+
+    /// Rows the category tabs take in a `width`-wide dialog in `lang`, wrapped as [`body`] lays
+    /// them out (13 pt labels, [`TAB_GAP`] apart).
+    fn tab_rows(ui: &egui::Ui, lang: crate::i18n::Lang, width: f32) -> usize {
+        let mut rows = 1;
+        let mut x = 0.0;
+        for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
+            let w = ui.painter().layout_no_wrap(crate::i18n::tr(lang, name).to_string(), egui::FontId::proportional(13.0), egui::Color32::WHITE).size().x;
+            assert!(w <= width, "{}: {name}", lang.code());
+            if x > 0.0 && x + TAB_GAP + w > width {
+                rows += 1;
+                x = 0.0;
+            }
+            x += if x > 0.0 { TAB_GAP + w } else { w };
+        }
+        rows
+    }
+
+    /// The iOS / Android / Billboard tabs: English still fits on one row of the 800 pt dialog,
+    /// and every language wraps onto at most two rows rather than running off the dialog.
+    #[test]
+    fn category_tabs_fit_the_dialog_in_every_language() {
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let en = crate::i18n::Lang::all().find(|l| l.code() == "en").unwrap();
+            assert_eq!(tab_rows(ui, en, 800.0), 1);
+            for lang in crate::i18n::Lang::all() {
+                assert!(tab_rows(ui, lang, 800.0) <= 2, "{}", lang.code());
+            }
+        });
+        out.textures_delta.clear();
+    }
+
+    fn presets(name: &str) -> &'static [Preset] {
+        CATEGORIES.iter().find(|c| c.0 == name).unwrap().1
+    }
+
+    /// Mobile is split into iOS and Android in its old place (after Web), screen presets at 72 ppi.
+    #[test]
+    fn mobile_is_split_into_ios_and_android() {
+        let names: Vec<&str> = CATEGORIES.iter().map(|c| c.0).collect();
+        assert!(!names.contains(&"Mobile"));
+        let web = names.iter().position(|n| *n == "Web").unwrap();
+        assert_eq!(&names[web + 1..web + 3], ["Mobile (iOS)", "Mobile (Android)"]);
+        let (ios, android) = (presets("Mobile (iOS)"), presets("Mobile (Android)"));
+        assert_eq!((ios.len(), android.len()), (5, 12));
+        assert_eq!(ios[0], ("iPhone 16", 1179, 2556, 72.0), "the tab still opens on the same first preset");
+        assert!(android.contains(&("Android 1080p", 1080, 2400, 72.0)));
+        for p in ios.iter().chain(android) {
+            assert!(p.3 == 72.0 && p.1 > 0 && p.2 > 0, "{}", p.0);
+            let mut f = crate::state::UiState::new_document_fields();
+            apply_preset(&mut f, p, &Default::default());
+            assert_eq!(f["__unit"], "px", "{}", p.0);
+        }
+    }
+
+    /// A script that still selects the old "Mobile" tab gets the iOS tab, not an unselected bar.
+    #[test]
+    fn the_old_mobile_category_opens_the_ios_tab() {
+        let mut f = crate::state::UiState::new_document_fields();
+        assert_eq!(category(&f), "Recent");
+        f.insert("__category".into(), json!("Mobile"));
+        assert_eq!(category(&f), "Mobile (iOS)");
+        f.insert("__category".into(), json!("Mobile (Android)"));
+        assert_eq!(category(&f), "Mobile (Android)");
+    }
+
+    /// Billboard presets are their real printed size at a large-format resolution, follow Print,
+    /// stay within `file.new`'s 300000 px limit, and ignore the Preset Resolutions preferences.
+    #[test]
+    fn billboard_presets_are_full_size_at_large_format_resolutions() {
+        let names: Vec<&str> = CATEGORIES.iter().map(|c| c.0).collect();
+        let print = names.iter().position(|n| *n == "Print").unwrap();
+        assert_eq!(names[print + 1], "Billboard");
+        // (preset, width cm, height cm)
+        let sizes = [
+            ("Billboard, 350 x 200 cm", 350.0, 200.0),
+            ("Bulletin, 48 x 14 ft", 48.0 * 30.48, 14.0 * 30.48),
+            ("Bulletin, 36 x 10.5 ft", 36.0 * 30.48, 10.5 * 30.48),
+            ("City Light, 118 x 175 cm", 118.0, 175.0),
+            ("Megaboard, 12 x 6 m", 1200.0, 600.0),
+        ];
+        let billboard = presets("Billboard");
+        assert_eq!(billboard.len(), sizes.len());
+        for (p, (name, w_cm, h_cm)) in billboard.iter().zip(sizes) {
+            assert_eq!(p.0, name);
+            assert!((15.0..=100.0).contains(&p.3), "{name}: {} ppi", p.3);
+            let px = |cm: f32| (cm / 2.54 * p.3).round() as u32;
+            assert_eq!((p.1, p.2), (px(w_cm), px(h_cm)), "{name}");
+            assert!(p.1 <= 300_000 && p.2 <= 300_000);
+            let mut f = crate::state::UiState::new_document_fields();
+            apply_preset(&mut f, p, &Default::default());
+            let params = command_params(&f);
+            assert_eq!((params["width"].as_u64(), params["height"].as_u64()), (Some(u64::from(p.1)), Some(u64::from(p.2))));
+            // Units & Rulers › Preset Resolutions (#3126) changes print and screen presets, not
+            // these: their pixels and ppi are the printed size.
+            let units = UnitsAndRulers { print_resolution: 200.0, screen_resolution: 96.0, ..Default::default() };
+            assert_eq!(at_pref_resolutions(p, &units), *p, "{name}");
+            // Also when the Orientation buttons have turned it (#4668).
+            let turned = (p.0, p.2, p.1, p.3);
+            assert_eq!(at_pref_resolutions(&turned, &units), turned, "{name} turned");
+            apply_preset(&mut f, p, &units);
+            assert_eq!(
+                (f["width"].as_u64(), f["height"].as_u64(), f["resolution"].as_f64()),
+                (Some(u64::from(p.1)), Some(u64::from(p.2)), Some(f64::from(p.3))),
+                "{name}"
+            );
+        }
+        // Mobile presets stay screen presets: pixels kept, ppi from the Screen Resolution.
+        let units = UnitsAndRulers { print_resolution: 200.0, screen_resolution: 96.0, ..Default::default() };
+        assert_eq!(at_pref_resolutions(&presets("Mobile (Android)")[0], &units), ("S26 Ultra", 1440, 3120, 96.0));
     }
 
     #[test]
@@ -1547,7 +1723,7 @@ mod tests {
         #[test]
         fn hovering_preset_tabs_shows_pointing_hand_not_text_cursor() {
             let mut h = harness();
-            for tab in ["Recent", "Saved", "Photo", "Print", "Art & Illustration", "Web", "Mobile", "Film & Video"] {
+            for tab in ["Recent", "Saved", "Photo", "Print", "Billboard", "Art & Illustration", "Web", "Mobile (iOS)", "Mobile (Android)", "Film & Video"] {
                 let rect = h.get_by_label(tab).rect();
                 h.hover_at(rect.center());
                 h.run_steps(2);

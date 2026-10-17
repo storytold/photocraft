@@ -1728,7 +1728,9 @@
 	Measurement Scale	Messskala
 	Measurement Scale Marker	Messskalen-Marker
 	Millimeters	Millimeter
-	Mobile	Mobil
+	Mobile (iOS)	Mobil (iOS)
+	Mobile (Android)	Mobil (Android)
+	Billboard	Plakatwände
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.

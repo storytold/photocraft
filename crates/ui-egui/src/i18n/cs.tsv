@@ -1750,7 +1750,9 @@
 	Measurement Scale	Měřítko měření
 	Measurement Scale Marker	Značka měřítka měření
 	Millimeters	Milimetry
-	Mobile	Mobilní zařízení
+	Mobile (iOS)	Mobilní zařízení (iOS)
+	Mobile (Android)	Mobilní zařízení (Android)
+	Billboard	Billboardy
 	Move Tool	Nástroj přesun
 	Could not use the move tool because the layer is locked.	Nástroj Přesun nelze použít, protože vrstva je zamčená.
 	Could not complete the Free Transform command because the layer is locked.	Příkaz Volná transformace nelze dokončit, protože vrstva je zamčená.

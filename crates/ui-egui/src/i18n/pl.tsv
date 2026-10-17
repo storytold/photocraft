@@ -1728,7 +1728,9 @@
 	Measurement Scale	Skala pomiaru
 	Measurement Scale Marker	Znacznik skali pomiaru
 	Millimeters	Milimetry
-	Mobile	Urządzenia mobilne
+	Mobile (iOS)	Urządzenia mobilne (iOS)
+	Mobile (Android)	Urządzenia mobilne (Android)
+	Billboard	Billboardy
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
 	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.

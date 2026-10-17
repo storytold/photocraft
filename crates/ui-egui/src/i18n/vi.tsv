@@ -1725,7 +1725,9 @@ cameraRaw	Size	Kích thước
 	Print	In
 	Art & Illustration	Nghệ thuật & Minh họa
 	Web	Web
-	Mobile	Di động
+	Mobile (iOS)	Di động (iOS)
+	Mobile (Android)	Di động (Android)
+	Billboard	Biển quảng cáo
 	Film & Video	Phim & Video
 	New Document	Tài liệu mới
 	Create a new document or open an existing file.	Tạo tài liệu mới hoặc mở tệp hiện có.

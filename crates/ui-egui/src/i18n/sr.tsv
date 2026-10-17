@@ -1691,7 +1691,9 @@
 	Measurement Scale	Razmera merenja
 	Measurement Scale Marker	Oznaka razmere merenja
 	Millimeters	Milimetri
-	Mobile	Mobilni
+	Mobile (iOS)	Mobilni (iOS)
+	Mobile (Android)	Mobilni (Android)
+	Billboard	Bilbordi
 	Move Tool	Alatka za pomeranje
 	Could not use the move tool because the layer is locked.	Alatka za pomeranje ne može da se koristi jer je sloj zaključan.
 	Could not complete the Free Transform command because the layer is locked.	Komanda Slobodna transformacija ne može da se izvrši jer je sloj zaključan.

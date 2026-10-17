@@ -1710,7 +1710,9 @@
 	Measurement Scale	Meetschaal
 	Measurement Scale Marker	Meetschaalmarkering
 	Millimeters	Millimeter
-	Mobile	Mobiel
+	Mobile (iOS)	Mobiel (iOS)
+	Mobile (Android)	Mobiel (Android)
+	Billboard	Billboards
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
 	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
