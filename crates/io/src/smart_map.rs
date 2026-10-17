@@ -144,7 +144,7 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 16] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -160,7 +160,65 @@ const KNOWN: [Known; 14] = [
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
     Known { class: "adaptCorrect", filter_id: 781, name: "Shado&ws/Highlights...", command: "image.adjustments.shadowsHighlights" },
+    // Smart Sharpen has a numeric filterID and a stringID class, like Box Blur.
+    Known { class: SMART_SHARPEN, filter_id: 1131, name: "Smart Sharpen...", command: "filter.sharpen.smartSharpen" },
+    Known { class: "DstS", filter_id: code(b"DstS"), name: "Dust & Scratches...", command: "filter.noise.dustAndScratches" },
 ];
+
+// ---------- Smart Sharpen and Dust & Scratches ----------
+//
+// Measured in Photoshop (applied through Action Manager to a smart object, saved, `filterFX` read
+// back):
+//
+// ```text
+// Smart Sharpen (filterID 1131): smartSharpen { presetKind = presetKindType enum (only on the
+//   default entry), useLegacy bool, Amnt UntF #Prc, Rds  UntF #Pxl, noiseReduction UntF #Prc,
+//   blur = blurType enum (GsnB | lensBlur | MtnB), Angl long (Motion Blur only) }
+// Dust & Scratches (filterID DstS): DstS { Rds  long, Thsh long }
+// ```
+//
+// PhotoCraft's Smart Sharpen removes a Gaussian blur, non-legacy: Lens Blur, Motion Blur, legacy
+// mode, Shadow/Highlight settings or any other key keep the whole entry verbatim. `presetKind`
+// only names the dialog's preset: it is accepted on open but not kept (the engine takes no such
+// parameter) and not written (Photoshop leaves it out of entries with explicit values).
+
+const SMART_SHARPEN: &str = "smartSharpen";
+const SMART_SHARPEN_KEYS: [&str; 6] = ["presetKind", "useLegacy", "Amnt", "Rds ", "noiseReduction", "blur"];
+
+/// A `UntF` value in `unit`, finite and within `lo..=hi`.
+fn unit_in(d: &Descriptor, key: &str, u: &[u8; 4], lo: f64, hi: f64) -> Option<f64> {
+    match d.get(key)? {
+        Value::UnitFloat { unit, value } if unit == u && value.is_finite() && (lo..=hi).contains(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// A `long` value within `lo..=hi`.
+fn int_in(d: &Descriptor, key: &str, lo: i32, hi: i32) -> Option<i32> {
+    int(d, key).filter(|v| (lo..=hi).contains(v))
+}
+
+/// `filter.sharpen.smartSharpen` params; `None` for a setting PhotoCraft doesn't render.
+fn smart_sharpen_params(f: &Descriptor) -> Option<J> {
+    if f.items.iter().any(|(k, _)| !SMART_SHARPEN_KEYS.iter().any(|x| k.is(x))) {
+        return None;
+    }
+    let Some(Value::Boolean(false)) = f.get("useLegacy") else { return None };
+    let Some(Value::Enumerated { type_id, value }) = f.get("blur") else { return None };
+    if !type_id.is("blurType") || !value.is("GsnB") {
+        return None;
+    }
+    let mut out = Map::new();
+    out.insert("amount".into(), json!(unit_in(f, "Amnt", b"#Prc", 1.0, 500.0)?));
+    out.insert("radius".into(), json!(unit_in(f, "Rds ", b"#Pxl", 0.1, 64.0)?));
+    out.insert("reduceNoise".into(), json!(unit_in(f, "noiseReduction", b"#Prc", 0.0, 100.0)?));
+    match f.get("presetKind") {
+        None => {}
+        Some(Value::Enumerated { type_id, .. }) if type_id.is("presetKindType") => {}
+        Some(_) => return None,
+    }
+    Some(J::Object(out))
+}
 
 fn known_by_command(command: &str) -> Option<&'static Known> {
     KNOWN.iter().find(|k| k.command == command)
@@ -282,6 +340,13 @@ fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)
         }
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
         ("Embs", Some(f)) => json!({"angle": int(f, "Angl")?, "height": int(f, "Hght")?, "amount": int(f, "Amnt")?}),
+        (SMART_SHARPEN, Some(f)) => smart_sharpen_params(f)?,
+        ("DstS", Some(f)) => {
+            if f.items.iter().any(|(k, _)| !k.is("Rds ") && !k.is("Thsh")) {
+                return None;
+            }
+            json!({"radius": int_in(f, "Rds ", 1, 500)?, "threshold": int_in(f, "Thsh", 0, 255)?})
+        }
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
         _ => return None,
@@ -595,6 +660,19 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         }
         "Msc " => d.with("ClSz", unit(b"#Pxl", pf(p, "cellSize", 10.0))),
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
+        SMART_SHARPEN => {
+            // The engine's defaults and ranges (it clamps the same way when rendering).
+            d.with("useLegacy", Value::Boolean(false))
+                .with("Amnt", unit(b"#Prc", pf(p, "amount", 100.0).clamp(1.0, 500.0)))
+                .with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0).clamp(0.1, 64.0)))
+                .with("noiseReduction", unit(b"#Prc", pf(p, "reduceNoise", 10.0).clamp(0.0, 100.0)))
+                .with("blur", enumv("blurType", "GsnB"))
+        }
+        // Photoshop stores whole pixels and levels.
+        "DstS" => {
+            let whole = |key: &str, default: f64, lo: f64, hi: f64| Value::Integer(pf(p, key, default).round().clamp(lo, hi) as i32);
+            d.with("Rds ", whole("radius", 1.0, 1.0, 500.0)).with("Thsh", whole("threshold", 0.0, 0.0, 255.0))
+        }
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
         "adaptCorrect" => {
@@ -1063,6 +1141,8 @@ mod tests {
             sf("filter.other.minimum", json!({"radius": 2.0})),
             sf("filter.pixelate.mosaic", json!({"cellSize": 8.0})),
             sf("filter.stylize.emboss", json!({"angle": 135, "height": 3, "amount": 100})),
+            sf("filter.sharpen.smartSharpen", json!({"amount": 120.0, "radius": 2.5, "reduceNoise": 5.0})),
+            sf("filter.noise.dustAndScratches", json!({"radius": 4, "threshold": 20})),
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
             sf("image.adjustments.shadowsHighlights", json!({})),
@@ -1077,6 +1157,222 @@ mod tests {
             let bytes = d.to_bytes();
             let back = filter_from_item(&Descriptor::from_bytes(&bytes).unwrap());
             assert_eq!(back, f, "{}", f.command);
+        }
+    }
+
+    /// A `filterFXList` item as Photoshop writes it, around filter `fltr`.
+    fn ps_item(name: &str, fltr: Descriptor, filter_id: i32) -> Descriptor {
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
+            .with("FrgC", rgbc(0.0))
+            .with("BckC", rgbc(255.0))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(filter_id))
+    }
+
+    /// Smart Sharpen's `Fltr` in the measured shape (no `presetKind`, no `Angl`).
+    fn smart_sharpen(amount: f64, radius: f64, noise: f64, blur: &str) -> Descriptor {
+        Descriptor::new("smartSharpen")
+            .with("useLegacy", Value::Boolean(false))
+            .with("Amnt", unit(b"#Prc", amount))
+            .with("Rds ", unit(b"#Pxl", radius))
+            .with("noiseReduction", unit(b"#Prc", noise))
+            .with("blur", enumv("blurType", blur))
+    }
+
+    fn dust(radius: i32, threshold: i32) -> Descriptor {
+        Descriptor::new("DstS").with("Rds ", Value::Integer(radius)).with("Thsh", Value::Integer(threshold))
+    }
+
+    /// The `Fltr` descriptor PhotoCraft writes for `f`, after a byte round trip.
+    fn written_fltr(f: &SmartFilter) -> Descriptor {
+        let d = Descriptor::from_bytes(&item_for_filter(f).unwrap().to_bytes()).unwrap();
+        get_desc(&d, "Fltr").unwrap().clone()
+    }
+
+    /// Measured in Photoshop: Smart Sharpen 120 %, 2.5 px, noise 5 %, Gaussian Blur
+    /// (filterID 1131); the default entry adds `presetKind` first, which is not kept.
+    #[test]
+    fn smart_sharpen_photoshop_entry_opens_and_writes_back() {
+        let fltr = smart_sharpen(120.0, 2.5, 5.0, "GsnB");
+        let item = ps_item("Smart Sharpen...", fltr.clone(), 1131);
+        let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+        assert_eq!(f.command, "filter.sharpen.smartSharpen");
+        assert_eq!(f.params, json!({"amount": 120.0, "radius": 2.5, "reduceNoise": 5.0}));
+        assert_eq!(written_fltr(&f), fltr);
+        let d = item_for_filter(&f).unwrap();
+        assert_eq!(int(&d, "filterID"), Some(1131));
+        assert_eq!(get_desc(&d, "Fltr").unwrap().class_id, Id::Str(b"smartSharpen".to_vec()));
+        // The four-character keys and enum values are codes, as Photoshop writes them.
+        let bytes = d.to_bytes();
+        assert_eq!(count(&bytes, b"\0\0\0\0blurenum\0\0\0\x08blurType\0\0\0\0GsnB"), 1);
+        assert_eq!(count(&bytes, b"\0\0\0\0Rds UntF#Pxl"), 1);
+
+        // With `presetKind` (any value): opens, but the params hold only the engine's own keys
+        // (it rejects unknown ones), and a re-save leaves it out as Photoshop does for explicit
+        // values.
+        for kind in ["presetKindDefault", "presetKindCustom", "Xxxx"] {
+            let mut with_preset = Descriptor::new("smartSharpen").with("presetKind", enumv("presetKindType", kind));
+            with_preset.items.extend(smart_sharpen(200.0, 1.0, 10.0, "GsnB").items);
+            let f = filter_from_item(&Descriptor::from_bytes(&ps_item("Smart Sharpen...", with_preset, 1131).to_bytes()).unwrap());
+            assert_eq!(f.command, "filter.sharpen.smartSharpen");
+            let keys: Vec<&str> = f.params.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys.len(), 3, "{keys:?}");
+            assert!(keys.iter().all(|k| ["amount", "radius", "reduceNoise"].contains(k)), "{keys:?}");
+            assert_eq!(f.params, json!({"amount": 200.0, "radius": 1.0, "reduceNoise": 10.0}));
+            assert_eq!(written_fltr(&f), smart_sharpen(200.0, 1.0, 10.0, "GsnB"));
+        }
+
+        // Without options PhotoCraft writes the engine's defaults, Gaussian Blur.
+        assert_eq!(written_fltr(&sf("filter.sharpen.smartSharpen", json!({}))), smart_sharpen(100.0, 1.0, 10.0, "GsnB"));
+    }
+
+    /// Lens Blur (Photoshop's default), Motion Blur and legacy mode render differently from
+    /// PhotoCraft's Smart Sharpen, so those entries stay verbatim.
+    #[test]
+    fn smart_sharpen_settings_we_dont_render_stay_verbatim() {
+        let mut default_entry = Descriptor::new("smartSharpen").with("presetKind", enumv("presetKindType", "presetKindDefault"));
+        default_entry.items.extend(smart_sharpen(200.0, 1.0, 10.0, "lensBlur").items);
+        let motion = smart_sharpen(80.0, 1.5, 0.0, "MtnB").with("Angl", Value::Integer(30));
+        let mut legacy = smart_sharpen(100.0, 1.0, 10.0, "GsnB");
+        set(&mut legacy, "useLegacy", Value::Boolean(true));
+        for fltr in [default_entry, motion, legacy] {
+            let item = ps_item("Smart Sharpen...", fltr, 1131);
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER);
+            assert_eq!(f.params["filterID"], 1131);
+            assert_eq!(item_for_filter(&f).unwrap(), item);
+        }
+    }
+
+    #[test]
+    fn malformed_smart_sharpen_is_kept_verbatim() {
+        let g = || smart_sharpen(100.0, 1.0, 10.0, "GsnB");
+        let without = |key: &str| {
+            let mut d = g();
+            d.items.retain(|(k, _)| !k.is(key));
+            d
+        };
+        let with = |key: &str, v: Value| {
+            let mut d = g();
+            set(&mut d, key, v);
+            d
+        };
+        let cases = vec![
+            without("useLegacy"),
+            without("Amnt"),
+            without("Rds "),
+            without("noiseReduction"),
+            without("blur"),
+            with("Amnt", Value::Double(100.0)),
+            with("Amnt", unit(b"#Pxl", 100.0)),
+            with("Rds ", Value::Integer(1)),
+            with("useLegacy", Value::Integer(0)),
+            with("Amnt", unit(b"#Prc", 0.0)),
+            with("Amnt", unit(b"#Prc", 501.0)),
+            with("Rds ", unit(b"#Pxl", 0.05)),
+            with("Rds ", unit(b"#Pxl", 65.0)),
+            with("Rds ", unit(b"#Pxl", f64::NAN)),
+            with("noiseReduction", unit(b"#Prc", -1.0)),
+            with("noiseReduction", unit(b"#Prc", f64::INFINITY)),
+            with("blur", enumv("blurType", "Xxxx")),
+            with("blur", enumv("BlrM", "GsnB")),
+            with("blur", Value::Integer(0)),
+            with("presetKind", Value::Integer(1)),
+            g().with("Angl", Value::Integer(30)),
+            g().with("shadowMode", Value::Descriptor(Descriptor::new("adaptCorrectTones"))),
+        ];
+        for fltr in cases {
+            let item = ps_item("Smart Sharpen...", fltr, 1131);
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{:?}", get_desc(&item, "Fltr"));
+            assert_eq!(item_for_filter(&f).unwrap().to_bytes(), item.to_bytes());
+        }
+        // No `Fltr` at all (hasoptions false).
+        let bare = Descriptor::new("filterFX").with("filterID", Value::Integer(1131));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
+    }
+
+    /// Measured in Photoshop: Dust & Scratches at its defaults (1, 0) and at 4, 20 (filterID
+    /// `DstS`, 1148417107; both settings `long`).
+    #[test]
+    fn dust_and_scratches_photoshop_entry_opens_and_writes_back() {
+        for (radius, threshold) in [(1, 0), (4, 20), (500, 255)] {
+            let fltr = dust(radius, threshold);
+            let item = ps_item("Dust & Scratches...", fltr.clone(), 1_148_417_107);
+            let f = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+            assert_eq!(f.command, "filter.noise.dustAndScratches");
+            assert_eq!(f.params, json!({"radius": radius, "threshold": threshold}));
+            assert_eq!(written_fltr(&f), fltr);
+            assert_eq!(int(&item_for_filter(&f).unwrap(), "filterID"), Some(1_148_417_107));
+        }
+        // No `Fltr` (hasoptions false): kept verbatim.
+        let bare = Descriptor::new("filterFX").with("filterID", Value::Integer(code(b"DstS")));
+        assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
+    }
+
+    #[test]
+    fn malformed_dust_and_scratches_is_kept_verbatim() {
+        let cases = vec![
+            Descriptor::new("DstS").with("Thsh", Value::Integer(0)),
+            Descriptor::new("DstS").with("Rds ", Value::Integer(1)),
+            Descriptor::new("DstS").with("Rds ", Value::Double(1.0)).with("Thsh", Value::Integer(0)),
+            Descriptor::new("DstS").with("Rds ", unit(b"#Pxl", 1.0)).with("Thsh", Value::Integer(0)),
+            Descriptor::new("DstS").with("Rds ", Value::Integer(1)).with("Thsh", Value::Boolean(false)),
+            dust(0, 0),
+            dust(501, 0),
+            dust(1, -1),
+            dust(1, 256),
+            dust(i32::MIN, i32::MAX),
+            dust(1, 0).with("Xtra", Value::Integer(1)),
+        ];
+        for fltr in cases {
+            let item = ps_item("Dust & Scratches...", fltr, code(b"DstS"));
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER, "{:?}", get_desc(&item, "Fltr"));
+            assert_eq!(item_for_filter(&f).unwrap(), item);
+        }
+    }
+
+    /// Every option's range ends round trip; hostile params are written in range (the engine
+    /// clamps the same way), never a panic.
+    #[test]
+    fn smart_sharpen_and_dust_option_values_round_trip() {
+        let mut cases = Vec::new();
+        for amount in [1.0, 100.0, 500.0] {
+            for radius in [0.1, 1.0, 64.0] {
+                for noise in [0.0, 10.0, 100.0] {
+                    cases.push(sf("filter.sharpen.smartSharpen", json!({"amount": amount, "radius": radius, "reduceNoise": noise})));
+                }
+            }
+        }
+        for radius in [1, 2, 100, 500] {
+            for threshold in [0, 1, 128, 255] {
+                cases.push(sf("filter.noise.dustAndScratches", json!({"radius": radius, "threshold": threshold})));
+            }
+        }
+        for f in cases {
+            let back = filter_from_item(&Descriptor::from_bytes(&item_for_filter(&f).unwrap().to_bytes()).unwrap());
+            assert_eq!(back, f);
+        }
+        let defaults = json!({"amount": 100.0, "radius": 1.0, "reduceNoise": 10.0});
+        for (command, p, want) in [
+            (
+                "filter.sharpen.smartSharpen",
+                json!({"amount": 1e9, "radius": -5.0, "reduceNoise": "x"}),
+                json!({"amount": 500.0, "radius": 0.1, "reduceNoise": 10.0}),
+            ),
+            ("filter.sharpen.smartSharpen", json!({"presetKind": "presetKindDefault", "amount": null}), defaults.clone()),
+            ("filter.sharpen.smartSharpen", json!(null), defaults.clone()),
+            ("filter.noise.dustAndScratches", json!({"radius": 2.4, "threshold": 1e12}), json!({"radius": 2, "threshold": 255})),
+            ("filter.noise.dustAndScratches", json!({"radius": -3, "threshold": -3}), json!({"radius": 1, "threshold": 0})),
+            ("filter.noise.dustAndScratches", json!([]), json!({"radius": 1, "threshold": 0})),
+        ] {
+            let back = filter_from_item(&item_for_filter(&sf(command, p.clone())).unwrap());
+            assert_eq!((back.command.as_str(), &back.params), (command, &want), "{p}");
         }
     }
 
