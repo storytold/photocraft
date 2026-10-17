@@ -990,8 +990,17 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let p = &targeted;
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
-    let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
+    let mut plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // A spot channel loads its ink, the black pixels, as ⌘-clicking it does in Photoshop (#6123).
+    if p.get("document").is_none()
+        && let Some(ChanRef::Alpha(i)) = p.get("channel").and_then(|v| parse_ref(v, doc))
+        && doc.channels.get(i).is_some_and(|c| c.spot.is_some())
+    {
+        for v in plane.iter_mut() {
+            *v = AlphaChannel::ink(*v);
+        }
+    }
     let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
         Some(ChanRef::Transparency) => "Load Transparency",
         Some(ChanRef::LayerMask) => "Load Layer Mask",
@@ -1132,11 +1141,14 @@ fn new_spot(s: &mut Session, p: &Value) -> Result<Value> {
     let i = s.edit("New Spot Channel", |doc, _| {
         let area = doc.bounds();
         let fmt = channel_format(doc);
-        let surface = if from_sel && doc.selection.is_some() {
-            plane_surface(&sel::mask_from_surface(doc.selection.as_ref(), area), area, fmt)
-        } else {
-            Surface::new(fmt)
+        // Stored as the Channels panel shows it (#6123): the selection is ink, black, and the rest
+        // paper; with no selection the whole canvas is ink, as in Photoshop. Space added to the
+        // canvas later is paper.
+        let ink: Vec<f32> = match doc.selection.as_ref().filter(|_| from_sel) {
+            Some(sel) => sel::mask_from_surface(Some(sel), area).iter().map(|m| 1.0 - m).collect(),
+            None => vec![0.0; area.width() as usize * area.height() as usize],
         };
+        let surface = AlphaChannel::on_paper(&plane_surface(&ink, area, fmt), area);
         let name = name.clone().unwrap_or_else(|| next_alpha_name(doc, "Spot Color"));
         doc.channels.push(AlphaChannel { spot: Some((color, solidity)), ..AlphaChannel::new(name, surface) });
         Ok(doc.channels.len() - 1)
@@ -1425,19 +1437,29 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let solidity = p.get("solidity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let kind = p.get("indicates").and_then(Value::as_str).map(str::to_string);
+    let area = doc.bounds();
     let apply = move |ch: &mut AlphaChannel| -> Result<()> {
         if let Some(n) = &name {
             ch.name = n.clone();
         }
         match kind.as_deref() {
+            // The values stay as the Channels panel shows them, as in Photoshop: an alpha
+            // channel's black becomes ink. Space added later follows the kind: paper for a spot
+            // channel, black for an alpha channel.
             Some("spot") => {
                 let (c, sol) = ch.spot.unwrap_or((ch.color, 0.0));
+                if ch.spot.is_none() {
+                    ch.surface = AlphaChannel::on_paper(&ch.surface, area);
+                }
                 ch.spot = Some((color.unwrap_or(c), solidity.unwrap_or(sol)));
                 return Ok(());
             }
             Some(k) => {
                 ch.indicates = indicates_param(Some(&json!(k))).ok_or_else(|| bad(cmd, format!("unknown `indicates` {k}")))?;
-                ch.spot = None;
+                if ch.spot.take().is_some() {
+                    let fmt = ch.surface.format();
+                    ch.surface = plane_surface(&read_plane(&ch.surface, area), area, fmt);
+                }
             }
             None => {}
         }
@@ -1524,7 +1546,7 @@ fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
             .flat_map(|(c, &v)| {
                 let rgb: [f32; 3] = std::array::from_fn(|j| {
                     let over = solidity * ink[j] + (1.0 - solidity) * c[j] * ink[j];
-                    c[j] + (over - c[j]) * v.clamp(0.0, 1.0)
+                    c[j] + (over - c[j]) * AlphaChannel::ink(v).clamp(0.0, 1.0)
                 });
                 from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0])
             })

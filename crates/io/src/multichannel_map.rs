@@ -1,10 +1,11 @@
 //! Multichannel documents <-> PSD colour mode 7.
 //!
 //! A Multichannel document has no layers: its image is a set of ink (spot) channels, stored in
-//! [`Document::channels`] with ink density as the value (1 = solid ink, like every spot channel).
-//! A PSD stores the same planes the way Photoshop shows them in the Channels panel: 0 (black) =
-//! solid ink, max = paper. Channel names come from resources 1006 / 1045 and ink colours from
-//! DisplayInfo (1077), exactly as for spot channels in the other modes.
+//! [`Document::channels`] the way Photoshop shows them in the Channels panel and stores them in a
+//! PSD: 0 (black) = solid ink, max = paper, like every spot channel (#6123). Alpha-type channels
+//! (DisplayInfo kind 0 / 1) are stored as-is too (max = selected), so every plane is a straight
+//! copy. Channel names come from resources 1006 / 1045 and ink colours from DisplayInfo (1077),
+//! exactly as for spot channels in the other modes.
 
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
@@ -47,8 +48,8 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
             warnings.push(format!("multichannel: channel {} is missing", k + 1));
             break;
         };
-        let vals: Vec<f32> = (0..n).map(|i| 1.0 - decode(p, i, depth)).collect();
-        let mut s = Surface::new(fmt);
+        let vals: Vec<f32> = (0..n).map(|i| decode(p, i, depth)).collect();
+        let mut s = AlphaChannel::paper(fmt);
         s.write_region(canvas, &vals);
         s.prune();
         let name = names.get(k).cloned().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Channel {}", k + 1));
@@ -60,6 +61,14 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
         crate::channel_map::apply_display_info(&r.data, true, 0, &mut doc.channels);
     } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
         crate::channel_map::apply_display_info(&r.data, false, 0, &mut doc.channels);
+    }
+    // Alpha-type channels keep their values; space added to them later is black, as for the
+    // alpha channels of every other mode.
+    for ch in doc.channels.iter_mut().filter(|c| c.spot.is_none()) {
+        let mut s = Surface::new(fmt);
+        s.write_region(canvas, &ch.surface.read_region(canvas));
+        s.prune();
+        ch.surface = s;
     }
 }
 
@@ -89,9 +98,10 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
             encode_be(1.0, sample, &mut planes);
         }
     }
+    // Every plane as stored: inks as tone (0 = solid ink), alpha-type channels as-is.
     for ch in &channels {
         for v in ch.surface.read_region(canvas).chunks_exact(ch.surface.channels()) {
-            encode_be(1.0 - v[0], sample, &mut planes);
+            encode_be(v[0], sample, &mut planes);
         }
     }
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;

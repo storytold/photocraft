@@ -1048,6 +1048,11 @@ pub(crate) fn psd_to_document_decoded(
         } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
             crate::channel_map::apply_display_info(&r.data, false, skip, &mut doc.channels);
         }
+        // A spot channel is stored as Photoshop stores it (black = ink, #6123); space added to it
+        // later is paper, not ink.
+        for ch in doc.channels.iter_mut().filter(|c| c.spot.is_some()) {
+            ch.surface = AlphaChannel::on_paper(&ch.surface, canvas);
+        }
         // Saved in Quick Mask mode: that channel becomes the document's Quick Mask again.
         if let Some(r) = file.resource(crate::channel_map::QUICK_MASK_INFO)
             && r.data.len() >= 2

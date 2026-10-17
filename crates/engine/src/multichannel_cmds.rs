@@ -1,8 +1,8 @@
 //! Image › Mode › Multichannel, and conversions out of it.
 //!
 //! A Multichannel document has no layers: its image is a set of ink channels, kept as spot
-//! channels in [`Document::channels`] (value = ink density, 1 = solid; the compositor prints them
-//! over white, see `photocraft_compose::multichannel`). Like Photoshop the conversion flattens and
+//! channels in [`Document::channels`] (stored as the Channels panel shows them: 0 = solid ink,
+//! #6123; the compositor prints them over white, see `photocraft_compose::multichannel`). Like Photoshop the conversion flattens and
 //! turns each colour channel into an ink:
 //!
 //! * RGB → Cyan, Magenta, Yellow (the red, green and blue data read as ink: density = 1 − value);
@@ -86,10 +86,12 @@ fn flattened_planes(doc: &Document) -> Vec<Vec<f32>> {
     planes
 }
 
+/// An ink channel at the document depth holding the ink densities `vals` over the canvas, stored
+/// as the Channels panel shows them (black = solid ink, #6123) on paper.
 fn channel_surface(doc: &Document, vals: &[f32]) -> Surface {
-    let mut s = Surface::new(PixelFormat::new(ColorMode::Grayscale, doc.depth, false));
-    let clamped: Vec<f32> = vals.iter().map(|v| v.clamp(0.0, 1.0)).collect();
-    s.write_region(doc.bounds(), &clamped);
+    let mut s = AlphaChannel::paper(PixelFormat::new(ColorMode::Grayscale, doc.depth, false));
+    let tone: Vec<f32> = vals.iter().map(|v| AlphaChannel::ink(v.clamp(0.0, 1.0))).collect();
+    s.write_region(doc.bounds(), &tone);
     s.prune();
     s
 }
@@ -176,8 +178,9 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
                 let vals = ch.surface.read_region(canvas);
                 let step = ch.surface.channels();
                 for (i, v) in vals.chunks_exact(step).enumerate() {
-                    // CMYK plates are ink amounts already; other modes store light.
-                    data[i * (cc + 1) + k] = if mode == ColorMode::Cmyk { v[0] } else { 1.0 - v[0] };
+                    // The channel holds tone (black = ink): CMYK plates are ink amounts, the other
+                    // modes store light, which is the tone itself.
+                    data[i * (cc + 1) + k] = if mode == ColorMode::Cmyk { AlphaChannel::ink(v[0]) } else { v[0] };
                 }
             }
             for i in 0..n {

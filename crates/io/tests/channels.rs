@@ -51,3 +51,30 @@ fn channel_options_spot_and_quick_mask_roundtrip() {
     assert_eq!(file.header.channels, 56);
     assert!(file.resources.iter().all(|resource| resource.id != 1022));
 }
+
+/// #6123: a spot channel is stored as Photoshop stores it in a PSD plane, black = solid ink, so
+/// the plane is a straight copy both ways; space added after reopening is paper.
+#[test]
+fn spot_channels_are_psd_planes_as_stored() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut d = Document::with_background("s", Size::new(4, 1), ColorMode::Cmyk, depth, Color::WHITE);
+        let mut ink = AlphaChannel::paper(PixelFormat::new(ColorMode::Grayscale, depth, false));
+        ink.write_region(Rect::new(0, 0, 4, 1), &[0.0, 0.25, 1.0, 1.0]);
+        d.channels.push(AlphaChannel { spot: Some((Color::rgb(0.0, 0.3, 1.0), 0.0)), ..AlphaChannel::new("PMS 300", ink) });
+        let file = document_to_psd(&d);
+        // The last merged plane is the spot channel, as Photoshop writes it: solid ink is 0.
+        let merged = file.decode_merged().unwrap();
+        let max = if depth == SampleType::U8 { 255.0 } else { 65535.0 };
+        let bytes = if depth == SampleType::U8 { 1 } else { 2 };
+        let plane = &merged[merged.len() - 4 * bytes..];
+        let samples: Vec<f32> =
+            plane.chunks_exact(bytes).map(|b| if bytes == 1 { f32::from(b[0]) } else { f32::from(u16::from_be_bytes([b[0], b[1]])) } / max).collect();
+        assert!(samples.iter().zip([0.0, 0.25, 1.0, 1.0]).all(|(a, b)| (a - b).abs() < 0.5 / 255.0), "{depth:?}: {samples:?}");
+        let (back, _) = psd_to_document(&file);
+        let s = &back.channels[0];
+        assert!(s.spot.is_some());
+        let vals: Vec<f32> = s.surface.read_region(Rect::new(0, 0, 4, 1)).chunks_exact(s.surface.channels()).map(|v| v[0]).collect();
+        assert!(vals.iter().zip([0.0, 0.25, 1.0, 1.0]).all(|(a, b)| (a - b).abs() < 0.5 / 255.0), "{depth:?}: {vals:?}");
+        assert_eq!(s.surface.sample_channel(40, 0, 0), 1.0, "{depth:?}: paper past the canvas");
+    }
+}

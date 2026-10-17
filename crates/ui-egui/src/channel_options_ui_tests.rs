@@ -135,9 +135,10 @@ fn new_spot_channel_dialog_creates_the_ink_from_the_selection_and_remembers_it()
     let (ink, solidity) = ch.spot.expect("a spot channel");
     assert_eq!(ink.to_rgba8()[..3], [0x00, 0x50, 0xff]);
     assert!((solidity - 0.6).abs() < 1e-6);
-    // Inked where the selection was, empty outside it.
+    // Inked where the selection was, paper outside it, stored as the Channels panel shows it:
+    // black = ink (#6123).
     let (inside, outside) = (ch.surface.rgba(4, 4)[0], ch.surface.rgba(14, 14)[0]);
-    assert!(inside > 0.99 && outside < 0.01, "{inside} {outside}");
+    assert!(inside < 0.01 && outside > 0.99, "{inside} {outside}");
 
     // The next one gets a fresh name and the last ink and solidity.
     let f = new_spot_fields(&app).unwrap();

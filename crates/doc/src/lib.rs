@@ -807,7 +807,9 @@ pub enum ColorIndicates {
 
 /// An extra (alpha or spot) channel, also used for the temporary Quick Mask channel.
 ///
-/// The surface is grayscale at the document depth; white = selected (1.0), black = masked.
+/// The surface is grayscale at the document depth, stored as Photoshop shows it in the Channels
+/// panel: for an alpha channel white = selected (1.0), black = masked; for a spot channel black =
+/// solid ink (0.0), white = paper (1.0), so painting black adds ink as in Photoshop (#6123).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlphaChannel {
     pub name: String,
@@ -829,10 +831,44 @@ impl AlphaChannel {
         Self { name: name.into(), surface, spot: None, color: Self::DEFAULT_COLOR, opacity: 0.5, indicates: ColorIndicates::MaskedAreas }
     }
 
+    /// A spot channel's value where there is no ink: white paper.
+    pub const PAPER: f32 = 1.0;
+
+    /// The ink (0..1) of spot channel value `v`: black is solid ink.
+    pub fn ink(v: f32) -> f32 {
+        1.0 - v
+    }
+
+    /// An empty spot channel surface: paper everywhere, also where the canvas later grows.
+    pub fn paper(format: photocraft_color::PixelFormat) -> Surface {
+        Surface::with_default(format, &[Self::PAPER])
+    }
+
+    /// `surface` with paper as its default (where it has no tiles), keeping its values over
+    /// `area`: what a surface becomes as a spot channel, so space added later holds no ink.
+    pub fn on_paper(surface: &Surface, area: photocraft_geom::Rect) -> Surface {
+        if surface.default_pixel().first() == Some(&Self::PAPER) {
+            return surface.clone();
+        }
+        let mut out = Self::paper(surface.format());
+        let area = area.union(&surface.content_bounds());
+        if !area.is_empty() {
+            out.write_region(area, &surface.read_region(area));
+            out.prune();
+        }
+        out
+    }
+
     /// Overlay coverage (0..1, before opacity) for channel value `v`: spot channels show ink
-    /// where the channel is white, alpha channels follow [`ColorIndicates`].
+    /// where the channel is black, alpha channels follow [`ColorIndicates`].
     pub fn overlay_coverage(&self, v: f32) -> f32 {
-        if self.spot.is_some() || self.indicates == ColorIndicates::SelectedAreas { v } else { 1.0 - v }
+        if self.spot.is_some() {
+            Self::ink(v)
+        } else if self.indicates == ColorIndicates::SelectedAreas {
+            v
+        } else {
+            1.0 - v
+        }
     }
 }
 

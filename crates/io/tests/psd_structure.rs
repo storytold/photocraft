@@ -186,10 +186,10 @@ fn multichannel_imports_ink_channels() {
         assert!(d.layers.is_empty());
         assert_eq!(d.channels.len(), usize::from(f.header.channels));
         assert!(d.channels.iter().all(|c| c.spot.is_some()));
-        // Stored dark = ink: the channel value is 1 − the stored sample.
+        // Stored dark = ink, and kept that way (#6123): the channel value is the stored sample.
         let merged = f.decode_merged().unwrap();
         let first = if *depth == 8 { f32::from(merged[0]) / 255.0 } else { f32::from(u16::from_be_bytes([merged[0], merged[1]])) / 65535.0 };
-        assert!((d.channels[0].surface.pixel(0, 0)[0] - (1.0 - first)).abs() < 1e-3);
+        assert!((d.channels[0].surface.pixel(0, 0)[0] - first).abs() < 1e-3);
         // Re-export writes the same planes.
         let out = export(&d, "x.psd", &ExportOptions::default()).unwrap();
         let back = PsdFile::from_bytes(&out.bytes).unwrap();

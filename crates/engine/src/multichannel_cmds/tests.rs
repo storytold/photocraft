@@ -49,10 +49,11 @@ fn rgb_becomes_cmy_inks_and_back_exactly() {
         assert_eq!(d.mode, ColorMode::Multichannel);
         assert!(d.layers.is_empty());
         assert_eq!(ink_names(d), ["Cyan", "Magenta", "Yellow"]);
-        // Cyan ink = the red data read as ink.
+        // The Cyan channel holds the red data as tone: black = solid ink (#6123), as Photoshop
+        // shows the plate in the Channels panel.
         let cyan = d.channels[0].surface.pixel(4, 3)[0];
         let red = before[(3 * 12 + 4) * 4];
-        assert!((cyan - (1.0 - red)).abs() <= tol(depth), "{depth}: {cyan} vs {red}");
+        assert!((cyan - red).abs() <= tol(depth), "{depth}: {cyan} vs {red}");
         assert!(!s.is_enabled("image.mode.multichannel"), "already multichannel");
         // The display prints the inks: a white RGB pixel shows paper.
         let shown = photocraft_compose::flatten(doc(&s));
@@ -109,9 +110,9 @@ fn flattens_layers_and_keeps_alpha_channels() {
     let d = doc(&s);
     assert_eq!(d.channels.len(), 4);
     assert!(d.channels[3].spot.is_none(), "the saved selection stays an alpha channel");
-    // The black fill on the upper layer is solid ink in all three plates.
+    // The black fill on the upper layer is solid ink in all three plates, stored black (#6123).
     for k in 0..3 {
-        assert!(d.channels[k].surface.pixel(1, 1)[0] > 0.99);
+        assert!(d.channels[k].surface.pixel(1, 1)[0] < 0.01);
     }
     // Back to RGB: the alpha channel survives, the inks become colour channels.
     s.execute("image.mode.rgb", json!({})).unwrap();

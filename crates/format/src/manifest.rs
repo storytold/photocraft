@@ -341,6 +341,11 @@ pub struct ChannelM {
     pub opacity: f32,
     #[serde(default)]
     pub indicates: photocraft_doc::ColorIndicates,
+    /// The spot channel is stored as Photoshop shows it, black = solid ink (#6123). Files written
+    /// before that stored 1 = solid ink and lack this flag: their spot channels are inverted when
+    /// they load.
+    #[serde(default)]
+    pub black_ink: bool,
 }
 
 fn is_zero_u32(v: &u32) -> bool {

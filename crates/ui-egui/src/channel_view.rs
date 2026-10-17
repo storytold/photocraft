@@ -659,6 +659,29 @@ mod tests {
         assert_eq!(px[0], Color32::from_rgb(0, 128, 0));
     }
 
+    /// #6123: a spot channel viewed alone reads black = ink, as Photoshop shows it, and over the
+    /// image its ink colour shows where the channel is black.
+    #[test]
+    fn a_spot_channel_alone_shows_its_ink_black() {
+        let mut s = session();
+        s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 4})).unwrap();
+        s.execute("channel.newSpot", json!({"color": "#0000ff", "solidity": 0})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": 0})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        assert_eq!((px[0], px[5]), (Color32::BLACK, Color32::WHITE), "ink black, paper white");
+        // With the colour channels shown too, the ink tints the image only where it is.
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        s.execute("channel.setVisible", json!({"channel": 0, "visible": true})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        assert!(px[0].b() > px[0].r() + 60, "blue ink over the inked area: {:?}", px[0]);
+        // The overlay draws over the canvas: nothing over the paper.
+        assert_eq!(px[5].a(), 0, "no ink over the paper: {:?}", px[5]);
+    }
+
     #[test]
     fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
         let mut s = session();
