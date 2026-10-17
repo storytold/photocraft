@@ -324,7 +324,7 @@ impl<'a> Para<'a> {
         let mut b = lcx.ranged_builder(fcx, &self.ptext, 1.0, false);
         // Paragraph-start style as the default (covers the direction mark and empty
         // paragraphs), then every run piece intersecting this paragraph.
-        for p in style_props(&env.styles[self.si0], env.k, &self.fallback, self.si0 as u32, env.small_caps[self.si0]) {
+        for p in style_props(&env.styles[self.si0], env.substitutes[self.si0].as_deref(), env.k, &self.fallback, self.si0 as u32, env.small_caps[self.si0]) {
             b.push_default(p);
         }
         // Paragraph text breaks a word wider than the box at the box edge, as Photoshop
@@ -365,7 +365,7 @@ impl<'a> Para<'a> {
             return;
         }
         let range = (a - self.start + self.prefix.len())..(z - self.start + self.prefix.len());
-        for p in style_props(&env.styles[ri], env.k, &self.fallback, ri as u32, env.small_caps[ri]) {
+        for p in style_props(&env.styles[ri], env.substitutes[ri].as_deref(), env.k, &self.fallback, ri as u32, env.small_caps[ri]) {
             b.push(p, range.clone());
         }
         if env.vertical {
