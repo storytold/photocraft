@@ -230,6 +230,26 @@ impl Drag {
 /// style (fixed ratio / fixed size), ⇧ for a square or circle, ⌥ to draw from the centre.
 pub fn marquee_corners(o: &crate::state::ToolOptions, d: &Drag, end: [f64; 2]) -> ([f64; 2], [f64; 2]) {
     let (shift, alt) = d.marquee_mods();
+    if o.marquee_style == "fixedSize" {
+        // A fixed size is that many pixels exactly: the corners land on the pixel grid, from the
+        // pressed pixel towards the drag (⌥: centred on the press), so the floor and ceil of
+        // `marquee_px` add nothing. From the fractional press point itself, `start + size`
+        // spanned a pixel more each way (#6015).
+        let size = [f64::from(o.marquee_width).max(1.0).round(), f64::from(o.marquee_height).max(1.0).round()];
+        let (mut a, mut b) = ([0.0; 2], [0.0; 2]);
+        for i in 0..2 {
+            let (s, n) = (d.start[i], size[i]);
+            a[i] = if alt {
+                (s - n / 2.0).round()
+            } else if end[i] < s {
+                s.ceil() - n
+            } else {
+                s.floor()
+            };
+            b[i] = a[i] + n;
+        }
+        return (a, b);
+    }
     let e = crate::chrome_ui::marquee_end(&o.marquee_style, o.marquee_width as f64, o.marquee_height as f64, shift, d.start, end);
     if !alt {
         return (d.start, e);
@@ -8705,3 +8725,37 @@ mod rotation_preview_isolation_tests {
 #[cfg(test)]
 #[path = "canvas_display_memo_tests.rs"]
 mod display_memo_tests;
+
+#[cfg(test)]
+mod marquee_size_tests {
+    use super::*;
+    use crate::state::ToolOptions;
+
+    /// #6015: Style: Fixed Size selects exactly that many pixels, from the pressed pixel towards
+    /// the drag or (⌥ during the drag) centred on the press, wherever inside the pixel the press
+    /// landed. The corners used to be `start + size` from the fractional press point, which
+    /// `marquee_px` floored and ceiled to a pixel more each way: 1 × 1 selected 2 × 2.
+    #[test]
+    fn a_fixed_size_marquee_is_exactly_that_size() {
+        let mut o = ToolOptions { marquee_style: "fixedSize".into(), ..Default::default() };
+        let drag = |alt: bool| {
+            let mut d = Drag::new(Tool::RectMarquee, [10.4, 20.6], vec![], egui::Modifiers::NONE, false);
+            d.live.alt = alt; // ⌥ pressed during the drag centres it (held at the press it subtracts)
+            d
+        };
+        let px = |o: &ToolOptions, d: &Drag, end: [f64; 2]| {
+            let (a, b) = marquee_corners(o, d, end);
+            marquee_px(a, b)
+        };
+        for (w, h) in [(1.0f32, 1.0f32), (10.0, 10.0), (64.0, 32.0)] {
+            (o.marquee_width, o.marquee_height) = (w, h);
+            let (w, h) = (f64::from(w), f64::from(h));
+            assert_eq!(px(&o, &drag(false), [30.0, 40.0]), [10.0, 20.0, 10.0 + w, 20.0 + h], "{w}×{h} from the pressed pixel");
+            assert_eq!(px(&o, &drag(false), [10.4, 20.6]), [10.0, 20.0, 10.0 + w, 20.0 + h], "{w}×{h} on the press itself");
+            assert_eq!(px(&o, &drag(false), [0.0, 0.0]), [11.0 - w, 21.0 - h, 11.0, 21.0], "{w}×{h} dragged up and left");
+            let r = px(&o, &drag(true), [10.4, 20.6]);
+            assert_eq!([r[2] - r[0], r[3] - r[1]], [w, h], "{w}×{h} centred: {r:?}");
+        }
+        assert_eq!(px(&o, &drag(true), [10.4, 20.6]), [-22.0, 5.0, 42.0, 37.0], "64 × 32 centred on the press");
+    }
+}
