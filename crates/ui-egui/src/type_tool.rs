@@ -825,7 +825,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                 copy_selection(app, ctx);
             }
             egui::Event::Cut => cut_selection(app, ctx),
-            egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 let key = &flow_key(*key, vertical_flow);
                 match key {
@@ -911,7 +911,9 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                         let to = line_edge(app, id, ed.caret, *key == Key::End);
                         set(app, to, m.shift);
                     }
-                    Key::Enter if m.command => commit_with(app, *m),
+                    // Both Enter keys have the same logical key. Photoshop uses the keypad
+                    // position to commit type, leaving the main Return key for line breaks.
+                    Key::Enter if m.command || *physical_key == Some(Key::NumpadEnter) => commit_with(app, *m),
                     Key::Enter => insert(app, "\n"),
                     // Photoshop types a tab character; layout advances it to the next tab stop.
                     Key::Tab if !m.command && !m.alt && !m.shift => insert(app, "\t"),

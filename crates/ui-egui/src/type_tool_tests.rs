@@ -115,6 +115,31 @@ fn new_app() -> PhotocraftApp {
     app
 }
 
+#[test]
+fn keypad_enter_commits_type_while_return_inserts_a_line_break() {
+    for physical_key in [egui::Key::Enter, egui::Key::NumpadEnter] {
+        let mut app = new_app();
+        let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+        super::edit_active(&mut app).unwrap();
+        let edit = app.ui.text_edit.as_mut().unwrap();
+        edit.anchor = 6;
+        edit.caret = 6;
+        let mut h = harness(1.0, app);
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: Some(physical_key), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        if physical_key == egui::Key::NumpadEnter {
+            assert!(h.state().ui.text_edit.is_none(), "keypad Enter ends editing");
+            assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
+        } else {
+            assert!(h.state().ui.text_edit.is_some(), "main Return keeps editing");
+            assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample\n"));
+            h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Enter);
+            h.run_steps(2);
+            assert!(h.state().ui.text_edit.is_none(), "Cmd/Ctrl+Return still commits");
+        }
+    }
+}
+
 fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {
