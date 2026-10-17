@@ -113,6 +113,23 @@ impl ThemeKind {
     pub fn is_pro(self) -> bool {
         matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
     }
+    /// Whether this theme belongs to the dark appearance family.
+    pub fn is_dark(self) -> bool {
+        matches!(
+            self,
+            ThemeKind::Studio
+                | ThemeKind::Pro
+                | ThemeKind::ProMedium
+                | ThemeKind::SolarizedDark
+                | ThemeKind::AdwaitaDark
+                | ThemeKind::BreezeDark
+                | ThemeKind::SoftDark
+        )
+    }
+    /// Whether this theme belongs to the light appearance family.
+    pub fn is_light(self) -> bool {
+        !self.is_dark()
+    }
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
@@ -809,16 +826,7 @@ impl Tokens {
     }
 
     pub fn dark(&self) -> bool {
-        matches!(
-            self.kind,
-            ThemeKind::Studio
-                | ThemeKind::Pro
-                | ThemeKind::ProMedium
-                | ThemeKind::SolarizedDark
-                | ThemeKind::AdwaitaDark
-                | ThemeKind::BreezeDark
-                | ThemeKind::SoftDark
-        )
+        self.kind.is_dark()
     }
 }
 
