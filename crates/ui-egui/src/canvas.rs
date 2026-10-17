@@ -2195,7 +2195,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
         let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::hover());
-        let f = crate::tab_strip::fit(&natural, selected, row.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
+        let f = fit_doc_tabs(&natural, selected, row.width());
         let mut x = row.left();
         let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
         for &(i, w) in &f.shown {
@@ -2293,7 +2293,10 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let labels: Vec<&str> =
                 app.session.documents().iter().map(|st| st.doc.name.as_str()).chain(opening.iter().map(|(_, name, _)| name.as_str())).collect();
             let mut picked = None;
-            crate::tab_strip::overflow_button(ui, ui.id().with("dtab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
+            // Like Photoshop's, the menu lists every open document, not only the hidden ones, and checks
+            // the active one (#4487).
+            let every: Vec<usize> = (0..labels.len()).collect();
+            crate::tab_strip::overflow_button(ui, ui.id().with("dtab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
             match picked {
                 Some(i) if i < tab_count => activate = Some(i),
                 Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
@@ -2467,14 +2470,20 @@ fn open_tab_clicks(
     }
 }
 
-/// Document tabs: the chrome around a title (the × and its gaps), and the width a tab shrinks to
-/// before it moves into the » overflow menu.
+/// Document tabs: the chrome around a title (the × and its gaps).
 const DOC_TAB_PAD: f32 = 42.0;
-const DOC_TAB_MIN_W: f32 = 72.0;
 /// The Studio strip's tabs carried 4 pt of spacing between them and 44 pt of chrome; `fit` sees
 /// one number per tab, so the gap rides in the natural width and comes back out when painted.
 const STUDIO_TAB_PAD: f32 = 48.0;
 const STUDIO_TAB_GAP: f32 = 4.0;
+
+/// Fit document tabs as Photoshop does (#4487): a tab never shrinks below its whole title, so the
+/// tabs that don't fit move into the » menu instead. Only the active tab, when it alone is wider
+/// than the strip, is cut.
+fn fit_doc_tabs(natural: &[f32], selected: usize, avail: f32) -> crate::tab_strip::TabFit {
+    let widest = natural.iter().copied().filter(|w| w.is_finite()).fold(0.0, f32::max);
+    crate::tab_strip::fit(natural, selected, avail, widest, crate::tab_strip::CHEVRON_W)
+}
 
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
 /// is targeted; the Background layer's name is omitted.
@@ -2497,8 +2506,8 @@ fn studio_tab_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> Str
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
-/// Tabs that don't fit shrink and elide, and the ones that still don't fit move into a » menu at
-/// the end of the strip; the active document's tab always stays on the strip (#1276).
+/// Tabs keep their whole titles, and the ones that don't fit move into a » menu at the end of the
+/// strip; the active document's tab always stays on the strip (#1276, #4487).
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     let active = app.session.active_index().filter(|_| app.jobs.focus.is_none());
@@ -2527,7 +2536,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .focus
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
         .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
-    let f = crate::tab_strip::fit(&natural, selected, strip.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
+    let f = fit_doc_tabs(&natural, selected, strip.width());
     let mut x = strip.left();
     let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
     for &(i, w) in &f.shown {
@@ -2606,7 +2615,10 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         let r = Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(crate::tab_strip::CHEVRON_W, strip.height()));
         let labels: Vec<&str> = titles.iter().map(String::as_str).collect();
         let mut picked = None;
-        crate::tab_strip::overflow_button(ui, ui.id().with("ptab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
+        // Like Photoshop's, the menu lists every open document, not only the hidden ones, and checks
+        // the active one (#4487).
+        let every: Vec<usize> = (0..labels.len()).collect();
+        crate::tab_strip::overflow_button(ui, ui.id().with("ptab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
         match picked {
             Some(i) if i < tab_count => activate = Some(i),
             Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
