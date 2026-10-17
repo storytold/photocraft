@@ -33,6 +33,10 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+#[cfg(test)]
+#[path = "extra_cmds/rasterize_missing_tests.rs"]
+mod rasterize_missing_tests;
+
 fn has_mask(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.mask.as_ref().map(|_| ()).ok_or_else(|| "the active layer has no layer mask".into())
 }
@@ -718,14 +722,11 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 let snapshot = doc.clone();
                 let mut snap = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
                 if matches!(snap.content, LayerContent::Smart(ref sm) if sm.cache.is_none()) {
-                    let _ = crate::smart_cmds::refresh_layer(&snapshot, &mut snap);
+                    crate::smart_cmds::refresh_layer(&snapshot, &mut snap)?;
                 }
                 let fmt = snapshot.pixel_format();
                 let surface = match &mut snap.content {
-                    LayerContent::Smart(sm) => match sm.cache.take() {
-                        Some(c) => c,
-                        None => content_pixels(&snapshot, &snap),
-                    },
+                    LayerContent::Smart(sm) => sm.cache.take().ok_or_else(|| EngineError::Other("the smart object's contents are unavailable".into()))?,
                     _ => return Err(EngineError::Other(format!("layer {} is not a smart object", id.0))),
                 };
                 let surface = if surface.format() == fmt { surface } else { surface.convert(fmt) };
