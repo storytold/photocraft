@@ -59,12 +59,11 @@ fn every_new_preset_button_opens_the_dialog_and_cancel_saves_nothing() {
     // Brush Settings' [+], then the Brushes tab's.
     h.state_mut().ui.brush_picker = None;
     h.state_mut().ui.panels.brush_settings = true;
-    h.state_mut().ui.brush_tab = 0;
     h.run_steps(3);
     h.get_by_label("Create new brush from these settings").click();
     h.run_steps(3);
     cancel(&mut h);
-    h.state_mut().ui.brush_tab = 1;
+    h.state_mut().run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 560, "height": 860})).unwrap();
     h.run_steps(3);
     h.get_by_label("Create new brush from the current settings").click();
     h.run_steps(3);

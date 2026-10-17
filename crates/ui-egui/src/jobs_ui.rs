@@ -498,8 +498,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
                 &[("group", group)],
             );
             app.ui.status_error = false;
-            app.ui.panels.brush_settings = true;
-            app.ui.brush_tab = 1;
+            crate::brush_panel::run_or_status(app, "window.panel.activate", json!({"panel": "brushes"}));
         }
         JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.print" | "file.printOneCopy") => {
             app.sync_views();

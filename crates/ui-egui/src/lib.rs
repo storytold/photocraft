@@ -2023,6 +2023,7 @@ impl eframe::App for PhotocraftApp {
         if chrome && self.ui.panels.toolbar {
             panels::toolbar(self, ui);
         }
+        panel_docking::reconcile(self);
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
         }
@@ -2032,8 +2033,6 @@ impl eframe::App for PhotocraftApp {
             canvas::document_area(self, ui);
         });
         panels::properties_window(self, &ctx);
-        brush_panel::window(self, &ctx);
-        preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);

@@ -13,8 +13,9 @@ fn dragging_a_brush_shows_its_tip_preview() {
         for mode in 0..3 {
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
             app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
-            app.ui.panels.brush_settings = mode != 2;
-            app.ui.brush_tab = 1;
+            if mode != 2 {
+                app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 560, "height": 860})).unwrap();
+            }
             app.ui.brushes_panel.view = if mode == 1 { BrushesView::Grid } else { BrushesView::List };
             if mode == 2 {
                 app.ui.brush_picker = Some([300.0, 120.0]);
@@ -57,8 +58,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
 #[test]
 fn dragging_a_brush_to_the_list_edge_scrolls_the_list() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.ui.panels.brush_settings = true;
-    app.ui.brush_tab = 1;
+    app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 560, "height": 860})).unwrap();
     app.ui.brushes_panel.view = BrushesView::List;
     app.ui.brushes_panel.collapsed.clear();
     let name = app.session.tools.presets[0].name.clone();
@@ -329,8 +329,7 @@ fn brush_picker_upper_controls_stop_at_their_max_width() {
 #[test]
 fn the_brushes_tab_grid_is_centred_past_its_indent() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.ui.panels.brush_settings = true;
-    app.ui.brush_tab = 1;
+    app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 560, "height": 860})).unwrap();
     app.ui.brushes_panel.view = BrushesView::Grid;
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -338,7 +337,8 @@ fn the_brushes_tab_grid_is_centred_past_its_indent() {
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            crate::brush_panel::window(app, &ctx);
+            crate::panel_docking::reconcile(app);
+            crate::panels::right_dock(app, ui);
         },
         app,
     );

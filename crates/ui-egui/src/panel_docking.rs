@@ -27,6 +27,87 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("paths", "Paths", Group::Layers),
     ("brushes", "Brushes", Group::Brushes),
 ];
+
+/// Panels with no legacy dock group: they live only in the shared layout and float when first
+/// opened, as in Photoshop. Each keeps the open flag its module already had, so its menu items,
+/// shortcuts and automation are unchanged; [`reconcile`] moves the layout to match the flag.
+struct FreePanel {
+    id: &'static str,
+    label: &'static str,
+    /// Size of its first floating window.
+    size: [f32; 2],
+    min_width: f32,
+    open: fn(&mut PhotocraftApp) -> &mut bool,
+    body: fn(&mut PhotocraftApp, &mut egui::Ui),
+}
+
+#[rustfmt::skip]
+const FREE_PANELS: &[FreePanel] = &[
+    FreePanel { id: "brushSettings", label: "Brush Settings", size: [540.0, 600.0], min_width: 400.0, open: |a| &mut a.ui.panels.brush_settings, body: crate::brush_panel::panel },
+    FreePanel { id: "styles", label: "Styles", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.styles, body: crate::preset_panels::styles_panel },
+    FreePanel { id: "shapes", label: "Shapes", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.shapes, body: crate::preset_panels::shapes_panel },
+    FreePanel { id: "toolPresets", label: "Tool Presets", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.tool_presets, body: crate::preset_panels::tool_presets_panel },
+    FreePanel { id: "cloneSource", label: "Clone Source", size: [270.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.clone_source, body: crate::preset_panels::clone_source_panel },
+    FreePanel { id: "characterStyles", label: "Character Styles", size: [290.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.character_styles, body: |a, ui| crate::type_panels_ui::styles_panel(a, ui, false) },
+    FreePanel { id: "paragraphStyles", label: "Paragraph Styles", size: [290.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.paragraph_styles, body: |a, ui| crate::type_panels_ui::styles_panel(a, ui, true) },
+    FreePanel { id: "glyphs", label: "Glyphs", size: [340.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.glyphs, body: crate::type_panels_ui::glyphs_panel },
+    FreePanel { id: "notes", label: "Notes", size: [260.0, 260.0], min_width: 220.0, open: |a| &mut a.ui.analysis.notes, body: crate::analysis_ui::notes_panel },
+    FreePanel { id: "modifierKeys", label: "Modifier Keys", size: [220.0, 120.0], min_width: 150.0, open: |a| &mut a.ui.shell.modifier_keys, body: crate::workspace_ui::modifier_keys_panel },
+];
+
+fn free(id: &str) -> Option<&'static FreePanel> {
+    FREE_PANELS.iter().find(|p| p.id == id)
+}
+
+fn label(id: &str) -> String {
+    let label = PANELS.iter().find(|p| p.0 == id).map(|p| p.1).or_else(|| free(id).map(|p| p.label));
+    label.map_or_else(|| id.to_owned(), |label| tl!(label).to_string())
+}
+
+/// Opens or closes each free panel whose flag a menu item, shortcut or script changed. A closed
+/// panel remembers where it was, and the first open of one floats it beside the canvas.
+pub(crate) fn reconcile(app: &mut PhotocraftApp) {
+    if app.ui.docking.as_ref().is_some_and(|layout| !valid(layout)) {
+        return;
+    }
+    let mut changed = false;
+    for panel in FREE_PANELS {
+        let id = panel.id.to_owned();
+        let open = *(panel.open)(app);
+        if open == app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&id)) {
+            continue;
+        }
+        let mut layout = app.ui.docking.clone().unwrap_or_else(|| legacy(app));
+        let mut hidden = if app.ui.docking.is_none() { migration_hidden(app, &layout) } else { app.ui.docking_hidden.clone() };
+        if open {
+            restore_hidden(&mut layout, &mut hidden, panel.id);
+            hidden.remove(panel.id);
+            if !layout.contains(&id) {
+                let (canvas, [w, h]) = (app.last_canvas_rect, panel.size);
+                let rect = [(canvas.right() - w - 30.0).max(canvas.left() + 8.0), canvas.top() + 40.0, w, h];
+                if float(&mut layout, panel.id, rect).is_err() {
+                    continue;
+                }
+            }
+            app.ui.panels.dock = true;
+            app.ui.docking_reveal = Some(id);
+        } else {
+            if let Ok(location) = layout.location(&id) {
+                hidden.insert(id.clone(), location);
+            }
+            if layout.apply(Action::Close { panel: id }).is_err() {
+                continue;
+            }
+        }
+        app.ui.docking = Some(layout);
+        app.ui.docking_hidden = hidden;
+        changed = true;
+    }
+    if changed {
+        sync_visibility(app);
+    }
+}
+
 #[derive(Clone, Default)]
 struct LegacyDrag {
     generation: u64,
@@ -53,7 +134,13 @@ fn cancel_legacy_drag(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 }
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
-    PANELS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim())).map(|p| p.0)
+    let raw = raw.trim();
+    PANELS
+        .iter()
+        .map(|p| (p.0, p.1))
+        .chain(FREE_PANELS.iter().map(|p| (p.id, p.label)))
+        .find(|(id, label)| id.eq_ignore_ascii_case(raw) || label.eq_ignore_ascii_case(raw))
+        .map(|p| p.0)
 }
 
 pub(crate) fn valid(layout: &Layout<String>) -> bool {
@@ -136,6 +223,16 @@ fn ensure(layout: &mut Layout<String>, panel: &str) -> Result<(), String> {
     layout.apply(Action::Open { panel: panel.into(), anchor }).map_err(|e| e.to_string())
 }
 
+/// Floats a panel in its own window. A hidden one goes straight there: opening it in a docked
+/// group first left that group showing a different tab once it moved out.
+fn float(layout: &mut Layout<String>, panel: &str, rect: [f32; 4]) -> Result<(), String> {
+    if !layout.contains(&panel.to_owned()) {
+        layout.floating.push(Floating { panels: vec![panel.to_owned()], active: 0, rect });
+        return layout.validate().map_err(|e| e.to_string());
+    }
+    layout.apply(Action::Float { panel: panel.into(), rect }).map_err(|e| e.to_string())
+}
+
 fn number(params: &Value, key: &str, default: f32) -> Result<f32, String> {
     match params.get(key) {
         None => Ok(default),
@@ -176,7 +273,8 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
                 .and_then(|action| apply_action(app, action)),
         );
     }
-    if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+    // A free panel's own module toggles its flag, with any extra parameters it takes.
+    if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize).filter(|p| free(p).is_none()) {
         if app.ui.docking.is_none() && panel != "brushes" {
             return None;
         }
@@ -204,7 +302,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let layout = app.ui.docking.as_ref()?;
-    let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
+    let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize).filter(|p| free(p).is_none())?;
     Some(layout.contains(&panel.to_string()))
 }
 
@@ -307,13 +405,12 @@ fn change(app: &mut PhotocraftApp, operation: &str, params: &Value) -> Result<Va
         "dock" if restored => {}
         "float" => {
             let rect = [number(params, "x", 400.0)?, number(params, "y", 140.0)?, number(params, "width", 300.0)?, number(params, "height", 400.0)?];
-            ensure(&mut layout, panel)?;
             if let Ok(location) = layout.location(&panel.to_string())
                 && location.floating.is_none()
             {
                 hidden.insert(panel.into(), location);
             }
-            layout.apply(Action::Float { panel: panel.into(), rect }).map_err(|e| e.to_string())?;
+            float(&mut layout, panel, rect)?;
         }
         "move" | "dock" => {
             if operation == "move" && params.get("anchor").or_else(|| params.get("onto")).is_none() {
@@ -429,25 +526,31 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
             ui,
             &layout,
             &style,
-            |id| PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()),
+            |id| label(id),
             |_| craft_ui::docking::Permissions { movable: !locked, floatable: !locked, closable: !locked, accepts_tabs: !locked },
             |id| {
+                let width = free(id).map_or(220.0, |p| p.min_width);
                 if collapsed.contains(id) {
-                    craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
+                    craft_ui::docking::PanelLimits { min: egui::vec2(width, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
                 } else {
                     // Layers owns its row scroll and footer; leave room for its fixed controls
                     // plus a scrolling row area instead of clipping the footer after a split.
                     let height = if id == "layers" { 220.0 } else { 80.0 };
-                    craft_ui::docking::PanelLimits { min: egui::vec2(220.0, height), ..Default::default() }
+                    craft_ui::docking::PanelLimits { min: egui::vec2(width, height), ..Default::default() }
                 }
             },
             &mut PanelContent { app, collapsed: &collapsed, commands: &mut commands, targets: &mut targets },
         )
     };
+    // A docked panel that needs more room than the column has (Brush Settings) widens it, as in
+    // Photoshop; the column can narrow again once the panel leaves.
+    let (narrowest, widest) = (*crate::panels::DOCK_WIDTH.start(), *crate::panels::DOCK_WIDTH.end());
+    let docked = Layout { root: layout.root.clone(), floating: Vec::new() };
+    let min_width = docked.panels().into_iter().filter_map(|id| free(id)).map(|p| p.min_width + 16.0).fold(narrowest, f32::max).min(widest);
     let output = if layout.root.is_some() {
         let mut panel = egui::Panel::right("shared-panel-dock")
             .default_size(if t.pro { 290.0 } else { 300.0 })
-            .size_range(crate::panels::DOCK_WIDTH)
+            .size_range(min_width..=widest)
             .resizable(!locked)
             .frame(egui::Frame::NONE.fill(t.card));
         if let Some(width) = requested_width {
@@ -540,6 +643,10 @@ pub(crate) fn legacy_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str
 }
 
 fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
+    if let Some(panel) = free(id) {
+        egui::ScrollArea::vertical().id_salt(("shared-panel-body", id)).auto_shrink([false, false]).show(ui, |ui| (panel.body)(app, ui));
+        return;
+    }
     let Some((_, label, group)) = PANELS.iter().find(|p| p.0 == id) else { return };
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
     let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
@@ -963,6 +1070,10 @@ pub(crate) fn sync_visibility(app: &mut PhotocraftApp) {
                 *group.tab_mut(&mut app.ui.dock_tabs) = selected;
             }
         }
+        let open: Vec<bool> = FREE_PANELS.iter().map(|p| layout.contains(&p.id.to_owned())).collect();
+        for (panel, open) in FREE_PANELS.iter().zip(open) {
+            *(panel.open)(app) = open;
+        }
     }
 }
 
@@ -1013,7 +1124,7 @@ fn restore_hidden(layout: &mut Layout<String>, hidden: &mut std::collections::BT
     let mut terminal = panel.to_owned();
     let mut seen = vec![terminal.clone()];
     while let Some(anchor) = at.anchor.as_ref().filter(|id| !layout.contains(id)).cloned() {
-        if seen.len() >= PANELS.len() || seen.contains(&anchor) {
+        if seen.len() >= PANELS.len() + FREE_PANELS.len() || seen.contains(&anchor) {
             return;
         }
         let Some(next) = hidden.get(&anchor).cloned() else { return };

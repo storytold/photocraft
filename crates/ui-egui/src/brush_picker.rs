@@ -175,7 +175,6 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
 /// Show the Brush Settings panel on its settings tab (what F5 does when it is hidden).
 pub fn open_settings(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.panels.brush_settings {
-        app.ui.brush_tab = 0;
         return;
     }
     if let Err(e) = crate::menus::invoke(app, ctx, "window.panel.brushSettings", json!({})) {

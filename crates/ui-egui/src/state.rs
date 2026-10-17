@@ -1241,11 +1241,9 @@ pub struct UiState {
     /// Which chip the Color panel edits.
     #[serde(default)]
     pub color_panel: ColorPanelState,
-    /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
+    /// Brush Settings: selected section (0 = Brush Tip Shape).
     #[serde(default)]
     pub brush_section: usize,
-    #[serde(default)]
-    pub brush_tab: usize,
     /// Brushes panel: collapsed groups and the search filter.
     #[serde(default)]
     pub brushes_panel: crate::brush_panel::BrushesPanelState,
@@ -1373,7 +1371,6 @@ impl Default for UiState {
             docking_reveal: None,
             color_panel: Default::default(),
             brush_section: 0,
-            brush_tab: 0,
             brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),

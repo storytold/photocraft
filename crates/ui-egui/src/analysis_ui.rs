@@ -752,24 +752,20 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             None => {}
         }
     }
-    if app.ui.analysis.notes {
-        notes_panel(app, ctx);
-    }
     if app.ui.analysis.dialog.is_some() {
         dialog(app, ctx);
     }
 }
 
-fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
+/// The Notes panel body (a dock panel, [`crate::panel_docking`]).
+pub(crate) fn notes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let notes = app.session.active().map(|d| d.doc.notes.clone()).unwrap_or_default();
     let n = notes.len();
     let mut sel = app.ui.analysis.note_selected.filter(|i| *i < n).or((n > 0).then_some(0));
-    let mut close = false;
     let mut edit: Option<Value> = None;
     let mut delete = false;
-    let t = Tokens::get(ctx);
-    panel_window(app, ctx, "notes-panel", tl!("Notes"), vec2(-40.0, 300.0), 260.0, |ui| {
-        close = title_row(ui, tl!("Notes"));
+    let t = Tokens::get(ui.ctx());
+    ui.vertical(|ui| {
         match sel {
             None => {
                 ui.label(RichText::new(tl!("Click with the Note tool to add a note.")).color(t.text_dim).size(11.0));
@@ -810,9 +806,6 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && app.run("notes.delete", json!({"index": i})).is_ok()
     {
         app.ui.analysis.note_selected = (n > 1).then(|| i.min(n - 2));
-    }
-    if close {
-        app.ui.analysis.notes = false;
     }
 }
 

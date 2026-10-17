@@ -336,27 +336,22 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, St
     r
 }
 
-/// Draws the Modifier Keys panel and the open dialog.
+/// The Modifier Keys panel body (a dock panel, [`crate::panel_docking`]): sticky Shift, Command
+/// and Alt for touch screens.
+pub(crate) fn modifier_keys_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let s = &mut app.ui.shell;
+    let (cmd, shift, alt) = (crate::shortcuts::pretty("Cmd"), crate::shortcuts::pretty("Shift"), crate::shortcuts::pretty("Alt"));
+    ui.horizontal(|ui| {
+        for (label, on) in [(&*shift, &mut s.sticky_shift), (&*cmd, &mut s.sticky_command), (&*alt, &mut s.sticky_alt)] {
+            if ui.add(egui::Button::new(RichText::new(label).size(14.0)).selected(*on).min_size(vec2(40.0, 30.0))).clicked() {
+                *on = !*on;
+            }
+        }
+    });
+}
+
+/// Draws the open dialog.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.shell.modifier_keys {
-        let mut close = false;
-        let mut s = app.ui.shell.clone();
-        let cmd = crate::shortcuts::pretty("Cmd");
-        let shift = crate::shortcuts::pretty("Shift");
-        let alt = crate::shortcuts::pretty("Alt");
-        crate::analysis_ui::panel_window(app, ctx, "modifier-keys", tl!("Modifier Keys"), vec2(-420.0, 80.0), 150.0, |ui| {
-            close = crate::analysis_ui::title_row(ui, tl!("Modifier Keys"));
-            ui.horizontal(|ui| {
-                for (label, on) in [(&*shift, &mut s.sticky_shift), (&*cmd, &mut s.sticky_command), (&*alt, &mut s.sticky_alt)] {
-                    if ui.add(egui::Button::new(RichText::new(label).size(14.0)).selected(*on).min_size(vec2(40.0, 30.0))).clicked() {
-                        *on = !*on;
-                    }
-                }
-            });
-        });
-        s.modifier_keys = !close;
-        app.ui.shell = s;
-    }
     if app.ui.shell.dialog.is_some() {
         dialog(app, ctx);
     }

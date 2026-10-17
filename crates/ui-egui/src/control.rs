@@ -780,8 +780,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(i) = brush_section {
                     app.ui.brush_section = (i as usize).min(crate::brush_panel::SECTIONS.len() - 1);
                 }
-                if let Some(i) = brush_tab {
-                    app.ui.brush_tab = (i as usize).min(1);
+                // Brush Settings no longer has a Brushes tab; older scripts' tab 1 shows the panel.
+                if brush_tab.is_some_and(|i| i >= 1) {
+                    app.run("window.panel.activate", json!({"panel": "brushes"}))?;
                 }
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;

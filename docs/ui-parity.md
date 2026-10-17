@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Brush Settings, Styles, Glyphs and seven more floating-only panels dock, #4818; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -201,7 +201,10 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 30 of 35 Window-menu panels exist (measured). Missing: Libraries, Comments, Contextual Task Bar,
 Discover, Generative variations. Dock tabs: Layers, Channels, Paths, History, Actions, Layer
 Comps, Properties, Adjustments, Navigator, Histogram, Info, Color, Swatches, Character,
-Paragraph; the rest open as in-app floating windows.
+Paragraph, Brushes. Brush Settings, Styles, Shapes, Tool Presets, Clone Source, Character Styles,
+Paragraph Styles, Glyphs, Notes and Modifier Keys float when first opened and then dock, group,
+split and resize like the dock tabs (#4818); Timeline and Measurement Log open as in-app floating
+windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
@@ -257,3 +260,4 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-14 | minor | Last selected tool restored across launches; temporary overrides excluded, explicit Eraser choices retained, and final selection flushed on normal exit |
 | 2026-10-13 | minor | Free Transform with a selection: the box is the selection's rectangle, and the marching ants follow it while it is transformed (#5297) |
 | 2026-10-14 | minor | Move › Show Transform Controls frames every selected layer and outlines the selected shapes |
+| 2026-10-15 | minor | Brush Settings (split from Brushes), Styles, Shapes, Tool Presets, Clone Source, Character Styles, Paragraph Styles (split apart), Glyphs, Notes and Modifier Keys are dock panels: they float when first opened, then dock, group, split, resize and reopen where they were closed (#4818) |

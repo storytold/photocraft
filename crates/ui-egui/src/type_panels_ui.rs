@@ -16,10 +16,9 @@ use crate::theme::Tokens;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TypePanelsUi {
-    /// The Character Styles / Paragraph Styles group is open.
-    pub styles: bool,
-    /// 0 = Character Styles, 1 = Paragraph Styles.
-    pub styles_tab: usize,
+    /// The Character Styles and Paragraph Styles panels are open.
+    pub character_styles: bool,
+    pub paragraph_styles: bool,
     /// Glyphs panel is open.
     pub glyphs: bool,
     /// Style Options editor open for (paragraph?, id).
@@ -67,8 +66,8 @@ pub fn handles(id: &str) -> bool {
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let p = &app.ui.type_panels;
     Some(match id {
-        "type.panels.characterStyles" | "window.panel.characterStyles" => p.styles && p.styles_tab == 0,
-        "type.panels.paragraphStyles" | "window.panel.paragraphStyles" => p.styles && p.styles_tab == 1,
+        "type.panels.characterStyles" | "window.panel.characterStyles" => p.character_styles,
+        "type.panels.paragraphStyles" | "window.panel.paragraphStyles" => p.paragraph_styles,
         "type.panels.glyphs" | "window.panel.glyphs" => p.glyphs,
         _ => return None,
     })
@@ -89,21 +88,15 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         p.glyphs = want.unwrap_or(!p.glyphs);
         p.glyphs
     } else {
-        let tab = usize::from(id.ends_with("paragraphStyles"));
-        let showing = p.styles && p.styles_tab == tab;
+        let paragraph = id.ends_with("paragraphStyles");
         // `{"options": styleId}` opens the panel with that style's Style Options.
-        let options = params.get("options").and_then(Value::as_u64).map(|o| (tab == 1, o as u32));
-        let show = if options.is_some() { true } else { want.unwrap_or(!showing) };
+        let options = params.get("options").and_then(Value::as_u64).map(|o| (paragraph, o as u32));
         if options.is_some() {
             p.options = options;
         }
-        if show {
-            p.styles = true;
-            p.styles_tab = tab;
-        } else if p.styles_tab == tab {
-            p.styles = false;
-        }
-        show
+        let open = if paragraph { &mut p.paragraph_styles } else { &mut p.character_styles };
+        *open = options.is_some() || want.unwrap_or(!*open);
+        *open
     };
     Some(Ok(json!({ "visible": visible })))
 }
@@ -138,71 +131,8 @@ fn float_frame(t: &Tokens) -> egui::Frame {
         .inner_margin(egui::Margin::same(8))
 }
 
-/// Draws the open type panels and the spelling dialog.
+/// Draws the spelling dialog; the type panels are dock panels ([`crate::panel_docking`]).
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let t = Tokens::get(ctx);
-    let canvas = app.last_canvas_rect;
-    if app.ui.type_panels.styles {
-        let mut close = false;
-        egui::Window::new(tl!("Type Styles"))
-            .id(egui::Id::new("type-styles-window"))
-            .title_bar(false)
-            .resizable(false)
-            .frame(float_frame(&t))
-            .default_pos(pos2((canvas.right() - 314.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
-            .show(ctx, |ui| {
-                ui.set_width(290.0);
-                ui.horizontal(|ui| {
-                    let mut tab = app.ui.type_panels.styles_tab;
-                    for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
-                        if crate::widgets::pill_tab(ui, name, tab == i).clicked() {
-                            tab = i;
-                        }
-                    }
-                    if tab != app.ui.type_panels.styles_tab {
-                        app.ui.type_panels.styles_tab = tab;
-                        app.ui.type_panels.options = None;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                            close = true;
-                        }
-                    });
-                });
-                crate::widgets::hairline(ui);
-                ui.add_space(4.0);
-                styles_panel(app, ui, app.ui.type_panels.styles_tab == 1);
-            });
-        if close {
-            app.ui.type_panels.styles = false;
-        }
-    }
-    if app.ui.type_panels.glyphs {
-        let mut close = false;
-        egui::Window::new(tl!("Glyphs"))
-            .id(egui::Id::new("glyphs-window"))
-            .title_bar(false)
-            .resizable(false)
-            .frame(float_frame(&t))
-            .default_pos(pos2((canvas.right() - 314.0 - 372.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
-            .show(ctx, |ui| {
-                ui.set_width(340.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                            close = true;
-                        }
-                    });
-                });
-                crate::widgets::hairline(ui);
-                ui.add_space(4.0);
-                glyphs_panel(app, ui);
-            });
-        if close {
-            app.ui.type_panels.glyphs = false;
-        }
-    }
     if app.ui.type_panels.spell.is_some() {
         spelling_window(app, ctx);
     }
@@ -907,13 +837,14 @@ mod tests {
         let mut app = app_with_text("Hi");
         assert!(handles("window.panel.glyphs") && crate::menus::is_live("type.panels.paragraphStyles"));
         menu(&mut app, "type.panels.paragraphStyles", &json!({})).unwrap().unwrap();
-        assert!(app.ui.type_panels.styles && app.ui.type_panels.styles_tab == 1);
+        assert!(app.ui.type_panels.paragraph_styles && !app.ui.type_panels.character_styles);
         assert_eq!(checked(&app, "window.panel.paragraphStyles"), Some(true));
         assert_eq!(checked(&app, "window.panel.characterStyles"), Some(false));
+        // They are separate panels: opening one leaves the other as it was.
         menu(&mut app, "window.panel.characterStyles", &json!({})).unwrap().unwrap();
-        assert_eq!(app.ui.type_panels.styles_tab, 0);
+        assert!(app.ui.type_panels.character_styles && app.ui.type_panels.paragraph_styles);
         menu(&mut app, "window.panel.characterStyles", &json!({})).unwrap().unwrap();
-        assert!(!app.ui.type_panels.styles);
+        assert!(!app.ui.type_panels.character_styles);
         menu(&mut app, "window.panel.glyphs", &json!({"show": true})).unwrap().unwrap();
         assert!(app.ui.type_panels.glyphs);
     }

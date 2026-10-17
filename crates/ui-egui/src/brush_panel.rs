@@ -1,4 +1,4 @@
-//! Window › Brush Settings (F5) and Window › Brushes: Photoshop's floating brush panel.
+//! Window › Brush Settings (F5): a dock panel that floats when first opened, as in Photoshop.
 //!
 //! Brush Settings: the section list with enable boxes on the left (clicking a controls section
 //! shows and enables it; the last five rows only toggle), the selected section's controls on the right (see [`crate::brush_sections`]),
@@ -12,9 +12,9 @@
 //! share a `coalesce` key, so a whole gesture is one journal entry ([`commit_gesture`]).
 //!
 //! The lock beside a section name keeps that section's settings when another preset is picked
-//! (`locks` in the brush, applied by the engine). The Brushes tab lives in [`crate::brushes_tab`].
+//! (`locks` in the brush, applied by the engine). The Brushes panel lives in [`crate::brushes_tab`].
 
-use egui::{Color32, CornerRadius, Sense, Stroke, vec2};
+use egui::{Color32, Sense, vec2};
 use photocraft_engine::BrushSettings;
 use photocraft_engine::paint;
 use serde::{Deserialize, Serialize};
@@ -52,8 +52,7 @@ fn checkbox_only(section: usize) -> bool {
     (CHECKBOX_ONLY_START..SECTIONS.len()).contains(&section)
 }
 
-/// Panel width and the stroke strip's size.
-pub(crate) const WIDTH: f32 = 540.0;
+/// The stroke strip's size.
 const STRIP: (u32, u32) = (488, 76);
 
 /// How the Brushes tab lists presets.
@@ -343,7 +342,8 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
     });
 }
 
-fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// The Brush Settings panel body. The Brushes row atop its section list shows the Brushes panel.
+pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let before = app.session.tools.brush.clone();
     let mut b = before.clone();
@@ -353,16 +353,18 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.brush_section = 0;
     }
     let section = app.ui.brush_section;
+    // The options pane takes what the section list leaves, so the panel fits a dock column.
+    let pane = (ui.available_width() - 190.0).max(180.0);
     ui.horizontal_top(|ui| {
         section_list(app, ui, &mut b);
         widgets::vline(ui, 482.0);
         ui.vertical(|ui| {
-            ui.set_width(WIDTH - 190.0);
+            ui.set_width(pane);
             // No title above the options (#3477): the selected row in the list names them, as
             // in Photoshop, and the line is better spent on the options.
             let on = section_flag(&mut b, section).is_none_or(|f| *f);
             egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(450.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.set_width(WIDTH - 204.0);
+                ui.set_width(pane - 14.0);
                 // A section that's off shows its options greyed out (Photoshop). A tip picked in
                 // the grid copies the tip fields only — the dynamics sections stay (Photoshop).
                 // The picked preset is recorded by name (`brush.presets.setCurrent`, identity, so
@@ -487,70 +489,6 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(has_texture, egui::Button::new(tl!("Copy Texture to Other Tools"))).clicked() {
         copy_texture_to_other_tools(app);
         ui.close();
-    }
-}
-
-pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if !app.ui.panels.brush_settings {
-        return;
-    }
-    let t = Tokens::get(ctx);
-    let frame = egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.card_border))
-        .corner_radius(CornerRadius::same(t.radius_lg as u8))
-        .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: t.shadow })
-        .inner_margin(egui::Margin::same(10));
-    let canvas = app.last_canvas_rect;
-    let mut open = true;
-    egui::Window::new(tl!("Brush Settings"))
-        .id(egui::Id::new("brush-settings"))
-        .title_bar(false)
-        .resizable(false)
-        .frame(frame)
-        .default_pos(egui::pos2((canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0), canvas.top() + 24.0))
-        .show(ctx, |ui| {
-            ui.set_width(WIDTH);
-            ui.horizontal(|ui| {
-                let mut tab = app.ui.brush_tab;
-                for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {
-                    if widgets::pill_tab(ui, name, tab == i).clicked() {
-                        tab = i;
-                    }
-                }
-                app.ui.brush_tab = tab;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                        open = false;
-                    }
-                    let menu_btn = widgets::panel_menu_button(ui);
-                    egui::Popup::menu(&menu_btn).show(|ui| {
-                        widgets::style_spectrum_popup_menu(ui);
-                        ui.set_min_width(180.0);
-                        panel_menu(app, ui);
-                        ui.separator();
-                        if ui.button(tl!("Close")).clicked() {
-                            open = false;
-                            ui.close();
-                        }
-                        if ui.button(tl!("Close Tab Group")).clicked() {
-                            open = false;
-                            ui.close();
-                        }
-                    });
-                });
-            });
-            ui.add_space(6.0);
-            widgets::hairline(ui);
-            ui.add_space(6.0);
-            if app.ui.brush_tab == 1 {
-                crate::brushes_tab::show(app, ui);
-            } else {
-                settings_tab(app, ui);
-            }
-        });
-    if !open {
-        app.ui.panels.brush_settings = false;
     }
 }
 

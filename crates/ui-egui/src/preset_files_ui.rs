@@ -50,9 +50,8 @@ pub fn import_brush_image(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> 
     let preset = r.get("name").and_then(Value::as_str).unwrap_or_default();
     app.ui.status_error = false;
     app.ui.status = format!("Imported brush {preset} from {file}");
-    // Show it: Brush Settings › Brushes tab.
-    app.ui.panels.brush_settings = true;
-    app.ui.brush_tab = 1;
+    // Show it in the Brushes panel.
+    app.run("window.panel.activate", json!({"panel": "brushes"}))?;
     Ok(r)
 }
 
@@ -124,9 +123,8 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
             None => imported,
         };
         if what == "brushes" {
-            // Show them: Brush Settings › Brushes tab.
-            app.ui.panels.brush_settings = true;
-            app.ui.brush_tab = 1;
+            // Show them in the Brushes panel.
+            crate::brush_panel::run_or_status(app, "window.panel.activate", json!({"panel": "brushes"}));
         }
     }))
 }
@@ -172,6 +170,6 @@ mod tests {
         assert_eq!(app.session.tools.current_preset.as_deref(), Some("Leaf"));
         let TipShape::Sampled(tip) = &app.session.tools.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (3, 8));
-        assert!(app.ui.panels.brush_settings && app.ui.brush_tab == 1, "the Brushes tab shows the new brush");
+        assert!(app.ui.docking.as_ref().is_some_and(|l| l.contains(&"brushes".to_string())), "the Brushes panel shows the new brush");
     }
 }

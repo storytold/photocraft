@@ -542,18 +542,30 @@ fn drop_targets_and_actions_reorder_presets() {
     }
 }
 
+/// Shows the panels the way the app does: Brush Settings and Brushes live in the dock.
+fn dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::panel_docking::reconcile(app);
+    crate::panels::right_dock(app, ui);
+}
+
+/// An empty workspace with just `panel`, floating at a usable size.
+pub(crate) fn show_alone(app: &mut PhotocraftApp, panel: &str) {
+    app.ui.docking = Some(craft_ui::docking::Layout::default());
+    app.run("window.panel.float", json!({"panel": panel, "x": 20, "y": 20, "width": 560, "height": 860})).unwrap();
+}
+
+/// Brush Settings (tab 0) or Brushes (tab 1), alone.
 fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     let mut app = app();
-    app.ui.panels.brush_settings = true;
-    app.ui.brush_tab = tab;
     app.ui.brush_section = section;
+    show_alone(&mut app, if tab == 1 { "brushes" } else { "brushSettings" });
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            window(app, &ctx);
+            dock(app, ui);
         },
         app,
     );
@@ -1040,7 +1052,7 @@ fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Photoc
             crate::i18n::set_current(lang);
             crate::shortcuts::handle(app, &ctx);
             crate::panels::options_bar(app, ui);
-            window(app, &ctx);
+            dock(app, ui);
             crate::paint_mouse::show_picker(app, &ctx);
             crate::i18n::set_current(previous);
         },
@@ -1109,7 +1121,7 @@ fn f5_edits_the_default_brush_with_every_section() {
     assert!(!fresh.shape_dynamics.enabled && !fresh.transfer.enabled, "the default round brush has no dynamics yet");
     h.key_press(egui::Key::F5);
     h.run_steps(3);
-    assert!(h.state().ui.panels.brush_settings && h.state().ui.brush_tab == 0, "F5 shows Brush Settings");
+    assert!(h.state().ui.panels.brush_settings, "F5 shows Brush Settings");
     // Every section is there for the built-in round brush, not only for sampled or imported ones.
     for (name, _) in SECTIONS {
         assert!(h.query_all_by_label(name).next().is_some(), "{name} listed");
@@ -1223,7 +1235,7 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
     h.run_steps(3);
     h.get_by_label("Brush Settings…").click();
     h.run_steps(3);
-    assert!(h.state().ui.panels.brush_settings && h.state().ui.brush_tab == 0);
+    assert!(h.state().ui.panels.brush_settings);
     assert_eq!(h.state().ui.brush_picker, None);
 }
 
@@ -1317,7 +1329,6 @@ fn brush_settings_hamburger_menu_actions() {
     assert!(h.query_all_by_label("Clear Brush Controls").count() > 0);
     assert!(h.query_all_by_label("Reset All Locked Settings").count() > 0);
     assert!(h.query_all_by_label("Copy Texture to Other Tools").count() > 0);
-    assert!(h.query_all_by_label("Close").count() > 0);
     assert!(h.query_all_by_label("Close Tab Group").count() > 0);
 
     // 2. New Brush Preset… saves a preset
@@ -1373,18 +1384,16 @@ fn brush_settings_hamburger_menu_actions() {
     let pencil = h.state().ui.tool_brushes.iter().find(|(t, _)| *t == crate::state::Tool::Pencil).unwrap();
     assert_eq!(pencil.1.texture.scale, 2.5);
 
-    // 6. Close closes the window
+    // 6. The tab's close button closes the panel
     let mut h = harness(0, 0);
     assert!(h.state().ui.panels.brush_settings);
-    h.get_by_label("Panel menu").click();
+    h.get_by_label("Brush Settings").click_secondary();
     h.run_steps(2);
-    let close_buttons: Vec<_> = h.query_all_by_label("Close").collect();
-    assert!(close_buttons.len() >= 2);
-    close_buttons.last().unwrap().click();
+    h.get_by_label("Close Panel").click();
     h.run_steps(2);
     assert!(!h.state().ui.panels.brush_settings);
 
-    // 7. Close Tab Group closes the window
+    // 7. Close Tab Group closes the panel
     let mut h = harness(0, 0);
     assert!(h.state().ui.panels.brush_settings);
     h.get_by_label("Panel menu").click();
@@ -1399,11 +1408,12 @@ fn brushes_button_at_top_of_brush_settings_opens_brushes_panel() {
     use egui_kittest::kittest::Queryable;
 
     let mut h = harness(0, 0);
-    assert_eq!(h.state().ui.brush_tab, 0);
+    let brushes = |h: &Harness<'_, PhotocraftApp>| h.state().ui.docking.as_ref().is_some_and(|l| l.contains(&"brushes".to_string()));
+    assert!(!brushes(&h));
     h.get_by_label("Brushes").click();
     h.run_steps(3);
-    assert!(h.state().ui.panels.brush_settings);
-    assert_eq!(h.state().ui.brush_tab, 1);
+    assert!(h.state().ui.panels.brush_settings, "Brush Settings stays open beside it");
+    assert!(brushes(&h), "the button shows the Brushes panel");
 }
 
 /// The fill painted for the check box in `rect` in the last frame (the topmost filled rect there).
