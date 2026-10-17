@@ -218,7 +218,7 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
         return Ok(None);
     }
     match id {
-        "edit.undo" | "edit.stepBackward" => {
+        "edit.undo" => {
             st.floating = None;
             Ok(Some(json!({"floating": "returned"})))
         }
