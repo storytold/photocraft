@@ -462,7 +462,19 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     } else {
         app.crop.redo.push(now);
     }
+    // Default mode: the box stays put on screen, so the view follows the frame's centre (#7088).
+    if let (true, Some(a), Some(b)) = (crate::crop_mode::moves_image(app), now.rect, s.rect) {
+        let (a, b) = (center(a), center(b));
+        let d = [(b[0] - a[0]) as f32, (b[1] - a[1]) as f32];
+        if let Some(v) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i)) {
+            let c = [v.center[0] + d[0], v.center[1] + d[1]];
+            if c.iter().all(|x| x.is_finite()) {
+                v.center = c;
+            }
+        }
+    }
     crate::crop_mode::sync_frame(app);
+    crate::crop_mode::auto_center(app);
     serde_json::Value::Null
 }
 
