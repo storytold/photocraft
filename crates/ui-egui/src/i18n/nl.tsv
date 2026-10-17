@@ -3882,6 +3882,8 @@ curves	Smooth	Vloeiend maken
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Handelingen laden…
+	Load Default Actions	Standaardacties laden
+	Blur Background	Achtergrond vervagen
 	Save Actions…	Handelingen opslaan…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

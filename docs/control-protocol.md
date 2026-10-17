@@ -106,6 +106,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `layer.select` | `{"layer":id\|str,"mode":"replace\|toggle\|range\|add\|remove"}` or `{"name":"Background","occurrence":0?}` (occurrence is zero-based document walk order; required for duplicate names): ⌘-click = toggle, ⇧-click = range; `document.inspect` reports `selectedLayers` and a per-layer `selected` flag |
 | `channel.target` / `channel.setVisible` | Channels panel target and eyes (`"composite"`, colour name, alpha index or name, `"quickMask"`). `document.inspect` (and `channel.list`) report `channels`: composite/colour/alpha rows with visibility, channel options, `quickMask`, `target`. Pixel commands without a `target` param follow the targeted channel |
 | `layer.setProps` | `{"layer":id?,"name":…,"visible":…,"opacity":0..1,"blend":"Multiply"}` |
+| `layer.blurBackground` | `{"layer":id\|name?,"radius":0.1..1000=8}`. Detect the subject on a pixel layer and blur its background within the current selection in one undo step. Preserves transparency, selection, masks and other layers. No subject or cancellation leaves the document unchanged. |
 | `layer.fill.solidColor.set` | `{"layer":id?,"document":id?,"color":"#rrggbb"}`: edit a Solid Color Fill in one undo step; RGB without alpha preserves the fill's alpha. Float RGB arrays and a stored `Color` are also accepted. `document` rejects stale dialog targets. |
 | `layer.fill.pattern.set` | `{"layer":id?,"document":id?,"pattern":id\|name?,"scale":1..1000?,"angle":-180..180?,"link":bool?,"phase":[x,y]?}`: edit a Pattern Fill (the Pattern Fill dialog's OK) in one undo step; omitted values keep the layer's, `phase` `[0,0]` is Snap to Origin. `layer.newFillLayer.pattern` from a menu (no params) and `layer.layerContentOptions` on a Pattern Fill layer open the Pattern Fill dialog. |
 | `layer.layerMask.edit` | `{"layer":id?,"document":id?,"density":0..100?,"feather":0..1000?}`: edit pixel-mask Density (%) and Feather (px) without changing mask pixels, including adjustment masks. At least one setting is required; `document` rejects stale targets. A shared `coalesce` key groups slider updates into one undo step. |
@@ -126,6 +127,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
 | `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
 | `actions.list` | `{}` → `{actions:[{name, steps}], recording}` (the name being recorded, or null) |
+| `actions.loadDefaults` | `{}` → `{added:[names], set}`. Append missing PhotoCraft Essentials actions without replacing same-name actions. Available without a document; refused while recording or playing an action. |
 | `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …], disabled:[step, …]}`. `steps` is the shape `file.automate.batch` and droplets take; `disabled` lists the 0-based steps playback skips |
 | `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |
 | `actions.stop` | `{}` → `{action, steps}`. Copies replayable journal entries since `actions.record` (queries and action-editing commands omitted) |
@@ -135,7 +137,25 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `actions.toggle` | `{"action": name or index, "step": index?, "enabled": bool?}` → `{action, disabled}`. Switches one 0-based step (pending recorded steps included) on or off; omitting `enabled` flips it. Without `step`, switches every step: on unless all already are. Playback, Batch and droplets skip steps that are off. In the desktop panel, click a step's check box |
 | `actions.rename` | `{"action": name or index, "name": str}` → `{action, index}`. Empty, whitespace-only or duplicate names are rejected and keep the old name. Nested `actions.play` steps that call the action by name and its function key follow the new name. In the desktop panel, double-click an action's name to rename it in place (Enter commits, Esc cancels) |
 
-The Actions list fills the resizable dock group.
+The Actions list fills the resizable dock group. **PhotoCraft Essentials** supplies Auto Tone,
+Auto Contrast, Auto Color, Select Subject, and Blur Background. These are original, editable
+single-step actions. The three auto adjustments work on the active pixel layer
+and respect the selection; Select Subject samples the visible image using PhotoCraft's current
+subject-detection heuristic. Blur Background uses that detector on the active pixel layer and
+blurs only its background within the current selection, with an 8-pixel radius. Fully detected
+subject pixels are excluded from blur sampling; partial edge coverage can still contribute.
+It preserves the layer's transparency and masks, other layers and the existing selection, and
+fails without an edit when no subject is found. This is a Gaussian blur using the current
+heuristic detector, not depth-aware lens blur. Each successful edit can be undone normally.
+Actions playback currently runs synchronously; job progress and cancellation are available
+when `layer.blurBackground` is invoked directly through the UI command dispatcher.
+
+The set is added once when the desktop or web preset store opens, including for existing users.
+Saved actions keep their order and definitions; a same-name action is preserved. Deleting or
+renaming a default stays that way after restart. **Load Default Actions** in the Actions panel's
+menu (also offered by an empty panel) adds missing defaults again. CLI/MCP sessions can use
+`actions.loadDefaults` explicitly. Blur Background calls a dedicated atomic command; it does
+not compose selection-changing steps that could act on an old selection after detection fails.
 
 The Actions panel shows replayable steps immediately while recording. Click an individual
 step to select it, then use the trash button to remove that step; selecting the action

@@ -3125,6 +3125,8 @@ curves	Smooth	Lisser
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Charger des actions…
+	Load Default Actions	Charger les actions par défaut
+	Blur Background	Flouter l’arrière-plan
 	Save Actions…	Enregistrer les actions…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

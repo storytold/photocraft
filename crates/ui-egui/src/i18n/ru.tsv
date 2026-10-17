@@ -3070,6 +3070,8 @@ curves	Smooth	Сгладить
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Загрузить операции…
+	Load Default Actions	Загрузить действия по умолчанию
+	Blur Background	Размыть фон
 	Save Actions…	Сохранить операции…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

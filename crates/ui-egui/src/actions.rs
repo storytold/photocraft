@@ -465,6 +465,9 @@ pub fn stopped(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>)
 /// The Actions entries of the panel group's menu ("…").
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut act: Option<&str> = None;
+    if ui.add_enabled(app.session.is_enabled("actions.loadDefaults"), egui::Button::new(tl!("Load Default Actions"))).clicked() {
+        act = Some("defaults");
+    }
     if ui.button(tl!("Load Actions…")).clicked() {
         act = Some("load");
     }
@@ -480,6 +483,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(a) = act else { return };
     ui.close();
     let r = match a {
+        "defaults" => load_defaults(app),
         "load" => load_dialog(app),
         "stop" => insert_stop_dialog(app),
         _ => save_dialog(app, None),
@@ -490,6 +494,21 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+fn load_defaults(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let result = app.run("actions.loadDefaults", json!({}))?;
+    if let Some(name) = result["added"].as_array().and_then(|names| names.first()).and_then(Value::as_str)
+        && let Some(index) = app.session.actions.list.iter().position(|action| action.name == name)
+    {
+        app.ui.actions.selected = Some(index);
+        app.ui.actions.selected_step = None;
+        app.ui.actions.renaming = None;
+        if let Some(set) = result["set"].as_str() {
+            app.ui.actions.collapsed_sets.retain(|collapsed| collapsed != set);
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Copy)]
@@ -679,6 +698,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     egui::ScrollArea::vertical().id_salt("actions-rows").max_height(max_h).min_scrolled_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         if rows.is_empty() {
+            if ui.button(tl!("Load Default Actions")).clicked()
+                && let Err(error) = load_defaults(app)
+            {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
             ui.label(egui::RichText::new(tl!("Record ● a sequence of edits, then play ▶ it on any document.")).color(t.text_faint).size(11.5));
         }
         if egui::DragAndDrop::has_payload_of_type::<DragRow>(ui.ctx()) {
@@ -987,6 +1012,53 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_actions_load_from_empty_panel_and_play() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(3);
+        h.get_by_label("Load Default Actions").click();
+        h.run_steps(3);
+        assert!(h.query_by_label("PhotoCraft Essentials").is_some());
+        for name in ["Auto Tone", "Auto Contrast", "Auto Color", "Select Subject", "Blur Background"] {
+            assert!(h.query_by_label(name).is_some(), "missing preset {name}");
+        }
+        assert_eq!(h.state().ui.actions.selected, Some(0));
+        h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("Play selection").click();
+        h.run_steps(3);
+        assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+        assert!(h.state().session.journal.iter().any(|(id, _)| id == "image.autoTone"));
+    }
+
+    #[test]
+    fn default_actions_flyout_preserves_custom_actions_and_reveals_restored_set() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let custom = Action::new("Auto Tone", vec![("view.fitOnScreen".into(), json!({}))]);
+        app.session.actions.list.push(custom.clone());
+        app.ui.actions.collapsed_sets.push("PhotoCraft Essentials".into());
+        let mut h = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(
+            |ui, app| {
+                ui.menu_button("Actions menu", |ui| panel_menu(app, ui));
+                panel(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label("Actions menu").click();
+        h.run_steps(3);
+        h.get_by_label("Load Default Actions").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.actions.list[0], custom);
+        assert_eq!(h.state().session.actions.list.len(), 5);
+        assert_eq!(h.state().ui.actions.selected, Some(1));
+        assert!(h.state().ui.actions.collapsed_sets.is_empty());
+        assert!(h.query_by_label("Select Subject").is_some());
+    }
 
     #[test]
     fn selected_layer_name_is_visible_during_recording_and_after_stop() {

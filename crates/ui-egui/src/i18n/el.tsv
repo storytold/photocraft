@@ -3820,6 +3820,8 @@ curves	Smooth	Εξομάλυνση
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Φόρτωση ενεργειών…
+	Load Default Actions	Φόρτωση προεπιλεγμένων ενεργειών
+	Blur Background	Θόλωση φόντου
 	Save Actions…	Αποθήκευση ενεργειών…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

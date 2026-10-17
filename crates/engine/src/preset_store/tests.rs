@@ -112,7 +112,7 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
     let dir = TempDir::new("roundtrip");
     let (mut s, w) = session(&dir);
     assert!(w.is_empty(), "{w:?}");
-    assert!(dir.files().is_empty(), "attaching an empty store writes nothing");
+    assert_eq!(dir.files(), [ACTIONS_FILE], "only starter actions are written when attaching an empty store");
     let mut a = sampled("Eight", "Inks", tip8(64, 48, 1));
     a.brush.dual_brush.tip = TipShape::Sampled(tip8(12, 12, 5));
     a.brush.texture.pattern = Pattern::Tile(tip16(32, 32, 7));
@@ -163,7 +163,7 @@ fn commands_persist_and_delete_removes_from_disk() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Doodle").is_some());
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Scribble").is_none());
     s.execute("brush.presets.delete", json!({"name": "Doodle"})).unwrap();
-    assert_eq!(dir.files(), [INDEX_FILE], "the group file and its tip are gone");
+    assert_eq!(dir.files(), [ACTIONS_FILE, INDEX_FILE], "the group file and its tip are gone");
     let (t, _) = session(&dir);
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Doodle").is_none());
 }

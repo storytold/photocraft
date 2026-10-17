@@ -3730,6 +3730,8 @@ navigator	Zoom	Zvětšení
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Načíst akce…
+	Load Default Actions	Načíst výchozí akce
+	Blur Background	Rozostřit pozadí
 	Save Actions…	Uložit akce…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

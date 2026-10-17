@@ -17,6 +17,10 @@ struct State {
     files: BTreeMap<String, Arc<[u8]>>,
     bytes: u64,
     dirty: BTreeSet<String>,
+    /// User edits still queued or in flight. Startup migrations are reproducible from the
+    /// loaded records and built-ins, so their persistence alone is not work at risk.
+    changed: BTreeSet<String>,
+    initializing: bool,
     writing: bool,
     error: Option<String>,
     rejected: BTreeMap<String, String>,
@@ -32,7 +36,11 @@ pub fn session(backend: Bridge) -> (Session, Vec<String>) {
     // An unreadable group may reference any tip, including one shared with a good group.
     // Keep all tips until the damaged library can be recovered; unrelated edits still save.
     backend.state().preserve_tips = !opened.warnings.is_empty();
+    // This is a fresh session: attaching can stage generated defaults, but no user edits.
+    // Keep those writes queued (including the seed marker) without a loss-of-work warning.
+    backend.state().initializing = true;
     let warnings = session.attach_preset_store(opened);
+    backend.state().initializing = false;
     (session, warnings)
 }
 
@@ -98,6 +106,13 @@ impl Bridge {
             // Requeue names, never old bytes: edits/deletes made during the failed write win.
             s.dirty.extend(batch.into_keys());
             s.error = Some(e);
+        } else {
+            for name in batch.into_keys() {
+                // A newer edit made during the transaction still needs its own write.
+                if !s.dirty.contains(&name) {
+                    s.changed.remove(&name);
+                }
+            }
         }
     }
 
@@ -116,7 +131,7 @@ impl Bridge {
 
     pub fn unsaved(&self) -> bool {
         let s = self.state();
-        s.writing || !s.dirty.is_empty() || !s.rejected.is_empty()
+        !s.changed.is_empty() || !s.rejected.is_empty()
     }
 }
 
@@ -150,7 +165,10 @@ impl PresetBackend for Bridge {
             return Err(e);
         }
         s.dirty.insert(name.to_string());
-        // This current replacement resolves only its own omitted edit. Pending transactions
+        if !s.initializing {
+            s.changed.insert(name.to_string());
+        }
+        // This current replacement resolves only its own omitted edit. Pending user edits
         // still keep unsaved() true; Retry or an older successful batch cannot clear it.
         s.rejected.remove(name);
         Ok(())
@@ -171,6 +189,9 @@ impl PresetBackend for Bridge {
         if let Some(bytes) = s.files.remove(name) {
             s.bytes = s.bytes.saturating_sub(bytes.len() as u64);
             s.dirty.insert(name.to_string());
+            if !s.initializing {
+                s.changed.insert(name.to_string());
+            }
         }
         s.rejected.remove(name);
         Ok(())
@@ -344,6 +365,100 @@ mod tests {
         assert!(b.error().unwrap().contains("SecurityError"));
         assert!(b.begin().is_none());
     }
+
+    #[test]
+    fn generated_defaults_are_persisted_without_unsaved_user_work() {
+        let b = Bridge::default();
+        let (s, warnings) = session(b.clone());
+        assert!(warnings.is_empty());
+        assert_eq!(s.actions.list.len(), 5);
+        assert!(!b.unsaved());
+        let batch = b.begin().unwrap();
+        let actions: serde_json::Value = serde_json::from_slice(batch.get(ACTIONS_FILE).unwrap().as_deref().unwrap()).unwrap();
+        assert_eq!(actions["defaults_version"], 1);
+        assert_eq!(actions["actions"].as_array().unwrap().len(), 5);
+        assert!(!b.unsaved(), "generated defaults in flight can be recreated on reload");
+        let restored = Bridge::default();
+        for (name, bytes) in &batch {
+            if let Some(bytes) = bytes {
+                restored.load(name, bytes.to_vec()).unwrap();
+            }
+        }
+        b.finish(batch, Ok(()));
+        let (reloaded, warnings) = session(restored.clone());
+        assert!(warnings.is_empty());
+        assert_eq!(reloaded.actions.list, s.actions.list);
+        assert!(restored.begin().is_none(), "the persisted marker avoids reseeding on reload");
+        assert!(!b.unsaved());
+    }
+
+    #[test]
+    fn denied_storage_marks_default_edits_unsaved_and_retry_saves_them() {
+        for command in ["actions.delete", "actions.rename"] {
+            let b = Bridge::default();
+            b.unavailable("SecurityError".into());
+            let (mut s, _) = session(b.clone());
+            assert!(!b.unsaved());
+            s.execute(command, json!({"action": "Auto Tone", "name": "My Tone"})).unwrap();
+            assert!(b.unsaved(), "editing generated defaults is user work: {command}");
+            assert!(b.begin().is_none());
+            assert!(b.error().unwrap().contains("SecurityError"));
+            b.retry();
+            let batch = b.begin().unwrap();
+            assert!(b.unsaved(), "the edit remains unsaved while its transaction runs");
+            let restored = Bridge::default();
+            for (name, bytes) in &batch {
+                if let Some(bytes) = bytes {
+                    restored.load(name, bytes.to_vec()).unwrap();
+                }
+            }
+            b.finish(batch, Ok(()));
+            assert!(!b.unsaved());
+            assert!(b.error().is_none());
+            let (reloaded, warnings) = session(restored);
+            assert!(warnings.is_empty());
+            assert_eq!(reloaded.actions.list, s.actions.list);
+            assert!(!reloaded.actions.list.iter().any(|a| a.name == "Auto Tone"));
+        }
+    }
+
+    #[test]
+    fn finishing_default_transaction_keeps_newer_action_edits_unsaved() {
+        for result in [Ok(()), Err("QuotaExceededError".into())] {
+            let b = Bridge::default();
+            let (mut s, _) = session(b.clone());
+            let defaults = b.begin().unwrap();
+            s.execute("actions.delete", json!({"action": "Auto Tone"})).unwrap();
+            b.finish(defaults, result);
+            assert!(b.unsaved(), "the bootstrap transaction cannot save a later edit");
+            b.retry();
+            let edited = b.begin().unwrap();
+            let actions: serde_json::Value = serde_json::from_slice(edited.get(ACTIONS_FILE).unwrap().as_deref().unwrap()).unwrap();
+            assert!(!actions["actions"].as_array().unwrap().iter().any(|a| a["name"] == "Auto Tone"));
+            b.finish(edited, Ok(()));
+            assert!(!b.unsaved());
+        }
+    }
+
+    #[test]
+    fn failed_default_transaction_does_not_warn_until_a_user_edit() {
+        let b = Bridge::default();
+        let (mut s, _) = session(b.clone());
+        b.finish(b.begin().unwrap(), Err("QuotaExceededError".into()));
+        assert!(!b.unsaved(), "the defaults are still reproducible after a failed write");
+        assert!(b.begin().is_none());
+        import(&mut s);
+        assert!(b.unsaved());
+        assert!(b.error().unwrap().contains("QuotaExceededError"));
+        let (reloaded, warnings) = session(b.clone());
+        assert!(warnings.is_empty());
+        assert_eq!(reloaded.tools.presets, s.tools.presets);
+        assert!(b.unsaved(), "reattaching must not hide already pending user edits");
+        b.retry();
+        b.finish(b.begin().unwrap(), Ok(()));
+        assert!(!b.unsaved());
+    }
+
     #[test]
     fn corrupt_group_and_shared_tip_survive_unrelated_save_delete_and_reload() {
         let b = Bridge::default();

@@ -2718,6 +2718,8 @@ curves	Smooth	平滑
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	載入動作…
+	Load Default Actions	載入預設動作
+	Blur Background	模糊背景
 	Save Actions…	儲存動作…
 	{name} (Photoshop)	{name}（Photoshop）
 	{message} ({note})	{message}（{note}）

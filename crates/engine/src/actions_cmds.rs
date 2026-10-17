@@ -78,6 +78,9 @@ impl Action {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ActionsFile {
     pub version: u32,
+    /// Starter set last seeded. Older stores default to zero; deletions after seeding persist.
+    #[serde(default)]
+    pub defaults_version: u32,
     pub actions: Vec<Action>,
 }
 
@@ -1386,8 +1389,8 @@ mod tests {
         let mut t = Session::new();
         t.attach_preset_store(crate::preset_store::open_dir(&dir));
         let listed = t.execute("actions.list", json!({})).unwrap();
-        assert_eq!(listed["actions"][0]["name"], "Kept");
-        assert_eq!(listed["actions"][0]["steps"], 1);
+        let kept = listed["actions"].as_array().unwrap().iter().find(|a| a["name"] == "Kept").unwrap();
+        assert_eq!(kept["steps"], 1);
         assert_eq!(t.execute("actions.get", json!({"action": "Kept"})).unwrap()["steps"][0][0], "layer.new.layer");
 
         // An action created before the store finishes loading is kept, and a different one on

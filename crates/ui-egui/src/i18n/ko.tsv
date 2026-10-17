@@ -3297,6 +3297,8 @@ curves	Smooth	매끄럽게
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	액션 불러오기…
+	Load Default Actions	기본 액션 불러오기
+	Blur Background	배경 흐리게
 	Save Actions…	액션 저장…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

@@ -3112,6 +3112,8 @@ curves	Smooth	Haluskan
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Muat Tindakan…
+	Load Default Actions	Muat Aksi Default
+	Blur Background	Buramkan Latar Belakang
 	Save Actions…	Simpan Tindakan…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

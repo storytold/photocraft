@@ -3720,6 +3720,8 @@ curves	Smooth	Wygładź
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Wczytaj operacje…
+	Load Default Actions	Wczytaj domyślne operacje
+	Blur Background	Rozmyj tło
 	Save Actions…	Zapisz operacje…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

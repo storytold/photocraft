@@ -4026,6 +4026,8 @@ cameraRaw	Yellow	Sárga
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Műveletek betöltése…
+	Load Default Actions	Alapértelmezett műveletek betöltése
+	Blur Background	Háttér elmosása
 	Save Actions…	Műveletek mentése…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

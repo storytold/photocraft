@@ -3730,6 +3730,8 @@ curves	Smooth	スムーズ
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	アクションを読み込み…
+	Load Default Actions	既定のアクションを読み込み
+	Blur Background	背景をぼかす
 	Save Actions…	アクションを保存…
 	{name} (Photoshop)	{name}（Photoshop）
 	{message} ({note})	{message}（{note}）

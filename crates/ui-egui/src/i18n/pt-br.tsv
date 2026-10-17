@@ -3912,6 +3912,8 @@ layerLabel	No Color	Sem cor
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Carregar ações…
+	Load Default Actions	Carregar ações padrão
+	Blur Background	Desfocar plano de fundo
 	Save Actions…	Salvar ações…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

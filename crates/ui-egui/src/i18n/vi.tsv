@@ -3604,6 +3604,8 @@ curves	Smooth	Làm mượt
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Nạp hành động…
+	Load Default Actions	Tải thao tác mặc định
+	Blur Background	Làm mờ nền
 	Save Actions…	Lưu hành động…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

@@ -3120,6 +3120,8 @@ curves	Smooth	Glätten
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Aktionen laden…
+	Load Default Actions	Standardaktionen laden
+	Blur Background	Hintergrund weichzeichnen
 	Save Actions…	Aktionen speichern…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

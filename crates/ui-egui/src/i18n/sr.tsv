@@ -4185,6 +4185,8 @@ shape	Appearance	Izgled
 	Reset All Locked Settings	Vrati sva zaključana podešavanja
 	Copy Texture to Other Tools	Kopiraj teksturu u druge alatke
 	Load Actions…	Učitaj radnje…
+	Load Default Actions	Učitaj podrazumevane radnje
+	Blur Background	Zamuti pozadinu
 	Save Actions…	Sačuvaj radnje…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})

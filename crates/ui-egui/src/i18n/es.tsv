@@ -4084,6 +4084,8 @@ navigator	Zoom	Zoom
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Cargar acciones…
+	Load Default Actions	Cargar acciones predeterminadas
+	Blur Background	Desenfocar fondo
 	Save Actions…	Guardar acciones…
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
