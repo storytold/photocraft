@@ -329,6 +329,35 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
     raw.events = out;
 }
 
+/// Repeating an Image › Adjustments shortcut dismisses that specific dialog without
+/// committing its temporary preview (#3331). The active binding table respects customized
+/// shortcuts and prevents a different command that claimed the key from closing the dialog.
+fn toggle_adjustment_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if egui::Popup::is_any_open(ctx) {
+        return false;
+    }
+    let Some((dialog_id, command)) = app.ui.dialogs.last().and_then(|dialog| {
+        crate::adjust_dialog::owns(&dialog.fields).then(|| {
+            let command = dialog.fields.get("__command").and_then(serde_json::Value::as_str)?;
+            Some((dialog.id, command.to_owned()))
+        })?
+    }) else {
+        return false;
+    };
+    if !crate::adjust_dialog::has_dialog(&command) {
+        return false;
+    }
+    let Some((_, binding)) = crate::shortcut_dispatch::bindings(app).into_iter().find(|(id, _)| id == &command) else {
+        return false;
+    };
+    if !consume(ctx, &binding) {
+        return false;
+    }
+    // Closing has the same semantics as Cancel: no document edit, no History step.
+    app.ui.close_dialog(dialog_id);
+    true
+}
+
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);
@@ -388,6 +417,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // focused text field keeps its keys.
     let liquify_focus = app.distort.liquify.is_some() && focus != Focus::None;
     if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
+        if !liquify_focus && app.discard.is_none() && focus != Focus::Text && toggle_adjustment_dialog(app, ctx) {
+            return;
+        }
         if focus != Focus::Text {
             nav_keys(app, ctx);
         }

@@ -804,3 +804,27 @@ fn type_size_keys_follow_key_position_and_the_typed_selection() {
     assert_eq!(logged(&h), ["type.decreaseSize"]);
     assert_eq!(sizes(&h), [(2, base), (3, base + 2.0)], "only the selected \"He\" shrinks");
 }
+
+#[test]
+fn repeated_adjustment_shortcut_closes_only_its_own_dialog_without_editing() {
+    for (shortcut, command) in [
+        ("Cmd+L", "image.adjustments.levels"),
+        ("Cmd+M", "image.adjustments.curves"),
+        ("Cmd+U", "image.adjustments.hueSaturation"),
+        ("Cmd+B", "image.adjustments.colorBalance"),
+    ] {
+        let mut h = harness();
+        let original = h.state().session.active().unwrap().doc.clone();
+        let history = h.state().session.active().unwrap().history.past_len();
+        press(&mut h, shortcut);
+        assert_eq!(h.state().ui.dialogs.len(), 1, "{shortcut} opens its dialog");
+        assert_eq!(h.state().ui.dialogs[0].fields.get("__command").and_then(|v| v.as_str()), Some(command));
+        press(&mut h, "Cmd+Z");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "other shortcuts cannot close the modal");
+        press(&mut h, shortcut);
+        assert!(h.state().ui.dialogs.is_empty(), "{shortcut} dismisses its own dialog");
+        let st = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&original, &st.doc), "closing cannot apply a preview");
+        assert_eq!(st.history.past_len(), history, "closing cannot add a history step");
+    }
+}
