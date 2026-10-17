@@ -579,17 +579,19 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": crate::adjust_dialog::open(app, a).ok_or("no document")?}))
         }
         "window.togglePanels" => {
-            // Tab hides the Tools panel, the options bar and the dock; Tab again shows what it hid.
+            // As in Photoshop, Tab hides the Tools panel, the options bar and the dock when all three
+            // are shown, and shows all three when any is hidden (#6760). In Full Screen Mode they
+            // start hidden and Tab brings them back (with the menu bar, see `lib.rs`) and hides them.
+            let full_screen = app.ui.view.hides_chrome();
             let p = &mut app.ui.panels;
-            match p.hidden_by_tab.take() {
-                Some([toolbar, options, dock]) if !(p.toolbar || p.options_bar || p.dock) => {
-                    (p.toolbar, p.options_bar, p.dock) = (toolbar, options, dock);
+            if full_screen {
+                p.full_screen_tabs = p.full_screen_tabs.wrapping_add(1);
+                if p.full_screen_tabs % 2 == 1 {
+                    (p.toolbar, p.options_bar, p.dock) = (true, true, true);
                 }
-                _ if p.toolbar || p.options_bar || p.dock => {
-                    p.hidden_by_tab = Some([p.toolbar, p.options_bar, p.dock]);
-                    (p.toolbar, p.options_bar, p.dock) = (false, false, false);
-                }
-                _ => (p.toolbar, p.options_bar, p.dock) = (true, true, true),
+            } else {
+                let all = p.toolbar && p.options_bar && p.dock;
+                (p.toolbar, p.options_bar, p.dock) = (!all, !all, !all);
             }
             Ok(Value::Null)
         }

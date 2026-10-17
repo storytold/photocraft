@@ -401,9 +401,10 @@ pub struct Panels {
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
     #[serde(default = "yes")]
     pub dock: bool,
-    /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hidden_by_tab: Option<[bool; 3]>,
+    /// Tab presses since Full Screen Mode was entered (#6760). Odd: Tab has brought the menu bar,
+    /// toolbar, options bar and dock back over the full screen canvas. Not saved.
+    #[serde(skip)]
+    pub full_screen_tabs: u32,
     /// The right dock's icon rail. An app that embeds PhotoCraft's UI can hide it for a simpler view.
     #[serde(default = "yes")]
     pub rail: bool,
@@ -434,7 +435,7 @@ impl Default for Panels {
             character: false,
             toolbar_double: false,
             dock: true,
-            hidden_by_tab: None,
+            full_screen_tabs: 0,
             rail: true,
             menu_bar: true,
             gradient_editor: false,

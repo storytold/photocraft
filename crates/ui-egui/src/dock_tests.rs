@@ -918,13 +918,20 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     let (mut app, _, _) = app_with_layers();
     let ctx = egui::Context::default();
     let run = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
-    app.ui.panels.options_bar = false;
     run(&mut app, "window.togglePanels");
     let p = &app.ui.panels;
     assert!(!p.toolbar && !p.options_bar && !p.dock);
     run(&mut app, "window.togglePanels");
     let p = &app.ui.panels;
-    assert!(p.toolbar && !p.options_bar && p.dock, "Tab brings back only what it hid");
+    assert!(p.toolbar && p.options_bar && p.dock);
+    // #6760: with any of the three hidden, Tab shows all three (it does not hide the rest).
+    app.ui.panels.options_bar = false;
+    run(&mut app, "window.togglePanels");
+    let p = &app.ui.panels;
+    assert!(p.toolbar && p.options_bar && p.dock, "Tab shows all three when one is hidden");
+    app.ui.panels.dock = false;
+    run(&mut app, "window.togglePanels");
+    assert!(app.ui.panels.toolbar && app.ui.panels.options_bar && app.ui.panels.dock);
     run(&mut app, "window.toggle.dock");
     assert!(!app.ui.panels.dock && app.ui.panels.toolbar, "⇧Tab hides only the dock");
     run(&mut app, "window.toggle.dock");
@@ -941,6 +948,36 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
     v.as_object_mut().unwrap().remove("dock");
     assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
+}
+
+#[test]
+fn tab_in_full_screen_shows_and_hides_the_chrome_and_exit_follows_the_last_tab() {
+    // #6760: Full Screen Mode starts with everything hidden; Tab shows the menu bar and panels.
+    // Leaving restores the panels as they were, unless Tab was pressed there: then the last Tab wins.
+    let (mut app, _, _) = app_with_layers();
+    let ctx = egui::Context::default();
+    let run = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
+    let shown = |app: &PhotocraftApp| (app.ui.panels.toolbar, app.ui.panels.options_bar, app.ui.panels.dock);
+    run(&mut app, "view.screenMode.fullScreen");
+    assert_eq!(app.ui.panels.full_screen_tabs % 2, 0, "hidden on entry");
+    run(&mut app, "view.screenMode.standard");
+    assert_eq!(shown(&app), (true, true, true), "no Tab: restored");
+    // Odd count: shown on exit.
+    run(&mut app, "view.screenMode.fullScreen");
+    run(&mut app, "window.togglePanels");
+    assert_eq!(app.ui.panels.full_screen_tabs % 2, 1, "Tab shows the chrome");
+    run(&mut app, "view.screenMode.standard");
+    assert_eq!(shown(&app), (true, true, true));
+    // Even count: stay hidden on exit.
+    run(&mut app, "view.screenMode.fullScreen");
+    run(&mut app, "window.togglePanels");
+    run(&mut app, "window.togglePanels");
+    assert_eq!(app.ui.panels.full_screen_tabs % 2, 0);
+    run(&mut app, "view.screenMode.standard");
+    assert_eq!(shown(&app), (false, false, false), "an even number of Tabs leaves them hidden");
+    // Entering again starts hidden, whatever the earlier count was.
+    run(&mut app, "view.screenMode.fullScreen");
+    assert_eq!(app.ui.panels.full_screen_tabs, 0);
 }
 
 /// #2726: the Navigator sizes its own preview to the group (no outer scroll area, so no scroll

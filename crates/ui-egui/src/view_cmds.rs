@@ -703,7 +703,20 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         } else {
             k
         };
+        let was_full_screen = o.hides_chrome();
         o.screen_mode = next.to_string();
+        // Full Screen Mode starts with the panels hidden. Leaving it restores them, unless Tab was
+        // pressed there: then they follow the last Tab (shown after an odd count, hidden after an even one) (#6760).
+        let p = &mut app.ui.panels;
+        if !was_full_screen && o.hides_chrome() {
+            p.full_screen_tabs = 0;
+        } else if was_full_screen && !o.hides_chrome() {
+            if p.full_screen_tabs > 0 {
+                let shown = p.full_screen_tabs % 2 == 1;
+                (p.toolbar, p.options_bar, p.dock) = (shown, shown, shown);
+            }
+            p.full_screen_tabs = 0;
+        }
         // Both full-screen modes take the whole display; the menu bar stays in the first.
         let (full_screen, maximized) = ctx.input(|i| (i.viewport().fullscreen.unwrap_or(false), i.viewport().maximized.unwrap_or(false)));
         let was_maximized = ctx.data(|d| d.get_temp::<bool>(was_maximized_id())).unwrap_or(false);
