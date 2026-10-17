@@ -188,7 +188,7 @@ pub struct Pass<'a> {
     pub extra: [f32; 4],
     /// Extra shader flags (`F_KNOCKOUT`, …).
     pub flags: u32,
-    /// 4096-entry LUT rows (Levels / Curves / Gradient map / gradient stops).
+    /// 4096-entry LUT rows, or packed exact stops when `F_EXACT_RAMP` is set.
     pub lut: Option<Vec<[f32; 4096]>>,
     pub gradient: bool,
     /// Effect map sampled by `FxPaint`.
@@ -384,6 +384,8 @@ pub const F_LAB: u32 = 65536;
 /// 32-bit float document: Add, Divide and Exposure retain values above 1; the non-separable
 /// blend modes clip only below 0 (`psblend::HDR`).
 pub const F_HDR: u32 = 262144;
+/// Packed gradient stops and CPU-computed horizontal parameters instead of LUT samples.
+pub const F_EXACT_RAMP: u32 = 1048576;
 /// `Lerp`: A rounded to `p0.x` steps per unit (adjustment results on integer documents).
 pub const F_QUANT: u32 = 32768;
 /// `Lerp` as A + (B − C) premultiplied (layers clipped to pass-through groups).
@@ -909,9 +911,7 @@ impl<'a> Planner<'a> {
                 let rgb = c.to_rgb();
                 p.color = [rgb[0], rgb[1], rgb[2], c.alpha];
             }
-            Fill::Gradient { stops, opacity_stops, angle, scale, style, reverse, offset, dither, .. } => {
-                check_gradient_stops(stops)?;
-                check_gradient_stops(opacity_stops)?;
+            Fill::Gradient { stops, opacity_stops, midpoints, angle, scale, style, reverse, offset, dither, .. } => {
                 p.gradient = true;
                 // compose::render_fill: whole-pixel end points (fill_layout).
                 let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
@@ -923,6 +923,22 @@ impl<'a> Planner<'a> {
                 // position hash, see the shader).
                 let quantum = photocraft_compose::adjustment_quantum(self.cx.depth).unwrap_or(0.0);
                 p.params[2] = [offset.0, offset.1, quantum, if *dither { 1.0 } else { 0.0 }];
+                if needs_exact(stops, opacity_stops) {
+                    check_ramp_size(stops.len(), opacity_stops.len())?;
+                    check_exact_depth(self.cx.depth)?;
+                    let mut colors: Vec<_> = stops.iter().map(|(t, c)| (*t, rgba(c, true))).collect();
+                    colors.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let mut opacity = opacity_stops.clone();
+                    opacity.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    check_exact_positions(&colors, &opacity)?;
+                    check_exact_values(colors.iter().map(|s| s.1), &opacity, midpoints)?;
+                    p.flags |= F_EXACT_RAMP;
+                    let parameters = exact_parameters(*style, angle, scale, *reverse, offset, frame, self.cx.canvas)?;
+                    p.lut = Some(exact_ramp_rows(&colors, &opacity, midpoints, false, &parameters));
+                    return Ok(());
+                }
+                check_gradient_stops(stops)?;
+                check_gradient_stops(opacity_stops)?;
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
                 let mut rows = vec![[0.0f32; 4096]; 4];
                 for k in 0..4096 {
@@ -978,11 +994,15 @@ impl<'a> Planner<'a> {
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
         }
-        if let Adjustment::GradientMap { stops, .. } = adj {
-            check_gradient_stops(stops)?;
-        }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
+        if let Adjustment::GradientMap { stops, .. } = adj {
+            if needs_exact(stops, &[]) {
+                check_ramp_size(stops.len(), 0)?;
+                return Err(Unsupported("exact gradient geometry from Gradient Map (composited on the CPU)".into()));
+            }
+            check_gradient_stops(stops)?;
+        }
         let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth);
         p.adjust_kind = kind;
         p.params = params;
@@ -1073,8 +1093,15 @@ impl<'a> Planner<'a> {
                 _ => None,
             };
             if let Some(g) = gradient {
-                check_gradient_stops(&g.stops)?;
-                check_gradient_stops(&g.opacity_stops)?;
+                if needs_exact(&g.stops, &g.opacity_stops) {
+                    check_ramp_size(g.stops.len(), g.opacity_stops.len())?;
+                    if matches!(e, Effect::InnerGlow(_) | Effect::OuterGlow(_)) {
+                        return Err(Unsupported("exact gradient geometry from glow coverage (composited on the CPU)".into()));
+                    }
+                } else {
+                    check_gradient_stops(&g.stops)?;
+                    check_gradient_stops(&g.opacity_stops)?;
+                }
             }
         }
         // Linked patterns tile from the effects reference point (else the layer's top-left).
@@ -1121,7 +1148,7 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::OuterGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
+                let paint = self.glow_paint(g, anchor, sb)?;
                 // Match CPU exterior knockout: a see-through fill must not reveal the
                 // glow through its own shape. The shader applies m × (1 − alpha × k).
                 let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
@@ -1160,7 +1187,8 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                let paint = self.gradient_paint(gradient, sb)?;
+                l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
             }
         }
         for &(_, e) in &rev {
@@ -1175,7 +1203,7 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::InnerGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
+                let paint = self.glow_paint(g, anchor, sb)?;
                 l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
             }
         }
@@ -1199,7 +1227,8 @@ impl<'a> Planner<'a> {
             if let Effect::Stroke(st) = e {
                 let (in_w, _) = stroke_widths(st);
                 if in_w > 0.0 {
-                    let paint = self.fx_paint(&st.paint, anchor);
+                    let frame = photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb);
+                    let paint = self.fx_paint(&st.paint, anchor, frame)?;
                     l = self.paint(
                         l,
                         content,
@@ -1209,7 +1238,7 @@ impl<'a> Planner<'a> {
                         st.common.opacity,
                         F_GATE,
                         clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                        frame,
                     );
                 }
             }
@@ -1255,20 +1284,11 @@ impl<'a> Planner<'a> {
                 cover = Some(init(self, ll, None, INIT_COVER, 1.0));
             }
             for (n, &(i, st)) in outs.iter().enumerate() {
-                let paint = self.fx_paint(&st.paint, anchor);
+                let frame = photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb);
+                let paint = self.fx_paint(&st.paint, anchor, frame)?;
                 let flags = F_STROKE_OUT | if vector_shape { F_VECTOR } else { 0 } | if outline { F_OUTLINE } else { 0 } | if n == 0 { F_FIRST } else { 0 };
                 // Share × blended colour, then coverage (both read the coverage so far).
-                let mut p = self.fx_pass_kernel(
-                    Kernel::FxStroke,
-                    w,
-                    content,
-                    &paint,
-                    st.common.blend,
-                    st.common.opacity,
-                    flags,
-                    clip,
-                    photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
-                );
+                let mut p = self.fx_pass_kernel(Kernel::FxStroke, w, content, &paint, st.common.blend, st.common.opacity, flags, clip, frame);
                 if matches!(paint, Paint::None) {
                     // A missing pattern paints nothing: the stroke's share keeps the result as is.
                     p.params[2][2] = 3.0;
@@ -1363,21 +1383,35 @@ impl<'a> Planner<'a> {
         Ok(self.write_back(backdrop, merged, clip))
     }
 
-    fn fx_paint(&self, p: &'a FxPaint, anchor: (f64, f64)) -> Paint<'a> {
-        match p {
+    fn gradient_paint(&self, g: &'a Gradient, frame: Rect) -> Result<Paint<'a>, Unsupported> {
+        let parameters = if needs_exact(&g.stops, &g.opacity_stops) {
+            check_ramp_size(g.stops.len(), g.opacity_stops.len())?;
+            check_exact_depth(self.cx.depth)?;
+            check_exact_positions(&g.stops, &g.opacity_stops)?;
+            check_exact_values(g.stops.iter().map(|s| rgba(&s.1, false)), &g.opacity_stops, &[])?;
+            let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, frame);
+            Some(exact_parameters(g.style, angle, scale, g.reverse, offset, frame, self.cx.canvas)?)
+        } else {
+            None
+        };
+        Ok(Paint::Gradient(g, parameters))
+    }
+
+    fn fx_paint(&self, p: &'a FxPaint, anchor: (f64, f64), frame: Rect) -> Result<Paint<'a>, Unsupported> {
+        Ok(match p {
             FxPaint::Color(c) => Paint::Color(c.to_rgb()),
-            FxPaint::Gradient(g) => Paint::Gradient(g),
+            FxPaint::Gradient(g) => return self.gradient_paint(g, frame),
             FxPaint::Pattern { name, id, scale } => match photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable()) {
                 Some(pat) => Paint::Pattern(pat, placement(anchor, true, (0.0, 0.0), *scale, 0.0)),
                 None => Paint::None,
             },
-        }
+        })
     }
 
-    fn glow_paint(&self, g: &'a Glow, anchor: (f64, f64)) -> Paint<'a> {
+    fn glow_paint(&self, g: &'a Glow, anchor: (f64, f64), frame: Rect) -> Result<Paint<'a>, Unsupported> {
         match &g.paint {
-            FxPaint::Gradient(gradient) => Paint::GlowGradient(gradient, photocraft_compose::effects::glow_gradient_gain(g.range)),
-            p => self.fx_paint(p, anchor),
+            FxPaint::Gradient(gradient) => Ok(Paint::GlowGradient(gradient, photocraft_compose::effects::glow_gradient_gain(g.range))),
+            p => self.fx_paint(p, anchor, frame),
         }
     }
 
@@ -1411,7 +1445,7 @@ impl<'a> Planner<'a> {
         match paint {
             Paint::None => {}
             Paint::Color(c) => p.color = [c[0], c[1], c[2], 1.0],
-            Paint::Gradient(g) => {
+            Paint::Gradient(g, parameters) => {
                 // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout).
                 let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, sb);
                 p.params[0] = [angle, scale, if g.reverse { 1.0 } else { 0.0 }, style_index(g.style)];
@@ -1419,7 +1453,13 @@ impl<'a> Planner<'a> {
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;
                 p.params[2][2] = 1.0;
-                p.lut = Some(gradient_rows(g));
+                p.lut = Some(if let Some(parameters) = parameters {
+                    p.flags |= F_EXACT_RAMP;
+                    let colors: Vec<_> = g.stops.iter().map(|(t, c)| (*t, rgba(c, false))).collect();
+                    exact_ramp_rows(&colors, &g.opacity_stops, &[], true, parameters)
+                } else {
+                    gradient_rows(g)
+                });
             }
             Paint::GlowGradient(g, gain) => {
                 // effects::paint_glow: the gradient at 1 - strength, opaque from 1 / gain.
@@ -1481,7 +1521,7 @@ impl<'a> Planner<'a> {
 enum Paint<'a> {
     None,
     Color([f32; 3]),
-    Gradient(&'a Gradient),
+    Gradient(&'a Gradient, Option<ExactParameters>),
     /// A glow's gradient with its opacity gain (`effects::paint_glow`).
     GlowGradient(&'a Gradient, f32),
     Pattern(&'a Pattern, Placement),
@@ -1740,7 +1780,138 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
     }
 }
 
-/// A gradient's colour and alpha as four 4096-entry LUT rows (`lut_tex`).
+// Descending stops need exact evaluation too: effects/maps preserve their stored order,
+// while fills sort it. Strictly increasing ramps retain the existing fast LUT path.
+fn needs_exact<C>(colors: &[(f32, C)], opacity: &[(f32, f32)]) -> bool {
+    colors.windows(2).any(|w| w[1].0 <= w[0].0) || opacity.windows(2).any(|w| w[1].0 <= w[0].0)
+}
+
+// Keep shader work bounded even for source-order effects, which cannot binary-search
+// unsorted stops. The matching shader bound is in compose.wgsl::gradient_sample.
+const MAX_RAMP_STOPS: usize = 256;
+
+fn check_exact_depth(depth: photocraft_color::SampleType) -> Result<(), Unsupported> {
+    // In float documents, an HDR backdrop or later nonlinear adjustment can
+    // amplify tiny interpolation differences. Preserve main's CPU exact-ramp path.
+    if depth == photocraft_color::SampleType::F32 {
+        return Err(Unsupported("exact gradient geometry in 32-bit documents (composited on the CPU)".into()));
+    }
+    Ok(())
+}
+
+fn check_ramp_size(colors: usize, opacity: usize) -> Result<(), Unsupported> {
+    if colors > MAX_RAMP_STOPS || opacity > MAX_RAMP_STOPS {
+        return Err(Unsupported("gradient exceeds 256 exact stops (composited on the CPU)".into()));
+    }
+    Ok(())
+}
+
+// At 2^-103 the f32 spacing is MIN_POSITIVE (2^-126). Accepted nonzero
+// coordinates are multiples of MIN_POSITIVE, so subtracting them cannot yield
+// a subnormal numerator or denominator, even when both operands are normal.
+const MIN_EXACT_COORDINATE: f32 = f32::MIN_POSITIVE * 8_388_608.0;
+
+fn portable_coordinate(t: f32) -> bool {
+    t.is_finite() && (t == 0.0 || t.abs() >= MIN_EXACT_COORDINATE)
+}
+
+fn check_exact_positions<C, A>(colors: &[(f32, C)], opacity: &[(f32, A)]) -> Result<(), Unsupported> {
+    // Check the actual sampling order (stable-sorted fills, source-order effects).
+    // Opposite-sign finite positions can also overflow an interpolation span.
+    let invalid_span = |a: f32, b: f32| b > a && !(b - a).is_finite();
+    if colors.iter().map(|s| s.0).chain(opacity.iter().map(|s| s.0)).any(|t| !portable_coordinate(t))
+        || colors.windows(2).any(|w| invalid_span(w[0].0, w[1].0))
+        || opacity.windows(2).any(|w| invalid_span(w[0].0, w[1].0))
+    {
+        return Err(Unsupported("exact gradient geometry has nonportable stop positions or intervals (composited on the CPU)".into()));
+    }
+    Ok(())
+}
+
+fn check_exact_values(colors: impl Iterator<Item = [f32; 4]>, opacity: &[(f32, f32)], mids: &[f32]) -> Result<(), Unsupported> {
+    // A ratio or color difference can still underflow. Unit-range values bound
+    // its visible error; HDR/invalid ramps preserve their values on the CPU path.
+    if colors.flatten().chain(opacity.iter().map(|s| s.1)).any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v)) || mids.iter().any(|m| !m.is_finite()) {
+        return Err(Unsupported("exact gradient geometry needs unit-range ramp values and finite midpoints (composited on the CPU)".into()));
+    }
+    Ok(())
+}
+
+fn rgba(c: &photocraft_color::Color, use_alpha: bool) -> [f32; 4] {
+    let rgb = c.to_rgb();
+    [rgb[0], rgb[1], rgb[2], if use_alpha { c.alpha } else { 1.0 }]
+}
+
+const MAX_EXACT_COLUMNS: u32 = 16384;
+
+struct ExactParameters {
+    origin: i32,
+    values: Vec<f32>,
+}
+
+/// WGSL permits approximate division and contraction, which can move even an interior
+/// pixel across a coincident stop. Compute the CPU oracle's t once per canvas column for
+/// geometry that is truly independent of y; other discontinuous gradients stay on the CPU.
+#[allow(clippy::too_many_arguments)]
+fn exact_parameters(
+    style: photocraft_doc::GradientStyle,
+    angle: f32,
+    scale: f32,
+    reverse: bool,
+    offset: (f32, f32),
+    frame: Rect,
+    canvas: Rect,
+) -> Result<ExactParameters, Unsupported> {
+    use photocraft_doc::GradientStyle;
+    let columns = canvas.width().max(1);
+    if columns > MAX_EXACT_COLUMNS {
+        return Err(Unsupported("exact gradient geometry exceeds 16384 columns (composited on the CPU)".into()));
+    }
+    let w = frame.width().max(1) as f32;
+    let h = frame.height().max(1) as f32;
+    let cx = frame.x0 as f32 + w / 2.0 + offset.0 * w;
+    let cy = frame.y0 as f32 + h / 2.0 + offset.1 * h;
+    if !matches!(style, GradientStyle::Linear | GradientStyle::Reflected) || angle != 0.0 || !scale.is_finite() || !cx.is_finite() || !cy.is_finite() {
+        return Err(Unsupported("exact gradient geometry is not horizontal Linear/Reflected (composited on the CPU)".into()));
+    }
+    let mut values = Vec::with_capacity(columns as usize);
+    for column in 0..columns {
+        let x = canvas.x0.saturating_add(column as i32) as f32 + 0.5;
+        let t = photocraft_compose::effects::gradient_t(style, angle, scale, reverse, offset, frame, x, frame.y0 as f32 + 0.5);
+        if !portable_coordinate(t) {
+            return Err(Unsupported("exact gradient geometry has nonportable float parameters (composited on the CPU)".into()));
+        }
+        values.push(t);
+    }
+    Ok(ExactParameters { origin: canvas.x0, values })
+}
+
+/// Texel-exact R32Float data: counts + empty-colour behavior, then colour records
+/// (position, RGBA, midpoint), opacity records (position, alpha), then exact CPU parameters.
+/// Header texel 3 points to (origin high/low halves, column count, t values). Counts are checked by
+/// the planner before this function; cap iteration as a second allocation bound.
+fn exact_ramp_rows(colors: &[(f32, [f32; 4])], opacity: &[(f32, f32)], mids: &[f32], empty_gray: bool, parameters: &ExactParameters) -> Vec<[f32; 4096]> {
+    let nc = colors.len().min(MAX_RAMP_STOPS);
+    let na = opacity.len().min(MAX_RAMP_STOPS);
+    let mut data = Vec::with_capacity(7 + nc * 6 + na * 2 + parameters.values.len());
+    data.extend([nc as f32, na as f32, if empty_gray { 1.0 } else { 0.0 }, 0.0]);
+    for (i, (t, c)) in colors.iter().take(nc).enumerate() {
+        data.push(*t);
+        data.extend(c);
+        data.push(mids.get(i).copied().unwrap_or(0.5));
+    }
+    for (t, a) in opacity.iter().take(na) {
+        data.extend([*t, *a]);
+    }
+    // The origin is split into exactly representable halves; casting a large/negative
+    // pixel origin to f32 would lose integer columns before the lookup.
+    data[3] = data.len() as f32;
+    data.extend([(parameters.origin >> 16) as f32, (parameters.origin & 0xffff) as f32, parameters.values.len() as f32]);
+    data.extend(&parameters.values);
+    data.chunks(4096).map(to_row).collect()
+}
+
+/// An ordinary gradient's RGBA LUT (`lut_tex`).
 fn gradient_rows(g: &Gradient) -> Vec<[f32; 4096]> {
     let mut rows = vec![[0.0f32; 4096]; 4];
     for k in 0..4096 {
@@ -1811,6 +1982,25 @@ mod tests {
     use super::*;
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
+
+    #[test]
+    fn bounded_exact_ramps_plan_on_gpu() {
+        use photocraft_doc::GradientStyle;
+        let mut doc = Document::new("bounded", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("fill", LayerContent::Fill(Fill::gradient(vec![(0.5, Color::WHITE); 256], 0.0, 1.0, GradientStyle::Linear, false))));
+        assert!(plan(&doc).is_ok(), "bounded hard stops should use the GPU");
+    }
+
+    #[test]
+    fn exact_parameter_tables_are_bounded_before_allocation() {
+        use photocraft_doc::GradientStyle;
+        let mut doc = Document::new("wide", Size::new(16385, 2), ColorMode::Rgb, SampleType::U16);
+        doc.layers.push(Layer::new(
+            "fill",
+            LayerContent::Fill(Fill::gradient(vec![(0.5, Color::BLACK), (0.5, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false)),
+        ));
+        assert!(plan(&doc).unwrap_err().0.contains("16384 columns"), "too-wide CPU parameter tables must request fallback");
+    }
 
     #[test]
     fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
