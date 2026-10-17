@@ -3,22 +3,27 @@
 //! * Layer comps: image resource 1065 holds a `CompList` descriptor (`list` of `Comp` objects
 //!   with `Nm  `, `compID`, `capturedInfo` bit flags and an optional `comment`, plus
 //!   `lastAppliedComp`). Each layer's state per comp lives in its `shmd` block under the `cmls`
-//!   key: `layerSettings`, one object per comp id list with `enab` (visibility) and `Ofst`
-//!   (offset from the layer's saved position). Comp id 0 is the Last Document State.
+//!   key: `layerSettings`, one object per comp id list with `enab` (visibility), `Ofst`
+//!   (offset from the layer's saved position) and, for comps that capture Appearance,
+//!   `blendOptions` (`Opct`, `Md  `, `fillOpacity`) and `Lefx` (the layer style). Photoshop
+//!   leaves out keys whose value is the default (visible, Normal, 100 %, no style): an empty
+//!   entry restores all of those. Comp id 0 is the Last Document State.
 //! * Artboards: the per-layer `artb` block (older files: `artd`/`abdd`) is an `artboard`
 //!   descriptor with `artboardRect`, `guideIndeces`, `artboardPresetName`, `Clr ` and
 //!   `artboardBackgroundType` (1 white, 2 black, 3 transparent, 4 other).
 //!
 //! Both are re-emitted verbatim while they still decode to the document's state, and are
-//! regenerated otherwise (comp appearance is not written to PSD; `.pcraft` keeps it).
+//! regenerated otherwise.
 
+use photocraft_color::BlendMode;
 use photocraft_doc::comps::layer_position;
-use photocraft_doc::{Artboard, ArtboardBackground, CompLayerState, Document, Guides, Layer, LayerComp};
+use photocraft_doc::{Artboard, ArtboardBackground, CompAppearance, CompLayerState, Document, Effect, Effects, Guides, Layer, LayerComp, LayerContent};
 use photocraft_geom::Rect;
 use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
 use photocraft_psd::metadata::{MetadataItem, parse_shmd, write_shmd};
 
-use crate::blocks::{color_from_desc, color_to_desc, num};
+use crate::blocks::{color_from_desc, color_to_desc, enum_of, num};
+use crate::effects_map::{blend_from_id, blend_value, effects_desc, effects_from_desc};
 
 /// Image resource id of the layer comp list.
 pub const LAYER_COMPS: u16 = 1065;
@@ -130,12 +135,39 @@ pub(crate) fn artboard_block(guides: &Guides, l: &Layer, raw: &mut Vec<([u8; 4],
 // ---------------------------------------------------------------- layer comps
 
 /// One `layerSettings` entry of a `cmls` descriptor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct Setting {
     comps: Vec<u32>,
     visible: Option<bool>,
     /// Kept at the file's width: whether origin + offset fits an `i32` is decided per layer (#1017).
     offset: Option<(i64, i64)>,
+    /// `blendOptions` `Md  `, `Opct` and `fillOpacity` (0..=100) as recorded; None = left out.
+    blend: Option<BlendMode>,
+    opacity: Option<f64>,
+    fill_opacity: Option<f64>,
+    /// `Lefx`: (master switch, effects).
+    effects: Option<(bool, Vec<Effect>)>,
+}
+
+impl Setting {
+    /// The appearance this entry records for `l`: keys Photoshop left out are the defaults
+    /// (Normal, or Pass Through for a group; 100 %; no layer style).
+    fn appearance(&self, l: &Layer) -> CompAppearance {
+        let pct = |v: Option<f64>| v.map_or(1.0, |v| (v / 100.0).clamp(0.0, 1.0) as f32);
+        let default_blend = if matches!(l.content, LayerContent::Group(_)) { BlendMode::PassThrough } else { BlendMode::Normal };
+        CompAppearance {
+            blend: self.blend.unwrap_or(default_blend),
+            opacity: pct(self.opacity),
+            fill_opacity: pct(self.fill_opacity),
+            // No `Lefx`: no layer style, with the effects switch on as on a new layer.
+            effects: self.effects.clone().map_or(Effects { enabled: true, ..Effects::default() }, |(enabled, items)| Effects {
+                enabled,
+                items,
+                psd_raw: None,
+                reference: None,
+            }),
+        }
+    }
 }
 
 fn parse_cmls(data: &[u8]) -> Option<Vec<Setting>> {
@@ -153,7 +185,16 @@ fn parse_cmls(data: &[u8]) -> Option<Vec<Setting>> {
             _ => None,
         };
         let offset = desc(s, "Ofst").and_then(|o| Some((int(o, "Hrzn")?, int(o, "Vrtc")?)));
-        out.push(Setting { comps, visible, offset });
+        let looks = desc(s, "blendOptions");
+        out.push(Setting {
+            comps,
+            visible,
+            offset,
+            blend: looks.and_then(|b| enum_of(b, "Md  ")).and_then(blend_from_id),
+            opacity: looks.and_then(|b| num(b.get("Opct"))),
+            fill_opacity: looks.and_then(|b| num(b.get("fillOpacity"))),
+            effects: desc(s, "Lefx").map(effects_from_desc),
+        });
     }
     Some(out)
 }
@@ -216,9 +257,6 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
         let Some(settings) = layer_cmls(l).and_then(|c| parse_cmls(&c)) else { continue };
         let here = layer_position(l);
         for s in settings {
-            if s.visible.is_none() && s.offset.is_none() {
-                continue;
-            }
             let state = CompLayerState {
                 layer: l.id,
                 visible: s.visible,
@@ -238,9 +276,21 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 appearance: None,
             };
             for id in &s.comps {
-                let target = if *id == 0 { Some(&mut last) } else { comps.iter_mut().find(|c| c.id == *id) };
-                if let Some(c) = target {
-                    c.states.push(state.clone());
+                if *id == 0 {
+                    if state.visible.is_some() || state.position.is_some() {
+                        last.states.push(state.clone());
+                    }
+                } else if let Some(c) = comps.iter_mut().find(|c| c.id == *id) {
+                    // A comp's entry holds only what differs from the defaults: what the comp
+                    // captures and the entry leaves out is the default (visible, plain look).
+                    let mut st = state.clone();
+                    if c.apply_visibility {
+                        st.visible = st.visible.or(Some(true));
+                    }
+                    if c.apply_appearance {
+                        st.appearance = Some(s.appearance(l));
+                    }
+                    c.states.push(st);
                 }
             }
         }
@@ -285,6 +335,16 @@ fn setting_value(ids: &[u32], st: Option<&CompLayerState>, here: Option<(i32, i3
         {
             s = s.with("Ofst", Value::Descriptor(obj("null").with("Hrzn", Value::Integer(dx)).with("Vrtc", Value::Integer(dy))));
         }
+        if let Some(a) = &st.appearance {
+            if !a.effects.items.is_empty() {
+                s = s.with("Lefx", Value::Descriptor(effects_desc(a.effects.enabled, &a.effects.items)));
+            }
+            let pct = |v: f32| Value::UnitFloat { unit: *b"#Prc", value: f64::from(v) * 100.0 };
+            s = s.with(
+                "blendOptions",
+                Value::Descriptor(obj("null").with("Opct", pct(a.opacity)).with("Md  ", blend_value(a.blend)).with("fillOpacity", pct(a.fill_opacity))),
+            );
+        }
     }
     Value::Descriptor(s.with("compList", Value::List(ids.iter().map(|i| Value::Integer(*i as i32)).collect())))
 }
@@ -295,7 +355,9 @@ pub fn write_cmls(comps: &[LayerComp], last: Option<&LayerComp>, l: &Layer, psd_
         return None;
     }
     let here = layer_position(l);
-    let mut settings: Vec<Value> = comps.iter().map(|c| setting_value(&[c.id], c.state(l.id), here)).collect();
+    // A layer a comp doesn't record gets no entry: an empty entry would read back as "visible,
+    // default look" (Photoshop leaves default values out).
+    let mut settings: Vec<Value> = comps.iter().filter_map(|c| Some(setting_value(&[c.id], Some(c.state(l.id)?), here))).collect();
     settings.push(setting_value(&[0], last.and_then(|c| c.state(l.id)), here));
     let origin = obj("null").with("Hrzn", Value::Double(0.0)).with("Vrtc", Value::Double(0.0));
     let d = Descriptor::new("null")
@@ -470,7 +532,7 @@ mod tests {
         for p in [(i32::MIN, 0), (0, i32::MIN)] {
             let cm = write_cmls(&[comp(Some(p))], None, &l, 1).unwrap();
             let s = parse_cmls(&cm).unwrap();
-            assert_eq!(s[0], Setting { comps: vec![1], visible: Some(false), offset: None }, "{p:?}");
+            assert_eq!(s[0], Setting { comps: vec![1], visible: Some(false), ..Default::default() }, "{p:?}");
         }
         // Control: an ordinary position is written as its offset from the layer origin.
         let cm = write_cmls(&[comp(Some((10, 1)))], None, &l, 1).unwrap();

@@ -131,3 +131,36 @@ fn photoshop_oracles_rerendered() {
     }
     assert!(pass >= PASS_FLOOR, "re-render oracle pass count {pass} fell below the floor {PASS_FLOOR}");
 }
+
+/// Layer comps captured with Appearance (`layer-comps/`): the same document saved once per comp
+/// with that comp applied. Applying any comp to any of the files must render like Photoshop's
+/// merged composite of the file saved with that comp applied (blend mode, opacity, fill opacity,
+/// layer style and visibility all come from the comp, #4685).
+#[test]
+fn photoshop_layer_comps_applied() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/layer-comps");
+    assert!(dir.is_dir(), "{} is missing: run `cargo xtask corpus --all`", dir.display());
+    let load = |comp: &str| {
+        let bytes = std::fs::read(dir.join(format!("appearance-applied-{comp}.psd"))).unwrap_or_default();
+        let file = PsdFile::from_bytes(&bytes).expect("parse");
+        let doc = photocraft_io::import(comp, &bytes).expect("import").document;
+        (doc, photocraft_io::merged_composite(&file).expect("merged composite"))
+    };
+    let names = ["plain", "multiply-screen", "styled-difference", "hidden-disc"];
+    let mut failed = Vec::new();
+    for from in names {
+        let (doc, _) = load(from);
+        assert_eq!(doc.layer_comps.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), names, "{from}: comps");
+        for comp in &doc.layer_comps {
+            let mut d = doc.clone();
+            photocraft_engine::comps_cmds::apply_comp(&mut d, comp, false);
+            let (_, want) = load(&comp.name);
+            let (m, bad) = max_diff(&photocraft_compose::flatten(&d).px, &want);
+            eprintln!("{from:<18} -> {:<18} {m:>9.4} {bad:>7.2}%", comp.name);
+            if m > PASS_TOL {
+                failed.push(format!("{from} -> {}: max {m:.4}", comp.name));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "applied comps differ from Photoshop: {failed:?}");
+}

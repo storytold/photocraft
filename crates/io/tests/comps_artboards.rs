@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::comps::capture_states;
-use photocraft_doc::{Artboard, ArtboardBackground, Document, Layer, LayerComp, LayerContent};
+use photocraft_doc::{Artboard, ArtboardBackground, Document, Effect, Effects, FxCommon, Layer, LayerComp, LayerContent};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::comps_map::LAYER_COMPS;
 use photocraft_io::{ExportOptions, export, import};
@@ -148,6 +148,14 @@ fn synthetic(depth: SampleType) -> Document {
     d.layers[1].visible = false;
     if let Some(ch) = d.layers[0].children_mut() {
         ch[0].blend = BlendMode::Multiply;
+        ch[0].opacity = 0.4;
+        ch[0].fill_opacity = 0.7;
+        ch[0].effects = Effects {
+            enabled: true,
+            items: vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Screen, 0.5), color: Color::rgb(0.0, 0.5, 1.0) }],
+            psd_raw: None,
+            reference: None,
+        };
     }
     let mut states = capture_states(&d);
     states.retain(|s| s.layer != d.layers[0].id);
@@ -183,6 +191,27 @@ fn synthetic_psd_roundtrip_all_depths() {
                 v
             };
             assert_eq!(named(&d, a), named(&back, b), "{depth:?} comp {}", a.name);
+            // Appearance (blend mode, opacity, fill opacity, layer style) survives for the comp
+            // that captures it (#4685).
+            let looks = |doc: &Document, c: &LayerComp| {
+                let mut v: Vec<_> = c
+                    .states
+                    .iter()
+                    .map(|s| {
+                        (
+                            doc.layer(s.layer).unwrap().name.clone(),
+                            s.appearance.as_ref().map(|a| (a.blend, a.opacity, a.fill_opacity, a.effects.enabled, a.effects.items.clone())),
+                        )
+                    })
+                    .collect();
+                v.sort_by(|x, y| x.0.cmp(&y.0));
+                v
+            };
+            if a.apply_appearance {
+                assert_eq!(looks(&d, a), looks(&back, b), "{depth:?} comp {} appearance", a.name);
+            } else {
+                assert!(b.states.iter().all(|s| s.appearance.is_none()), "{depth:?} comp {}", a.name);
+            }
         }
         // Re-exporting the imported document is byte-stable for comps and artboards.
         let f1 = PsdFile::from_bytes(&to_psd(&back)).unwrap();
