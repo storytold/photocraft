@@ -499,7 +499,8 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
 }
 
 /// Right-click at document point `doc` on a guide that `tool` could drag (the Move tool, or ⌘ with
-/// a selection tool): select the guide and open the guide menu at screen point `pos`.
+/// a tool on which ⌘ moves guides, `canvas::command_guide_at`): select the guide and open the guide
+/// menu at screen point `pos`.
 pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui::Modifiers, pos: [f32; 2], doc: [f64; 2]) -> bool {
     if !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
         return false;

@@ -219,6 +219,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         app.gradient.drag = None;
         return false;
     }
+    // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held drags a guide or the layer
+    // (#6288). A drag already under way keeps its events.
+    if app.gradient.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Gradient {
+        return false;
+    }
     let zoom = app.point_zoom().max(0.01);
     match ev {
         ToolEvent::Down { x, y, .. } => {

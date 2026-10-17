@@ -829,7 +829,17 @@ mod tests {
     fn command_drag_over_a_guide_moves_the_guide_with_any_tool() {
         use crate::canvas::{ToolEvent, tool_event};
         use crate::state::Tool;
-        for (tool, locked) in [(Tool::Brush, false), (Tool::RectMarquee, false), (Tool::Lasso, false), (Tool::MagicWand, false), (Tool::RectMarquee, true)] {
+        for (tool, locked) in [
+            (Tool::Brush, false),
+            (Tool::Eraser, false),
+            (Tool::Gradient, false),
+            (Tool::Frame, false),
+            (Tool::Artboard, false),
+            (Tool::RectMarquee, false),
+            (Tool::Lasso, false),
+            (Tool::MagicWand, false),
+            (Tool::RectMarquee, true),
+        ] {
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
             app.run("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
             app.sync_views();

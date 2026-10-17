@@ -5229,7 +5229,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::gradient_ui::pointer(app, ev, mods) {
         return;
     }
-    // ⌘ with a selection tool over a guide takes the guide (#2690); the guide drag below moves it.
+    // ⌘ over a guide takes the guide (#2690, #6288); the guide drag below moves it.
     if let ToolEvent::Down { x, y, .. } = raw
         && let Some((vertical, i)) = command_guide_at(app, app.active_tool(), [x, y], mods)
     {
@@ -5624,13 +5624,16 @@ pub(crate) fn command_moves_layer(app: &PhotocraftApp, tool: Tool, p: [f64; 2], 
     selection_tool && mods.command && !mods.shift && !floating && app.ui.polygon.is_empty() && !inside_selection(app, p)
 }
 
-/// The guide a ⌘ press with selection tool `tool` at `p` drags (vertical?, index), as the Move
-/// tool's press would (#2690): ⌘ is the Move tool, and a guide under the pointer comes before the
-/// layer or the selected pixels. Not while a polygon or lasso outline is being drawn.
+/// The guide a ⌘ press with `tool` at `p` drags (vertical?, index), as the Move tool's press
+/// would (#2690): ⌘ is the Move tool, and a guide under the pointer comes before the layer or the
+/// selected pixels. The selection tools, and every tool on which ⌘ is the Move tool
+/// (`hold_keys::cmd_moves`, #6288); the canvas shows the guide cursor where this finds a guide.
+/// Not while a polygon or lasso outline, a stroke, Free Transform or type editing is under way.
 pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<(bool, usize)> {
     let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
-    let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none();
-    (selection_tool && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
+    let moves = selection_tool || crate::hold_keys::cmd_moves(tool);
+    let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && app.drag.is_none();
+    (moves && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
 
 /// Photoshop's cursor over a selection: what a press (or the drag under way) would do.

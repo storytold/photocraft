@@ -182,7 +182,9 @@ fn follow(d: &mut ArtboardDrag, p: [f64; 2], mods: egui::Modifiers) {
 
 /// Pointer input for the Artboard tool. Returns true when the event was its own.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    if app.ui.tool != Tool::Artboard {
+    // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held is not this tool's,
+    // so it drags a guide or the layer (#6288). A drag already under way keeps its events.
+    if app.ui.tool != Tool::Artboard || (app.ui.artboard_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Artboard) {
         return false;
     }
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
