@@ -5436,7 +5436,18 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 Tool::MagicWand => {
                     let o = app.ui.tool_options.clone();
                     let mode = selection_mode(app, mods);
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all_layers, "mode": mode}));
+                    if app
+                        .run(
+                            "select.magicWand",
+                            json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all_layers, "mode": mode}),
+                        )
+                        .is_ok()
+                    {
+                        app.last_magic_wand = app
+                            .session
+                            .active()
+                            .map(|doc| (doc.doc.id, [x.floor(), y.floor()], mode.to_owned(), o.tolerance));
+                    }
                     return;
                 }
                 Tool::MagicEraser => {

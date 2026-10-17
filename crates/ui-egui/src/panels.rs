@@ -1193,7 +1193,30 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         selection_mode_buttons(app, ui);
                         widgets::vline(ui, 22.0);
                         opt_label(ui, tl!("Tolerance"));
-                        widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
+                        let tolerance = widgets::value_field(
+                            ui,
+                            &mut app.ui.tool_options.tolerance,
+                            0.0..=255.0,
+                            "",
+                            58.0,
+                        );
+                        if tolerance.drag_stopped()
+                            && let Some((doc_id, [x, y], mode, applied_tolerance)) = app.last_magic_wand.clone()
+                            && app.session.active().is_some_and(|doc| doc.doc.id == doc_id)
+                            && app.ui.tool_options.tolerance != applied_tolerance
+                        {
+                            let options = app.ui.tool_options.clone();
+                            if app
+                                .run(
+                                    "select.magicWand",
+                                    json!({"x": x, "y": y, "tolerance": options.tolerance, "contiguous": options.contiguous, "antiAlias": options.anti_alias, "sampleAllLayers": options.sample_all_layers, "mode": mode}),
+                                )
+                                .is_ok()
+                                && let Some(last) = app.last_magic_wand.as_mut()
+                            {
+                                last.3 = options.tolerance;
+                            }
+                        }
                         widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
                         widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
                         widgets::checkbox(ui, &mut app.ui.tool_options.sample_all_layers, tl!("Sample All Layers"));
