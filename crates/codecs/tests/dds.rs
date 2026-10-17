@@ -6,6 +6,7 @@ const DDPF_ALPHAPIXELS: u32 = 0x1;
 const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 const DDPF_LUMINANCE: u32 = 0x2_0000;
+const DDSD_PITCH: u32 = 0x8;
 
 /// A DDS_HEADER for a single-level 2D texture, after the `DDS ` signature.
 fn header(width: u32, height: u32, pf_flags: u32, fourcc: &[u8; 4], bits: u32, masks: [u32; 4]) -> Vec<u8> {
@@ -29,6 +30,11 @@ fn header(width: u32, height: u32, pf_flags: u32, fourcc: &[u8; 4], bits: u32, m
 
 fn compressed(width: u32, height: u32, fourcc: &[u8; 4]) -> Vec<u8> {
     header(width, height, DDPF_FOURCC, fourcc, 0, [0; 4])
+}
+
+fn set_pitch(b: &mut [u8], pitch: u32) {
+    b[8..12].copy_from_slice(&(0x1007 | DDSD_PITCH).to_le_bytes());
+    b[20..24].copy_from_slice(&pitch.to_le_bytes());
 }
 
 /// The DX10 extension header after a `DX10` FourCC: format, dimension, misc flags, array size.
@@ -167,6 +173,101 @@ fn decodes_packed_masks_and_luminance() {
     b.extend([10, 20, 30, 40]);
     let im = decode(&b).unwrap();
     assert_eq!((im.layout(), im.data()), (ChannelLayout::GrayA, &[10u8, 20, 30, 40][..]));
+}
+
+#[test]
+fn decodes_padded_rgb_rows() {
+    // DWORD-aligned 24-bit rows: the fourth byte is padding, not the next pixel.
+    let mut b = header(1, 2, DDPF_RGB, &[0; 4], 24, [0xff, 0xff00, 0xff_0000, 0]);
+    set_pitch(&mut b, 4);
+    b.extend([255, 0, 0, 99, 0, 255, 0, 88]);
+    let im = decode(&b).unwrap();
+    assert_eq!((im.dimensions(), im.layout()), ((1, 2), ChannelLayout::Rgb));
+    assert_eq!(im.data(), &[255, 0, 0, 0, 255, 0]);
+
+    // Padding can contain whole pixels; only the declared width is decoded.
+    let mut b = header(2, 2, DDPF_RGB, &[0; 4], 16, [0xf800, 0x07e0, 0x001f, 0]);
+    set_pitch(&mut b, 8);
+    for v in [RED, GREEN, WHITE, WHITE, BLUE, BLACK, WHITE, WHITE] {
+        b.extend(v.to_le_bytes());
+    }
+    assert_eq!(decode(&b).unwrap().data(), &[255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]);
+}
+
+#[test]
+fn decodes_padded_luminance_rows() {
+    let mut b = header(2, 2, DDPF_LUMINANCE, &[0; 4], 8, [0xff, 0, 0, 0]);
+    set_pitch(&mut b, 4);
+    b.extend([10, 20, 99, 98, 30, 40, 97, 96]);
+    let im = decode(&b).unwrap();
+    assert_eq!((im.layout(), im.data()), (ChannelLayout::Gray, &[10u8, 20, 30, 40][..]));
+
+    let mut b = header(1, 2, DDPF_LUMINANCE | DDPF_ALPHAPIXELS, &[0; 4], 16, [0xff, 0, 0, 0xff00]);
+    set_pitch(&mut b, 4);
+    b.extend([10, 20, 99, 98, 30, 40, 97, 96]);
+    let im = decode(&b).unwrap();
+    assert_eq!((im.layout(), im.data()), (ChannelLayout::GrayA, &[10u8, 20, 30, 40][..]));
+}
+
+#[test]
+fn decodes_padded_dx10_rows() {
+    let mut b = dx10(1, 2, 28, 3, 0, 1); // R8G8B8A8_UNORM
+    set_pitch(&mut b, 8);
+    b.extend([1, 2, 3, 4, 99, 98, 97, 96, 5, 6, 7, 8, 95, 94, 93, 92]);
+    assert_eq!(decode(&b).unwrap().data(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+}
+
+#[test]
+fn ignores_pitch_without_the_pitch_flag() {
+    let mut b = header(1, 2, DDPF_RGB, &[0; 4], 24, [0xff, 0xff00, 0xff_0000, 0]);
+    b[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+    b.extend([255, 0, 0, 0, 255, 0]);
+    assert_eq!(decode(&b).unwrap().data(), &[255, 0, 0, 0, 255, 0]);
+
+    set_pitch(&mut b, 3); // An explicitly tightly packed row is also valid.
+    assert_eq!(decode(&b).unwrap().data(), &[255, 0, 0, 0, 255, 0]);
+}
+
+#[test]
+fn compressed_linear_size_is_not_a_row_pitch() {
+    let mut b = compressed(4, 8, b"DXT1");
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x8_0000).to_le_bytes()); // DDSD_LINEARSIZE
+    b[20..24].copy_from_slice(&16u32.to_le_bytes()); // Two 8-byte block rows.
+    b.extend(bc1_block(RED, RED, [0; 4]));
+    b.extend(bc1_block(BLUE, BLUE, [0; 4]));
+    let im = decode(&b).unwrap();
+    assert!(im.data()[..64].as_chunks::<4>().0.iter().all(|p| p == &[255, 0, 0, 255]));
+    assert!(im.data()[64..].as_chunks::<4>().0.iter().all(|p| p == &[0, 0, 255, 255]));
+}
+
+#[test]
+fn rejects_pitch_smaller_than_a_pixel_row() {
+    for pitch in [0, 1, 2] {
+        let mut b = header(1, 2, DDPF_RGB, &[0; 4], 24, [0xff, 0xff00, 0xff_0000, 0]);
+        set_pitch(&mut b, pitch);
+        b.extend([255, 0, 0, 0, 255, 0]);
+        assert!(matches!(decode(&b), Err(CodecError::Malformed { .. })), "pitch {pitch}");
+    }
+}
+
+#[test]
+fn rejects_truncated_padded_rows() {
+    let mut b = header(1, 2, DDPF_RGB, &[0; 4], 24, [0xff, 0xff00, 0xff_0000, 0]);
+    set_pitch(&mut b, 4);
+    b.extend([255, 0, 0, 99, 0, 255, 0, 88]);
+    assert!(decode(&b).is_ok());
+    for n in 128..b.len() {
+        assert!(matches!(decode(&b[..n]), Err(CodecError::Malformed { .. })), "decoded {n} of {} bytes", b.len());
+    }
+}
+
+#[test]
+fn rejects_huge_pitch_without_allocating() {
+    let mut b = header(1, 2, DDPF_LUMINANCE, &[0; 4], 8, [0xff, 0, 0, 0]);
+    set_pitch(&mut b, u32::MAX);
+    b.extend([10, 20]);
+    // On 32-bit targets pitch * height overflows; on 64-bit the payload is too short.
+    assert!(matches!(decode(&b), Err(CodecError::Malformed { .. })));
 }
 
 #[test]

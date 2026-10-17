@@ -71,8 +71,9 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 
 * **DDS.** The top mip level of a 2D texture: uncompressed pixels described by channel masks
   (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha) or BC1/BC2/BC3 (DXT1/DXT3/DXT5),
-  with the legacy header or the DX10 one. Everything opens as U8; the other mip levels are
-  ignored. Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4 and other formats
+  with the legacy header or the DX10 one. Uncompressed row padding follows the header's
+  `DDSD_PITCH` stride; without that flag, rows are tightly packed. Everything opens as U8;
+  the other mip levels are ignored. Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4 and other formats
   (BC4–BC7, float) are refused with `CodecError::Unsupported`. Writing is not provided.
 
 * **FITS.** The image in the primary HDU, or the first `IMAGE` extension, is read; `NAXIS3 = 3`
