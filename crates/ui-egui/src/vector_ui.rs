@@ -1171,6 +1171,18 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ),
             ),
         }
+        // Path mode: Make Selection from the path being drawn or the active path, as Photoshop's
+        // options bar's "Make: Selection…" does (#5703).
+        if app.ui.tool_options.vector_mode == "path" {
+            crate::widgets::vline(ui, 22.0);
+            let has_path = active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+            if ui.add_enabled(has_path, egui::Button::new(tl!("Make Selection"))).clicked()
+                && let Err(e) = crate::canvas_tool_menu::make_selection(app)
+            {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
         return true;
     }
     let mut mode = "shape".to_string();
