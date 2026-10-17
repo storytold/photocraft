@@ -2237,7 +2237,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut actions: Vec<(String, Value)> = Vec::new();
 
     let t = Tokens::get(ui.ctx());
-    if t.pro {
+    app.reorder_preview_hit = false;
+    if !ui.input(|i| i.pointer.primary_down()) || !app.ui.layers_panel_options.preview_on_canvas_when_reordering_layers {
+        app.reorder_preview = None;
+    }
+    if t.pro && app.ui.layers_panel_options.show_filters {
         crate::layer_filter_ui::bar(app, ui);
         ui.add_space(4.0);
     }
@@ -2438,6 +2442,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 actions.push(done);
             }
         });
+    // Leaving the list or hovering an invalid target immediately cancels the temporary
+    // image. The release still uses the actual command, not the preview snapshot.
+    if !app.reorder_preview_hit {
+        app.reorder_preview = None;
+    }
     // A layer being dragged can also be dropped on the footer's Delete, New Layer and Group
     // buttons (#736); read the drag before it ends.
     let footer_drag = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag"))).map(|id| {
@@ -2782,8 +2791,8 @@ fn layer_row(
 ) -> Rect {
     let selected = row.selected;
     let t = Tokens::get(ctx);
-    // Photoshop's default (medium) thumbnails: 32 pt rows.
-    let row_h = if t.pro { 32.0 } else { 46.0 };
+    // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
+    let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     // A drag from a mask's thumbnail drags that mask, not the layer (#3113, #3119).
     let mask_drag = starts_mask_drag(ctx, l, &resp);
@@ -2863,8 +2872,8 @@ fn layer_row(
         + if l.is_group() { crate::layer_tree_ui::TRIANGLE_W } else { 0.0 }
         + if l.clipped { 12.0 } else { 0.0 }
         + crate::layer_row_ui::reserved_width(l);
-    let ts = crate::mask_thumbs_ui::thumb_size(l, if t.pro { 24.0 } else { 34.0 }, rect.width() - others);
-    let fixed = others + ts + 6.0 + crate::mask_thumbs_ui::width(l, ts);
+    let ts = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
+    let fixed = others + if ts == 0.0 { 0.0 } else { ts + 6.0 + crate::mask_thumbs_ui::width(l, ts) };
     x += 28.0 + crate::layer_row_ui::indent(depth, rect.width(), fixed);
     let toggled = crate::layer_tree_ui::disclosure(ui, rect, &mut x, l, actions);
     if l.clipped {
@@ -2872,15 +2881,17 @@ fn layer_row(
         x += 12.0;
     }
     let thumb = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
-    draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
-    x += ts + 6.0;
-    // Link chains and pixel / vector mask thumbnails (#153).
-    let masks = crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions);
+    if ts > 0.0 {
+        draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
+        x += ts + 6.0;
+    }
+    // With thumbnails disabled the labels and disclosure controls remain interactive.
+    let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
     let mask_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Pixel);
     let vector_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Vector);
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
     // with corner brackets.
-    if row.primary {
+    if row.primary && ts > 0.0 {
         let target = if app.ui.vector_mask_target && vector_rect.is_some() {
             vector_rect
         } else if app.ui.mask_target {
@@ -2914,7 +2925,7 @@ fn layer_row(
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
     let italic = !t.pro && doc.is_background(l.id);
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
-    let is_pixel = t.pro || matches!(l.content, LayerContent::Raster(_));
+    let is_pixel = t.pro || ts == 0.0 || matches!(l.content, LayerContent::Raster(_));
     let name_rect = crate::layer_row_ui::truncated(&painter, &l.name, font, name_color, italic, name_right - x).map(|galley| {
         let text_pos = pos2(x, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
         let r = Rect::from_min_size(text_pos, galley.size());
@@ -2929,7 +2940,10 @@ fn layer_row(
         };
         crate::layer_row_ui::label(&painter, x, rect.center().y + 8.0, name_right, &sub, egui::FontId::proportional(11.0), t.text_faint);
     }
-    crate::layer_row_ui::record(ctx, crate::layer_row_ui::RowRects { layer: l.id.0, row: rect, name: name_rect, indicators });
+    crate::layer_row_ui::record(
+        ctx,
+        crate::layer_row_ui::RowRects { layer: l.id.0, row: rect, thumbnail: (ts > 0.0).then_some(thumb), name: name_rect, indicators },
+    );
     // ⌘-click a layer, mask or vector-mask thumbnail loads its transparency / mask / path as a
     // selection (⇧ add, ⌥ subtract, ⇧⌥ intersect) instead of changing the layer selection.
     let thumb_load = resp.clicked().then(|| (ui.input(|i| i.modifiers), resp.interact_pointer_pos())).and_then(|(m, pos)| {
@@ -2937,7 +2951,8 @@ fn layer_row(
         if let Some(kind) = masks.hit(p) {
             return Some(crate::mask_thumbs_ui::load_params(l, kind, m));
         }
-        thumb.expand(2.0).contains(p).then(|| json!({"channel": "transparency", "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)}))
+        (ts > 0.0 && thumb.expand(2.0).contains(p))
+            .then(|| json!({"channel": "transparency", "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)}))
     });
     // ⇧-click a mask thumbnail: disable / enable that mask; ⌥-click a layer mask: view it.
     let mask_toggle = resp.clicked().then(|| (ui.input(|i| i.modifiers), resp.interact_pointer_pos())).and_then(|(m, pos)| {
@@ -2956,7 +2971,7 @@ fn layer_row(
         // defaults to its mask, but clicking its content thumbnail must leave the mask target.
         let pos = resp.interact_pointer_pos();
         let on_mask = mask_rect.zip(pos).is_some_and(|(r, p)| r.expand(2.0).contains(p));
-        let on_thumb = pos.is_some_and(|p| thumb.expand(2.0).contains(p));
+        let on_thumb = ts > 0.0 && pos.is_some_and(|p| thumb.expand(2.0).contains(p));
         let on_vector = pos.and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Vector);
         // Clicking the layer thumbnail leaves mask view (#196).
         let viewing = app.session.active().and_then(photocraft_engine::mask_view_cmds::current).is_some_and(|v| v.layer == l.id);
@@ -3014,9 +3029,9 @@ fn layer_row(
             }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
-                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if on(thumb) => "layer.layerContentOptions",
-                LayerContent::Smart(_) if on(thumb) => "layer.smartObjects.editContents",
-                LayerContent::Text(_) if on(thumb) => "type.editText",
+                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if ts > 0.0 && on(thumb) => "layer.layerContentOptions",
+                LayerContent::Smart(_) if ts > 0.0 && on(thumb) => "layer.smartObjects.editContents",
+                LayerContent::Text(_) if ts > 0.0 && on(thumb) => "type.editText",
                 _ => "layer.layerStyle.blendingOptions",
             };
             if crate::menus::is_enabled(app, id) {
@@ -3954,7 +3969,7 @@ fn background_drop_refused(doc: &photocraft_doc::Document, payload: &Value, targ
 /// release the layers stay put and copies land there instead (Photoshop).
 /// Multi-layer moves are atomic (one undo step), using the engine's stable document order.
 fn layer_drag_and_drop(
-    app: &PhotocraftApp,
+    app: &mut PhotocraftApp,
     ctx: &egui::Context,
     ui: &egui::Ui,
     l: &Layer,
@@ -3998,12 +4013,15 @@ fn layer_drag_and_drop(
             } else {
                 painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, t.accent));
             }
+            let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
+            if let Some(o) = payload.as_object_mut() {
+                o.insert("copy".into(), json!(true));
+            }
             if released {
-                let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
-                if let Some(o) = payload.as_object_mut() {
-                    o.insert("copy".into(), json!(true));
-                }
+                app.reorder_preview = None;
                 actions.push(("layer.moveTo".into(), payload));
+            } else if ctx.input(|i| i.pointer.primary_down()) {
+                crate::layers_panel_ui::preview_reorder(app, &payload);
             }
         }
         return;
@@ -4037,10 +4055,14 @@ fn layer_drag_and_drop(
             painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, t.accent));
         }
     }
+    if copy && let Some(o) = payload.as_object_mut() {
+        o.insert("copy".into(), json!(true));
+    }
+    if !released && ctx.input(|i| i.pointer.primary_down()) {
+        crate::layers_panel_ui::preview_reorder(app, &payload);
+    }
     if released {
-        if copy && let Some(o) = payload.as_object_mut() {
-            o.insert("copy".into(), json!(true));
-        }
+        app.reorder_preview = None;
         actions.push(("layer.moveTo".into(), payload));
     }
 }
@@ -4050,7 +4072,7 @@ fn layer_drag_and_drop(
 /// with ⌥ held on release (Photoshop), a move without. A multi-selection dropped on the row it
 /// was grabbed from is left alone: the engine can only copy it beside each of its own layers.
 fn layer_drop_zone(
-    app: &PhotocraftApp,
+    app: &mut PhotocraftApp,
     ctx: &egui::Context,
     ui: &egui::Ui,
     zone: Rect,
@@ -4070,14 +4092,17 @@ fn layer_drop_zone(
     let t = Tokens::get(ctx);
     let line = if position == "above" { [target.1.left_top(), target.1.right_top()] } else { [target.1.left_bottom(), target.1.right_bottom()] };
     ui.painter().line_segment(line, Stroke::new(2.0, t.accent));
+    let mut payload = layer_drop_payload(dragged, target.0, position, &selected);
+    if ctx.input(|i| i.modifiers.alt)
+        && let Some(o) = payload.as_object_mut()
+    {
+        o.insert("copy".into(), json!(true));
+    }
     if ctx.input(|i| i.pointer.any_released()) {
-        let mut payload = layer_drop_payload(dragged, target.0, position, &selected);
-        if ctx.input(|i| i.modifiers.alt)
-            && let Some(o) = payload.as_object_mut()
-        {
-            o.insert("copy".into(), json!(true));
-        }
+        app.reorder_preview = None;
         actions.push(("layer.moveTo".into(), payload));
+    } else if ctx.input(|i| i.pointer.primary_down()) {
+        crate::layers_panel_ui::preview_reorder(app, &payload);
     }
 }
 

@@ -3,6 +3,70 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Photoshop-style Layers panel display preferences; part of serialized UI state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerThumbnailSize {
+    None,
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerThumbnailContents {
+    LayerBounds,
+    #[default]
+    EntireDocument,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayersPanelOptions {
+    pub thumbnail_size: LayerThumbnailSize,
+    /// Thumbnail Contents in the Panel Options dialog. Not saved with these options: the dialog
+    /// shows and sets `interface.clipThumbnailsToLayerBounds` (Layer Bounds = clipped, #4281),
+    /// which the panel menu's Clip Thumbnails to Layer Bounds toggles too.
+    #[serde(skip)]
+    pub thumbnail_contents: LayerThumbnailContents,
+    pub show_filters: bool,
+    pub expand_new_effects: bool,
+    pub add_copy_to_copied_layers_and_groups: bool,
+    pub preview_on_canvas_when_reordering_layers: bool,
+    pub show_layer_mask_badges: bool,
+}
+
+impl LayersPanelOptions {
+    pub fn defaults() -> Self {
+        Self {
+            thumbnail_size: LayerThumbnailSize::Medium,
+            thumbnail_contents: LayerThumbnailContents::EntireDocument,
+            show_filters: true,
+            expand_new_effects: true,
+            add_copy_to_copied_layers_and_groups: true,
+            preview_on_canvas_when_reordering_layers: true,
+            show_layer_mask_badges: false,
+        }
+    }
+}
+
+impl Default for LayersPanelOptions {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// Pending dialog data is transient: Cancel never changes persisted options.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LayersPanelDialog {
+    PanelOptions(LayersPanelOptions),
+    NewLayer(String),
+    NewGroup(String),
+    LockLayers { transparency: bool, pixels: bool, position: bool, artboard: bool, all: bool },
+}
+
 /// Shared selection and capture for a point curve; document parameters remain with the host.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1170,6 +1234,12 @@ pub struct UiState {
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
+    /// Thumbnail dimensions, content cropping and filter-strip visibility.
+    #[serde(default)]
+    pub layers_panel_options: LayersPanelOptions,
+    /// Transient dialog; never restored with a workspace.
+    #[serde(skip)]
+    pub layers_panel_dialog: Option<LayersPanelDialog>,
     /// Layers panel filter type (#5048): kind (above), name or blend mode.
     #[serde(default)]
     pub layer_filter_by: crate::layer_filter_ui::FilterBy,
@@ -1349,6 +1419,8 @@ impl Default for UiState {
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
+            layers_panel_options: LayersPanelOptions::default(),
+            layers_panel_dialog: None,
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),

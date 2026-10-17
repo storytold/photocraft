@@ -3918,6 +3918,23 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+
+# Layers panel options and Smart Filter editors
+	Add “copy” to Copied Layers and Groups	Kopyalanan Katman ve Gruplara “kopya” Ekle
+	Animation Options	Animasyon Seçenekleri
+	Entire Document	Tüm Belge
+	Expand New Effects	Yeni Efektleri Genişlet
+	Filter Options	Filtre Seçenekleri
+	Layer Bounds	Katman Sınırları
+	Layers Panel Options	Katmanlar Paneli Seçenekleri
+	New Artboard…	Yeni Çalışma Yüzeyi…
+	New Group…	Yeni Grup…
+	Prevent Auto-Nesting	Otomatik Yerleştirmeyi Önle
+	Preview on canvas when reordering layers	Katmanları yeniden sıralarken kanvasta önizle
+	Show Layers	Katmanları Göster
+	Show layer mask badges	Katman maskesi rozetlerini göster
+	Thumbnail Contents	Küçük Resim İçeriği
+	Thumbnail Size	Küçük Resim Boyutu
 	Accept and Go to Conflict	Kabul Et ve Çakışmaya Git
 	Changes undone.	Değişiklikler geri alındı.
 	Choose a new shortcut for this command, or leave it without one.	Bu komut için yeni bir kısayol seçin veya kısayolsuz bırakın.

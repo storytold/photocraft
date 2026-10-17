@@ -4107,6 +4107,23 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+
+# Layers panel options and Smart Filter editors
+	Add “copy” to Copied Layers and Groups	„másolat” hozzáadása a másolt rétegekhez és csoportokhoz
+	Animation Options	Animációs beállítások
+	Entire Document	Teljes dokumentum
+	Expand New Effects	Új effektusok kibontása
+	Filter Options	Szűrési beállítások
+	Layer Bounds	Réteghatárok
+	Layers Panel Options	Rétegek panel beállításai
+	New Artboard…	Új rajztábla…
+	New Group…	Új csoport…
+	Prevent Auto-Nesting	Automatikus beágyazás tiltása
+	Preview on canvas when reordering layers	Előnézet a vásznon a rétegek átrendezésekor
+	Show Layers	Rétegek megjelenítése
+	Show layer mask badges	Rétegmaszk-jelvények megjelenítése
+	Thumbnail Contents	Bélyegkép tartalma
+	Thumbnail Size	Bélyegképméret
 	Accept and Go to Conflict	Elfogadás és ugrás az ütközéshez
 	Changes undone.	Változások visszavonva.
 	Choose a new shortcut for this command, or leave it without one.	Válasszon új billentyűparancsot ehhez a parancshoz, vagy hagyja nélküle.

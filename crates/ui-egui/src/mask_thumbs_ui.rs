@@ -150,6 +150,12 @@ pub fn paint(
                 painter.line_segment([k.right_top(), k.left_bottom()], st);
             }
         }
+        if app.ui.layers_panel_options.show_layer_mask_badges {
+            // Distinguish pixel and vector masks without altering their thumbnails.
+            let badge = Rect::from_min_size(pos2(r.right() - 9.0, r.bottom() - 9.0), vec2(9.0, 9.0));
+            painter.rect_filled(badge, 1.0, t.card);
+            crate::icons::paint(ui, badge, if kind == MaskKind::Vector { "pen-tool" } else { "circle-dot" }, 8.0, t.text);
+        }
         painter.rect_stroke(
             r,
             if t.pro { 0.0 } else { 4.0 },
