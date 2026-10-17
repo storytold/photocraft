@@ -152,6 +152,12 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
     if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
 }
 
+/// The bitmap [`hand`] hands Windows, for tests that check the Hand's pointer on every platform.
+#[cfg(test)]
+pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCursorImage> {
+    rasterize(&Shape::Hand { closed }, native_scale(ctx))
+}
+
 /// The Zoom tool's pointer: a magnifier with a plus, or a minus when it zooms `out`. winit maps
 /// `ZoomIn` and `ZoomOut` to the plain arrow on Windows (#3735), so there it is a bitmap; macOS and
 /// the Linux themes already draw magnifiers.

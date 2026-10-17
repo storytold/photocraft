@@ -3814,7 +3814,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     let xf = if crop_camera { ViewXform { center: view.center, rotation: view.rotation, ..xf } } else { xf };
     let (img_rect, beyond, layer_edges) = painted.unwrap_or_else(|| paint_canvas(app, ui, &view, xf));
-    if primary && !(hand_pan && response.dragged()) {
+    // A Hand drag (the tool, Space or the middle button) keeps every overlay on screen, as in
+    // Photoshop: the Pen path being drawn, paths, guides, grid, transform box (#6592). Only the
+    // tool cursors below give way to the fist.
+    let panning = hand_pan && response.dragged();
+    if primary {
         // The transform preview is image content: it goes under the grid and guides, which
         // stay visible across a layer being transformed (#5086); the box is drawn later.
         crate::transform_tool::draw_content(app, &painter, &xf);
@@ -3877,7 +3881,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
         });
-        if let Some((vertical, _)) = guide_hover {
+        if panning {
+            // The fist set with the pan above stays (#2196).
+        } else if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(&xf, vertical));
         } else if let Some(p) = response.hover_pos()
             && let Some(c) = crate::transform_tool::cursor(app, &xf, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command))
@@ -4107,12 +4113,6 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // ⇧ after a stroke: the straight line a click would paint (#257).
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
         }
-    }
-    if primary && hand_pan && response.dragged() {
-        crate::transform_tool::draw_content(app, &painter, &xf);
-        crate::transform_tool::draw_overlay(app, &painter, &xf);
-        // The Pen's path in progress survives a Space pan, and stays on screen through it (#6592).
-        crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
     }
     app.tool_override = None;
     if let Some(b) = layer_edges_rect(app, idx) {
