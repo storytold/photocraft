@@ -2879,6 +2879,9 @@ fontWeight	Italic	Курсив
 	Create new document from current state	Создать новый документ из текущего состояния
 	Create new fill or adjustment layer	Создать новый слой-заливку или корректирующий слой
 	Create new snapshot	Создать новый снимок
+	From:	Из:
+	Full Document	Весь документ
+	Merged Layers	Объединённые слои
 	Delete Cropped Pixels	Удалить отсечённые пикселы
 	Delete current state	Удалить текущее состояние
 	Delete layer	Удалить слой

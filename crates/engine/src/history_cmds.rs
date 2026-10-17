@@ -101,6 +101,12 @@ fn snapshot_index(s: &Session, cmd: &str, p: &Value) -> Result<usize> {
     st.snapshots.iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
 }
 
+/// The name `history.newSnapshot` gives a snapshot without one: "Snapshot N" (the New Snapshot
+/// dialog suggests it too).
+pub fn next_snapshot_name(st: &crate::DocState) -> String {
+    format!("Snapshot {}", st.next_snapshot)
+}
+
 /// A non-blank `name` param, trimmed; `None` when absent.
 fn name_param(cmd: &str, p: &Value) -> Result<Option<String>> {
     match p.get("name") {
@@ -140,9 +146,9 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
         _ => (st.doc.clone(), st.layer_target()),
     };
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let name = name.unwrap_or_else(|| next_snapshot_name(st));
     let id = st.next_snapshot;
     st.next_snapshot = id.saturating_add(1);
-    let name = name.unwrap_or_else(|| format!("Snapshot {id}"));
     st.snapshots.push(Snapshot { id, name: name.clone(), doc, layers });
     Ok(json!({ "snapshot": id, "name": name }))
 }
@@ -413,7 +419,8 @@ mod tests {
         assert_eq!(entries(&s), before, "taking a snapshot is not a step");
         let r = s.execute("history.newSnapshot", json!({"name": "Before green"})).unwrap();
         assert_eq!(r, json!({"snapshot": 2, "name": "Before green"}));
-        assert_eq!(snapshots(&s), json!([{"id": 1, "name": "Snapshot 1"}, {"id": 2, "name": "Before green"}]));
+        let first = json!({"id": 0, "name": s.active().unwrap().doc.name});
+        assert_eq!(snapshots(&s), json!([first, {"id": 1, "name": "Snapshot 1"}, {"id": 2, "name": "Before green"}]));
     }
 
     #[test]
@@ -433,7 +440,7 @@ mod tests {
         assert!(s.active().unwrap().active_layer.is_some());
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(top_pixel(&s), blue, "undo leaves the snapshot");
-        assert_eq!(snapshots(&s).as_array().unwrap().len(), 1, "snapshots are not history");
+        assert_eq!(snapshots(&s).as_array().unwrap().len(), 2, "snapshots are not history");
     }
 
     #[test]
@@ -465,7 +472,7 @@ mod tests {
         let base = with.active().unwrap().memory_bytes();
         with.execute("history.newSnapshot", json!({"from": "mergedLayers"})).unwrap();
         let st = with.active().unwrap();
-        let flat = tile_bytes(&st.snapshots[0].doc);
+        let flat = tile_bytes(&st.snapshots.last().unwrap().doc);
         assert!(flat > 0);
         assert_eq!(st.memory_bytes(), base + flat);
         // Room for the document's tiles and four fill tiles.
@@ -494,11 +501,11 @@ mod tests {
         s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
         let st = s.active().unwrap();
         // The snapshot's green layer tile, now only in it and the last state.
-        let shared = tile_bytes(&Document { layers: st.snapshots[0].doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let shared = tile_bytes(&Document { layers: st.snapshots.last().unwrap().doc.layers[1..].to_vec(), ..(*st.doc).clone() });
         let all = st.history.unique_bytes(&st.doc);
         let r = s.execute("edit.purge.histories", json!({})).unwrap();
         assert_eq!(r["bytes"], json!(all - shared), "the green tile stays with the snapshot");
-        assert_eq!(s.active().unwrap().snapshots.len(), 1);
+        assert_eq!(s.active().unwrap().snapshots.len(), 2, "the first snapshot and the new one");
     }
 
     #[test]
@@ -509,9 +516,29 @@ mod tests {
         }
         s.execute("history.renameSnapshot", json!({"snapshot": 2, "name": "Lesson start"})).unwrap();
         s.execute("history.deleteSnapshot", json!({"snapshot": 1})).unwrap();
-        assert_eq!(snapshots(&s), json!([{"id": 2, "name": "Lesson start"}, {"id": 3, "name": "Snapshot 3"}]));
+        s.execute("history.deleteSnapshot", json!({"snapshot": 0})).unwrap();
+        assert_eq!(snapshots(&s), json!([{"id": 2, "name": "Lesson start"}, {"id": 3, "name": "Snapshot 3"}]), "the first snapshot can go too");
         let r = s.execute("history.newSnapshot", json!({})).unwrap();
         assert_eq!(r["snapshot"], json!(4), "ids are never reused");
+    }
+
+    /// Photoshop's first snapshot (#2966): every document starts with a snapshot of itself as
+    /// opened, named after it, so the opening state can always be brought back, even after
+    /// History has dropped its oldest states.
+    #[test]
+    fn a_document_starts_with_a_first_snapshot_of_itself() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let name = s.active().unwrap().doc.name.clone();
+        assert_eq!(snapshots(&s), json!([{"id": 0, "name": name}]));
+        let opened = top_pixel(&s);
+        for _ in 0..3 {
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        }
+        s.active_mut().unwrap().history.purge_last();
+        s.execute("history.selectSnapshot", json!({"snapshot": 0})).unwrap();
+        assert_eq!(top_pixel(&s), opened, "back to the document as opened");
+        assert_eq!(entries(&s).last(), Some(&name), "a state named after the document");
     }
 
     #[test]

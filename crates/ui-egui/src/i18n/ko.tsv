@@ -991,6 +991,10 @@
 	Create new pattern from the selection	선택 영역으로 새 패턴 만들기
 	Create new shape from the current path	현재 패스로 새 모양 만들기
 	Create new snapshot	새 스냅샷 만들기
+	From:	원본:
+	Full Document	전체 문서
+	Merged Layers	병합된 레이어
+	New Snapshot	새 스냅샷
 	Create new style (from the selected type)	새 스타일 만들기(선택한 문자에서)
 	Create new style from the selected layer	선택한 레이어로 새 스타일 만들기
 	Create new tool preset	새 도구 사전 설정 만들기

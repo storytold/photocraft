@@ -3117,10 +3117,10 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No document"));
         return;
     };
-    let doc = st.doc.clone();
     let entries = st.history.entries();
     let current = entries.len() - 1;
     let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let doc_id = st.doc.id;
     let selected_snap = selected_snapshot(ui.ctx(), st);
     let ctx = ui.ctx().clone();
     // A row dragged onto the trash (#5324); a drag that never saw its release must not outlive it.
@@ -3128,20 +3128,6 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ctx.data_mut(|d| d.remove::<HistoryDrag>(history_drag_key()));
     }
     let drag = ctx.data(|d| d.get_temp::<HistoryDrag>(history_drag_key()));
-    // Snapshot row (Photoshop shows the document's opening state with a thumbnail).
-    {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-        let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
-        let ctx = ui.ctx().clone();
-        if let Some(layer) = doc.layers.first() {
-            widgets::checker(ui.painter(), thumb, 4.0);
-            let (tex, _) = app.layer_thumb(&ctx, &doc, layer);
-            ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-        }
-        ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
-        ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &doc.name, egui::FontId::proportional(12.0), t.text);
-        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
-    }
     let mut snap_cmd = None;
     let mut target: Option<usize> = None;
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
@@ -3190,7 +3176,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 target = Some(i);
             } else if resp.clicked() && selected_snap.is_some() {
                 // The current state is already the document: clicking it only selects it.
-                ctx.data_mut(|d| d.remove::<SelectedSnapshot>(selected_snapshot_key(doc.id)));
+                ctx.data_mut(|d| d.remove::<SelectedSnapshot>(selected_snapshot_key(doc_id)));
             }
         }
     });
@@ -3204,6 +3190,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::layer_transfer::ghost(&ctx, p, &label.unwrap_or_default());
     }
     let mut footer_cmd: Option<(&str, Value)> = None;
+    let mut snapshot_dialog = false;
     if t.pro {
         // With a snapshot selected the trash deletes it, as in Photoshop (#5324).
         let can_delete = selected_snap.is_some() || app.session.is_enabled("history.deleteState");
@@ -3226,8 +3213,13 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             }
             let can_snap = app.session.is_enabled("history.newSnapshot");
+            // ⌥-click opens New Snapshot (name, From) instead, as in Photoshop.
             if ui.add_enabled_ui(can_snap, |ui| icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"))).inner.clicked() {
-                footer_cmd = Some(("history.newSnapshot", json!({})));
+                if ui.input(|i| i.modifiers.alt) {
+                    snapshot_dialog = true;
+                } else {
+                    footer_cmd = Some(("history.newSnapshot", json!({})));
+                }
             }
             if ui.add_enabled_ui(can_new, |ui| icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"))).inner.clicked() {
                 footer_cmd = Some(("history.newDocument", json!({})));
@@ -3239,6 +3231,9 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     // An open Free Transform owns Undo (transform_tool::intercept): stepping the document's history under
     // its box would leave it transforming pixels that changed.
+    if snapshot_dialog {
+        crate::snapshot_dialog::open(app);
+    }
     // Selecting a snapshot changes the document, so it waits for an open transform like the rows.
     let snap_cmd = snap_cmd.filter(|(cmd, _)| *cmd != "history.selectSnapshot" || app.ui.transform.is_none());
     if let Some((cmd, p)) = footer_cmd.filter(|_| app.ui.transform.is_none()).or(snap_cmd) {
@@ -4769,7 +4764,7 @@ mod history_transform_tests {
         let steps = h.state().session.active().unwrap().history.entries().len();
         click(&mut h, b[1].0.center());
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.snapshots.len(), 1, "the camera takes a snapshot");
+        assert_eq!(st.snapshots.len(), 2, "the camera takes a snapshot, after the first one");
         assert_eq!(st.history.entries().len(), steps, "which is not a history state");
         let docs = h.state().session.documents().len();
         click(&mut h, b[2].0.center());
@@ -4798,8 +4793,9 @@ mod snapshot_row_tests {
         h.state().session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().rgba(1, 1)
     }
 
+    /// The names of the snapshots taken after the first one (the document as opened).
     fn snapshot_names(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-        h.state().session.active().unwrap().snapshots.iter().map(|s| s.name.clone()).collect()
+        h.state().session.active().unwrap().snapshots.iter().skip(1).map(|s| s.name.clone()).collect()
     }
 
     /// Snapshot rows (#2966) sit under the opening row: clicking one returns to it as a new
@@ -4921,7 +4917,7 @@ mod snapshot_row_tests {
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
-        assert!(st.snapshots.is_empty(), "the trash deleted the snapshot");
+        assert_eq!(st.snapshots.len(), 1, "the trash deleted the snapshot (the first snapshot stays)");
         assert_eq!(st.history.entries().len(), steps, "and left the states alone");
 
         // An edit after the click deselects the snapshot: the trash deletes the state.
@@ -4935,7 +4931,7 @@ mod snapshot_row_tests {
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
+        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept");
         assert_eq!(st.history.entries().len(), steps - 1, "the current state is deleted");
     }
 
@@ -4948,7 +4944,7 @@ mod snapshot_row_tests {
         let to = trash(&h);
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
-        assert!(st.snapshots.is_empty(), "the dragged snapshot is deleted");
+        assert_eq!(st.snapshots.len(), 1, "the dragged snapshot is deleted (the first snapshot stays)");
         assert_eq!(st.history.entries().len(), steps, "no state is");
 
         // The second-to-last state: it and the state after it go, as with Delete.
@@ -4961,7 +4957,7 @@ mod snapshot_row_tests {
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
         assert_eq!(st.history.entries().len(), 1, "the dragged state and the ones after it are deleted");
-        assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
+        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept");
     }
 
     /// Snapshot rows scroll with the states: many snapshots in a short dock leave the footer and
@@ -4983,6 +4979,78 @@ mod snapshot_row_tests {
             .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
         assert_eq!(buttons.len(), 3, "{buttons:?}");
         assert!(buttons.iter().all(|b| view.contains_rect(*b)), "footer in view: {buttons:?} in {view:?}");
+    }
+
+    /// The top row is the first snapshot, the document as opened: clicking it brings that back
+    /// (the Discord report on #2966: "History original file click does not work").
+    #[test]
+    fn the_top_row_returns_to_the_document_as_opened() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        let opened = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(1, 1);
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let name = app.session.active().unwrap().doc.name.clone();
+        let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+        h.run_steps(3);
+        h.get_by_label(&name).click();
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers[0].surface().unwrap().rgba(1, 1), opened);
+        assert_eq!(st.history.entries().last(), Some(&name));
+    }
+
+    /// ⌥-click on the camera opens New Snapshot (#2966): the name, selected so typing replaces
+    /// it, and From (Full Document, Merged Layers, Current Layer); OK takes the snapshot.
+    #[test]
+    fn alt_click_on_the_camera_opens_new_snapshot() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                history(app, ui);
+                crate::dialogs::show(app, &ctx);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.state_mut().ui.theme = crate::theme::ThemeKind::ProMedium;
+        h.run_steps(4);
+        let mut buttons: Vec<Rect> = h
+            .ctx
+            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
+        buttons.sort_by(|a, b| b.center().x.total_cmp(&a.center().x));
+        let camera = buttons[1].center();
+        let alt = egui::Modifiers::ALT;
+        h.event(egui::Event::ModifiersChanged(alt));
+        h.event(egui::Event::PointerMoved(camera));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: camera, button: egui::PointerButton::Primary, pressed, modifiers: alt });
+            h.run_steps(1);
+        }
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(3);
+        assert_eq!(h.state().session.active().unwrap().snapshots.len(), 1, "⌥-click opens the dialog instead");
+        assert!(h.state().ui.dialogs.last().is_some_and(|d| crate::snapshot_dialog::owns(&d.fields)));
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("Red layer only");
+        h.run_steps(1);
+        h.get_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.accesskit_node().value().as_deref() == Some("Full Document")).unwrap().click();
+        h.run_steps(3);
+        h.get_by_label("Current Layer").click();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let st = h.state().session.active().unwrap();
+        let snap = st.snapshots.last().unwrap();
+        assert_eq!(snap.name, "Red layer only");
+        assert_eq!(snap.doc.layers.len(), 1, "only the current layer");
+        assert!(h.state().ui.dialogs.is_empty());
     }
 
     /// Renaming belongs to one document: snapshot ids restart in each, so switching tabs must not

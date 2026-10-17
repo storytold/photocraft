@@ -976,6 +976,10 @@
 	Frame from Layers…	Frame từ các lớp…
 	Create new document from current state	Tạo tài liệu mới từ trạng thái hiện tại
 	Create new snapshot	Tạo ảnh chụp trạng thái mới
+	From:	Từ:
+	Full Document	Toàn bộ tài liệu
+	Merged Layers	Các lớp đã gộp
+	New Snapshot	Ảnh chụp trạng thái mới
 	Delete current state	Xóa trạng thái hiện tại
 	No properties	Không có thuộc tính
 	Hide Properties	Ẩn Thuộc tính
