@@ -1012,31 +1012,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let Some(d) = app.camera_raw.as_ref() else { return };
-    // Where the platform has no extra windows (the web build), draw over the main window.
-    if ctx.embed_viewports() {
-        draw(app, ctx, false);
-        return;
-    }
-    let window_title = d.window_title();
-    // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
-    // is open (in a separate window, or drawn over it where there are no extra windows).
-    let main = ctx.content_rect();
-    egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
-        let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
-        ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
-    });
-    // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
-    let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
-        if ui.ctx().input(|i| i.viewport().close_requested()) {
-            close = true;
-        }
-        draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
-    });
-    if close && app.camera_raw.is_some() {
-        cancel(app);
+    if app.camera_raw.is_some() {
+        draw(app, ctx);
     }
 }
 
@@ -1051,14 +1028,23 @@ impl CameraRawDialog {
     }
 }
 
-/// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
-/// shows the title, so none is painted.
-fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
+/// Camera Raw stays in the main window, like Preferences, with room for its image preview.
+fn draw(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
-    egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    let id = egui::Id::new("camera-raw-dialog");
+    let position = id.with("position");
+    let pinned = ctx.data(|m| m.get_temp::<egui::Vec2>(position));
+    let area = match pinned {
+        Some(offset) => egui::Modal::default_area(id).anchor(Align2::LEFT_TOP, offset),
+        None => egui::Modal::default_area(id),
+    };
+    let mut drag = egui::Vec2::ZERO;
+    let mut sizing = false;
+    let contents = |ui: &mut egui::Ui| {
+        sizing = ui.is_sizing_pass();
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
@@ -1076,14 +1062,17 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if d.dirty {
             d.render(ctx);
         }
-        let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
+        let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::click());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, t.chrome);
-        let title = ERect::from_min_size(full.min, vec2(full.width(), if own_window { 0.0 } else { 30.0 }));
-        if !own_window {
-            painter.rect_filled(title, 0.0, t.dock);
-            painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-            painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
+        let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
+        painter.rect_filled(title, 0.0, t.dock);
+        painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
+        painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
+        let drag_right = title.right() - if crate::dialogs::CLOSE_BOX { 30.0 } else { 0.0 };
+        drag = ui.interact(ERect::from_min_max(title.min, pos2(drag_right, title.bottom())), id.with("title"), Sense::drag()).drag_delta();
+        if crate::dialogs::CLOSE_BOX && crate::dialogs::close_box(ui, ERect::from_center_size(pos2(title.right() - 15.0, title.center().y), vec2(20.0, 20.0))) {
+            action = Some("cancel");
         }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let footer_h = 48.0;
@@ -1279,7 +1268,23 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             remember_edit(d);
             d.params = edited;
         }
-    });
+    };
+    let max = (screen.size() - vec2(40.0, 40.0)).max(vec2(1.0, 1.0));
+    let modal =
+        egui::Modal::new(id).area(area).frame(egui::Frame::NONE.stroke(Stroke::new(1.0, t.separator))).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
+            egui::Resize::default()
+                .id(id.with("resize"))
+                .default_size(vec2(1360.0, 900.0).min(max))
+                .min_size(vec2(900.0, 600.0).min(max))
+                .max_size(max)
+                .with_stroke(false)
+                .show(ui, contents);
+        });
+    if !sizing {
+        let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
+        let offset = (pinned.unwrap_or(modal.response.rect.min - screen.min) + drag).clamp(egui::Vec2::ZERO, room);
+        ctx.data_mut(|m| m.insert_temp(position, offset));
+    }
     super::camera_raw_scope_ui::persist(app, ctx);
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()
@@ -1367,35 +1372,54 @@ mod tests {
         assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001);
     }
 
-    /// Closing Camera Raw's window is Cancel. Without a multi-window backend egui embeds the
-    /// "window" (`ViewportClass::EmbeddedWindow`), and the close request comes from the window
-    /// it is drawn in; the overlay fallback (`embed_viewports`) keeps the dialog open.
     #[test]
-    fn closing_the_camera_raw_window_cancels() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        app.run("layer.new.layer", json!({})).unwrap();
-        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-        let steps = app.session.active().unwrap().history.past_len();
-        let frame = |app: &mut PhotocraftApp, close: bool| {
-            let mut input = egui::RawInput::default();
-            if close {
-                let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
-                info.events.push(egui::ViewportEvent::Close);
+    fn camera_raw_stays_in_the_main_window_and_escape_cancels() {
+        // The native renderer is thread-local, so isolate the mock from other UI tests.
+        std::thread::spawn(|| {
+            egui::Context::set_immediate_viewport_renderer(|ctx, mut viewport| {
+                let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
+                input.viewports.entry(viewport.ids.this).or_default().parent = Some(viewport.ids.parent);
+                ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
+            });
+            for embedded in [false, true] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let ctx = egui::Context::default();
+                ctx.set_embed_viewports(embedded);
+                PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+                app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+                let steps = app.session.active().unwrap().history.past_len();
+                let frame = |app: &mut PhotocraftApp, escape: bool| {
+                    let mut input = egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))), ..Default::default() };
+                    if escape {
+                        input.events.push(egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                    let mut output = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+                    output.textures_delta.clear();
+                    assert_eq!(output.viewport_output.len(), 1, "Camera Raw must not create a separate OS window");
+                    assert!(output.viewport_output.contains_key(&egui::ViewportId::ROOT));
+                };
+                open(&mut app, &ctx).unwrap();
+                frame(&mut app, false);
+                menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+                frame(&mut app, false);
+                assert!(app.camera_raw.is_some(), "drawn over the main window");
+                frame(&mut app, true);
+                assert!(app.camera_raw.is_none(), "Escape is Cancel");
+                assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+                let pixel = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(0, 0);
+                assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001, "cancelling must discard the preview changes");
             }
-            ctx.run_ui(input, |ui| show(app, ui.ctx())).textures_delta.clear();
-        };
-        open(&mut app, &ctx).unwrap();
-        frame(&mut app, false);
-        assert!(app.camera_raw.is_some(), "drawn over the main window");
-        ctx.set_embed_viewports(false);
-        frame(&mut app, false);
-        assert!(app.camera_raw.is_some(), "drawn in its window");
-        frame(&mut app, true);
-        assert!(app.camera_raw.is_none(), "closing the window is Cancel");
-        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
