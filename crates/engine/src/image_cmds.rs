@@ -328,17 +328,53 @@ fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extensi
         && let LayerContent::Raster(surf) = &mut bg.content
     {
         let old = old_canvas.translate(dx, dy);
-        let fmt = surf.format();
-        let px = photocraft_raster::from_rgba(&fmt, [extension[0], extension[1], extension[2], 1.0]);
-        let keep = surf.content_bounds().intersect(&old);
-        let saved = surf.to_interleaved(keep);
-        surf.fill_rect(Rect::from_xywh(0, 0, r.width(), r.height()), &px);
-        if !keep.is_empty() {
-            surf.write_interleaved(keep, &saved);
-        }
+        let px = photocraft_raster::from_rgba(&surf.format(), [extension[0], extension[1], extension[2], 1.0]);
+        fill_background_extension(surf, Rect::from_xywh(0, 0, r.width(), r.height()), old, &px);
     }
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
+}
+
+/// Fills the area an extension adds to the Background's `canvas` (all of it outside the `old`
+/// canvas, and any gap there) with `px`, under the pixels the Background already holds there:
+/// those a crop with Delete Cropped Pixels off hid show again instead of being painted over (#7086).
+/// Only the added strips are touched, so the cost follows the added area, not the canvas.
+fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
+    let keep = surf.content_bounds().intersect(&old).intersect(&canvas);
+    let strips = if keep.is_empty() {
+        vec![canvas]
+    } else {
+        vec![
+            Rect::new(canvas.x0, canvas.y0, canvas.x1, keep.y0),
+            Rect::new(canvas.x0, keep.y1, canvas.x1, canvas.y1),
+            Rect::new(canvas.x0, keep.y0, keep.x0, keep.y1),
+            Rect::new(keep.x1, keep.y0, canvas.x1, keep.y1),
+        ]
+    };
+    let n = surf.channels();
+    let a = n.saturating_sub(1);
+    let pa = px.get(a).copied().unwrap_or(1.0);
+    // Without an alpha channel hidden pixels can't be told from empty ones: fill the strips.
+    let has_alpha = surf.format().alpha;
+    for strip in strips.into_iter().filter(|r| !r.is_empty()) {
+        if !has_alpha || !surf.has_tiles_in(strip) {
+            surf.fill_rect(strip, px);
+            continue;
+        }
+        // The Background's own pixels over `px` (source-over).
+        let mut d = surf.read_region(strip);
+        for p in d.chunks_exact_mut(n) {
+            let ta = p.get(a).copied().unwrap_or(0.0);
+            let oa = ta + pa * (1.0 - ta);
+            for (c, &f) in p.iter_mut().zip(px).take(a) {
+                *c = if oa > 0.0 { (*c * ta + f * pa * (1.0 - ta)) / oa } else { 0.0 };
+            }
+            if let Some(alpha) = p.get_mut(a) {
+                *alpha = oa;
+            }
+        }
+        surf.write_region(strip, &d);
+    }
 }
 
 /// The nine documented canvas-size anchors, in the order the command lists them, each mapped to
@@ -414,14 +450,8 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
             && let Some(bg) = doc.background_mut()
             && let LayerContent::Raster(surf) = &mut bg.content
         {
-            let fmt = surf.format();
-            let px = photocraft_raster::from_rgba(&fmt, ext);
-            let keep = surf.content_bounds().intersect(&old);
-            let saved = surf.to_interleaved(keep);
-            surf.fill_rect(canvas, &px);
-            if !keep.is_empty() {
-                surf.write_interleaved(keep, &saved);
-            }
+            let px = photocraft_raster::from_rgba(&surf.format(), ext);
+            fill_background_extension(surf, canvas, old, &px);
         }
         Ok(())
     })?;
@@ -1168,6 +1198,55 @@ mod tests {
         s.execute("layer.new.layerFromBackground", json!({})).unwrap();
         s.execute("image.crop", json!({"x": -4, "y": 0, "width": 20, "height": 16})).unwrap();
         assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(1, 8), [0.0; 4]);
+    }
+
+    /// The Background keeps the pixels a crop with Delete Cropped Pixels off hid: extending the
+    /// canvas over them again (Reveal All, Canvas Size) shows them rather than painting them over
+    /// with the background colour (#7086).
+    #[test]
+    fn extending_the_canvas_keeps_the_backgrounds_hidden_pixels() {
+        for depth in [8, 16, 32] {
+            let hidden = |s: &mut Session| {
+                s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth, "background": "white"})).unwrap();
+                s.edit("paint", |doc, _| {
+                    let bg = doc.background_mut().unwrap();
+                    bg.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 50, 100), &[1.0, 0.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+                s.execute("image.crop", json!({"x": 50, "y": 0, "width": 50, "height": 100, "deleteCroppedPixels": false})).unwrap();
+                s.tools.background = [0.0, 0.0, 0.0, 1.0];
+            };
+            let mut s = Session::new();
+            hidden(&mut s);
+            s.execute("image.revealAll", json!({})).unwrap();
+            let surf = doc(&s).background().unwrap().surface().unwrap();
+            assert_eq!(doc(&s).size, Size::new(100, 100), "{depth}-bit");
+            assert_eq!(surf.rgba(10, 50), [1.0, 0.0, 0.0, 1.0], "{depth}-bit: Reveal All shows the hidden red half");
+            assert_eq!(surf.rgba(80, 50), [1.0, 1.0, 1.0, 1.0], "{depth}-bit");
+
+            // Canvas Size wider than the hidden pixels: they show, the rest takes the colour.
+            let mut s = Session::new();
+            hidden(&mut s);
+            s.execute("image.canvasSize", json!({"width": 120, "height": 100, "anchor": "right"})).unwrap();
+            let surf = doc(&s).background().unwrap().surface().unwrap();
+            assert_eq!(surf.rgba(5, 50), [0.0, 0.0, 0.0, 1.0], "{depth}-bit: past the hidden pixels the background colour");
+            assert_eq!(surf.rgba(30, 50), [1.0, 0.0, 0.0, 1.0], "{depth}-bit: Canvas Size shows the hidden red half");
+            assert_eq!(surf.rgba(100, 50), [1.0, 1.0, 1.0, 1.0], "{depth}-bit");
+        }
+    }
+
+    /// A Background without an alpha channel (a Grayscale PSD import) has no hidden pixels to tell
+    /// from empty ones: the added area takes the colour, the kept area stays (#7086).
+    #[test]
+    fn an_alpha_less_background_extension_takes_the_colour() {
+        let mut surf = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        surf.fill_rect(Rect::new(-50, 0, 100, 100), &[0.6]);
+        let kept = surf.pixel(50, 50);
+        fill_background_extension(&mut surf, Rect::new(-60, 0, 100, 100), Rect::new(0, 0, 100, 100), &[0.0]);
+        assert_eq!(surf.pixel(-55, 50), vec![0.0], "past the old pixels the colour");
+        assert_eq!(surf.pixel(-30, 50), vec![0.0], "no alpha: the added area takes the colour");
+        assert_eq!(surf.pixel(50, 50), kept, "the kept area is unchanged");
     }
 
     /// A document (`mode`, `depth`) with a white Background and a layer holding a red pixel at
