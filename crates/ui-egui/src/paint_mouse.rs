@@ -113,12 +113,20 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
+    // Shift+Alt+right-press opens Photoshop's HUD Color Picker (#6098) instead of the picker.
+    let sticky = crate::workspace_ui::sticky_mods(app, mods);
+    let hud_gesture = has_brush_picker(tool) && !layer_menu && !erase && sticky.shift && sticky.alt;
+    let right_press = response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) && response.contains_pointer();
+    if hud_gesture && right_press && let Some(p) = response.ctx.input(|i| i.pointer.hover_pos()) {
+        crate::color_hud::open(app, [p.x, p.y], true);
+    }
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && response.drag_started_by(PointerButton::Secondary);
     let right_click = response.secondary_clicked();
     if right_click
         && !erase
         && !layer_menu
+        && !crate::color_hud::is_open(&app.ui)
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
@@ -141,6 +149,15 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
 /// the Brush Preset picker at screen point `at`, and nothing paints.
 pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: bool, mods: egui::Modifiers, at: [f32; 2]) -> bool {
     let tool = app.ui.tool;
+    // Shift+Alt+right is Photoshop's HUD Color Picker (#6098): the down opens it, the up closes it.
+    if has_brush_picker(tool) && mods.shift && mods.alt {
+        if down {
+            crate::color_hud::open(app, at, false);
+        } else {
+            crate::color_hud::release(&mut app.ui);
+        }
+        return false;
+    }
     if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture(mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
         app.brush_resize_armed = down && app.drag.is_none();
         return true;

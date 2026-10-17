@@ -49,9 +49,10 @@ pub fn is_gesture(mods: egui::Modifiers) -> bool {
 }
 
 /// Alt (Option) with the right button: Photoshop's Windows gesture (#297). The left button with
-/// Alt alone stays the painting tools' eyedropper.
+/// Alt alone stays the painting tools' eyedropper. Shift+Alt+right is Photoshop's HUD Color
+/// Picker (#6098), so Shift disqualifies the resize gesture.
 pub fn is_right_gesture(mods: egui::Modifiers) -> bool {
-    mods.alt
+    mods.alt && !mods.shift
 }
 
 /// The diameter and hardness a drag from `start` by (`dx`, `dy`) document pixels gives at `zoom`.

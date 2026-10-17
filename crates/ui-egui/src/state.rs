@@ -1136,6 +1136,10 @@ pub struct UiState {
     /// ([`crate::brush_picker::DEFAULT_SIZE`] before that).
     #[serde(default)]
     pub brush_picker_size: Option<[f32; 2]>,
+    /// Photoshop's HUD Color Picker (#6098), open while Shift+Alt+right-click is held on the
+    /// canvas with a painting tool (`crate::color_hud`).
+    #[serde(default)]
+    pub color_hud: Option<crate::color_hud::Hud>,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -1328,6 +1332,7 @@ impl Default for UiState {
             brush_picker: None,
             brush_picker_list: crate::brush_picker::list_state(),
             brush_picker_size: None,
+            color_hud: None,
             layer_menu: None,
             canvas_tool_menu: None,
             selected_guide: None,
