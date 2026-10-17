@@ -1,4 +1,5 @@
-//! JPEG: decode via `zune-jpeg` (gray, YCbCr, CMYK, YCCK), encode via
+//! JPEG: decode via `zune-jpeg` (gray, YCbCr, CMYK, YCCK; arithmetic-coded and 12-bit files
+//! via our own [`jpeg_ext`]), encode via
 //! `jpeg-encoder` (gray, RGB, CMYK). Metadata (APP0 JFIF density, APP1
 //! EXIF/XMP, APP2 multi-segment ICC, APP13 Photoshop resources, APP14 Adobe) is
 //! parsed by our own marker scanner so behaviour does not depend on decoder internals.
@@ -14,6 +15,7 @@ use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
 
+use super::jpeg_ext;
 use crate::Format;
 use crate::error::CodecError;
 use crate::fidelity::Plan;
@@ -186,6 +188,17 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     let meta = scan_metadata(bytes);
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
+    }
+    // Arithmetic-coded and 12-bit files go to our own T.81 decoder (#4934, #5003).
+    if jpeg_ext::handles(bytes) {
+        let d = jpeg_ext::decode(bytes, limits, meta.adobe_transform)?;
+        let mut img = Image::from_raw(d.width, d.height, d.layout, d.sample, d.data)?;
+        img.icc = meta.icc;
+        img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, ..Default::default() };
+        if end == DataEnd::Truncated || d.damaged {
+            img.warnings.push(DecodeWarning::Truncated { format: F });
+        }
+        return Ok(img);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), options);
