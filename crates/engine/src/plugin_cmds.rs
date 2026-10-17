@@ -77,7 +77,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             *surf = plugin.apply(surf, canvas, selection.as_ref(), &resolved).map_err(err)?;
             return Ok(());
         }
+        let locks = doc.effective_locks(layer);
         let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
+        if locks.pixels || locks.all {
+            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+        }
         match &mut l.content {
             LayerContent::Raster(surf) => {
                 *surf = plugin.apply(surf, canvas, selection.as_ref(), &resolved).map_err(err)?;

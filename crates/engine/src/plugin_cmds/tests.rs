@@ -120,6 +120,15 @@ fn example_invert_matches_builtin_invert_and_round_trips_the_registry() {
     assert_eq!(sm.smart_filters[0].command, RUN);
     assert_eq!(sm.smart_filters[0].params["id"], INVERT_ID);
 
+    // Locked layer refuses to run.
+    let mut locked = doc(8);
+    locked.edit("lock", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().locks.pixels = true;
+        Ok(())
+    }).unwrap();
+    let err = locked.execute("plugin.run", json!({"id": INVERT_ID})).unwrap_err();
+    assert!(err.to_string().contains("is locked"));
+
     // Install from a path (native), then remove.
     let dir = std::env::temp_dir().join(format!("pc-plugin-cmds-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
