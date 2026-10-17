@@ -864,8 +864,11 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // Paint amount = darkness × alpha × selection (black = full paint, like Photoshop).
     let (w, h) = (area.width() as usize, area.height() as usize);
     // The sampled tip is one f32 buffer over the whole selection; a large selection must fail
-    // gracefully instead of aborting the process on allocation, so reserve it fallibly.
-    let mut v = crate::allocation::filled(w * h, 0.0, "defining a brush from the selection")?;
+    // gracefully instead of aborting the process on allocation, so reserve it fallibly. The
+    // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
+    // this command is already fallible.
+    let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
+    let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
     let sc = sel.channels();
     // The selection mask is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
