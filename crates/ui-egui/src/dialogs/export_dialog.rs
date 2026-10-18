@@ -1025,8 +1025,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             // The panel around the image is canvas, not transparency: the checkerboard and the
             // outline cover only the exported image, so its proportions read at a glance.
             ui.painter().rect_filled(r, 0.0, t.canvas);
+            // The output size, not the thumbnail's: a very thin export's thumbnail is rounded up
+            // to whole pixels and would draw wider than the file.
+            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = (n(f, "width", bw), n(f, "height", bh));
             if let Some(tex) = preview.as_ref().and_then(|preview| preview.texture.as_ref()) {
-                let ir = preview_image_rect(r, tex.size_vec2());
+                let ir = preview_image_rect(r, egui::vec2(w as f32, h as f32));
                 crate::widgets::checker(ui.painter(), ir, 8.0);
                 ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
                 ui.painter().rect_stroke(ir, 0.0, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Outside);
@@ -1042,8 +1046,6 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let exact: Option<u64> = None;
             let est =
                 exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate)).map_or("—".to_string(), |b| crate::sizing::human_bytes(b as f64));
-            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
-            let (w, h) = (n(f, "width", bw), n(f, "height", bh));
             ui.label(egui::RichText::new(format!("{w} × {h} px  ·  {}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
     });
