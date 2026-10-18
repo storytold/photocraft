@@ -5,6 +5,8 @@
 
 use serde_json::{Value, json};
 
+use photocraft_algo::selection::{self as sel, SelectionMode};
+
 use crate::commands::{CommandSpec, int_i32};
 use crate::{EngineError, Result, Session};
 
@@ -22,7 +24,6 @@ fn select_cryptomatte(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(mode.as_str(), "replace" | "add" | "subtract" | "intersect") {
         return Err(bad(format!("mode is \"{mode}\"; it is replace, add, subtract or intersect")));
     }
-    let tolerance = p.get("tolerance").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0) as f32;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let Some(path) = st.path.clone() else {
         return Err(EngineError::Other("the document was not opened from a file; its Cryptomatte samples are unavailable".into()));
@@ -39,11 +40,35 @@ fn select_cryptomatte(s: &mut Session, p: &Value) -> Result<Value> {
         None => layers.first().ok_or_else(|| EngineError::Other(format!("{path} holds no Cryptomatte layer")))?,
     };
     let buffer = photocraft_codecs::decode_cryptomatte(&bytes, &layer.name, &Default::default()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if x < 0 || y < 0 || x as u32 >= buffer.width || y as u32 >= buffer.height {
-        return Err(bad(format!("({x}, {y}) lies outside the {}×{} Cryptomatte buffer", buffer.width, buffer.height)));
+    // The samples only line up with the canvas the EXR opens as (the staged decode). Any Crop,
+    // Canvas Size or Image Size afterwards moves or scales the document away from that grid,
+    // so the mask would land in the wrong place — refuse instead of selecting something else.
+    let staged = photocraft_codecs::decode(&bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let doc_bounds = st.doc.bounds();
+    if doc_bounds.width() != staged.width() || doc_bounds.height() != staged.height() {
+        return Err(EngineError::Other(format!(
+            "the document is {}×{} but {} opens as {}×{}; after Crop, Canvas Size or Image Size the Cryptomatte samples no longer line up with the canvas. Undo back to the opened size, or re-open the EXR",
+            doc_bounds.width(),
+            doc_bounds.height(),
+            path,
+            staged.width(),
+            staged.height()
+        )));
+    }
+    // Where the EXR's data window sits on that canvas: the placement import recorded on the
+    // document's raster layer (a cropped render is staged at its offset).
+    let (ox, oy) = st
+        .doc
+        .layers
+        .iter()
+        .find_map(|l| l.surface().map(|sf| sf.content_bounds()))
+        .map_or((0, 0), |b| (b.x0, b.y0));
+    let (bx, by) = (x - ox, y - oy);
+    if bx < 0 || by < 0 || bx as u32 >= buffer.width || by as u32 >= buffer.height {
+        return Err(bad(format!("({x}, {y}) lies outside the {}×{} Cryptomatte buffer at ({ox}, {oy})", buffer.width, buffer.height)));
     }
     // The ID to select: the strongest sample at the clicked pixel.
-    let clicked = buffer.at(x as u32, y as u32).first().copied().map(|(id, _)| id);
+    let clicked = buffer.at(bx as u32, by as u32).first().copied().map(|(id, _)| id);
     let Some(want) = clicked else {
         // Nothing at the click: an empty selection (deselects in replace mode, like clicking
         // empty space with the Magic Wand).
@@ -57,30 +82,31 @@ fn select_cryptomatte(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The coverage of `want` at every pixel becomes the selection mask.
     let name = layer.name_of(want).map(str::to_string);
-    let doc_bounds = st.doc.bounds();
-    let (ox, oy) = (buffer.width.saturating_sub(doc_bounds.width()) / 2, buffer.height.saturating_sub(doc_bounds.height()) / 2);
-    let mut shape = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+    let mut mask = vec![0.0f32; doc_bounds.width() as usize * doc_bounds.height() as usize];
+    let stride = doc_bounds.width() as usize;
     let mut selected = 0u64;
     for py in 0..buffer.height {
         for px in 0..buffer.width {
-            let cov =
-                buffer.at(px, py).iter().find(|(id, _)| (id - want).abs() <= tolerance.max(f32::EPSILON * id.abs().max(1.0))).map(|(_, c)| *c).unwrap_or(0.0);
+            // IDs are hashes stored as float bit patterns: a numeric distance between two
+            // says nothing about their objects, so only the exact value matches.
+            let cov = buffer.at(px, py).iter().find(|(id, _)| *id == want).map(|(_, c)| *c).unwrap_or(0.0);
             if cov > 0.0 {
-                shape.write_pixel(px as i32 - ox as i32 + doc_bounds.x0, py as i32 - oy as i32 + doc_bounds.y0, &[cov]);
-                selected += 1;
+                let (dx, dy) = (ox - doc_bounds.x0 + px as i32, oy - doc_bounds.y0 + py as i32);
+                if dx >= 0 && dy >= 0 && (dx as usize) < stride && (dy as usize) < mask.len() / stride.max(1) {
+                    mask[dy as usize * stride + dx as usize] = cov;
+                    selected += 1;
+                }
             }
         }
     }
+    let mode = match mode.as_str() {
+        "add" => SelectionMode::Add,
+        "subtract" => SelectionMode::Subtract,
+        "intersect" => SelectionMode::Intersect,
+        _ => SelectionMode::Replace,
+    };
     s.edit("Cryptomatte", |doc, _| {
-        let old = doc.selection.take();
-        let combined = match (mode.as_str(), old) {
-            ("add", Some(o)) => crate::commands::combine(&o, &shape, doc_bounds, |a, b| a.max(b)),
-            ("subtract", Some(o)) => crate::commands::combine(&o, &shape, doc_bounds, |a, b| a * (1.0 - b)),
-            ("intersect", Some(o)) => crate::commands::combine(&o, &shape, doc_bounds, |a, b| a.min(b)),
-            ("subtract" | "intersect", None) => photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8),
-            _ => shape.clone(),
-        };
-        doc.selection = (!combined.content_bounds().is_empty()).then_some(combined);
+        doc.selection = sel::combine(doc.selection.as_ref(), &mask, doc_bounds, mode);
         Ok(())
     })?;
     Ok(json!({"id": want, "name": name, "selected": selected, "layer": layer.name}))
@@ -97,7 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Cryptomatte Selection",
         &["Select"],
         None,
-        r##"{"x":i32,"y":i32,"layer":str? (the Cryptomatte layer; default the first),"tolerance":0..1=0 (IDs within this distance of the clicked one),"mode":"replace|add|subtract|intersect"="replace"}"##,
+        r##"{"x":i32,"y":i32 (canvas coordinates),"layer":str? (the Cryptomatte layer; default the first),"mode":"replace|add|subtract|intersect"="replace"} → {id,name,selected,layer}; refuses after Crop/Canvas Size/Image Size changed the canvas away from the EXR's"##,
         crate::file_cmds::native,
         select_cryptomatte
     )]
@@ -112,9 +138,21 @@ mod tests {
     /// A 4×4 EXR whose `crypto_asset` Cryptomatte holds two objects: `cube` on the left two
     /// columns (coverage 1) and `sphere` on the right (coverage 0.5), via the codec's hash.
     fn cryptomatte_file(path: &std::path::Path) {
-        let (w, h) = (4usize, 4usize);
-        let cube = photocraft_codecs::cryptomatte_id("cube");
-        let sphere = photocraft_codecs::cryptomatte_id("sphere");
+        cryptomatte_file_at(path, (0, 0, 4, 4), (0, 0, 4, 4), (photocraft_codecs::cryptomatte_id("cube"), photocraft_codecs::cryptomatte_id("sphere")));
+    }
+
+    /// The fixture at an arbitrary data-window position inside an arbitrary display window,
+    /// with explicit object IDs (for tests that need particular float values).
+    #[allow(clippy::too_many_arguments)]
+    fn cryptomatte_file_at(
+        path: &std::path::Path,
+        display: (i32, i32, usize, usize),
+        data: (i32, i32, usize, usize),
+        ids: (f32, f32),
+    ) {
+        let (w, h) = (data.2, data.3);
+        let cube = ids.0;
+        let sphere = ids.1;
         let (s0, s1) = (vec![cube; w * h], (0..w * h).map(|p| if p % w >= 2 { sphere } else { 0.0 }).collect::<Vec<_>>());
         let (c0, c1) = (
             (0..w * h).map(|p| if p % w < 2 { 1.0f32 } else { 0.0 }).collect::<Vec<_>>(),
@@ -144,7 +182,10 @@ mod tests {
             Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
             AnyChannels::sort(list.into_iter().collect()),
         );
-        let image = Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (w, h))), vec![layer]);
+        let image = Image::from_layers(
+            ImageAttributes::new(IntegerBounds::new((display.0, display.1), (display.2, display.3))),
+            vec![layer],
+        );
         image.write().to_buffered(&mut std::io::BufWriter::new(std::fs::File::create(path).expect("fixture"))).expect("write fixture");
     }
 
@@ -197,11 +238,81 @@ mod tests {
         let st = s.active().unwrap();
         let sel = st.doc.selection.as_ref().unwrap();
         assert!(sel.pixel(0, 0)[0] > 0.99 && sel.pixel(3, 0)[0] > 0.49);
-        // subtract undoes the sphere again.
+        // subtract removes the sphere again, on the shared selection algebra.
         s.execute("select.cryptomatte", json!({"x": 3, "y": 0, "mode": "subtract"})).unwrap();
         let sel = s.active().unwrap().doc.selection.as_ref().unwrap();
-        // 0.5 coverage minus itself: 0.5 * (1 - 0.5) = 0.25.
-        assert!((sel.pixel(3, 0)[0] - 0.25).abs() < 1e-2, "{}", sel.pixel(3, 0)[0]);
+        assert!(sel.pixel(3, 0)[0] < 1e-2, "{}", sel.pixel(3, 0)[0]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn canvas_changes_refuse_instead_of_misplacing() {
+        let (mut s, dir) = session_with_crypto();
+        // A non-centred crop: the old centring assumption would place the mask wrong.
+        s.execute("image.crop", json!({"x": 1, "y": 1, "width": 3, "height": 3})).unwrap();
+        let e = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap_err().to_string();
+        assert!(e.contains("no longer line up"), "{e}");
+        assert!(!e.is_empty());
+        // A resize scales the document away from the render's grid just the same.
+        for _ in 0..4 {
+            s.execute("edit.undo", json!({})).unwrap();
+        }
+        s.execute("image.imageSize", json!({"width": 8, "height": 8})).unwrap();
+        let e = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap_err().to_string();
+        assert!(e.contains("no longer line up"), "{e}");
+        // Back on the opened grid, the same click selects again.
+        for _ in 0..4 {
+            s.execute("edit.undo", json!({})).unwrap();
+        }
+        let r = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap();
+        assert_eq!(r["name"], "cube");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_cropped_render_places_its_mask_at_the_data_window_offset() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("pcraft-cm-crop-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cropped.exr");
+        // A 4×4 data window inside a 6×6 display stage: the doc opens on the stage.
+        cryptomatte_file_at(&path, (0, 0, 6, 6), (0, 0, 4, 4), (photocraft_codecs::cryptomatte_id("cube"), photocraft_codecs::cryptomatte_id("sphere")));
+        let mut s = Session::new();
+        let bytes = std::fs::read(&path).unwrap();
+        let r = photocraft_io::import("cropped.exr", &bytes).unwrap();
+        let (i, _) = s.open_document(r.document, Some(path.to_string_lossy().into_owned()));
+        s.set_active(i);
+        // Clicking the canvas where the render's (0, 0) sits: doc (1, 1).
+        let r = s.execute("select.cryptomatte", json!({"x": 1, "y": 1})).unwrap();
+        assert_eq!(r["name"], "cube", "{r}");
+        let st = s.active().unwrap();
+        let sel = st.doc.selection.as_ref().expect("a selection");
+        assert_eq!(sel.pixel(1, 1)[0], 1.0, "the mask sits at the data window offset");
+        assert_eq!(sel.pixel(0, 0)[0], 0.0, "nothing outside the render");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn nearby_float_ids_stay_separate_objects() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("pcraft-cm-near-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("near.exr");
+        // Two IDs a hair apart numerically: a distance-based grouping (the old `tolerance`
+        // epsilon) lumped them together, but they are unrelated hashes.
+        let a = 0.1f32;
+        let b = a + 1e-7;
+        cryptomatte_file_at(&path, (0, 0, 4, 4), (0, 0, 4, 4), (a, b));
+        let mut s = Session::new();
+        let bytes = std::fs::read(&path).unwrap();
+        let r = photocraft_io::import("near.exr", &bytes).unwrap();
+        let (i, _) = s.open_document(r.document, Some(path.to_string_lossy().into_owned()));
+        s.set_active(i);
+        let r = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap();
+        assert_eq!(r["name"], "cube", "{r}");
+        assert_eq!(r["selected"], 8, "only the clicked object's pixels: {r}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

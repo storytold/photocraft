@@ -10,6 +10,7 @@
 pub mod adjust_params;
 mod allocation;
 pub mod build_info;
+pub mod cryptomatte_cmds;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
