@@ -237,11 +237,12 @@ impl Stylus {
                 }
             }
         }
-        // A pen reports pressure 0 while it hovers and as it lifts (X11, macOS): that is no
-        // contact, so a frame that also touched keeps only its contact samples. A stroke's last
-        // moves then keep the pressure the pen left with, and a tap its own (#1798).
-        if self.frame.iter().any(|s| s.pressure > 0.0) {
-            self.frame.retain(|s| s.pressure > 0.0);
+        // A pen reports pressure 0 while hovering and as it lifts (X11, macOS). Zeroes after
+        // the final contact sample are no contact and would stretch the stroke over later pointer
+        // moves. Zeroes before or between contacts are part of the pressure timeline while the pen
+        // crosses its contact threshold, so keep them and discard only trailing zeroes (#1798).
+        if let Some(last_contact) = self.frame.iter().rposition(|s| s.pressure > 0.0) {
+            self.frame.truncate(last_contact + 1);
         }
         self.peak = self.frame.iter().fold(self.peak, |m, s| m.max(s.pressure));
     }
