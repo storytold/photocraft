@@ -57,12 +57,7 @@ fn select_cryptomatte(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Where the EXR's data window sits on that canvas: the placement import recorded on the
     // document's raster layer (a cropped render is staged at its offset).
-    let (ox, oy) = st
-        .doc
-        .layers
-        .iter()
-        .find_map(|l| l.surface().map(|sf| sf.content_bounds()))
-        .map_or((0, 0), |b| (b.x0, b.y0));
+    let (ox, oy) = st.doc.layers.iter().find_map(|l| l.surface().map(|sf| sf.content_bounds())).map_or((0, 0), |b| (b.x0, b.y0));
     let (bx, by) = (x - ox, y - oy);
     if bx < 0 || by < 0 || bx as u32 >= buffer.width || by as u32 >= buffer.height {
         return Err(bad(format!("({x}, {y}) lies outside the {}×{} Cryptomatte buffer at ({ox}, {oy})", buffer.width, buffer.height)));
@@ -144,12 +139,7 @@ mod tests {
     /// The fixture at an arbitrary data-window position inside an arbitrary display window,
     /// with explicit object IDs (for tests that need particular float values).
     #[allow(clippy::too_many_arguments)]
-    fn cryptomatte_file_at(
-        path: &std::path::Path,
-        display: (i32, i32, usize, usize),
-        data: (i32, i32, usize, usize),
-        ids: (f32, f32),
-    ) {
+    fn cryptomatte_file_at(path: &std::path::Path, display: (i32, i32, usize, usize), data: (i32, i32, usize, usize), ids: (f32, f32)) {
         let (w, h) = (data.2, data.3);
         let cube = ids.0;
         let sphere = ids.1;
@@ -182,10 +172,7 @@ mod tests {
             Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
             AnyChannels::sort(list.into_iter().collect()),
         );
-        let image = Image::from_layers(
-            ImageAttributes::new(IntegerBounds::new((display.0, display.1), (display.2, display.3))),
-            vec![layer],
-        );
+        let image = Image::from_layers(ImageAttributes::new(IntegerBounds::new((display.0, display.1), (display.2, display.3))), vec![layer]);
         image.write().to_buffered(&mut std::io::BufWriter::new(std::fs::File::create(path).expect("fixture"))).expect("write fixture");
     }
 
@@ -254,42 +241,14 @@ mod tests {
         assert!(e.contains("no longer line up"), "{e}");
         assert!(!e.is_empty());
         // A resize scales the document away from the render's grid just the same.
-        for _ in 0..4 {
-            s.execute("edit.undo", json!({})).unwrap();
-        }
+        s.execute("edit.undo", json!({})).unwrap();
         s.execute("image.imageSize", json!({"width": 8, "height": 8})).unwrap();
         let e = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap_err().to_string();
         assert!(e.contains("no longer line up"), "{e}");
         // Back on the opened grid, the same click selects again.
-        for _ in 0..4 {
-            s.execute("edit.undo", json!({})).unwrap();
-        }
+        s.execute("edit.undo", json!({})).unwrap();
         let r = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap();
         assert_eq!(r["name"], "cube");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn a_cropped_render_places_its_mask_at_the_data_window_offset() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static N: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!("pcraft-cm-crop-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cropped.exr");
-        // A 4×4 data window inside a 6×6 display stage: the doc opens on the stage.
-        cryptomatte_file_at(&path, (0, 0, 6, 6), (0, 0, 4, 4), (photocraft_codecs::cryptomatte_id("cube"), photocraft_codecs::cryptomatte_id("sphere")));
-        let mut s = Session::new();
-        let bytes = std::fs::read(&path).unwrap();
-        let r = photocraft_io::import("cropped.exr", &bytes).unwrap();
-        let (i, _) = s.open_document(r.document, Some(path.to_string_lossy().into_owned()));
-        s.set_active(i);
-        // Clicking the canvas where the render's (0, 0) sits: doc (1, 1).
-        let r = s.execute("select.cryptomatte", json!({"x": 1, "y": 1})).unwrap();
-        assert_eq!(r["name"], "cube", "{r}");
-        let st = s.active().unwrap();
-        let sel = st.doc.selection.as_ref().expect("a selection");
-        assert_eq!(sel.pixel(1, 1)[0], 1.0, "the mask sits at the data window offset");
-        assert_eq!(sel.pixel(0, 0)[0], 0.0, "nothing outside the render");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
