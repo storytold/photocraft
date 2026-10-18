@@ -4297,3 +4297,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	カンバスサイズを自動調整
 	Keep Relative Position During Layer Reordering	レイヤーの並べ替え中も相対位置を保持
 	Shrinkwrap Canvas on Save	保存時にカンバスを内容に合わせて縮小
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	透明に設定
+	Clear Transparency	透明を解除
+	Color Picker (First Color)	カラーピッカー（最初の色）
+	Color Picker (Last Color)	カラーピッカー（最後の色）
+	Pick a Palette Colour From the Image	画像からパレットの色を選択
+	Table Color	テーブルの色
+	Palette Color	パレットの色

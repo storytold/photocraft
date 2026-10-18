@@ -4328,3 +4328,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Αυτόματη αλλαγή μεγέθους καμβά
 	Keep Relative Position During Layer Reordering	Διατήρηση σχετικής θέσης κατά την αναδιάταξη επιπέδων
 	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ορισμός διαφάνειας
+	Clear Transparency	Καθαρισμός διαφάνειας
+	Color Picker (First Color)	Επιλογέας χρώματος (Πρώτο χρώμα)
+	Color Picker (Last Color)	Επιλογέας χρώματος (Τελευταίο χρώμα)
+	Pick a Palette Colour From the Image	Επιλέξτε ένα χρώμα παλέτας από την εικόνα
+	Table Color	Χρώμα πίνακα
+	Palette Color	Χρώμα παλέτας

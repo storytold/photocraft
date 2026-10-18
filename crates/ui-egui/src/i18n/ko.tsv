@@ -4202,3 +4202,12 @@ shape	Appearance	화면 모양
 	Auto-size Canvas	캔버스 크기 자동 조정
 	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
 	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	투명으로 설정
+	Clear Transparency	투명성 해제
+	Color Picker (First Color)	색상 선택기 (첫 번째 색상)
+	Color Picker (Last Color)	색상 선택기 (마지막 색상)
+	Pick a Palette Colour From the Image	이미지에서 팔레트 색상을 선택하세요
+	Table Color	테이블 색상
+	Palette Color	팔레트 색상

@@ -4244,3 +4244,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
 	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
 	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ustaw jako przezroczyste
+	Clear Transparency	Usuń przezroczystość
+	Color Picker (First Color)	Próbnik kolorów (pierwszy kolor)
+	Color Picker (Last Color)	Próbnik kolorów (ostatni kolor)
+	Pick a Palette Colour From the Image	Wybierz kolor palety z obrazu
+	Table Color	Kolor tabeli
+	Palette Color	Kolor palety

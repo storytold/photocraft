@@ -4337,3 +4337,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Автоматично змінювати розмір полотна
 	Keep Relative Position During Layer Reordering	Зберігати відносне положення під час зміни порядку шарів
 	Shrinkwrap Canvas on Save	Зменшувати полотно до вмісту під час збереження
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Зробити прозорим
+	Clear Transparency	Прибрати прозорість
+	Color Picker (First Color)	Вибір кольору (перший колір)
+	Color Picker (Last Color)	Вибір кольору (останній колір)
+	Pick a Palette Colour From the Image	Оберіть колір палітри з зображення
+	Table Color	Колір таблиці
+	Palette Color	Колір палітри

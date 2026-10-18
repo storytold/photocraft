@@ -4647,3 +4647,12 @@ shape	Appearance	Apparence
 	Auto-size Canvas	Redimensionner le canevas automatiquement
 	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
 	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Rendre transparent
+	Clear Transparency	Supprimer la transparence
+	Color Picker (First Color)	Sélecteur de couleurs (première couleur)
+	Color Picker (Last Color)	Sélecteur de couleurs (dernière couleur)
+	Pick a Palette Colour From the Image	Choisir une couleur de palette dans l'image
+	Table Color	Couleur du tableau
+	Palette Color	Couleur de palette

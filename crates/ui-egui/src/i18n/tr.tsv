@@ -4357,3 +4357,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Tuvali Otomatik Boyutlandır
 	Keep Relative Position During Layer Reordering	Katmanları Yeniden Sıralarken Göreli Konumu Koru
 	Shrinkwrap Canvas on Save	Kaydederken Tuvali İçeriğe Göre Küçült
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Şeffaf Olarak Ayarla
+	Clear Transparency	Şeffaflığı Kaldır
+	Color Picker (First Color)	Renk Seçici (İlk Renk)
+	Color Picker (Last Color)	Renk Seçici (Son Renk)
+	Pick a Palette Colour From the Image	Görselden bir palet rengi seçin
+	Table Color	Tablo Rengi
+	Palette Color	Palet Rengi

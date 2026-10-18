@@ -3282,3 +3282,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # RAW Develop feature labels
 	RAW Develop	RAW 顯影
 	RAW Develop Filter	RAW 顯影濾鏡
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	設為透明
+	Clear Transparency	清除透明
+	Color Picker (First Color)	檢色器（第一個顏色）
+	Color Picker (Last Color)	檢色器（最後一個顏色）
+	Pick a Palette Colour From the Image	從圖像中選取調色盤顏色
+	Table Color	表格顏色
+	Palette Color	調色盤顏色

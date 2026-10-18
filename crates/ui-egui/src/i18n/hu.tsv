@@ -4533,3 +4533,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Vászonméret automatikus módosítása
 	Keep Relative Position During Layer Reordering	Relatív pozíció megtartása a rétegek átrendezésekor
 	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Átlátszóvá állítás
+	Clear Transparency	Átlátszóság törlése
+	Color Picker (First Color)	Színválasztó (első szín)
+	Color Picker (Last Color)	Színválasztó (utolsó szín)
+	Pick a Palette Colour From the Image	Palettaszín kiválasztása a képből
+	Table Color	Táblaszín
+	Palette Color	Palettaszín

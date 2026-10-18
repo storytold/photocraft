@@ -31,6 +31,7 @@ photocraft-format = { workspace = true }
 # Decoding the brand mark's PNG (`brand.rs`); already linked through photocraft-io.
 photocraft-codecs = { workspace = true }
 # Reading embedded thumbnail resources (1036/1033) for recent files in Home screen.
+# The `.act` palette parser (`palette_file_ui.rs`) — the same one the swatch import/export use.
 photocraft-psd = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }

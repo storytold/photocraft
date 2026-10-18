@@ -475,12 +475,42 @@ fn hash01(x: usize, y: usize, seed: u32) -> f32 {
     (h & 0xffff) as f32 / 65535.0
 }
 
-/// Maps every opaque pixel to its palette entry (in place) with the chosen dither; returns the
-/// index per pixel. Pixels with alpha < ½ become index `transparent` (and alpha 0) when given;
-/// otherwise alpha is kept. `amount` (0..=1) scales diffusion / pattern / noise strength.
-pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amount: f32, transparent: Option<usize>) -> Vec<u8> {
+/// Maps every pixel to its palette entry (in place) with the chosen dither; returns the index
+/// per pixel. With `transparent`, pixels of alpha < ½ become that entry (stored with its colour
+/// and alpha 0), and an opaque pixel whose nearest entry is it becomes transparent too. Without
+/// one, `opaque_clear` flattens clear pixels to opaque (an explicit "no transparency" request);
+/// otherwise fully transparent pixels are left alone and the rest keep their alpha. `amount`
+/// (0..=1) scales diffusion / pattern / noise strength.
+pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amount: f32, transparent: Option<usize>, opaque_clear: bool) -> Vec<u8> {
     let lookup = Nearest::new(pal.iter().map(|c| c.map(f32::from)));
-    quantize_with(px, w, pal, dither, amount, transparent, |c| lookup.find(c.map(|v| v * 255.0)))
+    let mode = match transparent {
+        Some(t) => AlphaMode::Transparent(t),
+        None if opaque_clear => AlphaMode::Opaque,
+        None => AlphaMode::Keep,
+    };
+    quantize_with(px, w, pal, dither, amount, mode, |c| lookup.find(c.map(|v| v * 255.0)))
+}
+
+/// The alpha handling of a quantized pixel (see [`quantize`]).
+#[derive(Clone, Copy, Debug)]
+enum AlphaMode {
+    /// Pixels of alpha < ½ take entry `t` (stored with its colour, alpha 0); an opaque pixel
+    /// whose nearest entry is `t` becomes transparent too.
+    Transparent(usize),
+    /// Every pixel comes out opaque (an explicit "no transparency" request).
+    Opaque,
+    /// Legacy: fully transparent pixels are left alone, the rest keep their alpha.
+    Keep,
+}
+
+/// The output alpha of a quantized pixel: transparent at the transparent entry, opaque when an
+/// entry exists (or [`AlphaMode::Opaque`] flattens clear pixels), else the source alpha.
+fn out_alpha(mode: AlphaMode, k: usize, src: f32) -> f32 {
+    match mode {
+        AlphaMode::Transparent(t) if t == k => 0.0,
+        AlphaMode::Transparent(_) | AlphaMode::Opaque => 1.0,
+        AlphaMode::Keep => src,
+    }
 }
 
 fn quantize_with(
@@ -489,7 +519,7 @@ fn quantize_with(
     pal: &[Rgb8],
     dither: Dither,
     amount: f32,
-    transparent: Option<usize>,
+    mode: AlphaMode,
     nearest: impl Fn([f32; 3]) -> usize + Sync,
 ) -> Vec<u8> {
     let h = px.len().checked_div(w).unwrap_or(0);
@@ -503,13 +533,13 @@ fn quantize_with(
             for (x, (ip, p)) in idxrow.iter_mut().zip(pxrow.iter_mut()).enumerate() {
                 let pv = *p;
                 if pv[3] < 0.5 {
-                    if let Some(t) = transparent {
+                    if let AlphaMode::Transparent(t) = mode {
                         *ip = t as u8;
-                        *p = [0.0, 0.0, 0.0, 0.0];
+                        let e = pal.get(t).copied().unwrap_or([0, 0, 0]).map(|v| f32::from(v) / 255.0);
+                        *p = [e[0], e[1], e[2], 0.0];
                         continue;
-                    }
-                    if pv[3] <= 0.0 {
-                        continue;
+                    } else if matches!(mode, AlphaMode::Keep) && pv[3] <= 0.0 {
+                        continue; // No entry to carry the transparency: leave it alone.
                     }
                 }
                 let mut c = [pv[0], pv[1], pv[2]];
@@ -522,7 +552,7 @@ fn quantize_with(
                 let k = nearest(c);
                 *ip = k as u8;
                 let e = pal[k].map(|v| f32::from(v) / 255.0);
-                *p = [e[0], e[1], e[2], if transparent.is_some() { 1.0 } else { pv[3] }];
+                *p = [e[0], e[1], e[2], out_alpha(mode, k, pv[3])];
             }
         });
         return idx;
@@ -539,13 +569,13 @@ fn quantize_with(
             let i = y * w + x;
             let p = px[i];
             if p[3] < 0.5 {
-                if let Some(t) = transparent {
+                if let AlphaMode::Transparent(t) = mode {
                     idx[i] = t as u8;
-                    px[i] = [0.0, 0.0, 0.0, 0.0];
+                    let e = pal.get(t).copied().unwrap_or([0, 0, 0]).map(|v| f32::from(v) / 255.0);
+                    px[i] = [e[0], e[1], e[2], 0.0];
                     continue;
-                }
-                if p[3] <= 0.0 {
-                    continue;
+                } else if matches!(mode, AlphaMode::Keep) && p[3] <= 0.0 {
+                    continue; // No entry to carry the transparency: leave it alone.
                 }
             }
             let mut c = [p[0], p[1], p[2]];
@@ -580,7 +610,7 @@ fn quantize_with(
                     next[x + 2][q] += d[q] / 16.0;
                 }
             }
-            px[i] = [e[0], e[1], e[2], if transparent.is_some() { 1.0 } else { p[3] }];
+            px[i] = [e[0], e[1], e[2], out_alpha(mode, k, p[3])];
         }
     }
     idx
