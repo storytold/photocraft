@@ -46,7 +46,7 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
 /// Export As (one file per layer, #3629) run on every selected layer instead.
 pub fn single_layer_only(id: &str) -> bool {
     let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
-    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle") || (id.starts_with("layer.layerMask.") && !adds_mask)
+    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.removeBackgroundAI") || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
@@ -92,6 +92,15 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     // Photoshop offers it under Rasterize Layer for a layer with a style (it bakes the effects).
     if multi || !l.effects.items.is_empty() {
         v.push(Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")));
+    }
+    if !multi {
+        // The matte is a neural inference that replaces this layer's pixels; text, shape,
+        // fill and smart layers must be rasterized first (the command writes through
+        // `Layer::surface_mut()`, which is `Raster`-only). Hidden layers are gated out:
+        // the composite cannot address their surfaces.
+        if matches!(l.content, LayerContent::Raster(_)) && l.visible {
+            v.push(Some((tl!("Remove Background (AI)…"), "layer.removeBackgroundAI")));
+        }
     }
     v.push(None);
     // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
