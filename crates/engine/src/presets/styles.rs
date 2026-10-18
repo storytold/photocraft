@@ -111,6 +111,11 @@ pub fn builtin() -> Vec<Group<StylePreset>> {
                     None,
                 ),
                 s("Hollow", json!([["stroke", {"size": 2, "color": "#222222", "position": "inside"}]]), Some(0.0)),
+                s(
+                    "Zebra",
+                    json!([["patternOverlay", {"pattern": "Zebra", "scale": 50}], ["bevelEmboss", {"style": "inner", "size": 3, "depth": 60}], ["stroke", {"size": 3, "color": "#111111", "position": "outside"}], ["dropShadow", {"distance": 4, "size": 6, "opacity": 45}]]),
+                    None,
+                ),
             ],
         ),
         Group::new(
