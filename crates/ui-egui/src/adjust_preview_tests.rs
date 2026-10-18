@@ -333,3 +333,60 @@ fn proxy_preview_has_its_own_ids() {
     }
     assert!(proxy_with_settings(&proxy, "levels", &json!({"gamma": "x"})).is_err());
 }
+
+/// A Properties-panel drag damages the layer's area and only the part of it the view shows,
+/// catching up as the view moves; a new document revision ends the session (#6839).
+#[test]
+fn a_live_adjust_drag_damages_only_the_visible_part_of_its_layer() {
+    let (doc, target) = document(ColorMode::Rgb, SampleType::U8, false);
+    let (id, bounds) = (doc.id, doc.bounds());
+    let mut app = app_with(doc.clone(), target);
+
+    let k1 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.1}));
+    let k2 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.4}));
+    assert_ne!(k1, k2, "a different setting is a different key");
+    assert_eq!(k1 & LIVE_TAG, LIVE_TAG, "keys carry the live tag");
+    assert_eq!(k1 >> LIVE_SESSION_SHIFT, k2 >> LIVE_SESSION_SHIFT, "the same drag is one session");
+    assert_ne!(k1 >> LIVE_SESSION_SHIFT, TAG >> LIVE_SESSION_SHIFT, "never the dialog's tag");
+
+    // Between two of the drag's previews, and between one and the committed document.
+    let region = live_switch_region(&app, id, 7, k1, k2).expect("same session");
+    assert_eq!(region, bounds, "the region is the whole document");
+    assert!(live_switch_region(&app, id, 7, 0, k2).is_some(), "from the committed document");
+    assert!(live_switch_region(&app, id, 7, k1, 0).is_some(), "back to the committed document");
+    assert!(live_switch_region(&app, id, 7, 0, 0).is_none(), "the document to itself is no switch");
+    assert!(live_switch_region(&app, id, 8, k1, k2).is_none(), "another revision is another session");
+
+    // Only the visible part is composited now; moving the view asks for the rest.
+    let mid = region.x0 + region.width() as i32 / 2;
+    let left = Rect::new(region.x0, region.y0, mid, region.y1);
+    assert_eq!(live_switch_damage(&mut app, k2, region, left), region.intersect(&left));
+    assert!(live_uncovered(&mut app, id, k2, left).is_none(), "what was just composited is covered");
+    let right = Rect::new(mid, region.y0, region.x1, region.y1);
+    assert_eq!(live_uncovered(&mut app, id, k2, right), Some(region.intersect(&right)), "the view moved");
+    assert!(live_uncovered(&mut app, id, k2, right).is_none(), "and is covered once composited");
+    assert!(live_uncovered(&mut app, id, k1, right).is_none(), "another preview's coverage is not this one's");
+
+    // Switching back to the document composites the whole region, not just the view.
+    assert_eq!(live_switch_damage(&mut app, 0, region, left), region);
+}
+
+/// A reveal-all mask stores its coverage in the surface's default pixel and reports an empty
+/// `content_bounds()`. Narrowing the region by it emptied the damage and the canvas drew nothing
+/// for a whole drag — every adjustment layer `layer.newAdjustmentLayer` creates has one (#6839).
+#[test]
+fn a_reveal_all_mask_does_not_empty_the_damage_region() {
+    let (mut doc, target) = document(ColorMode::Rgb, SampleType::U8, false);
+    let bounds = doc.bounds();
+    let mask = photocraft_doc::LayerMask::reveal_all();
+    assert!(mask.surface.content_bounds().is_empty(), "a reveal-all mask has no written content");
+    doc.layer_mut(target).expect("target").mask = Some(mask);
+    let id = doc.id;
+    let mut app = app_with(doc.clone(), target);
+
+    let k1 = live_key(&mut app, &doc, 3, target, &json!({"gamma": 1.1}));
+    let k2 = live_key(&mut app, &doc, 3, target, &json!({"gamma": 1.4}));
+    let region = live_switch_region(&app, id, 3, k1, k2).expect("same session");
+    assert_eq!(region, bounds, "the whole document, not the mask's empty content");
+    assert!(!live_switch_damage(&mut app, k2, region, bounds).is_empty(), "something is composited");
+}

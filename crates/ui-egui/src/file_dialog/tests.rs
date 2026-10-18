@@ -838,6 +838,37 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     assert!(!app.ui.status_error, "{}", app.ui.status);
 }
 
+/// #6599: Quick Export as PNG with Location = Same Folder asks before replacing the document's
+/// own file (a document opened from photo.png), and keeps writing beside a PSD without a prompt.
+#[test]
+fn same_folder_quick_export_asks_before_replacing_the_documents_own_file() {
+    let dir = std::env::temp_dir().join(format!("photocraft-quick-own-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let own = dir.join("photo.png").to_string_lossy().into_owned();
+    std::fs::write(&own, b"original").unwrap();
+    let (mut app, open, _) = app();
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
+    app.session.active_mut().unwrap().path = Some(own.clone());
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(open.borrow().len(), 1, "the save dialog asks");
+    assert_eq!(std::fs::read(&own).unwrap(), b"original", "nothing written before the answer");
+    answer(&open, Some(FileDialogAnswer::SaveTo(own.clone())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(std::fs::read(&own).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "replaced once confirmed: {}", app.ui.status);
+
+    // Beside a PSD, Same Folder still writes without a prompt.
+    app.session.active_mut().unwrap().path = Some(dir.join("photo.psd").to_string_lossy().into_owned());
+    std::fs::write(&own, b"earlier export").unwrap();
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no dialog");
+    assert!(std::fs::read(&own).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn cancelling_multi_layer_quick_export_writes_nothing() {
     let (mut app, open, written) = app();

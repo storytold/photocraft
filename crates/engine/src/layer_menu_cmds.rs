@@ -373,14 +373,17 @@ fn reveal_in_finder(s: &mut Session, p: &Value) -> Result<Value> {
     let SmartSource::Linked { path } = &sm.source else {
         return Err(other("embedded smart objects have no file to reveal"));
     };
-    reveal(path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
+    // The path is stored in the document: shown only when it would be followed.
+    let file =
+        crate::doc_path::resolve_in(path, d.path.as_deref().map(std::path::Path::new)).map_err(|why| crate::doc_path::refusal("the linked file", path, why))?;
+    reveal(&file.to_string_lossy(), p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
 }
 
 /// Show `path` in the platform file manager ([`reveal_command`] + [`spawn`]); `dry_run` answers
 /// the program and arguments instead (tests). Shared by the smart-object command and the document
 /// tab's Reveal in Finder (UI-217-6).
 pub(crate) fn reveal(path: &str, dry_run: bool) -> Result<Value> {
-    let (program, args) = reveal_command(path);
+    let (program, args) = reveal_command(path)?;
     if dry_run {
         return Ok(json!({"program": program, "args": args}));
     }
@@ -389,14 +392,23 @@ pub(crate) fn reveal(path: &str, dry_run: bool) -> Result<Value> {
 }
 
 /// The file-manager invocation that selects `path` on this platform.
-pub fn reveal_command(path: &str) -> (&'static str, Vec<String>) {
-    if cfg!(target_os = "macos") {
-        ("open", vec!["-R".into(), path.into()])
-    } else if cfg!(target_os = "windows") {
-        ("explorer", vec![format!("/select,{path}")])
-    } else {
-        let parent = std::path::Path::new(path).parent().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned());
-        ("xdg-open", vec![parent])
+pub fn reveal_command(path: &str) -> Result<(&'static str, Vec<String>)> {
+    reveal_command_on(std::env::consts::OS, path)
+}
+
+/// [`reveal_command`] on the platform `os` (a `std::env::consts::OS` value).
+fn reveal_command_on(os: &str, path: &str) -> Result<(&'static str, Vec<String>)> {
+    match os {
+        // `--` ends the options: a path starting with `-` is not read as one.
+        "macos" => Ok(("open", vec!["-R".into(), "--".into(), path.into()])),
+        // Explorer splits `/select,` arguments at commas and reads quotes itself, so such a path
+        // would select something else.
+        "windows" if path.contains([',', '"']) => Err(other(format!("{path} can't be shown in Explorer: its path contains a comma or a quotation mark"))),
+        "windows" => Ok(("explorer", vec![format!("/select,{path}")])),
+        _ => {
+            let parent = std::path::Path::new(path).parent().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned());
+            Ok(("xdg-open", vec![parent]))
+        }
     }
 }
 

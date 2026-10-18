@@ -43,6 +43,10 @@ roxmltree = "0.20"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3"
 
+# Printing on Unix: an IPP client for CUPS (pure Rust); the web build cannot print.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+photocraft-ipp = { workspace = true }
+
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.

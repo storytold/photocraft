@@ -3,7 +3,12 @@
 //! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
 //! --control-token-file <path>] [--automation-read-root <dir>]
 //! [--automation-write-root <dir>] [--safe-gpu] [--in-window-menus] [--present-mode <mode>]
-//! [--frame-latency <n>] [--stroke-trace <stderr|file.csv>] [--new-instance] [files…]`
+//! [--frame-latency <n>] [--stroke-trace <stderr|file.csv>] [--new-instance] [--] [files…]`
+//! (`photocraft --help` prints [`USAGE`]; `--version` prints the version).
+//!
+//! Any other argument starting with `-` is a usage error (exit status 2, issue #6431), so a typo
+//! such as `--safegpu` doesn't open the window and then fail to open the flag as a file. A file
+//! whose name starts with `-` goes after `--`.
 //!
 //! On Windows and Linux a launch hands its files to the PhotoCraft that is already running (new
 //! tabs in its window) and exits; `--new-instance` starts a separate copy instead, as does any
@@ -58,6 +63,9 @@ mod photoshop_settings;
 #[cfg(target_os = "linux")]
 mod portal_save;
 mod presentation;
+// The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
+#[cfg(any(target_os = "linux", test))]
+mod print_portal;
 mod screen_color;
 mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
@@ -149,21 +157,63 @@ fn parse_control_port(value: &str, source: &str) -> Result<u16, String> {
     value.trim().parse().map_err(|_| format!("{source}: `{value}` is not a valid port (expected a number from 0 to 65535)"))
 }
 
-/// Process exit status for the collected `--control` / `PHOTOCRAFT_CONTROL_PORT` errors: `None`
-/// when there are none, else 2 (a command-line usage error), never 0.
-fn control_args_exit_code(errors: &[String]) -> Option<i32> {
+/// Process exit status for the collected usage errors (a bad `--control` /
+/// `PHOTOCRAFT_CONTROL_PORT`, an unknown option): `None` when there are none, else 2 (a
+/// command-line usage error), never 0.
+fn usage_exit_code(errors: &[String]) -> Option<i32> {
     if errors.is_empty() { None } else { Some(2) }
+}
+
+/// `photocraft --help`. Keep in step with the options `main` accepts and the module docs.
+const USAGE: &str = "\
+Usage: photocraft [options] [--] [files…]
+
+Opens PhotoCraft with the given files.
+
+Options:
+  -h, --help                       Print this help and exit
+      --version                    Print the version, commit and build date and exit
+      --safe-gpu                   Start with the CPU renderer for this launch (after a graphics driver crash)
+      --in-window-menus            macOS: keep the menus inside the window instead of the menu bar
+      --new-instance               Windows and Linux: start a separate PhotoCraft instead of opening
+                                   the files in the one already running
+      --present-mode <mode>        How frames reach the display: fifo, autovsync or novsync
+      --frame-latency <n>          Frames queued for the display: 1 to 3
+      --stroke-trace <stderr|file.csv>
+                                   Time each brush stroke's frames
+      --control <port>             Start the localhost JSON-lines control server on this port
+      --control-token <64-hex>     Control server token (default: a new random one, printed)
+      --control-token-file <path>  Read the control server token from this file, or create it
+                                   with a new one
+      --automation-read-root <dir> Directory the control server may read files from
+      --automation-write-root <dir>
+                                   Directory the control server may write files to
+  --                               Treat every later argument as a file, even one starting with `-`
+
+A bad --present-mode, --frame-latency or --stroke-trace value is reported and ignored.
+Environment: PHOTOCRAFT_CONTROL_PORT, PHOTOCRAFT_CONTROL_TOKEN, PHOTOCRAFT_CONTROL_TOKEN_FILE,
+PHOTOCRAFT_AUTOMATION_READ_ROOT, PHOTOCRAFT_AUTOMATION_WRITE_ROOT, PHOTOCRAFT_PRESENT_MODE,
+PHOTOCRAFT_FRAME_LATENCY, PHOTOCRAFT_STROKE_TRACE, PHOTOCRAFT_IN_WINDOW_MENUS, PHOTOCRAFT_NEW_INSTANCE,
+PHOTOCRAFT_CONFIG_DIR.
+";
+
+/// Print to standard output for `--help` / `--version`. Unlike `println!`, never panics when
+/// stdout is closed or a pipe (`photocraft --help | head -1`).
+fn print_stdout(text: &str) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
 }
 
 #[cfg(test)]
 mod control_port_tests {
-    use super::{control_args_exit_code, parse_control_port};
+    use super::{parse_control_port, usage_exit_code};
 
     #[test]
     fn control_port_errors_exit_non_zero() {
-        assert_eq!(control_args_exit_code(&[]), None);
+        assert_eq!(usage_exit_code(&[]), None);
         let errors = vec![parse_control_port("nope", "--control").unwrap_err()];
-        assert_eq!(control_args_exit_code(&errors), Some(2));
+        assert_eq!(usage_exit_code(&errors), Some(2));
     }
 
     #[test]
@@ -191,11 +241,11 @@ fn main() -> eframe::Result {
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     let mut control_port: Option<u16> = None;
-    let mut control_arg_errors: Vec<String> = Vec::new();
+    let mut usage_errors: Vec<String> = Vec::new();
     if let Some(value) = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().filter(|v| !v.trim().is_empty()) {
         match parse_control_port(&value, "PHOTOCRAFT_CONTROL_PORT") {
             Ok(port) => control_port = Some(port),
-            Err(error) => control_arg_errors.push(error),
+            Err(error) => usage_errors.push(error),
         }
     }
     let mut control_token = None;
@@ -214,18 +264,32 @@ fn main() -> eframe::Result {
     let (mut present_mode_arg, mut frame_latency_arg, mut stroke_trace_arg): (Option<String>, Option<String>, Option<String>) = (None, None, None);
     let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
     let mut args = std::env::args_os().skip(1);
+    // After `--`, every argument is a file, even one that starts with `-`.
+    let mut only_files = false;
     while let Some(a) = args.next() {
+        if only_files {
+            match a.into_string() {
+                Ok(s) => files.push(s),
+                Err(raw) => unreadable_paths.push(raw.to_string_lossy().into_owned()),
+            }
+            continue;
+        }
         match a.to_str() {
+            Some("--") => only_files = true,
+            Some("--help" | "-h") => {
+                print_stdout(USAGE);
+                return Ok(());
+            }
             Some("--control") => match args.next() {
                 Some(value) => match parse_control_port(&value.to_string_lossy(), "--control") {
                     Ok(port) => control_port = Some(port),
-                    Err(error) => control_arg_errors.push(error),
+                    Err(error) => usage_errors.push(error),
                 },
-                None => control_arg_errors.push("--control: missing port value (expected `--control <port>`)".to_string()),
+                None => usage_errors.push("--control: missing port value (expected `--control <port>`)".to_string()),
             },
             Some("--control-token") => match args.next().map(std::ffi::OsString::into_string) {
                 Some(Ok(token)) => control_token = Some(token),
-                Some(Err(raw)) => control_arg_errors.push(format!("--control-token: value is not valid Unicode (`{}`)", raw.to_string_lossy())),
+                Some(Err(raw)) => usage_errors.push(format!("--control-token: value is not valid Unicode (`{}`)", raw.to_string_lossy())),
                 None => control_token = None,
             },
             Some("--control-token-file") => control_token_file = args.next().map(std::path::PathBuf::from),
@@ -264,23 +328,28 @@ fn main() -> eframe::Result {
             }
             Some("--new-instance") => new_instance = true,
             Some("--version") => {
-                println!("photocraft {}", photocraft_engine::build_info::long_version());
+                print_stdout(&format!("photocraft {}\n", photocraft_engine::build_info::long_version()));
                 return Ok(());
             }
             // Old macOS passes a process serial number when launched from Finder.
             Some(s) if s.starts_with("-psn_") => {}
+            // A typo such as `--safegpu`, or `--help` spelt another way, must not open the window
+            // and then fail to open the flag as a file (#6431).
+            Some(s) if s.starts_with('-') => usage_errors.push(format!("unknown option `{s}` (put `--` before a file name that starts with `-`)")),
             Some(s) => files.push(s.to_owned()),
             None => unreadable_paths.push(a.to_string_lossy().into_owned()),
         }
     }
 
-    // A malformed control port must not silently drop the control server (issue #701): name the
-    // bad value and fail the launch, like `photocraft-cli serve --port` does for the same typo.
-    // Exit status 2 is the usual command-line usage error, so a launcher sees the failure.
-    if let Some(code) = control_args_exit_code(&control_arg_errors) {
-        for error in &control_arg_errors {
+    // A malformed control port must not silently drop the control server (issue #701), and an
+    // unknown option must not open the window (#6431): name the bad argument and fail the launch,
+    // like `photocraft-cli` does for the same typos. Exit status 2 is the usual command-line usage
+    // error, so a launcher sees the failure.
+    if let Some(code) = usage_exit_code(&usage_errors) {
+        for error in &usage_errors {
             eprintln!("photocraft: {error}");
         }
+        eprintln!("Run `photocraft --help` for usage.");
         std::process::exit(code);
     }
 
@@ -499,7 +568,15 @@ fn main() -> eframe::Result {
                         services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
                 }
             }
-            let mut app = PhotocraftApp::new(Session::new(), services);
+            #[cfg(target_os = "linux")]
+            let session = {
+                let mut session = Session::new();
+                session.print_spooler = print_portal::spooler();
+                session
+            };
+            #[cfg(not(target_os = "linux"))]
+            let session = Session::new();
+            let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;

@@ -437,6 +437,54 @@ fn export_preferences_drive_quick_export() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
+/// #6599: with Location = Same Folder, a document opened from `photo.png` would be exported over
+/// `photo.png` itself. Without a `path` that is refused and the file is left alone; named
+/// explicitly (the save dialog's answer) it is written.
+#[test]
+fn quick_export_never_replaces_the_documents_own_file_unasked() {
+    let dir = tmp("quick_own_file");
+    let mut s = session(8);
+    s.execute("file.export.exportPreferences", json!({"quickExportLocation": "sameFolder", "quickExportFormat": "png"})).unwrap();
+    let own = format!("{dir}/photo.png");
+    std::fs::write(&own, b"original").unwrap();
+    s.active_mut().unwrap().path = Some(own.clone());
+    assert_eq!(quick_export_target(&s), Some(own.clone()));
+    assert!(quick_export_target_is_own_file(&s));
+    let e = s.execute("file.export.quickExport", json!({})).unwrap_err().to_string();
+    assert!(e.contains("own file"), "{e}");
+    assert_eq!(std::fs::read(&own).unwrap(), b"original", "the source is untouched");
+    s.execute("file.export.quickExport", json!({"path": own})).unwrap();
+    assert_eq!(decode(&own).dimensions(), (64, 48));
+    // Another format, or a PSD's earlier export beside it, is still written without asking.
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg"})).unwrap();
+    assert!(!quick_export_target_is_own_file(&s));
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/photo.jpg")));
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png"})).unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/photo.psd"));
+    assert!(!quick_export_target_is_own_file(&s));
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(own));
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
+#[test]
+fn same_file_sees_through_other_names_for_one_file() {
+    let dir = tmp("same_file");
+    let (a, b, c) = (format!("{dir}/a.png"), format!("{dir}/b.png"), format!("{dir}/c.png"));
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&c, b"c").unwrap();
+    assert!(crate::file_cmds::same_file(&a, &a));
+    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/./a.png")));
+    assert!(!crate::file_cmds::same_file(&a, &c));
+    assert!(!crate::file_cmds::same_file(&a, &b), "a missing file is not the same file");
+    #[cfg(unix)]
+    {
+        std::fs::hard_link(&a, &b).unwrap();
+        assert!(crate::file_cmds::same_file(&a, &b), "a hard link is the same file");
+    }
+    #[cfg(windows)]
+    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/A.PNG")), "NTFS names ignore case");
+}
+
 #[test]
 fn webp_export_preferences_select_lossless_or_lossy_output() {
     let dir = tmp("quick_webp_quality");
@@ -544,6 +592,47 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// #6614: two layers, or two default variants, naming one file never overwrite each other: the
+/// layer higher in the Layers panel keeps the file, whatever the case of its name, and the
+/// others are reported.
+#[test]
+fn image_assets_never_write_one_file_twice() {
+    let dir = tmp("asset-collisions");
+    let mut s = session(8);
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("Top", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    let mut d = (*s.active().unwrap().doc).clone();
+    let id = |d: &photocraft_doc::Document, name: &str| d.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id;
+    let (top, logo) = (id(&d, "Top"), id(&d, "Logo"));
+    d.layer_mut(top).unwrap().name = "Logo.PNG".into();
+    d.layer_mut(logo).unwrap().name = "logo.png, logo.png".into();
+    let (files, errors) = generate_assets(&d, &dir);
+    assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("Logo.png")]);
+    assert_eq!(decode(&files[0]).dimensions(), (4, 4), "the top layer keeps the file");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors.iter().all(|e| e["error"].as_str().unwrap().contains("another layer already writes this file")), "{errors:?}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "one file, not a second one under another case");
+
+    // Two default variants that land on one name: the first keeps it.
+    let dir = tmp("asset-variant-collisions");
+    d.layer_mut(top).unwrap().name = "icon.png".into();
+    d.layer_mut(logo).unwrap().name = "Logo".into();
+    d.layers
+        .push(Layer::new("default 50% + 200% + 200% @2x", LayerContent::Group(photocraft_doc::Group { children: vec![], expanded: false, artboard: None })));
+    let (files, errors) = generate_assets(&d, &dir);
+    let names: Vec<_> = files.iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["icon.png", "icon@2x.png"]);
+    assert_eq!(decode(&files[0]).dimensions(), (2, 2), "the 50% variant keeps icon.png");
+    assert_eq!(errors.len(), 1, "{errors:?}");
 }
 
 #[test]

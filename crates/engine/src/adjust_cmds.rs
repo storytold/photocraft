@@ -296,6 +296,18 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
 pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<Surface> {
+    // A Color Lookup filter re-reads its LUT `file`, a path stored in the document: followed only
+    // as `doc_path` allows, else the filter can't run (like a missing file).
+    let resolved;
+    let p = match p.get("file").and_then(Value::as_str).filter(|f| kind == "colorLookup" && !f.is_empty()) {
+        Some(file) => {
+            let mut q = p.clone();
+            q["file"] = json!(crate::doc_path::resolve(file).ok()?.to_str()?);
+            resolved = q;
+            &resolved
+        }
+        None => p,
+    };
     let mut out = surf.clone();
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);

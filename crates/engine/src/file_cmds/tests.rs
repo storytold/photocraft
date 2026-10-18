@@ -1033,7 +1033,7 @@ fn reveal_in_finder_reveals_the_documents_saved_path() {
     let path = "/tmp/pics/a.psd";
     s.active_mut().unwrap().path = Some(path.into());
     let r = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap();
-    let (program, args) = crate::layer_menu_cmds::reveal_command(path);
+    let (program, args) = crate::layer_menu_cmds::reveal_command(path).unwrap();
     assert_eq!(r["program"], json!(program));
     assert_eq!(r["args"], json!(args));
     // The tab menu names a background tab: the active document is not the one revealed.

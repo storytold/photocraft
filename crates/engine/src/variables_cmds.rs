@@ -199,7 +199,9 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
         return Ok(());
     }
     let fmt = doc.pixel_format();
-    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
+    // The path is stored in the document's data sets.
+    let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
+    let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);

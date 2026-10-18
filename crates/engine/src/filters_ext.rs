@@ -466,13 +466,15 @@ fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<algo::Image>> 
 
 /// The session-free part of [`resolve`]: Displace's `mapPath`. Smart filters record params, not
 /// the map, so their re-render reads the map again here; without it the filter passed the pixels
-/// through. `mapDocument` needs the session and is left unresolved.
+/// through. The path is stored in the document, so it is followed only as
+/// [`crate::doc_path::resolve`] allows. `mapDocument` needs the session and is left unresolved.
 pub(crate) fn resolve_map_path(fp: &mut FilterParams, p: &Value) -> Result<()> {
     if let FilterParams::Displace { map, .. } = fp
         && map.is_none()
         && let Some(path) = map_path(p)
     {
-        *map = map_from_path(path, p.get("mapLayer").and_then(Value::as_u64))?.map(Arc::new);
+        let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the displacement map", path, why))?;
+        *map = map_from_path(&file.to_string_lossy(), p.get("mapLayer").and_then(Value::as_u64))?.map(Arc::new);
     }
     Ok(())
 }

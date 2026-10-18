@@ -193,6 +193,16 @@ jobs:
           cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
         shell: bash
 
+      # Every command against adversarial params must return Err, never panic or hang (AGENTS.md
+      # Rule 9). It is `#[ignore]`d (slow), so Test skips it. Same packages, features and targets as
+      # Test, so nothing rebuilds: `--test panic_hunt` would drop the other crates' dev-dependency
+      # features and recompile the whole graph. The `ci` profile terminates it if it hangs.
+      - name: Panic hunt
+        if: runner.os == 'Linux'
+        run: >-
+          cargo nextest run --profile ci --workspace --locked --features heif --lib --bins --tests
+          --run-ignored only -E 'binary_id(photocraft-engine::panic_hunt)'
+
       - name: Doctests
         if: matrix.part == 'all' || matrix.part == 'unit'
         run: cargo test --workspace --locked --features heif --doc

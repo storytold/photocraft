@@ -77,8 +77,13 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
+/// A linked file's bytes; `None` when it is missing or its path is not followed
+/// ([`crate::doc_path::resolve`]).
 fn read_file(path: &str) -> Option<Vec<u8>> {
-    if path.is_empty() { None } else { photocraft_format::read_file(std::path::Path::new(path)).ok() }
+    if path.is_empty() {
+        return None;
+    }
+    photocraft_format::read_file(&crate::doc_path::resolve(path).ok()?).ok()
 }
 
 /// The source file of a smart object: embedded bytes, the PSD's embedded linked-layer data (PSD
@@ -492,10 +497,14 @@ fn refresh_or_fail(doc: &mut Document, id: LayerId) -> Result<()> {
 
 fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<()> {
     if refresh_in(doc, id, ctx)? {
-        Ok(())
-    } else {
-        Err(other("the smart object's contents are unavailable (missing linked file?), so it can't be re-rendered"))
+        return Ok(());
     }
+    if let SmartSource::Linked { path } = &smart(doc, id)?.source
+        && let Err(why @ crate::doc_path::NotFollowed::Refused(_)) = crate::doc_path::resolve(path)
+    {
+        return Err(crate::doc_path::refusal("the linked file", path, why));
+    }
+    Err(other("the smart object's contents are unavailable (missing linked file?), so it can't be re-rendered"))
 }
 
 fn smart(doc: &Document, id: LayerId) -> Result<&SmartObject> {

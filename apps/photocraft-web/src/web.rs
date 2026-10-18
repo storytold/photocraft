@@ -1,6 +1,8 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -79,11 +81,13 @@ pub fn start() {
                 Box::new(move |cc| {
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
+                    let place_inbox: Inbox = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone()));
+                    let drag = listen_drag(&pen_target);
+                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -97,7 +101,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, unsaved, served, database, presets }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
                 }),
             )
             .await;
@@ -138,6 +142,38 @@ fn listen_pen(target: &web_sys::HtmlCanvasElement, feed: photocraft_ui_egui::sty
             cb.forget();
         }
     }
+}
+
+/// The pointer in a drag over the page, in CSS pixels relative to the viewport (`clientX`,
+/// `clientY`): the last `dragover` or `drop` event's.
+type DragPos = Rc<Cell<Option<(f32, f32)>>>;
+
+/// Follows files dragged over the canvas. eframe's drop events carry no pointer position and the
+/// page gets no pointer events during a drag, so this is where a drop lands: on the document's
+/// canvas it places the files, elsewhere it opens them (#5749).
+fn listen_drag(target: &web_sys::HtmlCanvasElement) -> DragPos {
+    use wasm_bindgen::closure::Closure;
+    let pos = DragPos::default();
+    for kind in ["dragover", "drop"] {
+        let pos = pos.clone();
+        // A DragEvent is a MouseEvent: only its client position is read.
+        let cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| pos.set(Some((e.client_x() as f32, e.client_y() as f32))));
+        if target.add_event_listener_with_callback(kind, cb.as_ref().unchecked_ref()).is_ok() {
+            cb.forget();
+        }
+    }
+    pos
+}
+
+/// `Services::cursor_pos` for the web: the last drag position in egui points, mapped as eframe
+/// maps pointer events (relative to the canvas, divided by the zoom factor).
+fn drag_pos_service(canvas: web_sys::HtmlCanvasElement, pos: DragPos) -> photocraft_ui_egui::CursorPosFn {
+    Box::new(move |ctx: &egui::Context| {
+        let (x, y) = pos.get()?;
+        let rect = canvas.get_bounding_client_rect();
+        let zoom = ctx.zoom_factor();
+        (zoom.is_finite() && zoom > 0.0).then(|| egui::pos2((x - rect.left() as f32) / zoom, (y - rect.top() as f32) / zoom))
+    })
 }
 
 /// Closing or reloading the tab while a document has unsaved changes asks first, as closing the
@@ -219,10 +255,13 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 }
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
-/// so the app's own drop path can't handle them) and feed them through the inbox.
+/// so the app's own drop path can't handle them) and feed them through the inboxes.
 struct WebShell {
     app: PhotocraftApp,
+    /// Dropped files to open as documents.
     inbox: Inbox,
+    /// Dropped files to place on the active document's canvas.
+    place_inbox: Inbox,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
@@ -285,17 +324,26 @@ impl WebShell {
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for f in dropped {
-            let inbox = self.inbox.clone();
+        if !dropped.is_empty() {
+            let names: Vec<String> =
+                dropped.iter().map(|f| f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())).collect();
+            // Decided now, where the drop landed: on the document's canvas the files are placed
+            // as layers (as on the desktop), elsewhere opened.
+            let places = self.app.dropped_on_canvas(ctx, &names);
+            let files: Vec<_> = dropped.into_iter().zip(names).zip(places).collect();
+            let (inbox, place_inbox) = (self.inbox.clone(), self.place_inbox.clone());
             let ctx = ctx.clone();
+            // One after another, so they open or place in the order they were dropped.
             wasm_bindgen_futures::spawn_local(async move {
-                let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
-                match f.bytes_async().await {
-                    Ok(bytes) => {
-                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
-                        ctx.request_repaint();
+                for ((f, name), place) in files {
+                    match f.bytes_async().await {
+                        Ok(bytes) => {
+                            let queue = if place { &place_inbox } else { &inbox };
+                            queue.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                            ctx.request_repaint();
+                        }
+                        Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
                     }
-                    Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
                 }
             });
         }
@@ -333,7 +381,7 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox) -> Services {
+fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
@@ -384,6 +432,8 @@ fn services(inbox: Inbox) -> Services {
             photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
         })),
         inbox: Some(inbox),
+        place_inbox: Some(place_inbox),
+        cursor_pos: Some(cursor_pos),
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),

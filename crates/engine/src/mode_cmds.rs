@@ -444,6 +444,10 @@ fn parse_inks(cmd: &str, v: &Value, n: usize) -> Result<Vec<DuotoneInk>> {
         if let Some(pts) = ink.get("curve").and_then(Value::as_array) {
             let mut curve: Vec<CurvePoint> =
                 pts.iter().filter_map(|p| Some(CurvePoint { input: p.get(0)?.as_f64()? as f32 / 100.0, output: p.get(1)?.as_f64()? as f32 / 100.0 })).collect();
+            // 1e39 is a valid JSON number but inf as f32, and a .pcraft with an inf curve can't be saved.
+            if curve.iter().any(|p| !p.input.is_finite() || !p.output.is_finite()) {
+                return Err(bad(cmd, "curve points must be finite numbers 0..100"));
+            }
             curve.sort_by(|a, b| a.input.total_cmp(&b.input));
             if curve.len() >= 2 {
                 d.curve = curve;
