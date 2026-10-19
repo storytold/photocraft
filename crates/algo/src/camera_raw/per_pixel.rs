@@ -230,16 +230,18 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
 /// Develop's stages for settings whose only spatial stage is Shadows and Highlights, on a
 /// `w × h` image; `points` are the image's [`white_black_points`]. `None` when `p` needs another
 /// spatial stage or Calibration (these stages don't run it), Shadows or Highlights on a frame
-/// wider than the filter's working copy (the develop then filters a reduced copy), or Whites or
-/// Blacks without Shadows and Highlights and without `points`. The points themselves leave
-/// Calibration out, so a caller may cache them across Calibration changes.
+/// wider than the filter's working copy (the develop then filters a reduced copy) or only 2
+/// pixels on its short side, or Whites or Blacks without Shadows and Highlights and without
+/// `points`. The points themselves leave Calibration out, so a caller may cache them across
+/// Calibration changes.
 pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
     if p.spatial_beyond_local_tone() || !p.calibration_neutral() {
         return None;
     }
     // The develop leaves frames under 2 pixels on a side alone.
     let local_tone = if w >= 2 && h >= 2 { LocalTone::new(p.shadows, p.highlights) } else { None };
-    if local_tone.is_some() && w.max(h) > WORK_SIDE {
+    // At 2 pixels on the short side the GPU pass's pyramid has one level, so the CPU develops it.
+    if local_tone.is_some() && (w.max(h) > WORK_SIDE || w.min(h) <= 2) {
         return None;
     }
     let identity = p.is_identity();

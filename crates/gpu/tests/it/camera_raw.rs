@@ -346,6 +346,10 @@ fn identity_leaves_pixels_alone_and_spatial_settings_have_no_pass() {
     assert!(toned.local_tone.is_some() && toned.whites_blacks.is_none() && toned.measure_whites_blacks == Some([10.0, 0.0]));
     // Wider than the filter's working copy, the develop filters a reduced copy: the CPU's.
     assert!(per_pixel(&CameraRaw { shadows: 20.0, ..Default::default() }, 1601, 32, false, None).is_none());
+    // At 2 pixels on the short side the pass's pyramid has one level: the CPU's too.
+    for (w, h) in [(2, 2), (40, 2), (2, 40)] {
+        assert!(per_pixel(&CameraRaw { highlights: -20.0, ..Default::default() }, w, h, false, None).is_none(), "{w}×{h}");
+    }
 }
 
 #[test]
@@ -404,9 +408,11 @@ fn shadows_and_highlights() {
 fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
     let Some(mut g) = gpu() else { return };
     let p = CameraRaw { shadows: 60.0, highlights: -40.0, whites: 20.0, ..Default::default() };
-    // A frame 2 pixels on a side has a one-level pyramid: the passes refuse it (the CPU develops it).
+    // A frame 2 pixels on a side has a one-level pyramid: `per_pixel` sends it to the CPU, and
+    // the pass still refuses stages built for it elsewhere.
     for (w, h) in [(2, 2), (40, 2)] {
-        let stages = per_pixel(&p, w, h, false, None).unwrap();
+        assert!(per_pixel(&p, w, h, false, None).is_none(), "{w}×{h}");
+        let stages = per_pixel(&p, 3, 3, false, None).unwrap();
         assert!(g.dev.develop(&g.device, &g.queue, None, &image(w, h, Depth::Eight), None, [w as u32, h as u32], &stages).is_err());
     }
     for size in [(3, 3), (5, 3), (37, 23), (300, 7)] {
