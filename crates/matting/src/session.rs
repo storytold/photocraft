@@ -184,7 +184,7 @@ fn env() -> Result<ort::environment::Environment> {
                     candidates.push(std::path::PathBuf::from(&d).join(ort_plugin_name(ep)));
                 }
             }
-            let mut push = |dir: &std::path::Path, v: &mut Vec<std::path::PathBuf>| {
+            let push = |dir: &std::path::Path, v: &mut Vec<std::path::PathBuf>| {
                 for ep in ort_plugin_names() {
                     v.push(dir.join(ort_plugin_name(ep)));
                 }
@@ -270,9 +270,12 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
                 // INFERENCE_PRECISION_HINT). FP32 matters: the GPU plugin's
                 // default fp16 oneDNN kernels crash executing BiRefNet on Arc
                 // (primitive-exec error); FP32 runs correctly at ~26x CPU
-                // speed on an A770, and with the compile cache in the same
-                // JSON the kernel build is actually persisted across runs.
-                let mut attempt = |cache: bool| -> Result<ort::session::Session> {
+                // speed on an A770. The GPU plugin writes its compile cache
+                // into CACHE_DIR but does not reload it across processes
+                // under this EP, so the first session build after start-up
+                // pays the kernel build (~50 s, known limitation); steady
+                // state inference is the 2 s win.
+                let attempt = |cache: bool| -> Result<ort::session::Session> {
                     let load_config = if cache {
                         format!(r#"{{"GPU": {{"INFERENCE_PRECISION_HINT": "f32", "CACHE_DIR": {}}}}}"#, json_string(&cache_dir))
                     } else {
@@ -287,7 +290,7 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
                     if gpu_devices.is_empty() {
                         return Err(MattingError::Session("no OpenVINO GPU device registered".into()));
                     }
-                    let mut b = ort::session::Session::builder(&env).map_err(|e| MattingError::Session(e.to_string()))?;
+                    let b = ort::session::Session::builder(&env).map_err(|e| MattingError::Session(e.to_string()))?;
                     b.with_devices(gpu_devices, Some(&opts))
                         .map_err(|e| MattingError::Session(e.to_string()))?
                         .commit_from_file(path)
