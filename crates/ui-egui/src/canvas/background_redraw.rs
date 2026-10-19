@@ -121,6 +121,9 @@ pub(crate) struct Redraw {
     drawn: u64,
     /// The mip level of a reduced first picture still to land.
     preview: Option<u32>,
+    /// The reduced picture once it landed (mip level, its rect there, texels; about the size of
+    /// the view), put back along each finished block's pending neighbours (see [`poll`]).
+    shown: Option<(u32, Rect, Vec<u8>)>,
     rx: Receiver<Piece>,
     stop: Arc<AtomicBool>,
     started_ms: f64,
@@ -438,12 +441,19 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
                     r.pending[block] = false;
                     r.left -= 1;
                     r.drawn += b.width() as u64 * b.height() as u64;
+                    // Rebuilding the block's mip levels pads each level by a texel, which spills
+                    // into the reduced picture of pending neighbours (from their stale level 0):
+                    // put it back there.
+                    if let Some((level, rect, texels)) = &r.shown {
+                        upload_preview(r, gpu, doc, *level, *rect, texels, Some(b.inflate(1)));
+                    }
                     collect(r, block, texels);
                 }
             }
             Ok(Piece::Preview { level, rect, texels }) => {
-                upload_preview(r, gpu, doc, level, rect, &texels);
+                upload_preview(r, gpu, doc, level, rect, &texels, None);
                 r.preview = None;
+                r.shown = Some((level, rect, texels));
             }
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => break,
@@ -491,8 +501,9 @@ fn collect(r: &mut Redraw, block: usize, texels: Vec<u8>) {
 }
 
 /// Put a reduced first picture (`rect` of mip `level`) where blocks are still to come: they
-/// replace it as they land. Elsewhere the texture already shows the finished composite.
-fn upload_preview(r: &Redraw, gpu: &GpuCanvas, doc: DocId, level: u32, rect: Rect, texels: &[u8]) {
+/// replace it as they land. Elsewhere the texture already shows the finished composite. With
+/// `near`, only under the pending blocks that touch it.
+fn upload_preview(r: &Redraw, gpu: &GpuCanvas, doc: DocId, level: u32, rect: Rect, texels: &[u8], near: Option<Rect>) {
     let (k, stride) = (1 << level, rect.width());
     let px = stride as usize * rect.height() as usize;
     if px == 0 || !texels.len().is_multiple_of(px) {
@@ -509,9 +520,9 @@ fn upload_preview(r: &Redraw, gpu: &GpuCanvas, doc: DocId, level: u32, rect: Rec
             gpu.upload_level(doc.0, level, [at.x0 as u32, at.y0 as u32], [at.width(), at.height()], stride, t);
         }
     };
-    let touched = |b: &Rect| !reduce(*b, k).intersect(&rect).is_empty();
+    let touched = |b: &Rect| !reduce(*b, k).intersect(&rect).is_empty() && near.is_none_or(|n| !b.intersect(&n).is_empty());
     // A fresh redraw: every block under the picture is pending, so one upload covers them all.
-    if r.blocks.iter().zip(&r.pending).all(|(b, &p)| p || !touched(b)) {
+    if near.is_none() && r.blocks.iter().zip(&r.pending).all(|(b, &p)| p || !touched(b)) {
         put(rect);
     } else {
         for (b, _) in r.blocks.iter().zip(&r.pending).filter(|(b, p)| **p && touched(b)) {
@@ -631,6 +642,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             left,
             drawn,
             preview,
+            shown: None,
             rx,
             stop,
             started_ms,

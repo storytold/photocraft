@@ -838,3 +838,38 @@ fn a_zoomed_out_redraw_shows_a_reduced_picture_before_its_blocks() {
     assert_eq!(g.harness.state().perf.last_refresh, "background");
     assert_matches_synchronous(&mut g, doc);
 }
+
+#[test]
+fn a_finished_block_leaves_the_reduced_picture_of_its_pending_neighbours_alone() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    // Flat colour: the reduced picture is opaque everywhere, and the texture starts transparent.
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    g.harness.step();
+    let level = g.harness.state().redraws.get(&doc).and_then(|r| r.preview).expect("a redraw with a reduced first picture");
+    let k = 1 << level;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let (mut checked, mut last_left) = (0, usize::MAX);
+    while let Some(r) = g.harness.state().redraws.get(&doc) {
+        // After each of the first blocks to land once the picture is in: every pending block's
+        // part of the level is still the opaque reduced picture, edges included.
+        if r.shown.is_some() && r.left < r.blocks.len() && r.left > 0 && r.left != last_left && checked < 4 {
+            last_left = r.left;
+            let pending: Vec<Rect> = r.blocks.iter().zip(&r.pending).filter(|(_, p)| **p).map(|(b, _)| reduce(*b, k)).collect();
+            let (_, size, texels) = g.observer.read_level(doc.0, level).expect("level");
+            for b in &pending {
+                let clear = (b.y0..b.y1)
+                    .flat_map(|y| (b.x0..b.x1).map(move |x| (x, y)))
+                    .filter(|&(x, y)| texels[y as usize * size[0] as usize + x as usize][3] < 0.99)
+                    .count();
+                assert_eq!(clear, 0, "{clear} texels of pending block {b:?} (level {level}) lost the reduced picture");
+            }
+            checked += 1;
+        }
+        assert!(std::time::Instant::now() < deadline, "the redraw didn't finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        g.harness.step();
+    }
+    assert!(checked > 0, "no frame had both finished and pending blocks");
+    assert_matches_synchronous(&mut g, doc);
+}
