@@ -294,6 +294,24 @@ mod tests {
     }
 
     #[test]
+    fn shadows_on_a_two_pixel_proxy_develop_on_the_cpu_and_keep_the_gpu() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Some((mut app, ctx)) = gpu_app(8) else { return };
+        force_pass(&app);
+        crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+        app.gpu.as_ref().expect("GPU canvas").wait_camera_raw_pass();
+        let Some(gpu) = app.camera_raw.as_ref().and_then(|d| d.gpu.as_ref()) else {
+            eprintln!("skipping: the device can't run the Camera Raw pass");
+            return;
+        };
+        // A layer about 450 times wider than tall has a 2 px tall proxy: its pyramid has one level.
+        let thin = vec![[0.4, 0.3, 0.2, 1.0]; 40 * 2];
+        assert!(gpu.develop(&thin, None, 40, 2, &CameraRaw { shadows: 50.0, ..Default::default() }, false).is_none());
+        let px = vec![[0.4, 0.3, 0.2, 1.0]; 64 * 48];
+        assert!(gpu.develop(&px, None, 64, 48, &CameraRaw { exposure: 0.5, ..Default::default() }, false).is_some(), "the GPU develop stays on");
+    }
+
+    #[test]
     fn rendering_mode_cpu_keeps_the_cpu_develop() {
         let _gpu = photocraft_testkit::gpu_lock();
         let Some((mut app, ctx)) = gpu_app(8) else { return };
