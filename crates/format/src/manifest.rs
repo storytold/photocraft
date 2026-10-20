@@ -14,7 +14,10 @@ use photocraft_doc::{
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
-pub use craft_pcraft_format::{FORMAT_VERSION, Hash, TileRef};
+pub use craft_pcraft_format::{Hash, TileRef};
+
+/// Current manifest version written by this build: 2 carries the responsive layout.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The manifest: craft-pcraft-format's envelope (`format_version`, `generator`, the optional
 /// `thumbnail` and `composite` previews) around the document [`DocM`]. A save with the full-size
@@ -79,6 +82,11 @@ pub struct DocM {
     /// The JPEG quality / WebP encoding File › Save reuses.
     #[serde(default, skip_serializing_if = "photocraft_doc::FileEncoding::is_empty")]
     pub file_encoding: photocraft_doc::FileEncoding,
+    /// Responsive layout program. Added in manifest v2; a document with no responsive
+    /// data serializes without the key and the file stays at version 1, so v1-only
+    /// readers keep opening everything PhotoCraft saves unless the feature is used.
+    #[serde(default, skip_serializing_if = "photocraft_doc::responsive::ResponsiveLayout::is_empty")]
+    pub responsive: photocraft_doc::responsive::ResponsiveLayout,
     /// Image › Analysis: measurement scale, count groups, ruler.
     #[serde(default)]
     pub measurement: photocraft_doc::Measurement,
