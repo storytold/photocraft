@@ -143,6 +143,22 @@ fn print_dry_run_renders_a_pdf_and_reports_the_platform_backend() {
     assert!(scale > 200.0, "fit to a landscape letter page: {scale}");
     assert!(s.execute("file.print", json!({"paper": "napkin", "dryRun": true})).is_err());
     assert!(s.execute("file.print", json!({"colorHandling": "photocraftManages", "dryRun": true})).is_err(), "needs a printer profile");
+
+    for depth in [8, 16, 32] {
+        let mut s = session("rgb", depth);
+        let out = format!("{dir}/forced-gray-{depth}.pdf");
+        let r = s.execute("file.print", json!({"output": out, "grayscale": true})).unwrap();
+        let (_, _, cs, data) = pdf_image(&std::fs::read(r["pdf"].as_str().unwrap()).unwrap());
+        assert_eq!(cs, "/DeviceGray");
+        assert_eq!(data.len(), 300 * 150);
+        assert!((i16::from(data[0]) - 99).abs() <= 1, "#3366cc luminance at {depth}-bit: {}", data[0]);
+        let preview = preview_thumbnail(&s.active().unwrap().doc, true, 400);
+        assert_eq!(preview.pixels[0], preview.pixels[1]);
+        assert_eq!(preview.pixels[1], preview.pixels[2]);
+        assert_eq!(preview.pixels[3], 255);
+        let colour = preview_thumbnail(&s.active().unwrap().doc, false, 400);
+        assert_eq!(&colour.pixels[..4], &[0x33, 0x66, 0xcc, 255]);
+    }
 }
 
 /// The Japanese papers are in the table at their metric sizes, their customary names resolve (case,
@@ -296,10 +312,10 @@ fn page_of(channels: usize, data: Vec<u8>, emulsion_down: bool) -> PrintPage {
         image: PrintImage { width: 2, height: 1, channels, data, icc: None },
         rect: (100.0, 200.0, 144.0, 72.0),
         marks: Marks::default(),
+        rotate_image: false,
         description: None,
         label: None,
         emulsion_down,
-        rotate_image: false,
     }
 }
 
@@ -334,24 +350,13 @@ fn native_rgb_route_preserves_pdf_only_color_and_page_content() {
     assert!(native_rgb_compatible(&page_of(1, vec![0; 2], false), "noColorManagement"));
 }
 
-/// Two printers, the second the default, in place of the system spooler's.
-fn test_printers() -> PrinterSource {
-    std::sync::Arc::new(|| {
-        vec![
-            craft_print::Printer { name: "Studio".into(), default: false, two_sided: None, description: String::new() },
-            craft_print::Printer { name: "Office".into(), default: true, two_sided: Some(true), description: String::new() },
-        ]
-    })
-}
-
 #[test]
 fn printer_commands_answer_without_a_document_and_reject_bad_settings() {
     let mut s = crate::session();
     *s.printer_source_mut() = Some(test_printers());
     let r = s.execute("file.print.printers", json!({})).unwrap();
     assert_eq!(r["supported"], cfg!(windows));
-    let listed = if cfg!(windows) { json!([{"name": "Studio", "default": false}, {"name": "Office", "default": true}]) } else { json!([]) };
-    assert_eq!(r["printers"], listed);
+    assert!(r["printers"].is_array());
     assert!(s.execute("file.print.page", json!({"printer": "Anything", "printerSettings": "zz"})).is_err());
     let mut s = session("rgb", 8);
     assert!(s.execute("file.print", json!({"printer": "Anything", "printerSettings": "0102", "send": true})).is_err());
@@ -530,6 +535,61 @@ fn print_one_copy_repeats_the_last_settings() {
 }
 
 #[test]
+fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let mut s = session("rgb", 8);
+    s.system_print_dialog = Some(Arc::new(move |pdf, settings| {
+        assert!(pdf.starts_with(b"%PDF"));
+        assert_eq!(settings.title, "Print Me.psd");
+        assert_eq!(settings.copies, 2);
+        assert!(settings.collate);
+        assert_eq!(settings.paper, (612.0, 792.0));
+        seen.fetch_add(1, Ordering::Relaxed);
+        Ok(SystemPrintOutcome::Printed)
+    }));
+    let printed = s.execute("file.print", json!({"systemDialog": true, "copies": 2})).unwrap();
+    assert_eq!(printed["sent"], true);
+    assert_eq!(printed["spooler"], "system-dialog");
+    assert!(printed["copies"].is_null(), "the system dialog's final choice is unknown");
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let remembered = last_print(&s).unwrap();
+    assert!(remembered.get("copies").is_none(), "the OS dialog owns final job settings");
+
+    s.system_print_dialog = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Cancelled)));
+    let cancelled = s.execute("file.print", json!({"systemDialog": true})).unwrap();
+    assert_eq!(cancelled["cancelled"], true);
+    assert_eq!(cancelled["sent"], false);
+}
+
+#[test]
+fn windows_rgb_transport_rotates_pixels_before_printing() {
+    let mut page = page_of(3, vec![1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0, 5, 0, 0, 6, 0, 0], false);
+    page.image.width = 2;
+    page.image.height = 3;
+    page.rotate_image = true;
+    let rgb = page_rgb(&page).unwrap();
+    let red: Vec<u8> = rgb.as_chunks::<3>().0.iter().map(|pixel| pixel[0]).collect();
+    assert_eq!(red, [2, 4, 6, 1, 3, 5]);
+}
+
+#[test]
+fn system_dialog_requires_desktop_bridge_and_print_one_copy_bypasses_it() {
+    use std::sync::Arc;
+
+    let mut s = session("rgb", 8);
+    assert!(s.execute("file.print", json!({"systemDialog": true})).is_err());
+    s.system_print_dialog = Some(Arc::new(|_, _| Err("dialog must not open".into())));
+    let first = s.execute("file.print", json!({"dryRun": true, "systemDialog": true, "paper": "a5"})).unwrap();
+    assert_eq!(first["systemDialog"], true);
+    let repeated = s.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
+    assert_eq!(repeated["systemDialog"], false);
+}
+
+#[test]
 fn package_copies_links_and_relinks() {
     let dir = tmp("package");
     let link = format!("{dir}/art.png");
@@ -697,7 +757,7 @@ fn print_dry_run_preserves_system_printer_job_settings() {
     assert_eq!(result["collate"], false);
     assert_eq!(result["duplex"], "shortEdge");
     assert_eq!(result["grayscale"], true);
-    assert_eq!(result["driverOptions"], json!([["InputSlot", "Tray2"], ["orientation-requested", "3"]]));
+    assert_eq!(result["driverOptions"], json!([["InputSlot", "Tray2"], ["media", "na_letter_8.5x11in"], ["orientation-requested", "3"]]));
     #[cfg(unix)]
     {
         let command: Vec<String> = serde_json::from_value(result["command"].clone()).unwrap();
@@ -872,6 +932,7 @@ fn disabled_printing_never_spools() {
 
 #[test]
 fn printers_lists_the_spooler_destinations_without_a_document() {
+<<<<<<< HEAD:crates/engine-core/src/cmd/print_cmds/tests.rs
     let mut s = crate::session();
     *s.printer_source_mut() = Some(test_printers());
     let r = s.execute("file.printers", json!({})).unwrap();
@@ -1056,6 +1117,16 @@ fn uncached_listings_do_not_wait(cache_other: bool) {
             assert_eq!(names, Err(craft_print::rgb::PrintError::Unsupported));
         }
     });
+=======
+    let mut s = Session::new();
+    let r = s.execute("file.printers", json!({})).unwrap();
+    let list = r["printers"].as_array().unwrap();
+    assert!(list.iter().all(|p| p["name"].is_string() && p["default"].is_boolean()));
+    match r["default"].as_str() {
+        Some(d) => assert!(list.iter().any(|p| p["name"] == d && p["default"] == true)),
+        None => assert!(list.iter().all(|p| p["default"] == false)),
+    }
+>>>>>>> 6678a036f5 (fix(print): harden native print confirmation):crates/engine/src/cmd/print_cmds/tests.rs
 }
 
 /// Spooling tests run in a child process: `disable_printing` is process-wide and a test above
@@ -1389,6 +1460,161 @@ mod cups {
         let jobs = std::iter::from_fn(|| rx.try_recv().ok()).filter(|(op, _, _)| *op == OP_PRINT_JOB).count();
         assert_eq!(jobs, 2, "both prints reached the fake CUPS");
     }
+}
+
+#[test]
+fn rotated_print_resolution_tracks_scale_without_resampling() {
+    let s = session("rgb", 16);
+    let doc = &s.active().unwrap().doc;
+    for rotate in [false, true] {
+        for scale in [50.0, 100.0, 200.0] {
+            let l = layout(doc, &json!({"autoRotate": rotate, "scale": scale}), "file.print").unwrap();
+            assert_eq!(l.rotate_image, rotate);
+            assert!((l.resolution_ppi(doc) - f64::from(doc.resolution_dpi) * 100.0 / scale).abs() < 1e-6);
+        }
+    }
+}
+
+#[test]
+fn invalid_print_geometry_is_rejected_without_output_or_remembered_settings() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("bad-geometry");
+    let output = format!("{dir}/invalid.pdf");
+    for mut params in [
+        json!({"paper": [1e300, 792]}),
+        json!({"paper": [40, 40], "cornerCropMarks": true, "scaleToFit": true}),
+        json!({"scale": 0}),
+        json!({"scale": -10}),
+        json!({"scale": "wrong"}),
+        json!({"scale": 1e300}),
+        json!({"center": false, "top": 1e300}),
+        json!({"center": false, "left": "wrong"}),
+        json!({"orientation": "wrong"}),
+    ] {
+        params["output"] = json!(output);
+        assert!(s.execute("file.print", params.clone()).is_err(), "{params}");
+        assert!(!std::path::Path::new(&output).exists());
+        assert!(s.file_menu.last_print.is_none());
+    }
+    let mut doc = (*s.active().unwrap().doc).clone();
+    for dpi in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        doc.resolution_dpi = dpi;
+        assert!(layout(&doc, &json!({}), "file.print").is_err());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn paper_selection_overrides_conflicting_driver_media() {
+    let mut s = session("rgb", 8);
+    for (paper, media) in [(json!("a4"), "iso_a4_210x297mm"), (json!("5x7"), "na_5x7_5x7in"), (json!([576, 432]), "Custom.432.00x576.00pt")] {
+        let r = s
+            .execute(
+                "file.print",
+                json!({"paper": paper, "orientation": "landscape", "dryRun": true,
+                    "driverOptions": {"media": "Letter", "PageSize": "Letter", "PageRegion": "Letter", "InputSlot": "Tray2"}
+                }),
+            )
+            .unwrap();
+        let options: Vec<(String, String)> = serde_json::from_value(r["driverOptions"].clone()).unwrap();
+        assert_eq!(options.iter().filter(|(key, _)| key == "media").count(), 1);
+        assert!(options.contains(&("media".into(), media.into())));
+        assert!(options.contains(&("InputSlot".into(), "Tray2".into())));
+        assert!(!options.iter().any(|(key, _)| key == "PageSize" || key == "PageRegion"));
+    }
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(layout(doc, &json!({"paper": [576, 432], "orientation": "portrait"}), "file.print").unwrap().paper, (432.0, 576.0));
+}
+
+#[test]
+fn direct_print_paper_limits_match_each_backend_but_pdf_export_remains_portable() {
+    use craft_print::Backend;
+    for backend in [Some(Backend::Cups), Some(Backend::WindowsPdf)] {
+        assert!(validate_spool_paper((612.0, 792.0), backend, "file.print").is_ok());
+        assert!(validate_spool_paper((9216.0, 9216.0), backend, "file.print").is_ok());
+        assert_eq!(validate_spool_paper((10000.0, 12000.0), backend, "file.print").is_ok(), backend == Some(Backend::Cups));
+    }
+    let mut s = session("rgb", 8);
+    // PDF-only output is valid even where direct Windows printing has a smaller sheet limit.
+    let r = s.execute("file.print", json!({"paper": [10000.0, 12000.0], "send": false, "dryRun": true})).unwrap();
+    assert_eq!(r["paper"], json!([10000.0, 12000.0]));
+    assert_eq!(r["sent"], false);
+}
+
+#[test]
+fn native_backend_diagnostics_are_available_on_each_supported_desktop() {
+    let mut s = session("rgb", 8);
+    let result = s.execute("file.print", json!({"dryRun": true, "printer": "Office café & photo", "copies": 2})).unwrap();
+    assert_eq!(result["sent"], false);
+    assert_eq!(result["printer"], "Office café & photo");
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        assert_eq!(craft_print::backend(), Some(craft_print::Backend::Cups));
+        assert!(!has_system_printer_preferences());
+        let command: Vec<String> = serde_json::from_value(result["command"].clone()).unwrap();
+        assert_eq!(&command[..5], &["lp", "-d", "Office café & photo", "-n", "2"]);
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(craft_print::backend(), Some(craft_print::Backend::WindowsPdf));
+        assert!(has_system_printer_preferences());
+        assert!(result["command"].as_array().unwrap().last().unwrap().as_str().unwrap().contains("craft-print PDF spooler"));
+    }
+}
+
+/// Exercise the same OS PDF renderer as the Windows spooler, without constructing a print
+/// job, creating a queue or needing a printer. This runs in the desktop-print CI matrix.
+#[cfg(windows)]
+#[test]
+fn windows_pdf_renderer_accepts_print_pages_without_a_printer() {
+    const RENDER: &str = r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Data.Pdf.PdfDocument, Windows.Data.Pdf, ContentType = WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+$genericAwait = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+} | Select-Object -First 1
+function ResultOf($operation, $resultType) {
+    $task = $genericAwait.MakeGenericMethod($resultType).Invoke($null, @($operation))
+    $task.Wait()
+    $task.Result
+}
+$file = ResultOf ([Windows.Storage.StorageFile]::GetFileFromPathAsync($env:PHOTOCRAFT_TEST_PRINT_PDF)) ([Windows.Storage.StorageFile])
+$pdf = ResultOf ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
+if ($pdf.PageCount -ne 1) { throw 'expected one print page' }
+$page = $pdf.GetPage(0)
+$memory = [System.IO.MemoryStream]::new()
+try {
+    $stream = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($memory)
+    $render = $page.RenderToStreamAsync($stream)
+    $awaitAction = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction'
+    } | Select-Object -First 1
+    $task = $awaitAction.Invoke($null, @($render))
+    $task.Wait()
+    if ($memory.Length -le 0) { throw 'the OS renderer produced no image' }
+    @($page.Size.Width, $page.Size.Height) | ConvertTo-Json -Compress
+} finally { $memory.Dispose(); $page.Dispose() }
+"#;
+    let dir = tmp("windows-native-render");
+    for mode in ["rgb", "gray", "cmyk"] {
+        let mut s = session(mode, 16);
+        let output = std::path::Path::new(&dir).join(format!("{mode}.pdf"));
+        s.execute("file.print", json!({"output": output, "send": false})).unwrap();
+        let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let powershell = std::path::Path::new(&system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let result = std::process::Command::new(powershell)
+            .args(["-NoProfile", "-NonInteractive", "-Command", RENDER])
+            .env("PHOTOCRAFT_TEST_PRINT_PDF", &output)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{mode}: {}", String::from_utf8_lossy(&result.stderr));
+        let dims: Vec<f64> = serde_json::from_slice(&result.stdout).unwrap();
+        // WinRT uses 96-DPI DIPs, while the PDF MediaBox uses 72-point inches.
+        assert_eq!(dims, vec![816.0, 1056.0]);
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// #5884, #8272: a Windows image without a loadable Windows.Data.Pdf.dll or prntvpt.dll reports

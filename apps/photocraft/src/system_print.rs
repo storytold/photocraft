@@ -3,7 +3,9 @@
 use std::io::Write as _;
 use std::sync::Arc;
 
-use photocraft_engine::print_cmds::{SystemPrintDialog, SystemPrintOutcome};
+#[cfg(target_os = "windows")]
+use photocraft_engine::print_cmds::SystemPrintDuplex;
+use photocraft_engine::print_cmds::{SystemPrintDialog, SystemPrintOutcome, SystemPrintSettings};
 
 #[cfg(target_os = "macos")]
 const MAC_PRINT_SCRIPT: &str = r#"
@@ -39,18 +41,19 @@ pub fn dialog() -> SystemPrintDialog {
     Arc::new(show)
 }
 
-fn show(pdf: &[u8], title: &str) -> Result<SystemPrintOutcome, String> {
+fn show(pdf: &[u8], settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     if photocraft_engine::print_cmds::printing_disabled() {
         return Err("printing is disabled in this process; use dryRun: true".into());
     }
     let mut file = tempfile::Builder::new().prefix("photocraft-print-").suffix(".pdf").tempfile().map_err(|e| e.to_string())?;
     file.write_all(pdf).map_err(|e| e.to_string())?;
     file.flush().map_err(|e| e.to_string())?;
-    platform(file.as_file(), file.path(), title)
+    let path = file.path().to_path_buf();
+    platform(file.as_file_mut(), &path, settings)
 }
 
 #[cfg(target_os = "macos")]
-fn platform(_file: &std::fs::File, path: &std::path::Path, _title: &str) -> Result<SystemPrintOutcome, String> {
+fn platform(_file: &mut std::fs::File, path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     // Opening through Launch Services gives sandboxed Preview a file-access extension. Asking
     // Preview to open a private tempfile directly through AppleScript instead produces a
     // misleading "you don't have permission" alert before the print sheet appears.
@@ -78,46 +81,32 @@ fn platform(_file: &std::fs::File, path: &std::path::Path, _title: &str) -> Resu
 }
 
 #[cfg(target_os = "linux")]
-fn platform(file: &std::fs::File, _path: &std::path::Path, title: &str) -> Result<SystemPrintOutcome, String> {
-    use std::collections::HashMap;
-    use std::os::fd::AsFd as _;
-    use zbus::{
-        blocking::Proxy,
-        zvariant::{Fd, OwnedObjectPath, OwnedValue, Value},
-    };
+fn platform(file: &mut std::fs::File, path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+    use std::io::{Seek as _, SeekFrom};
 
-    let conn = zbus::blocking::connection::Builder::session()
-        .map_err(|e| e.to_string())?
-        .method_timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let unique = conn.unique_name().ok_or("print portal connection has no unique name")?.as_str().trim_start_matches(':').replace('.', "_");
-    let token = format!("photocraft_print_{}", std::process::id());
-    let request_path = format!("/org/freedesktop/portal/desktop/request/{unique}/{token}");
-    let request = Proxy::new(&conn, "org.freedesktop.portal.Desktop", request_path.as_str(), "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
-    use futures_lite::StreamExt as _;
-    let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
-    let portal =
-        Proxy::new(&conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Print").map_err(|e| e.to_string())?;
-    let options: HashMap<&str, Value<'_>> = HashMap::from([("handle_token", Value::from(token.as_str()))]);
-    let fd = Fd::from(file.as_fd());
-    let _handle: OwnedObjectPath = portal.call("Print", &("", title, fd, options)).map_err(|e| format!("could not open the desktop print portal: {e}"))?;
-    let reply = futures_lite::future::block_on(replies.next()).ok_or("the desktop print dialog closed without a result")?;
-    let (code, _values): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(|e| e.to_string())?;
-    match code {
-        0 => Ok(SystemPrintOutcome::Printed),
-        1 => Ok(SystemPrintOutcome::Cancelled),
-        _ => Err("the desktop print portal could not print the document".into()),
-    }
+    file.seek(SeekFrom::Start(0)).map_err(|e| format!("could not rewind the print document: {e}"))?;
+    crate::print_portal::confirm(path, settings)
 }
 
 #[cfg(target_os = "windows")]
-fn platform(_file: &std::fs::File, path: &std::path::Path, title: &str) -> Result<SystemPrintOutcome, String> {
+fn platform(_file: &mut std::fs::File, path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     let script = include_str!("system_print_windows.ps1");
     let result = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
         .env("PHOTOCRAFT_PRINT_FILE", path)
-        .env("PHOTOCRAFT_PRINT_TITLE", title)
+        .env("PHOTOCRAFT_PRINT_TITLE", &settings.title)
+        .env("PHOTOCRAFT_PRINT_PRINTER", settings.printer.as_deref().unwrap_or(""))
+        .env("PHOTOCRAFT_PRINT_COPIES", settings.copies.to_string())
+        .env("PHOTOCRAFT_PRINT_COLLATE", if settings.collate { "1" } else { "0" })
+        .env(
+            "PHOTOCRAFT_PRINT_DUPLEX",
+            match settings.duplex {
+                None => "default",
+                Some(SystemPrintDuplex::Simplex) => "simplex",
+                Some(SystemPrintDuplex::LongEdge) => "long-edge",
+                Some(SystemPrintDuplex::ShortEdge) => "short-edge",
+            },
+        )
         .output()
         .map_err(|e| format!("could not open the Windows print dialog: {e}"))?;
     if !result.status.success() {
