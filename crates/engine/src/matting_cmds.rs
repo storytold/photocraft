@@ -1,11 +1,21 @@
 //! `layer.removeBackgroundAI` — BiRefNet neural matting as an engine command.
 //!
 //! Reads the active pixel layer, runs the network through
-//! [`photocraft_matting::cutout`] (DirectML GPU when available, CPU
-//! otherwise — the result always reports which served the run), and multiplies
-//! the returned matte into the layer's alpha in a single undoable edit. The
-//! command never deletes pixels: users who want a hole rather than a matte
-//! flatten afterwards, and a mask round-trip stays lossless.
+//! [`photocraft_matting::cutout_with_progress`] (OpenVINO/DirectML GPU when
+//! available, CPU otherwise — the result always reports which served the run),
+//! and multiplies the returned matte into the layer's alpha in a single
+//! undoable edit. The command never deletes pixels: users who want a hole
+//! rather than a matte flatten afterwards, and a mask round-trip stays
+//! lossless.
+//!
+//! The heavy work runs as a background job (`crate::jobs`), like the classic
+//! Remove Background: the UI stays responsive, the status bar shows each
+//! stage's progress (`Loading the model …`, `Running inference …`), Esc
+//! cancels, and other edits to the document are locked until the run ends.
+//! Cancellation lands at stage boundaries: ONNX Runtime offers no interrupt
+//! inside a session build or a forward pass, so Esc waits for the current
+//! stage (≤ ~1 minute on a cold GPU kernel build, ~2 s per inference) and
+//! then discards the result — the document is never touched by a partial run.
 
 use serde_json::{Value, json};
 
@@ -15,10 +25,19 @@ use crate::{EngineError, Result, Session};
 
 const CMD: &str = "layer.removeBackgroundAI";
 
+/// Turn a matting error into the engine error the job should report. Cancel
+/// keeps its identity so the jobs framework records `cancelled`, not `failed`.
+fn matting_err(e: photocraft_matting::MattingError) -> EngineError {
+    match e {
+        photocraft_matting::MattingError::Cancelled => EngineError::Cancelled,
+        e => EngineError::Other(format!("{CMD}: {e}")),
+    }
+}
+
 /// Run the model over the active layer and matte out its background.
 ///
-/// Params: `{"variant":"general"|"hr"="general","device":"auto"|"cpu"=auto}`.
-/// Returns `{"provider":"DirectML"|"CPU","gpu":name|null,"ms":elapsed}`.
+/// Params: `{"variant":"general"|"hr"="general","device":"auto"|"cpu"="auto"}`.
+/// Returns `{"provider":"OpenVINO"|"DirectML"|"CPU","gpu":name|null,"ms":elapsed}`.
 pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
     let variant = match p.get("variant").and_then(Value::as_str).unwrap_or("general") {
         "general" => photocraft_matting::ModelVariant::General,
@@ -34,47 +53,78 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`device` must be \"auto\" or \"cpu\", got {other:?}") });
         }
     };
-
+    // Resolve the target synchronously so "no document / no active layer"
+    // errors answer immediately; the pixels themselves are read on the
+    // worker from the document snapshot.
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-    let layer = st.doc.layer(id).ok_or(EngineError::NoDocument)?;
-    let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{CMD} needs a pixel layer")))?;
-    let area = surface.content_bounds();
-    let (w, h) = (area.width(), area.height());
-    if w == 0 || h == 0 {
-        return Err(EngineError::Other("the active layer is empty".into()));
-    }
 
-    // Straight f32 RGBA → u8 RGBA for the model (alpha ignored; the matte is
-    // what we compute). Clamping to [0,1] matches how the compositor reads.
-    let mut f32s = vec![[0.0f32; 4]; (w as usize) * (h as usize)];
-    surface.read_rgba_into(Rect::new(area.x0, area.y0, area.x1, area.y1), &mut f32s);
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let rgba: Vec<u8> = f32s.iter().flat_map(|px| [q(px[0]), q(px[1]), q(px[2]), q(px[3])]).collect();
+    crate::jobs::edit_job(
+        s,
+        "Remove Background (AI)",
+        move |doc, _, ctx| {
+            ctx.progress(0.0, "Reading layer");
+            ctx.check()?;
+            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{CMD} needs a pixel layer")))?;
+            let area = surface.content_bounds();
+            let (w, h) = (area.width(), area.height());
+            if w == 0 || h == 0 {
+                return Err(EngineError::Other("the active layer is empty".into()));
+            }
 
-    let opts = photocraft_matting::CutoutOptions { variant, device };
-    let run = photocraft_matting::cutout(&rgba, w, h, &opts).map_err(|e| EngineError::Other(format!("{CMD}: {e}")))?;
+            // Straight f32 RGBA → u8 RGBA for the model (alpha ignored; the matte is
+            // what we compute). Clamping to [0,1] matches how the compositor reads.
+            let mut f32s = vec![[0.0f32; 4]; (w as usize) * (h as usize)];
+            surface.read_rgba_into(Rect::new(area.x0, area.y0, area.x1, area.y1), &mut f32s);
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            let rgba: Vec<u8> = f32s.iter().flat_map(|px| [q(px[0]), q(px[1]), q(px[2]), q(px[3])]).collect();
+            drop(f32s);
 
-    // Multiply the matte into the layer alpha; one undo step.
-    let alphas = run.alpha.clone();
-    let ox = area.x0;
-    let oy = area.y0;
-    s.edit("Remove Background (AI)", |doc, _| {
-        let surf = doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
-        for (i, a) in alphas.iter().enumerate() {
-            let (x, y) = (ox + (i as u32 % w) as i32, oy + (i as u32 / w) as i32);
-            let old = surf.rgba(x, y);
-            let row = [old[0], old[1], old[2], old[3] * (*a as f32 / 255.0)];
-            surf.write_pixel(x, y, &row);
-        }
-        Ok(())
-    })?;
+            // Each stage names itself in the progress line and gates on
+            // cancellation; the fractions keep the bar moving across the
+            // uneven wall-clock of the stages (LoadingModel dwarfs the rest
+            // when the GPU has to compile freshly).
+            let opts = photocraft_matting::CutoutOptions { variant, device };
+            let mut stage = |st: photocraft_matting::CutoutStage| -> std::result::Result<(), ()> {
+                if ctx.cancelled() {
+                    return Err(());
+                }
+                let (frac, msg) = match st {
+                    photocraft_matting::CutoutStage::PreparingInput => (0.05, "Preparing image"),
+                    photocraft_matting::CutoutStage::CheckingModel => (0.10, "Looking for the model"),
+                    photocraft_matting::CutoutStage::LoadingModel => {
+                        (0.15, "Loading the model — the first GPU run compiles kernels and can take about a minute")
+                    }
+                    photocraft_matting::CutoutStage::Inference => (0.55, "Running inference"),
+                    photocraft_matting::CutoutStage::RetryingOnCpu => (0.60, "GPU returned no subject; re-running on the CPU"),
+                    photocraft_matting::CutoutStage::Postprocessing => (0.90, "Building the alpha matte"),
+                };
+                ctx.progress(frac, msg);
+                Ok(())
+            };
+            let run = photocraft_matting::cutout_with_progress(&rgba, w, h, &opts, &mut stage).map_err(matting_err)?;
+            ctx.check()?;
 
-    Ok(json!({
-        "provider": run.provider,
-        "gpu": run.gpu.as_ref().map(|g| g.describe()),
-        "ms": run.ms,
-    }))
+            // Multiply the matte into the layer alpha (on this snapshot; the
+            // framework commits it as one undo step on the UI thread).
+            let alphas = run.alpha;
+            let (ox, oy) = (area.x0, area.y0);
+            let surf = doc
+                .layer_mut(id)
+                .and_then(|l| l.surface_mut())
+                .ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
+            for (i, a) in alphas.iter().enumerate() {
+                let (x, y) = (ox + (i as u32 % w) as i32, oy + (i as u32 / w) as i32);
+                let old = surf.rgba(x, y);
+                let row = [old[0], old[1], old[2], old[3] * (*a as f32 / 255.0)];
+                surf.write_pixel(x, y, &row);
+            }
+
+            Ok((run.provider, run.gpu.map(|g| g.describe()), run.ms))
+        },
+        move |(provider, gpu, ms)| json!({ "provider": provider, "gpu": gpu, "ms": ms }),
+    )
 }
 
 #[cfg(test)]
@@ -93,5 +143,35 @@ mod tests {
         // With no document the failure is NoDocument, not a panic.
         let e = remove_background_ai(&mut s, &json!({})).unwrap_err();
         assert!(matches!(e, EngineError::NoDocument), "{e:?}");
+    }
+
+    /// The command is a job: `start` (what the UI runs) returns without
+    /// waiting, the document is locked against edits meanwhile, and cancel
+    /// ends the job with the document untouched. `"hr"` keeps this fast even
+    /// where model weights exist: only the general export ships locally.
+    #[test]
+    fn runs_as_a_background_job_and_locks_the_document() {
+        use crate::jobs::Started;
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let alpha_before = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(0, 0).to_vec();
+        match s.start(CMD, json!({"variant": "hr"})) {
+            Ok(Started::Job(job)) => {
+                let e = s.execute("layer.new.layer", json!({})).unwrap_err();
+                assert!(e.to_string().contains("still running"), "edits are locked while the job runs: {e}");
+                assert!(s.cancel_job(job), "the job is cancellable");
+                s.join_cancelled_jobs();
+                let events = s.poll_jobs();
+                assert!(events.iter().any(|ev| ev.id == job && matches!(ev.outcome, crate::jobs::JobOutcome::Cancelled)), "{events:?}");
+            }
+            Ok(Started::Done(v)) => {
+                // Inline fallback (wasm): the command still answers, and the
+                // "hr" weights are absent here, so nothing was applied.
+                assert!(v.is_null() || v.is_object(), "{v}");
+            }
+            Err(e) => panic!("start failed: {e}"),
+        }
+        let alpha_after = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(0, 0).to_vec();
+        assert_eq!(alpha_after, alpha_before, "a cancelled run leaves the document untouched");
     }
 }
