@@ -257,6 +257,44 @@ fn remove_and_reinsert_keeps_the_responsive_layout() {
     assert_eq!(back.responsive, before);
 }
 
+/// The save path validates what it saves: deleting rule and variant layers through a path
+/// that misses `remove_layers` (every deletion in this PR — `remove` no longer prunes)
+/// must still save cleanly, with the stale rules and variants dropped, not fail the
+/// bounds check with "rule count exceeds layer count" (#7970's review).
+#[test]
+fn saving_after_removals_without_pruning_validates_the_pruned_layout() {
+    let mut doc = Document::new("deleted", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.layers.push(Layer::group("Wide", vec![]));
+    doc.layers[2].id = LayerId(42);
+    doc.responsive.master = Some(LayerId(40));
+    for (artboard, name) in [(LayerId(41), "Square"), (LayerId(42), "Wide")] {
+        doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant { artboard, master: LayerId(40), name: name.into(), layers: vec![] });
+    }
+    // Three rules on three layers; then two layers go the unpruned deletion path.
+    for id in [LayerId(40), LayerId(41), LayerId(42)] {
+        doc.responsive.rules.push(photocraft_doc::responsive::LayerLayoutRule {
+            layer: id,
+            anchor: Default::default(),
+            mode: photocraft_doc::responsive::ResizeMode::Fixed,
+            min_size: None,
+            max_size: None,
+            text_flow: Default::default(),
+            min_font_size_pt: None,
+            stack: None,
+        });
+    }
+    doc.remove(LayerId(41)).unwrap();
+    doc.remove(LayerId(42)).unwrap();
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.responsive.rules.len(), 1, "the stale rules are dropped, the save does not fail");
+    assert!(back.responsive.variants.is_empty());
+    assert_eq!(back.responsive.master, Some(LayerId(40)));
+}
+
 /// Whatever still dangles after a deletion path missed `remove_layers` is dropped at save,
 /// never written into a file: the mirror of load-side `remap_ids` pruning.
 #[test]
