@@ -30,14 +30,33 @@ pub fn emit() {
     }
     let Some(sha) = git(&root, &["rev-parse", "HEAD"]) else { return };
     // Rebuild when HEAD moves: a commit or checkout changes HEAD (detached) or the branch's ref.
+    // Cargo treats a watched path that does not exist as always changed (it re-runs this script
+    // and recompiles the binary on every build), so only existing paths are watched.
     if let Some(dir) = git(&root, &["rev-parse", "--absolute-git-dir"]) {
-        println!("cargo:rerun-if-changed={dir}/HEAD");
+        let head = Path::new(&dir).join("HEAD");
+        rerun_if_changed(watched(&head, &head));
     }
     if let (Some(common), Some(head_ref)) =
         (git(&root, &["rev-parse", "--path-format=absolute", "--git-common-dir"]), git(&root, &["symbolic-ref", "-q", "HEAD"]))
     {
-        println!("cargo:rerun-if-changed={common}/{head_ref}");
-        println!("cargo:rerun-if-changed={common}/packed-refs");
+        let common = Path::new(&common);
+        // A packed branch has no loose ref file; the first commit on it creates one, which
+        // changes the nearest existing directory above it under `refs/`.
+        rerun_if_changed(watched(&common.join(&head_ref), &common.join("refs")));
+        let packed = common.join("packed-refs");
+        rerun_if_changed(watched(&packed, &packed));
     }
     println!("cargo:rustc-env=PHOTOCRAFT_CHECKOUT_SHA={sha}");
+}
+
+fn rerun_if_changed(path: Option<PathBuf>) {
+    if let Some(path) = path {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+/// The path Cargo should watch for `path`: `path` itself when it exists, else its nearest existing
+/// ancestor that is still inside `stop`; `None` when neither exists.
+pub(crate) fn watched(path: &Path, stop: &Path) -> Option<PathBuf> {
+    path.ancestors().take_while(|p| p.starts_with(stop)).find(|p| p.exists()).map(Path::to_path_buf)
 }
