@@ -462,7 +462,7 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
     assert!(printed["copies"].is_null(), "the system dialog's final choice is unknown");
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     let remembered = last_print(&s).unwrap();
-    assert!(remembered.get("copies").is_none(), "the OS dialog owns final job settings");
+    assert_eq!(remembered["copies"], 2, "Print One Copy repeats PhotoCraft's submitted settings");
 
     s.system_print_dialog = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Cancelled)));
     let cancelled = s.execute("file.print", json!({"systemDialog": true})).unwrap();

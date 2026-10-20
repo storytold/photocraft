@@ -1443,13 +1443,6 @@ fn remember_print(s: &mut Session, p: &Value) {
         // reads it again, and a later print to PDF or another printer must not inherit it.
         o.remove("printable");
         o.remove("systemDialog");
-        if p.get("systemDialog").and_then(Value::as_bool) == Some(true) {
-            // These are owned by the operating system's dialog. PhotoCraft cannot observe the
-            // user's final choices, while the OS already remembers them for the next print.
-            for key in ["printer", "printerSettings", "copies", "collate", "duplex", "driverOptions"] {
-                o.remove(key);
-            }
-        }
     }
     let kept = remembered.clone();
     s.prefs.edit(|prefs| {
