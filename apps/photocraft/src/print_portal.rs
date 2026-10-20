@@ -8,7 +8,8 @@
 //! https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Print.html
 
 #[cfg(target_os = "linux")]
-use photocraft_engine::print_cmds::{PrintJob, Spooler};
+use photocraft_engine::print_cmds::{PrintJob, Spooler, SystemPrintOutcome};
+use photocraft_engine::print_cmds::{SystemPrintDuplex, SystemPrintSettings};
 
 /// The spooler to install on the session, unless `PHOTOCRAFT_PRINT_PORTAL=0`. The portal itself
 /// is looked up per job, so a missing one costs nothing at start-up.
@@ -41,12 +42,24 @@ fn print(job: &PrintJob) -> Result<String, String> {
             let outcome = dialog(&conn, &title, &settings, &page_setup, file.path());
             drop(file);
             match outcome {
-                Ok(what) => log::info!("print portal (v{version}): {what}"),
+                Ok(SystemPrintOutcome::Printed) => log::info!("print portal (v{version}): printed through the system print dialog"),
+                Ok(SystemPrintOutcome::Cancelled) => log::info!("print portal (v{version}): cancelled in the print dialog"),
                 Err(e) => log::warn!("print portal (v{version}): {e}"),
             }
         })
         .map_err(|e| format!("cannot start the print thread: {e}"))?;
     Ok("the system print dialog".into())
+}
+
+/// Shows the portal's confirmation dialog and waits for its final print/cancel result.
+#[cfg(target_os = "linux")]
+pub(crate) fn confirm(pdf: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+    let conn = zbus::blocking::connection::Builder::session()
+        .and_then(|builder| builder.method_timeout(std::time::Duration::from_secs(600)).build())
+        .map_err(|e| format!("no session bus for the print portal ({e})"))?;
+    let values = system_settings(settings);
+    let page_setup = page_setup_for(settings.paper, settings.landscape);
+    dialog(&conn, &settings.title, &values, &page_setup, pdf)
 }
 
 #[cfg(target_os = "linux")]
@@ -60,14 +73,14 @@ fn portal(conn: &zbus::blocking::Connection) -> Result<zbus::blocking::Proxy<'st
 fn dialog(
     conn: &zbus::blocking::Connection,
     title: &str,
-    settings: &[(&'static str, Seed)],
-    page_setup: &[(&'static str, Seed)],
+    settings: &[(String, Seed)],
+    page_setup: &[(String, Seed)],
     pdf: &std::path::Path,
-) -> Result<String, String> {
+) -> Result<SystemPrintOutcome, String> {
     use std::collections::HashMap;
     use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
     type Dict<'a> = HashMap<&'a str, Value<'a>>;
-    fn as_dict(pairs: &[(&'static str, Seed)]) -> Dict<'static> {
+    fn as_dict(pairs: &[(String, Seed)]) -> HashMap<String, Value<'static>> {
         pairs
             .iter()
             .map(|(k, v)| {
@@ -75,7 +88,7 @@ fn dialog(
                     Seed::Text(t) => Value::from(t.clone()),
                     Seed::Mm(mm) => Value::from(*mm),
                 };
-                (*k, value)
+                (k.clone(), value)
             })
             .collect()
     }
@@ -86,12 +99,12 @@ fn dialog(
         let request = zbus::blocking::Proxy::new(conn, "org.freedesktop.portal.Desktop", path, "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
         request.receive_signal("Response").map_err(|e| e.to_string())
     };
-    let response = |mut signals: zbus::blocking::proxy::SignalIterator<'static>| -> Result<HashMap<String, OwnedValue>, String> {
+    let response = |mut signals: zbus::blocking::proxy::SignalIterator<'static>| -> Result<Option<HashMap<String, OwnedValue>>, String> {
         let message = signals.next().ok_or("the print portal went away")?;
         let (code, results): (u32, HashMap<String, OwnedValue>) = message.body().deserialize().map_err(|e| format!("odd portal reply: {e}"))?;
         match code {
-            0 => Ok(results),
-            1 => Err("cancelled in the print dialog".into()),
+            0 => Ok(Some(results)),
+            1 => Ok(None),
             _ => Err("the print dialog failed".into()),
         }
     };
@@ -102,7 +115,7 @@ fn dialog(
     options.insert("handle_token", Value::from(token.as_str()));
     let _: OwnedObjectPath =
         proxy.call("PreparePrint", &("", title, as_dict(settings), as_dict(page_setup), options)).map_err(|e| format!("PreparePrint failed: {e}"))?;
-    let results = response(signals)?;
+    let Some(results) = response(signals)? else { return Ok(SystemPrintOutcome::Cancelled) };
     let prepared = results.get("token").and_then(|v| u32::try_from(v.clone()).ok()).ok_or("the print dialog gave no token")?;
 
     let file = std::fs::File::open(pdf).map_err(|e| format!("cannot reopen the print file: {e}"))?;
@@ -113,8 +126,10 @@ fn dialog(
     options.insert("token", Value::from(prepared));
     let fd = zbus::zvariant::Fd::from(std::os::fd::AsFd::as_fd(&file));
     let _: OwnedObjectPath = proxy.call("Print", &("", title, fd, options)).map_err(|e| format!("Print failed: {e}"))?;
-    response(signals)?;
-    Ok("printed through the system print dialog".into())
+    if response(signals)?.is_none() {
+        return Ok(SystemPrintOutcome::Cancelled);
+    }
+    Ok(SystemPrintOutcome::Printed)
 }
 
 #[cfg(target_os = "linux")]
@@ -175,12 +190,12 @@ fn orientation(landscape: bool) -> Seed {
 
 /// `PreparePrint`'s settings (GtkPrintSettings keys, string values).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn settings_for(copies: u32, paper_pt: (f64, f64), landscape: bool) -> Vec<(&'static str, Seed)> {
+fn settings_for(copies: u32, paper_pt: (f64, f64), landscape: bool) -> Vec<(String, Seed)> {
     let (row, w, h) = paper(paper_pt);
-    let mut v = vec![("n-copies", text(&copies.to_string())), ("orientation", orientation(landscape))];
+    let mut v = vec![("n-copies".into(), text(&copies.to_string())), ("orientation".into(), orientation(landscape))];
     match row {
-        Some((pwg, _, _, _)) => v.push(("paper-format", text(pwg))),
-        None => v.extend([("paper-width", text(&format!("{w:.2}"))), ("paper-height", text(&format!("{h:.2}")))]),
+        Some((pwg, _, _, _)) => v.push(("paper-format".into(), text(pwg))),
+        None => v.extend([("paper-width".into(), text(&format!("{w:.2}"))), ("paper-height".into(), text(&format!("{h:.2}")))]),
     }
     v
 }
@@ -188,24 +203,48 @@ fn settings_for(copies: u32, paper_pt: (f64, f64), landscape: bool) -> Vec<(&'st
 /// `PreparePrint`'s page setup (GtkPageSetup keys): the size in millimetres, found by its PPD
 /// name when it has one, else a custom size named by its dimensions.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn page_setup_for(paper_pt: (f64, f64), landscape: bool) -> Vec<(&'static str, Seed)> {
+fn page_setup_for(paper_pt: (f64, f64), landscape: bool) -> Vec<(String, Seed)> {
     let (row, w, h) = paper(paper_pt);
-    let mut v = vec![("Orientation", orientation(landscape)), ("Width", Seed::Mm(w)), ("Height", Seed::Mm(h))];
+    let mut v = vec![("Orientation".into(), orientation(landscape)), ("Width".into(), Seed::Mm(w)), ("Height".into(), Seed::Mm(h))];
     match row {
-        Some((_, ppd, _, _)) => v.push(("PPDName", text(ppd))),
-        None => v.push(("Name", text(&format!("custom_{w:.0}x{h:.0}mm")))),
+        Some((_, ppd, _, _)) => v.push(("PPDName".into(), text(ppd))),
+        None => v.push(("Name".into(), text(&format!("custom_{w:.0}x{h:.0}mm")))),
     }
     v
 }
 
 #[cfg(target_os = "linux")]
-fn settings(job: &PrintJob) -> Vec<(&'static str, Seed)> {
+fn settings(job: &PrintJob) -> Vec<(String, Seed)> {
     settings_for(job.copies, job.paper, job.landscape)
 }
 
 #[cfg(target_os = "linux")]
-fn page_setup(job: &PrintJob) -> Vec<(&'static str, Seed)> {
+fn page_setup(job: &PrintJob) -> Vec<(String, Seed)> {
     page_setup_for(job.paper, job.landscape)
+}
+
+fn system_settings(settings: &SystemPrintSettings) -> Vec<(String, Seed)> {
+    let mut values = settings_for(settings.copies, settings.paper, settings.landscape);
+    if let Some(printer) = settings.printer.as_deref() {
+        values.push(("printer".into(), text(printer)));
+    }
+    values.push(("collate".into(), text(if settings.collate { "true" } else { "false" })));
+    if let Some(duplex) = settings.duplex {
+        let value = match duplex {
+            SystemPrintDuplex::Simplex => "simplex",
+            SystemPrintDuplex::LongEdge => "vertical",
+            SystemPrintDuplex::ShortEdge => "horizontal",
+        };
+        values.push(("duplex".into(), text(value)));
+    }
+    values.extend(
+        settings
+            .driver_options
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "media" | "orientation-requested"))
+            .map(|(key, value)| (format!("cups-{key}"), text(value))),
+    );
+    values
 }
 
 #[cfg(test)]
@@ -221,19 +260,40 @@ mod tests {
     fn standard_papers_get_their_pwg_and_ppd_names_and_custom_ones_their_size() {
         // A4 landscape as the engine lays it out: width > height, still A4.
         let s = settings_for(2, (841.89, 595.28), true);
-        assert_eq!(s, vec![("n-copies", text("2")), ("orientation", text("landscape")), ("paper-format", text("iso_a4"))]);
+        assert_eq!(s, vec![("n-copies".into(), text("2")), ("orientation".into(), text("landscape")), ("paper-format".into(), text("iso_a4"))]);
         let p = page_setup_for((841.89, 595.28), true);
-        assert_eq!(p[0], ("Orientation", text("landscape")));
+        assert_eq!(p[0], ("Orientation".into(), text("landscape")));
         let Seed::Mm(w) = p[1].1 else { panic!("width is millimetres") };
         let Seed::Mm(h) = p[2].1 else { panic!("height is millimetres") };
         assert!((w - 210.0).abs() < 0.01 && (h - 297.0).abs() < 0.01, "{w} x {h}");
-        assert_eq!(p[3], ("PPDName", text("A4")));
-        assert_eq!(settings_for(1, (612.0, 792.0), false)[2], ("paper-format", text("na_letter")));
-        assert_eq!(page_setup_for((612.0, 792.0), false)[3], ("PPDName", text("Letter")));
-        assert_eq!(settings_for(1, (288.0, 432.0), false)[2], ("paper-format", text("na_index-4x6")));
+        assert_eq!(p[3], ("PPDName".into(), text("A4")));
+        assert_eq!(settings_for(1, (612.0, 792.0), false)[2], ("paper-format".into(), text("na_letter")));
+        assert_eq!(page_setup_for((612.0, 792.0), false)[3], ("PPDName".into(), text("Letter")));
+        assert_eq!(settings_for(1, (288.0, 432.0), false)[2], ("paper-format".into(), text("na_index-4x6")));
         // 100 x 200 mm is nobody's standard.
         let custom = settings_for(1, (283.46, 566.93), false);
-        assert_eq!(&custom[2..], &[("paper-width", text("100.00")), ("paper-height", text("200.00"))]);
-        assert_eq!(page_setup_for((283.46, 566.93), false)[3], ("Name", text("custom_100x200mm")));
+        assert_eq!(&custom[2..], &[("paper-width".into(), text("100.00")), ("paper-height".into(), text("200.00"))]);
+        assert_eq!(page_setup_for((283.46, 566.93), false)[3], ("Name".into(), text("custom_100x200mm")));
+    }
+
+    #[test]
+    fn system_dialog_settings_seed_job_and_cups_options() {
+        let settings = SystemPrintSettings {
+            title: "proof".into(),
+            printer: Some("Studio".into()),
+            copies: 3,
+            collate: false,
+            duplex: Some(SystemPrintDuplex::LongEdge),
+            paper: (612.0, 792.0),
+            landscape: false,
+            driver_options: vec![("InputSlot".into(), "Tray2".into()), ("media".into(), "ignored".into())],
+        };
+        let values = system_settings(&settings);
+        assert!(values.contains(&("printer".into(), text("Studio"))));
+        assert!(values.contains(&("n-copies".into(), text("3"))));
+        assert!(values.contains(&("collate".into(), text("false"))));
+        assert!(values.contains(&("duplex".into(), text("vertical"))));
+        assert!(values.contains(&("cups-InputSlot".into(), text("Tray2"))));
+        assert!(!values.iter().any(|(key, _)| key == "cups-media"));
     }
 }
