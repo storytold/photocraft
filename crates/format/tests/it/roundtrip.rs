@@ -229,6 +229,53 @@ fn empty_document_roundtrips() {
     assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
 }
 
+/// A layer that is removed only to be re-inserted (Reorder Layers, drag into a group,
+/// Group Layers, New Frame, Background from Layer all detach this way) must not lose its
+/// responsive rules, variant memberships or overrides — #7970's review found the pruning
+/// in `Document::remove` deleting a file's whole responsive setup on the first drag.
+#[test]
+fn remove_and_reinsert_keeps_the_responsive_layout() {
+    let mut doc = Document::new("reorder", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(40),
+        name: "Square".into(),
+        layers: vec![],
+    });
+    let before = doc.responsive.clone();
+    // The detach step of a reorder: take the layer out, put it straight back.
+    let taken = doc.remove(LayerId(41)).unwrap();
+    doc.layers.push(taken);
+    assert_eq!(doc.responsive, before, "a rearrangement keeps the responsive setup");
+    // A save in that state round-trips it unchanged, too.
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.responsive, before);
+}
+
+/// Whatever still dangles after a deletion path missed `remove_layers` is dropped at save,
+/// never written into a file: the mirror of load-side `remap_ids` pruning.
+#[test]
+fn saving_drops_dangling_responsive_references() {
+    let mut doc = Document::new("dangling", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(99),
+        master: LayerId(40),
+        name: "Ghost".into(),
+        layers: vec![],
+    });
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert!(back.responsive.variants.is_empty(), "the variant whose artboard is gone is not saved");
+    assert_eq!(back.responsive.master, Some(LayerId(40)), "live references stay");
+}
+
 #[test]
 fn responsive_layout_roundtrips_in_native_manifest() {
     let mut doc = Document::new("responsive", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);

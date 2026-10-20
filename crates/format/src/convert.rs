@@ -275,7 +275,15 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
         file_encoding: d.file_encoding,
-        responsive: d.responsive.clone(),
+        responsive: {
+            // Saves never dangle: whatever the in-memory layout still references after a
+            // deletion path missed `remove_layers` is dropped here, the mirror of load-side
+            // `remap_ids` pruning.
+            let mut r = d.responsive.clone();
+            let present = d.walk().iter().map(|(_, _, l)| l.id).collect();
+            r.prune_absent(&present);
+            r
+        },
         layer_comps: d.layer_comps.iter().map(|c| comp_m(c, sink)).collect(),
         last_applied_comp: d.last_applied_comp,
         last_document_state: d.last_document_state.as_ref().map(|c| comp_m(c, sink)),

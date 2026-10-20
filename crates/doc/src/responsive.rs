@@ -203,6 +203,23 @@ impl ResponsiveLayout {
         self.safe_areas.retain(|area| !ids.contains(&area.artboard));
     }
 
+    /// Drops every entry whose layer reference no longer exists in the document. The save
+    /// path calls this, so a layer deleted without `remove_layers` (or one whose removal was
+    /// only a rearrangement's detach step, which must not prune) never dangles in a file.
+    pub fn prune_absent(&mut self, present: &std::collections::HashSet<LayerId>) {
+        let gone = |id: LayerId| !present.contains(&id);
+        if self.master.is_some_and(gone) {
+            self.master = None;
+        }
+        self.variants.retain(|variant| !gone(variant.artboard) && !gone(variant.master));
+        for variant in &mut self.variants {
+            variant.layers.retain(|mapping| !gone(mapping.master_layer) && !gone(mapping.variant_layer));
+        }
+        self.rules.retain(|rule| !gone(rule.layer));
+        self.overrides.retain(|entry| !gone(entry.variant) && !gone(entry.layer) && !gone(entry.rule.layer));
+        self.safe_areas.retain(|area| !gone(area.artboard));
+    }
+
     /// Check resource bounds and numeric invariants before accepting persisted data.
     pub fn validate(&self, layer_count: usize) -> std::result::Result<(), &'static str> {
         use std::collections::HashSet;

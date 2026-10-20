@@ -1291,19 +1291,13 @@ impl Document {
     pub fn remove(&mut self, id: LayerId) -> Option<Layer> {
         let path = self.path_of(id)?;
         let (sib, idx) = self.siblings_mut(&path)?;
-        let removed = sib.remove(idx);
-        fn collect(layer: &Layer, ids: &mut std::collections::HashSet<LayerId>) {
-            ids.insert(layer.id);
-            if let Some(children) = layer.children() {
-                for child in children {
-                    collect(child, ids);
-                }
-            }
-        }
-        let mut ids = std::collections::HashSet::new();
-        collect(&removed, &mut ids);
-        self.responsive.remove_layers(&ids);
-        Some(removed)
+        // Deliberately no responsive pruning here: `remove` is also the detach step of
+        // operations that put the layer straight back (Reorder Layers, drag into a group,
+        // Group Layers, New Frame, Background from Layer), and pruning would drop its rules
+        // and variant memberships on a mere rearrangement. True deletions prune through
+        // `responsive.remove_layers`, and the save path drops whatever still dangles
+        // (#7970's review: dragging a layer must not lose the responsive setup).
+        Some(sib.remove(idx))
     }
 
     /// Move a layer up (+1) or down (-1) among its siblings. Returns false at the ends.
