@@ -107,10 +107,10 @@ pub fn enumerate_gpus() -> Vec<GpuInfo> {
     let adapters = pollster::block_on(instance.enumerate_adapters(Backends::all()));
     let mut out: Vec<GpuInfo> = adapters
         .into_iter()
-        .filter_map(|a| {
+        .map(|a| {
             let info = a.get_info();
             let software = matches!(info.device_type, DeviceType::Cpu);
-            Some(GpuInfo {
+            GpuInfo {
                 index: 0, // assigned after sorting, below
                 name: info.name,
                 vendor: Vendor::from_id(info.vendor),
@@ -118,7 +118,7 @@ pub fn enumerate_gpus() -> Vec<GpuInfo> {
                 device_type: format!("{:?}", info.device_type),
                 backend: format!("{:?}", info.backend),
                 software,
-            })
+            }
         })
         .collect();
     // Software rasterizers never accelerate ONNX inference; keep them out.

@@ -62,16 +62,10 @@ pub enum DevicePref {
 }
 
 /// Inference options; defaults follow the crate docs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CutoutOptions {
     pub variant: ModelVariant,
     pub device: DevicePref,
-}
-
-impl Default for CutoutOptions {
-    fn default() -> Self {
-        Self { variant: ModelVariant::default(), device: DevicePref::default() }
-    }
 }
 
 /// What one [`cutout`] call reports back.
@@ -135,10 +129,10 @@ static CACHE: OnceLock<Mutex<Option<Cached>>> = OnceLock::new();
 /// Release the cached session (call on application shutdown so ONNX Runtime's
 /// teardown happens before process teardown, never on a lazy static drop).
 pub fn release() {
-    if let Some(c) = CACHE.get() {
-        if let Ok(mut guard) = c.lock() {
-            *guard = None;
-        }
+    if let Some(c) = CACHE.get()
+        && let Ok(mut guard) = c.lock()
+    {
+        *guard = None;
     }
 }
 
@@ -190,10 +184,10 @@ fn env() -> Result<ort::environment::Environment> {
                 }
                 v.push(dir.join("models").join("matting").join(ort_plugin_name("openvino_plugin")));
             };
-            if let Ok(exe) = std::env::current_exe() {
-                if let Some(dir) = exe.parent() {
-                    push(dir, &mut candidates);
-                }
+            if let Ok(exe) = std::env::current_exe()
+                && let Some(dir) = exe.parent()
+            {
+                push(dir, &mut candidates);
             }
             if let Ok(cwd) = std::env::current_dir() {
                 push(&cwd, &mut candidates);
@@ -249,91 +243,91 @@ fn build_session(path: &Path, _variant: ModelVariant, device: DevicePref) -> Res
         DevicePref::Gpu(id) => device::enumerate_gpus().into_iter().find(|g| g.index == id),
     };
 
-    if device != DevicePref::Cpu {
-        if let Some(g) = &gpu {
-            // OpenVINO first on Intel GPUs: it is Intel's own Arc path and
-            // computes BiRefNet correctly where DirectML's EP collapses (see
-            // the logits guard in cutout). The OV plugin DLLs are optional —
-            // without them registration/commit fails here and we fall through
-            // to DirectML, so machines without the plugins behave exactly as
-            // before.
-            if g.vendor_id == 0x8086 {
-                let cache_dir = path.parent().map(|d| d.join("ov-cache").display().to_string()).unwrap_or_default();
-                // V2 device selection: the plugin EP ignores every device-ish
-                // provider option ("pass the enumerated EP device to
-                // AppendExecutionProvider_V2"), so enumerate the registered
-                // OpenVINO devices and bind the GPU one explicitly. Everything
-                // else travels inside load_config: the EP's legacy option
-                // names (cache_dir, precision, ...) are advise-only and
-                // otherwise silently ignored — OV plugin properties go in the
-                // device-keyed JSON instead (CACHE_DIR alongside
-                // INFERENCE_PRECISION_HINT). FP32 matters: the GPU plugin's
-                // default fp16 oneDNN kernels crash executing BiRefNet on Arc
-                // (primitive-exec error); FP32 runs correctly at ~26x CPU
-                // speed on an A770. The GPU plugin writes its compile cache
-                // into CACHE_DIR but does not reload it across processes
-                // under this EP, so the first session build after start-up
-                // pays the kernel build (~50 s, known limitation); steady
-                // state inference is the 2 s win.
-                let attempt = |cache: bool| -> Result<ort::session::Session> {
-                    let load_config = if cache {
-                        format!(r#"{{"GPU": {{"INFERENCE_PRECISION_HINT": "f32", "CACHE_DIR": {}}}}}"#, json_string(&cache_dir))
-                    } else {
-                        r#"{"GPU": {"INFERENCE_PRECISION_HINT": "f32"}}"#.to_owned()
-                    };
-                    let opts = vec![("OpenVINOExecutionProvider.load_config".to_owned(), load_config)];
-                    let env = env()?;
-                    let gpu_devices = env
-                        .devices()
-                        .filter(|d| d.ep().unwrap_or("") == "OpenVINOExecutionProvider" && d.hardware_device().ty() == ort::memory::DeviceType::GPU)
-                        .collect::<Vec<_>>();
-                    if gpu_devices.is_empty() {
-                        return Err(MattingError::Session("no OpenVINO GPU device registered".into()));
-                    }
-                    let b = ort::session::Session::builder(&env).map_err(|e| MattingError::Session(e.to_string()))?;
-                    b.with_devices(gpu_devices, Some(&opts))
-                        .map_err(|e| MattingError::Session(e.to_string()))?
-                        .commit_from_file(path)
-                        .map_err(|e| MattingError::Session(e.to_string()))
+    if device != DevicePref::Cpu
+        && let Some(g) = &gpu
+    {
+        // OpenVINO first on Intel GPUs: it is Intel's own Arc path and
+        // computes BiRefNet correctly where DirectML's EP collapses (see
+        // the logits guard in cutout). The OV plugin DLLs are optional —
+        // without them registration/commit fails here and we fall through
+        // to DirectML, so machines without the plugins behave exactly as
+        // before.
+        if g.vendor_id == 0x8086 {
+            let cache_dir = path.parent().map(|d| d.join("ov-cache").display().to_string()).unwrap_or_default();
+            // V2 device selection: the plugin EP ignores every device-ish
+            // provider option ("pass the enumerated EP device to
+            // AppendExecutionProvider_V2"), so enumerate the registered
+            // OpenVINO devices and bind the GPU one explicitly. Everything
+            // else travels inside load_config: the EP's legacy option
+            // names (cache_dir, precision, ...) are advise-only and
+            // otherwise silently ignored — OV plugin properties go in the
+            // device-keyed JSON instead (CACHE_DIR alongside
+            // INFERENCE_PRECISION_HINT). FP32 matters: the GPU plugin's
+            // default fp16 oneDNN kernels crash executing BiRefNet on Arc
+            // (primitive-exec error); FP32 runs correctly at ~26x CPU
+            // speed on an A770. The GPU plugin writes its compile cache
+            // into CACHE_DIR but does not reload it across processes
+            // under this EP, so the first session build after start-up
+            // pays the kernel build (~50 s, known limitation); steady
+            // state inference is the 2 s win.
+            let attempt = |cache: bool| -> Result<ort::session::Session> {
+                let load_config = if cache {
+                    format!(r#"{{"GPU": {{"INFERENCE_PRECISION_HINT": "f32", "CACHE_DIR": {}}}}}"#, json_string(&cache_dir))
+                } else {
+                    r#"{"GPU": {"INFERENCE_PRECISION_HINT": "f32"}}"#.to_owned()
                 };
-                match attempt(true) {
-                    Ok(s) => {
-                        log::debug!("[matting] OpenVINO GPU session (fp32) on {}", g.describe());
-                        return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
-                    }
-                    Err(e1) => {
-                        // A poisoned or incompatible cache blob must not take
-                        // the GPU path down with it: retry uncached.
-                        let e1s = e1.to_string();
-                        match attempt(false) {
-                            Ok(s) => {
-                                log::warn!("[matting] OpenVINO GPU session (fp32, cache failed: {e1s}) on {}", g.describe());
-                                return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
-                            }
-                            Err(e2) => log::debug!("[matting] OpenVINO GPU unavailable ({e1s}; uncached retry: {e2}); trying DirectML"),
+                let opts = vec![("OpenVINOExecutionProvider.load_config".to_owned(), load_config)];
+                let env = env()?;
+                let gpu_devices = env
+                    .devices()
+                    .filter(|d| d.ep().unwrap_or("") == "OpenVINOExecutionProvider" && d.hardware_device().ty() == ort::memory::DeviceType::GPU)
+                    .collect::<Vec<_>>();
+                if gpu_devices.is_empty() {
+                    return Err(MattingError::Session("no OpenVINO GPU device registered".into()));
+                }
+                let b = ort::session::Session::builder(&env).map_err(|e| MattingError::Session(e.to_string()))?;
+                b.with_devices(gpu_devices, Some(&opts))
+                    .map_err(|e| MattingError::Session(e.to_string()))?
+                    .commit_from_file(path)
+                    .map_err(|e| MattingError::Session(e.to_string()))
+            };
+            match attempt(true) {
+                Ok(s) => {
+                    log::debug!("[matting] OpenVINO GPU session (fp32) on {}", g.describe());
+                    return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
+                }
+                Err(e1) => {
+                    // A poisoned or incompatible cache blob must not take
+                    // the GPU path down with it: retry uncached.
+                    let e1s = e1.to_string();
+                    match attempt(false) {
+                        Ok(s) => {
+                            log::warn!("[matting] OpenVINO GPU session (fp32, cache failed: {e1s}) on {}", g.describe());
+                            return Ok((s, "OpenVINO".to_owned(), Some(g.clone())));
                         }
+                        Err(e2) => log::debug!("[matting] OpenVINO GPU unavailable ({e1s}; uncached retry: {e2}); trying DirectML"),
                     }
                 }
             }
-            log::debug!("[matting] DirectML candidate: {}", g.describe());
-            let attempt = ort::session::Session::builder(&env()?)
-                .map_err(|e| MattingError::Session(e.to_string()))?
-                .with_execution_providers([ort::ep::DirectML::default().with_device_id(g.index as i32).build()])
-                .map_err(|e| MattingError::Session(e.to_string()))?
-                .commit_from_file(path)
-                .map_err(|e| MattingError::Session(e.to_string()));
-            match attempt {
-                Ok(s) => return Ok((s, "DirectML".to_owned(), Some(g.clone()))),
-                Err(dml_err) => {
-                    // DirectML failed (missing DLL, device id, driver) — the
-                    // CPU fallback is honest only if we say why we fell back.
-                    log::warn!("DirectML session failed ({dml_err}); falling back to CPU");
-                    let cpu_err = match cpu_session(path) {
-                        Ok(s) => return Ok((s, "CPU".to_owned(), None)),
-                        Err(e) => e,
-                    };
-                    return Err(MattingError::NoProvider { detail: format!("DirectML: {dml_err}; CPU: {cpu_err}") });
-                }
+        }
+        log::debug!("[matting] DirectML candidate: {}", g.describe());
+        let attempt = ort::session::Session::builder(&env()?)
+            .map_err(|e| MattingError::Session(e.to_string()))?
+            .with_execution_providers([ort::ep::DirectML::default().with_device_id(g.index as i32).build()])
+            .map_err(|e| MattingError::Session(e.to_string()))?
+            .commit_from_file(path)
+            .map_err(|e| MattingError::Session(e.to_string()));
+        match attempt {
+            Ok(s) => return Ok((s, "DirectML".to_owned(), Some(g.clone()))),
+            Err(dml_err) => {
+                // DirectML failed (missing DLL, device id, driver) — the
+                // CPU fallback is honest only if we say why we fell back.
+                log::warn!("DirectML session failed ({dml_err}); falling back to CPU");
+                let cpu_err = match cpu_session(path) {
+                    Ok(s) => return Ok((s, "CPU".to_owned(), None)),
+                    Err(e) => e,
+                };
+                return Err(MattingError::NoProvider { detail: format!("DirectML: {dml_err}; CPU: {cpu_err}") });
             }
         }
     }
@@ -427,7 +421,7 @@ pub fn cutout_with_progress(
         if outputs.len() == 0 {
             return Err(MattingError::Inference("model returned no outputs".to_owned()));
         }
-        let ref out = outputs[0];
+        let out = &outputs[0];
         let (_shape, data) = out.try_extract_tensor::<f32>().map_err(|e| MattingError::Inference(e.to_string()))?;
         // Copy: the output buffer lives inside the Value we drop next.
         let owned = data.to_vec();
@@ -456,7 +450,7 @@ pub fn cutout_with_progress(
         let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
         let owned = {
             let outputs = cpu.run(ort::inputs![tensor]).map_err(|e| MattingError::Inference(e.to_string()))?;
-            let ref out = outputs[0];
+            let out = &outputs[0];
             let (_shape, data) = out.try_extract_tensor::<f32>().map_err(|e| MattingError::Inference(e.to_string()))?;
             data.to_vec()
         };

@@ -48,7 +48,7 @@ mod tests {
     fn logits_are_squashed_and_unpadded() {
         // Uniform logit 0 → alpha 128 everywhere (sigmoid 0.5), whatever the padding.
         let pad = Padding { side: 4, offset: (1.0, 1.0), scaled: (2, 2) };
-        let a = build_alpha(&vec![0.0; 16], &pad, 3, 2);
+        let a = build_alpha(&[0.0; 16], &pad, 3, 2);
         assert!(a.iter().all(|&v| v == 128), "{a:?}");
         // Strongly positive logits inside the content rows → opaque.
         let mut hi = vec![-20.0f32; 16];
