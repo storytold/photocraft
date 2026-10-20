@@ -38,8 +38,29 @@ pub enum SystemPrintOutcome {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemPrintDuplex {
+    Simplex,
+    LongEdge,
+    ShortEdge,
+}
+
+/// Initial values for the operating system's print dialog. The system dialog remains
+/// authoritative: the user can change these values before submitting the job.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemPrintSettings {
+    pub title: String,
+    pub printer: Option<String>,
+    pub copies: u32,
+    pub collate: bool,
+    pub duplex: Option<SystemPrintDuplex>,
+    pub paper: (f64, f64),
+    pub landscape: bool,
+    pub driver_options: Vec<(String, String)>,
+}
+
 /// Desktop-shell bridge used after PhotoCraft has composed the print-ready PDF.
-pub type SystemPrintDialog = Arc<dyn Fn(&[u8], &str) -> std::result::Result<SystemPrintOutcome, String> + Send + Sync>;
+pub type SystemPrintDialog = Arc<dyn Fn(&[u8], &SystemPrintSettings) -> std::result::Result<SystemPrintOutcome, String> + Send + Sync>;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -1284,7 +1305,21 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     if (send || system_dialog) && !dry {
         if system_dialog {
             let open = dialog.ok_or_else(|| other("the system print dialog is unavailable in this environment"))?;
-            match open(&pdf, &job.title).map_err(other)? {
+            let settings = SystemPrintSettings {
+                title: job.title.clone(),
+                printer: job.printer.clone(),
+                copies: job.copies,
+                collate: job.collate,
+                duplex: job.duplex.map(|duplex| match duplex {
+                    craft_print::Duplex::Off => SystemPrintDuplex::Simplex,
+                    craft_print::Duplex::LongEdge => SystemPrintDuplex::LongEdge,
+                    craft_print::Duplex::ShortEdge => SystemPrintDuplex::ShortEdge,
+                }),
+                paper: (pw, ph),
+                landscape: p.get("orientation").and_then(Value::as_str) == Some("landscape"),
+                driver_options: job.options.clone(),
+            };
+            match open(&pdf, &settings).map_err(other)? {
                 SystemPrintOutcome::Printed => {
                     spool = json!("system-dialog");
                     backend = json!("system-dialog");
@@ -1324,12 +1359,18 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         "bleed": marks.bleed / 72.0,
         "rotateImage": rotate_image,
         "scale": scale * 100.0,
-        "printer": job.printer,
-        "copies": copies,
-        "collate": job.collate,
-        "duplex": duplex_name,
+        // The system dialog is authoritative and does not report its final choices back on every
+        // platform. Avoid presenting PhotoCraft's initial values as the settings that printed.
+        "printer": if system_dialog { Value::Null } else { json!(job.printer) },
+        "copies": if system_dialog { Value::Null } else { json!(copies) },
+        "collate": if system_dialog { Value::Null } else { json!(job.collate) },
+        "duplex": if system_dialog { Value::Null } else { json!(duplex_name) },
         "grayscale": job.grayscale,
-        "driverOptions": job.options.iter().map(|(key, value)| json!([key, value])).collect::<Vec<_>>(),
+        "driverOptions": if system_dialog {
+            Value::Null
+        } else {
+            json!(job.options.iter().map(|(key, value)| json!([key, value])).collect::<Vec<_>>())
+        },
         "command": command,
         "systemDialog": system_dialog,
         "cancelled": cancelled,
@@ -1402,6 +1443,13 @@ fn remember_print(s: &mut Session, p: &Value) {
         // reads it again, and a later print to PDF or another printer must not inherit it.
         o.remove("printable");
         o.remove("systemDialog");
+        if p.get("systemDialog").and_then(Value::as_bool) == Some(true) {
+            // These are owned by the operating system's dialog. PhotoCraft cannot observe the
+            // user's final choices, while the OS already remembers them for the next print.
+            for key in ["printer", "printerSettings", "copies", "collate", "duplex", "driverOptions"] {
+                o.remove(key);
+            }
+        }
     }
     let kept = remembered.clone();
     s.prefs.edit(|prefs| {
@@ -1499,7 +1547,7 @@ fn settings_for_layout(
     Ok((Some(turned), page))
 }
 
-/// The page's image as 8-bit RGB rows (gray expanded), mirrored for Emulsion Down.
+/// The page's image as 8-bit RGB rows (gray expanded), rotated and mirrored as previewed.
 pub fn page_rgb(page: &PrintPage) -> Result<Vec<u8>> {
     let img = &page.image;
     let (w, h) = (img.width as usize, img.height as usize);
@@ -1512,8 +1560,22 @@ pub fn page_rgb(page: &PrintPage) -> Result<Vec<u8>> {
     if row == 0 || row.checked_mul(h) != Some(rgb.len()) {
         return Err(other("nothing to print"));
     }
+    if page.rotate_image {
+        let len = rgb.len();
+        let mut rotated = vec![0; len];
+        for y in 0..h {
+            for x in 0..w {
+                let source = (y * w + x) * 3;
+                let target = ((w - 1 - x) * h + y) * 3;
+                rotated[target..target + 3].copy_from_slice(&rgb[source..source + 3]);
+            }
+        }
+        rgb = rotated;
+    }
     if page.emulsion_down {
-        for row in rgb.chunks_exact_mut(row) {
+        let output_width = if page.rotate_image { h } else { w };
+        let output_row = output_width.checked_mul(3).ok_or_else(|| other("print image is too large"))?;
+        for row in rgb.chunks_exact_mut(output_row) {
             row.as_chunks_mut::<3>().0.reverse();
         }
     }
@@ -1538,7 +1600,8 @@ fn print_windows(page: &PrintPage, p: &Value, title: &str, copies: u32) -> Resul
         return Err(other("the driver paper or orientation differs from the print layout; choose the matching paper in Print Settings before printing"));
     }
     let rgb = page_rgb(page)?;
-    let image = craft_print::rgb::RgbImage { width: page.image.width, height: page.image.height, data: &rgb };
+    let (image_width, image_height) = if page.rotate_image { (page.image.height, page.image.width) } else { (page.image.width, page.image.height) };
+    let image = craft_print::rgb::RgbImage { width: image_width, height: image_height, data: &rgb };
     let rect = page_rect_top_left(page);
     let primitives = windows_marks::primitives(page.marks, rect);
     let color_policy = match p.get("colorHandling").and_then(Value::as_str) {

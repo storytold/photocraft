@@ -56,12 +56,29 @@ try {
 $document = [System.Drawing.Printing.PrintDocument]::new()
 $document.DocumentName = $env:PHOTOCRAFT_PRINT_TITLE
 $document.OriginAtMargins = $false
-$document.DefaultPageSettings.PaperSize = [System.Drawing.Printing.PaperSize]::new('PhotoCraft page', $width, $height)
+if (-not [string]::IsNullOrWhiteSpace($env:PHOTOCRAFT_PRINT_PRINTER)) {
+    $document.PrinterSettings.PrinterName = $env:PHOTOCRAFT_PRINT_PRINTER
+}
+$paperWidth = [Math]::Min($width, $height)
+$paperHeight = [Math]::Max($width, $height)
+$document.DefaultPageSettings.PaperSize = [System.Drawing.Printing.PaperSize]::new('PhotoCraft page', $paperWidth, $paperHeight)
 $document.DefaultPageSettings.Landscape = ($width -gt $height)
 $document.DefaultPageSettings.Margins = [System.Drawing.Printing.Margins]::new(0, 0, 0, 0)
+$document.PrinterSettings.Copies = [int16][Math]::Max(1, [Math]::Min(999, [int]$env:PHOTOCRAFT_PRINT_COPIES))
+$document.PrinterSettings.Collate = ($env:PHOTOCRAFT_PRINT_COLLATE -eq '1')
+switch ($env:PHOTOCRAFT_PRINT_DUPLEX) {
+    'simplex' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Simplex }
+    'long-edge' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Vertical }
+    'short-edge' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Horizontal }
+}
 $document.add_PrintPage({
     param($sender, $event)
-    $box = [System.Drawing.RectangleF]::new(-$event.PageSettings.HardMarginX, -$event.PageSettings.HardMarginY, $width, $height)
+    $box = [System.Drawing.RectangleF]::new(
+        -$event.PageSettings.HardMarginX,
+        -$event.PageSettings.HardMarginY,
+        $event.PageBounds.Width,
+        $event.PageBounds.Height
+    )
     $event.Graphics.DrawImage($bitmap, $box)
     $event.HasMorePages = $false
 })
