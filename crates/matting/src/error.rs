@@ -33,6 +33,11 @@ pub enum MattingError {
     /// WebAssembly build: the sandbox has no ONNX Runtime and no GPU.
     #[error("Neural matting needs the native build (the WebAssembly build has no ONNX Runtime)")]
     UnsupportedOnWasm,
+
+    /// The caller (a background job whose progress callback returned `Err`)
+    /// asked to stop between stages. Nothing was computed further.
+    #[error("the matting run was cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, MattingError>;

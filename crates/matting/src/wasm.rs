@@ -51,8 +51,30 @@ pub enum DevicePref {
     Gpu(u32),
 }
 
+/// Mirror of the native `CutoutStage`; never delivered here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutoutStage {
+    PreparingInput,
+    CheckingModel,
+    LoadingModel,
+    Inference,
+    RetryingOnCpu,
+    Postprocessing,
+}
+
 /// Always `Err(UnsupportedOnWasm)`.
 pub fn cutout(_rgba: &[u8], _width: u32, _height: u32, _opts: &CutoutOptions) -> Result<CutoutResult> {
+    Err(MattingError::UnsupportedOnWasm)
+}
+
+/// Always `Err(UnsupportedOnWasm)`.
+pub fn cutout_with_progress(
+    _rgba: &[u8],
+    _width: u32,
+    _height: u32,
+    _opts: &CutoutOptions,
+    _stage: &mut dyn FnMut(CutoutStage) -> std::result::Result<(), ()>,
+) -> Result<CutoutResult> {
     Err(MattingError::UnsupportedOnWasm)
 }
 

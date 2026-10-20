@@ -358,31 +358,67 @@ fn cpu_session(path: &Path) -> std::result::Result<ort::session::Session, Mattin
 
 // ---- the one entry point ---------------------------------------------------
 
-/// Run the matting model over straight RGBA8 pixels and return the alpha matte plus
-/// the provenance of the run (provider, adapter, timings).
-///
-/// A GPU session is serialised through the cache lock: one 200 M-parameter
-/// model per process is enough, and ONNX Runtime sessions are thread-safe for
-/// `run` — the lock protects the *cache*, letting concurrent callers share the
-/// session they find there.
-pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Result<CutoutResult> {
+/// A stage of a [`cutout`] run, reported through the progress callback so the
+/// caller can show what is happening (and veto by returning `Err`). The
+/// stages arrive in order; `LoadingModel` only appears when the process-wide
+/// session cache misses — a cold GPU kernel build there can take about a
+/// minute (OpenVINO does not reuse compiled kernels across processes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutoutStage {
+    /// Pixels are being resized/normalised into the model's input tensor.
+    PreparingInput,
+    /// The session cache is checked for a usable session.
+    CheckingModel,
+    /// A session is being created: model load plus provider setup; the
+    /// slow stage on a cold GPU.
+    LoadingModel,
+    /// The forward pass runs.
+    Inference,
+    /// The logits-collapsed guard is re-running the model on the CPU.
+    RetryingOnCpu,
+    /// Logits are being turned back into a layer-sized alpha plane.
+    Postprocessing,
+}
+
+/// Run one stage report; `Err` from the callback stops the run at the
+/// boundary (the only interrupt points ONNX Runtime leaves us).
+fn report(stage: CutoutStage, cb: &mut dyn FnMut(CutoutStage) -> std::result::Result<(), ()>) -> Result<()> {
+    cb(stage).map_err(|_| MattingError::Cancelled)
+}
+
+/// Run BiRefNet over `rgba` and return the matte, reporting each
+/// [`CutoutStage`] to `stage`. Returning `Err` from the callback aborts with
+/// [`MattingError::Cancelled`] before the next heavy step (the inference and
+/// a cold session build themselves run to completion — ONNX Runtime offers
+/// no finer interrupt).
+pub fn cutout_with_progress(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    opts: &CutoutOptions,
+    stage: &mut dyn FnMut(CutoutStage) -> std::result::Result<(), ()>,
+) -> Result<CutoutResult> {
     let start = Instant::now();
     let expected = (width as usize) * (height as usize) * 4;
     if rgba.len() != expected {
         return Err(MattingError::BadBuffer { expected, got: rgba.len(), width, height, channels: 4 });
     }
+    report(CutoutStage::PreparingInput, stage)?;
     let path = find_model(opts.variant)?;
     let (input, padding) = build_input(rgba, width, height, opts.variant.resolution());
 
+    report(CutoutStage::CheckingModel, stage)?;
     let mut guard = cache().lock().map_err(|_| MattingError::Session("cache poisoned".to_owned()))?;
     let key = (path.clone(), opts.variant.resolution(), device_tag(opts.device));
     let cache_hit = guard.as_ref().is_some_and(|c| c.key == key);
     if !cache_hit {
+        report(CutoutStage::LoadingModel, stage)?;
         let (session, provider, gpu) = session_for(&path, opts.variant, opts.device)?;
         *guard = Some(Cached { key: key.clone(), session, provider: provider.clone(), gpu: gpu.clone() });
     }
     let cached = guard.as_mut().ok_or_else(|| MattingError::Session("cache empty after fill".to_owned()))?;
 
+    report(CutoutStage::Inference, stage)?;
     let (shape, mut logits) = {
         use ort::value::Tensor;
         let side = opts.variant.resolution() as usize;
@@ -414,6 +450,7 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
         // redo the run on CPU, where the collapse never happens, and cache
         // that path so the wasted GPU attempt does not repeat.
         log::warn!("[matting] {provider} inference collapsed (max logit {max:.2}); re-running on CPU");
+        report(CutoutStage::RetryingOnCpu, stage)?;
         use ort::value::Tensor;
         let mut cpu = cpu_session(&path)?;
         let tensor = Tensor::from_array(([1usize, 3, side, side], input.into_boxed_slice())).map_err(|e| MattingError::Inference(e.to_string()))?;
@@ -431,8 +468,24 @@ pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Res
         gpu = None;
         *guard = Some(Cached { key: (path, opts.variant.resolution(), device_tag(DevicePref::Cpu)), session: cpu, provider: "CPU".to_owned(), gpu: None });
     }
+    report(CutoutStage::Postprocessing, stage)?;
     let alpha = build_alpha(&logits, &padding, width, height);
     Ok(CutoutResult { alpha, provider, gpu, ms: start.elapsed().as_millis() })
+}
+
+/// Run the matting model over straight RGBA8 pixels and return the alpha matte plus
+/// the provenance of the run (provider, adapter, timings).
+///
+/// A GPU session is serialised through the cache lock: one 200 M-parameter
+/// model per process is enough, and ONNX Runtime sessions are thread-safe for
+/// `run` — the lock protects the *cache*, letting concurrent callers share the
+/// session they find there.
+///
+/// Progress-aware callers (a UI that must show what is happening and allow
+/// cancellation) use [`cutout_with_progress`]; this is the same run with the
+/// stage callback disabled.
+pub fn cutout(rgba: &[u8], width: u32, height: u32, opts: &CutoutOptions) -> Result<CutoutResult> {
+    cutout_with_progress(rgba, width, height, opts, &mut |_| Ok(()))
 }
 
 #[cfg(test)]
