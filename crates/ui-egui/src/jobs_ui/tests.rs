@@ -12,7 +12,7 @@ use egui_kittest::kittest::Queryable;
 use photocraft_engine::jobs::{JobId, Started};
 use serde_json::{Value, json};
 
-use crate::PhotocraftApp;
+use crate::{FormatChoices, PhotocraftApp};
 
 fn app_harness() -> Harness<'static, PhotocraftApp> {
     app_harness_with(crate::Services::default())
@@ -574,6 +574,153 @@ fn a_failed_save_or_one_cancelled_while_encoding_leaves_the_document_unsaved() {
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
     assert_eq!(h.state().ui.status, "Cancelled Saving b.psd");
+}
+
+fn journaled_saves(app: &PhotocraftApp) -> Vec<(String, Value)> {
+    app.session.journal.iter().filter(|(id, _)| id.starts_with("file.save")).cloned().collect()
+}
+
+/// #7889: a background save is journaled when its file is written, not when it starts, so an
+/// action being recorded never keeps a save that failed or was cancelled.
+#[test]
+fn a_background_save_is_journaled_only_once_written() {
+    let mut h = app_harness();
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/j.psd".into())).unwrap();
+    h.run_steps(2);
+    assert!(h.state().saving());
+    assert!(journaled_saves(h.state()).is_empty(), "nothing journaled while the save runs");
+    gates.encode.store(true, Ordering::Relaxed);
+    gates.write.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(journaled_saves(h.state()), [("file.saveAs".to_string(), json!({"path": "/tmp/photocraft-test/j.psd"}))]);
+
+    // File › Save back to the same file: journaled as `file.save` once written.
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.state_mut().save_in_place("/tmp/photocraft-test/j.psd".into(), FormatChoices::default()).unwrap();
+    assert_eq!(journaled_saves(h.state()).len(), 1, "not yet");
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(journaled_saves(h.state()).last().map(|s| s.0.as_str()), Some("file.save"));
+}
+
+#[test]
+fn a_failed_or_cancelled_background_save_is_not_journaled() {
+    let mut h = app_harness();
+    let gates = Gates::open();
+    h.state_mut().services.save_file = Some(gates.save(Some("disk full")));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/f.psd".into())).unwrap();
+    step_until(&mut h, |a| !a.saving());
+    assert!(noticed(h.state(), "disk full"));
+    assert!(journaled_saves(h.state()).is_empty(), "a failed save is not journaled");
+
+    gates.encode.store(false, Ordering::Relaxed);
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/c.psd".into())).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    step_until(&mut h, |a| !a.saving());
+    assert!(gates.written().is_empty());
+    assert!(journaled_saves(h.state()).is_empty(), "a cancelled save is not journaled");
+}
+
+/// The file steps of action `name`.
+fn file_steps(app: &PhotocraftApp, name: &str) -> Vec<String> {
+    let action = app.session.actions.list.iter().find(|a| a.name == name).unwrap();
+    action.steps.iter().filter(|(id, _)| id.starts_with("file.")).map(|(id, _)| id.clone()).collect()
+}
+
+/// While an action records, saves are written at once, as its playback writes them: each is
+/// recorded in call order once written (replaying New then Save As would save the new document
+/// to the first one's path), and one that fails records nothing.
+#[test]
+fn saves_while_recording_are_written_at_once_in_call_order() {
+    let mut h = app_harness();
+    let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let w = Arc::clone(&written);
+    h.state_mut().services.export = Some(Box::new(|_, _, _| Ok((vec![1], Vec::new()))));
+    h.state_mut().services.write = Some(Box::new(move |path, _| {
+        w.lock().unwrap().push(path.to_string());
+        Ok(())
+    }));
+    // Held shut: a background save would never finish.
+    h.state_mut().services.save_file = Some(Gates::default().save(None));
+    h.state_mut().run("actions.record", json!({"name": "A"})).unwrap();
+    let r = h.state_mut().save_as(Some("/tmp/photocraft-test/first.psd".into())).unwrap();
+    assert!(r.get("pending").is_none() && !h.state().saving(), "written at once: {r}");
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().save_as(Some("/tmp/photocraft-test/second.psd".into())).unwrap();
+    h.state_mut().services.export = Some(Box::new(|_, _, _| Err("disk full".into())));
+    assert!(h.state_mut().save_as(Some("/tmp/photocraft-test/third.psd".into())).is_err());
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(*written.lock().unwrap(), ["/tmp/photocraft-test/first.psd", "/tmp/photocraft-test/second.psd"]);
+    assert_eq!(file_steps(h.state(), "A"), ["file.saveAs", "file.new", "file.saveAs"]);
+
+    // Without a recording, saves go to the background again.
+    let r = h.state_mut().save_as(Some("/tmp/photocraft-test/fourth.psd".into())).unwrap();
+    assert_eq!(r["pending"], true);
+}
+
+/// A save written at once while recording still waits for a background save to the same file:
+/// the older snapshot must not land over it.
+#[test]
+fn a_save_while_recording_is_refused_while_a_background_save_writes_the_same_file() {
+    let mut h = app_harness();
+    let gates = Gates::default();
+    let exported = Arc::new(AtomicUsize::new(0));
+    let e = Arc::clone(&exported);
+    h.state_mut().services.export = Some(Box::new(move |_, _, _| {
+        e.fetch_add(1, Ordering::Relaxed);
+        Ok((vec![1], Vec::new()))
+    }));
+    h.state_mut().services.write = Some(Box::new(|_, _| Ok(())));
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/same.psd".into())).unwrap();
+    h.state_mut().run("actions.record", json!({"name": "A"})).unwrap();
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let err = h.state_mut().save_as(Some("/tmp/photocraft-test/same.psd".into())).unwrap_err();
+    assert!(err.contains("still running"), "{err}");
+    assert_eq!(exported.load(Ordering::Relaxed), 0, "refused before encoding");
+    gates.encode.store(true, Ordering::Relaxed);
+    gates.write.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    h.state_mut().save_as(Some("/tmp/photocraft-test/same.psd".into())).unwrap();
+    assert_eq!(exported.load(Ordering::Relaxed), 1, "allowed once the first save is done");
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(file_steps(h.state(), "A"), ["file.new", "file.saveAs"]);
+}
+
+/// A background save was started outside any recording: a recording begun while it writes
+/// (also after its action list was flushed, or into a reused action index) doesn't take it.
+#[test]
+fn a_recording_started_during_a_background_save_does_not_take_its_step() {
+    let mut h = app_harness();
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/rec.psd".into())).unwrap();
+    h.state_mut().run("actions.record", json!({"name": "B"})).unwrap();
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    gates.encode.store(true, Ordering::Relaxed);
+    gates.write.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(file_steps(h.state(), "B"), ["file.new"], "the save began before B");
+    assert_eq!(journaled_saves(h.state()).len(), 1, "the written save is still journaled");
+}
+
+/// The Save dialog confirming the document's own file re-labels its Save As as File › Save,
+/// also when that save is still running in the background.
+#[test]
+fn a_pending_save_as_to_the_own_file_is_relabelled_as_save() {
+    let mut h = app_harness();
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/own.psd".into())).unwrap();
+    h.state_mut().journal_as_plain_save("/tmp/photocraft-test/own.psd");
+    gates.encode.store(true, Ordering::Relaxed);
+    gates.write.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(journaled_saves(h.state()), [("file.save".to_string(), json!({}))]);
 }
 
 /// Step until the save in `h` has started writing.

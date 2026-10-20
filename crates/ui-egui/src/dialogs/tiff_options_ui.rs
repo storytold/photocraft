@@ -74,9 +74,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let settings = ExportSettings { tiff_layers: !p.discard_layers, ..app.save_settings() };
         let step = serde_json::json!({"path": p.path, "tiffLayers": !p.discard_layers});
         let written = app.with_document(p.doc, |app| app.write_document(p.path, &settings, p.discard_layers));
-        if written.is_ok() {
-            // An action being recorded keeps the Save As with this answer (#2032).
-            app.session.journal.push(("file.saveAs".into(), step));
+        if let Ok(w) = &written {
+            // An action being recorded keeps the Save As with this answer (#2032), once written (#7889).
+            app.journal_save(w.is_none(), ("file.saveAs".into(), step));
         }
         match written {
             Err(e) => {

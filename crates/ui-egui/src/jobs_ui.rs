@@ -148,6 +148,10 @@ pub struct SaveJob {
     /// An automation save records without firing user-configured hooks.
     pub automation: bool,
     pub state: Arc<SaveState>,
+    /// The action journal step for this save, recorded only once the file is written (#7889).
+    /// Saves started while an action records are written at once, so this one never belongs to
+    /// a recording ([`PhotocraftApp::write_document`]).
+    pub journal: Option<(String, Value)>,
     /// The job has ended (cancelled, say) but its worker may still be running: kept until it
     /// returns, so quitting and another save to the same file wait for it.
     pub ended: bool,
@@ -277,6 +281,22 @@ pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value)
     r
 }
 
+/// Whether the active document may be saved to `path` now, in the background or at once: not
+/// while a job locks it, nor while another save (one cancelled whose worker hasn't returned too)
+/// still writes `path`, so an older snapshot can't land over a newer one.
+pub(crate) fn may_save(app: &PhotocraftApp, path: &str) -> Result<(), String> {
+    let st = app.session.active().ok_or("no document")?;
+    if let Some(j) = app.session.job_on(st.doc.id) {
+        // The engine's wording for a command refused while a job runs.
+        return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", j.label));
+    }
+    if app.jobs.saves.iter().any(|s| s.path == path) {
+        let name = crate::file_open::display_name(path);
+        return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
+    }
+    Ok(())
+}
+
 /// Save the active document to `path` in the background: `save` encodes and writes it on a
 /// worker while the window keeps drawing and shows the progress dialog. The document is locked
 /// until the job ends, which [`tick`] records like a synchronous save. `Ok(None)`: started;
@@ -289,16 +309,9 @@ pub fn start_save(
     save: SaveFileFn,
     automation: bool,
 ) -> Result<Option<(String, Vec<String>)>, String> {
+    may_save(app, &path)?;
     let st = app.session.active().ok_or("no document")?;
-    if let Some(j) = app.session.job_on(st.doc.id) {
-        // The engine's wording for a command refused while a job runs.
-        return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", j.label));
-    }
     let name = crate::file_open::display_name(&path);
-    // One writer per file: an older snapshot must not land after a newer one.
-    if app.jobs.saves.iter().any(|s| s.path == path) {
-        return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
-    }
     let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
@@ -331,7 +344,7 @@ pub fn start_save(
         Started::Job(job) => {
             // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, journal: None, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -351,6 +364,10 @@ fn warnings_of(v: &Value) -> Vec<String> {
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Done(v) => {
+            // The file is written: now an action being recorded keeps the save.
+            if let Some(step) = save.journal {
+                journal_outside_recording(app, step);
+            }
             if save.automation {
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
             } else {
@@ -372,6 +389,21 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
         }
     }
     close_after_saves(app, ctx);
+}
+
+/// Journal a written background save's `step`. It started before any recording now running
+/// (saves started while recording are written at once), so it goes just before that
+/// recording's mark rather than into the action.
+fn journal_outside_recording(app: &mut PhotocraftApp, step: (String, Value)) {
+    let s = &mut app.session;
+    match s.actions.recording.as_mut() {
+        Some((from, _)) => {
+            let at = (*from).min(s.journal.len());
+            s.journal.insert(at, step);
+            *from = at.saturating_add(1);
+        }
+        None => s.journal.push(step),
+    }
 }
 
 /// Forget saves whose job ended and whose worker has returned; repeat a held window close once
