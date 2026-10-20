@@ -24,14 +24,21 @@ use photocraft_geom::Rect;
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "layer.removeBackgroundAI";
+const CMD_HD: &str = "layer.removeBackgroundAIHd";
 
 /// Turn a matting error into the engine error the job should report. Cancel
 /// keeps its identity so the jobs framework records `cancelled`, not `failed`.
-fn matting_err(e: photocraft_matting::MattingError) -> EngineError {
+fn matting_err(cmd: &str, e: photocraft_matting::MattingError) -> EngineError {
     match e {
         photocraft_matting::MattingError::Cancelled => EngineError::Cancelled,
-        e => EngineError::Other(format!("{CMD}: {e}")),
+        e => EngineError::Other(format!("{cmd}: {e}")),
     }
+}
+
+/// True when the 2048-px export (`birefnet-hr.onnx`) is installed; drives the
+/// HD menu item's presence. Filesystem probing, so callers cache the answer.
+pub fn hr_available() -> bool {
+    photocraft_matting::model_candidates(photocraft_matting::ModelVariant::Hr).into_iter().any(|p| p.exists())
 }
 
 /// Run the model over the active layer and matte out its background.
@@ -59,14 +66,20 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
 
+    // The HD command shares this implementation: the job label and the
+    // error prefix follow the variant so history and messages name the
+    // command the user actually invoked.
+    let hr = matches!(variant, photocraft_matting::ModelVariant::Hr);
+    let (cmdname, job_label): (&str, &str) = if hr { (CMD_HD, "Remove Background (AI, HD)") } else { (CMD, "Remove Background (AI)") };
+
     crate::jobs::edit_job(
         s,
-        "Remove Background (AI)",
+        job_label,
         move |doc, _, ctx| {
             ctx.progress(0.0, "Reading layer");
             ctx.check()?;
             let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{CMD} needs a pixel layer")))?;
+            let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{cmdname} needs a pixel layer")))?;
             let area = surface.content_bounds();
             let (w, h) = (area.width(), area.height());
             if w == 0 || h == 0 {
@@ -93,9 +106,14 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
                 let (frac, msg) = match st {
                     photocraft_matting::CutoutStage::PreparingInput => (0.05, "Preparing image"),
                     photocraft_matting::CutoutStage::CheckingModel => (0.10, "Looking for the model"),
-                    photocraft_matting::CutoutStage::LoadingModel => {
-                        (0.15, "Loading the model — the first GPU run compiles kernels and can take about a minute")
-                    }
+                    photocraft_matting::CutoutStage::LoadingModel => (
+                        0.15,
+                        if hr {
+                            "Loading the model — the first GPU run compiles kernels and can take several minutes at 2048 px"
+                        } else {
+                            "Loading the model — the first GPU run compiles kernels and can take about a minute"
+                        },
+                    ),
                     photocraft_matting::CutoutStage::Inference => (0.55, "Running inference"),
                     photocraft_matting::CutoutStage::RetryingOnCpu => (0.60, "GPU returned no subject; re-running on the CPU"),
                     photocraft_matting::CutoutStage::Postprocessing => (0.90, "Building the alpha matte"),
@@ -103,7 +121,7 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
                 ctx.progress(frac, msg);
                 Ok(())
             };
-            let run = photocraft_matting::cutout_with_progress(&rgba, w, h, &opts, &mut stage).map_err(matting_err)?;
+            let run = photocraft_matting::cutout_with_progress(&rgba, w, h, &opts, &mut stage).map_err(|e| matting_err(cmdname, e))?;
             ctx.check()?;
 
             // Multiply the matte into the layer alpha (on this snapshot; the
@@ -125,10 +143,31 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
+/// `layer.removeBackgroundAIHd` — the same job forced onto the high-resolution
+/// export. A distinct command id so the Layers menu can offer it (and hide it)
+/// based on the weights actually installed. Params: `{"device":"auto|cpu"}`.
+pub fn remove_background_ai_hd(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut p = p.clone();
+    p["variant"] = json!("hr");
+    remove_background_ai(s, &p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hd_command_shares_the_job_path() {
+        // The HD wrapper forces the hr variant before the shared implementation
+        // runs: bad device still validates, and with no document the failure
+        // is NoDocument rather than a panic.
+        let mut s = Session::new();
+        let e = remove_background_ai_hd(&mut s, &json!({"device": "nope"})).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{e:?}");
+        let e = remove_background_ai_hd(&mut s, &json!({})).unwrap_err();
+        assert!(matches!(e, EngineError::NoDocument), "{e:?}");
+    }
 
     #[test]
     fn reports_bad_params_without_a_document() {

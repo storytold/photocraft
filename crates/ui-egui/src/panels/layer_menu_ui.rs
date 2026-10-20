@@ -46,7 +46,7 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
 /// Export As (one file per layer, #3629) run on every selected layer instead.
 pub fn single_layer_only(id: &str) -> bool {
     let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
-    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.removeBackgroundAI")
+    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.removeBackgroundAI" | "layer.removeBackgroundAIHd")
         || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
@@ -101,6 +101,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         // the composite cannot address their surfaces.
         if matches!(l.content, LayerContent::Raster(_)) && l.visible {
             v.push(Some((tl!("Remove Background (AI)…"), "layer.removeBackgroundAI")));
+            v.push(Some((tl!("Remove Background (AI, HD)…"), "layer.removeBackgroundAIHd")));
         }
     }
     v.push(None);
@@ -234,6 +235,12 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 last_sep = true;
             }
             Some((label, id)) => {
+                // The HD matte needs its own 2048-px weights; without them the
+                // item would only ever produce an error, so it is not offered.
+                // The probe hits the filesystem, hence the process-lifetime cache.
+                if id == "layer.removeBackgroundAIHd" && !hr_matting_installed() {
+                    continue;
+                }
                 // Skip commands this build doesn't have rather than showing dead items.
                 if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
                     continue;
@@ -253,6 +260,13 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
             }
         }
     }
+}
+
+/// Whether the HD matting weights are present; cached after the first probe
+/// (installing the file takes a restart, which is fine for a menu).
+fn hr_matting_installed() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(photocraft_engine::matting_cmds::hr_available)
 }
 
 pub(crate) fn color_name(color: LabelColor) -> &'static str {
