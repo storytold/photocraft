@@ -110,10 +110,8 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
             // framework commits it as one undo step on the UI thread).
             let alphas = run.alpha;
             let (ox, oy) = (area.x0, area.y0);
-            let surf = doc
-                .layer_mut(id)
-                .and_then(|l| l.surface_mut())
-                .ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
+            let surf =
+                doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or_else(|| EngineError::Other("the active layer changed; nothing was applied".into()))?;
             for (i, a) in alphas.iter().enumerate() {
                 let (x, y) = (ox + (i as u32 % w) as i32, oy + (i as u32 / w) as i32);
                 let old = surf.rgba(x, y);

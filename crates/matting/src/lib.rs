@@ -60,14 +60,10 @@ pub use error::{MattingError, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::{GpuInfo, Vendor, enumerate_gpus, pick_gpu};
 #[cfg(not(target_arch = "wasm32"))]
-pub use session::{
-    CutoutOptions, CutoutResult, CutoutStage, DevicePref, ModelVariant, cutout, cutout_with_progress, model_candidates, ort_status, release,
-};
+pub use session::{CutoutOptions, CutoutResult, CutoutStage, DevicePref, ModelVariant, cutout, cutout_with_progress, model_candidates, ort_status, release};
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{
-    CutoutOptions, CutoutResult, CutoutStage, DevicePref, GpuInfo, ModelVariant, cutout, cutout_with_progress, ort_status, release,
-};
+pub use wasm::{CutoutOptions, CutoutResult, CutoutStage, DevicePref, GpuInfo, ModelVariant, cutout, cutout_with_progress, ort_status, release};
 
 /// Default inference resolution of the BiRefNet-general export (the model is
 /// resolution-agnostic; 1024 is the fast default, 2048 the sharp one).
