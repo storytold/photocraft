@@ -32,7 +32,7 @@ enum Target {
 
 fn target(tool: Tool) -> Target {
     match tool {
-        Tool::Brush | Tool::Eraser => Target::Brush { flow: true },
+        Tool::Brush | Tool::Eraser | Tool::CloneStamp | Tool::HistoryBrush => Target::Brush { flow: true },
         Tool::Pencil => Target::Brush { flow: false },
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
@@ -199,6 +199,18 @@ mod tests {
         press(&mut e, 7, false, 5000.0);
         assert!((e.session.tools.brush.opacity - 0.7).abs() < 1e-6);
         assert!((e.session.tools.brush.flow - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn history_brush_and_clone_stamp_digits_set_brush_opacity_and_flow() {
+        for tool in [Tool::HistoryBrush, Tool::CloneStamp] {
+            let mut a = app(tool);
+            press(&mut a, 7, false, 0.0);
+            assert!((a.session.tools.brush.opacity - 0.7).abs() < 1e-6);
+            press(&mut a, 4, true, 1000.0);
+            assert!((a.session.tools.brush.flow - 0.4).abs() < 1e-6);
+            assert_eq!(layer(&a), (1.0, 1.0), "the layer is untouched");
+        }
     }
 
     #[test]
