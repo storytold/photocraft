@@ -115,12 +115,23 @@ impl PhotocraftMcp {
     /// leaving the document unchanged. `None` in bridge mode.
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
         let Backend::Headless(session) = &*self.backend else { return None };
-        let job = match self.headless_op(move |h| h.command_begin(&id, params)).await? {
-            Ok(Started::Job(job)) => job,
-            Ok(Started::Done(value)) => return Some(Ok(value)),
+        let session = session.clone();
+        // The guard is armed under the lock that starts the job: when the request is dropped while
+        // the start still waits for the lock, the closure's output is dropped unread and cancels it.
+        let mut guard = match self
+            .headless_op(move |h| {
+                Ok(match h.command_begin(&id, params)? {
+                    Started::Job(job) => Ok(Abandon { session, job: Some(job) }),
+                    Started::Done(value) => Err(value),
+                })
+            })
+            .await?
+        {
+            Ok(Ok(guard)) => guard,
+            Ok(Err(value)) => return Some(Ok(value)),
             Err(error) => return Some(Err(error)),
         };
-        let mut guard = Abandon { session: session.clone(), job: Some(job) };
+        let Some(job) = guard.job else { return Some(Err(AutomationError::Other("internal error: a started job has no id".into()))) };
         let mut delay = Duration::from_millis(1);
         loop {
             match self.headless_op(move |h| Ok(h.job_poll(job))).await? {
