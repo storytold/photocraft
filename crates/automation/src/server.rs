@@ -895,8 +895,8 @@ impl PhotocraftMcp {
 
     #[tool(description = "Run an engine command by id with JSON params (see command_list). Returns the command's JSON result. \
         Long commands (filters, Content-Aware Fill/Scale, Photomerge, brush import) wait to finish unless `wait` is false: \
-        then they run as a background job and the result is {job: id} (see jobs_list, jobs_cancel). Headless, a waited \
-        long command reports progress and cancelling the request cancels it; other calls are served meanwhile.")]
+        then they run as a background job and the result is {job: id} (see jobs_list, jobs_cancel). A waited long \
+        command reports progress, cancelling the request cancels it, and other calls are served meanwhile.")]
     async fn command_run(&self, Parameters(p): Parameters<RunParams>, context: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mut waiter = Waiter::new(Some(context));
         to_result(self.step(p.id, p.params.unwrap_or_else(|| json!({})), p.wait.unwrap_or(true), &mut waiter, (0, 1)).await)
@@ -1002,7 +1002,8 @@ impl PhotocraftMcp {
         match &*self.backend {
             Backend::Headless(_) if wait => self.headless_wait(id, params, waiter, at).await.unwrap_or_else(none),
             Backend::Headless(_) => self.headless_op(move |h| h.command_start(&id, params, false)).await.unwrap_or_else(none),
-            Backend::Bridge(b) => b.call("engine.execute", json!({"command": id, "params": params, "wait": wait})).await,
+            Backend::Bridge(b) if wait => self.bridge_wait(b, id, params, waiter, at).await,
+            Backend::Bridge(b) => b.call("engine.execute", json!({"command": id, "params": params, "wait": false})).await,
         }
     }
 
@@ -1326,6 +1327,41 @@ mod tests {
         let cancelled = mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled"))).await.unwrap().unwrap();
         assert!(cancelled, "the job ended without being cancelled");
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+    }
+
+    /// The same over the bridge (#8130): a dropped wait sends `jobs.cancel` for the app's job.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dropping_a_bridged_wait_cancels_the_apps_job() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (cancels, mut cancelled) = tokio::sync::mpsc::unbounded_channel();
+        // A fake app whose job 3 never ends.
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            let (auth, _) = crate::security::authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
+            write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "engine.execute" => json!({"job": 3, "pending": true}),
+                    "jobs.list" => json!({"jobs": [{"id": 3, "state": "running", "progress": 0.5, "message": ""}]}),
+                    _ => {
+                        cancels.send(request.clone()).unwrap();
+                        json!({"cancelled": 1})
+                    }
+                };
+                write.write_all(format!("{}\n", json!({"id": request["id"], "ok": true, "result": result})).as_bytes()).await.unwrap();
+            }
+        });
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(BridgeClient::new(addr, TOKEN).unwrap())));
+        let waited = mcp.run_command("filter.blur.gaussianBlur".into(), json!({"radius": 4}), true);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(200), waited).await.is_err(), "the job never ends");
+        let cancel = tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.recv()).await.unwrap().unwrap();
+        assert_eq!((&cancel["method"], &cancel["params"]), (&json!("jobs.cancel"), &json!({"job": 3})));
     }
 
     /// The MCP server applies finished jobs before every tool call too (#503).

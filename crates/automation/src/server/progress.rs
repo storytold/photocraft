@@ -1,6 +1,7 @@
 //! Progress and cancellation for calls that wait. Render Video runs on the existing blocking
-//! worker; other long commands run as engine jobs that the session polls ([`Waiter`]).
-use super::{Arc, AutomationError, Backend, CallToolResult, Headless, Mutex, PhotocraftMcp, PoisonError, Value, fail, no_backend, ok_json};
+//! worker; other long commands run as engine jobs that the server polls ([`Waiter`]): the headless
+//! session's own, or the app's over the bridge.
+use super::*;
 use crate::headless::JobPoll;
 use photocraft_engine::jobs::{JobId, Started};
 use rmcp::RoleServer;
@@ -91,19 +92,31 @@ impl Waiter {
 /// Cancels a waited job when its waiter goes away without collecting it: rmcp may drop the
 /// request future on cancellation, and nothing else would stop the job.
 struct Abandon {
-    session: Arc<Mutex<Headless>>,
+    backend: Arc<Backend>,
     job: Option<JobId>,
 }
 
 impl Drop for Abandon {
     fn drop(&mut self) {
         let Some(job) = self.job.take() else { return };
-        let session = self.session.clone();
-        let abandon = move || session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job);
-        match tokio::runtime::Handle::try_current() {
-            // A synchronous command can hold the lock for a while: don't block a runtime thread.
-            Ok(runtime) => drop(runtime.spawn_blocking(abandon)),
-            Err(_) => abandon(),
+        let runtime = tokio::runtime::Handle::try_current();
+        match &*self.backend {
+            Backend::Headless(session) => {
+                let session = session.clone();
+                let abandon = move || session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job);
+                match runtime {
+                    // A synchronous command can hold the lock for a while: don't block a runtime thread.
+                    Ok(runtime) => drop(runtime.spawn_blocking(abandon)),
+                    Err(_) => abandon(),
+                }
+            }
+            // Without a runtime there is no way to reach the app; the job then runs to the end.
+            Backend::Bridge(client) => {
+                if let Ok(runtime) = runtime {
+                    let client = client.clone();
+                    drop(runtime.spawn(async move { client.call("jobs.cancel", json!({"job": job.0})).await }));
+                }
+            }
         }
     }
 }
@@ -114,14 +127,16 @@ impl PhotocraftMcp {
     /// `waiter` as `step.0 + fraction` of `step.1`, and cancelling the request cancels the job,
     /// leaving the document unchanged. `None` in bridge mode.
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
-        let Backend::Headless(session) = &*self.backend else { return None };
-        let session = session.clone();
+        if !matches!(&*self.backend, Backend::Headless(_)) {
+            return None;
+        }
+        let backend = self.backend.clone();
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
         let mut guard = match self
             .headless_op(move |h| {
                 Ok(match h.command_begin(&id, params)? {
-                    Started::Job(job) => Ok(Abandon { session, job: Some(job) }),
+                    Started::Job(job) => Ok(Abandon { backend, job: Some(job) }),
                     Started::Done(value) => Err(value),
                 })
             })
@@ -156,6 +171,78 @@ impl PhotocraftMcp {
                 () = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_millis(50));
+        }
+    }
+    /// Bridge: run command `id` for a caller that waits (#8130). An engine command starts with
+    /// `wait: false`; when the app runs it as a background job, `jobs.list` is polled until the job
+    /// ends, so no single reply has to arrive within the client's call timeout. Progress and
+    /// cancellation as in [`Self::headless_wait`]. Only the start is an edit, and it is sent once
+    /// (#1007); a failed poll reports the job instead of guessing its outcome.
+    pub(super) async fn bridge_wait(
+        &self,
+        client: &BridgeClient,
+        id: String,
+        params: Value,
+        waiter: &mut Waiter,
+        step: (usize, usize),
+    ) -> Result<Value, AutomationError> {
+        // A UI command can start a job without naming it in its reply: the app waits on those.
+        if photocraft_engine::commands::find(&id).is_none() {
+            return client.call("engine.execute", json!({"command": id, "params": params, "wait": true})).await;
+        }
+        let started = client.call("engine.execute", json!({"command": id, "params": params, "wait": false})).await?;
+        let pending = started.get("pending").and_then(Value::as_bool) == Some(true);
+        let Some(job) = started.get("job").and_then(Value::as_u64).filter(|_| pending) else {
+            return Ok(started);
+        };
+        let mut guard = Abandon { backend: self.backend.clone(), job: Some(JobId(job)) };
+        let mut delay = Duration::from_millis(10);
+        loop {
+            let listed = match client.call_read("jobs.list", json!({})).await {
+                Ok(listed) => listed,
+                Err(error) => {
+                    // The app may be fine and the job still running: leave it, and say how to find it.
+                    guard.job = None;
+                    return Err(AutomationError::Bridge(format!(
+                        "lost track of job {job} ({id}): {error}; it may still be running and apply its result: check jobs_list, or stop it with jobs_cancel"
+                    )));
+                }
+            };
+            let entry = listed.get("jobs").and_then(Value::as_array).and_then(|jobs| jobs.iter().find(|j| j.get("id").and_then(Value::as_u64) == Some(job)));
+            let Some(entry) = entry else {
+                guard.job = None;
+                return Err(AutomationError::Bridge(format!(
+                    "job {job} ({id}) ended but jobs.list no longer shows it (it keeps the last few); inspect the document for its result"
+                )));
+            };
+            let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+            match entry.get("state").and_then(Value::as_str) {
+                Some("running") => {
+                    let fraction = entry.get("progress").and_then(Value::as_f64).filter(|f| f.is_finite()).map_or(0.0, |f| f.clamp(0.0, 1.0));
+                    waiter.report(step.0 as f64 + fraction, step.1 as f64, &text("message")).await;
+                }
+                state => {
+                    guard.job = None;
+                    // The same results the app's own waited reply gives.
+                    return match state {
+                        Some("done") => Ok(entry.get("result").cloned().unwrap_or(Value::Null)),
+                        Some("failed") => Err(AutomationError::App(Some(text("error")).filter(|e| !e.is_empty()).unwrap_or_else(|| "unknown error".into()))),
+                        Some("cancelled") => Err(AutomationError::App("cancelled".into())),
+                        _ => Err(AutomationError::Bridge(format!("job {job} ({id}) has an unknown state: {entry}"))),
+                    };
+                }
+            }
+            tokio::select! {
+                biased;
+                () = waiter.cancelled() => {
+                    // Cancel before answering, so the next call already sees the document unchanged.
+                    guard.job = None;
+                    let _ = client.call("jobs.cancel", json!({"job": job})).await;
+                    return Err(photocraft_engine::EngineError::Cancelled.into());
+                }
+                () = tokio::time::sleep(delay) => {}
+            }
+            delay = (delay * 2).min(Duration::from_millis(200));
         }
     }
 }

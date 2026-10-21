@@ -1252,10 +1252,14 @@ async fn command_batch_step_without_waiting_starts_a_background_job() {
 async fn bridge_command_batch_forwards_each_steps_wait() {
     let (addr, app) = fake_app().await;
     let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
-    let r = json_of(&call(&client, "command_batch", json!({"steps": [{"id": "filter.blur.gaussianBlur", "wait": false}, {"id": "layer.new.layer"}]})).await);
-    assert_eq!(r["completed"], 2, "{r}");
+    let steps = json!([{"id": "filter.blur.gaussianBlur", "wait": false}, {"id": "layer.new.layer"}, {"id": "view.zoomIn"}]);
+    let r = json_of(&call(&client, "command_batch", json!({"steps": steps})).await);
+    assert_eq!(r["completed"], 3, "{r}");
     assert_eq!(r["results"][0]["result"]["wait"], false, "{r}");
-    assert_eq!(r["results"][1]["result"]["wait"], true, "{r}");
+    // A waited engine command starts without waiting too: the bridge polls a job it starts (#8130).
+    assert_eq!(r["results"][1]["result"]["wait"], false, "{r}");
+    // A UI command can't be polled, so the app waits on it.
+    assert_eq!(r["results"][2]["result"]["wait"], true, "{r}");
     client.cancel().await.unwrap();
     app.abort();
 }
