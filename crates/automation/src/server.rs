@@ -1289,6 +1289,45 @@ mod tests {
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
     }
 
+    /// Dropped while its start still waits for the session lock (held here as a long synchronous
+    /// command would): the job that starts afterwards is cancelled too, not left running.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wait_dropped_before_its_job_starts_cancels_the_job() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| {
+            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
+            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
+        let (session, (locked, is_locked)) = (session.clone(), std::sync::mpsc::channel());
+        let holder = std::thread::spawn(move || {
+            let _held = session.lock().unwrap();
+            locked.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+        is_locked.recv().unwrap();
+        let mut waiter = Waiter::new(None);
+        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), waited).await.is_err(), "the start waits for the lock");
+        holder.join().unwrap();
+        let t = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let (started, running) = mcp.headless_op(|h| Ok((!h.session.jobs_with_recent().is_empty(), h.session.has_jobs()))).await.unwrap().unwrap();
+            if started && !running {
+                break;
+            }
+            assert!(t.elapsed().as_secs() < 30, "the job kept running");
+        }
+        let cancelled = mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled"))).await.unwrap().unwrap();
+        assert!(cancelled, "the job ended without being cancelled");
+        assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+    }
+
     /// The MCP server applies finished jobs before every tool call too (#503).
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_tools_see_a_finished_background_job() {
