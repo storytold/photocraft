@@ -342,7 +342,7 @@ How each MCP tool maps onto control methods in bridge mode:
 
 | MCP tool | Control method |
 |---|---|
-| `command_run {id, params, wait?}` | `engine.execute {command: id, params, wait: false}`, then `jobs.list` until a started job ends (`jobs.cancel` on cancellation); a UI command id is sent with `wait` as given |
+| `command_run {id, params, wait?}` | `engine.execute {command: id, params, wait: false}`; when `wait` is true (the default), then `jobs.list` until a started job ends (`jobs.cancel` on cancellation), and with `wait: false` the `{job, pending}` reply is returned as is. A UI command id is sent with `wait` as given |
 | `jobs_list` / `jobs_cancel {job?}` | `jobs.list` / `jobs.cancel {job?}` |
 | `command_list {filter?, enabled_only?}` | `engine.commands` (filtered by the MCP server; replies with the same bare array, rows keep `disabledReason` and `needsDocument`, see [Command list replies](#command-list-replies)) |
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |

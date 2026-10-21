@@ -236,8 +236,9 @@ impl PhotocraftMcp {
                 biased;
                 () = waiter.cancelled() => {
                     // Cancel before answering, so the next call already sees the document unchanged.
-                    guard.job = None;
                     let _ = client.call("jobs.cancel", json!({"job": job})).await;
+                    // Disarm only now: dropped during the call, the guard still sends the cancel.
+                    guard.job = None;
                     return Err(photocraft_engine::EngineError::Cancelled.into());
                 }
                 () = tokio::time::sleep(delay) => {}
