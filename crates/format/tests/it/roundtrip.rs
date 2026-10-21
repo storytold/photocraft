@@ -229,6 +229,59 @@ fn empty_document_roundtrips() {
     assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
 }
 
+/// The manifest JSON as written in the bundle (its persisted `format_version`, before
+/// load-side migration normalizes it to the current version).
+fn manifest_json(bytes: &[u8]) -> String {
+    let r = zip::ZipReader::new(bytes).unwrap();
+    String::from_utf8(r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap()
+}
+
+/// Compatibility policy: a document with no responsive data saves at version 1 without the
+/// responsive key, so v1-only readers keep opening everything PhotoCraft writes unless the
+/// feature is used; re-saving a v1 file produces a v1 file again (#7970's review).
+#[test]
+fn plain_documents_stay_at_format_version_1() {
+    let mut doc = Document::new("plain", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::raster("px", photocraft_color::PixelFormat::RGBA8));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let text = manifest_json(&bytes);
+    assert!(text.contains("\"format_version\": 1"), "a plain document writes version 1");
+    assert!(!text.contains("responsive"), "the v1 manifest carries no responsive key");
+    // Load and re-save: still version 1, document unchanged.
+    let back = load_from_bytes(&bytes).unwrap();
+    assert!(back.responsive.is_empty(), "loading v1 leaves the layout empty");
+    let again = save_to_bytes(&back, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&again).contains("\"format_version\": 1"), "re-saving stays at version 1");
+    assert_eq!(load_from_bytes(&again).unwrap(), doc);
+}
+
+/// A document that uses the responsive layout saves at version 2 with the key, and the
+/// round trip carries every rule and variant back; dropping the data returns the file to
+/// version 1.
+#[test]
+fn responsive_documents_save_at_format_version_2() {
+    let mut doc = Document::new("responsive", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(40),
+        name: "Square".into(),
+        layers: vec![],
+    });
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&bytes).contains("\"format_version\": 2"), "using the feature marks the file v2");
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back.responsive, doc.responsive);
+    let mut emptied = back;
+    emptied.responsive = Default::default();
+    let plain = save_to_bytes(&emptied, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&plain).contains("\"format_version\": 1"), "dropping the layout returns the file to v1");
+}
+
 /// A layer that is removed only to be re-inserted (Reorder Layers, drag into a group,
 /// Group Layers, New Frame, Background from Layer all detach this way) must not lose its
 /// responsive rules, variant memberships or overrides — #7970's review found the pruning
@@ -688,7 +741,7 @@ fn manifest_is_human_readable_json() {
     let r = zip::ZipReader::new(&bytes).unwrap();
     assert_eq!(r.entries[0].name, "manifest.json");
     let text = String::from_utf8(r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
-    assert!(text.contains("\"format_version\": 2"));
+    assert!(text.contains("\"format_version\": 1"), "a rich document without responsive data stays v1");
     assert!(text.contains("\"Hue/Sat\""));
     assert!(text.contains("filter.blur.gaussian"));
     assert!(r.entries.iter().any(|e| e.name.starts_with("tiles/") && e.name.ends_with(".zst")));
