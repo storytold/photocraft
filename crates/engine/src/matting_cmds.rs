@@ -37,8 +37,17 @@ fn matting_err(cmd: &str, e: photocraft_matting::MattingError) -> EngineError {
 
 /// True when the 2048-px export (`birefnet-hr.onnx`) is installed; drives the
 /// HD menu item's presence. Filesystem probing, so callers cache the answer.
+/// On wasm there is no filesystem model store to probe, and matting itself is
+/// compiled out, so the answer is a flat "not available".
 pub fn hr_available() -> bool {
-    photocraft_matting::model_candidates(photocraft_matting::ModelVariant::Hr).into_iter().any(|p| p.exists())
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        photocraft_matting::model_candidates(photocraft_matting::ModelVariant::Hr).into_iter().any(|p| p.exists())
+    }
 }
 
 /// Run the model over the active layer and matte out its background.
