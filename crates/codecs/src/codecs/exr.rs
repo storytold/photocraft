@@ -219,10 +219,22 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::h
     let display = header.shared_attributes.display_window;
     let display_w = u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?;
     let display_h = u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?;
+    // The display window stages a render that was cropped INTO it (data within the stage).
+    // A part larger than the stage (multi-part files whose first layer sized the shared
+    // display window, #5866's tests) keeps the data window as its canvas, as before.
+    let data_within = w <= display_w as usize && h <= display_h as usize;
+    let (display_w, display_h, display_x0, display_y0) = if data_within {
+        (display_w, display_h, i64::from(display.position.0), i64::from(display.position.1))
+    } else {
+        (
+            u32::try_from(w).map_err(|_| err("EXR width exceeds u32"))?,
+            u32::try_from(h).map_err(|_| err("EXR height exceeds u32"))?,
+            i64::from(header.own_attributes.layer_position.0),
+            i64::from(header.own_attributes.layer_position.1),
+        )
+    };
     // Compute exclusive bounds in i64. IntegerBounds::end() converts the size to i32 and can
     // panic for hostile headers, so do not use its convenience methods here.
-    let display_x0 = i64::from(display.position.0);
-    let display_y0 = i64::from(display.position.1);
     let data_x0 = i64::from(layer.attributes.layer_position.0);
     let data_y0 = i64::from(layer.attributes.layer_position.1);
     let display_x1 = display_x0.checked_add(i64::from(display_w)).ok_or_else(|| err("EXR display-window x bound overflows"))?;
@@ -411,10 +423,22 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32), CodecEr
     }
     let header = meta.headers.get(pick).ok_or_else(|| err("no parts"))?;
     let display = header.shared_attributes.display_window;
-    Ok((
+    let (dw, dh) = (
         u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?,
         u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?,
-    ))
+    );
+    // Stage the data window's size only when the part fits the display window; a part
+    // larger than it keeps the data window (multi-part first-layer sizing, as decode does).
+    let within = header.layer_size.0 <= display.size.0 && header.layer_size.1 <= display.size.1;
+    let ls = header.layer_size;
+    Ok(if within {
+        (dw, dh)
+    } else {
+        (
+            u32::try_from(ls.0).map_err(|_| CodecError::LimitExceeded("EXR width exceeds u32".into()))?,
+            u32::try_from(ls.1).map_err(|_| CodecError::LimitExceeded("EXR height exceeds u32".into()))?,
+        )
+    })
 }
 
 /// Decode one part of a multi-part file by its index into [`info`]'s list. A file with

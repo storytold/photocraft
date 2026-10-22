@@ -50,14 +50,35 @@ fn data_window_is_placed_on_negative_origin_display_stage() {
 }
 
 #[test]
-fn data_window_outside_display_is_clipped_to_the_intersection() {
-    // Source data begins at (-2, -1), while the display stage is (0, 0)..(2, 2).
-    // Only source columns 2..4 and rows 1..3 should be visible.
+fn a_part_larger_than_the_display_window_keeps_its_data_window() {
+    // Source data begins at (-2, -1), 4×3, while the display stage is (0, 0)..(2, 2): the
+    // data window exceeds the stage, so it stays its own canvas (multi-part files size the
+    // shared display window from their first layer, #5866) — no staging, no clipping.
     let values = (0..12).map(|v| v as f32 + 1.0).collect();
     let bytes = exr(IntegerBounds::new((0, 0), (2, 2)), (-2, -1), (4, 3), values);
-    let image = decode(&bytes).expect("decode clipped EXR");
-    assert_eq!(image.dimensions(), (2, 2));
-    assert_eq!([image.get(0, 0, 0), image.get(1, 0, 0), image.get(0, 1, 0), image.get(1, 1, 0)], [7.0, 8.0, 11.0, 12.0]);
+    let image = decode(&bytes).expect("decode oversized-data EXR");
+    assert_eq!(image.dimensions(), (4, 3));
+    assert_eq!(image.get(0, 0, 0), 1.0);
+    assert_eq!(image.get(3, 2, 0), 12.0);
+    assert!(image.warnings.is_empty(), "a part the stage cannot hold does not claim one");
+}
+
+/// A data window that fits the stage is placed on it: cropped renders open on their full
+/// canvas, the overlap keeping its texels and the stage's rest the default pixel.
+#[test]
+fn overlapping_data_within_the_display_window_is_staged() {
+    // Source data begins at (-2, -1), 2×2, inside a 4×4 display stage at (0, 0).
+    let values = vec![9.0f32, 8.0, 7.0, 6.0];
+    let bytes = exr(IntegerBounds::new((0, 0), (4, 4)), (1, 1), (2, 2), values);
+    let image = decode(&bytes).expect("decode staged EXR");
+    assert_eq!(image.dimensions(), (4, 4));
+    assert_eq!(image.get(1, 1, 0), 9.0);
+    assert_eq!(image.get(2, 1, 0), 8.0);
+    assert_eq!(image.get(1, 2, 0), 7.0);
+    assert_eq!(image.get(2, 2, 0), 6.0);
+    assert_eq!(image.get(0, 0, 0), 0.0, "outside the data window the stage is default");
+    assert_eq!(image.get(3, 3, 0), 0.0);
+    assert!(image.warnings.iter().any(|w| matches!(w, photocraft_codecs::DecodeWarning::DisplayWindowStage { .. })));
 }
 
 /// A data window entirely disjoint from the display window intersects it in nothing: the
