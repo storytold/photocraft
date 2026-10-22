@@ -236,8 +236,11 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::h
     let copy_y0 = display_y0.max(data_y0);
     let copy_x1 = display_x1.min(data_x1);
     let copy_y1 = display_y1.min(data_y1);
-    let copy_w = usize::try_from(copy_x1.saturating_sub(copy_x0)).map_err(|_| err("EXR clipped width"))?;
-    let copy_h = usize::try_from(copy_y1.saturating_sub(copy_y0)).map_err(|_| err("EXR clipped height"))?;
+    // A data window entirely outside the display window intersects it in nothing: the
+    // clamped difference is a negative i64, which `usize::try_from` would refuse ("EXR
+    // clipped width", #6271's review) — an empty copy is the valid result, not an error.
+    let copy_w = usize::try_from((copy_x1 - copy_x0).max(0)).map_err(|_| err("EXR clipped width"))?;
+    let copy_h = usize::try_from((copy_y1 - copy_y0).max(0)).map_err(|_| err("EXR clipped height"))?;
     let source_x = usize::try_from(copy_x0.saturating_sub(data_x0)).map_err(|_| err("EXR source x offset"))?;
     let source_y = usize::try_from(copy_y0.saturating_sub(data_y0)).map_err(|_| err("EXR source y offset"))?;
     let target_x = usize::try_from(copy_x0.saturating_sub(display_x0)).map_err(|_| err("EXR target x offset"))?;
@@ -330,8 +333,8 @@ fn stage_image(mut image: Image, header: &exr::meta::header::Header) -> Result<I
     let sey = sy.checked_add(i64::from(h)).ok_or_else(|| err("EXR data-window y bound overflows"))?;
     let ix = dx.max(sx);
     let iy = dy.max(sy);
-    let iw = usize::try_from(ex.min(sex).saturating_sub(ix)).map_err(|_| err("EXR clipped width"))?;
-    let ih = usize::try_from(ey.min(sey).saturating_sub(iy)).map_err(|_| err("EXR clipped height"))?;
+    let iw = usize::try_from((ex.min(sex) - ix).max(0)).map_err(|_| err("EXR clipped width"))?;
+    let ih = usize::try_from((ey.min(sey) - iy).max(0)).map_err(|_| err("EXR clipped height"))?;
     let src_x = usize::try_from(ix.saturating_sub(sx)).map_err(|_| err("EXR source x offset"))?;
     let src_y = usize::try_from(iy.saturating_sub(sy)).map_err(|_| err("EXR source y offset"))?;
     let dst_x = usize::try_from(ix.saturating_sub(dx)).map_err(|_| err("EXR target x offset"))?;

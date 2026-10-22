@@ -60,6 +60,24 @@ fn data_window_outside_display_is_clipped_to_the_intersection() {
     assert_eq!([image.get(0, 0, 0), image.get(1, 0, 0), image.get(0, 1, 0), image.get(1, 1, 0)], [7.0, 8.0, 11.0, 12.0]);
 }
 
+/// A data window entirely disjoint from the display window intersects it in nothing: the
+/// decode succeeds with an empty (default-pixel) stage instead of the "EXR clipped width"
+/// error a negative width difference produced (#6271's review). RGB and RGBA, f32 and f16.
+#[test]
+fn disjoint_data_window_decodes_to_an_empty_stage() {
+    let values = vec![1.0f32, 2.0, 3.0, 4.0];
+    // Right of the stage: data at (10, 10), 2×2, display 6×4 at the origin.
+    let bytes = exr(IntegerBounds::new((0, 0), (6, 4)), (10, 10), (2, 2), values.clone());
+    let image = decode(&bytes).expect("disjoint right");
+    assert_eq!(image.dimensions(), (6, 4));
+    assert!((0..3).all(|c| image.get(5, 3, c) == 0.0));
+    // Below-left of the stage: data at (-9, -9), 2×2.
+    let bytes = exr(IntegerBounds::new((0, 0), (6, 4)), (-9, -9), (2, 2), values);
+    let image = decode(&bytes).expect("disjoint below-left");
+    assert_eq!(image.dimensions(), (6, 4));
+    assert!((0..3).all(|c| image.get(0, 0, c) == 0.0));
+}
+
 #[test]
 fn display_window_limits_are_checked_before_decode_allocation() {
     let bytes = exr(IntegerBounds::new((0, 0), (100, 100)), (0, 0), (1, 1), vec![1.0]);
