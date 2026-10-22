@@ -95,8 +95,8 @@ fn rect_of(doc: &Document, l: &photocraft_doc::Layer) -> Option<[f64; 4]> {
 /// Bounds of a layer as a Snap To Layers target: all of its content, whatever the selection
 /// holds of it (#6290: clipped to the selection, every layer's edges and centre were the
 /// selection's, so a moved selection snapped back to where it started).
-fn target_rect_of(l: &photocraft_doc::Layer) -> Option<[f64; 4]> {
-    snappable(l).then(|| crate::transform_cmds::whole_layer_bounds(l)).and_then(to_rect)
+fn target_rect_of(doc: &Document, l: &photocraft_doc::Layer) -> Option<[f64; 4]> {
+    snappable(l).then(|| crate::transform_cmds::whole_layer_bounds(doc, l)).and_then(to_rect)
 }
 
 fn snappable(l: &photocraft_doc::Layer) -> bool {
@@ -132,7 +132,7 @@ impl SnapTargets {
                 if !l.visible || exclude.contains(&l.id) {
                     continue;
                 }
-                if let Some(r) = target_rect_of(l) {
+                if let Some(r) = target_rect_of(doc, l) {
                     t.add_rect(r, SnapKind::LayerEdge, SnapKind::LayerCenter);
                 }
             }

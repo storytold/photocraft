@@ -61,6 +61,40 @@ pub fn is_focused(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(focus_id())).is_some_and(|seen| seen + 2 >= pass)
 }
 
+/// A command shortcut pressed while the keyboard is on the bar with no menu open (⌘D, ⌘⇧I, F7…)
+/// takes it off the bar, so the shortcut runs in the same press, as a native menu bar does
+/// (#6573). Keys the bar uses (arrows, ↩, Esc, letters, Alt+letter, F10) keep driving it, and
+/// an open menu still swallows shortcuts. True when the bar was left.
+pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
+    if !is_focused(ctx) || crate::menu_nav::is_open(ctx) {
+        return false;
+    }
+    let shortcut = ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers))));
+    if !shortcut {
+        return false;
+    }
+    let mut keys = Keys::load(ctx);
+    keys.focus = None;
+    keys.underline = false;
+    keys.store(ctx);
+    ctx.request_repaint();
+    true
+}
+
+/// A key press that is a command shortcut rather than a key of the bar: ⌘ / Ctrl with a key
+/// (not the modifier keys themselves), or a function key other than F10 (which toggles the bar).
+fn is_command_key(key: Key, mods: Modifiers) -> bool {
+    let modifier_key = matches!(
+        key,
+        Key::ShiftLeft | Key::ShiftRight | Key::ControlLeft | Key::ControlRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight
+    );
+    if modifier_key {
+        return false;
+    }
+    let function_key = key != Key::F10 && key.name().strip_prefix('F').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    mods.command || mods.ctrl || mods.mac_cmd || function_key
+}
+
 /// The mnemonic a key press stands for: the letter or digit of a plain key.
 fn key_char(key: Key) -> Option<char> {
     let name = key.name();
@@ -208,7 +242,12 @@ impl Keys {
         }
         let events = ctx.input(|i| i.events.clone());
         let mut tap = false;
-        for e in &events {
+        // The tap is judged on every event of the frame, also those another handler consumed
+        // before the bar's turn: the shortcuts run first, so Ctrl+Alt+I (Image Size) left no
+        // trace in `events`, and releasing Alt counted as a tap that put the keyboard on the bar;
+        // Enter then opened File instead of confirming the dialog (#7481).
+        let raw = ctx.input(|i| i.raw.events.clone());
+        for e in &raw {
             match e {
                 Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, .. } => {
                     self.alt_down = true;
@@ -347,6 +386,21 @@ mod tests {
         assert_eq!(key_char(Key::F10), None);
         assert_eq!(key_char(Key::ArrowDown), None);
         assert_eq!(key_char(Key::Space), None);
+    }
+
+    #[test]
+    fn command_keys_are_command_combos_and_function_keys_but_f10() {
+        assert!(is_command_key(Key::D, Modifiers::COMMAND));
+        assert!(is_command_key(Key::I, Modifiers::COMMAND | Modifiers::SHIFT));
+        assert!(is_command_key(Key::F7, Modifiers::NONE));
+        assert!(is_command_key(Key::F12, Modifiers::SHIFT));
+        assert!(!is_command_key(Key::F10, Modifiers::NONE), "F10 toggles the bar");
+        assert!(!is_command_key(Key::ControlLeft, Modifiers::CTRL), "Ctrl going down is no shortcut yet");
+        assert!(!is_command_key(Key::E, Modifiers::NONE), "a letter is a mnemonic");
+        assert!(!is_command_key(Key::E, Modifiers::ALT), "Alt+letter opens a menu");
+        assert!(!is_command_key(Key::ArrowRight, Modifiers::NONE));
+        assert!(!is_command_key(Key::Enter, Modifiers::NONE));
+        assert!(!is_command_key(Key::Escape, Modifiers::NONE));
     }
 }
 

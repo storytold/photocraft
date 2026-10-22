@@ -36,6 +36,7 @@ fn err(e: photocraft_heif::Error) -> CodecError {
 
 #[cfg(feature = "heif")]
 pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> Result<Image, CodecError> {
+    use crate::cicp::Cicp;
     use crate::image::{ChannelLayout, Metadata, SampleType};
 
     // The container alone: the declared size is checked before any pixel is decoded.
@@ -51,12 +52,21 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     let sample = if decoded.sixteen_bit { SampleType::U16 } else { SampleType::U8 };
     let mut img = Image::from_raw(decoded.width, decoded.height, layout, sample, decoded.data)?;
     img.icc = decoded.icc;
+    img.cicp = decoded.nclx.map(|n| Cicp { primaries: n.primaries, transfer: n.transfer, matrix: n.matrix, full_range: n.full_range });
     img.meta = Metadata {
         exif: decoded.exif.map(|e| if keep_orientation { e } else { crate::orientation::upright_exif(&e).into_owned() }),
         xmp: decoded.xmp.map(|x| if keep_orientation { x } else { crate::orientation::upright_xmp(&x).into_owned() }),
         ..Default::default()
     };
-    Ok(img)
+    // A 10-bit HDR HEIC (BT.2100 HLG or PQ) opens as linear light in 32-bit float (#6752): no
+    // ICC curve can describe those transfers, and an 8/16-bit document would clip the highlights.
+    match img.cicp.filter(|c| c.is_hdr()) {
+        Some(c) => {
+            limits.check(decoded.width, decoded.height, layout, SampleType::F32)?;
+            crate::cicp::linearize(img, c)
+        }
+        None => Ok(img),
+    }
 }
 
 #[cfg(test)]

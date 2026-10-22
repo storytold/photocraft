@@ -527,16 +527,39 @@ fn style_font_missing(fonts: &mut photocraft_text::FontDb, style: &photocraft_do
     true
 }
 
-/// Font families used by type layers that the font database cannot supply.
+/// The document's type layers, inside groups too.
+fn type_layers(doc: &Document) -> Vec<&TextLayer> {
+    doc.walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `doc` has a type layer. Only then does checking its fonts need the shared text engine,
+/// whose first use waits for the installed-font scan started at launch: minutes on some machines
+/// (#7332).
+pub fn has_type_layers(doc: &Document) -> bool {
+    doc.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Text(_)))
+}
+
+/// Font families used by type layers that the font database cannot supply. A document without
+/// type returns at once, without touching the shared text engine: the shell asks this on the UI
+/// thread for every file it opens, and waiting there for the font scan froze the window on the
+/// first open after launch (#7332).
 pub fn missing_fonts(doc: &Document) -> Vec<String> {
+    let layers = type_layers(doc);
+    if layers.is_empty() {
+        return Vec::new();
+    }
     let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<String> = Vec::new();
-    for (_, _, l) in doc.walk() {
-        if let LayerContent::Text(t) = &l.content {
-            for r in t.char_runs() {
-                if style_font_missing(&mut engine.fonts, &r.style) && !out.contains(&r.style.font_family) {
-                    out.push(r.style.font_family);
-                }
+    for t in layers {
+        for r in t.char_runs() {
+            if style_font_missing(&mut engine.fonts, &r.style) && !out.contains(&r.style.font_family) {
+                out.push(r.style.font_family);
             }
         }
     }

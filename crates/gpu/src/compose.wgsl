@@ -31,6 +31,13 @@ struct Op {
     map_origin: vec2<i32>,
     map_size: vec2<i32>,
     p4: vec4<f32>,
+    // fs_layerbatch's third extra layer and the rest of its second (see `batch_layer`); zero
+    // elsewhere. With them the record fills its 256-byte stride.
+    q0: vec4<f32>,
+    q1: vec4<f32>,
+    q2: vec4<f32>,
+    q3: vec4<f32>,
+    q4: vec4<f32>,
 };
 
 const F_MASK: u32 = 1u;          // layer has an enabled mask
@@ -53,6 +60,7 @@ const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment res
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
+const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
 @group(0) @binding(1) var<uniform> op: Op;
@@ -312,6 +320,9 @@ fn fill_is_special(mode: i32) -> bool {
 // colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)) at `opacity`, Fill staying coverage over
 // transparency. Lab documents mix Normal in CIELAB; type layers mix in the text gamma space.
 fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32, gamma_on: bool) -> vec4<f32> {
+    // The same code as fs_layerbatch_normal, so a layer gives the same bits whichever pass
+    // draws it (a render resumed from the prefix cache splits runs differently).
+    if (mode == M_NORMAL && !gamma_on && (op.flags & F_LAB) == 0u) { return composite_normal_fill(b, s, opacity, fill); }
     let f = clamp(fill, 0.0, 1.0);
     let special = f < 1.0 && fill_is_special(mode);
     let ab = b.a;
@@ -338,6 +349,21 @@ fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32
     if (!gamma_on) { return vec4(wb * b.rgb + wbs * bl + ws * s.rgb, ao); }
     let g = op.p4.w;
     return vec4(text_dec(wb * text_enc(b.rgb, g) + wbs * text_enc(bl, g) + ws * text_enc(s.rgb, g), g), ao);
+}
+
+// composite_fill for Normal outside Lab documents and without text gamma: Fill is plain coverage
+// and the blend is the source. Kept apart so fs_layerbatch_normal doesn't carry every other
+// mode's code, which costs registers and so pixels in flight.
+fn composite_normal_fill(b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32) -> vec4<f32> {
+    let ab = b.a;
+    let over = s.a * opacity * clamp(fill, 0.0, 1.0);
+    if (over <= 0.0) { return b; }
+    let ao = ab + (1.0 - ab) * over;
+    if (ao <= 0.0) { return vec4(0.0); }
+    let wb = ab * (1.0 - over) / ao;
+    let wbs = ab * over / ao;
+    let ws = (1.0 - ab) * over / ao;
+    return vec4(wb * b.rgb + wbs * s.rgb + ws * s.rgb, ao);
 }
 
 // photocraft_color::convert::{srgb_to_lab, lab_to_srgb} (D50, Bradford to sRGB).
@@ -812,18 +838,94 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
     return c;
 }
 
-// blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
-@fragment
-fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
-    let b = textureLoad(tex_a, p, 0);
-    var s = textureLoad(tex_b, p, 0);
+// blend_into(backdrop = b, src = s, mode, opacity) at chunk pixel p, including Dissolve.
+fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
+    var s = src;
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
         s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
     return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
+}
+
+// blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
+@fragment
+fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    return blend_px(p, textureLoad(tex_a, p, 0), textureLoad(tex_b, p, 0));
+}
+
+// fs_content then fs_blend in one pass: the layer's own pixels (times its mask) blended straight
+// onto A, without writing them to a chunk texture and reading them back.
+@fragment
+fn fs_layerblend(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let d = doc_px(p);
+    var s = layer_texel(d);
+    s.a = s.a * mask_value(d);
+    return blend_px(p, textureLoad(tex_a, p, 0), s);
+}
+
+// The pixel at document pixel d of an extra layer of fs_layerbatch: an unmasked plain layer whose
+// pixels are in texture `t` (0: tex_b, 1: tex_c, 2: map_tex). Three vec4 of the record describe
+// it: geo = (texture origin x, y, size w, h), color = its colour outside the texture,
+// prm = (opacity, fill, mode, 1 when it has a texture), all whole numbers stored as floats.
+fn batch_texel(t: i32, d: vec2<i32>, geo: vec4<f32>, color: vec4<f32>, prm: vec4<f32>) -> vec4<f32> {
+    let q = d - vec2<i32>(geo.xy);
+    if (prm.w > 0.5 && inside(q, vec2<i32>(geo.zw))) {
+        if (t == 0) {
+            return textureLoad(tex_b, q, 0);
+        } else if (t == 1) {
+            return textureLoad(tex_c, q, 0);
+        }
+        return textureLoad(map_tex, q, 0);
+    }
+    return color;
+}
+
+// One extra layer of fs_layerbatch (see batch_texel) blended onto b at document pixel d.
+fn batch_layer(t: i32, d: vec2<i32>, b: vec4<f32>, geo: vec4<f32>, color: vec4<f32>, prm: vec4<f32>) -> vec4<f32> {
+    let s = batch_texel(t, d, geo, color, prm);
+    if (s.a <= 0.0) { return b; }
+    return composite_fill(i32(prm.z), b, s, prm.x, prm.y, false);
+}
+
+// batch_layer of a Normal layer outside Lab documents.
+fn batch_layer_normal(t: i32, d: vec2<i32>, b: vec4<f32>, geo: vec4<f32>, color: vec4<f32>, prm: vec4<f32>) -> vec4<f32> {
+    let s = batch_texel(t, d, geo, color, prm);
+    if (s.a <= 0.0) { return b; }
+    return composite_normal_fill(b, s, prm.x, prm.y);
+}
+
+// fs_layerblend of this pass's layer, then `op.kind` (at most 3) more plain layers: consecutive
+// LayerBlend passes the executor draws as one, reading and writing the chunk once for all of them.
+@fragment
+fn fs_layerbatch(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let d = doc_px(p);
+    var s = layer_texel(d);
+    s.a = s.a * mask_value(d);
+    var b = blend_px(p, textureLoad(tex_a, p, 0), s);
+    if (op.kind >= 1) { b = batch_layer(0, d, b, op.p0, op.p1, op.p2); }
+    if (op.kind >= 2) { b = batch_layer(1, d, b, op.p3, op.q0, op.q1); }
+    if (op.kind >= 3) { b = batch_layer(2, d, b, op.q2, op.q3, op.q4); }
+    return b;
+}
+
+// fs_layerbatch for a run of Normal layers without text gamma, outside Lab documents.
+@fragment
+fn fs_layerbatch_normal(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let d = doc_px(p);
+    var s = layer_texel(d);
+    s.a = s.a * mask_value(d);
+    var b = textureLoad(tex_a, p, 0);
+    if (s.a > 0.0) { b = composite_normal_fill(b, s, op.opacity, op.fill); }
+    if (op.kind >= 1) { b = batch_layer_normal(0, d, b, op.p0, op.p1, op.p2); }
+    if (op.kind >= 2) { b = batch_layer_normal(1, d, b, op.p3, op.q0, op.q1); }
+    if (op.kind >= 3) { b = batch_layer_normal(2, d, b, op.q2, op.q3, op.q4); }
+    return b;
 }
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.
@@ -1168,8 +1270,12 @@ fn mix_premul(a: vec4<f32>, b: vec4<f32>, k: f32) -> vec4<f32> {
 fn fs_fxmerge(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     var w = textureLoad(tex_a, p, 0);
-    let l = textureLoad(tex_b, p, 0);
+    var l = textureLoad(tex_b, p, 0);
     let c = textureLoad(tex_c, p, 0);
+    if ((op.flags & F_LAYER_SHAPE) != 0u) {
+        // fs_fxinit INIT_INSIDE then INIT_ALPHA, on the shape in B.
+        l = vec4(l.rgb, select(0.0, op.p0.x, l.a > INSIDE_EPS) * min(l.a, 1.0));
+    }
     if (l.a > 0.0 && (op.flags & F_NO_LAYER) == 0u) { w = composite_g(op.mode, w, l, 1.0, (op.flags & F_TEXT_GAMMA) != 0u); }
     let atop = (op.flags & F_ATOP) != 0u;
     var before = c;

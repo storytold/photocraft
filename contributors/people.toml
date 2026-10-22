@@ -181,3 +181,13 @@ sync_github_name = true
 
 [people.00xJS]
 sync_github_name = true
+
+[people.guillehr2]
+real_name = "Guillem Hermida"
+sync_github_name = true
+
+[people.fjamesprice]
+sync_github_name = true
+
+[people.ha1des]
+sync_github_name = true

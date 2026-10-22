@@ -21,6 +21,8 @@ fn realistic() -> photocraft_engine::Session {
     s.execute("file.new", json!({"width": 240, "height": 160})).unwrap();
     s.execute("layer.new.layer", json!({"name": "in-group"})).unwrap();
     s.execute("layer.groupLayers", json!({"name": "group"})).unwrap();
+    // Group Layers creates collapsed groups (#5571); the walk below expects it open.
+    s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
     s.execute("type.create", json!({"x": 20, "y": 60, "text": "Hello"})).unwrap();
     let paint = s.execute("layer.new.layer", json!({"name": "paint"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 80, "height": 60})).unwrap();
@@ -354,6 +356,24 @@ fn alternate_keys_run_their_command() {
     });
     press(&mut h, "F4");
     assert!(take_log(&h.ctx).is_empty());
+}
+
+/// Ctrl+F4 closes the document beside Ctrl+W, as in Photoshop on Windows, through the same
+/// guarded Close: unsaved changes still get the save prompt.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_f4_closes_the_document() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    press(&mut h, "Cmd+F4");
+    assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Ran)] if id == "file.close"));
+    assert!(h.state().discard.is_some(), "unsaved changes ask first");
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().discard = None;
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    press(&mut h, "Cmd+F4");
+    assert!(h.state().session.documents().is_empty(), "a saved document closes");
 }
 
 /// #352: ⌥[ ⌥] ⌥, ⌥. and ⇧⌥[ walk the Layers panel's rows from the keyboard.

@@ -340,6 +340,8 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
         }
         "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
         "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
+        // New Document's Color Profile (#321) can name an .icc file.
+        "file.new" => &["profile"],
         "edit.colorSettings" => &["workingRgb", "workingCmyk", "workingGray"],
         _ => &[],
     };
@@ -355,6 +357,13 @@ fn profile_command_may_read_ambient(id: &str, params: &Value) -> bool {
     // Installed profiles scan OS and user directories even without a request path.
     if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.installedProfiles" | "view.proofSetup") {
         return true;
+    }
+    // New Document skips exact `working` and `none`; the other working aliases resolve
+    // the configured working space, which may be an .icc path.
+    if id == "file.new" {
+        return params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
+            matches!(profile, "default" | "working-cmyk" | "workingCmyk" | "working-rgb" | "workingRgb" | "working-gray" | "workingGray")
+        });
     }
     matches!(id, "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo")
         && params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
@@ -591,7 +600,7 @@ mod tests {
 
     /// #7095: replacing a file through the automation path keeps the old file's extended
     /// attributes, the same as a save through `atomic_write` does.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     #[test]
     fn write_keeps_the_replaced_files_extended_attributes() {
         #[cfg(target_os = "macos")]
@@ -759,6 +768,12 @@ mod tests {
         assert!(authorize_desktop_engine_command("image.mode.cmyk", &serde_json::json!({})).is_err());
         assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
         assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "srgb"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "adobe-rgb-compat"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "working"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "none"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "default"})).is_err());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "working-cmyk"})).is_err());
         // Shortcut sets: text in and out is fine; a path reads or writes the filesystem.
         let ks = |p: serde_json::Value| authorize_engine_command("edit.keyboardShortcuts", &p);
         assert!(ks(serde_json::json!({"exportKys": true, "summarize": true, "importKys": "<photoshop-keyboard-shortcuts/>"})).is_ok());
@@ -887,7 +902,9 @@ mod tests {
     }
 
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
-        if matches!(id, "prefs.get" | "prefs.reset") {
+        // These commands return settings or installed-profile paths; they do not accept a host
+        // filesystem path as an automation input.
+        if matches!(id, "prefs.get" | "prefs.reset" | "edit.installedProfiles") {
             return false;
         }
         // These registry descriptions refer to document vector paths, not host files.

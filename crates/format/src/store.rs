@@ -304,19 +304,24 @@ pub struct SaveStats {
     pub manifest_bytes: usize,
 }
 
+type BlobHashCache = HashMap<usize, (Weak<Vec<u8>>, Hash)>;
+type TileHashCache = HashMap<(usize, SampleType), (Weak<Tile>, Hash)>;
+
 #[derive(Default)]
 struct Collect<'c> {
     tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
     blobs: BTreeMap<Hash, Arc<Vec<u8>>>,
-    hash_cache: Option<&'c mut HashMap<usize, (Weak<Tile>, Hash)>>,
+    hash_cache: Option<&'c mut TileHashCache>,
+    blob_hash_cache: Option<&'c mut BlobHashCache>,
 }
 
 impl Sink for Collect<'_> {
+    /// Reuses hashes by allocation and sample byte order without upgrading weak references.
     fn tile(&mut self, format: PixelFormat, tile: &Arc<Tile>) -> Hash {
-        let key = Arc::as_ptr(tile) as usize;
+        let key = (Arc::as_ptr(tile) as usize, format.sample);
         if let Some(cache) = self.hash_cache.as_deref_mut()
             && let Some((w, h)) = cache.get(&key)
-            && w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, tile))
+            && std::ptr::eq(w.as_ptr(), Arc::as_ptr(tile))
         {
             let h = h.clone();
             self.tiles.entry(h.clone()).or_insert_with(|| (tile.clone(), format.sample));
@@ -330,8 +335,21 @@ impl Sink for Collect<'_> {
         h
     }
 
+    /// Reuses hashes for the same allocation without upgrading weak references.
     fn blob(&mut self, data: &Arc<Vec<u8>>) -> Hash {
+        let key = Arc::as_ptr(data) as usize;
+        if let Some(cache) = self.blob_hash_cache.as_deref_mut()
+            && let Some((w, h)) = cache.get(&key)
+            && std::ptr::eq(w.as_ptr(), Arc::as_ptr(data))
+        {
+            let h = h.clone();
+            self.blobs.entry(h.clone()).or_insert_with(|| data.clone());
+            return h;
+        }
         let h = hash_bytes(data);
+        if let Some(cache) = self.blob_hash_cache.as_deref_mut() {
+            cache.insert(key, (Arc::downgrade(data), h.clone()));
+        }
         self.blobs.entry(h.clone()).or_insert_with(|| data.clone());
         h
     }
@@ -365,16 +383,25 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
 pub struct PcraftWriter {
-    hash_cache: HashMap<usize, (Weak<Tile>, Hash)>,
+    hash_cache: TileHashCache,
+    blob_hash_cache: BlobHashCache,
     /// Compressed objects by bundle path (ZIP mode).
     compressed: HashMap<String, Arc<Vec<u8>>>,
+    compressed_budget: usize,
     verified_directory: Option<DirectoryVerificationCache>,
     reverify_budget: u64,
 }
 
 impl Default for PcraftWriter {
     fn default() -> Self {
-        Self { hash_cache: HashMap::new(), compressed: HashMap::new(), verified_directory: None, reverify_budget: DEFAULT_REVERIFY_BUDGET }
+        Self {
+            hash_cache: HashMap::new(),
+            blob_hash_cache: HashMap::new(),
+            compressed: HashMap::new(),
+            compressed_budget: usize::MAX,
+            verified_directory: None,
+            reverify_budget: DEFAULT_REVERIFY_BUDGET,
+        }
     }
 }
 
@@ -729,10 +756,18 @@ impl PcraftWriter {
         self.reverify_budget = bytes;
     }
 
+    /// Cap compressed payload capacity retained between ZIP saves. Clears the previous payload
+    /// cache; tile hashes remain reusable. The default is unbounded; `0` retains no payloads.
+    pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
+        self.compressed_budget = bytes;
+        self.compressed.clear();
+    }
+
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
+        self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
-        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
+        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
         let mut previews = Vec::new();
         if let Some(t) = &opts.thumbnail {
@@ -777,27 +812,31 @@ impl PcraftWriter {
             z.add(name, data)?;
         }
         let mut next = HashMap::with_capacity(p.objects.len());
+        let mut cached_bytes = 0usize;
         // New objects are compressed on all cores first (zstd dominates a full save).
         let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
         let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
         for (path, obj) in &p.objects {
-            let data = match self.compressed.get(path) {
-                Some(d) => {
+            let (key, data) = match self.compressed.remove_entry(path) {
+                Some((key, data)) => {
                     if matches!(obj, Object::Tile(..)) {
                         stats.tiles_reused += 1;
                     }
-                    d.clone()
+                    (Some(key), data)
                 }
                 None => {
                     match obj {
                         Object::Tile(..) => stats.tiles_written += 1,
                         Object::Blob(_) => stats.blobs_written += 1,
                     }
-                    fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed()))
+                    (None, fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed())))
                 }
             };
             z.add(path, &data)?;
-            next.insert(path.clone(), data);
+            if data.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
+                cached_bytes += data.capacity();
+                next.insert(key.unwrap_or_else(|| path.clone()), data);
+            }
         }
         self.compressed = next;
         Ok((z.finish()?, stats))
@@ -881,17 +920,14 @@ impl PcraftWriter {
         // Pin all GC directories before removing stale previews or objects.
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
+        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
+        // Omitted previews belong to the previous manifest until the new one commits.
+        // After commit, a locked leftover is only housekeeping, just like unused objects.
         for stale in [THUMB, COMPOSITE] {
             if !p.previews.iter().any(|(n, _)| *n == stale) {
-                let path = dir.join(stale);
-                validate_bundle_file(dir, &path)?;
-                match remove_bundle_file(dir, &path, &gc) {
-                    Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    other => other?,
-                }
+                let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
             }
         }
-        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
         // The manifest is committed: the save has succeeded. Removing objects it no longer
         // references is best-effort housekeeping (a vanished or locked file must not turn a
         // complete save into a reported failure); a leftover is retried on the next save.
@@ -943,6 +979,77 @@ impl PcraftWriter {
             Ok(stats)
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn tile_hash_cache_keeps_sample_byte_order_in_its_identity() {
+    let mut cache = HashMap::new();
+    let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    surface.write_pixel(0, 0, &[0.1, 0.2, 0.3, 1.0]);
+    let tile = surface.tile(photocraft_geom::TileCoord::new(0, 0)).unwrap();
+    let mut collect = Collect { hash_cache: Some(&mut cache), ..Default::default() };
+    for sample in [SampleType::U8, SampleType::U16] {
+        let format = if sample == SampleType::U8 { PixelFormat::RGBA8 } else { PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, true) };
+        assert_eq!(collect.tile(format, tile), hash_bytes(&tile_le(tile, sample)));
+    }
+    drop(collect);
+    assert_eq!(cache.len(), 2);
+}
+
+#[cfg(test)]
+#[test]
+fn blob_hash_cache_tracks_arc_identity_without_retaining_payloads() {
+    let mut cache = HashMap::new();
+    let original = Arc::new(vec![1, 2, 3]);
+    let weak = Arc::downgrade(&original);
+    let mut collect = Collect { blob_hash_cache: Some(&mut cache), ..Default::default() };
+    let hash = collect.blob(&original);
+    assert_eq!(collect.blob(&original), hash);
+    let mut edited = original.clone();
+    Arc::make_mut(&mut edited)[0] = 7;
+    assert_eq!(collect.blob(&edited), hash_bytes(&[7, 2, 3]));
+    assert_ne!(collect.blob(&edited), hash);
+    drop(collect);
+    assert_eq!(cache.len(), 2);
+    drop(original);
+    assert!(weak.upgrade().is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("cache", Size::new(257, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
+    surface.write_pixel(256, 0, &[0.6, 0.4, 0.2, 1.0]);
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let mut writer = PcraftWriter::new();
+    let (expected, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let key = writer.compressed.keys().next().unwrap().clone();
+    let key_allocation = writer.compressed.get_key_value(&key).unwrap().0.as_ptr();
+    assert_eq!(writer.save_zip(&doc, &SaveOptions::default()).unwrap().0, expected);
+    assert_eq!(writer.compressed.get_key_value(&key).unwrap().0.as_ptr(), key_allocation);
+    let budget = writer.compressed.values().map(|v| v.capacity()).min().unwrap();
+    writer.set_compressed_cache_budget(budget);
+    assert!(writer.compressed.is_empty());
+    let (bytes, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert!(writer.compressed.values().map(|v| v.capacity()).sum::<usize>() <= budget);
+    assert!(!writer.compressed.is_empty());
+    let retained = writer.compressed.len();
+    let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(stats.tiles_reused, retained);
+    writer.set_compressed_cache_budget(0);
+    let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(stats.tiles_reused, 0);
+    assert!(writer.compressed.is_empty());
 }
 
 #[cfg(all(test, unix))]

@@ -13,6 +13,16 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key, pressed: bool, modifiers: M
     h.event(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
 }
 
+fn input_state(events: Vec<Event>, modifiers: Modifiers) -> egui::InputState {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+    let state = ctx.input(|i| i.clone());
+    ctx.end_pass().textures_delta.clear();
+    let mut state = state;
+    state.modifiers = modifiers;
+    state
+}
+
 /// The Keyboard Shortcuts dialog with `command` selected, filtered to it.
 fn dialog(ppp: f32, command: &str, filter: &str) -> (Harness<'static, PhotocraftApp>, u64) {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_pixels_per_point(ppp).with_max_steps(64).build_eframe(|cc| {
@@ -135,6 +145,41 @@ fn capture(h: &mut Harness<'_, PhotocraftApp>, button: &str, modifier: Key, held
 }
 
 #[test]
+fn capture_key_press_records_shift_when_key_events_carry_no_modifier_bits() {
+    // Same event pattern as Linux/Windows egui: modifier and letter Key events with empty bits.
+    // Legacy capture → (F6, NONE) → shortcut_text → "F6"; capture_key_press → "Shift+F6".
+    let key_event = |key: Key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let (mods, pressed) =
+        crate::prefs_ui::capture_key_press(Modifiers::NONE, &input_state(vec![key_event(Key::ShiftLeft), key_event(Key::F6)], Modifiers::NONE));
+    assert!(mods.shift);
+    let (key, m) = pressed.expect("F6 press");
+    assert_eq!(key, Key::F6);
+    assert!(m.shift);
+    assert_eq!(crate::prefs_ui::shortcut_text(key, m).as_deref(), Some("Shift+F6"));
+    let (mods, pressed) = crate::prefs_ui::capture_key_press(Modifiers::NONE, &input_state(vec![key_event(Key::ShiftLeft)], Modifiers::NONE));
+    assert!(mods.shift);
+    assert!(pressed.is_none(), "modifier alone does not finish capture");
+    let (_, pressed) = crate::prefs_ui::capture_key_press(mods, &input_state(vec![key_event(Key::F6)], Modifiers::NONE));
+    let (_, m) = pressed.expect("letter in a later frame");
+    assert!(m.shift, "captureMods carries Shift across frames");
+    assert_eq!(crate::prefs_ui::shortcut_text(Key::F6, m).as_deref(), Some("Shift+F6"));
+}
+
+#[test]
+fn shift_is_recorded_when_modifier_key_events_carry_no_bits() {
+    // End-to-end: dialog capture → overrides JSON (shortcut_text → prefs::normalize_shortcut).
+    let (mut h, id) = dialog(1.0, "edit.search", "search…");
+    h.get_by_label(&crate::shortcuts::pretty("Cmd+F")).click();
+    h.run_steps(2);
+    key(&mut h, Key::ShiftLeft, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::F6, true, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Shift+F6"));
+    assert_eq!(field(&h, id, "capture"), json!(false));
+}
+
+#[test]
 fn ctrl_k_is_recorded_as_ctrl_k_not_the_control_key() {
     for ppp in [1.0, 2.0] {
         let (mut h, id) = dialog(ppp, "edit.search", "search…");
@@ -200,7 +245,13 @@ fn a_function_key_moved_off_a_panel_toggle_runs_its_new_command() {
     // row in the dialog is Photoshop's `window.panel.brushSettings` while the key ran the shell's
     // `window.toggle.brushSettings`.
     let (mut h, id) = dialog(1.0, "select.modify.feather", "feather");
-    capture(&mut h, &crate::shortcuts::pretty("Shift+F6"), Key::ShiftLeft, Modifiers::NONE, Key::F5);
+    // Enter capture on the default row, then press plain F5 (not Shift+F5: #7190 records held modifiers).
+    h.get_by_label(&crate::shortcuts::pretty("Shift+F6")).click();
+    h.run_steps(2);
+    key(&mut h, Key::F5, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::F5, false, Modifiers::NONE);
+    h.run_steps(2);
     let message = field(&h, id, "message");
     assert!(message.as_str().unwrap().contains("already in use"), "{message}");
     crate::dialogs::confirm(h.state_mut(), id).unwrap();

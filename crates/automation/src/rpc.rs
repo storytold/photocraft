@@ -114,10 +114,20 @@ impl Headless {
                 let mut opts =
                     photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), tga_bits, ..Default::default() };
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
-                if let Some(q) = p.get("quality").and_then(Value::as_u64) {
-                    opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
-                    opts.encode.webp_quality = q.clamp(1, 100) as u8;
-                    opts.encode.webp_lossless = false;
+                opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
+                match p.get("quality") {
+                    None | Some(Value::Null) => {}
+                    Some(v) => {
+                        // Like the CLI's `--quality`: never ignore or clamp a bad value.
+                        let q = v
+                            .as_u64()
+                            .filter(|q| (1..=100).contains(q))
+                            .and_then(|q| u8::try_from(q).ok())
+                            .ok_or_else(|| bad(format!("`quality` must be a whole number from 1 to 100, got {v}")))?;
+                        opts.encode.jpeg_quality = q;
+                        opts.encode.webp_quality = q;
+                        opts.encode.webp_lossless = false;
+                    }
                 }
                 let path = str_of(&p, "path").map(PathBuf::from);
                 self.save(index_of(&p)?, path.as_deref(), str_of(&p, "format"), &opts)
@@ -576,6 +586,26 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Regression: `quality` 85.0 or "85" was ignored (a lossless WebP, reply ok) and 0 or 500 was
+    /// clamped, where the CLI refuses anything but a whole number from 1 to 100.
+    #[test]
+    fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
+        let dir = std::env::temp_dir().join(format!("pc-rpc-save-quality-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.webp");
+        let mut h = Headless::trusted_local();
+        h.handle("doc.new", json!({"width": 16, "height": 16})).unwrap();
+        for q in [json!(85.0), json!("85"), json!(0), json!(500), json!(-5), json!(true)] {
+            let err = h.handle("doc.save", json!({"path": path.to_string_lossy(), "quality": q})).unwrap_err().to_string();
+            assert!(err.contains("quality"), "{q}: {err}");
+            assert!(!path.exists(), "{q} wrote a file");
+        }
+        h.handle("doc.save", json!({"path": path.to_string_lossy(), "quality": 85})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.get(12..16), Some(&b"VP8 "[..]), "a WebP saved with a quality is lossy");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn automation_preview_rejects_oversized_full_size_and_numeric_wraparound() {
         let mut h = Headless::new();
@@ -751,6 +781,43 @@ mod tests {
         std::fs::write(base.join("outside.csv"), "Data Set,show\none,true\n").unwrap();
         let outside = h.handle("doc.importDataSets", json!({"path": base.join("outside.csv").to_string_lossy()})).unwrap_err().to_string();
         assert!(outside.contains("must be inside the automation root"), "{outside}");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn indexed_place_and_data_set_methods_keep_the_active_document() {
+        let base = std::env::temp_dir().join(format!("pc-doc-index-active-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let img = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![42; 4 * 4 * 3]).unwrap();
+        std::fs::write(root.join("logo.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        std::fs::write(root.join("sets.csv"), "Data Set,show\none,true\ntwo,false\n").unwrap();
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "first"})).unwrap();
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "second"})).unwrap();
+        let layer = h.handle("doc.inspect", json!({})).unwrap()["layers"][0]["id"].as_u64().expect("the layer id");
+        h.handle("engine.execute", json!({"command": "image.variables.define", "params": {"defs": [{"name": "show", "layer": layer, "type": "visibility"}]}}))
+            .unwrap();
+        h.handle("doc.select", json!({"index": 0})).unwrap();
+
+        let steps = [
+            ("doc.place", json!({"path": "logo.png", "index": 1}), true),
+            ("doc.importDataSets", json!({"path": "sets.csv", "index": 1}), true),
+            ("doc.exportLayers", json!({"dir": "layers", "index": 1}), true),
+            ("doc.exportDataSets", json!({"dir": "sets", "index": 1}), true),
+            // A failing call restores the active document too.
+            ("doc.importDataSets", json!({"path": "missing.csv", "index": 1}), false),
+        ];
+        for (method, params, succeeds) in steps {
+            let result = h.handle(method, params.clone());
+            assert_eq!(result.is_ok(), succeeds, "{method} {params}: {result:?}");
+            assert_eq!(h.session.active_index(), Some(0), "{method} {params} must not select document 1");
+        }
+        assert_eq!(h.session.documents()[0].doc.layer_count(), 1, "nothing was placed into the active document");
+        assert_eq!(h.session.documents()[1].doc.layer_count(), 2, "the placed layer is in document 1");
+        assert_eq!(std::fs::read_dir(root.join("sets")).unwrap().count(), 2, "document 1's data sets were exported");
         // Release directory capabilities before cleanup on Windows.
         drop(h);
         std::fs::remove_dir_all(base).unwrap();

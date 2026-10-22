@@ -42,6 +42,8 @@ pub enum Indicator {
 pub struct RowRects {
     pub layer: u64,
     pub row: Rect,
+    /// Visible layer thumbnail; None when thumbnails are disabled.
+    pub thumbnail: Option<Rect>,
     /// The name as painted (after truncation); `None` when there was no room for it.
     pub name: Option<Rect>,
     pub indicators: Vec<(Indicator, Rect)>,
@@ -206,10 +208,60 @@ pub fn label(painter: &Painter, x: f32, cy: f32, right: f32, text: &str, font: F
     Some(r)
 }
 
-/// The Layers panel's own items at the top of its panel menu (Photoshop's flyout).
+/// Photoshop-style Layers flyout commands. The dock owns tab-group controls, not this menu.
 pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
-    let can = app.session.is_enabled("layer.setExpanded");
-    if ui.add_enabled(can, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
+    use crate::layers_panel_ui::run_menu_command;
+    use crate::state::LayersPanelDialog;
+
+    let has_doc = app.session.active().is_some();
+    if ui.add_enabled(has_doc, egui::Button::new(tl!("New Layer…"))).clicked() {
+        app.ui.layers_panel_dialog = Some(LayersPanelDialog::NewLayer(String::new()));
+        ui.close();
+    }
+    if ui.add_enabled(has_doc, egui::Button::new(tl!("New Group…"))).clicked() {
+        app.ui.layers_panel_dialog = Some(LayersPanelDialog::NewGroup(String::new()));
+        ui.close();
+    }
+    ui.separator();
+    run_menu_command(app, ui, tl!("Flatten Image"), "layer.flattenImage");
+    ui.separator();
+    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), egui::Button::new(tl!("Lock Layers…"))).clicked() {
+        app.ui.layers_panel_dialog = Some(LayersPanelDialog::LockLayers { transparency: false, pixels: false, position: false, artboard: false, all: true });
+        ui.close();
+    }
+    run_menu_command(app, ui, tl!("Rename Layer…"), "layer.renameLayer");
+    let any_hidden = app.session.active().is_some_and(|st| st.selected_layers().iter().any(|id| st.doc.layer(*id).is_some_and(|l| !l.visible)));
+    if any_hidden {
+        run_menu_command(app, ui, tl!("Show Layers"), "layer.showLayers");
+    } else {
+        run_menu_command(app, ui, tl!("Hide Layers"), "layer.hideLayers");
+    }
+    ui.separator();
+    run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard");
+    ui.separator();
+    ui.menu_button(tl!("Filter Options"), |ui| {
+        let mut show = app.ui.layers_panel_options.show_filters;
+        if ui.checkbox(&mut show, tl!("Show")).changed() {
+            app.ui.layers_panel_options.show_filters = show;
+            crate::layers_panel_ui::persist_options(app);
+            ui.close();
+        }
+    });
+    // Animation Options control Photoshop's frame-unification buttons. PhotoCraft's Layers
+    // panel does not expose those buttons; do not offer nonfunctional toggles.
+    ui.add_enabled_ui(false, |ui| {
+        ui.menu_button(tl!("Animation Options"), |_ui| {});
+    });
+    if ui.button(tl!("Panel Options…")).clicked() {
+        let mut options = app.ui.layers_panel_options.clone();
+        options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
+        app.ui.layers_panel_dialog = Some(LayersPanelDialog::PanelOptions(options));
+        ui.close();
+    }
+    ui.separator();
+    // Preserve PhotoCraft's existing group disclosure action when expanding the flyout.
+    let can_collapse = app.session.is_enabled("layer.setExpanded");
+    if ui.add_enabled(can_collapse, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
         if let Err(e) = app.run("layer.setExpanded", json!({"all": true, "expanded": false})) {
             app.ui.status = e;
             app.ui.status_error = true;

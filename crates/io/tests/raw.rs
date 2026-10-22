@@ -46,6 +46,118 @@ fn cr2_opens() {
     assert_eq!(r.document.depth, SampleType::U16);
 }
 
+/// #6957: a developed raw keeps the raw's EXIF (camera, exposure), so File Info shows its Camera
+/// Data. The raw's Orientation is left out: the developed image is already upright.
+#[test]
+fn a_developed_raw_keeps_its_exif() {
+    let (w, h) = (48, 16);
+    let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 256, 12000);
+    let spec =
+        Cr2Spec { width: w, height: h, data, precision: 14, components: 2, slices: vec![24, 24], borders: None, wb_rggb: None, orientation: 6, model_id: None };
+    let r = import("IMG_0001.CR2", &spec.build()).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "developed, not a preview: {:?}", r.warnings);
+    let exif = r.document.metadata.exif.as_deref().expect("the raw's EXIF");
+    let camera = photocraft_algo::exif::read(exif);
+    assert_eq!(camera.make.as_deref(), Some("Canon"));
+    assert_eq!(camera.model.as_deref(), Some("Canon EOS Synthetic"));
+    assert_eq!(camera.exposure_time, Some(0.01));
+    assert_eq!(photocraft_codecs::exif_orientation(exif), 1, "no orientation to apply a second time");
+    assert_eq!((r.document.size.width, r.document.size.height), (16, 48));
+}
+
+/// The tags of the Exif directory of an EXIF block (a little-endian TIFF stream).
+fn exif_ifd_tags(b: &[u8]) -> Vec<u16> {
+    assert_eq!(&b[..2], b"II");
+    let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+    let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
+    let entries = |at: usize| (0..usize::from(u16_at(at))).map(move |k| at + 2 + 12 * k);
+    let ifd0 = u32_at(4);
+    let exif = entries(ifd0).find(|&e| u16_at(e) == 34665).map(|e| u32_at(e + 8)).expect("an Exif directory");
+    entries(exif).map(u16_at).collect()
+}
+
+/// A Panasonic RW2 (its TIFF header has 0x55 for 42) with an Exif directory: the developed
+/// document keeps it, without the Exif pixel dimensions (the sensor's, not the image's).
+#[test]
+fn a_developed_rw2_keeps_its_exif() {
+    let (w, h, bits) = (20usize, 12usize, 12u32);
+    let data: Vec<u16> = (0..w * h).map(|i| (i * 13 % 4000) as u16 + 200).collect();
+    let mut t = TiffBuilder::default();
+    let raw = t.blob(photocraft_raw::testgen::rw2_pack(&data, w, bits));
+    let exif = t.ifd(vec![(33434, Val::Rational(vec![(1, 60)])), (40962, Val::Long(vec![w as u32])), (40963, Val::Long(vec![h as u32]))]);
+    let white = ((1u32 << bits) - 1) as u16;
+    let ifd0 = t.ifd(vec![
+        (0x0002, Val::Short(vec![w as u16])),
+        (0x0003, Val::Short(vec![h as u16])),
+        (0x0004, Val::Short(vec![2])),
+        (0x0005, Val::Short(vec![2])),
+        (0x0006, Val::Short(vec![h as u16 - 2])),
+        (0x0007, Val::Short(vec![w as u16 - 2])),
+        (0x0009, Val::Short(vec![1])),
+        (0x000A, Val::Short(vec![bits as u16])),
+        (0x000E, Val::Short(vec![white])),
+        (0x000F, Val::Short(vec![white])),
+        (0x0010, Val::Short(vec![white])),
+        (0x002D, Val::Short(vec![5])),
+        (0x010F, Val::Ascii("Panasonic".into())),
+        (0x0110, Val::Ascii("DC-Synthetic".into())),
+        (0x0112, Val::Short(vec![1])),
+        (0x0118, Val::Blobs(vec![raw])),
+        (34665, Val::Ifds(vec![exif])),
+    ]);
+    t.chain = vec![ifd0];
+    let mut bytes = t.build();
+    bytes[2..4].copy_from_slice(b"U\0");
+    let r = import("P1000001.RW2", &bytes).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "developed, not a preview: {:?}", r.warnings);
+    let exif = r.document.metadata.exif.as_deref().expect("the raw's EXIF");
+    let camera = photocraft_algo::exif::read(exif);
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("Panasonic"), Some("DC-Synthetic")));
+    assert!(camera.exposure_time.is_some_and(|t| (t - 1.0 / 60.0).abs() < 1e-9));
+    let tags = exif_ifd_tags(exif);
+    assert!(tags.contains(&33434), "{tags:?}");
+    assert!(!tags.contains(&40962) && !tags.contains(&40963), "no Exif pixel dimensions: {tags:?}");
+}
+
+/// A raw whose Exif directory holds only the pixel dimensions, which a developed image drops:
+/// IFD0's camera make and model are kept on their own rather than lost with the empty directory.
+#[test]
+fn a_developed_raw_keeps_its_camera_when_the_exif_directory_empties() {
+    let (w, h, bits) = (20usize, 12usize, 12u32);
+    let data: Vec<u16> = (0..w * h).map(|i| (i * 13 % 4000) as u16 + 200).collect();
+    let mut t = TiffBuilder::default();
+    let raw = t.blob(photocraft_raw::testgen::rw2_pack(&data, w, bits));
+    let exif = t.ifd(vec![(40962, Val::Long(vec![w as u32])), (40963, Val::Long(vec![h as u32]))]);
+    let white = ((1u32 << bits) - 1) as u16;
+    let ifd0 = t.ifd(vec![
+        (0x0002, Val::Short(vec![w as u16])),
+        (0x0003, Val::Short(vec![h as u16])),
+        (0x0004, Val::Short(vec![2])),
+        (0x0005, Val::Short(vec![2])),
+        (0x0006, Val::Short(vec![h as u16 - 2])),
+        (0x0007, Val::Short(vec![w as u16 - 2])),
+        (0x0009, Val::Short(vec![1])),
+        (0x000A, Val::Short(vec![bits as u16])),
+        (0x000E, Val::Short(vec![white])),
+        (0x000F, Val::Short(vec![white])),
+        (0x0010, Val::Short(vec![white])),
+        (0x002D, Val::Short(vec![5])),
+        (0x010F, Val::Ascii("Panasonic".into())),
+        (0x0110, Val::Ascii("DC-Synthetic".into())),
+        (0x0112, Val::Short(vec![1])),
+        (0x0118, Val::Blobs(vec![raw])),
+        (34665, Val::Ifds(vec![exif])),
+    ]);
+    t.chain = vec![ifd0];
+    let mut bytes = t.build();
+    bytes[2..4].copy_from_slice(b"U\0");
+    let r = import("P1000001.RW2", &bytes).unwrap();
+    let exif = r.document.metadata.exif.as_deref().expect("the raw's camera, without an Exif directory");
+    let camera = photocraft_algo::exif::read(exif);
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("Panasonic"), Some("DC-Synthetic")));
+    assert_eq!(camera.exposure_time, None);
+}
+
 /// A NEF-like file with Nikon's (undocumented) compression and a full-size
 /// baseline JPEG preview in IFD0.
 fn nef_with_preview() -> Vec<u8> {

@@ -9,6 +9,8 @@ use std::sync::Mutex;
 use photocraft_doc::Document;
 use serde_json::{Map, Value, json};
 
+use photocraft_engine::export_preset_cmds::{DEFAULT_RESAMPLE, RESAMPLE, export_resample};
+
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
@@ -20,54 +22,68 @@ const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "We
 /// filter dialogs do.
 pub(crate) const COMMAND: &str = "file.export.exportAs";
 
+/// The dialog's own settings: what Export As remembers for next time and what an action records
+/// with the destination (#7207).
+const SETTINGS: [&str; 14] = [
+    "format",
+    "quality",
+    "lossless",
+    "transparency",
+    "scale",
+    "resample",
+    "metadata",
+    "tgaBits",
+    "sizing",
+    "width",
+    "height",
+    "lockAspect",
+    "profile",
+    "embedProfile",
+];
+
+fn settings_of(f: &Map<String, Value>) -> Map<String, Value> {
+    SETTINGS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect()
+}
+
+/// Whether `v` is a value the dialog's `key` control can hold: what a remembered setting is
+/// seeded from and what a recorded Export As step replays with (#7207).
+fn valid_setting(key: &str, v: &Value) -> bool {
+    let num = |lo: f64, hi: f64| v.as_f64().is_some_and(|x| x.is_finite() && (lo..=hi).contains(&x));
+    let one_of = |options: &[&str]| v.as_str().is_some_and(|s| options.contains(&s));
+    match key {
+        "format" => v.as_str().is_some_and(|s| FORMATS.iter().any(|(k, _)| *k == s)),
+        "quality" => num(1.0, 100.0),
+        "scale" => num(1.0, 1000.0),
+        "width" | "height" => num(1.0, MAX_PX),
+        "lossless" | "transparency" | "lockAspect" | "embedProfile" => v.is_boolean(),
+        "resample" => v.as_str().is_some_and(|s| export_resample(s).is_ok()),
+        "metadata" => one_of(&["none", "exif", "all"]),
+        "tgaBits" => one_of(&["auto", "24", "32"]),
+        "sizing" => one_of(&["scale", "pixels"]),
+        "profile" => one_of(&["document", "srgb"]),
+        _ => false,
+    }
+}
+
 /// The dialog is seeded from the settings it was used with last (see [`COMMAND`]); a value that
 /// no longer matches a control (a hand-edited preferences file) is left at its default.
 fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(COMMAND) else { return };
-    if let Some(v) = saved.get("format").and_then(Value::as_str).filter(|v| FORMATS.iter().any(|(k, _)| k == v)) {
-        f.insert("format".into(), json!(v));
-    }
-    if let Some(v) = saved.get("quality").and_then(Value::as_f64).filter(|v| (1.0..=100.0).contains(v)) {
-        f.insert("quality".into(), json!(v));
-    }
-    if let Some(v) = saved.get("scale").and_then(Value::as_f64).filter(|v| (1.0..=1000.0).contains(v)) {
-        f.insert("scale".into(), json!(v));
-    }
-    for key in ["lossless", "transparency"] {
-        if let Some(v) = saved.get(key).and_then(Value::as_bool) {
-            f.insert(key.into(), json!(v));
-        }
-    }
-    if let Some(v) = saved.get("metadata").and_then(Value::as_str).filter(|v| ["none", "exif", "all"].contains(v)) {
-        f.insert("metadata".into(), json!(v));
-    }
-    if let Some(v) = saved.get("tgaBits").and_then(Value::as_str).filter(|v| ["auto", "24", "32"].contains(v)) {
-        f.insert("tgaBits".into(), json!(v));
-    }
-    if let Some(v) = saved.get("sizing").and_then(Value::as_str).filter(|v| ["scale", "pixels"].contains(v)) {
-        f.insert("sizing".into(), json!(v));
-    }
-    if let Some(v) = saved.get("lockAspect").and_then(Value::as_bool) {
-        f.insert("lockAspect".into(), json!(v));
-    }
-    if let Some(v) = saved.get("embedProfile").and_then(Value::as_bool) {
-        f.insert("embedProfile".into(), json!(v));
-    }
-    if let Some(v) = saved.get("profile").and_then(Value::as_str).filter(|v| ["document", "srgb"].contains(v)) {
-        f.insert("profile".into(), json!(v));
-    }
-    for key in ["width", "height"] {
-        if let Some(v) = saved.get(key).and_then(Value::as_f64).filter(|v| v.is_finite() && (1.0..=MAX_PX).contains(v)) {
-            f.insert(key.into(), json!(v.round()));
-        }
+    for key in SETTINGS {
+        let Some(v) = saved.get(key).filter(|v| valid_setting(key, v)) else { continue };
+        // Numbers as the dialog's fields hold them; pixel sizes are whole pixels.
+        let v = match (key, v.as_f64()) {
+            ("width" | "height", Some(x)) => json!(x.round()),
+            (_, Some(x)) => json!(x),
+            _ => v.clone(),
+        };
+        f.insert(key.into(), v);
     }
 }
 
 /// Record the settings for the next Export As (see [`seed_remembered`]).
 fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
-    const KEYS: [&str; 13] =
-        ["format", "quality", "lossless", "transparency", "scale", "metadata", "tgaBits", "sizing", "width", "height", "lockAspect", "profile", "embedProfile"];
-    let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect();
+    let saved = settings_of(f);
     app.session.prefs.edit(|p| {
         p.dialogs.insert(COMMAND.into(), Value::Object(saved));
     });
@@ -83,6 +99,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("lossless".into(), json!(app.session.prefs().export.webp_lossless));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
+    f.insert("resample".into(), json!(DEFAULT_RESAMPLE));
     f.insert("metadata".into(), json!("none"));
     f.insert("tgaBits".into(), json!("auto"));
     f.insert("sizing".into(), json!("scale"));
@@ -240,9 +257,27 @@ fn n(f: &Map<String, Value>, k: &str, d: f64) -> f64 {
     f.get(k).and_then(Value::as_f64).unwrap_or(d)
 }
 
-/// The document as exported: scaled (engine Image Size, bicubic) and flattened over white when
-/// transparency is off or the format has no alpha.
+/// Image Size's method for the exported copy (Export As › Resample). A missing choice is
+/// Photoshop's default, Bicubic Automatic; an unknown one is an error, never a silent Bicubic.
+/// The preview proxy (`max_side`) resamples bilinearly to stay fast, except for Nearest
+/// Neighbor, whose hard pixel edges are the point of choosing it and cost nothing extra.
+fn resample_method(f: &Map<String, Value>, max_side: Option<u32>) -> Result<&'static str, String> {
+    let chosen = match f.get("resample") {
+        None | Some(Value::Null) => DEFAULT_RESAMPLE,
+        Some(v) => export_resample(v.as_str().ok_or("resample must be a string")?)?,
+    };
+    Ok(if max_side.is_some() && chosen != "nearest" { "bilinear" } else { chosen })
+}
+
+/// Whether the dialog asks for Nearest Neighbor (the preview then magnifies without smoothing).
+fn nearest(f: &Map<String, Value>) -> bool {
+    f.get("resample").and_then(Value::as_str) == Some("nearest")
+}
+
+/// The document as exported: scaled (engine Image Size, with the dialog's Resample method) and
+/// flattened over white when transparency is off or the format has no alpha.
 fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {
+    let resample = resample_method(f, max_side)?;
     let mut session = photocraft_engine::Session::new();
     session.add_document(doc.clone(), None);
     if s(f, "profile") == "srgb" && doc.icc_profile.is_some() {
@@ -253,9 +288,7 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
         return Err("ICO export is limited to 256 × 256 pixels; reduce the export scale".into());
     }
     if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
-        session
-            .execute("image.imageSize", json!({"width": w, "height": h, "resample": if max_side.is_some() { "bilinear" } else { "bicubic" }}))
-            .map_err(|e| e.to_string())?;
+        session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
     }
     let fmt = s_fmt(f);
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
@@ -446,11 +479,17 @@ struct CachedPreview {
     texture: Option<Arc<egui::TextureHandle>>,
 }
 
-fn cache_preview(ui: &mut egui::Ui, key: egui::Id, signature: String, result: Result<PreviewPixels, String>) -> CachedPreview {
+/// The preview texture's filter: a small export is magnified to fill the preview, and with
+/// Nearest Neighbor that magnification keeps hard pixel edges too.
+fn preview_filter(f: &Map<String, Value>) -> egui::TextureOptions {
+    if nearest(f) { egui::TextureOptions::NEAREST } else { egui::TextureOptions::LINEAR }
+}
+
+fn cache_preview(ui: &mut egui::Ui, key: egui::Id, signature: String, result: Result<PreviewPixels, String>, filter: egui::TextureOptions) -> CachedPreview {
     let preview = match result {
         Ok(pixels) => {
             let image = egui::ColorImage::from_rgba_unmultiplied([pixels.width, pixels.height], &pixels.rgba);
-            let texture = Arc::new(ui.ctx().load_texture("export-preview", image, egui::TextureOptions::LINEAR));
+            let texture = Arc::new(ui.ctx().load_texture("export-preview", image, filter));
             CachedPreview { signature, estimate: pixels.estimate, texture: Some(texture) }
         }
         Err(error) => {
@@ -585,6 +624,32 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     }
 }
 
+/// Export As › Image Size › Resample, with Photoshop's choices (only the exported copy is
+/// resampled; the document keeps its pixels).
+fn resample_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Resample")).color(t.text_dim));
+        let mut method = resample_method(f, None).unwrap_or(DEFAULT_RESAMPLE).to_string();
+        let opts: Vec<(String, &str)> = RESAMPLE.iter().map(|(k, label)| ((*k).to_string(), resample_label(label))).collect();
+        if crate::widgets::dropdown(ui, "export-resample", &mut method, &opts, 130.0) {
+            f.insert("resample".into(), json!(method));
+        }
+    });
+}
+
+/// The translated label of a [`RESAMPLE`] choice (literal `tl!`s, so the catalogue check sees them).
+fn resample_label(label: &str) -> &'static str {
+    match label {
+        "Bicubic" => tl!("Bicubic"),
+        "Bicubic Smoother" => tl!("Bicubic Smoother"),
+        "Bicubic Sharper" => tl!("Bicubic Sharper"),
+        "Bilinear" => tl!("Bilinear"),
+        "Nearest Neighbor" => tl!("Nearest Neighbor"),
+        _ => tl!("Bicubic Automatic"),
+    }
+}
+
 fn apply_preset(f: &mut Map<String, Value>, settings: &photocraft_engine::export_preset_cmds::ExportPresetSettings, src_w: f64, src_h: f64) {
     f.insert("format".into(), json!(settings.format));
     f.insert("quality".into(), json!(settings.quality));
@@ -597,6 +662,7 @@ fn apply_preset(f: &mut Map<String, Value>, settings: &photocraft_engine::export
     f.insert("profile".into(), json!(settings.profile));
     f.insert("embedProfile".into(), json!(settings.embed_profile));
     f.insert("tgaBits".into(), json!(settings.tga_bits));
+    f.insert("resample".into(), json!(settings.resample));
     if settings.sizing == "pixels" {
         f.insert("width".into(), json!(settings.width));
         f.insert("height".into(), json!(settings.height));
@@ -628,6 +694,7 @@ fn preset_settings(f: &Map<String, Value>) -> Value {
         "profile": if s(f, "profile") == "srgb" { "srgb" } else { "document" },
         "embedProfile": f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
         "tgaBits": bits,
+        "resample": resample_method(f, None).unwrap_or(DEFAULT_RESAMPLE),
     })
 }
 
@@ -771,6 +838,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
             let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
             size_fields(ui, f, bw, bh);
+            resample_field(ui, f);
             let (w, h) = (n(f, "width", bw), n(f, "height", bh));
             ui.label(egui::RichText::new(format!("{w} × {h} px")).color(t.text_dim).size(11.5));
             if fmt == "ico" && (w > 256.0 || h > 256.0) {
@@ -784,7 +852,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
-                "{}{}{}{}{}{}{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}",
                 s_fmt(f),
                 n(f, "quality", 85.0),
                 lossless(f),
@@ -796,7 +864,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 s(f, "tgaBits"),
                 s(f, "profile"),
                 f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
-                s(f, "sizing")
+                s(f, "sizing"),
+                s(f, "resample")
             );
             let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(key));
             let preview = match cached.filter(|cached| cached.signature == sig) {
@@ -814,7 +883,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         let source = source_document(app, f).unwrap_or_else(|_| doc.clone());
                         Some(preview_sync(app, &source, f))
                     };
-                    result.map(|result| cache_preview(ui, key, sig, result))
+                    let filter = preview_filter(f);
+                    result.map(|result| cache_preview(ui, key, sig, result, filter))
                 }
             };
             let side = 300.0;
@@ -848,21 +918,51 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
-    let (f, settings) = (f.clone(), settings(f));
+    let f = f.clone();
     app.pick_save(&suggested, move |app, path| {
-        let out = export_document(&doc, &f, None)?;
-        let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&out, &path, &settings)?;
-        let write = app.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
-        let template = "Exported {path} ({size})";
-        app.ui.status = crate::i18n::fmt(tl!(template), &[("path", &path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
-        app.ui.status_error = false;
-        let template = "Exported {path}";
-        let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(&path))]);
-        crate::notices::io_warnings(app, &what, &warnings);
-        Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+        let r = write_export(app, &doc, &f, &path)?;
+        // An action being recorded keeps a whole-document export with its destination and
+        // settings (#7207). A layer's export isn't recorded: its layer is this document's.
+        if !f.contains_key("__layer") {
+            let mut step = settings_of(&f);
+            step.insert("path".into(), json!(path));
+            app.session.journal.push((COMMAND.into(), Value::Object(step)));
+        }
+        Ok(r)
     })
+}
+
+/// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
+fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str) -> Result<Value, String> {
+    let out = export_document(doc, f, None)?;
+    let export = app.services.export.as_ref().ok_or("no exporter configured")?;
+    let (bytes, warnings) = export(&out, path, &settings(f))?;
+    let write = app.services.write.as_mut().ok_or("no writer configured")?;
+    write(path, &bytes)?;
+    let template = "Exported {path} ({size})";
+    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
+    app.ui.status_error = false;
+    let template = "Exported {path}";
+    let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
+    crate::notices::io_warnings(app, &what, &warnings);
+    Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+}
+
+/// Replays a recorded Export As step (#7207): the active document exported to the recorded `path`
+/// with the recorded settings, without the dialog. The remembered dialog settings are untouched.
+pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Export As needs a `path`")?;
+    let f = params.as_object().map(settings_of).unwrap_or_default();
+    if let Some(format) = f.get("format").filter(|v| !valid_setting("format", v)) {
+        return Err(format!("Export As can't write the format {format}"));
+    }
+    // A setting out of the dialog's range or of the wrong type is an error, not quietly its
+    // default: the step would otherwise write something other than what was recorded.
+    if let Some((key, v)) = f.iter().find(|(k, v)| !valid_setting(k, v)) {
+        return Err(format!("Export As: `{key}` can't be {v}"));
+    }
+    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    write_export(app, &doc, &f, path)
 }
 
 /// [`confirm`] for several layers: one destination prompt, then each layer exported with the
@@ -985,6 +1085,34 @@ mod tests {
         assert_eq!(f["metadata"], "none");
     }
 
+    /// A recorded Export As step replays only with a destination and a format Export As writes
+    /// (#7207); anything else is an error, not a guess.
+    #[test]
+    fn a_replayed_export_needs_a_path_and_a_known_format() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(replay(&mut app, &json!({"path": "/x.png"})).unwrap_err().contains("document"));
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        for bad in [json!({}), json!({"path": ""}), json!("nope"), json!({"path": 3})] {
+            assert!(replay(&mut app, &bad).unwrap_err().contains("path"), "{bad}");
+        }
+        for format in [json!("bmp"), json!(7)] {
+            assert!(replay(&mut app, &json!({"path": "/x.bmp", "format": format})).unwrap_err().contains("format"), "{format}");
+        }
+        // A setting of the wrong type or out of the dialog's range is an error, not its default.
+        for (key, v) in [
+            ("scale", json!("50")),
+            ("scale", json!(5000)),
+            ("quality", json!(0)),
+            ("transparency", json!("yes")),
+            ("metadata", json!("some")),
+            ("width", json!(-3)),
+        ] {
+            let mut step = json!({"path": "/x.png", "format": "png"});
+            step[key] = v.clone();
+            assert!(replay(&mut app, &step).unwrap_err().contains(key), "{key}: {v}");
+        }
+    }
+
     /// Only the dialog's own settings are remembered: not the destination, the document size or
     /// the layer the dialog was opened with.
     #[test]
@@ -1001,6 +1129,114 @@ mod tests {
         assert_eq!(saved["format"], "webp");
         assert_eq!(saved["scale"], 50);
         assert!(saved.get("path").is_none() && saved.get("__w").is_none() && saved.get("__layer").is_none());
+    }
+
+    /// A red/blue checkerboard at `depth`, one pixel per square.
+    fn checker_doc(depth: photocraft_doc::SampleType) -> Document {
+        use photocraft_doc::{Color, ColorMode, Size};
+        let mut doc = Document::with_background("checker", Size::new(5, 3), ColorMode::Rgb, depth, Color::WHITE);
+        let b = doc.bounds();
+        let surf = doc.layers[0].surface_mut().unwrap();
+        let fmt = surf.format();
+        let mut data = Vec::new();
+        for y in b.y0..b.y1 {
+            for x in b.x0..b.x1 {
+                data.extend(photocraft_raster::from_rgba(&fmt, checker(x, y)));
+            }
+        }
+        surf.write_region(b, &data);
+        doc
+    }
+
+    fn checker(x: i32, y: i32) -> [f32; 4] {
+        if (x + y) % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] }
+    }
+
+    /// Export As › Resample › Nearest Neighbor at 200 %: every source pixel becomes an exact
+    /// 2 × 2 block, at 8 and 16 bits, and the document keeps its pixels. Bicubic Automatic (the
+    /// default) blends the squares instead.
+    #[test]
+    fn nearest_neighbor_doubles_each_pixel_into_an_exact_block() {
+        use photocraft_doc::SampleType;
+        for depth in [SampleType::U8, SampleType::U16] {
+            let doc = checker_doc(depth);
+            let before = doc.clone();
+            let mut f = Map::new();
+            f.insert("format".into(), json!("png"));
+            f.insert("scale".into(), json!(200));
+            f.insert("resample".into(), json!("nearest"));
+            let out = export_document(&doc, &f, None).unwrap();
+            assert_eq!((out.size.width, out.size.height), (10, 6));
+            assert_eq!(out.depth, depth);
+            let surf = out.layers[0].surface().unwrap();
+            for y in 0..6 {
+                for x in 0..10 {
+                    assert_eq!(surf.rgba(x, y), checker(x / 2, y / 2), "{depth:?} pixel {x},{y}");
+                }
+            }
+            assert_eq!(doc, before, "{depth:?}: export leaves the source document unchanged");
+
+            // The preview proxy keeps Nearest Neighbor's hard edges too.
+            let proxy = export_document(&doc, &f, Some(512)).unwrap();
+            assert_eq!(proxy.layers[0].surface().unwrap().rgba(1, 1), checker(0, 0), "{depth:?}: preview proxy is nearest as well");
+            assert_eq!(preview_filter(&f), egui::TextureOptions::NEAREST);
+
+            f.insert("resample".into(), json!(DEFAULT_RESAMPLE));
+            let smooth = export_document(&doc, &f, None).unwrap();
+            let blended = (0..6).flat_map(|y| (0..10).map(move |x| (x, y))).any(|(x, y)| {
+                let p = smooth.layers[0].surface().unwrap().rgba(x, y);
+                p[0] > 0.01 && p[2] > 0.01
+            });
+            assert!(blended, "{depth:?}: Bicubic Automatic blends neighbouring squares");
+            assert_eq!(preview_filter(&f), egui::TextureOptions::LINEAR);
+        }
+    }
+
+    /// Every Resample choice reaches Image Size; a method Export As does not offer is an error
+    /// naming the choices, never a silent Bicubic, and a missing one is Bicubic Automatic.
+    #[test]
+    fn resample_choices_are_checked() {
+        let doc = checker_doc(photocraft_doc::SampleType::U8);
+        let mut f = Map::new();
+        f.insert("scale".into(), json!(300));
+        for (method, _) in RESAMPLE {
+            f.insert("resample".into(), json!(method));
+            let out = export_document(&doc, &f, None).unwrap();
+            assert_eq!((out.size.width, out.size.height), (15, 9), "{method}");
+        }
+        for bad in [json!("lanczos"), json!("NEAREST"), json!(""), json!(1), json!({"m": "nearest"})] {
+            f.insert("resample".into(), bad.clone());
+            let err = export_document(&doc, &f, None).unwrap_err();
+            assert!(err.contains("resample must be"), "{bad}: {err}");
+            assert!(export_document(&doc, &f, Some(512)).is_err(), "{bad}: the preview reports it too");
+        }
+        f.remove("resample");
+        assert_eq!(resample_method(&f, None).unwrap(), "bicubicAutomatic");
+        assert_eq!(resample_method(&f, Some(512)).unwrap(), "bilinear", "the preview stays on the fast path");
+    }
+
+    /// Resample is remembered with the other settings; a saved value the menu does not offer
+    /// opens the dialog with the default.
+    #[test]
+    fn resample_is_remembered_and_a_bad_saved_value_falls_back() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let id = open(&mut app).unwrap();
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["resample"], DEFAULT_RESAMPLE, "Photoshop's default");
+        let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        f.insert("resample".into(), json!("nearest"));
+        remember(&mut app, &f);
+        assert_eq!(app.session.prefs().dialogs[COMMAND]["resample"], "nearest");
+        let id = open(&mut app).unwrap();
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["resample"], "nearest");
+
+        for bad in [json!("lanczos"), json!(7), json!(null)] {
+            app.session.prefs.edit(|p| {
+                p.dialogs.insert(COMMAND.into(), json!({"resample": bad}));
+            });
+            let id = open(&mut app).unwrap();
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["resample"], DEFAULT_RESAMPLE, "saved {bad}");
+        }
     }
 
     #[test]
@@ -1300,9 +1536,12 @@ mod tests {
             profile: "document".into(),
             embed_profile: false,
             tga_bits: "auto".into(),
+            resample: "nearest".into(),
         };
         let mut f = Map::new();
         apply_preset(&mut f, &pixels, 400.0, 200.0);
+        assert_eq!(f.get("resample"), Some(&json!("nearest")), "a preset restores its Resample method");
+        assert_eq!(preset_settings(&f)["resample"], "nearest", "and saves it");
         assert_eq!(f.get("width"), Some(&json!(64)));
         assert_eq!(f.get("height"), Some(&json!(32)));
         assert_eq!(f.get("sizing"), Some(&json!("pixels")));

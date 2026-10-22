@@ -26,6 +26,7 @@ pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
 pub mod bidi_text;
+pub(crate) mod bitmap_dialog;
 mod blend_keys;
 pub(crate) mod blend_preview;
 pub mod blur_pins;
@@ -58,6 +59,7 @@ pub mod cjk_fonts;
 pub mod clip_line_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
+pub mod color_table_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod corner_radius;
@@ -69,6 +71,7 @@ pub mod crop_shield;
 pub mod crop_size;
 pub mod crop_straighten;
 pub mod crop_ui;
+pub mod dds_options_ui;
 pub mod delete_layer_prompt;
 pub mod dialog_alt_reset;
 pub mod dialog_blend_ui;
@@ -106,6 +109,7 @@ pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
+pub mod history_menu_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
@@ -124,6 +128,7 @@ pub mod layer_row_ui;
 pub mod layer_style;
 mod layer_transfer;
 pub mod layer_tree_ui;
+pub mod layers_panel_ui;
 mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
@@ -137,6 +142,7 @@ pub mod menu_nav;
 pub mod menus;
 pub mod monitor_status;
 pub mod move_box;
+pub mod move_distance;
 pub mod move_hover;
 pub mod move_lock;
 pub mod move_mods;
@@ -222,6 +228,7 @@ pub mod tool_feedback;
 pub(crate) mod tool_memory;
 mod tool_reset;
 mod tool_shortcuts;
+pub mod touch_twins;
 pub mod transform_fx;
 pub mod transform_tex;
 pub mod transform_tool;
@@ -239,6 +246,7 @@ pub mod wide_angle_ui;
 pub mod widgets;
 pub mod work_area;
 pub mod workspace_ui;
+pub mod zoom_hold;
 pub mod zoom_levels;
 pub mod zoom_tool;
 
@@ -274,6 +282,9 @@ pub struct ExportSettings {
     /// Targa: bits per pixel from Targa Options or Export As (`None`: 32 with an alpha channel or
     /// transparency, else 24).
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    /// DDS: the compression and mip chain from DDS Options (uncompressed without mipmaps unless
+    /// chosen).
+    pub dds: photocraft_io::DdsOptions,
     /// PSD/PSB: embed a thumbnail (Preferences › File Handling › Image Previews; see
     /// [`PhotocraftApp::save_settings`]).
     pub image_previews: bool,
@@ -289,6 +300,8 @@ pub struct ExportSettings {
     /// The path of the document's own file, which linked smart objects that PSD/PSB embed are
     /// resolved against ([`photocraft_io::ExportOptions::document_path`]).
     pub document_path: Option<std::path::PathBuf>,
+    /// Native save cache owned by the open document; exports without one remain one-shot.
+    pub pcraft_cache: Option<photocraft_io::PcraftExportCache>,
 }
 
 impl Default for ExportSettings {
@@ -300,11 +313,13 @@ impl Default for ExportSettings {
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
+            dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
+            pcraft_cache: None,
         }
     }
 }
@@ -326,10 +341,43 @@ impl ExportSettings {
         opts.tiff_layers = self.tiff_layers;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
+        opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.document_path = self.document_path.clone();
+        opts.pcraft_cache = self.pcraft_cache.clone();
         opts
+    }
+}
+
+/// The format answers a save takes instead of asking: the Targa bits per pixel and the DDS options
+/// (`"tgaBits"`, `"ddsCompression"`, `"ddsMipmaps"`). `None` asks in Save As and takes the
+/// default in automation saves, which never prompt.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormatChoices {
+    pub tga_bits: Option<photocraft_io::TgaBits>,
+    pub dds: Option<photocraft_io::DdsOptions>,
+}
+
+impl FormatChoices {
+    /// The answers in command `cmd`'s params; a bad value is an error.
+    pub fn from_params(params: &Value, cmd: &str) -> Result<Self, String> {
+        Ok(FormatChoices { tga_bits: targa_options_ui::bits_param(params, cmd)?, dds: dds_options_ui::options_param(params, cmd)? })
+    }
+
+    /// The export settings with these answers applied.
+    pub(crate) fn apply(self, settings: ExportSettings) -> ExportSettings {
+        ExportSettings { tga_bits: self.tga_bits, dds: self.dds.unwrap_or(settings.dds), ..settings }
+    }
+
+    /// Adds the answers to a recorded save step.
+    fn record(self, step: &mut Value) {
+        if let Some(bits) = self.tga_bits {
+            step["tgaBits"] = bits.bits().into();
+        }
+        if let Some(dds) = self.dds {
+            dds_options_ui::record(dds, step);
+        }
     }
 }
 
@@ -403,8 +451,9 @@ pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
-/// Read an RGBA8 image from the OS clipboard.
-pub type ClipboardGetFn = Box<dyn FnMut() -> Option<(u32, u32, Vec<u8>)>>;
+/// Read an RGBA8 image from the OS clipboard. `Ok(None)` means no image is available;
+/// `Err` means the contents could not be read and must not invalidate the internal copy.
+pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String>>;
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
@@ -456,6 +505,8 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 pub type WindowFrameFn = Box<dyn FnMut()>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
+/// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
+pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -530,6 +581,10 @@ pub struct Services {
     pub autosave: Option<AutosaveFn>,
     /// None for services that report synchronous success through `autosave`.
     pub autosave_results: Option<AutosaveResultsFn>,
+    /// Finish every queued crash-recovery autosave and wait for it, with outcomes like
+    /// `autosave_results`. For a session that ends without asking: the window's graphics device
+    /// was lost (see `gpu_status::check_window`).
+    pub flush_autosaves: Option<AutosaveResultsFn>,
     pub discard_autosave: Option<DiscardAutosaveFn>,
     pub recover: Option<RecoverFn>,
     pub adopt_autosave: Option<AdoptAutosaveFn>,
@@ -552,6 +607,8 @@ pub struct Services {
     /// style and button layout). Read every frame, with the context to wake when it changes;
     /// `None` keeps Windows' buttons at the right end.
     pub caption_style: Option<CaptionStyleFn>,
+    /// Physical right mouse button or pen barrel button currently down.
+    pub right_button_down: Option<RightButtonDownFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
@@ -622,10 +679,16 @@ pub struct PhotocraftApp {
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
+    /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
+    pub(crate) move_distance: Option<move_distance::Cache>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).
     pub(crate) object_finder: Option<object_finder::Finder>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
     pub(crate) blend_preview: Option<blend_preview::BlendPreview>,
+    /// Layers panel drag: temporary reordered document displayed until mouse release.
+    pub(crate) reorder_preview: Option<layers_panel_ui::ReorderPreview>,
+    /// Whether the currently dragged layer is over a valid destination this frame.
+    pub(crate) reorder_preview_hit: bool,
     /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
@@ -727,6 +790,8 @@ pub struct PhotocraftApp {
     filter_preview_worker: filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
     pub(crate) redraws: std::collections::HashMap<photocraft_doc::DocId, background_redraw::Redraw>,
+    /// The last finished background redraws, for going back to a state drawn a moment ago (#6528).
+    pub(crate) kept: background_redraw::KeptComposites,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).
     pub(crate) color_range: Option<color_range_ui::Preview>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
@@ -779,8 +844,11 @@ pub struct PhotocraftApp {
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
-    /// Signature of the image we last put on the OS clipboard (to tell ours from other apps').
+    /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
+    /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
+    /// to recognize unchanged system contents when exporting a newer copy failed or was disabled.
+    clip_unmirrored: bool,
     /// The session clipboard currently holds an image imported from the OS clipboard: it has no
     /// original position, so Paste centres it (see `menus` "edit.paste").
     pub(crate) clip_external: bool,
@@ -820,6 +888,14 @@ pub struct PhotocraftApp {
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped
     /// for the rest of the session when the device is lost (see `gpu_status`).
     gpu: Option<gpu_canvas::GpuCanvas>,
+    /// The device the window itself draws with, and its health flag: the GPU canvas's, or one
+    /// watched for the CPU canvas (see `gpu_status::check_window`).
+    window_device: Option<(eframe::wgpu::Device, photocraft_gpu::DeviceHealth)>,
+    /// That device was lost: frames draw nothing and the app closes once its work is saved (#3438).
+    window_lost: bool,
+    /// When (in `egui::InputState::time`) to try saving unsaved work for recovery again after a
+    /// failed attempt; the app closes only once it succeeded.
+    window_recovery_retry: Option<f64>,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
@@ -842,6 +918,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
+    /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
+    pub(crate) dds_options: Option<dds_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
@@ -891,8 +969,11 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            move_distance: None,
             object_finder: None,
             blend_preview: None,
+            reorder_preview: None,
+            reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
             magnetic: Default::default(),
@@ -940,6 +1021,7 @@ impl PhotocraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
+            kept: Default::default(),
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
@@ -961,6 +1043,7 @@ impl PhotocraftApp {
             clone_preview: None,
             info_sample: None,
             os_clip_sig: None,
+            clip_unmirrored: true,
             clip_external: false,
             clip_read_for_paste: false,
             transform_preview: None,
@@ -983,6 +1066,9 @@ impl PhotocraftApp {
             doc_hist: None,
             hist_job: None,
             gpu: None,
+            window_device: None,
+            window_lost: false,
+            window_recovery_retry: None,
             started: None,
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
@@ -993,6 +1079,7 @@ impl PhotocraftApp {
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
+            dds_options: None,
             held_opens: Default::default(),
             allow_close: false,
             stylus: Default::default(),
@@ -1005,6 +1092,7 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        layers_panel_ui::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -1020,6 +1108,9 @@ impl PhotocraftApp {
         let tile = self.session.prefs().performance.cache_tile_size;
         // Escaped driver/setup panics must leave the session and CPU canvas alive.
         self.perf.gpu_info.set_adapter(&rs.adapter.get_info());
+        // The browser has no adapter list (egui-wgpu only has it natively).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.perf.gpu_info.set_available(&rs.available_adapters);
         let gpu = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu_canvas::GpuCanvas::with_tile(&rs, Some(tile)))) {
             Ok(gpu) => gpu,
             Err(payload) => {
@@ -1031,10 +1122,12 @@ impl PhotocraftApp {
                 self.perf.gpu_info.canvas = "cpu".into();
                 self.perf.gpu_info.fallback = Some(detail.clone());
                 gpu_status::queue_fallback_notice(self, detail);
+                self.watch_window_device(&rs.device);
                 return;
             }
         };
         self.perf.gpu_info.canvas = "gpu".into();
+        self.window_device = Some((rs.device.clone(), gpu.health().clone()));
         self.gpu = Some(gpu);
         self.prefs_rt.gpu_style = None;
     }
@@ -1048,6 +1141,24 @@ impl PhotocraftApp {
     /// The GPU canvas's device health flag (tests inject faults through it).
     pub fn gpu_health(&self) -> Option<photocraft_gpu::DeviceHealth> {
         self.gpu.as_ref().map(|g| g.health().clone())
+    }
+
+    /// Watch the device the window draws with when the GPU canvas doesn't (the CPU canvas), so
+    /// its loss is handled like the GPU canvas's (see `gpu_status::check_window`).
+    pub fn watch_window_device(&mut self, device: &eframe::wgpu::Device) {
+        self.window_device = Some((device.clone(), photocraft_gpu::DeviceHealth::watch(device)));
+    }
+
+    /// Whether the window's graphics device was lost, so the app saves its documents for
+    /// recovery and closes once they are saved (#3438).
+    pub fn window_lost(&self) -> bool {
+        self.window_lost
+    }
+
+    /// Destroy the window's graphics device, as a driver reset does (`ui.gpu.simulateLoss`
+    /// with `destroy`, tests). Returns whether there was one.
+    pub fn destroy_window_device(&mut self) -> bool {
+        self.window_device.as_ref().map(|(device, _)| device.destroy()).is_some()
     }
 
     /// Run `hook` once the app has rendered its first frames (and a document opened at launch
@@ -1132,15 +1243,11 @@ impl PhotocraftApp {
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
         }
-        let suppress_events = self.automation_input && self.session.prefs().script_events.enabled;
-        if suppress_events {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
-        }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
             if !clip_read {
-                self.import_os_clipboard();
+                self.import_os_clipboard()?;
             }
             if self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
                 if self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
@@ -1154,6 +1261,10 @@ impl PhotocraftApp {
                 self.ui.status_error = false;
                 return Ok(serde_json::json!({"pasted": false}));
             }
+        }
+        let suppress_events = self.automation_input && self.session.prefs().script_events.enabled;
+        if suppress_events {
+            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         // Long commands become background jobs when enabled (`jobs_ui`); the rest run inline.
         let params = self.with_mask_target(id, params);
@@ -1182,13 +1293,24 @@ impl PhotocraftApp {
             jobs_ui::run(self, id, params)
         };
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
-        if r.is_ok() && (ADDS_LAYER_MASK.contains(&id) || creates_adjustment_or_fill) {
-            // Adding a layer mask targets it, as in Photoshop (#2166).
+        if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
+            // Adding an explicit mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
-            // Properties still shows the new adjustment or fill layer's settings, not its mask,
-            // as in Photoshop (#3369): clicking the mask thumbnail switches it to the mask.
-            self.ui.properties_layer = if creates_adjustment_or_fill { self.session.active().and_then(|st| st.active_layer).map(|l| l.0) } else { None };
+            self.ui.properties_layer = None;
+        } else if r.is_ok() && creates_adjustment_or_fill {
+            // Panel Options may suppress a fill layer's default mask. Never target a
+            // nonexistent mask; an active path creates a vector mask instead.
+            let masks = self
+                .session
+                .active()
+                .and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id)))
+                .map(|layer| (layer.mask.is_some(), layer.vector_mask.is_some()))
+                .unwrap_or((false, false));
+            self.ui.mask_target = masks.0;
+            self.ui.vector_mask_target = !masks.0 && masks.1;
+            // Keep Properties on the new layer contents, as on main (#3369).
+            self.ui.properties_layer = self.session.active().and_then(|st| st.active_layer).map(|l| l.0);
         }
         if r.is_ok() && creates_adjustment_or_fill {
             // Properties comes to the front, shown and expanded, so the new layer's settings can
@@ -1199,6 +1321,26 @@ impl PhotocraftApp {
                 self.ui.dock_tabs.properties = 0;
                 dock::reveal(self, dock::Group::Properties);
             }
+        }
+        // Making a new selection reveals its outline after View > Extras was hidden (#5597).
+        // These interactive selection commands complete inline; a failed command, deselection,
+        // or painting inside an existing selection must leave the user's view choice alone.
+        if r.as_ref().is_ok_and(|v| v.get("changed") != Some(&Value::Bool(false)) && v.get("pending") != Some(&Value::Bool(true)))
+            && matches!(
+                id,
+                "select.rect"
+                    | "select.lasso"
+                    | "select.magneticLasso"
+                    | "select.magicWand"
+                    | "select.quick"
+                    | "select.object"
+                    | "select.loadSelection"
+                    | "select.loadLuminosity"
+                    | "path.toSelection"
+            )
+            && self.session.active().is_some_and(|st| st.doc.selection.is_some())
+        {
+            self.ui.view.extras = true;
         }
         if r.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
@@ -1275,6 +1417,7 @@ impl PhotocraftApp {
         // ... and to the document it was started on.
         crate::canvas::polygon_cancel_stale(self);
         crate::crop_ui::cancel_stale(self);
+        crate::perspective_crop_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
         // Where the document of view `i` is now. Views not tracked yet keep their index.
         let now = |i: usize| match self.view_docs.get(i) {
@@ -1444,21 +1587,22 @@ impl PhotocraftApp {
     /// continues on a later frame, see `file_dialog`). Returns `{"path", "warnings"}` (the export
     /// warnings are also shown to the user).
     pub fn save_as(&mut self, path: Option<String>) -> Result<Value, String> {
-        self.save_as_with(path, None)
+        self.save_as_with(path, FormatChoices::default())
     }
 
-    /// [`Self::save_as`], writing a Targa with `tga_bits` per pixel when given (no Targa Options
-    /// prompt): `file.save` and `file.saveAs` with `tgaBits`.
-    pub fn save_as_with(&mut self, path: Option<String>, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
-        self.save_dialog_flow(path, tga_bits, false)
+    /// [`Self::save_as`], writing a Targa or DDS texture with the `choices` given instead of
+    /// asking for them (no Targa or DDS Options prompt): `file.save` and `file.saveAs` with
+    /// `tgaBits`, `ddsCompression` or `ddsMipmaps`.
+    pub fn save_as_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
+        self.save_dialog_flow(path, choices, false)
     }
 
     /// [`Self::save_as_with`]. `plain_save` marks File › Save that had to ask for a file name
     /// (a flat file): confirming the document's own file is recorded as a `file.save` step,
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
-    pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, tga_bits: Option<photocraft_io::TgaBits>, plain_save: bool) -> Result<Value, String> {
+    pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer TIFF or Targa Options before starting another save".into());
+            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
         }
         // Edit Contents documents save back into their smart object.
         if path.is_none() && self.session.is_enabled("layer.smartObjects.saveContents") {
@@ -1466,7 +1610,7 @@ impl PhotocraftApp {
             return Ok(serde_json::json!({"path": "smart object", "warnings": []}));
         }
         if let Some(path) = path {
-            return self.save_to(path, tga_bits);
+            return self.save_to(path, choices);
         }
         let st = self.session.active().ok_or("no document")?;
         // PDN imports default to our native format, which preserves Paint.NET's blend modes;
@@ -1506,7 +1650,7 @@ impl PhotocraftApp {
                 {
                     return r;
                 }
-                let r = app.save_to(path.clone(), tga_bits)?;
+                let r = app.save_to(path.clone(), choices)?;
                 if plain_save && own.as_deref() == Some(path.as_str()) {
                     app.journal_as_plain_save(&path);
                 }
@@ -1516,13 +1660,18 @@ impl PhotocraftApp {
     }
 
     /// [`Self::save_as_with`] once the path is known.
-    pub(crate) fn save_to(&mut self, path: String, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
-        // An RGB Targa asks for its bits per pixel, unless the caller chose them; the save
-        // continues from the prompt (still a copy when it would be one without the prompt),
-        // which records the step once answered.
-        if tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
+    pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        // An RGB Targa asks for its bits per pixel, and a DDS texture for its compression, unless
+        // the caller chose them; the save continues from the prompt (still a copy when it would
+        // be one without the prompt), which records the step once answered.
+        if choices.tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
             targa_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
+            let copy = self.saves_copy(&path, None)?;
+            dds_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
@@ -1531,55 +1680,70 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        self.save_as_step(path, None, tga_bits)
+        self.save_as_step(path, None, choices)
     }
 
-    /// File › Save back to the document's own layered file, recorded as a `file.save` step.
-    pub(crate) fn save_in_place(&mut self, path: String) -> Result<Value, String> {
+    /// File › Save back to the document's own file, recorded as a `file.save` step with the
+    /// Targa or DDS answer in `choices` (a replayed Save of a flat file brings its own).
+    pub(crate) fn save_in_place(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer TIFF or Targa Options before starting another save".into());
+            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
         }
-        let r = self.write_save(path, None, None)?;
-        self.session.journal.push(("file.save".into(), Value::Object(Default::default())));
+        let r = self.write_save(path, None, choices)?;
+        let mut step = Value::Object(Default::default());
+        choices.record(&mut step);
+        self.session.journal.push(("file.save".into(), step));
         Ok(r)
     }
 
-    /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF or
-    /// Targa answer), so an action being recorded keeps it (#2032).
-    fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
-        let r = self.write_save(path.clone(), tiff_layers, tga_bits)?;
+    /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
+    /// Targa or DDS answer), so an action being recorded keeps it (#2032).
+    fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+        let r = self.write_save(path.clone(), tiff_layers, choices)?;
         let mut step = serde_json::json!({"path": path});
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
         }
-        if let Some(bits) = tga_bits {
-            step["tgaBits"] = bits.bits().into();
-        }
+        choices.record(&mut step);
         self.session.journal.push(("file.saveAs".into(), step));
         Ok(r)
     }
 
-    /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]).
+    /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]),
+    /// keeping its Targa or DDS answer so playback writes the file the same way. A save parked
+    /// behind Targa or DDS Options hasn't been journaled yet: it is recorded as File › Save once
+    /// answered.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
+        let parked = [self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)), self.dds_options.as_mut().map(|p| (&p.path, &mut p.record))];
+        if let Some((_, record)) = parked.into_iter().flatten().find(|(p, record)| p.as_str() == path && **record == "file.saveAs") {
+            *record = "file.save";
+            return;
+        }
         if let Some(last) = self.session.journal.last_mut()
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
-            && last.1.as_object().is_some_and(|o| o.len() == 1)
+            && let Some(step) = last.1.as_object()
+            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps"))
         {
-            *last = ("file.save".into(), Value::Object(Default::default()));
+            let mut step = step.clone();
+            step.remove("path");
+            *last = ("file.save".into(), Value::Object(step));
         }
     }
 
-    /// Replays a recorded `file.save` / `file.saveAs` / `file.saveACopy` step: no dialog or prompt, and the
-    /// recorded TIFF or Targa answer (if any) stands in for the TIFF or Targa Options prompt.
+    /// Replays a recorded `file.save` / `file.saveAs` / `file.saveACopy` / `file.export.exportAs`
+    /// step: no dialog or prompt, and the recorded TIFF, Targa or DDS answer (if any) stands in for
+    /// the TIFF, Targa or DDS Options prompt.
     pub(crate) fn replay_save(&mut self, id: &str, params: &Value) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer TIFF or Targa Options before starting another save".into());
+            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
         }
         if id == "file.save" {
             // The file the action is played on: one that holds the whole document, or a flat
             // file a recorded Save confirmed in the dialog while the document is still a plain
-            // raster, so it is never flattened over (#3531, #3806).
+            // raster, so it is never flattened over (#3531, #3806). A flat file's recorded Targa
+            // or DDS answer stands in for the prompt.
+            let choices = FormatChoices::from_params(params, id)?;
             let st = self.session.active().ok_or("no document")?;
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
@@ -1589,16 +1753,20 @@ impl PhotocraftApp {
             let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
                 "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
             )?;
-            return self.save_in_place(path);
+            return self.save_in_place(path, choices);
+        }
+        if id == crate::export_dialog::COMMAND {
+            // Export As has its own settings, its TGA bits included (#7207).
+            return crate::export_dialog::replay(self, params);
         }
         let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save As needs a `path`")?;
-        let tga_bits = targa_options_ui::bits_param(params, id)?;
+        let choices = FormatChoices::from_params(params, id)?;
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
             let doc = self.session.active().ok_or("no document")?.doc.clone();
-            return crate::view_cmds::write_copy(self, &doc, path, tga_bits);
+            return crate::view_cmds::write_copy(self, &doc, path, choices);
         }
-        self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), tga_bits)
+        self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), choices)
     }
 
     /// What a save writes by default under the preferences: File Handling › Image Previews
@@ -1618,6 +1786,7 @@ impl PhotocraftApp {
             settings.webp_lossless = e.webp_lossless.unwrap_or(settings.webp_lossless);
             settings.webp_quality = e.webp_quality.map(|q| q.min(100));
             settings.document_path = st.path.as_deref().map(std::path::PathBuf::from);
+            settings.pcraft_cache = Some(st.pcraft_cache.clone());
         }
         settings
     }
@@ -1638,11 +1807,11 @@ impl PhotocraftApp {
     }
 
     /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:
-    /// `Some(false)` discards the layers and saves a copy. `tga_bits` is the Targa bits per
-    /// pixel (`None`: 32 with an alpha channel or transparency, else 24).
-    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
+    /// `Some(false)` discards the layers and saves a copy. `choices` are the Targa bits per
+    /// pixel (`None`: 32 with an alpha channel or transparency, else 24) and the DDS options.
+    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
-        let settings = ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), tga_bits, ..self.save_settings() };
+        let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
         match self.write_document(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
@@ -1748,9 +1917,9 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF Options or Targa Options is waiting on an answer before a save is written.
+    /// TIFF, Targa or DDS Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some()
     }
 
     /// A print worker may still be handing a job to the system queue.
@@ -1767,12 +1936,13 @@ impl PhotocraftApp {
     /// picker or ambient writer is reachable from this path. Returns the path
     /// written and the export warnings (also shown to the user).
     pub fn save_automation(&mut self, path: Option<String>) -> Result<Value, String> {
-        self.save_automation_with(path, None)
+        self.save_automation_with(path, FormatChoices::default())
     }
 
-    /// [`Self::save_automation`] writing a Targa with `tga_bits` per pixel (`None`: 32 with an
-    /// alpha channel or transparency, else 24). Automation saves never prompt.
-    pub fn save_automation_with(&mut self, path: Option<String>, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
+    /// [`Self::save_automation`] writing a Targa or DDS texture with the `choices` given (a
+    /// Targa's `None`: 32 with an alpha channel or transparency, else 24; a DDS texture's:
+    /// uncompressed without mipmaps). Automation saves never prompt.
+    pub fn save_automation_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
         let target = {
             let state = self.session.active().ok_or("no document")?;
             // As File › Save: without `path` only a layered file is written back (#416).
@@ -1785,7 +1955,7 @@ impl PhotocraftApp {
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()
         {
-            return match jobs_ui::start_save(self, target.clone(), ExportSettings { tga_bits, ..self.save_settings() }, false, save, true)? {
+            return match jobs_ui::start_save(self, target.clone(), choices.apply(self.save_settings()), false, save, true)? {
                 Some((path, warnings)) => Ok(reply(&path, &warnings)),
                 None => {
                     let job = self.jobs.last_started;
@@ -1795,7 +1965,7 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
-        let settings = ExportSettings { tga_bits, ..self.save_settings() };
+        let settings = choices.apply(self.save_settings());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
@@ -1925,6 +2095,8 @@ impl eframe::App for PhotocraftApp {
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
         }
+        // So does selecting another layer or document by any route (#6483).
+        type_tool::end_if_left(self);
         if self.ui.pen.as_ref().is_some_and(|p| !p.drawn_with(self.ui.tool)) {
             vector_ui::pen_commit(self, false);
         }
@@ -2053,6 +2225,7 @@ impl eframe::App for PhotocraftApp {
                 }
             });
             self.automation_input = false;
+            gpu_status::check_window(self, &ctx);
             return;
         }
         if screen_picker::busy(&ctx) {
@@ -2063,19 +2236,24 @@ impl eframe::App for PhotocraftApp {
         // system title bar this is where the document name lives, as the in-app title is hidden.
         panels::sync_window_title(self, &ctx);
         let chrome = !self.ui.view.hides_chrome();
-        if chrome && self.ui.panels.menu_bar {
+        if chrome {
+            self.ui.panels.full_screen_chrome = false;
+        }
+        // In Full Screen Mode, Tab shows the menu bar, options bar, toolbar and dock (#6760).
+        let tabbed_in = !chrome && self.ui.panels.full_screen_chrome;
+        if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
-        if chrome && self.ui.panels.options_bar {
+        if (chrome && self.ui.panels.options_bar) || tabbed_in {
             panels::options_bar(self, ui);
         }
         if chrome && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
-        if chrome && self.ui.panels.toolbar {
+        if (chrome && self.ui.panels.toolbar) || tabbed_in {
             panels::toolbar(self, ui);
         }
-        if chrome && self.ui.panels.dock {
+        if (chrome && self.ui.panels.dock) || tabbed_in {
             panels::right_dock(self, ui);
         }
         // The docked Timeline spans the canvas column: after the side panels, before the canvas.
@@ -2097,11 +2275,13 @@ impl eframe::App for PhotocraftApp {
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        layers_panel_ui::show_dialog(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
+        dds_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
@@ -2173,6 +2353,8 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
         self.poll_file_dialog(&ctx, Some(frame));
+        // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
+        gpu_status::check_window(self, &ctx);
     }
 }
 
@@ -2502,6 +2684,31 @@ impl PhotocraftApp {
         self.bounds_cache.insert(key, (rev, b));
         b
     }
+
+    /// The box Properties › Transform shows for `layer` (X, Y, W, H): its pixels' bounds, but a
+    /// soft shape's path and stroke, whose Density and Feather render past them (#5846), as its
+    /// transform frame does.
+    pub fn layer_frame_bounds(&mut self, layer: &photocraft_doc::Layer, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
+        match &layer.content {
+            photocraft_doc::LayerContent::Shape(sh) if sh.has_soft_mask() => {
+                // Cached per rendering, like the pixel bounds: the frame renders strips of the shape.
+                let (key, rev) = (layer.id.0 | 1 << 63, surface_fingerprint(surface));
+                if let Some((r, b)) = self.bounds_cache.get(&key)
+                    && *r == rev
+                {
+                    return *b;
+                }
+                let canvas = self.session.active().map_or_else(|| surface.content_bounds(), |st| st.doc.bounds());
+                let b = photocraft_compose::soft_shape_frame(sh, surface.format(), canvas).unwrap_or(photocraft_geom::Rect::EMPTY);
+                if self.bounds_cache.len() > 256 {
+                    self.bounds_cache.clear();
+                }
+                self.bounds_cache.insert(key, (rev, b));
+                b
+            }
+            _ => self.cached_bounds(layer.id.0, surface),
+        }
+    }
 }
 
 impl PhotocraftApp {
@@ -2690,6 +2897,7 @@ fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: b
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     fn export_os_clipboard(&mut self) {
+        self.clip_unmirrored = true;
         if !self.session.prefs().general.export_clipboard {
             return;
         }
@@ -2703,6 +2911,7 @@ impl PhotocraftApp {
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
             self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.clip_unmirrored = false;
         }
     }
 
@@ -2719,7 +2928,9 @@ impl PhotocraftApp {
                 }
             }
         }
-        self.import_os_clipboard();
+        if self.import_os_clipboard().is_err() {
+            return f;
+        }
         if let Some(c) = self.session.clipboard.as_ref().filter(|c| !c.bounds.is_empty()) {
             crate::new_doc_ui::set_clipboard(&mut f, c.bounds.width(), c.bounds.height());
         }
@@ -2728,22 +2939,44 @@ impl PhotocraftApp {
 
     /// If the OS clipboard holds an image that isn't the one we put there, make it the session
     /// clipboard (so ⌘V pastes screenshots and images copied in other apps, like Photoshop).
-    /// Returns true when a new external image was imported. Once the OS clipboard no longer holds
+    /// Returns `Ok(true)` when a new external image was imported. Once the OS clipboard no longer holds
     /// the image we mirrored or imported (text or a file was copied since), that image is stale:
-    /// it is dropped rather than pasted.
-    pub(crate) fn import_os_clipboard(&mut self) -> bool {
-        let Some(get) = self.services.clipboard_get_image.as_mut() else { return false };
-        let image = get().filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+    /// it is dropped rather than pasted. Unexported internal copies survive unavailable or empty
+    /// system clipboards.
+    pub(crate) fn import_os_clipboard(&mut self) -> Result<bool, String> {
+        let Some(get) = self.services.clipboard_get_image.as_mut() else { return Ok(false) };
+        // A read failure says nothing about the clipboard contents. Keep our editable copy and
+        // its signature rather than treating the failure as an empty image.
+        let image = match get() {
+            Ok(image) => image,
+            Err(error) => {
+                // An unexported copy remains usable without an OS clipboard (for example, in
+                // a Wayland sandbox). Mirrored/imported copies still require a successful read
+                // before pasting, because their system contents may have changed.
+                if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() {
+                    return Ok(false);
+                }
+                if self.session.clipboard.is_none() && self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
+                    // Let paste explain the unavailable backend without treating a saved copy as empty.
+                    return Ok(false);
+                }
+                self.ui.status = error.clone();
+                self.ui.status_error = true;
+                return Err(error);
+            }
+        };
+        let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
         let Some((w, h, bytes)) = image else {
-            if self.os_clip_sig.take().is_some() {
+            if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
                 self.session.clipboard = None;
                 self.clip_external = false;
+                self.clip_unmirrored = true;
             }
-            return false;
+            return Ok(false);
         };
         let sig = clip_signature(w, h, &bytes);
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
-            return false;
+            return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
@@ -2751,7 +2984,8 @@ impl PhotocraftApp {
         self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
-        true
+        self.clip_unmirrored = false;
+        Ok(true)
     }
 }
 
@@ -2781,6 +3015,8 @@ mod color_replacement_tests;
 #[cfg(test)]
 mod layer_shortcut_tests;
 #[cfg(test)]
+mod live_retouch_tests;
+#[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;
@@ -2793,6 +3029,8 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
+#[cfg(test)]
+mod notice_text_tests;
 #[cfg(test)]
 mod transform_switch_tests;
 #[cfg(test)]
@@ -2901,7 +3139,7 @@ mod clipboard_tests {
                 *a.lock().unwrap() = Some((w, h, px.to_vec()));
                 Ok(())
             })),
-            clipboard_get_image: Some(Box::new(move || b.lock().unwrap().clone())),
+            clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(Session::new(), services);
@@ -2912,10 +3150,10 @@ mod clipboard_tests {
         let (w, h, px) = os.lock().unwrap().clone().unwrap();
         assert_eq!((w, h, px.len()), (8, 4, 8 * 4 * 4));
         // Our own image comes back unchanged (no re-import, keeps the original position).
-        assert!(!app.import_os_clipboard());
+        assert!(!app.import_os_clipboard().unwrap());
         // Text copied elsewhere replaces our image: nothing to paste, not the stale image.
         let ours = os.lock().unwrap().take();
-        assert!(!app.import_os_clipboard());
+        assert!(!app.import_os_clipboard().unwrap());
         assert!(app.session.clipboard.is_none());
         *os.lock().unwrap() = ours;
         app.run("edit.copy", serde_json::json!({})).unwrap();
@@ -2949,12 +3187,215 @@ mod clipboard_tests {
 
     type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
+    #[test]
+    fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace", "file.newFromClipboard"] {
+            let os = OsClip::default();
+            let busy = Arc::new(AtomicBool::new(false));
+            let (write, read, unavailable) = (os.clone(), os.clone(), busy.clone());
+            let services = Services {
+                clipboard_set_image: Some(Box::new(move |w, h, bytes| {
+                    *write.lock().unwrap() = Some((w, h, bytes.to_vec()));
+                    Ok(())
+                })),
+                clipboard_get_image: Some(Box::new(move || {
+                    if unavailable.load(Ordering::SeqCst) { Err("clipboard is busy".into()) } else { Ok(read.lock().unwrap().clone()) }
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+            app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+            app.run("edit.copy", serde_json::json!({})).unwrap();
+            app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+            let signature = app.os_clip_sig;
+            assert!(signature.is_some());
+            let before = app.session.active().unwrap().doc.walk().len();
+            busy.store(true, Ordering::SeqCst);
+            let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+            assert_eq!(result.unwrap_err(), "clipboard is busy", "{id}");
+            assert!(app.ui.status_error);
+            assert_eq!(app.session.documents().len(), 2);
+            assert_eq!(app.session.active().unwrap().doc.walk().len(), before);
+            assert_eq!(app.os_clip_sig, signature);
+            assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+            // The New dialog also reads the clipboard; a failed preset probe must preserve it.
+            app.new_document_fields();
+            assert_eq!(app.os_clip_sig, signature);
+            assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+            // An automation error must not leave script events disabled by the dispatch guard.
+            app.automation_input = true;
+            app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+            assert!(app.run(id, serde_json::json!({})).is_err());
+            assert!(app.session.prefs().script_events.enabled);
+            app.automation_input = false;
+            busy.store(false, Ordering::SeqCst);
+            app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap();
+            let state = app.session.active().unwrap();
+            assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Shape(_)));
+            assert!(!app.ui.status_error);
+        }
+    }
+
+    #[test]
+    fn internal_only_clipboard_remains_usable_when_native_access_fails() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for export in [true, false] {
+            for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace", "file.newFromClipboard"] {
+                let os = OsClip::default();
+                let unavailable = Arc::new(AtomicBool::new(true));
+                let (read, failed) = (os.clone(), unavailable.clone());
+                let services = Services {
+                    clipboard_set_image: Some(Box::new(|_, _, _| Err("clipboard unavailable".into()))),
+                    clipboard_get_image: Some(Box::new(move || {
+                        if failed.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(read.lock().unwrap().clone()) }
+                    })),
+                    ..Default::default()
+                };
+                let mut app = PhotocraftApp::new(Session::new(), services);
+                app.session.edit_prefs(|prefs| prefs.general.export_clipboard = export);
+                app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+                app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+                app.run("edit.copy", serde_json::json!({})).unwrap();
+                app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+                assert!(app.os_clip_sig.is_none() && !app.clip_external);
+                let bounds = app.session.clipboard.as_ref().unwrap().bounds;
+                assert_eq!(app.new_document_fields()["__preset"], "Clipboard");
+                crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({})).unwrap();
+                assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+                assert!(!app.ui.status_error);
+                if id == "file.newFromClipboard" {
+                    assert_eq!(app.session.documents().len(), 3);
+                    let doc = &app.session.active().unwrap().doc;
+                    assert_eq!((doc.size.width, doc.size.height), (bounds.width(), bounds.height()));
+                } else {
+                    assert_eq!(app.session.documents().len(), 2);
+                    let state = app.session.active().unwrap();
+                    assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Shape(_)));
+                }
+                app.run("edit.purge.clipboard", serde_json::json!({})).unwrap();
+                assert!(app.session.clipboard.is_none());
+                assert!(app.run("edit.paste", serde_json::json!({})).is_err(), "purged content must not be a fallback");
+                // The fallback is only for failed reads: a later successful external image wins.
+                *os.lock().unwrap() = Some((3, 2, [0u8, 0, 255, 255].repeat(6)));
+                unavailable.store(false, Ordering::SeqCst);
+                app.run("edit.paste", serde_json::json!({})).unwrap();
+                assert!(app.clip_external && app.os_clip_sig.is_some());
+                let clip = app.session.clipboard.as_ref().unwrap();
+                assert!(clip.layers.is_none());
+                assert_eq!((clip.bounds.width(), clip.bounds.height()), (3, 2));
+            }
+        }
+    }
+
+    #[test]
+    fn newer_unexported_copies_do_not_track_an_older_os_signature() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for imported in [true, false] {
+            for disable_export in [true, false] {
+                for copy_id in ["edit.copy", "edit.cut", "edit.copyMerged"] {
+                    let os = OsClip::default();
+                    let write_fails = Arc::new(AtomicBool::new(false));
+                    let read_fails = Arc::new(AtomicBool::new(false));
+                    let (write, read, failed_write, failed_read) = (os.clone(), os.clone(), write_fails.clone(), read_fails.clone());
+                    let services = Services {
+                        clipboard_set_image: Some(Box::new(move |w, h, bytes| {
+                            if failed_write.load(Ordering::SeqCst) {
+                                return Err("clipboard unavailable".into());
+                            }
+                            *write.lock().unwrap() = Some((w, h, bytes.to_vec()));
+                            Ok(())
+                        })),
+                        clipboard_get_image: Some(Box::new(move || {
+                            if failed_read.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(read.lock().unwrap().clone()) }
+                        })),
+                        ..Default::default()
+                    };
+                    let mut app = PhotocraftApp::new(Session::new(), services);
+                    app.run("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
+                    if imported {
+                        *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
+                        assert!(app.import_os_clipboard().unwrap());
+                    } else {
+                        app.run("edit.fill", serde_json::json!({"color": "#ff0000"})).unwrap();
+                        app.run("edit.copy", serde_json::json!({})).unwrap();
+                    }
+                    let old_signature = app.os_clip_sig;
+                    assert!(old_signature.is_some() && !app.clip_unmirrored);
+                    app.run("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
+                    app.run("edit.fill", serde_json::json!({"color": "#0000ff"})).unwrap();
+                    write_fails.store(true, Ordering::SeqCst);
+                    app.session.edit_prefs(|prefs| prefs.general.export_clipboard = !disable_export);
+                    app.run(copy_id, serde_json::json!({})).unwrap();
+                    let copied = app.session.clipboard.clone().unwrap();
+                    assert!(app.clip_unmirrored && !app.clip_external);
+                    assert_eq!(app.os_clip_sig, old_signature);
+                    assert_eq!(copied.surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+                    // An old successful export/import must not block the newer internal copy.
+                    read_fails.store(true, Ordering::SeqCst);
+                    app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap();
+                    assert_eq!(app.os_clip_sig, old_signature);
+                    assert!(app.clip_unmirrored && !app.clip_external);
+                    read_fails.store(false, Ordering::SeqCst);
+                    assert!(!app.import_os_clipboard().unwrap(), "unchanged old OS image must not overwrite the newer copy");
+                    assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), copied.surface.rgba(0, 0));
+                    *os.lock().unwrap() = None;
+                    assert!(!app.import_os_clipboard().unwrap(), "empty OS clipboard must not discard an unexported copy");
+                    assert!(app.os_clip_sig.is_none() && app.clip_unmirrored);
+                    assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), copied.surface.rgba(0, 0));
+                    // A different external image supersedes the internal copy and disables fallback.
+                    *os.lock().unwrap() = Some((3, 2, [0u8, 255, 0, 255].repeat(6)));
+                    assert!(app.import_os_clipboard().unwrap());
+                    assert!(app.clip_external && !app.clip_unmirrored);
+                    let clip = app.session.clipboard.as_ref().unwrap();
+                    assert_eq!((clip.bounds.width(), clip.bounds.height()), (3, 2));
+                    read_fails.store(true, Ordering::SeqCst);
+                    assert!(app.run("edit.paste", serde_json::json!({})).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for external in [true, false] {
+            let unavailable = Arc::new(AtomicBool::new(false));
+            let failed = unavailable.clone();
+            let services = Services {
+                clipboard_get_image: Some(Box::new(move || {
+                    if failed.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))) }
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+            if external {
+                assert!(app.import_os_clipboard().unwrap());
+            }
+            let signature = app.os_clip_sig;
+            let before = app.session.active().unwrap().doc.walk().len();
+            unavailable.store(true, Ordering::SeqCst);
+            for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace", "file.newFromClipboard"] {
+                let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+                assert_eq!(result.unwrap_err(), "clipboard unavailable", "{id}");
+                assert!(app.ui.status_error);
+                assert_eq!(app.session.documents().len(), 1);
+                assert_eq!(app.session.active().unwrap().doc.walk().len(), before);
+                assert_eq!(app.os_clip_sig, signature);
+                assert_eq!(app.session.clipboard.is_some(), external);
+                assert_eq!(app.clip_external, external);
+            }
+        }
+    }
+
     /// An app whose OS clipboard is `os`, counting every read in `reads`.
     fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> PhotocraftApp {
         let (b, n) = (os.clone(), reads.clone());
         let get = move || {
             n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            b.lock().unwrap().clone()
+            Ok(b.lock().unwrap().clone())
         };
         let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
         app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
@@ -2990,7 +3431,7 @@ mod clipboard_tests {
         let (b, n) = (os.clone(), Arc::clone(&reads));
         let get = move || {
             n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            b.lock().unwrap().clone()
+            Ok(b.lock().unwrap().clone())
         };
         let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
         let ctx = egui::Context::default();
@@ -3040,7 +3481,7 @@ mod clipboard_tests {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let get = move || {
                 n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                b.lock().unwrap().clone()
+                Ok(b.lock().unwrap().clone())
             };
             let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
             app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();

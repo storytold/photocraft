@@ -803,6 +803,71 @@ fn vector_mask_edit_rejects_out_of_range_feather() {
     assert_eq!(feather(&s), 1000.0);
 }
 
+/// #5846: a shape layer's path is its vector mask; `layer.vectorMask.edit` sets its Density and
+/// Feather in one undoable step, re-rendering the fill, which shows beyond the path at 100 −
+/// density %. Hostile values are refused before any edit.
+#[test]
+fn shape_density_and_feather_through_vector_mask_edit() {
+    for depth in [8, 16, 32] {
+        let mut s = session(200, 200, depth);
+        let id = s.execute("shape.create", json!({"kind": "rect", "rect": [50, 50, 100, 100], "fill": "#000000"})).unwrap()["layer"].as_u64().unwrap();
+        let info = s.execute("layer.vectorMask.info", json!({})).unwrap();
+        assert_eq!((info["shape"].clone(), info["density"].clone(), info["feather"].clone()), (json!(true), json!(100.0), json!(0.0)), "{depth}");
+        let steps = s.active().unwrap().history.past_len();
+        let r = s.execute("layer.vectorMask.edit", json!({"density": 50})).unwrap();
+        assert_eq!(r["density"], 50.0);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+        let sh = shape(&s, id);
+        assert_eq!((sh.density, sh.feather), (0.5, 0.0));
+        // The shape's own pixels carry the soft fill (half-transparent black beyond the path).
+        let cache = sh.cache.as_ref().unwrap();
+        assert!((cache.rgba(10, 10)[3] - 0.5).abs() < 0.01, "{depth}: {:?}", cache.rgba(10, 10));
+        assert!(cache.rgba(100, 100)[3] > 0.99);
+        s.execute("layer.vectorMask.edit", json!({"feather": 10, "density": 100})).unwrap();
+        let sh = shape(&s, id);
+        assert_eq!((sh.density, sh.feather), (1.0, 10.0));
+        let a = |x| sh.cache.as_ref().unwrap().rgba(x, 100)[3];
+        assert!(a(30) > 0.0 && a(30) < 0.05 && (a(49) + a(50) - 1.0).abs() < 0.02 && a(70) > 0.95, "{depth}: {} {} {} {}", a(30), a(49), a(50), a(70));
+        // Fill and stroke stay editable: the shape is still a shape.
+        s.execute("shape.edit", json!({"fill": "#ff0000"})).unwrap();
+        assert_eq!(shape(&s, id).feather, 10.0, "shape.edit keeps the feather");
+        s.undo();
+        s.undo();
+        assert_eq!((shape(&s, id).density, shape(&s, id).feather), (0.5, 0.0), "{depth}: undo restores");
+    }
+}
+
+#[test]
+fn shape_vector_mask_edit_fails_gracefully() {
+    let mut s = session(64, 64, 8);
+    let id = s.execute("shape.create", json!({"kind": "rect", "rect": [8, 8, 30, 30]})).unwrap()["layer"].as_u64().unwrap();
+    let before = doc(&s).clone();
+    let steps = s.active().unwrap().history.past_len();
+    let bad = [
+        json!({"density": -1}),
+        json!({"density": 100.5}),
+        json!({"density": 1e39}),
+        json!({"density": "50"}),
+        json!({"density": null}),
+        json!({"feather": -0.5}),
+        json!({"feather": 1001}),
+        json!({"feather": [1]}),
+        json!({"feather": 5, "path": {"subpaths": []}}),
+        json!({"density": 50, "enabled": false}),
+        json!({"invert": true}),
+        json!({"layer": u64::MAX, "density": 50}),
+    ];
+    for p in bad {
+        assert!(s.execute("layer.vectorMask.edit", p.clone()).is_err(), "{p}");
+        assert_eq!(*doc(&s), before, "{p}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{p}");
+    }
+    // A locked shape refuses it too.
+    s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+    assert!(s.execute("layer.vectorMask.edit", json!({"layer": id, "density": 50})).is_err());
+    assert_eq!(shape(&s, id).density, 1.0);
+}
+
 #[test]
 fn translate_vectors_moves_shapes_and_masks() {
     let mut s = session(100, 100, 8);

@@ -396,6 +396,9 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == "edit.assignProfile" {
         assign_profile_defaults(app, fields);
     }
+    if command == crate::bitmap_dialog::COMMAND {
+        crate::bitmap_dialog::defaults(app, fields);
+    }
     // Photoshop's Replace Color opens with its sample eyedropper active (#6279): the first click
     // on the image picks the colour.
     if command == REPLACE_COLOR {
@@ -1003,6 +1006,45 @@ pub fn params_of(f: &Map<String, Value>) -> Value {
     Value::Object(f.iter().filter(|(k, v)| !k.starts_with("__") && !unset(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
+/// Filter › Distort › Displace confirmed with no map: no open document picked and no path typed
+/// (#5806). Photoshop asks for the displacement map file after OK; so does PhotoCraft.
+pub(crate) fn needs_displace_map(command: &str, params: &Value) -> bool {
+    command == "filter.distort.displace"
+        && params.get("mapPath").and_then(Value::as_str).is_none_or(|p| p.trim().is_empty())
+        && params.get("mapDocument").and_then(Value::as_i64).is_none_or(|i| i < 0)
+}
+
+/// Asks for the displacement map, then runs Displace with the dialog's values and that file, as
+/// OK in a dialog that had one would (smart filters included). Cancel applies nothing. In the
+/// browser the picker gives contents, not a path the filter can read: the map has to be opened
+/// as a document and picked as Map Document there. It displaces the document that asked, even
+/// when another one was activated while the picker was open.
+pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields: Map<String, Value>) -> Result<Value, String> {
+    use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
+    let doc = app.active_doc_id()?;
+    let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
+        let path = match answer {
+            FileDialogAnswer::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
+            FileDialogAnswer::Unavailable(e) => return Err(e),
+            FileDialogAnswer::Contents(..) | FileDialogAnswer::ContentsMany(_) => {
+                return Err("open the displacement map as a document, then choose it as the Map Document".into());
+            }
+            FileDialogAnswer::SaveTo(_) | FileDialogAnswer::FolderTo(_) => return Err("unexpected answer from the file dialog".into()),
+        };
+        let mut fields = fields;
+        fields.insert("mapPath".into(), json!(path));
+        app.refocus(doc)?;
+        let (cmd, params) = crate::smart_ui::confirm_command(&fields, command, params_of(&fields));
+        let result = app.run(&cmd, params);
+        if result.is_ok() {
+            remember(app, &cmd, &fields);
+            let _ = crate::actions::resume(app, &fields);
+        }
+        result
+    })
+}
+
 /// Compute a preview document: run `command` with `params` on the proxy (scaled) copy of `doc`.
 pub fn preview_document(doc: &Document, active: Option<photocraft_doc::LayerId>, command: &str, params: &Value, k: u32) -> Option<Document> {
     preview_document_with(doc, active, command, params, k, None)
@@ -1061,6 +1103,13 @@ pub(crate) fn preview_document_for_target(
     let doc_id = proxy.id;
     s.add_document(proxy, None);
     let mut p = params.clone();
+    // Bitmap's Output resolution resamples the image: the preview keeps the canvas's size and
+    // resolution, so its dots and halftone screen show at their printed size (#5559).
+    if command == crate::bitmap_dialog::COMMAND
+        && let Some(o) = p.as_object_mut()
+    {
+        o.remove("resolution");
+    }
     add_source_documents(&mut s, doc_id, command, &mut p, documents, run_k);
     if let Some(id) = active {
         s.select_layer(id).ok()?;
@@ -1104,11 +1153,10 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
     let Some(o) = p.as_object_mut() else { return };
     let mut added: Vec<(usize, usize)> = Vec::new();
-    for param in parse_spec(spec.params).into_iter().filter(|p| p.kind == Kind::Document) {
-        let Some(v) = o.get_mut(&param.key) else { continue };
-        let Some(i) = v.as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
+    let mut remap = |v: &mut Value| {
+        let Some(i) = v.as_u64().and_then(|i| usize::try_from(i).ok()) else { return };
         // An index past the open documents stays as given, so the preview fails like OK would.
-        let Some(src) = documents.get(i) else { continue };
+        let Some(src) = documents.get(i) else { return };
         let at = if src.id == doc_id {
             0
         } else if let Some(&(_, at)) = added.iter().find(|(j, _)| *j == i) {
@@ -1119,6 +1167,18 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
             at
         };
         *v = json!(at);
+    };
+    for param in parse_spec(spec.params).into_iter().filter(|p| p.kind == Kind::Document) {
+        if let Some(v) = o.get_mut(&param.key) {
+            remap(v);
+        }
+    }
+    // A smart filter being edited carries its filter's params one level down: Displace's
+    // `mapDocument` there names an open document too.
+    if command == SMART_FILTER_SET_PARAMS
+        && let Some(v) = o.get_mut("params").and_then(Value::as_object_mut).and_then(|f| f.get_mut("mapDocument"))
+    {
+        remap(v);
     }
     // Adding a document makes it active: the command still runs on the edited one.
     s.set_active(0);
@@ -1336,6 +1396,51 @@ mod tests {
         assert_eq!(f["radius"], json!(1.0));
         assert!(f.contains_key("__filter"));
         assert!(app.ui.dialogs.iter().any(|d| d.id == id));
+    }
+
+    /// #5806: OK in Displace with no map asks for the map file, as Photoshop does, and displaces
+    /// with the chosen file; Cancel in the picker applies nothing; a map already given runs at once.
+    #[test]
+    fn displace_asks_for_its_map_after_ok() {
+        let dir = std::env::temp_dir().join(format!("photocraft-displace-map-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let map = dir.join("map.png");
+        let mut m = photocraft_engine::Session::new();
+        m.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        std::fs::write(&map, photocraft_io::export(&m.active().unwrap().doc, "map.png", &Default::default()).unwrap().bytes).unwrap();
+        let answers = vec![Some(crate::file_dialog::FileDialogAnswer::Paths(vec![map.to_string_lossy().into_owned()])), None];
+        let (show, asked) = crate::file_dialog::fake(answers);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+        app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        let ctx = egui::Context::default();
+        let id = open(&mut app, "filter.distort.displace").unwrap();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert!(app.file_dialog_open(), "OK leaves the map picker pending");
+        // Another document activated while the picker is open is left alone.
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        let other_steps = app.session.documents()[1].history.past_len();
+        // The frame shows the picker (the service is asked then) and acts on its answer.
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(asked.borrow().len(), 1, "OK asks for the map");
+        assert_eq!(app.session.active_index(), Some(0), "the document that asked is shown");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "Displace ran with the chosen map");
+        assert_eq!(app.session.documents()[1].history.past_len(), other_steps, "not on the other document");
+        // Cancelled: nothing is applied.
+        let id = open(&mut app, "filter.distort.displace").unwrap();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(asked.borrow().len(), 2);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        // A map given in the dialog runs without asking.
+        assert!(!needs_displace_map("filter.distort.displace", &json!({"mapPath": "/maps/x.psd"})));
+        assert!(!needs_displace_map("filter.distort.displace", &json!({"mapDocument": 0})));
+        assert!(needs_displace_map("filter.distort.displace", &json!({"mapDocument": -1, "mapPath": " "})));
+        assert!(!needs_displace_map("filter.blur.gaussianBlur", &json!({})));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1756,6 +1861,52 @@ mod tests {
         let p = out.layers[0].surface().unwrap().pixel(32, 32);
         assert!(p[0] > 0.2 && p[0] < 0.8, "edge blurred: {p:?}");
         assert_eq!(label("wavelengthMin"), "Wavelength Min");
+    }
+
+    /// #7423 (review on #7799): re-editing a Displace smart filter and picking another open
+    /// document as its map previews with that document, as OK applies it. The preview session held
+    /// only the edited document, and the map's `mapDocument` sits inside the filter's `params`.
+    #[test]
+    fn smart_displace_preview_uses_the_map_document() {
+        let mut s = photocraft_engine::Session::new();
+        // Documents 0 and 1: a white and a black map, opened before the edited one.
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "black"})).unwrap();
+        s.execute("file.new", json!({"width": 48, "height": 32, "background": "transparent"})).unwrap();
+        s.edit("square", |doc, active| {
+            let fmt = doc.pixel_format();
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surf.fill_rect(photocraft_geom::Rect::new(10, 10, 20, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("filter.distort.displace", json!({"horizontal": 10, "vertical": 0, "mapDocument": 0})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let layer = s.active().unwrap().active_layer;
+        let documents: Vec<_> = s.documents().iter().map(|d| d.doc.clone()).collect();
+        for map in [1, 0] {
+            let p = json!({"index": 0, "params": {"mapDocument": map}});
+            let mut applied = photocraft_engine::Session::new();
+            for d in &documents {
+                applied.add_document((**d).clone(), None);
+            }
+            applied.execute(SMART_FILTER_SET_PARAMS, p.clone()).unwrap();
+            let want = photocraft_compose::render(&applied.active().unwrap().doc, doc.bounds()).px;
+            let preview = preview_document_for_target(
+                &doc,
+                layer,
+                SMART_FILTER_SET_PARAMS,
+                &p,
+                1,
+                None,
+                photocraft_engine::channel_cmds::ChannelTarget::Composite,
+                &documents,
+                &ColorSettings::default(),
+            )
+            .unwrap_or_else(|| panic!("map {map}: no preview"));
+            assert!(photocraft_compose::render(&preview, doc.bounds()).px == want, "map {map}: the preview differs from what OK applies");
+        }
     }
 
     /// Match Color's preview reads the Source document from the open documents, as OK does: the

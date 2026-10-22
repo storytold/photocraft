@@ -234,6 +234,7 @@
 	Inner Glow…	Внутрішнє світіння…
 	Bevel & Emboss…	Фаска та рельєф…
 	Use Global Light	Використовувати глобальне освітлення
+	Overprint	Накладання
 	Satin…	Атлас…
 	Color Overlay…	Накладання кольору…
 	Gradient Overlay…	Накладання градієнта…
@@ -1000,6 +1001,11 @@
 	Mix	Змішування
 	Auto Clean Brush	Автоматично очищувати пензель
 	Wet	Вологість
+	Current Brush Load	Поточне завантаження пензля
+	Load Brush	Завантажити пензель
+	Clean Brush	Очистити пензель
+	Load the brush after each stroke	Завантажувати пензель після кожного штриха
+	Clean the brush after each stroke	Очищати пензель після кожного штриха
 	Rate	Частота
 	Airbrush: keeps depositing paint while the pointer rests.	Аерограф: продовжує наносити фарбу, коли вказівник нерухомий.
 	Pulled String Mode	Режим натягнутої нитки
@@ -3738,6 +3744,23 @@ cameraData	Lens	Об'єктив
 	Mirror	Віддзеркалення
 	Output Settings	Параметри виводу
 	Output To	Вивести в
+
+	Animation Options	Параметри анімації
+	Entire Document	Увесь документ
+	Filter Options	Параметри фільтрів
+	Layer Bounds	Межі шару
+	Layers Panel Options	Параметри панелі «Шари»
+	New Artboard…	Нова монтажна область…
+	New Group…	Нова група…
+	Prevent Auto-Nesting	Заборонити автоматичне вкладення
+	Show Layers	Показати шари
+	Thumbnail Contents	Вміст мініатюр
+	Thumbnail Size	Розмір мініатюр
+	Use Default Masks on Fill Layers	Використовувати типові маски для шарів заливки
+	Expand New Effects	Розгортати нові ефекти
+	Add “copy” to Copied Layers and Groups	Додавати «копія» до скопійованих шарів і груп
+	Preview on canvas when reordering layers	Попередній перегляд на полотні під час зміни порядку шарів
+	Show layer mask badges	Показувати позначки масок шарів
 	Loading fonts…	Завантаження шрифтів…
 	Response curve	Крива відгуку
 	Simulate Pressure	Імітувати натиск
@@ -3793,6 +3816,10 @@ curves	Smooth	Згладити
 	Click to place · Alt-click or drag off-canvas to remove	Клацніть, щоб розмістити · Alt-клацання або перетягування за межі полотна для видалення
 	No document open	Документ не відкрито
 	{n} of {max} sample points	{n} з {max} точок вимірювання
+
+# History panel menu (#2966)
+	New Snapshot…	Новий знімок стану…
+	History Options…	Параметри історії…
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції
@@ -3869,6 +3896,9 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
+	Sets the source for the history brush	Задає джерело для пензля історії
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Використати вбудований профіль ({profile})
 	Convert to the working space ({profile})	Перетворити в робочий простір ({profile})
@@ -3889,6 +3919,9 @@ curves	Smooth	Згладити
 # View › Guides › right-click a guide
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
+	Bicubic Automatic	Бікубічна, автоматично
+	Bicubic Smoother	Бікубічна, гладкіша
+	Bicubic Sharper	Бікубічна, чіткіша
 	Pasting from other apps is unavailable	Вставлення з інших застосунків недоступне
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	У цьому сеансі PhotoCraft не має доступу до системного буфера обміну. У Wayland пісочниця Flatpak приховує протокол, через який читаються зображення з інших застосунків.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Щоб вставляти з інших застосунків, запустіть PhotoCraft під XWayland: `{command}`
@@ -3908,6 +3941,17 @@ curves	Smooth	Згладити
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
 	Show file name in title	Показувати ім’я файла в заголовку
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Поріг 50%
+	Pattern Dither	Візерунковий дизеринг
+	Diffusion Dither	Дифузійний дизеринг
+	Halftone Screen	Півтоновий растр
+	Custom Pattern	Довільний візерунок
+	Frequency:	Лініатура:
+	Lines/Inch	Ліній/дюйм
+	Lines/Centimeter	Ліній/сантиметр
+	Ellipse	Еліпс
 	Accept and Go to Conflict	Прийняти й перейти до конфлікту
 	Changes undone.	Зміни скасовано.
 	Choose a new shortcut for this command, or leave it without one.	Виберіть нове клавіатурне скорочення для цієї команди або залиште її без нього.
@@ -3968,3 +4012,15 @@ curves	Smooth	Згладити
 	Tween	Проміжні кадри
 	Last frame	Останній кадр
 	Frames to add	Додати кадрів
+
+# DDS Options (#1327)
+	DDS Options	Параметри DDS
+	Compression	Стиснення
+	Generate Mipmaps	Створити MIP-карти
+
+# Color Table (.act) dialog
+	There is no color table to save.	Немає таблиці кольорів для збереження.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Збережено {n} колір у {file}|Збережено {n} кольори у {file}|Збережено {n} кольорів у {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Адаптер GPU

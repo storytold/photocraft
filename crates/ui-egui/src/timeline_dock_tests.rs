@@ -276,6 +276,7 @@ fn the_timeline_keys_leave_space_to_type_on_the_canvas() {
     assert!(crate::timeline_ui::keys_apply(h.state(), &ctx), "over the panel the keys apply");
     // A type edit in progress on the canvas (checked before the next frame can end it).
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
+        document: None,
         layer: 1,
         caret: 0,
         anchor: 0,

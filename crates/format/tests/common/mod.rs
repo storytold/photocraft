@@ -154,6 +154,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             live: Some(LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [4.0, 0.0, 4.0, 0.0] }),
             cache: Some(cache.clone()),
             psd_raw: Some(blob(10, 30)),
+            density: 0.6,
+            feather: 3.5,
         }),
     );
     shape.label = LabelColor::Green;

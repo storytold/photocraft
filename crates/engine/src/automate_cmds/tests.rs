@@ -253,6 +253,38 @@ fn droplets_carry_the_actions_their_play_steps_call() {
 }
 
 #[test]
+fn droplets_carry_the_actions_their_conditional_steps_call() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("droplet-conditional");
+    let inputs = images(&dir, 2, 40, 20);
+    let mut s = Session::new();
+    let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
+    s.actions.list = vec![
+        act("Unrelated", json!([["image.imageRotation.180", {}]])),
+        act("Rotate", json!([["image.imageRotation.90cw", {}]])),
+        // The then branch calls Rotate by index, as the panel records it.
+        act("Wide", json!([["actions.play", {"action": 1}]])),
+        act("Tall", json!([["image.imageRotation.180", {}]])),
+    ];
+    let steps = json!([["actions.conditional", {"if": "landscape", "then": "Wide", "else": "Tall"}]]);
+    let out = format!("{dir}/out");
+    let r = s
+        .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Cond"), "steps": steps, "format": "png", "output": out, "shim": false}))
+        .unwrap();
+    let dp = r["path"].as_str().unwrap().to_string();
+    let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+    let names: Vec<&str> = v["calledActions"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Rotate", "Wide", "Tall"], "both branches and what they call");
+
+    // A fresh session, as `photocraft-cli droplet` and the droplet shim use.
+    let mut fresh = Session::new();
+    let r = fresh.execute("file.automate.runDroplet", json!({"droplet": dp, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+    let img = photocraft_codecs::decode(&std::fs::read(format!("{out}/img0.png")).unwrap()).unwrap();
+    assert_eq!(img.dimensions(), (20, 40), "the landscape input took the then branch");
+}
+
+#[test]
 fn batch_and_droplets_skip_recorded_view_steps() {
     let dir = tmp("view-steps");
     images(&dir, 1, 40, 20);

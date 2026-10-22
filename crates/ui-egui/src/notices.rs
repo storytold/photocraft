@@ -309,7 +309,7 @@ mod tests {
     fn unreadable_clipboard_paste_explains_the_sandbox() {
         let command = "flatpak run --nosocket=wayland --socket=x11 ai.storyteller.photocraft";
         let services = |unreadable: bool| Services {
-            clipboard_get_image: Some(Box::new(|| None)),
+            clipboard_get_image: Some(Box::new(move || if unreadable { Err("no clipboard backend".into()) } else { Ok(None) })),
             clipboard_unreadable: Some(Box::new(move || unreadable)),
             xwayland_command: Some(command.to_string()),
             ..Default::default()

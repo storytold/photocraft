@@ -217,7 +217,8 @@ fn size_ok(r: [f64; 4]) -> bool {
 pub(crate) fn preset_ratio(app: &PhotocraftApp) -> Option<f64> {
     if app.ui.tool_options.crop_ratio == crate::crop_size::WHR {
         let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
-        return crate::crop_size::ratio(&app.ui.tool_options, dpi);
+        let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+        return crate::crop_size::ratio(&app.ui.tool_options, dpi, pt_per_in);
     }
     let size = app.session.active().map_or((1.0, 1.0), |s| (s.doc.size.width as f64, s.doc.size.height as f64));
     crate::chrome_ui::crop_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1).map(|(w, h)| w / h).filter(|k| k.is_finite() && *k > 0.0)
@@ -248,13 +249,29 @@ pub(crate) fn apply_ratio(app: &mut PhotocraftApp) {
     crate::crop_mode::sync_frame(app);
 }
 
+/// [`apply_ratio`] for a ratio being typed: fits from `base`, the frame the edit started with,
+/// not from the frame the last keystroke's ratio left (#7752).
+pub(crate) fn apply_ratio_from(app: &mut PhotocraftApp, base: [f64; 4]) {
+    if app.ui.tool != Tool::Crop || app.crop.drag.is_some() {
+        return;
+    }
+    if let Some(ratio) = preset_ratio(app)
+        && let Some(fitted) = fitted_ratio(base, ratio)
+        && app.ui.crop_rect != Some(fitted)
+    {
+        keyed(app, fitted);
+    }
+    crate::crop_mode::sync_frame(app);
+}
+
 fn fit_frame(app: &mut PhotocraftApp) {
     let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
     if let Some(r) = app.ui.crop_rect
         && let Some(ratio) = preset_ratio(app)
         && let Some(fitted) = fitted_ratio(r, ratio)
         // W x H x Resolution can change output size even when the frame already fits.
-        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi).is_some())
+        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi, pt_per_in).is_some())
     {
         keyed(app, fitted);
     }
@@ -377,10 +394,14 @@ fn keeps_pending(app: &PhotocraftApp) -> bool {
 }
 
 /// Commits the drawn frame on leaving the Crop tool as ↵ would with the tool still picked (so the
-/// view goes upright too, `crop_mode::upright`), then gives the new tool back.
+/// view goes upright too, `crop_mode::upright`), then gives the new tool back. A refused crop
+/// keeps its frame: that is cancelled, so the new tool doesn't retry it every frame.
 fn commit_on_leave(app: &mut PhotocraftApp) {
     let tool = std::mem::replace(&mut app.ui.tool, Tool::Crop);
     crate::canvas::commit_crop(app);
+    if app.ui.crop_rect.is_some() {
+        cancel(app);
+    }
     app.ui.tool = tool;
 }
 
@@ -422,17 +443,42 @@ fn apply_step(app: &mut PhotocraftApp, s: CropStep) {
     app.crop.default_frame = s.default_frame;
 }
 
+/// The pending frame, its box Undo/Redo and the view's turn, kept while `image.crop` runs so a
+/// refused commit gives them back ([`restore`]).
+pub(crate) struct Kept {
+    step: CropStep,
+    undo: Vec<CropStep>,
+    redo: Vec<CropStep>,
+    view: Option<(f32, [f32; 2])>,
+}
+
+pub(crate) fn keep(app: &PhotocraftApp) -> Kept {
+    let view = app.session.active_index().and_then(|i| app.ui.views.get(i)).map(|v| (v.rotation, v.center));
+    Kept { step: step_of(app), undo: app.crop.undo.clone(), redo: app.crop.redo.clone(), view }
+}
+
+pub(crate) fn restore(app: &mut PhotocraftApp, k: Kept) {
+    apply_step(app, k.step);
+    (app.crop.undo, app.crop.redo) = (k.undo, k.redo);
+    if let Some((rotation, center)) = k.view
+        && let Some(v) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i))
+    {
+        (v.rotation, v.center) = (rotation, center);
+    }
+}
+
 /// While the Crop tool has box history, Undo/Redo step the *box*, not the document (Photoshop keeps
 /// Edit › Undo live during a crop, #1918/#3145). `Some(enabled)` for those commands, else `None` so
-/// the caller falls back to document history.
+/// the caller falls back to document history. While either box stack has a step, `intercept` takes
+/// both commands, so one with nothing left to step greys out rather than offering the document's.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if app.ui.tool != Tool::Crop {
+    if app.ui.tool != Tool::Crop || (app.crop.undo.is_empty() && app.crop.redo.is_empty()) {
         return None;
     }
     match id {
-        "edit.undo" if !app.crop.undo.is_empty() => Some(true),
-        "edit.redo" if !app.crop.redo.is_empty() => Some(true),
-        "edit.toggleLastState" if !app.crop.undo.is_empty() || !app.crop.redo.is_empty() => Some(false),
+        "edit.undo" => Some(!app.crop.undo.is_empty()),
+        "edit.redo" => Some(!app.crop.redo.is_empty()),
+        "edit.toggleLastState" => Some(false),
         _ => None,
     }
 }
@@ -462,7 +508,19 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     } else {
         app.crop.redo.push(now);
     }
+    // Default mode: the box stays put on screen, so the view follows the frame's centre (#7088).
+    if let (true, Some(a), Some(b)) = (crate::crop_mode::moves_image(app), now.rect, s.rect) {
+        let (a, b) = (center(a), center(b));
+        let d = [(b[0] - a[0]) as f32, (b[1] - a[1]) as f32];
+        if let Some(v) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i)) {
+            let c = [v.center[0] + d[0], v.center[1] + d[1]];
+            if c.iter().all(|x| x.is_finite()) {
+                v.center = c;
+            }
+        }
+    }
     crate::crop_mode::sync_frame(app);
+    crate::crop_mode::auto_center(app);
     serde_json::Value::Null
 }
 
@@ -706,9 +764,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     if crate::crop_straighten::pointer(app, ev, mods) {
         claim(app);
         // Default mode: the image turns so the line ends up level (the press keeps its point).
+        // The turn is one box Undo step, like any other frame gesture.
         match ev {
-            ToolEvent::Down { .. } => crate::crop_mode::sync(app, Some(p)),
-            _ => crate::crop_mode::sync_frame(app),
+            ToolEvent::Down { .. } => {
+                app.crop.press_step = Some(step_of(app));
+                crate::crop_mode::sync(app, Some(p));
+            }
+            ToolEvent::Move { .. } => crate::crop_mode::sync_frame(app),
+            ToolEvent::Up { .. } => {
+                crate::crop_mode::sync_frame(app);
+                push_press_step(app);
+            }
         }
         return true;
     }
@@ -774,16 +840,21 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 }
                 _ => {}
             }
-            if let Some(before) = app.crop.press_step.take()
-                && step_of(app) != before
-            {
-                app.crop.undo.push(before);
-                app.crop.redo.clear();
-            }
+            push_press_step(app);
         }
     }
     crate::crop_mode::sync_frame(app);
     true
+}
+
+/// On release: the frame state at the press becomes a box Undo step when the gesture changed it.
+fn push_press_step(app: &mut PhotocraftApp) {
+    if let Some(before) = app.crop.press_step.take()
+        && step_of(app) != before
+    {
+        app.crop.undo.push(before);
+        app.crop.redo.clear();
+    }
 }
 
 /// The frame follows the pointer at `p`.
@@ -1325,6 +1396,23 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), doc_steps, "the document is untouched");
         app.run("edit.redo", json!({})).unwrap();
         assert!((app.ui.crop_rect.unwrap()[0] - 60.0).abs() < 1e-3, "redo re-applies the move");
+    }
+
+    /// Once the box has no step left in one direction, that command greys out rather than staying
+    /// live over the document's history and doing nothing (as the Free Transform box does).
+    #[test]
+    fn box_undo_and_redo_grey_out_when_their_stack_is_empty() {
+        let mut app = app(SampleType::U8);
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert!(app.session.active().unwrap().history.can_undo());
+        app.ui.crop_rect = Some([40.0, 30.0, 100.0, 70.0]);
+        app.crop.default_frame = false;
+        drag(&mut app, &[[70.0, 50.0], [90.0, 50.0]], NONE);
+        assert!(crate::menus::is_enabled(&app, "edit.undo"));
+        assert!(!crate::menus::is_enabled(&app, "edit.redo"), "no box step to redo");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(!crate::menus::is_enabled(&app, "edit.undo"), "no box step left to undo");
+        assert!(crate::menus::is_enabled(&app, "edit.redo"));
     }
 
     #[test]

@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use photocraft_color::Color;
 use photocraft_doc::text::{
-    AntiAlias, Caps, CharStyle, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape,
+    AntiAlias, Caps, CharStyle, FontBaseline, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection,
+    TextRun, TextShape,
 };
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
@@ -107,7 +108,8 @@ pub fn check_kerning(p: &Value) -> std::result::Result<(), String> {
 }
 
 /// Validates text metrics (size, tracking, leading, baseline shift, scales) that can otherwise
-/// exceed the rasterizer's supported range or overflow `f32`, which a .pcraft manifest cannot hold.
+/// exceed the rasterizer's supported range or overflow `f32`, which a .pcraft manifest cannot hold,
+/// and the superscript/subscript `baseline`, so a typo is an error rather than a reset to Normal.
 pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     if let Some(v) = p.get("size") {
         match v.as_f64() {
@@ -136,6 +138,11 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
             Some(shift) if shift.is_finite() && shift.abs() <= max => {}
             _ => return Err(format!("baselineShift must be between -{max} and {max} pt")),
         }
+    }
+    if let Some(v) = p.get("baseline").filter(|v| !v.is_null())
+        && !matches!(v.as_str(), Some("normal" | "superscript" | "subscript"))
+    {
+        return Err("baseline must be \"normal\", \"superscript\" or \"subscript\"".into());
     }
     for key in ["horizontalScale", "verticalScale"] {
         if let Some(v) = p.get(key) {
@@ -362,6 +369,19 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
             _ => Caps::Normal,
         };
         hit(true);
+    }
+    if let Some(v) = p.get("baseline").and_then(Value::as_str) {
+        let baseline = match v {
+            "superscript" => Some(FontBaseline::Superscript),
+            "subscript" => Some(FontBaseline::Subscript),
+            "normal" => Some(FontBaseline::Normal),
+            _ => None,
+        };
+        // An unknown value keeps the style (the commands reject it in `check_size_tracking`).
+        if let Some(b) = baseline {
+            s.baseline = b;
+            hit(true);
+        }
     }
     if let Some(Value::Object(m)) = p.get("features") {
         for (tag, v) in m {
@@ -826,7 +846,7 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
     Ok(t)
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -1606,6 +1626,23 @@ mod tests {
         // Inserting at a caret still follows the character before it.
         s.execute("type.edit", json!({"layer": id, "replace": {"start": 4, "end": 4, "text": "!"}})).unwrap();
         assert_eq!(sizes(&s), [(5, 40.0), (1, 12.0)]);
+    }
+
+    /// A misspelt `baseline` is an error and keeps superscript, instead of resetting it to Normal.
+    #[test]
+    fn unknown_baseline_is_rejected_and_keeps_the_style() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "x2", "size": 30})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [1, 2], "baseline": "superscript"})).unwrap();
+        let before = text_layer(&s, id).runs;
+        for b in [json!("superscipt"), json!("Superscript"), json!(1)] {
+            assert!(matches!(s.execute("type.setStyle", json!({"layer": id, "baseline": b})), Err(EngineError::BadParams { .. })), "{b}");
+            assert!(s.execute("type.edit", json!({"layer": id, "baseline": b})).is_err(), "{b}");
+            assert!(s.execute("type.create", json!({"x": 0, "y": 10, "text": "a", "baseline": b})).is_err(), "{b}");
+        }
+        assert_eq!(text_layer(&s, id).runs, before);
+        s.execute("type.setStyle", json!({"layer": id, "baseline": "normal"})).unwrap();
+        assert!(text_layer(&s, id).char_runs().iter().all(|r| r.style.baseline == FontBaseline::Normal));
     }
 
     fn kerning_of(s: &Session, id: u64) -> Vec<(Kerning, f32)> {

@@ -17,7 +17,7 @@ id = "FILE-215-2"
 target = "Smart Filters survive PSD save and re-open (filterFX descriptor read and written)"
 status = "partial"
 issue = 215
-note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
+note = "smart_map.rs: 41 filters plus Hue/Saturation, Perspective Warp, Filter Gallery (Chrome) and a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
 
 [[item]]
 id = "FILE-215-3"
@@ -127,9 +127,9 @@ note = "compose multichannel.rs:1 spot preview for Multichannel only"
 [[item]]
 id = "FILE-215-18"
 target = "Save for Web per-slice settings remembered; Export As remembers and offers nearest scaling"
-status = "partial"
+status = "done"
 issue = 215
-note = "Save for Web settings survive a restart through the remembered dialog settings in prefs.dialogs (web_cmds::remember_web_settings stores them on a complete export, never the destination; file_ui.rs open_web seeds from the session's last export, else the preferences). export_dialog seeds Export As the same way (seed_remembered: format, quality, transparency, scale, metadata, TGA bits) and confirm remembers them as used. Missing: Export As nearest-neighbour scaling"
+note = "Save for Web settings survive a restart through the remembered dialog settings in prefs.dialogs (web_cmds::remember_web_settings stores them on a complete export, never the destination; file_ui.rs open_web seeds from the session's last export, else the preferences). export_dialog seeds Export As the same way (seed_remembered: format, quality, transparency, scale, resample, metadata, TGA bits) and confirm remembers them as used. Export As › Image Size › Resample offers Photoshop's six methods (Bicubic Automatic default, Nearest Neighbor included; export_preset_cmds::RESAMPLE, unknown values are errors) for the exported copy only; also layer.exportAs `resample` and export presets (#5838). Tests: export_dialog nearest_neighbor_doubles_each_pixel_into_an_exact_block (8/16-bit), resample_choices_are_checked, resample_is_remembered_and_a_bad_saved_value_falls_back; layer_menu_cmds export_layer_resamples_with_the_chosen_method; tests/export_as_scaling.rs export_as_resample_menu_writes_nearest_neighbor_blocks"
 
 [[item]]
 id = "FILE-215-19"
@@ -162,9 +162,9 @@ note = "ci.yml has a corpus job (name: corpus tests) on every PR and on main: th
 [[item]]
 id = "FILE-216-2"
 target = "Large-file fixtures: 20 MP, 150-layer, generated 2 GB PSD and 4-5 GB PSB stress tests"
-status = "partial"
+status = "done"
 issue = 216
-note = "4-5 GB PSB fixtures: psd example big_psb writes them (raw and RLE, planes past 2 GiB), io example big_psb_check opens and checks them; opt-in io tests/large_psb.rs (2.5 GB merged image). No 2 GB PSD, 150-layer or 20 MP fixture, nothing in CI"
+note = "Generated at test time by psd fixtures.rs (feature testgen; never committed). io tests/large_files.rs: layered_20_mp_psd_opens_and_saves (5472x3648, 5 layers in 2 groups, mask, drop shadow) and layout_with_150_layers_opens_and_saves (A4 300 ppi, 150 layers in 15 groups, masks, hidden layers, closed groups, drop shadows) run in every cargo test (~2 s each); opt-in psd_just_under_2_gb_opens_and_saves (17,000 px, 2.02 GB PSD) and psb_of_4_gb_opens_and_saves (25,000 px, 4.38 GB PSB, data past 4 GiB), each opened, pixel-checked, saved and re-opened; plus large_psb.rs (2.5 GB merged image). Open times: ui-egui large_file_bench (P20, P63). The 2 GB and 4 GB files are not run in CI (6.4 GB on disk; ~12 GB of memory for the PSD test, ~25 GB for the PSB test) (#5107)"
 
 [[item]]
 id = "FILE-216-3"

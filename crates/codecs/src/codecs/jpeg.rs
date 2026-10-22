@@ -7,8 +7,9 @@
 //! these wins: the APP13 Photoshop ResolutionInfo, the XMP `tiff:` resolution, the EXIF IFD0
 //! resolution, and last the JFIF density (a unit-0 JFIF density is only an aspect ratio and
 //! never counts). Cameras record their resolution in EXIF only, and many tools write a default
-//! 72 into JFIF, so JFIF can't outrank EXIF (see [`crate::resolution`]). On export the JFIF
-//! density, the EXIF and the XMP resolution are all written as the image's resolution.
+//! 72 into JFIF, so JFIF can't outrank EXIF (see [`crate::resolution`]). On export RGB and gray
+//! images carry density in JFIF; CMYK omits JFIF APP0, which is invalid for four components, and
+//! carries an available density in EXIF instead.
 
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
@@ -263,7 +264,8 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     enc.set_sampling_factor(sampling);
     let e = |e: jpeg_encoder::EncodingError| CodecError::encode(F, e);
     if opts.embed_metadata {
-        if let Some((x, y)) = img.meta.dpi
+        if img.layout() != ChannelLayout::Cmyk
+            && let Some((x, y)) = img.meta.dpi
             && x >= 1.0
             && y >= 1.0
         {
@@ -271,7 +273,16 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         }
         // Metadata too large for its one segment is left out (and reported by the fidelity
         // warnings) rather than failing the whole export.
-        if let Some(seg) = img.meta.exif.as_deref().and_then(|x| exif_segment(x, img.meta.dpi)) {
+        let exif = if img.layout() == ChannelLayout::Cmyk {
+            match img.meta.exif.as_deref() {
+                Some(exif) => exif_segment_with_resolution(exif, img.meta.dpi),
+                None if usable_dpi(img.meta.dpi) => exif_segment_with_resolution(&[], img.meta.dpi),
+                None => None,
+            }
+        } else {
+            img.meta.exif.as_deref().and_then(|x| exif_segment(x, img.meta.dpi))
+        };
+        if let Some(seg) = exif {
             enc.add_app_segment(1, &seg).map_err(e)?;
         }
         if let Some(seg) = img.meta.xmp.as_deref().and_then(|x| xmp_segment(x, img.meta.dpi)) {
@@ -284,7 +295,56 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         enc.add_icc_profile(icc).map_err(e)?;
     }
     enc.encode(img.data(), w16, h16, ct).map_err(e)?;
+    if img.layout() == ChannelLayout::Cmyk {
+        strip_jfif_app0(&mut out);
+    }
     Ok(out)
+}
+
+/// JFIF APP0 requires one or three image components. A four-component CMYK JPEG must not carry
+/// that marker; keep Adobe APP14, which identifies the CMYK encoding instead.
+fn strip_jfif_app0(bytes: &mut Vec<u8>) {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return;
+    }
+    let mut i = 2usize;
+    loop {
+        if bytes.get(i) != Some(&0xff) {
+            return;
+        }
+        let Some(&marker) = bytes.get(i.saturating_add(1)) else { return };
+        if matches!(marker, 0xda | 0xd9) {
+            return;
+        }
+        if marker == 0xff {
+            i = i.saturating_add(1);
+            continue;
+        }
+        if marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
+            i = i.saturating_add(2);
+            continue;
+        }
+        let Some(length_bytes) = i.checked_add(2).and_then(|at| bytes.get(at..at.checked_add(2)?)) else { return };
+        let Ok(length_bytes) = <[u8; 2]>::try_from(length_bytes) else { return };
+        let length = usize::from(u16::from_be_bytes(length_bytes));
+        if length < 2 {
+            return;
+        }
+        let Some(end) = i.checked_add(2).and_then(|at| at.checked_add(length)) else { return };
+        if end > bytes.len() {
+            return;
+        }
+        if marker == 0xe0 && bytes.get(i.saturating_add(4)..i.saturating_add(9)) == Some(b"JFIF\0") {
+            bytes.drain(i..end);
+        } else {
+            i = end;
+        }
+    }
+}
+
+/// Return whether both resolution values are finite and within the supported metadata range.
+fn usable_dpi(dpi: Option<(f32, f32)>) -> bool {
+    dpi.is_some_and(|(x, y)| x.is_finite() && y.is_finite() && (1.0..=1_000_000.0).contains(&x) && (1.0..=1_000_000.0).contains(&y))
 }
 
 /// The most data one APP segment holds (its 16-bit length counts its own two bytes).
@@ -297,9 +357,15 @@ const LAYERED_ONLY_XMP: [&str; 2] = ["DocumentAncestors", "TextLayers"];
 
 /// The EXIF APP1 segment, or `None` when it doesn't fit in one segment.
 pub(crate) fn exif_segment(exif: &[u8], dpi: Option<(f32, f32)>) -> Option<Vec<u8>> {
-    // The pixels are written as they are shown: never let a viewer rotate them again; and the
-    // resolution is the one written to JFIF, not the source's (#1691).
+    // The pixels are written as they are shown: never let a viewer rotate them again; and store
+    // the output resolution, not the source's (#1691).
     let seg = [EXIF_HEADER, export_exif(exif, dpi).as_ref()].concat();
+    (seg.len() <= MAX_SEGMENT).then_some(seg)
+}
+
+/// Build an EXIF APP1 segment, adding missing resolution tags when the source metadata is valid.
+fn exif_segment_with_resolution(exif: &[u8], dpi: Option<(f32, f32)>) -> Option<Vec<u8>> {
+    let seg = [EXIF_HEADER, crate::resolution::export_exif_adding_missing_resolution(exif, dpi).as_ref()].concat();
     (seg.len() <= MAX_SEGMENT).then_some(seg)
 }
 
@@ -346,4 +412,75 @@ fn remove_element(xmp: &str, name: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Format, Metadata};
+
+    /// Build a little-endian TIFF with an empty IFD0 for metadata tests.
+    fn empty_tiff() -> Vec<u8> {
+        // Little-endian TIFF with an empty IFD0 and no next IFD.
+        b"II*\0\x08\0\0\0\0\0\0\0\0\0\0\0".to_vec()
+    }
+
+    /// Return whether the JPEG begins with a JFIF APP0 segment.
+    fn has_jfif_app0(bytes: &[u8]) -> bool {
+        bytes.get(2..11) == Some(b"\xff\xe0\0\x10JFIF\0")
+    }
+
+    /// CMYK JPEG output must omit JFIF while retaining Adobe's CMYK marker.
+    #[test]
+    fn cmyk_jpeg_omits_jfif_but_keeps_adobe_cmyk_marker() {
+        let img = Image::from_raw(2, 1, ChannelLayout::Cmyk, SampleType::U8, vec![0, 32, 64, 96, 255, 224, 192, 160]).unwrap();
+        let bytes = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+
+        let meta = scan_metadata(&bytes);
+        assert!(!has_jfif_app0(&bytes));
+        assert_eq!(meta.frame, Some((2, 1, 4)));
+        assert_eq!(meta.adobe_transform, Some(0));
+        assert_eq!(crate::decode_as(Format::Jpeg, &bytes).unwrap().layout(), ChannelLayout::Cmyk);
+    }
+
+    /// CMYK JPEG output stores image resolution in EXIF when the source has no EXIF.
+    #[test]
+    fn cmyk_jpeg_preserves_dpi_without_source_exif() {
+        let mut img = Image::from_raw(1, 1, ChannelLayout::Cmyk, SampleType::U8, vec![0, 0, 0, 0]).unwrap();
+        img.meta.dpi = Some((300.0, 150.0));
+        let bytes = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+
+        assert!(!has_jfif_app0(&bytes));
+        assert_eq!(crate::decode_as(Format::Jpeg, &bytes).unwrap().meta.dpi, Some((300.0, 150.0)));
+    }
+
+    /// CMYK JPEG output adds missing EXIF resolution tags to existing metadata.
+    #[test]
+    fn cmyk_jpeg_preserves_dpi_with_source_exif_without_resolution_tags() {
+        let mut img = Image::from_raw(1, 1, ChannelLayout::Cmyk, SampleType::U8, vec![0, 0, 0, 0]).unwrap();
+        img.meta = Metadata { exif: Some(empty_tiff()), dpi: Some((240.0, 120.0)), ..Default::default() };
+        let bytes = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+
+        assert_eq!(crate::decode_as(Format::Jpeg, &bytes).unwrap().meta.dpi, Some((240.0, 120.0)));
+    }
+
+    /// Adding missing resolution tags makes them readable from the rewritten IFD0.
+    #[test]
+    fn exif_with_resolution_adds_missing_ifd0_entries() {
+        let exif = empty_tiff();
+        let rewritten = crate::resolution::export_exif_adding_missing_resolution(&exif, Some((240.0, 120.0)));
+
+        assert_eq!(crate::resolution::exif_resolution(&rewritten), Some((240.0, 120.0)));
+    }
+
+    /// RGB JPEG output continues to store image resolution in JFIF density fields.
+    #[test]
+    fn rgb_jpeg_keeps_jfif_density() {
+        let mut img = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U8, vec![12, 34, 56]).unwrap();
+        img.meta.dpi = Some((96.0, 96.0));
+        let bytes = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+
+        assert!(has_jfif_app0(&bytes));
+        assert_eq!(scan_metadata(&bytes).dpi, Some((96.0, 96.0)));
+    }
 }

@@ -19,7 +19,8 @@ pub enum Format {
     Pcx,
     /// X PixMap icons (XPM2 plain text and XPM3 C-string arrays).
     Xpm,
-    /// DirectDraw Surface: the top mip level of a 2D texture, uncompressed or BC1–BC3.
+    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC3. Reading takes the top mip
+    /// level; writing can add the full mip chain ([`crate::DdsOptions`]).
     Dds,
     Qoi,
     OpenExr,
@@ -70,10 +71,6 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     (
         Format::Pcx,
         "PCX is supported for opening legacy paint and clipart assets. New files should use PNG; writing obsolete indexed and planar variants is intentionally not provided.",
-    ),
-    (
-        Format::Dds,
-        "DDS is supported for opening game and 3D textures. Writing one well means choosing a block compression and generating mip levels, which belongs in a texture export, not Save As.",
     ),
     (
         Format::Avif,
@@ -255,7 +252,8 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Pnm => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, ..base },
         Format::Pcx => FormatCaps { read: true, write: false, layouts: &[L::Rgb], alpha: false, ..base },
         Format::Xpm => FormatCaps { read: true, write: false, layouts: &[L::Rgba], ..base },
-        Format::Dds => FormatCaps { read: true, write: false, layouts: RGB_GRAY, ..base },
+        // Uncompressed by default; a block compression is lossy (see `fidelity_warnings_with`).
+        Format::Dds => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },

@@ -121,7 +121,7 @@ mod permissions {
     }
 
     #[test]
-    fn denied_stale_preview_cleanup_preserves_the_previous_manifest() {
+    fn denied_stale_preview_cleanup_is_retried_after_a_successful_save() {
         let root = temp_dir("denied-preview-cleanup");
         let bundle = root.join("project.pcraft");
         let mut writer = PcraftWriter::new();
@@ -139,12 +139,14 @@ mod permissions {
             return;
         }
         let mut changed = empty_doc();
-        changed.name = "must not commit".into();
+        changed.name = "committed despite housekeeping failure".into();
         let result = writer.save_dir(&changed, &bundle, &SaveOptions::default());
         drop(restricted);
-        assert!(result.is_err(), "a required pre-commit cleanup failure is reported");
-        assert_eq!(std::fs::read(preview).unwrap(), b"stale composite");
-        assert_eq!(load_path(&bundle).unwrap(), original);
+        result.expect("a stale preview must not turn a committed save into an error");
+        assert_eq!(std::fs::read(&preview).unwrap(), b"stale composite");
+        assert_eq!(load_path(&bundle).unwrap(), changed);
+        writer.save_dir(&changed, &bundle, &SaveOptions::default()).unwrap();
+        assert!(!preview.exists(), "a later save retries stale-preview cleanup");
         std::fs::remove_dir_all(root).unwrap();
     }
 

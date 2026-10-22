@@ -29,7 +29,7 @@ const MAX_EDGE: u32 = 30_000;
 /// Budget for zero-padded channel planes summed over every pattern of one parse (a block, a `.pat`
 /// file, an `.abr`). Photoshop writes every channel at the pattern rectangle, so a smaller channel
 /// rectangle is only padding; without this cap a few hundred bytes (1x1 channels, a huge pattern
-/// rectangle) would allocate up to `MAX_DECODED_BYTES` of zeros. Matches `abr::MAX_TOTAL_BYTES`.
+/// rectangle) would allocate up to `MAX_DECODED_BYTES` of zeros.
 const MAX_PADDED_PATTERN_BYTES: u64 = 512 << 20;
 // A PackBits run packet emits at most 128 bytes from a 2-byte packet.
 const MAX_RLE_EXPANSION: u64 = 64;

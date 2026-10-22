@@ -942,6 +942,44 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// Whether the driver's paper, as `driver_page` took it, is wider than tall: the Orientation
+/// buttons show landscape then.
+fn driver_paper_is_wide(f: &Map<String, Value>) -> bool {
+    let side = |i: usize| f.get("paper").and_then(Value::as_array).and_then(|a| a.get(i)).and_then(Value::as_f64);
+    matches!((side(0), side(1)), (Some(w), Some(h)) if w > h)
+}
+
+/// The Orientation buttons: the driver settings (or the printer's own) turned portrait or
+/// landscape through `file.print.page`. An error stays on the dialog, with the settings left as
+/// they were.
+fn turn_driver(app: &mut PhotocraftApp, f: &mut Map<String, Value>, landscape: bool) {
+    let mut q = json!({"printer": s(f, "printer", ""), "orientation": if landscape { "landscape" } else { "portrait" }});
+    if let (Some(h), Some(o)) = (f.get("printerSettings").cloned(), q.as_object_mut()) {
+        o.insert("printerSettings".into(), h);
+    }
+    match app.session.execute("file.print.page", q) {
+        Ok(r) => take_turned_page(f, &r),
+        Err(e) => {
+            f.insert("__pageError".into(), json!(e.to_string()));
+        }
+    }
+}
+
+/// The turned settings and the paper they give, both from the one `file.print.page` answer, as
+/// `driver_page` takes a page: asking the driver again could fail and leave new settings with the
+/// old paper. An answer without both leaves the dialog as it was, with the reason shown.
+fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
+    let paper = r.get("paper").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+    let (Some(settings), Some((w, h))) = (r.get("printerSettings").and_then(Value::as_str), paper) else {
+        f.insert("__pageError".into(), json!("the printer did not report the turned page"));
+        return;
+    };
+    f.insert("printerSettings".into(), json!(settings));
+    f.insert("paper".into(), json!([w, h]));
+    f.insert("orientation".into(), json!("portrait"));
+    f.remove("__pageError");
+}
+
 /// Takes the paper from the printer's driver settings (Windows), as Photoshop does.
 fn driver_page(f: &mut Map<String, Value>) {
     let printer = s(f, "printer", "");
@@ -1173,6 +1211,17 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                             Err(e) => {
                                 f.insert("__pageError".into(), json!(e.to_string()));
                             }
+                        }
+                    }
+                });
+                // Photoshop's Layout: Portrait / Landscape turn the driver settings, so the paper
+                // and the preview turn with them without opening Print Settings….
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Orientation")).color(t.text_dim));
+                    let wide = driver_paper_is_wide(f);
+                    for (landscape, label) in [(false, "Portrait"), (true, "Landscape")] {
+                        if crate::widgets::pill_tab(ui, label, wide == landscape).clicked() && wide != landscape {
+                            turn_driver(app, f, landscape);
                         }
                     }
                 });
@@ -1698,6 +1747,65 @@ mod tests {
             let id = r["dialog"].as_u64().unwrap();
             assert!(app.ui.dialog_mut(id).unwrap().fields.get("send").is_none());
             std::fs::remove_file(out).unwrap();
+        }
+    }
+
+    /// The Orientation buttons show the driver paper's shape: landscape when it is wider than tall.
+    #[test]
+    fn orientation_follows_the_driver_paper() {
+        let with = |paper: Value| {
+            let mut f = Map::new();
+            f.insert("paper".into(), paper);
+            f
+        };
+        assert!(driver_paper_is_wide(&with(json!([1191.14, 842.29]))));
+        assert!(!driver_paper_is_wide(&with(json!([842.29, 1191.14]))));
+        assert!(!driver_paper_is_wide(&with(json!("a3"))), "a named paper is not a driver page");
+        assert!(!driver_paper_is_wide(&Map::new()));
+    }
+
+    /// Turning a printer whose driver can't be asked keeps its settings and says why on the dialog.
+    #[test]
+    fn turning_without_a_driver_keeps_the_settings_and_shows_the_error() {
+        // Valid driver settings (a minimal DEVMODEW: 220 bytes, no private part), so the command
+        // gets past reading them and fails where it asks the (missing) printer for its page.
+        let mut dm = vec![0u8; 220];
+        dm[68..70].copy_from_slice(&220u16.to_le_bytes());
+        let hex: String = dm.iter().map(|b| format!("{b:02x}")).collect();
+        assert!(craft_print::rgb::DevMode::from_hex(&hex).is_ok());
+        let (mut app, _) = app();
+        let mut f = Map::new();
+        f.insert("printer".into(), json!("photocraft-no-such-printer"));
+        f.insert("printerSettings".into(), json!(hex));
+        f.insert("paper".into(), json!([595.28, 841.89]));
+        turn_driver(&mut app, &mut f, true);
+        assert_eq!(f.get("printerSettings"), Some(&json!(hex)));
+        assert_eq!(f.get("paper"), Some(&json!([595.28, 841.89])));
+        let error = f.get("__pageError").and_then(Value::as_str).unwrap_or_default();
+        // Reading bad settings fails with "printer settings are too short / damaged"; this must not.
+        assert!(!error.is_empty() && !error.contains("printer settings are"), "failed at the printer, not at reading the settings: {error}");
+    }
+
+    /// A turn takes the settings and the paper from the same answer, never one without the other.
+    #[test]
+    fn a_turn_takes_settings_and_paper_together() {
+        let fields = || {
+            let mut f = Map::new();
+            f.insert("printerSettings".into(), json!("old"));
+            f.insert("paper".into(), json!([595.28, 841.89]));
+            f.insert("__pageError".into(), json!("earlier"));
+            f
+        };
+        let mut f = fields();
+        take_turned_page(&mut f, &json!({"printerSettings": "new", "paper": [841.89, 595.28]}));
+        assert_eq!((f.get("printerSettings"), f.get("paper")), (Some(&json!("new")), Some(&json!([841.89, 595.28]))));
+        assert_eq!(f.get("orientation"), Some(&json!("portrait")), "the driver paper is already turned");
+        assert!(f.get("__pageError").is_none());
+        for partial in [json!({"printerSettings": "new"}), json!({"paper": [841.89, 595.28]}), json!({"printerSettings": "new", "paper": [841.89]})] {
+            let mut f = fields();
+            take_turned_page(&mut f, &partial);
+            assert_eq!((f.get("printerSettings"), f.get("paper")), (Some(&json!("old")), Some(&json!([595.28, 841.89]))), "{partial}");
+            assert!(f.get("__pageError").is_some(), "{partial}");
         }
     }
 }

@@ -429,6 +429,7 @@ mod tests {
             size,
             position: StrokePosition::Outside,
             paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+            overprint: false,
         })
     }
 

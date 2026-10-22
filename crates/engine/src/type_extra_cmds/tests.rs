@@ -438,3 +438,24 @@ fn camel_case_and_underscore_postscript_names_resolve_to_their_installed_faces()
         assert!(!style_font_missing(&mut fonts, &style), "{ps} stored as {guess:?} is not missing");
     }
 }
+
+/// #7332: the shell asks for an opened file's missing fonts on the UI thread. A document without
+/// type must answer without the shared text engine, whose first use waits for the installed-font
+/// scan (minutes on some machines). The engine is held locked meanwhile, which used to block it.
+#[test]
+fn a_document_without_type_never_waits_for_the_text_engine() {
+    let s = session(8);
+    let doc = (*s.active().unwrap().doc).clone();
+    assert!(!has_type_layers(&doc));
+    let held = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(missing_font_warnings(&doc));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    drop(held);
+    assert_eq!(got, Ok(Vec::<String>::new()), "a document without type waited for the text engine");
+    let mut s = session(8);
+    text_layer(&mut s, "type");
+    assert!(has_type_layers(&s.active().unwrap().doc));
+}

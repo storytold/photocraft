@@ -6,7 +6,7 @@
 //! boundary for half of all pattern names.
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Fill, Layer, LayerContent, Pattern};
+use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, Pattern};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::*;
 use photocraft_psd::PsdFile;
@@ -48,6 +48,49 @@ fn layer_blocks_are_four_byte_aligned() {
                 fills += usize::from(layer.block(b"PtFl").is_some());
             }
             assert_eq!(fills, names.len(), "{depth:?} {path}: every pattern fill keeps its PtFl block");
+        }
+    }
+}
+
+#[test]
+fn generated_gradient_map_blocks_are_four_byte_aligned() {
+    let cases = [(vec![(0.0, [0.04, 0.1, 0.18]), (1.0, [1.0; 3])], 128), (vec![(0.0, [0.04, 0.1, 0.18]), (0.5, [0.4, 0.2, 0.1]), (1.0, [1.0; 3])], 148)];
+    for (stops, expected_length) in cases {
+        let mut doc = Document::new("gradient", Size::new(16, 16), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("Gradient Map", LayerContent::Adjustment(Adjustment::GradientMap { stops, reverse: false, dither: false })));
+        let bytes = export(&doc, "gradient.psd", &ExportOptions::default()).expect("export").bytes;
+        let file = PsdFile::from_bytes(&bytes).expect("reparse");
+        let block = file.layers().iter().find_map(|layer| layer.block(b"grdm")).expect("Gradient Map block");
+        assert_eq!(block.data.len(), expected_length, "grdm declared length must include padding");
+    }
+}
+
+/// A file saved by an older build carries the 2-mod-4 `grdm` Photoshop refuses; saving it again,
+/// with the stops unchanged or only Reverse toggled, must write an aligned block (#8070).
+#[test]
+fn legacy_unaligned_gradient_map_is_repaired_on_resave() {
+    let stops = vec![(0.0, [0.04, 0.1, 0.18]), (0.5, [0.4, 0.2, 0.1]), (1.0, [1.0; 3])];
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        let mut doc = Document::new("gradient", Size::new(16, 16), mode, SampleType::U8);
+        doc.layers.push(Layer::new("Gradient Map", LayerContent::Adjustment(Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false })));
+        let mut file = PsdFile::from_bytes(&export(&doc, "gradient.psd", &ExportOptions::default()).expect("export").bytes).expect("reparse");
+        let legacy = file.layers_mut().iter_mut().find_map(|layer| layer.block_mut(b"grdm")).expect("Gradient Map block");
+        let unpadded = legacy.data.len() - 2;
+        legacy.data.truncate(unpadded);
+        let legacy = file.to_bytes().expect("legacy file");
+        for reverse in [false, true] {
+            let mut reopened = import("gradient.psd", &legacy).expect("import").document;
+            let Some(LayerContent::Adjustment(Adjustment::GradientMap { reverse: r, .. })) = reopened.layers.iter_mut().map(|l| &mut l.content).last() else {
+                panic!("no Gradient Map layer")
+            };
+            *r = reverse;
+            let expected = reopened.layers.last().map(|l| l.content.clone());
+            let bytes = export(&reopened, "gradient.psd", &ExportOptions::default()).expect("re-save").bytes;
+            let file = PsdFile::from_bytes(&bytes).expect("reparse");
+            let block = file.layers().iter().find_map(|layer| layer.block(b"grdm")).expect("Gradient Map block");
+            assert_eq!(block.data.len() % 4, 0, "{mode:?} reverse {reverse}: re-saved grdm is {} bytes", block.data.len());
+            let again = import("gradient.psd", &bytes).expect("reopen").document;
+            assert_eq!(again.layers.last().map(|l| l.content.clone()), expected, "{mode:?} reverse {reverse}: Gradient Map changed on re-save");
         }
     }
 }

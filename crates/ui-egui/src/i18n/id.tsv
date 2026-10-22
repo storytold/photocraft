@@ -2112,6 +2112,11 @@
 	Apply the pen's tilt and rotation to the tip shape	Terapkan kemiringan dan rotasi pena ke bentuk ujung
 	Mixer Brush	Kuas Pencampur
 	Wet	Basah
+	Current Brush Load	Muatan Kuas Saat Ini
+	Load Brush	Muat Kuas
+	Clean Brush	Bersihkan Kuas
+	Load the brush after each stroke	Muat kuas setelah setiap goresan
+	Clean the brush after each stroke	Bersihkan kuas setelah setiap goresan
 	Mix	Campur
 	Wetness Jitter	Jitter Kebasahan
 	Mix Jitter	Jitter Campuran
@@ -2640,6 +2645,7 @@
 	32 bit (float)	32 bit (titik mengambang)
 	Floating point	Titik mengambang
 	Use Global Light	Gunakan Cahaya Global
+	Overprint	Cetak Tindih
 	Native file drag-and-drop is unavailable	Seret dan lepas berkas native tidak tersedia
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Seret dan lepas berkas native belum didukung di Wayland. Gunakan Berkas › Buka, atau salin gambar di pengelola berkas lalu tempel dengan {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Untuk menjatuhkan berkas, jalankan PhotoCraft di XWayland: `{command}`
@@ -3056,6 +3062,24 @@ cameraData	Lens	Lensa
 	Output To	Keluaran Ke
 	Duplicate Layer	Duplikat Layer
 	Contract	Ciutkan
+
+	Animation Options	Opsi Animasi
+	Entire Document	Seluruh Dokumen
+	Filter Options	Opsi Filter
+	Layer Bounds	Batas Lapisan
+	Layers Panel Options	Opsi Panel Lapisan
+	Lock Layers	Kunci Lapisan
+	New Artboard…	Artboard Baru…
+	New Group…	Grup Baru…
+	Prevent Auto-Nesting	Cegah Pengelompokan Otomatis
+	Show Layers	Tampilkan Lapisan
+	Thumbnail Contents	Isi Gambar Mini
+	Thumbnail Size	Ukuran Gambar Mini
+	Use Default Masks on Fill Layers	Gunakan Masker Default pada Lapisan Isian
+	Expand New Effects	Perluas Efek Baru
+	Add “copy” to Copied Layers and Groups	Tambahkan “salinan” ke Lapisan dan Grup yang Disalin
+	Preview on canvas when reordering layers	Pratinjau pada kanvas saat mengurutkan ulang lapisan
+	Show layer mask badges	Tampilkan Lencana Masker Lapisan
 	Loading fonts…	Memuat font…
 	Response curve	Kurva respons
 	Tool	Alat
@@ -3101,6 +3125,10 @@ curves	Smooth	Haluskan
 	Click to place · Alt-click or drag off-canvas to remove	Klik untuk menempatkan · Alt-klik atau seret ke luar kanvas untuk menghapus
 	No document open	Tidak ada dokumen yang terbuka
 	{n} of {max} sample points	{n} dari {max} titik sampel
+
+# History panel menu (#2966)
+	New Snapshot…	Snapshot Baru…
+	History Options…	Opsi Riwayat…
 # Print dialog (#2697)
 	Emulsion Down	Emulsi di Bawah
 	Functions	Fungsi
@@ -3163,6 +3191,9 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
+	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Pakai profil tertanam ({profile})
 	Convert to the working space ({profile})	Konversi ke working space ({profile})
@@ -3183,6 +3214,9 @@ curves	Smooth	Haluskan
 # View › Guides › right-click a guide
 	Edit Selected Guides	Edit Panduan Terpilih
 	Clear Selected Guides	Hapus Panduan Terpilih
+	Bicubic Automatic	Bicubic otomatis
+	Bicubic Smoother	Bicubic lebih halus
+	Bicubic Sharper	Bicubic lebih tajam
 	Pasting from other apps is unavailable	Menempel dari aplikasi lain tidak tersedia
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft tidak dapat mengakses papan klip sistem dalam sesi ini. Di Wayland, sandbox Flatpak menyembunyikan protokol yang digunakan untuk membaca gambar dari aplikasi lain.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Untuk menempel dari aplikasi lain, jalankan PhotoCraft di bawah XWayland: `{command}`
@@ -3203,6 +3237,18 @@ curves	Smooth	Haluskan
 	{set} (modified)	{set} (diubah)
 	Random	Acak
 	Show file name in title	Tampilkan nama file di judul
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Threshold 50%
+	Pattern Dither	Dither Pola
+	Diffusion Dither	Dither Difusi
+	Halftone Screen	Layar Halftone
+	Custom Pattern	Pola Kustom
+	Frequency:	Frekuensi:
+	Lines/Inch	Garis/Inci
+	Lines/Centimeter	Garis/Sentimeter
+	Ellipse	Elips
+	Cross	Silang
 	Accept and Go to Conflict	Terima dan Buka Konflik
 	Changes undone.	Perubahan dibatalkan.
 	Choose a new shortcut for this command, or leave it without one.	Pilih pintasan baru untuk perintah ini, atau biarkan tanpa pintasan.
@@ -3255,3 +3301,15 @@ curves	Smooth	Haluskan
 	Tween	Tween
 	Last frame	Frame terakhir
 	Frames to add	Frame yang ditambahkan
+
+# DDS Options (#1327)
+	DDS Options	Opsi DDS
+	Compression	Kompresi
+	Generate Mipmaps	Buat mipmap
+
+# Color Table (.act) dialog
+	There is no color table to save.	Tidak ada tabel warna untuk disimpan.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} warna disimpan ke {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Adaptor GPU

@@ -112,6 +112,54 @@ fn hovering_a_font_row_moves_no_other_row() {
     }
 }
 
+/// #7792: the search field stays at the top of the menu while the list scrolls under it. The
+/// menu's own scroll area used to carry the field away with the rows.
+#[test]
+fn the_search_field_stays_put_while_the_list_scrolls() {
+    let mut h = harness();
+    open(&mut h);
+    let search = h.get_by_role(Role::TextInput).rect();
+    let popup = popup_rect(&h).expect("font menu open");
+    let first_row = h.get_by_label("Family 00").rect();
+
+    // The wheel over a row scrolls the list.
+    h.hover_at(h.get_by_label("Family 05").rect().center());
+    for _ in 0..6 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -3.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    let scrolled = h.get_by_label("Family 00").rect();
+    assert!(scrolled.top() < first_row.top() - 1.0, "the list did not scroll: {first_row:?} -> {scrolled:?}");
+
+    // The field did not move with the rows: it is still where it was, inside the menu.
+    let after = h.get_by_role(Role::TextInput).rect();
+    assert_eq!(search, after, "the search field scrolled away with the list");
+    assert!(popup.contains(after.center()), "the search field left the menu");
+}
+
+/// #7792: the arrow keys scroll the list to the selected family without moving the search
+/// field: they scroll the list, not the whole menu.
+#[test]
+fn the_search_field_stays_put_while_the_arrows_scroll_the_list() {
+    let mut h = harness();
+    open(&mut h);
+    let search = h.get_by_role(Role::TextInput).rect();
+    for _ in 0..40 {
+        h.key_press(Key::ArrowDown);
+        h.run();
+    }
+    assert_eq!(h.state().current, "Family 40");
+    let row = h.get_by_label("Family 40").rect();
+    let popup = popup_rect(&h).expect("font menu open");
+    assert!(popup.contains(row.center()), "the selected row is in view: {row:?} in {popup:?}");
+    assert_eq!(search, h.get_by_role(Role::TextInput).rect(), "the search field scrolled away with the list");
+}
+
 #[test]
 fn clearing_the_query_restores_the_menu_height() {
     let mut h = harness();
@@ -545,6 +593,7 @@ fn hovering_a_font_previews_only_the_selected_characters() {
     app.run("type.setStyle", json!({"layer": layer.0, "range": [0, 2], "font": "JetBrains Mono"})).unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: layer.0,
+        document: None,
         caret: 5,
         anchor: 3,
         session: "font-preview-test".into(),

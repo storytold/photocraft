@@ -105,7 +105,7 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
     let mut out: Vec<String> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| OPENABLE.contains(&x.to_ascii_lowercase().as_str())))
+        .filter(|p| p.is_file() && openable_name(&p.to_string_lossy()))
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     out.sort();
@@ -116,12 +116,20 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
     Err(EngineError::Other(format!("cannot list {dir}: no file system on the web")))
 }
 
+/// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, or GIMP's
+/// gzipped `.xcf.gz`, whose last extension alone says nothing.
+#[cfg(not(target_arch = "wasm32"))]
+fn openable_name(path: &str) -> bool {
+    let lower = file_name(path).to_ascii_lowercase();
+    lower.ends_with(".xcf.gz") || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext))
+}
+
 /// Extensions the batch commands pick up from a folder.
 #[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
-    "pdn", "ora", "kra", "krz", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm",
-    "ppm", "pgm", "fits", "fit", "fts", "dpx", "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto",
-    "afpub",
+    "pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi",
+    "ico", "pnm", "ppm", "pgm", "fits", "fit", "fts", "dpx", "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign",
+    "afphoto", "afpub",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -288,8 +296,8 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     Ok(r.document)
 }
 
-/// What a headless save writes beyond the format: JPEG quality, TIFF layers, Targa bits, PSD
-/// previews and the PSD merged image.
+/// What a headless save writes beyond the format: JPEG quality, TIFF layers, Targa bits, DPX
+/// bits, DDS compression and mipmaps, PSD previews and the PSD merged image.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SaveOpts {
     /// Photoshop's 0–12 JPEG scale.
@@ -301,6 +309,9 @@ pub(crate) struct SaveOpts {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     /// DPX: 8, 10, 12 or 16 bits per sample (`"dpxBits"`); unset, 8 for an 8-bit document, else 16.
     pub dpx_bits: Option<photocraft_io::DpxBits>,
+    /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
+    /// `"ddsMipmaps"`); unset, uncompressed without mipmaps.
+    pub dds: photocraft_io::DdsOptions,
     /// PSD/PSB: embed the thumbnail resource (Preferences › File Handling › Image Previews).
     pub image_previews: bool,
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
@@ -310,7 +321,15 @@ pub(crate) struct SaveOpts {
 
 impl Default for SaveOpts {
     fn default() -> Self {
-        SaveOpts { quality: None, tiff_layers: false, tga_bits: None, dpx_bits: None, image_previews: true, psd_maximize_compatibility: true }
+        SaveOpts {
+            quality: None,
+            tiff_layers: false,
+            tga_bits: None,
+            dpx_bits: None,
+            dds: photocraft_io::DdsOptions::default(),
+            image_previews: true,
+            psd_maximize_compatibility: true,
+        }
     }
 }
 
@@ -326,6 +345,7 @@ impl SaveOpts {
             tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
             tga_bits: tga_bits_param(p, cmd)?,
             dpx_bits: dpx_bits_param(p, cmd)?,
+            dds: dds_param(p, cmd)?.unwrap_or_default(),
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
         })
@@ -370,6 +390,30 @@ pub fn dpx_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DpxB
     }
 }
 
+/// The DDS options in `p`: `"ddsCompression": "none" | "bc1" | "bc2" | "bc3"` (or the DXT names)
+/// and `"ddsMipmaps": bool`. `None` when neither is given (Save As then asks); either alone
+/// leaves the other at its default (uncompressed, no mipmaps). Anything else is a bad parameter
+/// of command `cmd`.
+pub fn dds_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DdsOptions>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let compression = match p.get("ddsCompression") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_str()
+                .and_then(photocraft_io::DdsCompression::from_name)
+                .ok_or_else(|| bad(format!("`ddsCompression` must be \"none\", \"bc1\", \"bc2\" or \"bc3\", got {v}")))?,
+        ),
+    };
+    let mipmaps = match p.get("ddsMipmaps") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(format!("`ddsMipmaps` must be true or false, got {v}")))?),
+    };
+    if compression.is_none() && mipmaps.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(photocraft_io::DdsOptions { compression: compression.unwrap_or_default(), mipmaps: mipmaps.unwrap_or(false) }))
+}
+
 /// Encodes `doc` for `path`'s extension.
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
     crate::allocation::checkpoint("saving document")?;
@@ -387,6 +431,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     // lossy or lossless as it was), as Photoshop's Save does.
     photocraft_io::apply_file_encoding(doc, &mut opts.encode);
     opts.encode.dpx_bits = save.dpx_bits;
+    opts.encode.dds = save.dds;
     if let Some(q) = save.quality {
         let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
         opts.encode.jpeg_quality = q;
@@ -765,7 +810,7 @@ fn exposure_text(t: f64) -> Option<String> {
         return None;
     }
     let r = 1.0 / t;
-    if t < 1.0 && (r - r.round()).abs() <= r * 0.01 {
+    if t < 1.0 && r.round() > 1.0 && (r - r.round()).abs() <= r * 0.01 {
         return Some(format!("1/{} s", r.round()));
     }
     Some(format!("{} s", short_num(t, if t < 1.0 { 2 } else { 1 })))
@@ -926,8 +971,8 @@ fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
 fn fit_image(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (w, h) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let bw = f64_param(p, "width").unwrap_or(w).max(1.0);
-    let bh = f64_param(p, "height").unwrap_or(h).max(1.0);
+    let bw = size_param(p, "width").unwrap_or(w);
+    let bh = size_param(p, "height").unwrap_or(h);
     let k = (bw / w).min(bh / h);
     if (k > 1.0 && p.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false)) || ((w * k).round() == w && (h * k).round() == h) {
         return Ok(json!({"width": w, "height": h, "changed": false}));
@@ -962,11 +1007,14 @@ fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unsupported target mode \"{other}\" (rgb, grayscale, cmyk, lab)") }),
     };
     let cur = mode_name(s.active().ok_or(EngineError::NoDocument)?.doc.mode);
+    // One spelling per source mode, for the array and the single-string forms alike (#7042).
+    let norm = |v: &str| {
+        let v = v.to_ascii_lowercase();
+        if v == "gray" { "grayscale".to_string() } else { v }
+    };
     let from: Vec<String> = match p.get("from") {
-        Some(Value::Array(a)) => {
-            a.iter().filter_map(Value::as_str).map(|v| v.to_ascii_lowercase().replace("gray", "grayscale").replace("grayscalescale", "grayscale")).collect()
-        }
-        Some(Value::String(v)) if v != "any" => vec![v.to_ascii_lowercase()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(norm).collect(),
+        Some(Value::String(v)) => vec![norm(v)],
         _ => vec!["any".into()],
     };
     if cur == to || !(from.iter().any(|f| f == "any" || f == cur)) {
@@ -1101,11 +1149,35 @@ pub(crate) fn process_files(inputs: &[String], output: &str, format: &str, save:
 /// under `output` (created as needed), so `a/x.png` and `b/x.png` don't collide.
 pub(crate) fn process_tree(inputs: &[BatchInput], output: &str, format: &str, save: SaveOpts, suffix: &str, f: &dyn Fn(&mut Session) -> Result<()>) -> Value {
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
-        let ext =
-            if format == "same" { path.rsplit('.').next().unwrap_or("png").to_ascii_lowercase() } else { format.trim_start_matches('.').to_ascii_lowercase() };
+        let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
     process_outputs(outputs, save, f)
+}
+
+/// The extension a batch output takes with Format "Same": the input's own, except for formats
+/// PhotoCraft opens but can't write, camera raws above all (#5799: a folder of ARWs failed on
+/// every file). Those are saved as PSD, the format Photoshop's Save As offers for a raw. An input
+/// whose file name has no extension (a dot in a folder name doesn't count) is saved as PNG.
+fn same_format(path: &str) -> String {
+    const IMPORT_ONLY: &[&str] = &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm"];
+    let ext = extension(path).unwrap_or_else(|| "png".into());
+    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) { "psd".into() } else { ext }
+}
+
+#[cfg(test)]
+#[test]
+fn same_format_takes_the_file_names_extension() {
+    assert_eq!(same_format("/in/a.PNG"), "png");
+    assert_eq!(same_format("/in/IMG_0001.ARW"), "psd");
+    assert_eq!(same_format("/in/a.kra"), "psd");
+    assert_eq!(same_format("/in/IMG_0001.HEIC"), "psd");
+    assert_eq!(same_format("/in/logo.svg"), "psd");
+    assert_eq!(same_format("/in/scan.cin"), "psd");
+    // No extension in the file name: PNG, not the path after a dot in a folder name.
+    assert_eq!(same_format("/in/v1.2/scan"), "png");
+    assert_eq!(same_format("C:\\in.d\\scan"), "png");
+    assert_eq!(same_format("/in/.hidden"), "png");
 }
 
 fn process_outputs<'a>(outputs: impl IntoIterator<Item = (&'a str, String)>, save: SaveOpts, f: &dyn Fn(&mut Session) -> Result<()>) -> Value {
@@ -1651,7 +1723,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
-            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)}"##,
+            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain)}"##,
             native_doc,
             save_a_copy
         ),
@@ -1714,7 +1786,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Batch…",
             &["File", "Automate"],
             None,
-            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"naming":string? (blank keeps source names; {name}, {serial} padded to 3 digits, {date} as YYYY-MM-DD UTC; extension added automatically),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"naming":string? (blank keeps source names; {name}, {serial} padded to 3 digits, {date} as YYYY-MM-DD UTC; extension added automatically),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             batch
         ),
@@ -1723,7 +1795,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Processor…",
             &["File", "Scripts"],
             None,
-            r##"{"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             image_processor
         ),
@@ -1751,7 +1823,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layers to Files…",
             &["File", "Export"],
             None,
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"quality":0..12?,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"quality":0..12?,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain)} → {files}"##,
             native_doc,
             layers_to_files
         ),

@@ -2112,6 +2112,11 @@
 	Apply the pen's tilt and rotation to the tip shape	Aplicar a inclinação e a rotação da caneta à forma da ponta
 	Mixer Brush	Pincel misturador
 	Wet	Molhado
+	Current Brush Load	Carga atual do pincel
+	Load Brush	Carregar pincel
+	Clean Brush	Limpar pincel
+	Load the brush after each stroke	Carregar o pincel após cada traço
+	Clean the brush after each stroke	Limpar o pincel após cada traço
 	Mix	Mistura
 	Wetness Jitter	Variação da umidade
 	Mix Jitter	Variação da mistura
@@ -2643,6 +2648,7 @@
 	32 bit (float)	32 bits (flutuante)
 	Floating point	Ponto flutuante
 	Use Global Light	Usar luz global
+	Overprint	Superimposição
 	Native file drag-and-drop is unavailable	Arrastar e soltar arquivos não está disponível
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	O recurso nativo de arrastar e soltar arquivos ainda não funciona no Wayland. Use Arquivo › Abrir ou copie a imagem no gerenciador de arquivos e cole-a com {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Para soltar arquivos, execute o PhotoCraft no XWayland: `{command}`
@@ -3073,6 +3079,23 @@ cameraData	Lens	Lente
 	New Layer	Nova camada
 	Duplicate Layer	Duplicar camada
 	Contract	Contrair
+
+	Animation Options	Opções de animação
+	Entire Document	Documento inteiro
+	Filter Options	Opções de filtro
+	Layer Bounds	Limites da camada
+	Layers Panel Options	Opções do painel Camadas
+	New Artboard…	Nova prancheta…
+	New Group…	Novo grupo…
+	Prevent Auto-Nesting	Impedir aninhamento automático
+	Show Layers	Mostrar camadas
+	Thumbnail Contents	Conteúdo das miniaturas
+	Thumbnail Size	Tamanho das miniaturas
+	Use Default Masks on Fill Layers	Usar máscaras padrão nas camadas de preenchimento
+	Expand New Effects	Expandir novos efeitos
+	Add “copy” to Copied Layers and Groups	Adicionar “cópia” às camadas e grupos copiados
+	Preview on canvas when reordering layers	Pré-visualizar na tela ao reordenar camadas
+	Show layer mask badges	Mostrar emblemas de máscaras de camada
 	Loading fonts…	Carregando fontes…
 	Response curve	Curva de resposta
 	Tool	Ferramenta
@@ -3884,6 +3907,10 @@ layerLabel	No Color	Sem cor
 	Set Colors	Definir cores
 	Switch Foreground and Background Colors	Alternar cores de primeiro plano e plano de fundo
 	Target	Alvo
+
+# History panel menu (#2966)
+	New Snapshot…	Novo instantâneo…
+	History Options…	Opções de histórico…
 # Print dialog (#2697)
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções
@@ -3960,6 +3987,9 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Pinta a partir do estado de origem do painel Histórico
+	Sets the source for the history brush	Define a origem do pincel do histórico
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usar o perfil incorporado ({profile})
 	Convert to the working space ({profile})	Converter para o espaço de trabalho ({profile})
@@ -3980,6 +4010,9 @@ layerLabel	No Color	Sem cor
 # View › Guides › right-click a guide
 	Edit Selected Guides	Editar guias selecionadas
 	Clear Selected Guides	Limpar guias selecionadas
+	Bicubic Automatic	Bicúbica automática
+	Bicubic Smoother	Bicúbica mais suave
+	Bicubic Sharper	Bicúbica mais nítida
 	Pasting from other apps is unavailable	Colar de outros aplicativos não está disponível
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	O PhotoCraft não consegue acessar a área de transferência do sistema nesta sessão. No Wayland, a sandbox do Flatpak oculta o protocolo pelo qual as imagens de outros aplicativos são lidas.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Para colar de outros aplicativos, execute o PhotoCraft no XWayland: `{command}`
@@ -3999,6 +4032,17 @@ layerLabel	No Color	Sem cor
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
 	Show file name in title	Exibir nome do arquivo no título
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Limiar de 50%
+	Pattern Dither	Pontilhamento de padrão
+	Diffusion Dither	Pontilhamento de difusão
+	Halftone Screen	Retícula de meio-tom
+	Custom Pattern	Padrão personalizado
+	Frequency:	Frequência:
+	Lines/Inch	Linhas/polegada
+	Lines/Centimeter	Linhas/centímetro
+	Ellipse	Elipse
 	Accept and Go to Conflict	Aceitar e ir para o conflito
 	Changes undone.	Alterações desfeitas.
 	Choose a new shortcut for this command, or leave it without one.	Escolha um novo atalho para este comando ou deixe-o sem atalho.
@@ -4050,3 +4094,14 @@ layerLabel	No Color	Sem cor
 	Tween	Interpolar
 	Last frame	Último quadro
 	Frames to add	Quadros a adicionar
+
+# DDS Options (#1327)
+	DDS Options	Opções de DDS
+	Generate Mipmaps	Gerar mipmaps
+
+# Color Table (.act) dialog
+	There is no color table to save.	Não há tabela de cores para salvar.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} cor salva em {file}|{n} cores salvas em {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Adaptador de GPU

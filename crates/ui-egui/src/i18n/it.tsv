@@ -327,6 +327,7 @@
 	Blending Options…	Opzioni di fusione…
 	Bevel & Emboss…	Smusso e rilievo…
 	Use Global Light	Usa luce globale
+	Overprint	Sovrastampa
 	Inner Shadow…	Ombra interna…
 	Inner Glow…	Bagliore interno…
 	Satin…	Raso…
@@ -2153,6 +2154,11 @@
 	Mixer Brush Tool	Strumento Pennello miscelatore
 	Color Replacement Tool	Strumento Sostituzione colore
 	Wet	Bagnato
+	Current Brush Load	Carico attuale del pennello
+	Load Brush	Carica pennello
+	Clean Brush	Pulisci pennello
+	Load the brush after each stroke	Carica il pennello dopo ogni tratto
+	Clean the brush after each stroke	Pulisci il pennello dopo ogni tratto
 	Mix	Miscela
 	Wetness Jitter	Variazione bagnato
 	Mix Jitter	Variazione miscela
@@ -2721,6 +2727,23 @@ cameraData	Lens	Obiettivo
 	Mirror	Rifletti
 	Output Settings	Impostazioni di output
 	Output To	Output in
+
+	Animation Options	Opzioni animazione
+	Entire Document	Documento intero
+	Filter Options	Opzioni filtro
+	Layer Bounds	Limiti livello
+	Layers Panel Options	Opzioni pannello Livelli
+	New Artboard…	Nuova tavola da disegno…
+	New Group…	Nuovo gruppo…
+	Prevent Auto-Nesting	Impedisci annidamento automatico
+	Show Layers	Mostra livelli
+	Thumbnail Contents	Contenuto miniature
+	Thumbnail Size	Dimensione miniature
+	Use Default Masks on Fill Layers	Usa maschere predefinite sui livelli di riempimento
+	Expand New Effects	Espandi nuovi effetti
+	Add “copy” to Copied Layers and Groups	Aggiungi «copia» ai livelli e ai gruppi duplicati
+	Preview on canvas when reordering layers	Anteprima sulla tela durante il riordino dei livelli
+	Show layer mask badges	Mostra distintivi delle maschere di livello
 	Loading fonts…	Caricamento font…
 	Response curve	Curva di risposta
 	Tool	Strumento
@@ -2768,6 +2791,10 @@ curves	Smooth	Leviga
 	Click to place · Alt-click or drag off-canvas to remove	Fai clic per posizionare · Alt-clic o trascina fuori dal quadro per rimuovere
 	No document open	Nessun documento aperto
 	{n} of {max} sample points	{n} di {max} punti di campionamento
+
+# History panel menu (#2966)
+	New Snapshot…	Nuova istantanea…
+	History Options…	Opzioni cronologia…
 # Print dialog (#2697)
 	Emulsion Down	Emulsione sotto
 	Functions	Funzioni
@@ -4134,6 +4161,9 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Inviato a {printer}
 	set in Print Settings…	impostato nelle impostazioni di stampa…
 	ICO is limited to 256 × 256 pixels	ICO è limitato a 256 × 256 pixel
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Dipinge dallo stato di origine del pannello Cronologia
+	Sets the source for the history brush	Imposta l'origine del pennello storia
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usa profilo incorporato ({profile})
 	Convert to the working space ({profile})	Converti in spazio di lavoro ({profile})
@@ -4311,6 +4341,9 @@ shape	Appearance	Aspetto
 # View › Guides › right-click a guide
 	Edit Selected Guides	Modifica guide selezionate
 	Clear Selected Guides	Cancella guide selezionate
+	Bicubic Automatic	Bicubica automatica
+	Bicubic Smoother	Bicubica più morbida
+	Bicubic Sharper	Bicubica più nitida
 	Pasting from other apps is unavailable	Incollare da altre app non è disponibile
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft non può accedere agli appunti di sistema in questa sessione. Su Wayland, la sandbox di Flatpak nasconde il protocollo con cui vengono lette le immagini delle altre app.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Per incollare da altre app, avvia PhotoCraft in XWayland: `{command}`
@@ -4330,6 +4363,17 @@ shape	Appearance	Aspetto
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
 	Show file name in title	Mostra nome file nel titolo
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Soglia 50%
+	Pattern Dither	Dithering pattern
+	Diffusion Dither	Dithering diffusione
+	Halftone Screen	Retino mezzetinte
+	Custom Pattern	Pattern personalizzato
+	Frequency:	Frequenza:
+	Lines/Inch	Linee/Pollice
+	Lines/Centimeter	Linee/Centimetro
+	Ellipse	Ellisse
 	Accept and Go to Conflict	Accetta e vai al conflitto
 	Changes undone.	Modifiche annullate.
 	Choose a new shortcut for this command, or leave it without one.	Scegli una nuova scorciatoia per questo comando o lascialo senza.
@@ -4377,3 +4421,14 @@ shape	Appearance	Aspetto
 	Tween	Interpola
 	Last frame	Ultimo fotogramma
 	Frames to add	Fotogrammi da aggiungere
+
+# DDS Options (#1327)
+	DDS Options	Opzioni DDS
+	Generate Mipmaps	Genera mipmap
+
+# Color Table (.act) dialog
+	There is no color table to save.	Non c'è alcuna tabella colori da salvare.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Salvato {n} colore in {file}|Salvati {n} colori in {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Adattatore GPU

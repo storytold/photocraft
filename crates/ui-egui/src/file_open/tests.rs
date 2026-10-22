@@ -898,6 +898,50 @@ fn save_a_copy_is_recorded_and_replayed_as_a_copy() {
     assert!(st.is_dirty(), "and its unsaved changes");
 }
 
+/// #7207: File › Export › Export As is recorded in an action with its destination and settings,
+/// as Save a Copy is, and played back without the dialog: on another document it exports that
+/// document, with the recorded format, quality and scale.
+#[test]
+fn export_as_is_recorded_and_replayed() {
+    type Exported = Rc<RefCell<Vec<(String, u32, u32, Option<u8>)>>>;
+    let exported: Exported = Rc::default();
+    let e = exported.clone();
+    let services = Services {
+        export: Some(Box::new(move |doc: &Document, path: &str, s: &crate::ExportSettings| {
+            e.borrow_mut().push((path.to_string(), doc.size.width, doc.size.height, s.jpeg_quality));
+            Ok((b"out".to_vec(), Vec::new()))
+        })),
+        file_dialog: Some(file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("/pics/out.jpg".into()))]).0),
+        write: Some(Box::new(|_: &str, _: &[u8]| Ok(()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 40, "height": 20})).unwrap();
+    app.run("actions.record", json!({})).unwrap();
+    let id = menus::invoke(&mut app, &ctx, "file.export.exportAs", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+    fields.insert("format".into(), json!("jpg"));
+    fields.insert("quality".into(), json!(70));
+    fields.insert("scale".into(), json!(50));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    answer(&mut app);
+    app.run("actions.stop", json!({})).unwrap();
+    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(70))]);
+    let (step_id, step) = app.session.actions.list[0].steps.last().cloned().unwrap();
+    assert_eq!(step_id, "file.export.exportAs");
+    assert_eq!((&step["path"], &step["format"], &step["quality"], &step["scale"]), (&json!("/pics/out.jpg"), &json!("jpg"), &json!(70), &json!(50)));
+    assert!(step.as_object().unwrap().keys().all(|k| !k.starts_with("__")), "only the destination and the dialog's settings: {step}");
+    assert_eq!(crate::actions::label_of("file.export.exportAs"), "Export As");
+
+    app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+    exported.borrow_mut().clear();
+    let played = app.run("actions.play", json!({"action": 0})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 50, 30, Some(70))], "the played document, scaled as recorded");
+    assert!(app.ui.dialogs.is_empty(), "no dialog on playback");
+}
+
 /// #4400: a new document saved under a name is listed in Open Recent (and on the Home screen),
 /// as opening it is; a Save a Copy isn't, since the document doesn't live there.
 #[test]

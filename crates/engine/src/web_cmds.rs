@@ -1032,54 +1032,42 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         }
         name
     };
-    // Stacking order: later stored slices are on top (auto slices never overlap anything).
-    let z = |r: &ResolvedSlice| r.id.and_then(|id| doc.slices.list.iter().position(|sl| sl.id == id));
+    // Slices never overlap here: one covered by later slices comes as its visible pieces (see
+    // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
+    // text goes into its first piece only.
+    let mut texted = std::collections::HashSet::new();
     for r in &chosen {
-        let rect = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
-        if rect.is_empty() {
+        let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+        if piece.is_empty() {
             continue;
         }
-        // In the HTML table a slice shows only where no slice above covers it; that visible part
-        // is cut into rectangles, each its own cell (and image), as Photoshop's subslices.
-        let pieces = if html {
-            let above: Vec<Rect> = chosen.iter().filter(|o| z(o) > z(r)).map(|o| scale_rect(o.rect, sx, sy).intersect(&wdoc.bounds())).collect();
-            slices::auto_slices(rect, &above)
-        } else {
-            vec![rect]
-        };
-        let split = pieces.len() > 1;
         let stored = r.id.and_then(|id| doc.slices.get(id));
-        for (k, piece) in pieces.into_iter().enumerate() {
-            if r.kind == SliceKind::NoImage {
-                let text = if k > 0 {
-                    String::new()
-                } else {
-                    stored.map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) }).unwrap_or_default()
-                };
-                let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
-                cells.push((piece, bg, text));
-                continue;
-            }
-            let o =
-                if animates(&wdoc, &st) { animated_gif(&wdoc, piece, &st)? } else { optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)? };
-            let stem = if split { format!("{}_{:02}", slice_file(&r.name), k + 1) } else { slice_file(&r.name) };
-            let name = unique(&stem, o.ext);
-            let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
-            let out = join(&dir, &rel);
-            write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
-            total += o.bytes.len();
-            files.push(out);
-            let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
-            let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
-            let body = match stored.filter(|s| safe_slice_url(&s.url)) {
-                Some(s) => {
-                    let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
-                    format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
-                }
-                None => img,
-            };
-            cells.push((piece, String::new(), body));
+        if r.kind == SliceKind::NoImage {
+            let text = stored
+                .filter(|s| texted.insert(s.id))
+                .map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) })
+                .unwrap_or_default();
+            let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
+            cells.push((piece, bg, text));
+            continue;
         }
+        let o = if animates(&wdoc, &st) { animated_gif(&wdoc, piece, &st)? } else { optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)? };
+        let name = unique(&slice_file(&r.name), o.ext);
+        let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
+        let out = join(&dir, &rel);
+        write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
+        total += o.bytes.len();
+        files.push(out);
+        let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
+        let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
+        let body = match stored.filter(|s| safe_slice_url(&s.url)) {
+            Some(s) => {
+                let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
+                format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
+            }
+            None => img,
+        };
+        cells.push((piece, String::new(), body));
     }
     let mut html_path = None;
     if html {

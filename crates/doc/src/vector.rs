@@ -192,7 +192,8 @@ pub struct VectorMask {
     pub linked: bool,
     /// Density `0..=1` (Properties panel), like [`crate::LayerMask::density`].
     pub density: f32,
-    /// Feather radius in px (stored; rendered unfeathered for now).
+    /// Feather radius in px (Properties panel); the compositor blurs the rasterised path by it
+    /// (`photocraft_compose::masks::feather_sigma`), as it does a pixel mask's feather.
     pub feather: f32,
 }
 
@@ -316,7 +317,7 @@ pub enum LiveShape {
 }
 
 /// A shape layer: a filled and/or stroked path.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShapeLayer {
     pub path: Path,
     /// `None` = no fill (Photoshop's fill "none").
@@ -328,6 +329,25 @@ pub struct ShapeLayer {
     /// Data of the PSD vector mask block (`vsms`, else `vmsk`). On export it replaces that entry
     /// in [`crate::Layer::psd_blocks`] while it still decodes to `path`.
     pub psd_raw: Option<Arc<Vec<u8>>>,
+    /// Density `0..=1` of the path as the fill's mask (Properties › Masks, like
+    /// [`VectorMask::density`]): below 1 the fill shows beyond the path at `1 - density`.
+    pub density: f32,
+    /// Feather radius in px of the path as the fill's mask (like [`VectorMask::feather`]).
+    pub feather: f32,
+}
+
+impl Default for ShapeLayer {
+    fn default() -> Self {
+        ShapeLayer { path: Path::default(), fill: None, stroke: None, live: None, cache: None, psd_raw: None, density: 1.0, feather: 0.0 }
+    }
+}
+
+impl ShapeLayer {
+    /// Whether the fill's edge is softened by a density below 100 % or a feather (non-finite
+    /// values count as the defaults).
+    pub fn has_soft_mask(&self) -> bool {
+        (self.density.is_finite() && self.density < 1.0) || (self.feather.is_finite() && self.feather > 0.0)
+    }
 }
 
 #[cfg(test)]

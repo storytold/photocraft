@@ -81,6 +81,8 @@ struct Out {
     act: Option<(&'static str, Value)>,
     close: bool,
     toggle_play: bool,
+    /// Stop, a step, a scrub or Delete Timeline: playback stops (and its toggle is ignored).
+    stop_play: bool,
     toggle_float: bool,
     clicked: Option<(usize, crate::frame_strip_ui::Click)>,
     onion: Option<crate::onion_skin::OnionSkin>,
@@ -162,7 +164,14 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
                 if crate::icons::button(ui, play_icon, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
                     out.toggle_play = true;
                 }
+                if crate::icons::button(ui, "square", 22.0, false, tl!("Stop")).clicked() {
+                    if !playing {
+                        out.act = Some(("timeline.setFrame", json!({ "frame": 0 })));
+                    }
+                    out.stop_play = true;
+                }
                 if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous frame")).clicked() {
+                    out.stop_play = true;
                     out.act = Some(("timeline.previousFrame", json!({})));
                 }
                 ui.label(
@@ -174,12 +183,14 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
                     .monospace(),
                 );
                 if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next frame")).clicked() {
+                    out.stop_play = true;
                     out.act = Some(("timeline.nextFrame", json!({})));
                 }
                 ui.separator();
                 ui.label(RichText::new(format!("{:.2}s", tl.time())).color(t.text_dim).monospace());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::icons::button(ui, "trash", 20.0, false, tl!("Delete Timeline")).clicked() {
+                        out.stop_play = true;
                         out.act = Some(("timeline.delete", json!({})));
                     }
                     ui.label(RichText::new(format!("{:.0} fps", tl.fps)).color(t.text_dim));
@@ -191,6 +202,7 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
                 let mut frame = tl.current as f64;
                 let resp = ui.add(egui::Slider::new(&mut frame, 0.0..=(tl.duration - 1) as f64).integer().show_value(false).text("playhead"));
                 if resp.changed() {
+                    out.stop_play = true;
                     out.act = Some(("timeline.setFrame", json!({ "frame": frame as u64 })));
                 }
             }
@@ -208,7 +220,9 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
     if out.toggle_float {
         app.ui.timeline.floating = !app.ui.timeline.floating;
     }
-    if out.toggle_play {
+    if out.stop_play {
+        app.ui.timeline.playing = false;
+    } else if out.toggle_play {
         toggle_play(app, ctx);
     }
     if let Some(show) = out.show_tween {
@@ -516,5 +530,71 @@ fn playback(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             app.ui.timeline.playing = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn stop_step_and_scrub_pause_playback_and_second_stop_rewinds() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
+        app.run("timeline.create", json!({"duration": 10, "fps": 30.0})).unwrap();
+        app.ui.timeline.open = true;
+        // `windows` draws the panel only while it floats.
+        app.ui.timeline.floating = true;
+        app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1000.0, 700.0));
+
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(0.001).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+        h.run_steps(2);
+
+        // Start playback via Play button.
+        h.get_by_label("Play").click();
+        h.run_steps(2);
+        assert!(h.state().ui.timeline.playing);
+
+        // Move to frame 5 while playing; first Stop pauses at the current frame without rewinding.
+        h.state_mut().run("timeline.setFrame", json!({"frame": 5})).unwrap();
+        h.get_by_label("Stop").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing, "first Stop pauses playback");
+        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 5);
+
+        // Second Stop while already paused rewinds to frame 0.
+        h.get_by_label("Stop").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing);
+        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 0);
+
+        // Next frame and Previous frame pause playback.
+        h.state_mut().ui.timeline.playing = true;
+        h.run_steps(1);
+        h.get_by_label("Next frame").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing, "Next frame pauses playback");
+        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 1);
+
+        h.state_mut().ui.timeline.playing = true;
+        h.run_steps(1);
+        h.get_by_label("Previous frame").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing, "Previous frame pauses playback");
+        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 0);
+
+        // Scrubbing the playhead slider pauses playback and updates the current frame.
+        h.state_mut().ui.timeline.playing = true;
+        h.run_steps(1);
+        let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+        let target = egui::pos2(slider.right() - 8.0, slider.center().y);
+        h.event(egui::Event::PointerMoved(target));
+        h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing, "scrubbing pauses playback");
+        assert!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current > 0);
     }
 }

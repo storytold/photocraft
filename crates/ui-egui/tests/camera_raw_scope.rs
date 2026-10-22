@@ -39,7 +39,23 @@ fn fixture_render(theme: ThemeKind, gpu: bool) -> Harness<'static, PhotocraftApp
     h.state_mut().set_theme(&ctx, theme);
     h.run_steps(3);
     assert_eq!(h.state().ui.theme, theme);
+    settle(&mut h);
     h
+}
+/// Waits for the proxy develop that the dialog's own controls start on a worker (#5964), so its
+/// frame can't land, and bump `previewRevision`, after a test has recorded the revision.
+fn settle(h: &mut Harness<'_, PhotocraftApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while inspect(h)["previewPending"] == true {
+        assert!(std::time::Instant::now() < deadline, "the Camera Raw preview worker never finished");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        h.run_steps(1);
+    }
+    // A failed worker develop also clears `previewPending`, without a new frame.
+    let app = control::inspect(h.state(), &h.ctx);
+    assert_ne!(app["statusError"], true, "the Camera Raw preview worker failed: {}", app["status"]);
+    // The frame that picked up the result also rebuilt the scope; let it go quiet.
+    h.run_steps(2);
 }
 fn press(h: &mut Harness<'_, PhotocraftApp>, p: Pos2, pressed: bool, modifiers: Modifiers) {
     h.event(Event::ModifiersChanged(modifiers));
@@ -218,6 +234,8 @@ fn real_drag_hover_warnings_sampler_motion_and_floating_scope_across_themes() {
         let ctx = h.ctx.clone();
         menu(h.state_mut(), &ctx, json!({"ui":{"scope":{"samplerTool":true,"vectorscope":true,"shadows":true,"highlights":true}}})).unwrap();
         h.run_steps(3);
+        // The tone drags above developed on the worker; the last frame may still be on its way.
+        settle(&mut h);
         let revision = inspect(&h)["previewRevision"].clone();
         let scope_revision = inspect(&h)["scopeRevision"].clone();
         let preview = rect(&h, "previewRect");

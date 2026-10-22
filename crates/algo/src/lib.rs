@@ -411,6 +411,14 @@ pub enum FilterParams {
     },
 
     // ---- Render ----
+    /// Clouds (or Difference Clouds, which subtracts them from the pixels) between two straight
+    /// sRGB RGBA colours; the cloud size follows the bounds.
+    Clouds {
+        seed: u32,
+        difference: bool,
+        foreground: [f32; 4],
+        background: [f32; 4],
+    },
     /// Variance 1–64, strength 1–64; colours straight sRGB RGBA.
     Fibers {
         variance: f32,
@@ -606,7 +614,13 @@ impl FilterParams {
     /// the reference bounds even where the layer is transparent, as Photoshop's does on an
     /// empty layer, while still reading no neighbourhood.
     pub fn renders_from_nothing(&self) -> bool {
-        matches!(self, FilterParams::Fibers { .. })
+        matches!(self, FilterParams::Fibers { .. } | FilterParams::Clouds { difference: false, .. })
+    }
+
+    /// Whether the filter places and sizes its pattern by the canvas even with a selection
+    /// (Clouds, Fibers): its bounds are then the canvas, and the selection only masks the result.
+    pub fn sizes_by_canvas(&self) -> bool {
+        matches!(self, FilterParams::Clouds { .. } | FilterParams::Fibers { .. })
     }
 
     /// Human-readable name.
@@ -653,6 +667,8 @@ impl FilterParams {
             FilterParams::Displace { .. } => "Displace",
             FilterParams::Shear { .. } => "Shear",
             FilterParams::ZigZag { .. } => "ZigZag",
+            FilterParams::Clouds { difference: false, .. } => "Clouds",
+            FilterParams::Clouds { difference: true, .. } => "Difference Clouds",
             FilterParams::Fibers { .. } => "Fibers",
             FilterParams::LensFlare { .. } => "Lens Flare",
             FilterParams::LightingEffects { .. } => "Lighting Effects",
@@ -697,7 +713,7 @@ fn halo_ext(p: &FilterParams) -> Halo {
         FilterParams::Wind { method, .. } => r(stylize2::wind_reach(*method)),
         FilterParams::Displace { .. } | FilterParams::Shear { .. } | FilterParams::ZigZag { .. } | FilterParams::SpinBlur { .. } => Halo::Bounds,
         // Generators and per-pixel renders only need the bounds geometry (always in the context).
-        FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } => Halo::Radius(0),
+        FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } | FilterParams::Clouds { .. } => Halo::Radius(0),
         FilterParams::LightingEffects { .. } => r(1.0),
         FilterParams::Relight { intensity, .. } if *intensity == 0.0 => Halo::Radius(0),
         FilterParams::Relight { .. } => Halo::Radius(relight::halo_radius_max()),
@@ -817,6 +833,7 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::Shear { points, undefined } => distort2::shear(src, out, ctx, points, *undefined),
         FilterParams::ZigZag { amount, ridges, style } => distort2::zigzag(src, out, ctx, *amount, *ridges, *style),
+        FilterParams::Clouds { seed, difference, foreground, background } => render::clouds(src, out, ctx, *seed, *difference, (*foreground, *background)),
         FilterParams::Fibers { variance, strength, seed, foreground, background } => {
             render::fibers(src, out, ctx, *variance, *strength, *seed, (*foreground, *background))
         }

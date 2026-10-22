@@ -114,6 +114,14 @@ fn corpus_round_trips_through_layered_tiff() {
             let expected: Document = {
                 let mut d = oracle.clone();
                 d.channels.clear();
+                // A flat Duotone is written as its inks rendered in RGB (as for any flat format).
+                if flat
+                    && d.mode == photocraft_color::ColorMode::Duotone
+                    && let Some(duo) = d.duotone.take()
+                {
+                    d.layers.push(Layer::new("Duotone", photocraft_doc::LayerContent::Adjustment(duo.display_adjustment())));
+                    d.mode = photocraft_color::ColorMode::Rgb;
+                }
                 d
             };
             let x = photocraft_compose::flatten(&expected).px;

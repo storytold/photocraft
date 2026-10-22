@@ -367,7 +367,21 @@ fn hostile_type_sizes_without_pixels_import_without_a_huge_render() {
     {
         let runs = vec![Run { len: 1, size, leading: None }];
         let data = tysh("M", &runs, None, transform, [10.0, 10.0, 20.0, 20.0]);
-        let mut t = photocraft_text::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+        let Some(mut t) = photocraft_text::psd::text_layer_from_tysh(&data, 72.0) else {
+            // Unsafe affine data is now rejected at the boundary (#4758). Exercise the
+            // actual file import too: with no saved pixels it must remain empty and safe.
+            let mut file = photocraft_psd::testgen::small(photocraft_psd::Version::Psd, photocraft_psd::Compression::Raw);
+            file.layers_mut().push(photocraft_psd::LayerRecord {
+                name: b"hostile".to_vec(),
+                blocks: vec![photocraft_psd::TaggedBlock::new(*b"TySh", data)],
+                ..Default::default()
+            });
+            let back = photocraft_io::import("t.psd", &file.to_bytes().unwrap()).unwrap();
+            assert!(back.warnings.iter().any(|w| w.contains("unsafe type geometry")));
+            let LayerContent::Raster(pixels) = &back.document.layers.last().unwrap().content else { panic!("unsafe type must stay pixels") };
+            assert!(pixels.content_bounds().is_empty());
+            continue;
+        };
         if big {
             // Precondition: the renderer's own guard (256 Mpx) would have drawn this one.
             let mut engine = photocraft_text::TextEngine::new();

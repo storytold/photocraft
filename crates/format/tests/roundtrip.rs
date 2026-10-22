@@ -214,6 +214,29 @@ fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
 }
 
 #[test]
+fn text_run_baseline_roundtrips() {
+    use photocraft_doc::text::FontBaseline;
+    let mut doc = Document::new("scripts", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new(
+        "Text",
+        LayerContent::Text(TextLayer {
+            text: "H2O2".into(),
+            runs: vec![
+                TextRun { len: 1, style: CharStyle::default() },
+                TextRun { len: 1, style: CharStyle { baseline: FontBaseline::Subscript, ..Default::default() } },
+                TextRun { len: 1, style: CharStyle::default() },
+                TextRun { len: 1, style: CharStyle { baseline: FontBaseline::Superscript, ..Default::default() } },
+            ],
+            ..Default::default()
+        }),
+    ));
+    let loaded = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let LayerContent::Text(text) = &loaded.layers.last().unwrap().content else { panic!("text layer must roundtrip") };
+    let baselines: Vec<FontBaseline> = text.char_runs().iter().map(|r| r.style.baseline).collect();
+    assert_eq!(baselines, [FontBaseline::Normal, FontBaseline::Subscript, FontBaseline::Normal, FontBaseline::Superscript]);
+}
+
+#[test]
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();
@@ -488,6 +511,11 @@ fn vector_fields_roundtrip_and_default_when_absent() {
         for l in layers.as_array_mut().unwrap() {
             l.as_object_mut().unwrap().remove("vector_mask");
             let c = l["content"].as_object_mut().unwrap();
+            // A shape's density and feather (#5846) came later still.
+            if c.get("kind").and_then(|k| k.as_str()) == Some("shape") {
+                c.remove("density");
+                c.remove("feather");
+            }
             for k in ["path", "stroke", "live"] {
                 c.remove(k);
             }
@@ -500,6 +528,15 @@ fn vector_fields_roundtrip_and_default_when_absent() {
     let old: photocraft_format::manifest::DocM = serde_json::from_value(v).unwrap();
     assert!(old.paths.is_empty() && old.work_path.is_none());
     assert!(old.layers.iter().all(|l| l.vector_mask.is_none()));
+    let shapes: Vec<_> = old
+        .layers
+        .iter()
+        .filter_map(|l| match &l.content {
+            photocraft_format::manifest::ContentM::Shape { density, feather, .. } => Some((*density, *feather)),
+            _ => None,
+        })
+        .collect();
+    assert!(!shapes.is_empty() && shapes.iter().all(|s| *s == (1.0, 0.0)), "{shapes:?}");
 }
 
 /// Type kerning (#206): the auto mode and manual kerning survive .pcraft; manifests written
@@ -579,6 +616,7 @@ fn channel_restrictions_and_bevel_elements_roundtrip() {
         altitude: 40.0,
         use_global_light: false,
         gloss_contour: Contour::Linear,
+        gloss_anti_alias: false,
         highlight: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Screen, 0.7),
         highlight_color: photocraft_color::Color::WHITE,
         shadow: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Multiply, 0.6),
@@ -882,4 +920,75 @@ fn variables_follow_layer_id_remapping() {
     assert_eq!(defs.iter().find(|d| d.name == "badge").unwrap().layer, id_of(&back, "Inner"));
     let gone = defs.iter().find(|d| d.name == "gone").unwrap().layer;
     assert!(back.walk().into_iter().all(|(_, _, l)| l.id != gone), "dangling target must not address a live layer");
+}
+
+/// Removing previews is post-commit housekeeping, not part of publishing the new document.
+#[test]
+fn directory_save_without_previews_removes_stale_files_after_commit() {
+    let mut doc = Document::new("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
+    let dir = temp_dir("preview-cleanup");
+    let mut writer = PcraftWriter::new();
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+    writer.save_dir(&doc, &dir, &opts).unwrap();
+    doc.name = "after".into();
+    writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert_eq!(load_path(&dir).unwrap(), doc);
+    assert!(!dir.join("thumb.png").exists());
+    assert!(!dir.join("composite/preview.png").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A real Windows handle denying delete-sharing blocks manifest replacement after preparation.
+#[cfg(windows)]
+#[test]
+fn failed_manifest_commit_preserves_omitted_previews() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::with_background("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, depth, photocraft_color::Color::WHITE);
+        let dir = temp_dir("locked-manifest-previews");
+        let mut writer = PcraftWriter::new();
+        let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+        writer.save_dir(&doc, &dir, &opts).unwrap();
+        let old_doc = doc.clone();
+        let paths = ["manifest.json", "thumb.png", "composite/preview.png"];
+        let before: Vec<_> = paths.iter().map(|p| std::fs::read(dir.join(p)).unwrap()).collect();
+        // FILE_SHARE_READ | FILE_SHARE_WRITE; deliberately omit FILE_SHARE_DELETE.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(3).open(dir.join("manifest.json")).unwrap();
+        doc.name = "after".into();
+        let error = writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
+        assert!(matches!(error, FormatError::Io(_)), "expected a real commit I/O failure: {error}");
+        for (path, bytes) in paths.iter().zip(&before) {
+            assert_eq!(std::fs::read(dir.join(path)).ok().as_ref(), Some(bytes), "saved file lost after failed commit: {path}");
+        }
+        assert_eq!(load_path(&dir).unwrap(), old_doc);
+        drop(held);
+        writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+        assert_eq!(load_path(&dir).unwrap(), doc);
+        assert!(!dir.join("thumb.png").exists());
+        assert!(!dir.join("composite/preview.png").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn locked_stale_preview_does_not_fail_committed_save() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let mut doc = Document::new("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
+    let dir = temp_dir("locked-stale-preview");
+    let mut writer = PcraftWriter::new();
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+    writer.save_dir(&doc, &dir, &opts).unwrap();
+    let held = std::fs::OpenOptions::new().read(true).share_mode(3).open(dir.join("thumb.png")).unwrap();
+    doc.name = "after".into();
+    writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert_eq!(load_path(&dir).unwrap(), doc);
+    assert!(dir.join("thumb.png").exists(), "locked leftover remains until a later cleanup");
+    assert!(!dir.join("composite/preview.png").exists());
+    drop(held);
+    writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert!(!dir.join("thumb.png").exists());
+    std::fs::remove_dir_all(dir).unwrap();
 }

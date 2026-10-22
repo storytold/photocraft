@@ -180,7 +180,8 @@ impl PinnedCorpus {
             let out = staging.join(format!("u{i}"));
             std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
             let mut tar = Command::new("tar");
-            tar.arg("-xzf").arg(&tgz).arg("-C").arg(&out).arg(format!("{top}/{}", up.subdir));
+            // macOS folder icons (`Icon\r`) can't be created on Windows and are never corpus files.
+            tar.arg("-xzf").arg(&tgz).arg("-C").arg(&out).arg("--exclude=Icon\r").arg(format!("{top}/{}", up.subdir));
             for (from, _) in up.extras {
                 // A root-level corpus selection (`subdir == ""`) already extracts the whole repo
                 // root; adding the same root files as individual tar selectors fails on GNU tar.

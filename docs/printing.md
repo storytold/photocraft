@@ -38,6 +38,17 @@ with a `note` when no server answers. `"printServer"` on `file.print` sends one 
 server; `"dryRun": true` renders the page and reports the equivalent `lp` command without
 spooling.
 
+## Orientation (Windows)
+
+On Windows the paper and its orientation are the driver's: the Print dialog takes them from the
+printer's settings. Its Orientation buttons (Portrait, Landscape; Photoshop's Layout) turn those
+settings, as Print Settings… would, and the paper and preview turn with them.
+`file.print.page {"orientation": "portrait|landscape"}` does the same for scripts: it returns the
+turned settings as `printerSettings`, with the page they give. A print sent to a Windows printer
+whose layout is the driver's paper the other way round (a landscape layout, portrait settings)
+turns the settings to the layout before printing, rather than stopping with "the driver paper or
+orientation differs"; another paper is still refused.
+
 ## Results
 
 `file.print` returns `sent`, `backend` (`lp`, `windows`, `ipp`, `portal`), `spooler` (where the

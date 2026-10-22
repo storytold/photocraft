@@ -8,7 +8,7 @@ use photocraft_geom::{Rect, Size};
 use photocraft_io::{ExportOptions, export, import};
 
 fn stroke(size: f32, position: StrokePosition, paint: FxPaint, opacity: f32) -> Effect {
-    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, opacity), size, position, paint })
+    Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, opacity), size, position, paint, overprint: false })
 }
 
 fn roundtrip(doc: &Document) -> Document {
@@ -65,7 +65,8 @@ fn joined_shape_components_roundtrip() {
     let outer = Subpath::polygon(&[(5.0, 5.0), (35.0, 5.0), (35.0, 35.0), (5.0, 35.0)]);
     let hole = Subpath::polygon(&[(12.0, 12.0), (12.0, 28.0), (28.0, 28.0), (28.0, 12.0)]).with_op(PathOp::Join);
     let path = Path::new(vec![outer, hole]);
-    let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.4, 0.9))), stroke: None, live: None, cache: None, psd_raw: None };
+    let mut sh =
+        ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.4, 0.9))), stroke: None, live: None, cache: None, psd_raw: None, ..ShapeLayer::default() };
     sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, d.bounds()));
     let mut l = Layer::new("ring", LayerContent::Shape(sh));
     l.effects.items = vec![stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)), 1.0)];

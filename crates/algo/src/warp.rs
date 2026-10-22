@@ -15,7 +15,7 @@
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::{Rect, TileCoord};
-use photocraft_raster::{Surface, Tile};
+use photocraft_raster::{Interrupt, Surface, Tile};
 use std::sync::Arc;
 
 use crate::transform::{Interp, bicubic};
@@ -75,6 +75,16 @@ pub fn place_source_projective(
 /// coordinates → destination document coordinates). Output has `src`'s format with alpha
 /// added; pixels outside the warped area are transparent.
 pub fn warp_mesh_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Surface {
+    mesh(src, src_rect, f, interp, &Interrupt::NONE)
+}
+
+/// [`warp_mesh_surface`] reporting progress per destination tile; `None` once `ctl` is cancelled.
+pub fn warp_mesh_surface_with(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Option<Surface> {
+    let out = mesh(src, src_rect, f, interp, ctl);
+    (!ctl.cancelled()).then_some(out)
+}
+
+fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Surface {
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -104,7 +114,7 @@ pub fn warp_mesh_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) ->
             tris.push([a, a + w1 + 1, a + w1]);
         }
     }
-    warp_triangles(src, src_rect, &verts, &tris, interp)
+    triangles(src, src_rect, &verts, &tris, interp, ctl)
 }
 
 /// Probe lines per axis [`mapped_lengths`] follows through the map.
@@ -149,6 +159,12 @@ fn mapped_lengths(src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -
 /// interpolation of its source positions. Later triangles in `tris` draw over earlier ones (the
 /// order is the depth order). Output has `src`'s format with alpha added.
 pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp) -> Surface {
+    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE)
+}
+
+/// [`warp_triangles`], reporting progress per destination tile to `ctl`. A cancelled `ctl` skips
+/// the remaining tiles; the caller discards the result.
+fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt) -> Surface {
     let mut fmt = src.format();
     let converted;
     let src = if fmt.alpha {
@@ -208,7 +224,16 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
     }
     let n = fmt.channels();
     let a = n - 1;
+    // Tiles finished so far, for progress reported per tile (from any worker thread).
+    let finished = std::sync::atomic::AtomicUsize::new(0);
+    let total = tiles.len().max(1);
     let work = |(t, tris): (&Rect, &Vec<[usize; 3]>)| -> Option<(TileCoord, Arc<Tile>)> {
+        if ctl.cancelled() {
+            return None;
+        }
+        let k = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        // The last few percent are putting the tiles in place.
+        ctl.progress(0.98 * k as f32 / total as f32);
         if tris.is_empty() {
             return None;
         }
@@ -430,6 +455,9 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
     };
     #[cfg(target_arch = "wasm32")]
     let done: Vec<(TileCoord, Arc<Tile>)> = tiles.iter().zip(bins.iter()).filter_map(work).collect();
+    if ctl.cancelled() {
+        return out;
+    }
     out.put_tiles(done);
     out
 }
@@ -501,6 +529,28 @@ mod tests {
         // The band follows the arch: 40 px lower in the middle, about 36 px a third of the way in.
         assert!(alpha(150, 60) > 0.99 && alpha(150, 20) < 0.01, "mid {} {}", alpha(150, 60), alpha(150, 20));
         assert!(alpha(100, 55) > 0.99 && alpha(100, 20) < 0.01, "third {} {}", alpha(100, 55), alpha(100, 20));
+    }
+
+    #[test]
+    fn the_interruptible_mesh_warp_reports_progress_and_stops_when_cancelled() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 600, 400), &[0.2, 0.4, 0.6, 1.0]);
+        let r = s.content_bounds();
+        let w = Warp::preset(WarpStyle::Arc, 30.0, [0.0, 0.0, 600.0, 400.0]);
+        let map = |x: f64, y: f64| w.map(x, y);
+        let reported = std::sync::Mutex::new(0.0f32);
+        let progress = |p: f32| {
+            let mut m = reported.lock().unwrap();
+            *m = m.max(p);
+        };
+        let never = || false;
+        let out = warp_mesh_surface_with(&s, r, &map, Interp::Bicubic, &Interrupt::new(&never, &progress)).expect("not cancelled");
+        let want = warp_mesh_surface(&s, r, &map, Interp::Bicubic);
+        assert_eq!(out.content_bounds(), want.content_bounds());
+        assert_eq!(out.read_region(want.content_bounds()), want.read_region(want.content_bounds()));
+        assert!(*reported.lock().unwrap() > 0.9);
+        let always = || true;
+        assert!(warp_mesh_surface_with(&s, r, &map, Interp::Bicubic, &Interrupt::cancel_only(&always)).is_none());
     }
 
     #[test]

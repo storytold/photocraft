@@ -214,6 +214,36 @@ fn dragging_a_layer_row_to_trash_still_deletes_the_layer_with_a_mask_targeted() 
     assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
 }
 
+/// With the thumbnail size set to None no mask thumbnail is drawn, so a drag from where one used
+/// to be moves the layer (the row) rather than a mask that is no longer on screen.
+#[test]
+fn thumbnails_off_forget_the_mask_rects_and_drag_the_layer() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let stale = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Pixel).unwrap().1;
+    click_with(&mut h, stale.center(), Modifiers::NONE);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = crate::state::LayerThumbnailSize::None;
+    h.run_steps(3);
+    assert!(recorded(&h.ctx, masked).is_none(), "no mask thumbnails are recorded while they are off");
+
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    let from = pos2(stale.center().x, row.center().y);
+    assert!(row.contains(from), "the old thumbnail position is still on the row");
+    let to = h.get_by_label("Delete Layer Mask").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(!h.state().ui.dialogs.iter().any(|d| crate::mask_trash_prompt::owns(&d.fields)), "no mask prompt: the mask was not dragged");
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none(), "the layer went to the trash");
+}
+
 /// #3113: dragging the layer mask's thumbnail onto the Trash asks "Apply mask to layer before
 /// removing?" and keeps the layer; Apply applies the mask, Delete deletes it.
 #[test]

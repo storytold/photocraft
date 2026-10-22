@@ -14,7 +14,7 @@
 //!   the page-only `blendIfChannel`; `channelNames`: the document's colour channels.
 
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, vec2};
-use photocraft_doc::effects::{FxPaint, GlowSource, StrokePosition};
+use photocraft_doc::effects::{FxPaint, GlowSource, GlowTechnique, StrokePosition};
 use photocraft_doc::{Effect, Layer};
 use serde_json::{Map, Value, json};
 
@@ -89,6 +89,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const TECHNIQUE: &[(&str, &str)] = &[("smooth", "Smooth"), ("chiselHard", "Chisel Hard"), ("chiselSoft", "Chisel Soft")];
     const DIR: &[(&str, &str)] = &[("up", "Up"), ("down", "Down")];
     const SRC: &[(&str, &str)] = &[("edge", "Edge"), ("center", "Center")];
+    const GLOW_TECHNIQUE: &[(&str, &str)] = &[("softer", "Softer"), ("precise", "Precise")];
     const CONTOUR: P = P::Contour(Some("antiAlias"));
     match kind {
         "dropShadow" => &[
@@ -116,24 +117,28 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("contour", "Contour", CONTOUR),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
+        // Photoshop's order (#6698): Technique before the spread or choke, Range after the contour.
         "outerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
             ("color", "Color", P::Color),
+            ("technique", "Technique", P::Choice(GLOW_TECHNIQUE)),
             ("spread", "Spread", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
-            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("contour", "Contour", CONTOUR),
+            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         "innerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
             ("color", "Color", P::Color),
+            ("technique", "Technique", P::Choice(GLOW_TECHNIQUE)),
             ("source", "Source", P::Choice(SRC)),
             ("choke", "Choke", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
             ("contour", "Contour", CONTOUR),
+            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         "stroke" => &[
@@ -141,6 +146,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("position", "Position", P::Choice(POS)),
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
+            ("overprint", "Overprint", P::Check),
             ("color", "Color", P::Color),
         ],
         "colorOverlay" => &[("blend", "Blend Mode", P::Blend), ("color", "Color", P::Color), ("opacity", "Opacity", P::Slider(0.0, 100.0, "%"))],
@@ -172,7 +178,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("angle", "Angle", P::Angle),
             ("useGlobalLight", "Use Global Light", P::Check),
             ("altitude", "Altitude", P::Slider(0.0, 90.0, "°")),
-            ("glossContour", "Gloss Contour", P::Contour(None)),
+            ("glossContour", "Gloss Contour", P::Contour(Some("glossAntiAlias"))),
             // Bevel & Emboss › Contour element.
             ("contour", "Contour", P::Check),
             ("contourName", "", P::Contour(Some("contourAntiAlias"))),
@@ -243,6 +249,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
             } else {
                 drop_keys(&mut v, &["color"]);
             }
+            set(&mut v, "technique", json!(if g.technique == GlowTechnique::Precise { "precise" } else { "softer" }));
             set(&mut v, if matches!(e, Effect::OuterGlow(_)) { "spread" } else { "choke" }, json!((g.spread * 100.0).round()));
             set(&mut v, "size", json!(g.size));
             set(&mut v, "range", json!((g.range * 100.0).round()));
@@ -266,6 +273,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
                     _ => "outside",
                 }),
             );
+            set(&mut v, "overprint", json!(s.overprint));
             if let FxPaint::Color(c) = &s.paint {
                 set(&mut v, "color", json!(hex(c)));
             } else {
@@ -355,6 +363,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
             set(&mut v, "altitude", json!(b.altitude));
             set(&mut v, "direction", json!(if b.up { "up" } else { "down" }));
             set(&mut v, "glossContour", photocraft_engine::layer_style::contour_param(&b.gloss_contour));
+            set(&mut v, "glossAntiAlias", json!(b.gloss_anti_alias));
             set(&mut v, "contour", json!(b.contour.is_some()));
             if let Some(c) = &b.contour {
                 set(&mut v, "contourName", photocraft_engine::layer_style::contour_param(&c.contour));
@@ -1635,6 +1644,40 @@ mod tests {
     }
 
     #[test]
+    fn bevel_gloss_anti_alias_survives_the_dialog() {
+        let mut s = session();
+        s.execute("layer.layerStyle.bevelEmboss", json!({"glossContour": "Ring - Double", "glossAntiAlias": true})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        assert_eq!(effects_of(&f)[0]["params"]["glossAntiAlias"], json!(true));
+        // Editing another setting keeps the gloss contour's Anti-aliased.
+        set_param(&mut f, "fx1", "size", json!(12));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let st = s.active().unwrap();
+        let items = &st.doc.layer(id).unwrap().effects.items;
+        let Some(photocraft_doc::Effect::BevelEmboss(b)) = items.first() else { panic!("{items:?}") };
+        assert_eq!(b.size, 12.0);
+        assert!(b.gloss_anti_alias);
+    }
+
+    #[test]
+    fn stroke_overprint_survives_the_dialog() {
+        let mut s = session();
+        s.execute("layer.layerStyle.stroke", json!({"size": 3, "color": "#000000", "overprint": true})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        assert_eq!(effects_of(&f)[0]["params"]["overprint"], json!(true));
+        // Editing another setting keeps Overprint.
+        set_param(&mut f, "fx1", "size", json!(5));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let strokes = strokes_of(&s);
+        assert_eq!(strokes[0].size, 5.0);
+        assert!(strokes[0].overprint);
+    }
+
+    #[test]
     fn preview_applies_the_style_without_touching_the_document() {
         let s = session();
         let st = s.active().unwrap();
@@ -1884,6 +1927,48 @@ mod tests {
         assert_eq!(glow["params"]["source"], json!("center"), "the dialog shows the effect's source");
         apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
         assert_eq!(source(&s), Some(GlowSource::Center), "OK keeps the source");
+    }
+
+    /// #6698: Inner Glow lacked Photoshop's Technique and Range, Outer Glow its Technique. They
+    /// show in Photoshop's order, the dialog loads them, and OK keeps them.
+    #[test]
+    fn glows_show_and_keep_technique_and_range() {
+        let keys = |kind: &str| spec(kind).iter().map(|(k, _, _)| *k).collect::<Vec<_>>();
+        assert_eq!(keys("innerGlow"), ["blend", "opacity", "color", "technique", "source", "choke", "size", "contour", "range", "noise"]);
+        assert_eq!(keys("outerGlow"), ["blend", "opacity", "color", "technique", "spread", "size", "contour", "range", "noise"]);
+        let mut s = session();
+        s.execute("layer.layerStyle.innerGlow", json!({"technique": "precise", "range": 30})).unwrap();
+        s.execute("layer.layerStyle.outerGlow", json!({"technique": "precise"})).unwrap();
+        let glows = |s: &photocraft_engine::Session| {
+            let d = s.active().unwrap();
+            let id = d.active_layer.unwrap();
+            d.doc
+                .layer(id)
+                .unwrap()
+                .effects
+                .items
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::InnerGlow(g) | Effect::OuterGlow(g) => Some((kind_of(e), g.technique, (g.range * 100.0).round())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = [("outerGlow", GlowTechnique::Precise, 50.0), ("innerGlow", GlowTechnique::Precise, 30.0)];
+        let mut have = glows(&s);
+        have.sort_by_key(|g| g.0);
+        let mut want = expected.to_vec();
+        want.sort_by_key(|g| g.0);
+        assert_eq!(have, want);
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        let inner = effects_of(&f).iter().find(|e| e["kind"] == json!("innerGlow")).unwrap().clone();
+        assert_eq!((&inner["params"]["technique"], &inner["params"]["range"]), (&json!("precise"), &json!(30.0)), "the dialog shows them");
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let mut have = glows(&s);
+        have.sort_by_key(|g| g.0);
+        assert_eq!(have, want, "OK keeps them");
     }
 
     #[test]

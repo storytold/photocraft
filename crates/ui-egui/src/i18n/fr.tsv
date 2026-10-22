@@ -2118,6 +2118,11 @@
 	Apply the pen's tilt and rotation to the tip shape	Appliquer l'inclinaison et la rotation du stylet à la forme de la pointe
 	Mixer Brush	Pinceau mélangeur
 	Wet	Humidité
+	Current Brush Load	Charge actuelle du pinceau
+	Load Brush	Charger le pinceau
+	Clean Brush	Nettoyer le pinceau
+	Load the brush after each stroke	Charger le pinceau après chaque trait
+	Clean the brush after each stroke	Nettoyer le pinceau après chaque trait
 	Mix	Mélange
 	Wetness Jitter	Variation de l'humidité
 	Mix Jitter	Variation du mélange
@@ -2651,6 +2656,7 @@
 	32 bit (float)	32 bits (flottant)
 	Floating point	Virgule flottante
 	Use Global Light	Utiliser la lumière globale
+	Overprint	Surimpression
 	Native file drag-and-drop is unavailable	Le glisser-déposer natif de fichiers n'est pas disponible
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Le glisser-déposer natif de fichiers n'est pas encore pris en charge sous Wayland. Utilisez Fichier › Ouvrir, ou copiez l'image dans votre gestionnaire de fichiers et collez-la avec {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Pour déposer des fichiers, lancez PhotoCraft sous XWayland : `{command}`
@@ -3069,6 +3075,24 @@ cameraData	Lens	Objectif
 	Output To	Sortie vers
 	Duplicate Layer	Dupliquer le calque
 	Contract	Contracter
+
+	Animation Options	Options d’animation
+	Entire Document	Document entier
+	Filter Options	Options de filtrage
+	Layer Bounds	Limites du calque
+	Layers Panel Options	Options du panneau Calques
+	Lock Layers	Verrouiller les calques
+	New Artboard…	Nouveau plan de travail…
+	New Group…	Nouveau groupe…
+	Prevent Auto-Nesting	Empêcher l’imbrication automatique
+	Show Layers	Afficher les calques
+	Thumbnail Contents	Contenu des vignettes
+	Thumbnail Size	Taille des vignettes
+	Use Default Masks on Fill Layers	Utiliser les masques par défaut sur les calques de remplissage
+	Expand New Effects	Développer les nouveaux effets
+	Add “copy” to Copied Layers and Groups	Ajouter « copie » aux calques et groupes dupliqués
+	Preview on canvas when reordering layers	Prévisualiser sur la zone de travail lors du réagencement des calques
+	Show layer mask badges	Afficher les badges des masques de fusion
 	Loading fonts…	Chargement des polices…
 	Response curve	Courbe de réponse
 	Tool	Outil
@@ -3114,6 +3138,10 @@ curves	Smooth	Lisser
 	Click to place · Alt-click or drag off-canvas to remove	Cliquez pour placer · Alt-clic ou glisser hors du canevas pour supprimer
 	No document open	Aucun document ouvert
 	{n} of {max} sample points	{n} sur {max} points d'échantillonnage
+
+# History panel menu (#2966)
+	New Snapshot…	Nouvel instantané…
+	History Options…	Options d'historique…
 # Print dialog (#2697)
 	Emulsion Down	Émulsion verso
 	Functions	Fonctions
@@ -3176,6 +3204,9 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Peint à partir de l'état source du panneau Historique
+	Sets the source for the history brush	Définit la source du pinceau d'historique
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Utiliser le profil incorporé ({profile})
 	Convert to the working space ({profile})	Convertir vers l'espace de travail ({profile})
@@ -3196,6 +3227,9 @@ curves	Smooth	Lisser
 # View › Guides › right-click a guide
 	Edit Selected Guides	Modifier les repères sélectionnés
 	Clear Selected Guides	Effacer les repères sélectionnés
+	Bicubic Automatic	Bicubique automatique
+	Bicubic Smoother	Bicubique plus lisse
+	Bicubic Sharper	Bicubique plus net
 	Pasting from other apps is unavailable	Le collage depuis d’autres applications est indisponible
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft ne peut pas accéder au presse-papiers du système dans cette session. Sous Wayland, le bac à sable Flatpak masque le protocole par lequel les images des autres applications sont lues.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Pour coller depuis d’autres applications, lancez PhotoCraft sous XWayland : `{command}`
@@ -3216,6 +3250,18 @@ curves	Smooth	Lisser
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
 	Show file name in title	Afficher le nom de fichier dans le titre
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Seuil 50 %
+	Pattern Dither	Simulation par motif
+	Diffusion Dither	Simulation par diffusion
+	Halftone Screen	Trame de demi-teintes
+	Custom Pattern	Motif personnalisé
+	Frequency:	Fréquence :
+	Lines/Inch	Lignes/pouce
+	Lines/Centimeter	Lignes/centimètre
+	Ellipse	Ellipse
+	Cross	Croix
 	Accept and Go to Conflict	Accepter et aller au conflit
 	Changes undone.	Modifications annulées.
 	Choose a new shortcut for this command, or leave it without one.	Choisissez un nouveau raccourci pour cette commande ou laissez-la sans raccourci.
@@ -3268,3 +3314,15 @@ curves	Smooth	Lisser
 	Tween	Interpolation
 	Last frame	Dernière image
 	Frames to add	Images à ajouter
+
+# DDS Options (#1327)
+	DDS Options	Options DDS
+	Compression	Compression
+	Generate Mipmaps	Générer les mipmaps
+
+# Color Table (.act) dialog
+	There is no color table to save.	Il n’y a aucune table de couleurs à enregistrer.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} couleur enregistrée dans {file}|{n} couleurs enregistrées dans {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Adaptateur GPU

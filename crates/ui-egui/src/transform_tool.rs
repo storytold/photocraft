@@ -1013,8 +1013,9 @@ fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
 }
 
-/// Undo and Redo while the commit runs in the background.
+/// Undo and Redo while the commit runs in the background (Free Transform, or Warp).
 const STILL_APPLYING: &str = "Free Transform is still being applied";
+const STILL_WARPING: &str = "Warp is still being applied";
 
 pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
@@ -1316,7 +1317,7 @@ fn box_command(id: &str) -> bool {
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     let warping = app.ui.transform.as_ref()?.warp.is_some();
     if committing(app).is_some() {
-        return box_command(id).then(|| Err(STILL_APPLYING.into()));
+        return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }
     match id {
         "edit.undo" => Some(Ok(step(app, false))),

@@ -997,7 +997,9 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
 }
 
 /// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched.
+/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. The speckle is
+/// scaled by the coverage, so it fades out with the effect instead of lighting up the blur's
+/// near-zero tail out to the edge of its rectangular reach (#7833).
 fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
         return;
@@ -1009,7 +1011,7 @@ fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
                 continue;
             }
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
-            *v = (*v + (n - 0.5) * 2.0 * amount).clamp(0.0, 1.0);
+            *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
         }
     }
 }
@@ -1528,13 +1530,16 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
         tent(&mut h, g.width);
         h
     } else {
-        let sharp = sharp_edges(shape);
-        let (din, dout) = (bevel_dist_inside(shape, &sharp, size), bevel_dist_outside(shape, &sharp, size));
-        let mut h = Map::new(shape.w, shape.h, 0.0);
+        let [din, dout] = bevel_dists(shape, size);
         let soft = g.chisel_soft > 0.0;
-        for i in 0..h.v.len() {
-            h.v[i] = bevel_chisel_h(g.paint, size, din[i], dout[i], soft);
-        }
+        let w = shape.w;
+        let v = par_fill(w, shape.h, 0.0, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let i = y * w + x;
+                *o = bevel_chisel_h(g.paint, size, din[i], dout[i], soft);
+            }
+        });
+        let mut h = Map { w, h: shape.h, v };
         // Inner and outer Chisel Soft are not blurred in Photoshop (their facets equal Chisel
         // Hard's across a straight edge); emboss styles keep the blur until measured.
         if soft && g.paint == BevelPaint::Both {
@@ -1555,14 +1560,23 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
         let place = Placement::anchored(tex.anchor, t.link, t.phase, t.scale, 0.0);
         let k = t.depth / unit;
         let (x0, y0) = (tex.rect.x0, tex.rect.y0);
-        for y in 0..h.h {
-            for x in 0..h.w {
-                let (u, v) = place.map(f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
-                let p = tile.sample(u, v);
-                let l = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3];
-                h.v[y * h.w + x] += k * if t.invert { 1.0 - l } else { l };
-            }
-        }
+        let w = h.w;
+        par_units(
+            h.v.len(),
+            &mut h.v,
+            w,
+            &mut [] as &mut [()],
+            0,
+            || (),
+            |_, y, row, _| {
+                for (x, o) in row.iter_mut().enumerate() {
+                    let (u, v) = place.map(f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
+                    let p = tile.sample(u, v);
+                    let l = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3];
+                    *o += k * if t.invert { 1.0 - l } else { l };
+                }
+            },
+        );
     }
     if b.soften >= 1.0 {
         tent(&mut h, b.soften);
@@ -1644,23 +1658,33 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
     };
     let shade_into = |depth: f32, region_kind: u8| -> (Map, Map) {
         let (mut hi, mut sh) = (Map::new(shape.w, shape.h, 0.0), Map::new(shape.w, shape.h, 0.0));
-        for y in 0..shape.h as i64 {
-            for x in 0..shape.w as i64 {
-                let i = y as usize * shape.w + x as usize;
-                let gx = (hmap.get(x + 1, y) - hmap.get(x - 1, y)) * 0.5 * depth;
-                let gy = (hmap.get(x, y + 1) - hmap.get(x, y - 1)) * 0.5 * depth;
-                let n = [-gx, -gy, 1.0];
-                let len = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
-                let shade = (n[0] * light_v[0] + n[1] * light_v[1] + n[2] * light_v[2]) / len;
-                let region = if region_kind == 0 { shape.v[i] } else { f32::from(shape.v[i] < 1.0 - INSIDE_EPS && on_bevel(x, y)) };
-                let k = shade - se;
-                if k > 0.0 {
-                    hi.v[i] = (k / (1.0 - se).max(1e-3)).clamp(0.0, 1.0) * region;
-                } else {
-                    sh.v[i] = (-k / se.max(1e-3)).clamp(0.0, 1.0) * region;
+        // Rows on threads: every pixel reads only `hmap` and `shape`.
+        par_units(
+            hi.v.len(),
+            &mut hi.v,
+            shape.w,
+            &mut sh.v,
+            shape.w,
+            || (),
+            |_, y, hi_row, sh_row| {
+                let y = y as i64;
+                for x in 0..shape.w as i64 {
+                    let i = y as usize * shape.w + x as usize;
+                    let gx = (hmap.get(x + 1, y) - hmap.get(x - 1, y)) * 0.5 * depth;
+                    let gy = (hmap.get(x, y + 1) - hmap.get(x, y - 1)) * 0.5 * depth;
+                    let n = [-gx, -gy, 1.0];
+                    let len = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
+                    let shade = (n[0] * light_v[0] + n[1] * light_v[1] + n[2] * light_v[2]) / len;
+                    let region = if region_kind == 0 { shape.v[i] } else { f32::from(shape.v[i] < 1.0 - INSIDE_EPS && on_bevel(x, y)) };
+                    let k = shade - se;
+                    if k > 0.0 {
+                        hi_row[x as usize] = (k / (1.0 - se).max(1e-3)).clamp(0.0, 1.0) * region;
+                    } else {
+                        sh_row[x as usize] = (-k / se.max(1e-3)).clamp(0.0, 1.0) * region;
+                    }
                 }
-            }
-        }
+            },
+        );
         (apply_contour(hi, &b.gloss_contour), apply_contour(sh, &b.gloss_contour))
     };
     let maps = match g.paint {
@@ -1676,7 +1700,13 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
             let (hi, sh) = shade_into(g.depth, 0);
             let (ho, so) = shade_into(if g.pillow { -g.depth } else { g.depth }, 1);
             let mix = |a: Map, b: Map| -> Map {
-                let v = a.v.iter().zip(&b.v).zip(&shape.v).map(|((x, y), s)| if *s > INSIDE_EPS { *x } else { 0.0 } + y * (1.0 - s.min(1.0))).collect();
+                let v = par_fill(a.w, a.h, 0.0, |y, row| {
+                    for (x, o) in row.iter_mut().enumerate() {
+                        let i = y * a.w + x;
+                        let (x, y, s) = (a.v[i], b.v[i], shape.v[i]);
+                        *o = if s > INSIDE_EPS { x } else { 0.0 } + y * (1.0 - s.min(1.0));
+                    }
+                });
                 Map { w: a.w, h: a.h, v }
             };
             vec![mix(hi, ho), mix(sh, so)]
@@ -2309,6 +2339,18 @@ pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize, reac
     }
 }
 
+/// Both chiselled bevel fields of `alpha`, `[BevelInside, BevelOutside]`: each is its
+/// [`distance_field`], with the sharp edges they both start from found once.
+pub fn bevel_distance_fields(alpha: Vec<f32>, w: usize, h: usize, reach: f32) -> [Vec<f32>; 2] {
+    bevel_dists(&Map { w, h, v: alpha }, reach)
+}
+
+/// The inside and outside bevel distances of `s`, from one set of sharp edges.
+fn bevel_dists(s: &Map, reach: f32) -> [Vec<f32>; 2] {
+    let sharp = sharp_edges(s);
+    [bevel_dist_inside(s, &sharp, reach), bevel_dist_outside(s, &sharp, reach)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2481,6 +2523,7 @@ mod tests {
             altitude: 30.0,
             use_global_light: false,
             gloss_contour: Contour::Linear,
+            gloss_anti_alias: false,
             highlight: photocraft_doc::FxCommon::new(BlendMode::Screen, 0.75),
             highlight_color: photocraft_color::Color::WHITE,
             shadow: photocraft_doc::FxCommon::new(BlendMode::Multiply, 0.75),
@@ -2951,6 +2994,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bevel_maps_do_not_depend_on_the_threads() {
+        // Every style and technique, softened or not, and a texture; one thread (in order) is the reference.
+        let mut patchy = aa_disc(101, 101, 40.0);
+        for (i, v) in patchy.v.iter_mut().enumerate() {
+            if (i % 101 / 13 + i / 101 / 17) % 5 == 0 {
+                *v *= 0.6;
+            }
+        }
+        let shapes = [aa_disc(97, 83, 30.0), aa_round_rect(131, 77, 9.0, 11.0, 120.0, 66.0, 14.0), aa_bar(90, 130, 60.0, 150.0, 25.0), patchy];
+        let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        sf.fill_rect(Rect::new(0, 0, 4, 2), &[0.0, 0.0, 0.0, 1.0]);
+        sf.fill_rect(Rect::new(0, 2, 4, 4), &[1.0, 1.0, 1.0, 1.0]);
+        let pats = [Pattern::new("stripes", sf, 4, 4)];
+        let light = GlobalLight::default();
+        let styles = [BevelStyle::InnerBevel, BevelStyle::OuterBevel, BevelStyle::Emboss, BevelStyle::PillowEmboss, BevelStyle::StrokeEmboss];
+        for (k, shape) in shapes.iter().enumerate() {
+            let tex = TextureCtx { rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32), patterns: &pats, anchor: (0.0, 0.0) };
+            for style in styles {
+                for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
+                    for (size, soften, textured) in [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)] {
+                        let mut b = bevel_of(style, technique);
+                        (b.size, b.soften) = (size, soften);
+                        if textured {
+                            b.texture = Some(photocraft_doc::BevelTexture {
+                                name: "stripes".into(),
+                                id: String::new(),
+                                scale: 1.0,
+                                depth: 1.0,
+                                invert: false,
+                                link: true,
+                                phase: (0.0, 0.0),
+                            });
+                        }
+                        let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
+                        let one = with_threads(1, run);
+                        for threads in [2, 5, 16] {
+                            let many = with_threads(threads, run);
+                            assert_eq!(one.len(), many.len());
+                            for (j, (a, m)) in one.iter().zip(&many).enumerate() {
+                                assert_eq!(bits(&a.v), bits(&m.v), "shape {k}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The four fields that use the distance transform, of `m`.
     fn distance_field_of(m: &Map, reach: f32) -> Vec<Vec<f32>> {
         [FieldKind::Inside, FieldKind::Outside, FieldKind::BevelInside, FieldKind::BevelOutside]
@@ -3231,6 +3323,56 @@ mod tests {
         let noisy = glow_map(&square_shape(40), &g(0.6), false, (0, 0));
         let diff: f32 = plain.v.iter().zip(&noisy.v).map(|(a, b)| (a - b).abs()).sum();
         assert!(diff > 5.0, "glow noise changes the coverage: {diff}");
+    }
+
+    /// Issue #7833: the speckle stays inside the glow's visible falloff instead of filling the
+    /// blur's whole rectangular reach out to the map edge.
+    #[test]
+    fn effect_noise_stays_inside_the_visible_falloff() {
+        let mut shape = Map::new(80, 80, 0.0);
+        for y in 35..45 {
+            for x in 35..45 {
+                shape.v[y * 80 + x] = 1.0;
+            }
+        }
+        let g = |noise: f32| Glow {
+            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 10.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise,
+            source: GlowSource::Edge,
+        };
+        let s = |noise: f32| Shadow {
+            common: photocraft_doc::FxCommon::new(BlendMode::Multiply, 1.0),
+            color: photocraft_color::Color::BLACK,
+            angle: 0.0,
+            use_global_light: false,
+            distance: 0.0,
+            spread: 0.0,
+            size: 10.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            noise,
+            knocks_out: true,
+        };
+        let light = GlobalLight::default();
+        let pairs = [
+            ("glow", glow_map(&shape, &g(0.0), false, (0, 0)), glow_map(&shape, &g(0.5), false, (0, 0))),
+            ("shadow", shadow_map(&shape, &s(0.0), &light, false, (0, 0)), shadow_map(&shape, &s(0.5), &light, false, (0, 0))),
+        ];
+        for (name, plain, noisy) in pairs {
+            for (i, (p, n)) in plain.v.iter().zip(&noisy.v).enumerate() {
+                if *p < 1.0 / 255.0 {
+                    assert!(*n <= 2.0 / 255.0, "{name}: pixel ({}, {}) invisible without noise: {p} -> {n}", i % 80, i / 80);
+                }
+            }
+        }
     }
 
     #[test]

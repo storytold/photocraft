@@ -1139,3 +1139,83 @@ fn displace_smart_filter_reads_its_map_path_on_re_render() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Clouds and Difference Clouds on a smart object are smart filters, as in Photoshop, and keep
+/// the colours they were drawn with: re-rendering after the colours change gives the same clouds.
+#[test]
+fn clouds_on_a_smart_object_are_smart_filters_with_their_colours() {
+    for depth in DEPTHS {
+        let mut s = session(depth);
+        paint(&mut s);
+        s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+        s.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute("filter.render.clouds", json!({"seed": 5})).unwrap();
+        s.execute("filter.render.differenceClouds", json!({"seed": 9})).unwrap();
+        let sm = active_smart(&s);
+        let commands: Vec<&str> = sm.smart_filters.iter().map(|f| f.command.as_str()).collect();
+        assert_eq!(commands, ["filter.render.clouds", "filter.render.differenceClouds"]);
+        assert_eq!(sm.smart_filters[0].params["foreground"], json!([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(sm.smart_filters[1].params["background"], json!([0.0, 0.0, 1.0, 1.0]));
+        // Red-to-blue clouds, and their difference, have no green: they fill the object (painted
+        // from (-6, 5) to (40, 38)) over the white background.
+        let rendered = flat(&s);
+        let object: Vec<[f32; 4]> = (5..38).flat_map(|y| (0..40).map(move |x| (y * W + x) as usize)).map(|i| rendered[i]).collect();
+        assert!(object.iter().all(|p| p[1] < 0.02), "depth {depth}");
+        assert!(max_diff(&object, &vec![object[0]; object.len()]) > 0.05, "the clouds vary");
+        s.tools.foreground = [0.0, 1.0, 0.0, 1.0];
+        s.execute("layer.smartFilter.setParams", json!({"index": 1, "params": {"seed": 9}})).unwrap();
+        assert!(max_diff(&flat(&s), &rendered) < 1e-6, "depth {depth}: same params, same clouds");
+        s.undo();
+        s.undo();
+        assert_eq!(active_smart(&s).smart_filters.len(), 1);
+    }
+}
+
+/// Render filters on a smart object work within the object, as in Photoshop (and as PSD stores
+/// them): Lens Flare's centre is a fraction of the object's bounds, not of the canvas.
+#[test]
+fn lens_flare_centres_on_the_smart_object() {
+    let mut s = session(8);
+    let block = Rect::new(32, 24, W, H);
+    s.edit("setup", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let fmt = surf.format();
+        let px = photocraft_raster::from_rgba(&fmt, [0.1, 0.1, 0.1, 1.0]);
+        surf.write_region(block, &px.repeat((block.width() * block.height()) as usize));
+        Ok(())
+    })
+    .unwrap();
+    convert(&mut s);
+    s.execute("filter.render.lensFlare", json!({"centerX": 0.5, "centerY": 0.5, "lens": "prime105"})).unwrap();
+    // The centre of the brightest pixels inside the object (the canvas around it is white).
+    let px = flat(&s);
+    let inside: Vec<(i32, i32, f32)> =
+        (block.y0..block.y1).flat_map(|y| (block.x0..block.x1).map(move |x| (x, y))).map(|(x, y)| (x, y, px[(y * W + x) as usize][1])).collect();
+    let peak = inside.iter().map(|p| p.2).fold(0.0, f32::max);
+    let core: Vec<_> = inside.iter().filter(|p| p.2 >= peak - 0.02).collect();
+    let (x, y) = (core.iter().map(|p| p.0).sum::<i32>() / core.len() as i32, core.iter().map(|p| p.1).sum::<i32>() / core.len() as i32);
+    assert!((x - 48).abs() <= 1 && (y - 36).abs() <= 1, "flare at {x},{y}, the object's centre is 48,36");
+}
+
+/// Moving a smart object moves its Clouds and Fibers with it: the pattern is anchored at the
+/// object, not at the canvas, so re-rendering after the move doesn't change the texture.
+#[test]
+fn clouds_and_fibers_move_with_the_smart_object() {
+    for (command, params) in [("filter.render.clouds", json!({"seed": 3})), ("filter.render.fibers", json!({"seed": 3}))] {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = convert(&mut s);
+        s.execute(command, params).unwrap();
+        let before = flat(&s);
+        s.execute("edit.transform", json!({"layer": id, "matrix": [1, 0, 0, 1, 8, 6]})).unwrap();
+        let after = flat(&s);
+        // Inside the object (painted from (-6, 5) to (40, 38)) both before and after the move.
+        for y in 8..30 {
+            for x in 2..30 {
+                let (a, b) = (before[(y * W + x) as usize], after[((y + 6) * W + x + 8) as usize]);
+                assert!((0..4).all(|c| (a[c] - b[c]).abs() < 1e-3), "{command} at {x},{y}: {a:?} vs {b:?}");
+            }
+        }
+    }
+}

@@ -6,6 +6,7 @@
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
 
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use photocraft_color::convert::{hsb_to_rgb, rgb_to_hsb};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -55,37 +56,6 @@ pub fn not_web_safe(rgb: [f32; 3]) -> Option<[f32; 3]> {
     (hex(web) != hex(rgb)).then_some(web)
 }
 
-pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
-    let h = (h.rem_euclid(360.0)) / 60.0;
-    let c = v * s;
-    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
-    let (r, g, b) = match h as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = v - c;
-    [r + m, g + m, b + m]
-}
-
-pub fn rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
-    let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
-    let d = mx - mn;
-    let h = if d <= 0.0 {
-        0.0
-    } else if mx == c[0] {
-        60.0 * ((c[1] - c[2]) / d).rem_euclid(6.0)
-    } else if mx == c[1] {
-        60.0 * ((c[2] - c[0]) / d + 2.0)
-    } else {
-        60.0 * ((c[0] - c[1]) / d + 4.0)
-    };
-    [h, if mx <= 0.0 { 0.0 } else { d / mx }, mx]
-}
-
 pub fn hex(c: [f32; 3]) -> String {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", q(c[0]), q(c[1]), q(c[2]))
@@ -108,12 +78,12 @@ pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
         return lab_rgb(lab);
     }
     match mode {
-        "s" => hsv_to_rgb(x * 360.0, z, 1.0 - y),
-        "v" => hsv_to_rgb(x * 360.0, 1.0 - y, z),
+        "s" => hsb_to_rgb([x * 360.0, z, 1.0 - y]),
+        "v" => hsb_to_rgb([x * 360.0, 1.0 - y, z]),
         "r" => [z, 1.0 - y, x],
         "g" => [1.0 - y, z, x],
         "b" => [x, 1.0 - y, z],
-        _ => hsv_to_rgb(z * 360.0, x, 1.0 - y),
+        _ => hsb_to_rgb([z * 360.0, x, 1.0 - y]),
     }
 }
 
@@ -141,12 +111,12 @@ fn slider_color(mode: &str, z: f32, hsv: [f32; 3], rgb: [f32; 3], lab: [f32; 3])
         return lab_rgb(l);
     }
     match mode {
-        "s" => hsv_to_rgb(hsv[0], z, hsv[2]),
-        "v" => hsv_to_rgb(hsv[0], hsv[1], z),
+        "s" => hsb_to_rgb([hsv[0], z, hsv[2]]),
+        "v" => hsb_to_rgb([hsv[0], hsv[1], z]),
         "r" => [z, rgb[1], rgb[2]],
         "g" => [rgb[0], z, rgb[2]],
         "b" => [rgb[0], rgb[1], z],
-        _ => hsv_to_rgb(z * 360.0, 1.0, 1.0),
+        _ => hsb_to_rgb([z * 360.0, 1.0, 1.0]),
     }
 }
 
@@ -186,7 +156,7 @@ pub(crate) fn initial_fields(target: &str, label: &str, rgb: [f32; 3]) -> Map<St
     f.insert("__label".into(), json!(label));
     f.insert("color".into(), json!(hex(rgb)));
     f.insert("__orig".into(), json!(hex(rgb)));
-    f.insert("__hsv".into(), json!(rgb_to_hsv(rgb)));
+    f.insert("__hsv".into(), json!(rgb_to_hsb(rgb)));
     f.insert("__mode".into(), json!("h"));
     f.insert("__webOnly".into(), json!(false));
     f
@@ -355,7 +325,7 @@ pub fn current(f: &Map<String, Value>) -> Components {
     let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
     Components {
         rgb,
-        hsv: kept(f, "__hsv", rgb, |h| hsv_to_rgb(h[0], h[1], h[2])).unwrap_or_else(|| rgb_to_hsv(rgb)),
+        hsv: kept(f, "__hsv", rgb, hsb_to_rgb).unwrap_or_else(|| rgb_to_hsb(rgb)),
         lab: kept(f, "__lab", rgb, photocraft_color::convert::lab_to_srgb).unwrap_or_else(|| photocraft_color::convert::srgb_to_lab(rgb)),
         cmyk: kept(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(rgb)),
     }
@@ -492,6 +462,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     outcome
 }
 
+/// The Color Picker's colour field and component slider, editing the colour in f.
 fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
@@ -537,7 +508,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             _ => None,
         };
         match (h, slider_lab(&mode, z, lab)) {
-            (Some(h), _) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
+            (Some(h), _) => set_rgb(f, hsb_to_rgb(h), Keep::Hsv(h)),
             (None, Some(l)) => set_rgb(f, lab_rgb(l), Keep::Lab(l)),
             (None, None) => set_rgb(f, slider_color(&mode, z, hsv, rgb, lab), Keep::Nothing),
         }
@@ -652,7 +623,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         let (mut h, mut c) = (hsv, rgb);
                         if i < 3 {
                             h[i] = if i == 0 { v } else { v / 100.0 };
-                            c = hsv_to_rgb(h[0], h[1], h[2]);
+                            c = hsb_to_rgb(h);
                             edit = Some((c, Keep::Hsv(h)));
                         } else {
                             c[i - 3] = v / 255.0;
@@ -1053,6 +1024,7 @@ mod tests {
         assert_eq!(color(&h), "#123456");
     }
 
+    /// Only Web Colors snaps hex, field and component edits to web-safe colours.
     #[test]
     fn web_only_snaps_hex_field_and_component_edits() {
         let mut f = Map::new();
@@ -1060,7 +1032,7 @@ mod tests {
         f.insert("__webOnly".into(), json!(true));
         set_rgb(&mut f, parse_hex("#ff8800").unwrap(), Keep::Nothing);
         assert_eq!(f["color"], json!("#ff9900"));
-        set_rgb(&mut f, hsv_to_rgb(40.0, 1.0, 1.0), Keep::Hsv([40.0, 1.0, 1.0]));
+        set_rgb(&mut f, hsb_to_rgb([40.0, 1.0, 1.0]), Keep::Hsv([40.0, 1.0, 1.0]));
         assert_eq!(f["color"], json!("#ff9900"));
         assert!(f.get("__hsv").is_none(), "kept HSV does not outlive a web snap");
         set_rgb(&mut f, photocraft_color::convert::lab_to_srgb([50.0, 40.0, 20.0]).map(|c| c.clamp(0.0, 1.0)), Keep::Lab([50.0, 40.0, 20.0]));
@@ -1137,6 +1109,7 @@ mod tests {
         }
     }
 
+    /// Hex parsing refuses text whose bytes split a character instead of panicking.
     #[test]
     fn parse_hex_rejects_multibyte_text() {
         // Six bytes, three characters: the byte range 0..2 splits "é", which used to panic.
@@ -1144,11 +1117,64 @@ mod tests {
         assert_eq!(parse_hex("#ff880"), None);
     }
 
+    /// The shared HSB conversions give bit-identical output to the picker's old copies.
+    #[test]
+    fn shared_hsb_output_matches_the_old_picker_conversions() {
+        /// The picker's HSB to sRGB before it used photocraft-color.
+        fn old_hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+            let h = (h.rem_euclid(360.0)) / 60.0;
+            let c = v * s;
+            let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+            let (r, g, b) = match h as u32 {
+                0 => (c, x, 0.0),
+                1 => (x, c, 0.0),
+                2 => (0.0, c, x),
+                3 => (0.0, x, c),
+                4 => (x, 0.0, c),
+                _ => (c, 0.0, x),
+            };
+            let m = v - c;
+            [r + m, g + m, b + m]
+        }
+        /// The picker's sRGB to HSB before it used photocraft-color.
+        fn old_rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
+            let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+            let d = mx - mn;
+            let h = if d <= 0.0 {
+                0.0
+            } else if mx == c[0] {
+                60.0 * ((c[1] - c[2]) / d).rem_euclid(6.0)
+            } else if mx == c[1] {
+                60.0 * ((c[2] - c[0]) / d + 2.0)
+            } else {
+                60.0 * ((c[0] - c[1]) / d + 4.0)
+            };
+            [h, if mx <= 0.0 { 0.0 } else { d / mx }, mx]
+        }
+        let bits = |c: [f32; 3]| c.map(f32::to_bits);
+        for h in (0..=720).map(|i| i as f32 * 0.5) {
+            for s in (0..=20).map(|i| i as f32 / 20.0) {
+                for v in (0..=20).map(|i| i as f32 / 20.0) {
+                    assert_eq!(bits(hsb_to_rgb([h, s, v])), bits(old_hsv_to_rgb(h, s, v)), "{h} {s} {v}");
+                }
+            }
+        }
+        for r in 0..=32 {
+            for g in 0..=32 {
+                for b in 0..=32 {
+                    let c = [r as f32 / 32.0, g as f32 / 32.0, b as f32 / 32.0];
+                    assert_eq!(bits(rgb_to_hsb(c)), bits(old_rgb_to_hsv(c)), "{c:?}");
+                }
+            }
+        }
+    }
+
+    /// HSB and hex round-trip sRGB colours.
     #[test]
     fn hsv_round_trips() {
         for c in [[1.0, 0.0, 0.0], [0.2, 0.6, 0.4], [0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [0.9, 0.8, 0.1]] {
-            let h = rgb_to_hsv(c);
-            let back = hsv_to_rgb(h[0], h[1], h[2]);
+            let h = rgb_to_hsb(c);
+            let back = hsb_to_rgb(h);
             for i in 0..3 {
                 assert!((back[i] - c[i]).abs() < 1e-5, "{c:?} -> {h:?} -> {back:?}");
             }
@@ -1157,10 +1183,11 @@ mod tests {
         assert_eq!(parse_hex("#FF8000").map(hex).as_deref(), Some("#ff8000"));
     }
 
+    /// Locating a colour on the field and reading the field back agree in every mode.
     #[test]
     fn field_and_locate_are_inverse_in_every_mode() {
         let rgb = [0.8, 0.3, 0.2];
-        let (hsv, lab) = (rgb_to_hsv(rgb), photocraft_color::convert::srgb_to_lab(rgb));
+        let (hsv, lab) = (rgb_to_hsb(rgb), photocraft_color::convert::srgb_to_lab(rgb));
         for (m, _) in MODES.iter().chain(LAB_MODES) {
             let (x, y, z) = locate(m, hsv, rgb, lab);
             let c = field_color(m, z, x, y);

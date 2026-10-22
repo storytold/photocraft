@@ -118,6 +118,60 @@ fn indexed_png_opens_with_its_color_table() {
     assert_eq!(s.rgba(0, 1)[3], 0.0, "the tRNS entry is transparent");
 }
 
+/// A 2 × 2 GIF89a of palette indices `idx` over `pal` (padded to 4 entries), with `transparent`
+/// set through a Graphic Control Extension. Its LZW stream clears before every pixel, so every
+/// code stays 3 bits: the simplest valid stream any decoder reads.
+fn indexed_gif(pal: &[[u8; 3]; 4], idx: [u8; 4], transparent: Option<u8>) -> Vec<u8> {
+    let mut b = b"GIF89a".to_vec();
+    b.extend([2, 0, 2, 0, 0x81, 0, 0]); // 2 × 2, global table of 4
+    pal.iter().for_each(|c| b.extend(c));
+    if let Some(t) = transparent {
+        b.extend([0x21, 0xF9, 4, 0x01, 0, 0, t, 0]);
+    }
+    b.extend([0x2C, 0, 0, 0, 0, 2, 0, 2, 0, 0]);
+    let (clear, end) = (4u32, 5u32);
+    let codes: Vec<u32> = idx.iter().flat_map(|&i| [clear, u32::from(i)]).chain([end]).collect();
+    let (mut bits, mut n, mut data) = (0u32, 0u32, Vec::new());
+    for c in codes {
+        bits |= c << n;
+        n += 3;
+        while n >= 8 {
+            data.push((bits & 0xFF) as u8);
+            bits >>= 8;
+            n -= 8;
+        }
+    }
+    if n > 0 {
+        data.push(bits as u8);
+    }
+    b.push(2); // LZW minimum code size
+    b.push(data.len() as u8);
+    b.extend(&data);
+    b.extend([0, 0x3B]);
+    b
+}
+
+/// An indexed GIF opens in Indexed Color mode with its colour table and transparent entry, as a
+/// palette PNG does (#7886); it used to open as RGB.
+#[test]
+fn indexed_gif_opens_with_its_color_table() {
+    let pal = [[10, 20, 30], [200, 100, 50], [7, 8, 9], [0, 255, 0]];
+    let doc = import("indexed.gif", &indexed_gif(&pal, [1, 0, 2, 1], Some(2))).unwrap().document;
+    assert_eq!(doc.mode, ColorMode::Indexed);
+    assert_eq!(doc.depth, SampleType::U8);
+    let table = doc.color_table.as_ref().unwrap();
+    assert_eq!(table.colors, pal, "every entry, used or not");
+    assert_eq!(table.transparent, Some(2));
+    let s = doc.layers[0].surface().unwrap();
+    let px = s.rgba(0, 0);
+    assert!((px[0] - 200.0 / 255.0).abs() < 1e-6 && (px[3] - 1.0).abs() < 1e-6, "{px:?}");
+    assert_eq!(s.rgba(0, 1)[3], 0.0, "the transparent entry is transparent");
+    // Without a transparent entry, the table alone.
+    let doc = import("opaque.gif", &indexed_gif(&pal, [3, 3, 0, 1], None)).unwrap().document;
+    assert_eq!(doc.mode, ColorMode::Indexed);
+    assert_eq!(doc.color_table.as_ref().unwrap().transparent, None);
+}
+
 /// FITS header cards travel as the document's text metadata, so an astro frame keeps its
 /// OBJECT, EXPTIME and the rest through an edit.
 #[test]

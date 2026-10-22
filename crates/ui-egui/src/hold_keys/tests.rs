@@ -180,12 +180,65 @@ fn space_is_a_temporary_hand_and_gives_the_tool_back() {
     assert!(!st.session.active().unwrap().history.can_undo(), "nothing was painted");
 }
 
+/// The open paths the last frame painted, as their screen points.
+fn painted_paths(h: &Harness<'static, PhotocraftApp>) -> Vec<Vec<Pos2>> {
+    fn walk(s: &egui::Shape, out: &mut Vec<Vec<Pos2>>) {
+        match s {
+            egui::Shape::Path(p) if !p.closed => out.push(p.points.clone()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn the_pen_path_being_drawn_stays_visible_while_space_pans() {
+    // #6592: the path vanished for as long as the Hand dragged.
+    let mut h = harness(Tool::Pen);
+    click(&mut h, 100.0, 100.0, Modifiers::NONE);
+    click(&mut h, 200.0, 100.0, Modifiers::NONE);
+    assert_eq!(h.state().ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    let before = h.state().ui.views[0].center;
+    press_at(&mut h, 150.0, 200.0);
+    move_to(&mut h, 190.0, 230.0);
+    assert_ne!(h.state().ui.views[0].center, before, "the view is panning");
+    // Mid-drag: the segment is painted where its anchors now are on screen.
+    let (a, b) = (screen(&h, 100.0, 100.0), screen(&h, 200.0, 100.0));
+    let near = |p: &Pos2, q: Pos2| p.distance(q) < 1.0;
+    assert!(
+        painted_paths(&h).iter().any(|pts| pts.first().is_some_and(|p| near(p, a)) && pts.last().is_some_and(|p| near(p, b))),
+        "the Pen path from {a:?} to {b:?} is drawn while panning"
+    );
+    // The fist (#2196): the OS's own on macOS and Linux; on Windows our bitmap, over the
+    // `Crosshair` fallback `CursorLifecycle` leaves under it.
+    let out = &h.output().platform_output;
+    let fist = if cfg!(target_os = "windows") {
+        (egui::CursorIcon::Crosshair, crate::tool_cursor::hand_bitmap(&h.ctx, true).map(|i| i.rgba))
+    } else {
+        (egui::CursorIcon::Grabbing, None)
+    };
+    assert_eq!((out.cursor_icon, out.cursor_image.as_ref().map(|i| i.rgba.clone())), fist, "the fist while panning (#2196)");
+    release(&mut h, 190.0, 230.0, Modifiers::NONE);
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    h.run_steps(2);
+    let st = h.state();
+    assert_eq!(st.ui.pen.as_ref().map(|p| p.knots.len()), Some(2), "the path is still being drawn");
+    assert_eq!(st.ui.tool, Tool::Pen);
+}
+
 #[test]
 fn space_while_editing_type_is_not_the_hand_tool() {
     let mut h = harness(Tool::Type);
     let id = h.state_mut().run("type.create", json!({"text": "ئا", "size": 20, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer: id,
+        document: None,
         caret: 2,
         anchor: 2,
         session: "t".into(),

@@ -29,6 +29,8 @@ pub(crate) struct BlendPreview {
     area: Option<Rect>,
     /// The document shown for `mode`, with its key.
     shown: Option<(u64, Arc<Document>)>,
+    /// GPU preview key, affected region (including effects), and rectangles already refreshed.
+    covered: Option<(u64, Rect, Vec<Rect>)>,
 }
 
 /// The Layers panel, each frame it draws `layer`'s blend-mode dropdown: the mode under the
@@ -54,7 +56,7 @@ pub(crate) fn hover(app: &mut PhotocraftApp, layers: &[LayerId], mode: Option<Bl
                 _ => None,
             };
         }
-        Some(BlendPreview { doc, revision, layers: layers.to_vec(), mode: Some(mode), frame, area, shown: None })
+        Some(BlendPreview { doc, revision, layers: layers.to_vec(), mode: Some(mode), frame, area, shown: None, covered: None })
     });
 }
 
@@ -94,6 +96,41 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, 
     let p = app.blend_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision)?;
     let ours = |k: u64| k == 0 || is_preview_key(k);
     (seen != now && ours(seen) && ours(now) && (is_preview_key(seen) || is_preview_key(now))).then_some(p.area)?
+}
+
+/// Limit an active preview to the view. Returning to the document restores the whole region.
+pub(crate) fn clip_damage(app: &mut PhotocraftApp, doc: DocId, revision: u64, key: u64, region: Rect, visible: Rect) -> Rect {
+    let Some(p) = app.blend_preview.as_mut().filter(|p| p.doc == doc && p.revision == revision) else { return region };
+    if !p.shown.as_ref().is_some_and(|(shown, _)| *shown == key) {
+        p.covered = None;
+        return region;
+    }
+    let shown = region.intersect(&visible);
+    p.covered = Some((key, region, vec![shown]));
+    shown
+}
+
+/// A pan or zoom can expose pixels not yet rendered for the current preview key.
+pub(crate) fn uncovered(app: &mut PhotocraftApp, doc: DocId, revision: u64, key: u64, visible: Rect) -> Option<Rect> {
+    let p = app.blend_preview.as_mut().filter(|p| p.doc == doc && p.revision == revision)?;
+    let (covered_key, region, covered) = p.covered.as_mut()?;
+    if *covered_key != key {
+        return None;
+    }
+    let want = region.intersect(&visible);
+    if want.is_empty() || covered.iter().any(|r| r.contains_rect(&want)) {
+        return None;
+    }
+    // Keep disjoint views without marking the unrendered gaps between them as covered.
+    // Bound bookkeeping during long pans: after eight rectangles, render the whole affected
+    // region once. A different mode/revision resets coverage through `clip_damage`.
+    covered.retain(|r| !want.contains_rect(r));
+    let refresh = if covered.len() < 8 { want } else { *region };
+    if refresh == *region {
+        covered.clear();
+    }
+    covered.push(refresh);
+    Some(refresh)
 }
 
 fn is_preview_key(key: u64) -> bool {

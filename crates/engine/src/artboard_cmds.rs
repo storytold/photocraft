@@ -426,6 +426,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let grown = |len: u32, by: i32| (i64::from(len) + i64::from(by)).clamp(1, 300_000) as u32;
     let label = if duplicate { "Duplicate Artboard" } else { "New Artboard" };
+    let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
     let (nid, rect) = s.edit(label, |doc, active| {
         if (sx, sy) != (0, 0) {
             crate::image_cmds::translate_doc(doc, cmd, sx, sy)?;
@@ -440,7 +441,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
         let nid = if duplicate {
             let src_rect = doc.layer(id).and_then(Layer::artboard).map(|a| a.rect).ok_or(EngineError::NoLayer(id))?;
             let (dx, dy) = (rect.x0.saturating_sub(src_rect.x0), rect.y0.saturating_sub(src_rect.y0));
-            let copy = crate::commands::layer_copy(doc, id)?;
+            let copy = crate::commands::layer_copy(doc, id, add_copy)?;
             let nid = doc.insert_above(Some(id), copy);
             // Grow the canvas first, so shapes on the board re-render uncut where they land.
             let fit = |len: u32, edge: i32| i64::from(len).max(i64::from(edge)).clamp(1, 300_000) as u32;

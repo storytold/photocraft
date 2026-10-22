@@ -59,7 +59,7 @@ fn a_deep_stack_above_the_device_buffer_limit_returns_an_error_without_panicking
     let Some((adapter, device, queue)) = constrained_device() else { return };
     let mut compositor = compositor(&adapter, &device);
     healthy_control(&mut compositor, &device, &queue);
-    let deep = fills(150);
+    let deep = fills(300);
     eprintln!(
         "uniform-limit reproduction: backend={:?}, buffer limit={}, page={}, passes={}",
         adapter.get_info().backend,
@@ -80,7 +80,7 @@ fn an_oversized_stack_falls_back_without_faulting_the_watched_device() {
     let mut compositor = compositor(&adapter, &device);
     compositor.set_health(health.clone());
     healthy_control(&mut compositor, &device, &queue);
-    let deep = fills(150);
+    let deep = fills(300);
     let fallback = match render_to_vec(&mut compositor, &device, &queue, &deep, deep.bounds()) {
         Ok(_) => panic!("the oversized stack must return Unsupported for CPU fallback"),
         Err(_) => photocraft_compose::flatten(&deep),
@@ -104,7 +104,8 @@ fn the_exact_buffer_limit_still_renders_with_cpu_parity() {
     let health = DeviceHealth::watch(&device);
     let mut compositor = compositor(&adapter, &device);
     compositor.set_health(health.clone());
-    let boundary = fills(127);
+    // Every fill layer is one pass (`Kernel::LayerBlend`) after the clear.
+    let boundary = fills(254);
     assert_eq!(plan(&boundary).unwrap().passes.len(), 255, "one chunk plus255passes uses exactly65536bytes");
     let expected = photocraft_compose::flatten(&boundary);
     let actual = render_to_vec(&mut compositor, &device, &queue, &boundary, boundary.bounds()).expect("the exact supported buffer boundary is accepted");
@@ -121,7 +122,7 @@ fn later_oversized_page_cells_are_rejected_before_render_or_encode_calls_the_sin
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((adapter, device, queue)) = constrained_device() else { return };
     let health = DeviceHealth::watch(&device);
-    let doc = fills_size(126, Size::new(4096, 2048));
+    let doc = fills_size(252, Size::new(4096, 2048));
     let region = photocraft_geom::Rect::new(2047, 0, 4096, 2048);
     assert_eq!(plan(&doc).unwrap().passes.len(), 253);
     // Default pages are2048, chunks1024: the narrow first page has2chunks and fits;

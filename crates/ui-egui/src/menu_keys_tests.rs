@@ -242,6 +242,32 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
     assert_ne!(h.state().ui.tool, tool, "off the bar, E picks the Eraser again");
 }
 
+/// The whole app: with the bar focused by an Alt tap, a command shortcut leaves the bar and runs
+/// in the same press (#6573); the bar's own keys still drive it.
+#[test]
+fn a_command_shortcut_leaves_the_bar_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.run_steps(2);
+    alt_tap(&mut h);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "Alt puts the keyboard on File");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(1), "→ still moves along the bar");
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘D deselects");
+    assert_eq!(Keys::current(&h.ctx).focus, None, "and takes the keyboard off the bar");
+    assert!(!crate::menu_keys::is_focused(&h.ctx));
+    assert!(!is_open(&h.ctx), "no menu opened");
+}
+
 /// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
 /// any script: the checkmark column has a fixed width instead of padding characters (#5705).
 #[test]
@@ -278,4 +304,55 @@ fn every_menu_row_starts_its_label_after_one_checkmark_column() {
         assert_eq!(t.text(), "✔ Rulers", "a checked row keeps its mark (and its accessible label)");
     });
     out.textures_delta.clear();
+}
+
+/// The whole app (shortcuts, dialogs and the menu bar), for keys other handlers see first.
+fn whole_app() -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(16).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app()
+    });
+    h.run_steps(4);
+    h
+}
+
+/// `key` pressed and released with `mods` held, as the platform reports a chord.
+fn chord(h: &mut Harness<'static, PhotocraftApp>, key: egui::Key, mods: egui::Modifiers) {
+    h.event_modifiers(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods }, mods);
+    h.event_modifiers(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: mods }, mods);
+    h.run_steps(2);
+}
+
+fn alt_down(h: &mut Harness<'static, PhotocraftApp>, mods: egui::Modifiers) {
+    h.event_modifiers(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: mods }, mods);
+    h.run_steps(2);
+}
+
+fn alt_up(h: &mut Harness<'static, PhotocraftApp>) {
+    h.event_modifiers(
+        egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+        egui::Modifiers::NONE,
+    );
+    h.run_steps(3);
+}
+
+/// #7481: Alt held through a shortcut is no tap, even when the shortcut consumed its key before
+/// the bar saw it. Ctrl+Alt+I opens Image Size; releasing Alt leaves the keyboard where it was,
+/// so Enter confirms the dialog instead of opening File. A lone tap still puts it on the bar.
+#[test]
+fn alt_held_through_a_shortcut_does_not_put_the_keyboard_on_the_bar() {
+    let mut h = whole_app();
+    alt_down(&mut h, egui::Modifiers::ALT);
+    chord(&mut h, egui::Key::I, egui::Modifiers::CTRL | egui::Modifiers::ALT | egui::Modifiers::COMMAND);
+    alt_up(&mut h);
+    assert_eq!(h.state().ui.dialogs.len(), 1, "Image Size opened");
+    assert_eq!(Keys::current(&h.ctx).focus, None, "the bar did not take the keyboard");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(!is_open(&h.ctx), "Enter opened no menu");
+    assert!(h.state().ui.dialogs.is_empty(), "Enter confirmed Image Size");
+
+    alt_down(&mut h, egui::Modifiers::ALT);
+    alt_up(&mut h);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "a lone tap still focuses the bar");
 }

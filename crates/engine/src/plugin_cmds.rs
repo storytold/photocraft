@@ -86,7 +86,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 let before = keep_alpha.then(|| surf.clone());
                 *surf = plugin.apply(surf, canvas, selection.as_ref(), &resolved).map_err(err)?;
                 if let Some(before) = &before {
-                    crate::filters::keep_alpha(before, surf);
+                    crate::filters::keep_alpha(before, surf, &|| false)?;
                 }
                 Ok(())
             }

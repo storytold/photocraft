@@ -2114,6 +2114,11 @@
 	Apply the pen's tilt and rotation to the tip shape	펜의 기울기와 회전을 브러시 끝 모양에 적용
 	Mixer Brush	혼합 브러시
 	Wet	젖음
+	Current Brush Load	현재 브러시 물감
+	Load Brush	브러시 채우기
+	Clean Brush	브러시 세척
+	Load the brush after each stroke	획마다 브러시 채우기
+	Clean the brush after each stroke	획마다 브러시 세척
 	Mix	혼합
 	Wetness Jitter	젖음 지터
 	Mix Jitter	혼합 지터
@@ -2185,6 +2190,7 @@
 	32 bit (float)	32비트(부동 소수점)
 	Floating point	부동 소수점
 	Use Global Light	전체 조명 사용
+	Overprint	중복 인쇄
 	Native file drag-and-drop is unavailable	파일 드래그 앤 드롭을 사용할 수 없습니다
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나, 파일 관리자에서 이미지를 복사한 뒤 {paste}(으)로 붙여넣으세요.
 	To drop files, start PhotoCraft under XWayland: `{command}`	파일을 끌어다 놓으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
@@ -3237,6 +3243,26 @@ cameraData	Lens	렌즈
 	Mirror	미러
 	Output Settings	출력 설정
 	Output To	출력 위치
+
+	Animation Options	애니메이션 옵션
+	Entire Document	전체 문서
+	Filter Options	필터 옵션
+	Layer Bounds	레이어 경계
+	Layers Panel Options	레이어 패널 옵션
+	New Artboard…	새 아트보드…
+	New Group	새 그룹
+	New Group…	새 그룹…
+	New Layer…	새 레이어…
+	Panel Options…	패널 옵션…
+	Prevent Auto-Nesting	자동 중첩 방지
+	Show Layers	레이어 표시
+	Thumbnail Contents	축소판 내용
+	Thumbnail Size	축소판 크기
+	Use Default Masks on Fill Layers	칠 레이어에 기본 마스크 사용
+	Expand New Effects	새 효과 펼치기
+	Add “copy” to Copied Layers and Groups	복사한 레이어 및 그룹에 “복사” 추가
+	Preview on canvas when reordering layers	레이어 순서 변경 시 캔버스에서 미리보기
+	Show layer mask badges	레이어 마스크 배지 표시
 	Loading fonts…	글꼴 불러오는 중…
 	Response curve	응답 곡선
 	Simulate Pressure	압력 시뮬레이션
@@ -3286,6 +3312,13 @@ curves	Smooth	매끄럽게
 	Click to place · Alt-click or drag off-canvas to remove	클릭하여 배치 · Alt-클릭 또는 캔버스 밖으로 드래그하여 제거
 	No document open	열린 문서 없음
 	{n} of {max} sample points	{max}개 중 {n}개의 샘플 지점
+
+# History panel menu (#2966)
+	Step Forward	한 단계 앞으로
+	Step Backward	한 단계 뒤로
+	Clear History	작업 내역 지우기
+	New Snapshot…	새 스냅샷…
+	History Options…	작업 내역 옵션…
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능
@@ -3303,6 +3336,7 @@ curves	Smooth	매끄럽게
 	Light Red	연한 빨강
 	Medium Blue	중간 파랑
 	Light Gray	연한 회색
+	Stop	정지
 	Object Finder	개체 찾기
 	No object found there — drag a rectangle around it	그곳에서 개체를 찾지 못했습니다 — 주위에 사각형을 드래그하세요
 	Remove after each stroke	획마다 제거
@@ -3347,6 +3381,9 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	작업 내역 패널의 소스 상태에서 칠합니다
+	Sets the source for the history brush	작업 내역 브러시의 소스를 설정합니다
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	포함된 프로파일 사용({profile})
 	Convert to the working space ({profile})	작업 색상 공간으로 변환({profile})
@@ -3370,6 +3407,9 @@ curves	Smooth	매끄럽게
 # View › Guides › right-click a guide
 	Edit Selected Guides	선택한 안내선 편집
 	Clear Selected Guides	선택한 안내선 지우기
+	Bicubic Automatic	쌍입방 자동
+	Bicubic Smoother	쌍입방 더 부드럽게
+	Bicubic Sharper	쌍입방 더 선명하게
 	Pasting from other apps is unavailable	다른 앱에서 붙여넣기를 사용할 수 없습니다
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	이 세션에서는 PhotoCraft가 시스템 클립보드에 접근할 수 없습니다. Wayland에서는 Flatpak 샌드박스가 다른 앱의 이미지를 읽는 데 쓰이는 프로토콜을 숨깁니다.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	다른 앱에서 붙여넣으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
@@ -3389,6 +3429,17 @@ curves	Smooth	매끄럽게
 	set name	세트 이름
 	{set} (modified)	{set}(수정됨)
 	Show file name in title	제목에 파일 이름 표시
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	50% 한계값
+	Pattern Dither	패턴 디더
+	Diffusion Dither	확산 디더
+	Halftone Screen	하프톤 스크린
+	Custom Pattern	사용자 정의 패턴
+	Frequency:	빈도:
+	Lines/Inch	선/인치
+	Lines/Centimeter	선/센티미터
+	Ellipse	타원
 	Accept and Go to Conflict	적용 후 충돌 항목으로 이동
 	Changes undone.	변경 사항을 취소했습니다.
 	Choose a new shortcut for this command, or leave it without one.	이 명령의 새 단축키를 선택하거나 단축키 없이 두세요.
@@ -3442,3 +3493,15 @@ curves	Smooth	매끄럽게
 	Tween	트위닝
 	Last frame	마지막 프레임
 	Frames to add	추가할 프레임 수
+
+# DDS Options (#1327)
+	DDS Options	DDS 옵션
+	Compression	압축
+	Generate Mipmaps	밉맵 생성
+
+# Color Table (.act) dialog
+	There is no color table to save.	저장할 색상표가 없습니다.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file}에 색상 {n}개 저장
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	GPU 어댑터

@@ -448,6 +448,25 @@ mod tests {
     }
 
     #[test]
+    fn a_crop_to_a_target_size_scales_points() {
+        // The crop resamples the 20 x 20 area to 40 x 40: the point (10, 10 after the shift; 10, 9
+        // turned 90°, as in `a_rotated_crop_moves_points`) doubles.
+        for (angle, at) in [(None, [20.0, 20.0]), (Some(90), [20.0, 18.0])] {
+            let mut s = session();
+            s.execute("view.colorSamplers.add", json!({"x": 50, "y": 40})).unwrap();
+            let mut p = json!({"x": 40, "y": 30, "width": 20, "height": 20, "targetWidth": 40, "targetHeight": 40});
+            if let Some(a) = angle {
+                p["angle"] = json!(a);
+            }
+            s.execute("image.crop", p).unwrap();
+            let p = points(&mut s);
+            assert_eq!(p.len(), 1, "angle {angle:?}");
+            assert_eq!(p[0]["position"], json!(at), "angle {angle:?}");
+            assert_eq!(s.take_samplers_removed(), 0, "angle {angle:?}");
+        }
+    }
+
+    #[test]
     fn bad_params_and_no_document_are_errors_not_panics() {
         let mut s = Session::new();
         for id in ["view.colorSamplers.add", "view.colorSamplers.move", "view.colorSamplers.delete", "view.colorSamplers.clear", "view.colorSamplers.list"] {

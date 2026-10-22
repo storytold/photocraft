@@ -257,3 +257,26 @@ fn an_ambient_map_or_lut_never_renders_unfiltered_pixels_into_the_stack_cache() 
         assert_eq!(bytes, smart_cmds::stack_cache_bytes(), "a denied render cached no stage");
     }
 }
+
+/// Choosing another Displace map through `setParams` embeds it (#7423), so the new map is read
+/// before the edit: a path outside the workspace is refused before that read, and the filter
+/// keeps the map it had.
+#[test]
+fn a_new_displace_map_outside_the_workspace_is_refused_before_it_is_read() {
+    let f = Fixture::new();
+    let (mut h, layer) = f.setup(false);
+    let params = |h: &Headless| {
+        let d = h.session.active().unwrap();
+        let LayerContent::Smart(sm) = &d.doc.layer(layer).unwrap().content else { panic!("smart object") };
+        sm.smart_filters[0].params.clone()
+    };
+    let before = params(&h);
+    let map = photocraft_io::smart_map::displace_embedded_map(&before).expect("the open document's map, embedded");
+    assert!(map.data.iter().all(|v| *v < 0.9), "the grey map");
+    let doc = h.session.active().unwrap().doc.clone();
+    let edit = json!({"layer": layer.0, "params": {"mapPath": f.outside("white.png")}});
+    assert_denied(h.session.execute("layer.smartFilter.setParams", edit.clone()));
+    assert_denied(h.handle("engine.execute", json!({"command": "layer.smartFilter.setParams", "params": edit})));
+    assert!(Arc::ptr_eq(&doc, &h.session.active().unwrap().doc));
+    assert_eq!(params(&h), before, "no white map was read into the filter");
+}

@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
+#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
+use parley::fontique::SourceKind;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
@@ -254,6 +256,10 @@ impl FontDb {
             }
             #[cfg(target_os = "linux")]
             files.extend(fontconfig_font_paths());
+            // Core Text knows every font macOS offers, also those activated from outside the
+            // font folders (#6683).
+            #[cfg(target_os = "macos")]
+            files.extend(coretext_font_paths());
             // PingFang (the macOS Chinese UI font) lives outside the font folders.
             if cfg!(target_os = "macos") {
                 files.extend(crate::cjk::mac_pingfang());
@@ -761,6 +767,49 @@ mod fontconfig_tests {
     }
 }
 
+/// The font files Core Text offers: the installed fonts and those activated from any other folder
+/// (a font manager, Adobe Fonts, Office, Apple's on-demand downloads). A scratch collection with
+/// fontique's Core Text backend lists them; its fonts are not used, only their files, so our own
+/// collection registers them like any scanned file.
+#[cfg(target_os = "macos")]
+fn coretext_font_paths() -> Vec<std::path::PathBuf> {
+    // Reading arbitrary fonts must not take the scan down: no files is the folder scan's result.
+    std::panic::catch_unwind(|| {
+        let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
+        let mut files = font_files_of(&mut system);
+        files.retain(|f| !f.starts_with(MACOS_PRIVATE_FONTS));
+        files
+    })
+    .unwrap_or_default()
+}
+
+/// Fonts reserved for the system UI (PingFangUI.ttc among them). Core Text offers them, but
+/// fontique can't draw their outlines (it works around PingFangUI for the same reason), so they
+/// are not listed.
+#[cfg(target_os = "macos")]
+const MACOS_PRIVATE_FONTS: &str = "/System/Library/PrivateFrameworks";
+
+/// The files `collection`'s fonts are read from, each once and in a fixed order. Fonts
+/// registered from memory have no file.
+#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
+fn font_files_of(collection: &mut Collection) -> Vec<std::path::PathBuf> {
+    let names: Vec<String> = collection.family_names().map(str::to_string).collect();
+    let mut files = HashSet::new();
+    for name in names {
+        let Some(family) = collection.family_by_name(&name) else {
+            continue;
+        };
+        for font in family.fonts() {
+            if let SourceKind::Path(path) = font.source().kind() {
+                files.insert(path.to_path_buf());
+            }
+        }
+    }
+    let mut files: Vec<_> = files.into_iter().collect();
+    files.sort();
+    files
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
@@ -901,6 +950,63 @@ mod tests {
         assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-GB")), ("Arial", Some("de-DE"))])), None);
         assert_eq!(super::localized_name("X", &names(&[("Y", None), ("  ", Some("ja-JP"))])), None);
         assert_eq!(super::localized_name("X", &[]), None);
+    }
+
+    /// The files a collection's fonts come from (what Core Text's fonts are loaded from, #6683):
+    /// each once, none for fonts held in memory.
+    #[test]
+    fn font_files_of_lists_each_font_file_once() {
+        use super::{Blob, Collection, CollectionOptions};
+        let dir = std::env::temp_dir().join(format!("photocraft-font-files-{}", std::process::id()));
+        let activated = dir.join("activated");
+        std::fs::create_dir_all(&activated).unwrap();
+        let (inter, mono) = (dir.join("inter.ttf"), activated.join("mono.ttf"));
+        std::fs::write(&inter, super::INTER_REGULAR.as_slice()).unwrap();
+        std::fs::write(&mono, super::JETBRAINS_MONO_REGULAR.as_slice()).unwrap();
+        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+        collection.load_fonts_from_paths([&dir]);
+        // The same file again and a font from memory add no files.
+        collection.load_fonts_from_paths([&inter]);
+        collection.register_fonts(Blob::new(std::sync::Arc::new(super::INTER_MEDIUM.clone())), None);
+        let files = super::font_files_of(&mut collection);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut expected = vec![inter, mono];
+        expected.sort();
+        assert_eq!(files, expected);
+    }
+
+    /// Core Text lists the system's font files, all readable, none of the reserved UI fonts.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn coretext_lists_the_system_font_files() {
+        let files = super::coretext_font_paths();
+        assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
+        assert!(files.iter().all(|f| f.is_file() && !f.starts_with("/System/Library/PrivateFrameworks")));
+    }
+
+    /// Every family macOS offers is in the font list, not only those in the font folders (#6683).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn every_family_coretext_offers_is_listed() {
+        use super::{Collection, CollectionOptions, SourceKind};
+        let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
+        // Its names include localized aliases of a family ("Systemschrift"); the family has one name.
+        let aliases: Vec<String> = system.family_names().map(str::to_string).collect();
+        let mut offered = Vec::new();
+        for family in aliases.iter().filter_map(|n| system.family_by_name(n)) {
+            // A family only the reserved UI fonts provide (PingFang before its download) is not listed.
+            let listed_file =
+                |font: &parley::fontique::FontInfo| matches!(font.source().kind(), SourceKind::Path(p) if !p.starts_with(super::MACOS_PRIVATE_FONTS));
+            if !super::is_hidden_family(family.name()) && family.fonts().iter().any(listed_file) {
+                offered.push(family.name().to_string());
+            }
+        }
+        offered.sort();
+        offered.dedup();
+        assert!(!offered.is_empty());
+        let listed = super::FontDb::with_system_fonts().families();
+        let missing: Vec<&String> = offered.iter().filter(|n| !listed.contains(n)).collect();
+        assert!(missing.is_empty(), "macOS offers these families, the font list lacks them: {missing:?}");
     }
 
     #[test]

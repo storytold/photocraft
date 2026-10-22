@@ -115,6 +115,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
             paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
             break;
         }
+        let target = app.session.active().map(|d| d.doc.id);
         let result = (|| {
             if let Some(auth) = app.session.authorize {
                 auth(id, p).map_err(|e| e.to_string())?;
@@ -137,7 +138,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
         })();
         match result {
             Ok(value) => {
-                if let Some(error) = actions_cmds::nested_failure(id, &value) {
+                if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
                 }
@@ -1708,5 +1709,73 @@ mod tests {
         assert!(!h.state().ui.actions.button_mode);
         assert!(h.query_by_label("Button Mode").is_some());
         assert_eq!(h.query_all_by_role(egui::accesskit::Role::CheckBox).count(), 1, "the step list returns when Button Mode is turned off");
+    }
+
+    /// An imported Close with Save: Yes plays as Save then Close. A Save Document script event
+    /// that closes the saved document stops playback, so the Close never reaches another dirty
+    /// document (#7367).
+    #[test]
+    fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
+        use photocraft_psd::atn::{self, AtnEvent, AtnItem};
+        use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+        use std::{cell::RefCell, rc::Rc};
+        // A one-step .atn: Close (`Cls `) with Save: Yes.
+        let seed = Action::new("Seed", vec![("layer.new.layer".into(), json!({}))]);
+        let (bytes, _) = photocraft_engine::atn_cmds::export("Set", &[&seed], &[], false).unwrap();
+        let mut f = atn::parse(&bytes).unwrap();
+        f.actions[0].items = vec![AtnItem {
+            event: AtnEvent::Code(*b"Cls "),
+            dictionary: "Close".into(),
+            descriptor: Some(Descriptor::new("null").with("Svng", D::Enumerated { type_id: Id::new("YsN "), value: Id::new("Ys  ") })),
+            ..Default::default()
+        }];
+        let imported = photocraft_engine::atn_cmds::import(&atn::write(&f).unwrap()).unwrap();
+        let close_with_save = imported.actions[0].clone();
+        assert_eq!(close_with_save.steps, [("file.save".into(), json!({})), ("file.close".into(), json!({}))]);
+        for hook in ["none", "activate", "close"] {
+            let writes = Rc::new(RefCell::new(Vec::<String>::new()));
+            let w = writes.clone();
+            let services = crate::Services {
+                export: Some(Box::new(|doc, _, _| Ok((doc.name.clone().into_bytes(), Vec::new())))),
+                write: Some(Box::new(move |path, _| {
+                    w.borrow_mut().push(path.to_string());
+                    Ok(())
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            // B is dirty with an unsaved KeepB layer; A is active and has its own file.
+            for name in ["B", "A"] {
+                app.run("file.new", json!({"name": name, "width": 2, "height": 2})).unwrap();
+            }
+            assert!(app.session.set_active(0));
+            app.run("layer.new.layer", json!({"name": "KeepB"})).unwrap();
+            assert!(app.session.set_active(1));
+            app.session.active_mut().unwrap().path = Some("A.psd".into());
+            app.session.actions.list.push(close_with_save.clone());
+            let steps = match hook {
+                "activate" => json!([["document.activate", {"document": 0}]]),
+                "close" => json!([["file.close", {}]]),
+                _ => Value::Null,
+            };
+            if !steps.is_null() {
+                app.run("file.scripts.scriptEventsManager", json!({"add": {"event": "saveDocument", "steps": steps}})).unwrap();
+            }
+            let r = app.run("actions.play", json!({"action": 0})).unwrap();
+            assert_eq!(*writes.borrow(), ["A.psd"], "hook={hook}: A is saved once");
+            let names: Vec<Vec<String>> = app.session.documents().iter().map(|d| d.doc.layers.iter().map(|l| l.name.clone()).collect()).collect();
+            assert_eq!(app.session.documents().len(), 1, "hook={hook}: only A closes; result={r}");
+            assert_eq!(app.session.active().unwrap().doc.name, "B", "hook={hook}");
+            assert_eq!(names, [["Background", "KeepB"]], "hook={hook}: B stays open with its unsaved layer");
+            if hook == "close" {
+                assert_eq!(r["failed"]["step"], 0, "{r}");
+                assert_eq!(r["failed"]["id"], "file.save", "{r}");
+                assert!(r["failed"]["error"].as_str().unwrap().contains("closed during the save"), "{r}");
+            } else {
+                assert!(r.get("failed").is_none(), "hook={hook}: {r}");
+            }
+            assert_eq!(app.session.actions.playing, 0);
+            assert!(app.session.actions.playback_stack.is_empty());
+        }
     }
 }

@@ -562,6 +562,46 @@ pub fn to_bitmap(gray: &mut [f32], w: usize, method: BitmapMethod) {
     }
 }
 
+/// The threshold map of Bitmap's Custom Pattern from a pattern's lightness (0..=1, row-major):
+/// pattern pixels ranked by lightness, ties sharing their average rank, the lightest pixel
+/// thresholding lowest (it turns white first). A map of `n` pixels thus spreads `n` evenly
+/// spaced levels `(k + 0.5) / n`, whatever the pattern's own contrast, as Photoshop's does
+/// (measured: a 2x2 pattern of 32/96/160/224, a 3x1 of 50/128/200 and a 7x1 ramp all give
+/// exactly those levels).
+pub fn custom_pattern_thresholds(lightness: &[f32]) -> Vec<f32> {
+    let n = lightness.len();
+    let key = |i: usize| lightness.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|a, b| key(*a).total_cmp(&key(*b)));
+    let mut out = vec![0.5; n];
+    let mut start = 0;
+    while start < n {
+        let v = order.get(start).map(|i| key(*i));
+        let end = (start..n).find(|&j| order.get(j).map(|i| key(*i)) != v).unwrap_or(n);
+        // Ranks start..end share their mean.
+        let rank = (start + end - 1) as f32 / 2.0;
+        let t = 1.0 - (rank + 0.5) / n as f32;
+        for i in order.get(start..end).unwrap_or_default() {
+            if let Some(o) = out.get_mut(*i) {
+                *o = t;
+            }
+        }
+        start = end;
+    }
+    out
+}
+
+/// Bitmap's Custom Pattern: each gray value (0..=1, row-major `w` wide) turns white where it
+/// reaches the threshold `map` (`mw` x `mh`, from [`custom_pattern_thresholds`]) tiled from the
+/// image's top-left corner, black elsewhere. A map that doesn't fit `mw` x `mh` thresholds at 50%.
+pub fn to_bitmap_custom(gray: &mut [f32], w: usize, map: &[f32], mw: usize, mh: usize) {
+    let fits = w > 0 && mw > 0 && mh > 0 && mw.checked_mul(mh) == Some(map.len());
+    for (i, v) in gray.iter_mut().enumerate() {
+        let t = if fits { map.get((i / w) % mh * mw + (i % w) % mw).copied().unwrap_or(0.5) } else { 0.5 };
+        *v = if *v >= t { 1.0 } else { 0.0 };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,5 +761,42 @@ mod tests {
                 assert_eq!(mean, 0.0);
             }
         }
+    }
+
+    /// The first 8-bit gray level (of a 0..=255 ramp) that `t` turns white.
+    fn first_white(t: f32) -> u32 {
+        (0..=255).find(|v| *v as f32 / 255.0 >= t).unwrap_or(256)
+    }
+
+    #[test]
+    fn custom_pattern_thresholds_match_photoshop() {
+        // Photoshop (Image › Mode › Bitmap, Custom Pattern) on a 0..255 ramp: the first white
+        // level per pattern pixel, measured against defined patterns.
+        let l = |v: &[u8]| v.iter().map(|v| f32::from(*v) / 255.0).collect::<Vec<_>>();
+        let ramp7 = custom_pattern_thresholds(&l(&[0, 40, 80, 120, 160, 200, 240]));
+        assert_eq!(ramp7.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [237, 201, 164, 128, 92, 55, 19]);
+        let five = custom_pattern_thresholds(&l(&[10, 200, 90, 250, 150]));
+        assert_eq!(five.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [230, 77, 179, 26, 128]);
+        // Equal pixels share their rank: 100, 100 both sit at 50%.
+        let ties = custom_pattern_thresholds(&l(&[100, 100, 200, 50]));
+        assert_eq!(ties.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [128, 128, 32, 224]);
+        assert!(custom_pattern_thresholds(&[]).is_empty());
+        assert_eq!(custom_pattern_thresholds(&[f32::NAN, 0.3]).len(), 2);
+    }
+
+    #[test]
+    fn custom_pattern_tiles_from_the_top_left() {
+        // A 2x1 map: even columns need 75%, odd ones 25%.
+        let map = [0.75, 0.25];
+        let mut g = vec![0.5; 6];
+        to_bitmap_custom(&mut g, 3, &map, 2, 1);
+        assert_eq!(g, [0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+        // A map that doesn't match its size, or an empty image width, is a 50% threshold.
+        let mut g = vec![0.4, 0.6];
+        to_bitmap_custom(&mut g, 2, &map, 3, 1);
+        assert_eq!(g, [0.0, 1.0]);
+        let mut g = vec![0.6];
+        to_bitmap_custom(&mut g, 0, &map, 2, 1);
+        assert_eq!(g, [1.0]);
     }
 }

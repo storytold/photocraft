@@ -1272,7 +1272,20 @@ mod tests {
 
     #[test]
     fn mixer_brush_ui_strings_have_translations_in_every_registered_language() {
-        const STRINGS: &[&str] = &["Mixer Brush", "Mixer Brush Tool", "Wet", "Load", "Mix", "Flow", "Sample All Layers"];
+        const STRINGS: &[&str] = &[
+            "Mixer Brush",
+            "Mixer Brush Tool",
+            "Wet",
+            "Load",
+            "Mix",
+            "Flow",
+            "Sample All Layers",
+            "Current Brush Load",
+            "Load Brush",
+            "Clean Brush",
+            "Load the brush after each stroke",
+            "Clean the brush after each stroke",
+        ];
         for lang in Lang::all() {
             for source in STRINGS {
                 let translated = tr(lang, source);

@@ -858,9 +858,10 @@ fn saturation_track(hue_deg: f32) -> [Color32; 2] {
     [Color32::from_gray(128), hue_color(hue_deg)]
 }
 
-/// The Lightness slider's track: black, the hue, white (UI-217-16).
-fn lightness_track(hue_deg: f32) -> [Color32; 3] {
-    [Color32::BLACK, hue_color(hue_deg), Color32::WHITE]
+/// The Lightness slider's track: black, mid grey, white, whatever the hue, as in Photoshop
+/// (UI-217-16, #6539).
+fn lightness_track() -> [Color32; 3] {
+    [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]
 }
 
 fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
@@ -926,7 +927,8 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["hue"] = json!(h.round());
         }
         e.add(Edit::of(&r));
-        // The Saturation and Lightness tracks follow the current hue, as in Photoshop (UI-217-16).
+        // The Saturation track follows the current hue; the Lightness track is a fixed
+        // black-grey-white ramp, as in Photoshop (UI-217-16).
         let sat_track = saturation_track(h);
         let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
         let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", track_stops(cx, &sat_track));
@@ -934,7 +936,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["saturation"] = json!(s.round());
         }
         e.add(Edit::of(&r));
-        let light_track = lightness_track(h);
+        let light_track = lightness_track();
         let mut l = num(v, "lightness", 0.0).clamp(-100.0, 100.0);
         let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", track_stops(cx, &light_track));
         if r.changed() {
@@ -1681,12 +1683,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saturation_and_lightness_tracks_follow_the_hue() {
-        // The S/L slider tracks recolour with the hue (UI-217-16).
+    fn saturation_track_follows_the_hue() {
+        // The Saturation slider track recolours with the hue (UI-217-16).
         assert_eq!(saturation_track(0.0), [Color32::from_gray(128), hue_color(0.0)]);
         assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
         assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
-        assert_eq!(lightness_track(200.0), [Color32::BLACK, hue_color(200.0), Color32::WHITE]);
+    }
+
+    #[test]
+    fn lightness_track_is_black_grey_white_whatever_the_hue() {
+        // Photoshop's Lightness track does not take the hue's colour (#6539).
+        assert_eq!(lightness_track(), [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]);
+        let [_, mid, _] = lightness_track();
+        assert!(mid.r() == mid.g() && mid.g() == mid.b(), "the middle stop is neutral grey");
     }
 
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the colour sliders get plain tracks.

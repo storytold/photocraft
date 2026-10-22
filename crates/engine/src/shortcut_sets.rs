@@ -35,14 +35,17 @@ pub struct ShortcutSet {
 }
 
 impl ShortcutSet {
-    /// The bindings `p` uses now.
+    /// The bindings `p` uses now, without the actions' function keys (they belong to the
+    /// actions, as in an `.atn` file, not to a set).
     pub fn of(p: &Preferences) -> Self {
-        Self { shortcuts: p.shortcuts.clone(), alternate_shortcuts: p.alternate_shortcuts.clone() }
+        let shortcuts = p.shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())).collect();
+        Self { shortcuts, alternate_shortcuts: p.alternate_shortcuts.clone() }
     }
 
-    /// Use this set's bindings in `p`.
+    /// Use this set's bindings in `p`, keeping the actions' function keys.
     pub fn load_into(&self, p: &mut Preferences) {
-        p.shortcuts = self.shortcuts.clone();
+        p.shortcuts.retain(|id, _| is_action_key(id));
+        p.shortcuts.extend(self.shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())));
         p.alternate_shortcuts = self.alternate_shortcuts.clone();
     }
 
@@ -58,6 +61,11 @@ impl ShortcutSet {
         }
         Ok(())
     }
+}
+
+/// An action's function key (`actions.play:<name>`): kept by the action, not by a set.
+fn is_action_key(id: &str) -> bool {
+    id.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX)
 }
 
 /// A set name as given, trimmed; an error for an empty, overlong or reserved name.
@@ -290,6 +298,21 @@ mod tests {
         assert!(p.shortcut_sets.is_empty() && p.shortcut_set.is_empty());
         assert_eq!(describe(&p)["activeSet"], "");
         assert!(modified(&p), "F9 differs from the defaults");
+    }
+
+    #[test]
+    fn switching_sets_keeps_action_function_keys() {
+        // An action's F-key belongs to the action (as in an .atn file), not to a shortcut set.
+        let mut p = prefs();
+        store(&mut p, &json!({"saveSet": "Mine"})).unwrap();
+        p.shortcuts.insert("actions.play:Sepia".into(), "F2".into());
+        assert!(!modified(&p), "an action key doesn't modify the set");
+        load(&mut p, &json!({"useSet": ""})).unwrap();
+        assert_eq!(p.shortcuts.get("actions.play:Sepia").map(String::as_str), Some("F2"), "kept switching to the defaults");
+        load(&mut p, &json!({"useSet": "Mine"})).unwrap();
+        assert_eq!(p.shortcuts.get("actions.play:Sepia").map(String::as_str), Some("F2"), "kept switching to a named set");
+        store(&mut p, &json!({"saveSet": "Other"})).unwrap();
+        assert!(p.shortcut_sets.values().all(|s| s.shortcuts.is_empty()), "a saved set holds no action keys");
     }
 
     #[test]

@@ -137,6 +137,9 @@ mod fits {
 mod dpx {
     cases!(Format::Dpx);
 }
+mod dds {
+    cases!(Format::Dds);
+}
 mod qoi {
     cases!(Format::Qoi);
 }

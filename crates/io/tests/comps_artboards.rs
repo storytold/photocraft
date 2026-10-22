@@ -182,7 +182,15 @@ fn synthetic_psd_roundtrip_all_depths() {
                 v.sort_by(|x, y| x.0.cmp(&y.0));
                 v
             };
-            assert_eq!(named(&d, a), named(&back, b), "{depth:?} comp {}", a.name);
+            let mut want = named(&d, a);
+            if a.name == "One" {
+                // "One" records nothing for Board 1. A PSD can't say "leaves it alone": its entry
+                // has no `enab`, which Photoshop reads as the previous comp's visibility (Both:
+                // shown), and so does the import now (#8093).
+                want.push(("Board 1".to_string(), Some(true), None));
+                want.sort_by(|x, y| x.0.cmp(&y.0));
+            }
+            assert_eq!(want, named(&back, b), "{depth:?} comp {}", a.name);
         }
         // Re-exporting the imported document is byte-stable for comps and artboards.
         let f1 = PsdFile::from_bytes(&to_psd(&back)).unwrap();

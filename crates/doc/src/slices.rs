@@ -168,10 +168,17 @@ pub struct ResolvedSlice {
 }
 
 /// The visible part of every stored slice (later slices cover earlier ones, as in Photoshop),
-/// clipped to the canvas.
-fn clipped(doc: &Document) -> Vec<(u32, Rect)> {
+/// clipped to the canvas: a covered slice is cut into the rectangles that stay visible, each
+/// paired with the slice's index in the list.
+fn visible(doc: &Document) -> Vec<(usize, Rect)> {
     let canvas = doc.bounds();
-    doc.slices.list.iter().map(|s| (s.id, s.rect.intersect(&canvas))).filter(|(_, r)| !r.is_empty()).collect()
+    let rects: Vec<Rect> = doc.slices.list.iter().map(|s| s.rect.intersect(&canvas)).collect();
+    let mut out = Vec::new();
+    for (i, r) in rects.iter().enumerate() {
+        let above = rects.get(i + 1..).unwrap_or_default();
+        out.extend(auto_slices(*r, above).into_iter().map(|p| (i, p)));
+    }
+    out
 }
 
 /// Rectangles that tile `canvas` minus `taken`. The canvas is cut into a grid along every slice
@@ -229,26 +236,31 @@ pub fn auto_slices(canvas: Rect, taken: &[Rect]) -> Vec<Rect> {
 
 /// Every slice of `doc` in display order (see [`ResolvedSlice`]). Without user or layer slices
 /// the whole canvas is one auto slice named `<base>` alone (as Photoshop's Save for Web names
-/// it); with several, generated names are numbered `<base>_NN`.
+/// it); with several, generated names are numbered `<base>_NN`. A slice covered by later ones
+/// appears once per visible piece: the first piece keeps its name, the others are `<name>-NN`.
 pub fn resolve(doc: &Document) -> Vec<ResolvedSlice> {
     let base = base_name(doc);
-    let stored = clipped(doc);
+    let stored = visible(doc);
     let rects: Vec<Rect> = stored.iter().map(|(_, r)| *r).collect();
-    let mut all: Vec<(Option<u32>, Rect)> = stored.iter().map(|(id, r)| (Some(*id), *r)).collect();
+    let mut all: Vec<(Option<usize>, Rect)> = stored.iter().map(|(i, r)| (Some(*i), *r)).collect();
     all.extend(auto_slices(doc.bounds(), &rects).into_iter().map(|r| (None, r)));
     all.sort_by_key(|(_, r)| (r.y0, r.x0));
     let single = all.len() == 1;
+    let mut named = vec![false; doc.slices.list.len()];
     all.into_iter()
         .enumerate()
-        .map(|(i, (id, rect))| {
-            let s = id.and_then(|id| doc.slices.get(id));
-            let number = i + 1;
+        .map(|(n, (i, rect))| {
+            let s = i.and_then(|i| doc.slices.list.get(i));
+            let number = n + 1;
+            let first = i.and_then(|i| named.get_mut(i)).is_none_or(|seen| !std::mem::replace(seen, true));
             let name = match s.map(|s| s.name.as_str()).filter(|n| !n.is_empty()) {
-                Some(n) => n.to_string(),
+                Some(n) if first => n.to_string(),
+                Some(n) => format!("{n}-{number:02}"),
                 None if single => base.clone(),
                 None => format!("{base}_{number:02}"),
             };
-            ResolvedSlice { number, id, origin: s.map_or(SliceOrigin::Auto, |s| s.origin), rect, name, kind: s.map_or(SliceKind::Image, |s| s.kind) }
+            let (id, origin, kind) = s.map_or((None, SliceOrigin::Auto, SliceKind::Image), |s| (Some(s.id), s.origin, s.kind));
+            ResolvedSlice { number, id, origin, rect, name, kind }
         })
         .collect()
 }
@@ -301,6 +313,30 @@ mod tests {
         assert_eq!(user.origin, SliceOrigin::User);
         d.slices.list[0].name = "logo".into();
         assert!(resolve(&d).iter().any(|s| s.name == "logo"));
+    }
+
+    #[test]
+    fn later_slices_cover_earlier_ones() {
+        // Photoshop's Save for Web on this document writes sliceA [0,0,60,40], o82_02, sliceA-03
+        // [0,40,40,60], sliceB and o82_05: the covered slice is cut into its visible pieces.
+        let mut d = Document::new("o82.psd", Size::new(100, 100), ColorMode::Rgb, SampleType::U8);
+        d.slices.list.push(Slice { id: 1, name: "sliceA".into(), rect: Rect::new(0, 0, 60, 60), ..Default::default() });
+        d.slices.list.push(Slice { id: 2, name: "sliceB".into(), rect: Rect::new(40, 40, 100, 100), ..Default::default() });
+        let r = resolve(&d);
+        let got: Vec<(&str, Option<u32>, Rect)> = r.iter().map(|s| (s.name.as_str(), s.id, s.rect)).collect();
+        assert_eq!(
+            got,
+            [
+                ("sliceA", Some(1), Rect::new(0, 0, 60, 40)),
+                ("o82_02", None, Rect::new(60, 0, 100, 40)),
+                ("sliceA-03", Some(1), Rect::new(0, 40, 40, 60)),
+                ("sliceB", Some(2), Rect::new(40, 40, 100, 100)),
+                ("o82_05", None, Rect::new(0, 60, 40, 100)),
+            ]
+        );
+        d.slices.list[0].name.clear();
+        let names: Vec<String> = resolve(&d).into_iter().filter(|s| s.id == Some(1)).map(|s| s.name).collect();
+        assert_eq!(names, ["o82_01", "o82_03"]);
     }
 
     #[test]

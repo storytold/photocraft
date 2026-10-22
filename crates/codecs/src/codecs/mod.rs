@@ -1,10 +1,12 @@
 pub(crate) mod dds;
+pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
 pub(crate) mod dpx;
 pub(crate) mod exr;
 pub(crate) mod exr_cryptomatte;
 pub(crate) mod fits;
 pub(crate) mod gif_frames;
+pub(crate) mod gif_palette;
 pub(crate) mod heif;
 pub(crate) mod jpeg;
 pub(crate) mod pcx;

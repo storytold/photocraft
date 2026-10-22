@@ -59,11 +59,12 @@ const WHITE: u16 = 0xffff;
 const INDICES_0123: [u8; 4] = [0x04, 0x0e, 0, 0];
 
 #[test]
-fn dds_is_readable_but_not_writable() {
+fn dds_is_readable_and_writable() {
     assert_eq!(from_extension("texture.DDS"), Some(Format::Dds));
-    assert!(caps(Format::Dds).read && !caps(Format::Dds).write);
-    let img = photocraft_codecs::Image::from_u8(1, 1, ChannelLayout::Rgba, vec![0, 0, 0, 0]).unwrap();
-    assert!(matches!(encode(&img, Format::Dds, &Default::default()), Err(CodecError::Unsupported { .. })));
+    assert!(caps(Format::Dds).read && caps(Format::Dds).write);
+    let img = photocraft_codecs::Image::from_u8(1, 1, ChannelLayout::Rgba, vec![1, 2, 3, 0]).unwrap();
+    let b = encode(&img, Format::Dds, &Default::default()).unwrap();
+    assert_eq!(decode(&b).unwrap().data(), &[1, 2, 3, 0]);
 }
 
 #[test]

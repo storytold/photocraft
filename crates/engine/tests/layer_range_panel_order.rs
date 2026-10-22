@@ -20,6 +20,7 @@ fn shift_range_follows_visible_rows_on_both_sides_of_an_expanded_group() {
     select(&mut s, b, "replace");
     select(&mut s, c, "add");
     let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setExpanded", json!({"layer": group, "expanded": true})).unwrap();
     let d = s.execute("layer.new.layer", json!({"name": "D"})).unwrap()["layer"].as_u64().unwrap();
 
     for (anchor, target, wanted) in

@@ -90,6 +90,7 @@ fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -
             return app(sp);
         }
         if let Some(name) = system_spooler() {
+            require_windows_pdf()?;
             return craft_print::submit(&job.pdf, lp).map(|m| (m, name.to_string())).map_err(other);
         }
     }
@@ -645,6 +646,34 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     )
 }
 
+/// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their
+/// `build.rs`) so a Windows image without it still starts. Calling into it when it cannot load
+/// would abort the process, so check that it loads first (#5884).
+fn require_windows_pdf() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
+        if !windows_pdf_loads(&windows_pdf_dll(std::path::Path::new(&root))) {
+            return Err(other(
+                "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_pdf_dll(system_root: &std::path::Path) -> std::path::PathBuf {
+    system_root.join("System32").join("Windows.Data.Pdf.dll")
+}
+
+/// Loads the DLL rather than checking the file exists: one that is present but cannot load (a
+/// dependency stripped too) would still abort at the delay-load stub.
+#[cfg(target_os = "windows")]
+fn windows_pdf_loads(dll: &std::path::Path) -> bool {
+    dll.to_str().is_some_and(|p| winsafe::HINSTANCE::LoadLibrary(p).is_ok())
+}
+
 /// Keep CMYK output profiles and page text on the existing PDF composition path. GDI currently
 /// draws RGB/gray and vector marks only; it must never silently omit requested page content.
 fn native_rgb_compatible(page: &PrintPage, handling: &str) -> bool {
@@ -708,6 +737,61 @@ fn printer_settings(p: &Value) -> Result<Option<craft_print::rgb::DevMode>> {
     }
 }
 
+/// `dmFields` and `dmOrientation` in DEVMODEW (wingdi.h: after the 32-wchar device name and four
+/// header words), and the `dmFields` bit that says `dmOrientation` is set.
+const DM_FIELDS_AT: usize = 72;
+const DM_ORIENTATION_AT: usize = 76;
+const DM_ORIENTATION: u32 = 0x1;
+/// `DMORIENT_PORTRAIT` and `DMORIENT_LANDSCAPE`.
+const DMORIENT_PORTRAIT: i16 = 1;
+const DMORIENT_LANDSCAPE: i16 = 2;
+
+/// Driver settings turned to portrait or landscape, as Photoshop's Layout buttons turn them:
+/// `dmOrientation` set and flagged in `dmFields`, every other byte (the driver's private settings
+/// included) kept. The driver validates the result when it lays out the page, as it does for
+/// settings from Print Settings….
+pub fn turned_settings(settings: &craft_print::rgb::DevMode, landscape: bool) -> Result<craft_print::rgb::DevMode> {
+    let mut b = settings.as_bytes().to_vec();
+    let short = || other("printer settings are too short to hold an orientation");
+    let fields: [u8; 4] = b.get(DM_FIELDS_AT..DM_FIELDS_AT + 4).and_then(|s| s.try_into().ok()).ok_or_else(short)?;
+    let fields = u32::from_le_bytes(fields) | DM_ORIENTATION;
+    b.get_mut(DM_FIELDS_AT..DM_FIELDS_AT + 4).ok_or_else(short)?.copy_from_slice(&fields.to_le_bytes());
+    let orientation = if landscape { DMORIENT_LANDSCAPE } else { DMORIENT_PORTRAIT };
+    b.get_mut(DM_ORIENTATION_AT..DM_ORIENTATION_AT + 2).ok_or_else(short)?.copy_from_slice(&orientation.to_le_bytes());
+    craft_print::rgb::DevMode::from_bytes(b).map_err(other)
+}
+
+/// Whether a driver page of `driver` points is the layout's `paper` turned the other way round
+/// (within the 2 pt the driver and layout may differ by): then turning the driver settings, not
+/// choosing another paper, makes them agree. A square paper is never turned.
+fn turned_paper(driver: (f64, f64), paper: (f64, f64)) -> bool {
+    let near = |a: f64, b: f64| (a - b).abs() <= 2.0;
+    let same = near(driver.0, paper.0) && near(driver.1, paper.1);
+    !same && near(driver.0, paper.1) && near(driver.1, paper.0)
+}
+
+/// The driver settings and page for printing a layout of `paper` points on `printer`: the given
+/// settings (or the printer's own) as they are, or turned to the layout's orientation when the
+/// driver has that paper the other way round. A landscape layout so prints landscape with portrait
+/// Print Settings, as a script or another app asking for landscape expects.
+fn settings_for_layout(
+    printer: &str,
+    settings: Option<craft_print::rgb::DevMode>,
+    paper: (f64, f64),
+) -> Result<(Option<craft_print::rgb::DevMode>, craft_print::rgb::Page)> {
+    let page = craft_print::rgb::page(printer, settings.as_ref()).map_err(other)?;
+    if !turned_paper(page.paper, paper) {
+        return Ok((settings, page));
+    }
+    let base = match settings {
+        Some(s) => s,
+        None => craft_print::rgb::default_settings(printer).map_err(other)?,
+    };
+    let turned = turned_settings(&base, paper.0 > paper.1)?;
+    let page = craft_print::rgb::page(printer, Some(&turned)).map_err(other)?;
+    Ok((Some(turned), page))
+}
+
 /// The page's image as 8-bit RGB rows (gray expanded), mirrored for Emulsion Down.
 pub fn page_rgb(page: &PrintPage) -> Result<Vec<u8>> {
     let img = &page.image;
@@ -742,8 +826,7 @@ pub fn page_rect_top_left(page: &PrintPage) -> (f64, f64, f64, f64) {
 /// PDF-only (no font/text layout in the GDI path yet).
 fn print_windows(page: &PrintPage, p: &Value, title: &str, copies: u32) -> Result<Value> {
     let printer = printer_name(p)?;
-    let settings = printer_settings(p)?;
-    let device_page = craft_print::rgb::page(&printer, settings.as_ref()).map_err(other)?;
+    let (settings, device_page) = settings_for_layout(&printer, printer_settings(p)?, page.paper)?;
     if (device_page.paper.0 - page.paper.0).abs() > 2.0 || (device_page.paper.1 - page.paper.1).abs() > 2.0 {
         return Err(other("the driver paper or orientation differs from the print layout; choose the matching paper in Print Settings before printing"));
     }
@@ -780,11 +863,31 @@ fn printers(_: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+    // Checked before the printer, so a bad value is the error whether or not a printer answers.
+    let landscape = match p.get("orientation").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some("portrait") => Some(false),
+            Some("landscape") => Some(true),
+            _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
+        },
+    };
     let printer = printer_name(p)?;
-    let pg = craft_print::rgb::page(&printer, printer_settings(p)?.as_ref()).map_err(other)?;
-    Ok(
-        json!({"printer": printer, "paper": [pg.paper.0, pg.paper.1], "printable": [pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3], "dpi": [pg.dpi.0, pg.dpi.1]}),
-    )
+    let mut settings = printer_settings(p)?;
+    if let Some(landscape) = landscape {
+        let base = match settings {
+            Some(s) => s,
+            None => craft_print::rgb::default_settings(&printer).map_err(other)?,
+        };
+        settings = Some(turned_settings(&base, landscape)?);
+    }
+    let pg = craft_print::rgb::page(&printer, settings.as_ref()).map_err(other)?;
+    let mut out = json!({"printer": printer, "paper": [pg.paper.0, pg.paper.1], "printable": [pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3], "dpi": [pg.dpi.0, pg.dpi.1]});
+    // The turned settings, to pass on as `printerSettings` (the Print dialog's Orientation does).
+    if let (Some(_), Some(s), Some(o)) = (landscape, settings, out.as_object_mut()) {
+        o.insert("printerSettings".into(), json!(s.to_hex()));
+    }
+    Ok(out)
 }
 
 /// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer.
@@ -1014,7 +1117,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Printer Page",
             menu: &[],
             shortcut: None,
-            params: r##"{"printer":name? (default printer),"printerSettings":hex?} → {printer, paper: [w,h] pt, printable: [x,y,w,h] pt from the top-left, dpi: [x,y]} (Windows)"##,
+            params: r##"{"printer":name? (default printer),"printerSettings":hex?,"orientation":"portrait|landscape"? (turn the settings, or the printer's own, that way)} → {printer, paper: [w,h] pt, printable: [x,y,w,h] pt from the top-left, dpi: [x,y], printerSettings: hex (only with orientation: the turned settings)} (Windows)"##,
             enabled: |_| Ok(()),
             journal: false,
             run: printer_page,

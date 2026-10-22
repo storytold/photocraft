@@ -1114,6 +1114,8 @@
 	Height:	Magasság:
 	Hide Auto Slices	Automatikus szeletek elrejtése
 	History Brush	Előzményecset
+	Paints from the History panel's source state	Az Előzmények panel forrásállapotából fest
+	Sets the source for the history brush	Beállítja az előzményecset forrását
 	Horizontal scale	Vízszintes méretarány
 	Horizontal type	Vízszintes szöveg
 	Hue Jitter	Színárnyalat ingadozása
@@ -1407,6 +1409,11 @@
 	Warp:	Hajlítás:
 	Weight	Vastagság
 	Wet	Nedvesség
+	Current Brush Load	Az ecset jelenlegi töltete
+	Load Brush	Ecset feltöltése
+	Clean Brush	Ecset tisztítása
+	Load the brush after each stroke	Az ecset feltöltése minden ecsetvonás után
+	Clean the brush after each stroke	Az ecset tisztítása minden ecsetvonás után
 	Wet Edges	Nedves szélek
 	Wetness Jitter	Nedvesség ingadozása
 	Width	Szélesség
@@ -1609,6 +1616,7 @@ fontWeight	Thin	Hajszálvékony
 	Overlay	Átfedés
 	Overlay Color	Átfedés színe
 	Overlay Opacity	Átfedés átlátszatlansága
+	Overprint	Felülnyomás
 	Paint over hair or fur on the image; Alt paints the other mode	Fesd át a hajat vagy a szőrzetet a képen; Alt lenyomásával a másik módban festesz
 	Pass Through	Áteresztés
 	Pattern Overlay	Mintázatfedés
@@ -3869,6 +3877,8 @@ cameraRaw	Yellow	Sárga
 	New Layer from Brush	Új réteg ecsetből
 	New Path	Új útvonal
 	New Snapshot	Új pillanatkép
+	New Snapshot…	Új pillanatkép…
+	History Options…	Előzménybeállítások…
 	New Video Group	Új videócsoport
 	Newspaper	Újságpapír
 	No Layer Comps	Nincs rétegkompozíció
@@ -4109,6 +4119,9 @@ cameraRaw	Yellow	Sárga
 # View › Guides › right-click a guide
 	Edit Selected Guides	Kijelölt segédvonalak szerkesztése
 	Clear Selected Guides	Kijelölt segédvonalak törlése
+	Bicubic Automatic	Automatikus bikubikus
+	Bicubic Smoother	Simább bikubikus
+	Bicubic Sharper	Élesebb bikubikus
 	Pasting from other apps is unavailable	A beillesztés más alkalmazásokból nem érhető el
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	A PhotoCraft ebben a munkamenetben nem fér hozzá a rendszer vágólapjához. Waylanden a Flatpak homokozó elrejti azt a protokollt, amelyen keresztül más alkalmazások képei olvashatók.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Ha más alkalmazásokból szeretne beilleszteni, indítsa a PhotoCraftot XWayland alatt: `{command}`
@@ -4128,6 +4141,35 @@ cameraRaw	Yellow	Sárga
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
 	Show file name in title	Fájlnév megjelenítése a címben
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	50%-os küszöb
+	Pattern Dither	Mintázatos keverés
+	Diffusion Dither	Diffúziós keverés
+	Halftone Screen	Féltónusrács
+	Custom Pattern	Egyéni mintázat
+	Frequency:	Gyakoriság:
+	Lines/Inch	Vonal/hüvelyk
+	Lines/Centimeter	Vonal/centiméter
+	Ellipse	Ellipszis
+
+# Layers panel options and Smart Filter editors
+	Add “copy” to Copied Layers and Groups	„másolat” hozzáadása a másolt rétegekhez és csoportokhoz
+	Animation Options	Animációs beállítások
+	Entire Document	Teljes dokumentum
+	Expand New Effects	Új effektusok kibontása
+	Filter Options	Szűrési beállítások
+	Layer Bounds	Réteghatárok
+	Layers Panel Options	Rétegek panel beállításai
+	New Artboard…	Új rajztábla…
+	New Group…	Új csoport…
+	Prevent Auto-Nesting	Automatikus beágyazás tiltása
+	Preview on canvas when reordering layers	Előnézet a vásznon a rétegek átrendezésekor
+	Show Layers	Rétegek megjelenítése
+	Show layer mask badges	Rétegmaszk-jelvények megjelenítése
+	Thumbnail Contents	Bélyegkép tartalma
+	Thumbnail Size	Bélyegképméret
+	Use Default Masks on Fill Layers	Alapértelmezett maszkok kitöltőrétegeken
 	Accept and Go to Conflict	Elfogadás és ugrás az ütközéshez
 	Changes undone.	Változások visszavonva.
 	Choose a new shortcut for this command, or leave it without one.	Válasszon új billentyűparancsot ehhez a parancshoz, vagy hagyja nélküle.
@@ -4179,3 +4221,14 @@ cameraRaw	Yellow	Sárga
 	Tween	Átmenet
 	Last frame	Utolsó képkocka
 	Frames to add	Hozzáadandó képkockák
+
+# DDS Options (#1327)
+	DDS Options	DDS-beállítások
+	Generate Mipmaps	Mipmapek létrehozása
+
+# Color Table (.act) dialog
+	There is no color table to save.	Nincs menthető színtábla.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} szín mentve ide: {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	GPU-adapter

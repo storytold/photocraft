@@ -168,6 +168,9 @@ pub fn parse_budgets(text: &str) -> Result<Budgets, String> {
     if !(b.settings.regression_pct.is_finite() && b.settings.regression_pct > 0.0) {
         return Err(format!("{BUDGETS}: settings.regression_pct must be > 0"));
     }
+    if !(b.settings.regression_min_ms.is_finite() && b.settings.regression_min_ms >= 0.0) {
+        return Err(format!("{BUDGETS}: settings.regression_min_ms must be finite and >= 0"));
+    }
     Ok(b)
 }
 
@@ -980,6 +983,8 @@ not_measurable = "needs a frame harness"
                 .is_err()
         );
         assert!(parse_budgets("[settings]\nregression_pct = 0\n").is_err());
+        assert!(parse_budgets("[settings]\nregression_min_ms = -1\n").is_err());
+        assert!(parse_budgets("[settings]\nregression_min_ms = 0\n").is_ok());
         assert!(parse_budgets("bogus = 1\n").is_err());
         assert!(parse_budgets("not toml [").is_err());
     }

@@ -524,6 +524,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
     let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer: id,
+        document: None,
         caret: 1,
         anchor: 1,
         session: "kern-test".into(),
@@ -574,6 +575,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
 fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize, caret: usize) {
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer,
+        document: None,
         caret,
         anchor,
         session: "format-keys".into(),
@@ -792,6 +794,7 @@ fn type_tool_format_keys_survive_hostile_state() {
     for ed in [None, Some(1)] {
         app.ui.text_edit = ed.map(|layer| crate::state::TextEdit {
             layer,
+            document: None,
             caret: 4,
             anchor: 0,
             session: "x".into(),
@@ -1136,4 +1139,32 @@ fn move_tool_controls_rotate_from_just_outside_the_box() {
     let end = h.state().ui.transform.as_ref().map(|t| t.quad).expect("the drag opened Free Transform");
     let tilt = (end[1][1] - end[0][1]).atan2(end[1][0] - end[0][0]).to_degrees();
     assert!((tilt - 90.0).abs() < 8.0 || (tilt + 270.0).abs() < 8.0, "rotated about a quarter turn, got {tilt}° (zoom {zoom})");
+}
+
+#[test]
+fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::RectMarquee;
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "view.extras", json!({})).unwrap();
+    assert!(!h.state().ui.view.extras);
+    let start = h.state().last_canvas_rect.center() - vec2(30.0, 20.0);
+    let end = start + vec2(60.0, 40.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for i in 1..=4 {
+        h.hover_at(start + (end - start) * (i as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the pointer drag created a selection");
+    assert!(h.state().ui.view.shows(h.state().ui.view.show.selection_edges), "a new marquee must become visible after hiding Extras");
+    crate::menus::invoke(h.state_mut(), &ctx, "view.extras", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().ui.view.extras, "the user can hide the existing selection again");
+    h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
+    assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
 }

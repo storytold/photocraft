@@ -786,6 +786,21 @@ fn slices_with_the_same_name_get_distinct_files() {
 }
 
 #[test]
+fn overlapping_slices_export_each_pixel_once() {
+    // #7770: without HTML too, a slice covered by a later one is written as its visible pieces.
+    let dir = tmp("overlap_images");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 40, 30], "name": "under"})).unwrap();
+    s.execute("slice.new", json!({"rect": [20, 15, 40, 30], "name": "over"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "slices": "user"})).unwrap();
+    let mut files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    let dims: Vec<(u32, u32)> = files.iter().map(|f| decode(f).dimensions()).collect();
+    files.iter_mut().for_each(|f| *f = f.rsplit('/').next().unwrap().to_string());
+    assert_eq!(files, ["under.png", "under-03.png", "over.png"]);
+    assert_eq!(dims, [(40, 15), (20, 15), (40, 30)]);
+}
+
+#[test]
 fn overlapping_slices_keep_the_later_slice_in_html() {
     // #909: the later slice is on top; the earlier one shows only where it isn't covered.
     let dir = tmp("overlap");
@@ -809,7 +824,10 @@ fn overlapping_slices_keep_the_later_slice_in_html() {
         })
         .sum();
     assert_eq!(area, 64 * 48);
-    assert!(files.iter().any(|f| f.ends_with("images/under_01.png")), "the covered slice is cut into pieces: {files:?}");
+    // As Photoshop names subslices: the first piece keeps the name, the others add their number.
+    let under = files.iter().find(|f| f.ends_with("images/under.png")).unwrap();
+    assert_eq!(decode(under).dimensions(), (40, 15), "the covered slice is cut into pieces: {files:?}");
+    assert!(files.iter().any(|f| f.ends_with("images/under-03.png")), "{files:?}");
 }
 
 #[path = "color_table_tests.rs"]

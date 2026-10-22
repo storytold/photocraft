@@ -65,6 +65,43 @@ fn any_other_command_drops_it_and_undo_puts_it_back() {
     assert!(alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 35, 20) == 1.0);
 }
 
+/// The History panel's Step Backward / Step Forward treat a floating piece like Edit › Undo /
+/// Redo: no Move step is recorded and the redo states survive.
+#[test]
+fn history_panel_steps_put_the_piece_back_and_keep_the_redo_states() {
+    for back in ["edit.undo", "history.stepBackward"] {
+        let (mut s, id) = session();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        assert_eq!(s.execute(back, json!({})).unwrap()["floating"], json!("returned"), "{back}");
+        let st = s.active().unwrap();
+        assert!(floating(st).is_none() && alpha(&st.doc, id, 12, 12) == 1.0, "{back}: piece back");
+        assert_eq!((st.history.past_len(), st.history.can_redo()), (steps, false), "{back}: no Move step");
+    }
+    for forward in ["edit.redo", "history.stepForward"] {
+        let (mut s, id) = session();
+        // A redo state (the deselection), then a moved piece over the selection undo restored.
+        s.execute("select.deselect", json!({})).unwrap();
+        s.undo();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        s.execute(forward, json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(floating(st).is_none(), "{forward}: piece back");
+        assert_eq!(alpha(&st.doc, id, 12, 12), 1.0, "{forward}: the move never reached the document");
+        assert!(st.doc.selection.is_none(), "{forward}: stepped forward to the deselection");
+        assert_eq!((st.history.past_len(), st.history.can_redo()), (steps + 1, false), "{forward}: no Move step");
+        // Nothing to step forward to: refused, and the piece keeps floating.
+        let (mut s, _) = session();
+        s.execute("select.float", json!({"dx": 20, "dy": 0})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        assert!(s.execute(forward, json!({})).is_err(), "{forward}: nothing to redo");
+        let st = s.active().unwrap();
+        assert_eq!(floating(st).map(|f| f.offset), Some((20, 0)), "{forward}: still floating");
+        assert_eq!(st.history.past_len(), steps);
+    }
+}
+
 #[test]
 fn needs_a_selection_and_an_unlocked_pixel_layer() {
     let mut s = Session::new();
@@ -188,4 +225,114 @@ fn cutting_an_untouched_part_of_the_mask_moves_it_and_leaves_the_background_colo
     assert_eq!(mask_at(&s, 55, 12), 0.0, "the untouched black moved");
     assert!((mask_at(&s, 12, 12) - 0.5).abs() < 0.01, "the hole takes the background colour");
     assert_eq!(mask_at(&s, 40, 12), 0.0);
+}
+
+/// #7655: a selection loaded from the layer's own transparency lifts its half-transparent pixels
+/// whole, leaving nothing behind (Photoshop); a half selection of an opaque pixel still splits it.
+#[test]
+fn a_layers_own_transparency_floats_its_soft_pixels_whole() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(10, 10, 20, 30), &[1.0, 0.0, 0.0, 0.5]);
+        surf.fill_rect(Rect::new(20, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.loadSelection", json!({"channel": "transparency"})).unwrap();
+    s.execute("select.float", json!({"dx": 0, "dy": 25})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let d = &s.active().unwrap().doc;
+    assert_eq!(alpha(d, id, 15, 20), 0.0, "no ghost where the soft pixels were");
+    assert!((alpha(d, id, 15, 45) - 0.5).abs() < 0.01, "they moved whole: {}", alpha(d, id, 15, 45));
+    assert_eq!((alpha(d, id, 25, 20), alpha(d, id, 25, 45)), (0.0, 1.0));
+
+    // A copy (⌥) of them is as solid as they are, as Photoshop's Layer via Copy of the same
+    // selection is, and leaves them where they were.
+    s.undo();
+    s.execute("select.loadSelection", json!({"channel": "transparency"})).unwrap();
+    s.execute("select.float", json!({"dx": 0, "dy": 25, "copy": true})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let d = &s.active().unwrap().doc;
+    assert!((alpha(d, id, 15, 20) - 0.5).abs() < 0.01 && (alpha(d, id, 15, 45) - 0.5).abs() < 0.01, "{} {}", alpha(d, id, 15, 20), alpha(d, id, 15, 45));
+
+    // A half selection of an opaque pixel splits it half and half, as before.
+    let (mut s, id) = session();
+    s.execute("select.all", json!({})).unwrap();
+    s.edit("half", |doc, _| {
+        let sel = doc.selection.as_mut().unwrap();
+        sel.fill_rect(doc_rect(80, 60), &[0.5]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.float", json!({"dx": 40, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let d = &s.active().unwrap().doc;
+    assert!((alpha(d, id, 15, 15) - 0.5).abs() < 0.01 && (alpha(d, id, 55, 15) - 0.5).abs() < 0.01);
+}
+
+fn doc_rect(w: i32, h: i32) -> Rect {
+    Rect::new(0, 0, w, h)
+}
+
+#[test]
+fn float_shares_interior_tiles_on_cut_and_place() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1024, "height": 1024})).unwrap();
+    s.tools.background = [0.2, 0.4, 0.8, 1.0];
+    let id = s.active().unwrap().active_layer.unwrap();
+    // Paint non-uniform pixels so original tiles are distinct.
+    s.edit("pattern", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        for ty in 0..4 {
+            for tx in 0..4 {
+                surf.write_pixel(tx * 256 + 5, ty * 256 + 5, &[tx as f32 * 0.25, ty as f32 * 0.25, 0.5, 1.0]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    // Select (100..900)^2, which fully covers interior tiles (1, 1) and (2, 2).
+    s.execute("select.rect", json!({"x": 100, "y": 100, "width": 800, "height": 800})).unwrap();
+    s.execute("select.float", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let orig = st.doc.layer(id).unwrap().surface().unwrap();
+    let parts = &floating(st).unwrap().parts;
+    let tc1 = photocraft_geom::TileCoord { tx: 1, ty: 1 };
+    let tc2 = photocraft_geom::TileCoord { tx: 2, ty: 2 };
+    // Interior tiles of `piece` share the original layer's Arc<Tile>.
+    assert!(Arc::ptr_eq(orig.tile(tc1).unwrap(), parts.piece.tile(tc1).unwrap()));
+    assert!(Arc::ptr_eq(orig.tile(tc2).unwrap(), parts.piece.tile(tc2).unwrap()));
+    // Interior tiles of the Background hole in `rest` share one solid fill Arc<Tile>.
+    assert!(Arc::ptr_eq(parts.rest.tile(tc1).unwrap(), parts.rest.tile(tc2).unwrap()));
+    // Moving by a whole tile (256, 0) shares the interior tile directly in the preview document.
+    let shown = displayed(st, (256, 0)).unwrap();
+    let shown_surf = shown.layer(id).unwrap().surface().unwrap();
+    let moved_tc = photocraft_geom::TileCoord { tx: 2, ty: 1 };
+    assert!(Arc::ptr_eq(orig.tile(tc1).unwrap(), shown_surf.tile(moved_tc).unwrap()));
+}
+
+#[test]
+fn float_feathered_selection_preserves_partial_alpha_across_depths() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 80, "background": "transparent", "depth": depth})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 55, 80), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 30, "height": 30, "feather": 4.0})).unwrap();
+        s.execute("select.float", json!({"dx": 40, "dy": 0})).unwrap();
+        s.execute("select.drop", json!({})).unwrap();
+        let surf = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+        // Center of moved piece is opaque red; center of hole is transparent; feathered edge has partial alpha.
+        assert!(surf.rgba(75, 35)[3] > 0.95, "{depth}-bit moved center");
+        assert!(surf.rgba(35, 35)[3] < 0.05, "{depth}-bit hole center");
+        let edge_a = surf.rgba(60, 35)[3];
+        assert!(edge_a > 0.1 && edge_a < 0.9, "{depth}-bit feathered edge alpha={edge_a}");
+    }
 }

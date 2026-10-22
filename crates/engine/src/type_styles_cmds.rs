@@ -84,7 +84,7 @@ fn id_param(cmd: &str, p: &Value) -> Result<Option<u32>> {
 /// A character style with every field changed from the default, to see which fields a set of
 /// Character-panel keys touches.
 fn perturbed_char() -> CharStyle {
-    use photocraft_doc::text::{Caps, FontFeature, FontVariation, Kerning};
+    use photocraft_doc::text::{Caps, FontBaseline, FontFeature, FontVariation, Kerning};
     CharStyle {
         font_family: "\u{1}".into(),
         font_style: "\u{1}".into(),
@@ -105,6 +105,7 @@ fn perturbed_char() -> CharStyle {
         kerning: Kerning::Off,
         kern: -12345.0,
         caps: Caps::AllCaps,
+        baseline: FontBaseline::Subscript,
         ligatures: false,
         discretionary_ligatures: true,
         features: vec![FontFeature { tag: "\u{1}".into(), value: 9 }],

@@ -444,6 +444,8 @@ impl Default for HistoryLog {
 pub struct FileHandling {
     pub image_previews: Ask,
     pub lowercase_extension: bool,
+    /// Saves run in the background while you keep working (on), or in the foreground under a
+    /// modal progress dialog that blocks the app until the file is written (off).
     pub save_in_background: bool,
     /// Save recovery information (crash recovery autosave).
     pub autosave: bool,
@@ -512,11 +514,14 @@ impl Default for Export {
     }
 }
 
+/// [`Performance::memory_usage_mb`]'s default.
+pub const DEFAULT_MEMORY_USAGE_MB: u32 = 8192;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
-    /// oldest states are dropped beyond it).
+    /// oldest states are dropped beyond it), and the result of one transform.
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
@@ -530,6 +535,11 @@ pub struct Performance {
     pub rendering_mode: Option<RenderingMode>,
     /// Graphics backend (applies at next launch; see [`GpuBackend`]).
     pub gpu_backend: GpuBackend,
+    /// Which graphics adapter the window and canvas use on a machine with several (applies at
+    /// next launch): part of the adapter's name, matched case-insensitively ("nvidia", "arc"). Empty
+    /// is automatic. `PHOTOCRAFT_GPU_ADAPTER` overrides it for one launch. If nothing matches or the
+    /// match can't present to the window, startup falls back to automatic and says so.
+    pub gpu_adapter: String,
     /// Live previews of large documents (adjustment and filter dialogs, an adjustment layer's
     /// sliders while they drag) render on a reduced copy: fast, but blocky when zoomed in. Off:
     /// they render at full resolution.
@@ -566,15 +576,17 @@ impl Performance {
 }
 
 impl Default for Performance {
+    /// What a new install starts with, [`DEFAULT_MEMORY_USAGE_MB`] of Memory Usage among it.
     fn default() -> Self {
         Self {
-            memory_usage_mb: 8192,
+            memory_usage_mb: DEFAULT_MEMORY_USAGE_MB,
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
             use_gpu: true,
             rendering_mode: None,
             gpu_backend: GpuBackend::Auto,
+            gpu_adapter: String::new(),
             low_resolution_previews: true,
             low_latency_drawing: false,
             linux_display_server: LinuxDisplayServer::Auto,
@@ -987,6 +999,12 @@ pub struct Preferences {
     /// differ from their defaults, saved as the user changes them and restored at launch, as
     /// Photoshop remembers each tool's options between sessions. JSON owned by the shell.
     pub tool_options: Value,
+    /// Each painting tool's own brush (the Brush, the Eraser, the retouching tools…; see the
+    /// shell's `paint_mouse::sync_tool_brush`), saved as the user changes them and restored at
+    /// launch, as Photoshop keeps every tool's brush between sessions (#6212): `{"owner": tool,
+    /// "brushes": {tool: brush}}`, where `owner` is the tool whose brush `last_brush` holds and
+    /// the brushes are shaped by `brush_cmds::remembered_settings`. JSON owned by the shell.
+    pub tool_brushes: Value,
     /// Last selected tool, restored at launch. A tool-name string owned and validated by the
     /// shell; null in older files. Kept separate from tool options so neither overwrites the other.
     pub selected_tool: Value,
@@ -1028,11 +1046,9 @@ pub const SECTIONS: [(&str, &str); 18] = [
 /// preference is read anywhere outside `prefs.rs`, and while an unlisted one is read nowhere.
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
-    "general.animatedZoom",
     "general.zoomResizesWindows",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
-    "fileHandling.saveInBackground",
     "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
@@ -1064,7 +1080,16 @@ pub fn is_hidden(path: &str) -> bool {
 
 /// Preferences that only do something on Linux; the dialog doesn't show them elsewhere. They
 /// still load, save and round-trip on every platform.
-pub const LINUX_ONLY: &[&str] = &["performance.linuxDisplayServer"];
+pub const LINUX_ONLY: &[&str] = &["performance.linuxDisplayServer", "performance.gpuAdapter"];
+
+/// Whether a graphics adapter called `name` is the one `performance.gpuAdapter` (`wanted`) asks
+/// for: every whitespace-separated word of `wanted` appears in the name, ignoring case ("nvidia",
+/// "arc a370m"). An empty `wanted` matches nothing. Startup and Preferences share this.
+pub fn gpu_adapter_matches(name: &str, wanted: &str) -> bool {
+    let name = name.to_lowercase();
+    let mut words = wanted.split_whitespace().peekable();
+    words.peek().is_some() && words.all(|w| name.contains(&w.to_lowercase()))
+}
 
 /// Choices of an enumerated preference (dotted path, e.g. `"cursors.painting"`).
 pub fn choices(path: &str) -> Option<&'static [&'static str]> {
@@ -1466,7 +1491,15 @@ pub fn normalize_shortcut(s: &str) -> Option<String> {
     Some(s)
 }
 
+/// Key names spelled with more than one capital (egui's `Key::name`): Title case would turn
+/// `PageUp` into `Pageup`, which no key matches, so a binding saved that way never fired (#6827).
+const MULTI_WORD_KEYS: [&str; 8] =
+    ["PageUp", "PageDown", "OpenBracket", "CloseBracket", "OpenCurlyBracket", "CloseCurlyBracket", "BrowserBack", "IntlBackslash"];
+
 fn capitalize(s: &str) -> String {
+    if let Some(k) = MULTI_WORD_KEYS.iter().find(|k| k.eq_ignore_ascii_case(s)) {
+        return (*k).to_string();
+    }
     let mut c = s.chars();
     match c.next() {
         Some(f) if f.is_ascii_alphabetic() => {
@@ -1498,7 +1531,8 @@ pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
 /// Photoshop's second default keys (#3665): (command, key). Each command keeps its main key
 /// (the one its menu shows) and answers these as well, as in Photoshop's default set: the
 /// legacy function keys F2 Cut, F3 Copy, F4 Paste and Shift+F7 Inverse; Shift+Backspace
-/// (Shift+Delete on a Mac) for Fill; and ⌘+ beside ⌘= for Zoom In.
+/// (Shift+Delete on a Mac) for Fill; ⌘+ beside ⌘= for Zoom In; and off the Mac, Ctrl+F4 beside
+/// Ctrl+W for Close (Windows' close-document key; macOS keeps Ctrl+F4 for window focus).
 pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("edit.cut", "F2"),
     ("edit.copy", "F3"),
@@ -1506,6 +1540,8 @@ pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("edit.fill", "Shift+Backspace"),
     ("select.inverse", "Shift+F7"),
     ("view.zoomIn", "Cmd++"),
+    #[cfg(not(target_os = "macos"))]
+    ("file.close", "Cmd+F4"),
 ];
 
 /// A command's default alternate keys ([`ALTERNATE_SHORTCUTS`]).
@@ -1717,7 +1753,7 @@ impl Session {
     }
 
     /// Push engine-relevant preferences into live state: every document's history limit, the
-    /// layer-effect cache budget and the text engine's missing-glyph protection.
+    /// transform and layer-effect cache budgets and the text engine's missing-glyph protection.
     pub fn apply_prefs(&mut self) {
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
@@ -1728,6 +1764,7 @@ impl Session {
             st.trim_history();
         }
         photocraft_compose::set_effect_cache_budget(budget << 20);
+        crate::transform_cmds::set_budget(u64::from(self.prefs().performance.memory_usage_mb) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);

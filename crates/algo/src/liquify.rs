@@ -654,6 +654,7 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
         return out;
     }
     let maxd = f64::from(field.max_displacement()).ceil() as i32 + 3;
+    let has_freeze = field.freeze.iter().any(|&f| f > 0.0);
     let tiles: Vec<Rect> = b.tiles().map(|t| t.rect().intersect(&b)).filter(|r| !r.is_empty() && field.touches(*r)).collect();
     let work = |t: &Rect| -> Option<(Rect, Vec<f32>)> {
         let w = t.width() as usize;
@@ -670,7 +671,15 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
                 let px = f64::from(t.x0) + x as f64 + 0.5;
                 let gx = (px - f64::from(b.x0) - 0.5) / field.cell;
                 let wx = catmull_rom(gx - gx.floor());
-                let d = field.sample_cubic(gx, gy, &wx, &wy);
+                let mut d = field.sample_cubic(gx, gy, &wx, &wy);
+                if has_freeze {
+                    let mask = f64::from(field.freeze_at(px, py)).clamp(0.0, 1.0);
+                    if mask > 0.0 {
+                        let linear = field.sample(px, py);
+                        d[0] = d[0] * (1.0 - mask) + linear[0] * mask;
+                        d[1] = d[1] * (1.0 - mask) + linear[1] * mask;
+                    }
+                }
                 if d[0] != 0.0 || d[1] != 0.0 {
                     moved = true;
                 }
@@ -1374,6 +1383,42 @@ mod tests {
         assert!(g.freeze_at(40.0, 32.0) < 0.01 && g.freeze_at(5.0, 5.0) > 0.99);
         g.apply_stroke(&LiquifyStroke::new(LiquifyTool::ThawAll, 1.0));
         assert!(g.freeze.iter().all(|f| *f == 0.0));
+    }
+
+    #[test]
+    fn fully_frozen_pixels_keep_their_mapping_when_an_adjacent_area_is_warped() {
+        let bounds = bounds();
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        for y in 0..bounds.height() {
+            for x in 0..bounds.width() {
+                src.write_pixel(x as i32, y as i32, &[x as f32 / bounds.width() as f32, y as f32 / bounds.height() as f32, 0.0, 1.0]);
+            }
+        }
+
+        let mut mask_only = LiquifyField::new(bounds, 2.0);
+        mask_only.apply_stroke(&lasso(&[[0.0, 0.0], [40.0, 0.0], [40.0, 64.0], [0.0, 64.0]], None));
+        assert_eq!(apply_liquify(&src, &mask_only), src);
+
+        let mut field = LiquifyField::new(bounds, 2.0);
+        let mut first_warp = LiquifyStroke::new(LiquifyTool::ForwardWarp, 40.0);
+        first_warp.points = vec![vec![22.0, 32.0], vec![34.0, 32.0]];
+        field.apply_stroke(&first_warp);
+
+        field.apply_stroke(&lasso(&[[0.0, 0.0], [40.0, 0.0], [40.0, 64.0], [0.0, 64.0]], None));
+        let frozen_pixel = (37, 32);
+        assert!(field.freeze_at(f64::from(frozen_pixel.0) + 0.5, f64::from(frozen_pixel.1) + 0.5) > 0.999);
+        let before = apply_liquify(&src, &field).pixel(frozen_pixel.0, frozen_pixel.1);
+        assert_ne!(before, src.pixel(frozen_pixel.0, frozen_pixel.1), "freezing must retain the earlier warp");
+        let neighbor_before = apply_liquify(&src, &field).pixel(43, 32);
+
+        let mut adjacent_warp = LiquifyStroke::new(LiquifyTool::ForwardWarp, 24.0);
+        adjacent_warp.points = vec![vec![44.0, 32.0], vec![52.0, 32.0]];
+        field.apply_stroke(&adjacent_warp);
+
+        let after = apply_liquify(&src, &field).pixel(frozen_pixel.0, frozen_pixel.1);
+        let neighbor_after = apply_liquify(&src, &field).pixel(43, 32);
+        assert_eq!(before, after, "a fully frozen pixel must keep its pre-neighbor-warp mapping");
+        assert_ne!(neighbor_before, neighbor_after, "an adjacent unfrozen pixel must still move");
     }
 
     #[test]

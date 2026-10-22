@@ -338,6 +338,7 @@
 	Blending Options…	混合選項…
 	Bevel & Emboss…	斜角和浮雕…
 	Use Global Light	使用全域光
+	Overprint	疊印
 	Inner Shadow…	內陰影…
 	Inner Glow…	內光暈…
 	Satin…	緞面…
@@ -2160,6 +2161,11 @@
 	Color Replacement Tool	顏色取代工具
 	Color Replacement	顏色取代
 	Wet	濕度
+	Current Brush Load	目前筆刷載入
+	Load Brush	載入筆刷
+	Clean Brush	清理筆刷
+	Load the brush after each stroke	每次描邊後載入筆刷
+	Clean the brush after each stroke	每次描邊後清理筆刷
 	Mix	混合
 	Wetness Jitter	濕度快速變換
 	Mix Jitter	混合快速變換
@@ -2639,6 +2645,27 @@ cameraData	Lens	鏡頭
 	Output To	輸出至
 	Duplicate Layer	複製圖層
 	Contract	縮減
+
+	Animation Options	動畫選項
+	Entire Document	整份文件
+	Filter Options	篩選選項
+	Layer Bounds	圖層邊界
+	Layers Panel Options	圖層面板選項
+	Lock Layers	鎖定圖層
+	New Artboard…	新增工作區域…
+	New Group	新增群組
+	New Group…	新增群組…
+	New Layer…	新增圖層…
+	Panel Options…	面板選項…
+	Prevent Auto-Nesting	防止自動巢狀
+	Show Layers	顯示圖層
+	Thumbnail Contents	縮圖內容
+	Thumbnail Size	縮圖大小
+	Use Default Masks on Fill Layers	在填色圖層使用預設遮色片
+	Expand New Effects	展開新效果
+	Add “copy” to Copied Layers and Groups	為複製的圖層和群組加上「副本」
+	Preview on canvas when reordering layers	重新排列圖層時在畫布上預覽
+	Show layer mask badges	顯示圖層遮色片標記
 	Loading fonts…	正在載入字體…
 	Response curve	回應曲線
 	Tool	工具
@@ -2696,6 +2723,13 @@ curves	Smooth	平滑
 	Click to place · Alt-click or drag off-canvas to remove	按一下以放置 · Alt 按一下或拖曳至畫布外以移除
 	No document open	未開啟任何文件
 	{n} of {max} sample points	{max} 個取樣點中的 {n} 個
+
+# History panel menu (#2966)
+	Step Forward	向前一步
+	Step Backward	向後一步
+	Clear History	清除步驟記錄
+	New Snapshot…	新增快照…
+	History Options…	步驟記錄選項…
 # Print dialog (#2697)
 	Emulsion Down	感光乳劑面朝下
 	Functions	功能
@@ -2728,6 +2762,7 @@ curves	Smooth	平滑
 	Light Red	淺紅色
 	Medium Blue	中藍色
 	Light Gray	淺灰色
+	Stop	停止
 	Object Finder	物件尋找器
 	No object found there — drag a rectangle around it	那裡找不到物件 — 請在其周圍拖曳矩形
 	Remove after each stroke	每次描邊後移除
@@ -2773,6 +2808,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	從步驟記錄面板的來源狀態繪畫
+	Sets the source for the history brush	設定步驟記錄筆刷的來源
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	使用內嵌描述檔 ({profile})
 	Convert to the working space ({profile})	轉換為工作空間 ({profile})
@@ -2796,6 +2834,9 @@ curves	Smooth	平滑
 # View › Guides › right-click a guide
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
+	Bicubic Automatic	雙三次 (自動)
+	Bicubic Smoother	雙三次 (較平滑)
+	Bicubic Sharper	雙三次 (較銳利)
 	Pasting from other apps is unavailable	無法從其他應用程式貼上
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft 在此工作階段中無法存取系統剪貼簿。在 Wayland 上，Flatpak 沙盒會隱藏讀取其他應用程式影像所用的協定。
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	若要從其他應用程式貼上，請在 XWayland 下啟動 PhotoCraft：`{command}`
@@ -2816,6 +2857,19 @@ curves	Smooth	平滑
 	{set} (modified)	{set}（已修改）
 	Random	隨機
 	Show file name in title	標題中顯示檔案名稱
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	50% 臨界值
+	Pattern Dither	圖樣混色
+	Diffusion Dither	擴散混色
+	Halftone Screen	半色調網屏
+	Custom Pattern	自訂圖樣
+	Frequency:	頻率：
+	Lines/Inch	線/英吋
+	Lines/Centimeter	線/公分
+	Ellipse	橢圓
+	Cross	十字
+	Method	方法
 	Accept and Go to Conflict	接受並前往衝突
 	Changes undone.	已還原變更。
 	Choose a new shortcut for this command, or leave it without one.	為此指令選擇新的快速鍵，或保持沒有快速鍵。
@@ -2869,3 +2923,15 @@ curves	Smooth	平滑
 	Tween	轉場
 	Last frame	最後一個影格
 	Frames to add	要新增的影格數
+
+# DDS Options (#1327)
+	DDS Options	DDS 選項
+	Compression	壓縮
+	Generate Mipmaps	產生 Mipmap
+
+# Color Table (.act) dialog
+	There is no color table to save.	沒有可儲存的色表。
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	已將 {n} 種顏色儲存至 {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	GPU 介面卡

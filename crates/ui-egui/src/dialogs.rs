@@ -361,7 +361,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // parameters reserves its own space (#3769).
                     let room = (ctx.content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(&fields)).max(120.0);
                     let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
-                        egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| crate::filter_dialog::body(ui, fields));
+                        egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
+                            if crate::bitmap_dialog::owns(fields) {
+                                crate::bitmap_dialog::body(app, ui, fields);
+                            } else {
+                                crate::filter_dialog::body(ui, fields);
+                            }
+                        });
                         // The in-dialog preview window sits under the scrolling parameters (#3769),
                         // so it never shifts them.
                         crate::filter_preview_ui::window(app, d.id, ui, fields);
@@ -389,6 +395,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = Some(true);
                 }
             } else {
+                // The Color Table dialog loads and saves `.act` files, as in Photoshop.
+                if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
+                    crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
+                }
                 ui.add_space(8.0);
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
@@ -646,6 +656,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.filter_preview = None;
                 return Err("dialog has no command".into());
             };
+            if crate::filter_dialog::needs_displace_map(&cmd, &crate::filter_dialog::params_of(&d.fields)) {
+                app.filter_preview = None;
+                return crate::filter_dialog::ask_displace_map(app, cmd, d.fields.clone());
+            }
             let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
             let result = app.run(&cmd, params.clone());
             // A filter that runs as a background job keeps its preview on screen until the job

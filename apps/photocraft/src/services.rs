@@ -17,12 +17,12 @@ use std::sync::Arc;
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
+/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr",
-    "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw",
-    "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
+    "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "heic", "heif", "hif", "dng", "cr2",
+    "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -45,6 +45,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Photoshop", &["psd", "psb", "psdt"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Krita", &["kra", "krz"]),
+    ("GIMP", &["xcf", "xcfgz", "gz"]),
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
     ("SVG", SVG_EXTS),
@@ -69,7 +70,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
     ("Brushes", &["abr"]),
     ("Gradients", &["grd"]),
-    ("Swatches", &["aco", "ase"]),
+    ("Swatches", &["aco", "act", "ase"]),
     ("Keyboard Shortcuts", &["kys"]),
 ];
 
@@ -99,11 +100,13 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenEXR", &["exr"]),
     ("FITS", &["fits", "fit"]),
     ("DPX", &["dpx"]),
+    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
+    ("DDS", &["dds"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
 /// never swaps their extension for a document format's.
-const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Swatch Exchange", &["ase"])];
+const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"])];
 
 /// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
 fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
@@ -272,7 +275,7 @@ fn path_of(file: &rfd::FileHandle) -> String {
 }
 
 /// Runs `future` to completion on this thread, sleeping until it is woken.
-fn block_on<T>(future: impl Future<Output = T>) -> T {
+pub(crate) fn block_on<T>(future: impl Future<Output = T>) -> T {
     struct Unpark(std::thread::Thread);
     impl std::task::Wake for Unpark {
         fn wake(self: Arc<Self>) {
@@ -384,12 +387,13 @@ fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R
 fn recovery_services(dir: Option<PathBuf>) -> Services {
     let recover_dir = dir.clone();
     let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
-    let (s1, s2, s4) = (store.clone(), store.clone(), store.clone());
+    let (s1, s2, s4, s5) = (store.clone(), store.clone(), store.clone(), store.clone());
     Services {
         autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
             with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
         })),
         autosave_results: Some(Box::new(move || with_store(&s4, |s| s.take_completed()).unwrap_or_default())),
+        flush_autosaves: Some(Box::new(move || with_store(&s5, RecoveryStore::flush).unwrap_or_default())),
         discard_autosave: Some(Box::new(move |id: u64| {
             let _ = with_store(&s2, |s| s.discard(id));
         })),
@@ -569,7 +573,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();
             Box::new(move || {
-                let mut slot = clip.try_borrow_mut().ok()?;
+                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
                 let cb = match slot.as_mut() {
                     Some(c) => c,
                     None => {
@@ -578,21 +582,33 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                         // `--socket=fallback-x11` gives no X server while a compositor runs.
                         let opened = arboard::Clipboard::new();
                         unreadable.set(opened.is_err());
-                        slot.insert(opened.ok()?)
+                        slot.insert(opened.map_err(|e| e.to_string())?)
                     }
                 };
                 // Copied files first: Finder also puts the file's icon on the clipboard as an
                 // image, which would otherwise paste instead of the file.
-                if let Some(img) = cb.get().file_list().ok().and_then(|paths| image_from_files(&paths)) {
-                    return Some(img);
+                match cb.get().file_list() {
+                    Ok(paths) => {
+                        if let Some(img) = image_from_files(&paths) {
+                            return Ok(Some(img));
+                        }
+                    }
+                    Err(error @ arboard::Error::ClipboardOccupied) => return Err(error.to_string()),
+                    Err(_) => {}
                 }
-                if let Ok(img) = cb.get_image() {
-                    return Some((img.width as u32, img.height as u32, img.bytes.into_owned()));
+                match cb.get_image() {
+                    Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
+                    Err(error) => {
+                        #[cfg(target_os = "linux")]
+                        if let Some(image) = wayland_clipboard_image() {
+                            return Ok(Some(image));
+                        }
+                        match error {
+                            arboard::Error::ContentNotAvailable => Ok(None),
+                            _ => Err(error.to_string()),
+                        }
+                    }
                 }
-                #[cfg(target_os = "linux")]
-                return wayland_clipboard_image();
-                #[cfg(not(target_os = "linux"))]
-                None
             })
         }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
@@ -734,6 +750,57 @@ mod tests {
         assert_eq!(with_chosen_type(Path::new("/pics/art.psd"), opened, &[]), PathBuf::from("/pics/art.psd"));
     }
 
+    /// Regression using the real clipboard on an isolated Windows CI runner.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires exclusive use of the Windows clipboard"]
+    fn busy_native_clipboard_preserves_copied_shape() {
+        for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace"] {
+            let mut native = native(None);
+            let services = Services {
+                clipboard_set_image: native.clipboard_set_image.take(),
+                clipboard_get_image: native.clipboard_get_image.take(),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+            app.run("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+            app.run("edit.copy", json!({})).unwrap();
+            assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+            assert!(app.services.clipboard_get_image.as_mut().unwrap()().unwrap().is_some(), "native export succeeded");
+            app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+
+            // Another thread holds the OS clipboard open beyond arboard's bounded retry window.
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let holder = std::thread::spawn(move || {
+                // A non-null window distinguishes this owner from arboard's null-window opens.
+                let guard = winsafe::HWND::GetDesktopWindow().OpenClipboard().unwrap();
+                ready_tx.send(()).unwrap();
+                release_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+                drop(guard);
+            });
+            ready_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            let contention = arboard::Clipboard::new().unwrap().get_image().err();
+            let first = app.run(id, json!({}));
+            release_tx.send(()).unwrap();
+            holder.join().unwrap();
+            assert!(matches!(contention, Some(arboard::Error::ClipboardOccupied)), "diagnostic must actually occupy the clipboard: {contention:?}");
+            eprintln!("paste while clipboard occupied: {first:?}");
+            assert!(first.is_err(), "report contention rather than a successful no-op");
+            assert!(
+                app.session.clipboard.as_ref().is_some_and(|clip| clip.layers.is_some()),
+                "a temporary OS read failure must not discard the copied editable shape"
+            );
+            app.run(id, json!({})).unwrap();
+            let state = app.session.active().unwrap();
+            assert!(
+                matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Shape(_)),
+                "retry keeps the shape editable"
+            );
+        }
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn open_filters_cover_uppercase_and_mixed_case_extensions() {
@@ -765,6 +832,9 @@ mod tests {
         assert!(!globs.iter().any(|glob| matches(glob, "txt")));
         let svg_filter = open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts).unwrap_or_default();
         assert_eq!(svg_filter, open_filter_extensions(SVG_EXTS));
+        let psd_filter = open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts).unwrap_or_default();
+        assert_eq!(psd_filter, open_filter_extensions(&["psd", "psb", "psdt"]));
+        assert!(psd_filter.iter().any(|glob| matches(glob, "psd")) && psd_filter.iter().any(|glob| matches(glob, "PSD")));
         assert!(svg_filter.iter().any(|glob| matches(glob, "svg")) && svg_filter.iter().any(|glob| matches(glob, "svgz")));
     }
 
@@ -794,6 +864,10 @@ mod tests {
         assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
         assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
         assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts), Some(vec!["svg".to_string(), "svgz".to_string()]));
+        assert_eq!(
+            open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts),
+            Some(vec!["psd".to_string(), "psb".to_string(), "psdt".to_string()])
+        );
     }
 
     #[test]
@@ -903,7 +977,7 @@ mod tests {
                 assert!(format.caps().write, "{name}: .{ext} can't be written");
             }
         }
-        for ext in ["ico", "gif", "bmp"] {
+        for ext in ["ico", "gif", "bmp", "dds"] {
             assert!(save_filters("Untitled-1.psd").iter().any(|(_, exts)| exts.iter().any(|e| e == ext)), ".{ext} is offered");
         }
         assert_eq!(save_filters("icon.ico")[0].0, "ICO", "an .ico name leads with its own type");

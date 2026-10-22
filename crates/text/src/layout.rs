@@ -22,7 +22,7 @@ use parley::{
     PositionedLayoutItem, StyleProperty,
 };
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{Caps, CharStyle, Kerning, Orientation, TextAlign, TextDirection, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, TextAlign, TextDirection, TextShape};
 use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
@@ -30,6 +30,23 @@ use crate::fonts::FontDb;
 /// Photoshop synthesizes small caps for faces without an OpenType `smcp` table. Keep the same
 /// readable hierarchy for every font instead of silently rendering lowercase text unchanged.
 const SYNTHETIC_SMALL_CAPS_SCALE: f32 = 0.7;
+
+/// Photoshop's default superscript / subscript size and position (Type preferences, stored in a
+/// PSD's text resources as `SuperscriptSize` .583, `SuperscriptPosition` .333 and their
+/// `Subscript` twins): the run is drawn at 58.3% of its size and moved by 33.3% of its size.
+const SCRIPT_SIZE: f32 = 0.583;
+const SCRIPT_POSITION: f32 = 0.333;
+
+/// The style a run is drawn with: superscript and subscript shrink it and shift its baseline.
+fn drawn_style(s: &mut CharStyle) {
+    let dir = match s.baseline {
+        FontBaseline::Normal => return,
+        FontBaseline::Superscript => 1.0,
+        FontBaseline::Subscript => -1.0,
+    };
+    s.baseline_shift_pt += dir * SCRIPT_POSITION * s.size_pt;
+    s.size_pt *= SCRIPT_SIZE;
+}
 
 /// Photoshop's default tab stops: every half inch, measured from the anchor of point text or the
 /// left edge of a paragraph box. PSD type carries no custom tab stops, so these are the only ones.
@@ -480,6 +497,7 @@ impl Layouter {
                 crate::served::request(&s.font_family);
             }
             fonts.select_named_face(&mut s);
+            drawn_style(&mut s);
             out.styles.push(s);
         }
         let run_starts: Vec<usize> = runs
