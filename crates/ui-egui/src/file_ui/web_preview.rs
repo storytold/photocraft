@@ -490,8 +490,9 @@ mod avif_estimate_tests {
         let mut first = None;
         frame(&mut |ui| first = Some((optimized(ui, pane, "t", &p, &px, w, h).unwrap(), avif_status(ui, pane))));
         let ((look, _, _, ext), (generation, pending)) = first.unwrap();
-        assert_eq!((ext, generation), ("avif", 0));
-        assert!(pending, "the real encode is running");
+        assert_eq!(ext, "avif");
+        // A small encode can finish on the worker before the pane asks, so either is fine here.
+        assert!(pending || generation == 1, "the real encode is running or has just landed");
         assert_eq!(look, source, "until then, the image before compression");
 
         let start = std::time::Instant::now();
