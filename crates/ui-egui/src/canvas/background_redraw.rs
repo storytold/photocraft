@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
 
-use photocraft_doc::{DocId, Document, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent};
 use photocraft_engine::display_color::CanvasDisplay;
 use photocraft_geom::{Affine, Rect};
 #[cfg(not(target_arch = "wasm32"))]
@@ -295,9 +295,9 @@ fn reduce(r: Rect, k: i32) -> Rect {
 }
 
 /// `doc` scaled down by `k` for a reduced first picture: [`photocraft_compose::proxy::proxy_document`]
-/// with what is measured in document pixels scaled too (layer effects, mask feathers, vector mask
-/// and shape paths, stroke widths), so styled documents look right at the reduced size. Only a stand-in: the full
-/// redraw replaces it.
+/// with what is measured in document pixels scaled too (layer effects, mask and shape feathers,
+/// vector mask and shape paths, stroke widths, pattern fill tiles), so styled documents look right
+/// at the reduced size. Only a stand-in: the full redraw replaces it.
 pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
     fn scale_layer(l: &mut Layer, k: f32) {
         photocraft_engine::image_cmds::scale_effects(&mut l.effects, 1.0 / k);
@@ -314,6 +314,7 @@ pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
             // so the path and stroke shrink with the pixels.
             LayerContent::Shape(sh) => {
                 photocraft_engine::vector_cmds::transform_shape(sh, &Affine::scale(1.0 / f64::from(k)));
+                sh.feather /= k;
                 if let Some(st) = &mut sh.stroke {
                     st.width /= k;
                 }
@@ -321,6 +322,18 @@ pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
             LayerContent::Group(g) => {
                 for c in &mut g.children {
                     scale_layer(c, k);
+                }
+            }
+            // The tile is kept at full size, so it is drawn smaller. A cached render (already
+            // downsampled) stays in use: its fill changes with the layer's.
+            LayerContent::Fill(f @ Fill::Pattern { .. }) => {
+                let cached = l.fill_cache.as_ref().is_some_and(|c| c.fill == *f);
+                if let Fill::Pattern { scale, phase, .. } = f {
+                    *scale /= k;
+                    *phase = (phase.0 / k, phase.1 / k);
+                }
+                if let Some(c) = l.fill_cache.as_mut().filter(|_| cached) {
+                    c.fill = f.clone();
                 }
             }
             _ => {}
