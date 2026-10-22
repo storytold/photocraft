@@ -197,6 +197,8 @@ fn the_reduced_picture_of_a_stroked_styled_shape_matches_the_full_one() {
         path: Path::new(vec![Subpath::polygon(&[(16.0, 16.0), (144.0, 16.0), (144.0, 144.0), (16.0, 144.0)])]),
         fill: Some(Fill::Solid(Color::BLACK)),
         stroke: Some(ShapeStroke { width: 8.0, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..Default::default() }),
+        // Feathered too: the blur is in document pixels.
+        feather: 8.0,
         ..Default::default()
     };
     sh.cache = Some(photocraft_vector::render_shape(&sh, doc.pixel_format(), doc.bounds()));
@@ -215,6 +217,48 @@ fn the_reduced_picture_of_a_stroked_styled_shape_matches_the_full_one() {
     assert!(differing < 200, "{differing} of 4096 pixels differ");
     assert_eq!(reduced.px[48 * 64 + 48], full.px[192 * 256 + 192], "outside the shape");
     assert_eq!(reduced.px[20 * 64 + 20], full.px[80 * 256 + 80], "inside the shape");
+}
+
+#[test]
+fn the_reduced_picture_of_a_pattern_fill_matches_the_full_one() {
+    // A pattern fill renders from its full-size tile (#5561 review): left at full scale, the
+    // reduced picture's tiles were four times too large.
+    use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::pattern::Pattern;
+    use photocraft_geom::Size;
+    let mut doc = Document::with_background("pattern", Size::new(256, 256), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    // 16 × 16 tile, red left half, blue right, drawn at half size from x = 12.
+    let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    tile.fill_rect(Rect::new(0, 0, 8, 16), &[1.0, 0.0, 0.0, 1.0]);
+    tile.fill_rect(Rect::new(8, 0, 16, 16), &[0.0, 0.0, 1.0, 1.0]);
+    let pat = Pattern::new("rb", tile, 16, 16);
+    let fill = Fill::Pattern { name: "rb".into(), scale: 2.0, id: pat.id.clone(), angle: 0.0, link: false, phase: (12.0, 0.0) };
+    doc.patterns.push(pat);
+    doc.layers.push(Layer::new("pattern", LayerContent::Fill(fill)));
+    let full = photocraft_compose::render(&doc, doc.bounds());
+    let p = preview_document(&doc, 4);
+    let reduced = photocraft_compose::render(&p, p.bounds());
+    for x in 0..64 {
+        let (a, b) = (reduced.px[10 * 64 + x], full.px[(10 * 4 + 2) * 256 + x * 4 + 2]);
+        assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 0.01), "x = {x}: {a:?} vs {b:?}");
+    }
+}
+
+#[test]
+fn a_cached_pattern_fill_keeps_its_cache_in_the_reduced_picture() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::FillCache;
+    use photocraft_geom::Size;
+    let mut doc = Document::new("cached", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+    let fill = Fill::Pattern { name: "gone".into(), scale: 1.0, id: String::new(), angle: 0.0, link: true, phase: (8.0, 4.0) };
+    let mut l = Layer::new("pattern", LayerContent::Fill(fill.clone()));
+    l.fill_cache = Some(FillCache { fill, surface: photocraft_raster::Surface::with_default(doc.pixel_format(), &[0.0, 1.0, 0.0, 1.0]) });
+    doc.layers.push(l);
+    let p = preview_document(&doc, 4);
+    let l = &p.layers[0];
+    let LayerContent::Fill(f) = &l.content else { panic!("{:?}", l.content) };
+    assert!(matches!(f, Fill::Pattern { scale, phase, .. } if *scale == 0.25 && *phase == (2.0, 1.0)), "{f:?}");
+    assert_eq!(l.fill_cache.as_ref().map(|c| &c.fill), Some(f), "the cache still matches");
 }
 
 struct Gpu {
