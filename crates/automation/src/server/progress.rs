@@ -236,14 +236,37 @@ impl PhotocraftMcp {
                 biased;
                 () = waiter.cancelled() => {
                     // Cancel before answering, so the next call already sees the document unchanged.
-                    let _ = client.call("jobs.cancel", json!({"job": job})).await;
+                    let cancel = client.call("jobs.cancel", json!({"job": job})).await;
                     // Disarm only now: dropped during the call, the guard still sends the cancel.
                     guard.job = None;
-                    return Err(photocraft_engine::EngineError::Cancelled.into());
+                    return Err(cancel_answer(job, &id, cancel));
                 }
                 () = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_millis(200));
         }
+    }
+}
+
+/// The answer to a bridged wait that was cancelled, from the app's reply to `jobs.cancel`. The app
+/// refuses to cancel a job that already ended, whose result may then be applied: say so rather
+/// than report a cancellation.
+fn cancel_answer(job: u64, id: &str, reply: Result<Value, AutomationError>) -> AutomationError {
+    match reply {
+        Ok(_) => photocraft_engine::EngineError::Cancelled.into(),
+        Err(error) => AutomationError::Bridge(format!("job {job} ({id}) was not cancelled: {error}; check jobs_list for its outcome")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_cancel_is_not_reported_as_cancelled() {
+        let cancelled = cancel_answer(7, "filter.blur.gaussianBlur", Ok(json!({"cancelled": 1})));
+        assert!(matches!(cancelled, AutomationError::Engine(photocraft_engine::EngineError::Cancelled)), "{cancelled}");
+        let refused = cancel_answer(7, "filter.blur.gaussianBlur", Err(AutomationError::App("job 7 is not running".into())));
+        assert!(matches!(&refused, AutomationError::Bridge(m) if m.contains("was not cancelled") && m.contains("job 7 is not running")), "{refused}");
     }
 }
