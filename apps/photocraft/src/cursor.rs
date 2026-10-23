@@ -6,7 +6,8 @@
 //! - **macOS**: `NSEvent.mouseLocation`, converted into the content view of our window under it.
 //! - **X11**: `QueryPointer` on our window (a second, pure-Rust X connection).
 //! - **Windows**: `GetCursorPos`, relative to the window's client area.
-//! - **Wayland**: winit 0.30 delivers no file drops there, so there's nothing to place.
+//! - **Wayland**: no global pointer position; this fork's winit (`patches/winit`) reports the drag
+//!   position as pointer motion, so egui's latest pointer is where the files are.
 //!
 //! No `unsafe`: every OS call goes through a safe binding.
 //!
@@ -54,6 +55,7 @@ mod platform {
         let window = match cc.window_handle().ok()?.as_raw() {
             RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok()?,
             RawWindowHandle::Xcb(h) => h.window.get(),
+            RawWindowHandle::Wayland(_) => return Some(Box::new(|ctx: &egui::Context| ctx.input(|i| i.pointer.latest_pos()))),
             _ => return None,
         };
         // Opened on first use and kept: the pointer is read every frame while files hover.

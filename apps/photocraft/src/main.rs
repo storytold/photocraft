@@ -731,6 +731,8 @@ fn main() -> eframe::Result {
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
                 file_dialog_probe::start();
+                // patches/winit receives Wayland file drops.
+                services.wayland_drops = true;
                 if services.is_wayland {
                     let var = |name| std::env::var(name).ok();
                     services.xwayland_command =

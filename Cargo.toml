@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["patches/winit"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
 
 [workspace.package]
@@ -172,3 +173,7 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+# winit 0.30.13 with Wayland file drag and drop (patches/winit/src/platform_impl/linux/
+# wayland/seat/dnd.rs). Drop once egui moves to winit 0.31, which has it upstream.
+[patch.crates-io]
+winit = { path = "patches/winit" }
