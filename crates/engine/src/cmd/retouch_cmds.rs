@@ -14,7 +14,7 @@ use photocraft_algo::inpaint::{self, CompleteParams};
 use photocraft_algo::poisson;
 use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen, sponge};
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_doc::{ColorTable, Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};

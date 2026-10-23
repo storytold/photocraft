@@ -6,6 +6,36 @@ fn session(w: u32, h: u32) -> Session {
     s
 }
 
+fn indexed_black_white() -> Session {
+    let mut s = session(64, 48);
+    s.edit("indexed test setup", |doc, active| {
+        let bounds = doc.bounds();
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let fmt = surf.format();
+        let mut data = Vec::with_capacity((bounds.width() * bounds.height()) as usize * fmt.channels());
+        for _y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                let c = if x < bounds.x0 + bounds.width() as i32 / 2 { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 1.0, 1.0, 1.0] };
+                data.extend(photocraft_raster::from_rgba(&fmt, c));
+            }
+        }
+        surf.write_region(bounds, &data);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    s
+}
+
+fn layer_bytes(s: &Session) -> Vec<u8> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().to_interleaved(st.doc.bounds())
+}
+
+fn live_layer_bytes(doc: &photocraft_doc::Document, id: photocraft_doc::LayerId) -> Vec<u8> {
+    doc.layer(id).unwrap().surface().unwrap().to_interleaved(doc.bounds())
+}
+
 fn surface(s: &Session) -> Surface {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().clone()
@@ -799,6 +829,145 @@ fn live_pencil_matches_the_committed_pencil_and_auto_erases() {
     // Only the Brush and the Pencil stroke live.
     assert!(LiveStroke::begin_with(&s, "paint.mixerBrush", &json!({"points": [[1, 1]]})).is_err());
     assert!(LiveStroke::begin_with(&s, "paint.pencil", &json!({"points": "none"})).is_err());
+}
+
+#[test]
+fn indexed_live_brush_and_pencil_match_cold_offered_and_partitioned_commits() {
+    let all = [[8.0, 24.0, 1.0], [20.0, 18.0, 0.65], [38.0, 30.0, 0.8], [56.0, 22.0, 1.0]];
+    let points = |v: &[[f64; 3]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect::<Vec<_>>();
+    for cmd in ["paint.stroke", "paint.pencil"] {
+        let settings = json!({
+            "size": 11,
+            "hardness": 0.4,
+            "opacity": 0.47,
+            "flow": 0.63,
+            "smoothing": 0.0,
+            "color": "#ff0000",
+            "target": "pixels",
+            "seed": 23
+        });
+        let mut commit = settings.clone();
+        commit["points"] = json!(all);
+
+        let mut cold = indexed_black_white();
+        let table = cold.active().unwrap().doc.color_table.clone().unwrap();
+        cold.execute(cmd, commit.clone()).unwrap();
+        let expected = layer_bytes(&cold);
+        assert_eq!(cold.active().unwrap().doc.color_table.as_ref(), Some(&table), "{cmd}: cold commit changes the table");
+        let st = cold.active().unwrap();
+        let sampled = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(20, 18);
+        let on_table =
+            table.colors.iter().any(|entry| entry.iter().copied().enumerate().all(|(i, v)| (sampled[i] - f32::from(v) / 255.0).abs() <= 1.0 / 255.0));
+        assert!(on_table, "{cmd}: sampled live/cold brush pixel is off the indexed table: {sampled:?}");
+
+        let mut offered = indexed_black_white();
+        let id = offered.active().unwrap().active_layer.unwrap();
+        let mut first = settings.clone();
+        first["points"] = json!([all[0]]);
+        let mut live = LiveStroke::begin_with(&offered, cmd, &first).unwrap();
+        live.push(&points(&all[1..2])).unwrap();
+        live.push(&points(&all[2..])).unwrap();
+        let preview = live_layer_bytes(&live.doc, id);
+        assert_eq!(preview, expected, "{cmd}: split live preview differs from cold bytes");
+        assert_eq!(live.doc.color_table.as_ref(), Some(&table), "{cmd}: live preview changes the table");
+
+        offered.offer_live_stroke(live).unwrap();
+        let result = offered.execute(cmd, commit.clone()).unwrap();
+        assert_eq!(result["fromLive"], true, "{cmd}: offered live pixels were not used");
+        assert_eq!(layer_bytes(&offered), expected, "{cmd}: offered commit differs from cold bytes");
+        assert_eq!(offered.active().unwrap().doc.color_table.as_ref(), Some(&table), "{cmd}: offered commit changes the table");
+
+        let partitioned = indexed_black_white();
+        let id = partitioned.active().unwrap().active_layer.unwrap();
+        let mut one_batch = LiveStroke::begin_with(&partitioned, cmd, &first).unwrap();
+        one_batch.push(&points(&all[1..])).unwrap();
+        assert_eq!(live_layer_bytes(&one_batch.doc, id), preview, "{cmd}: batch partition changes live bytes");
+    }
+}
+
+#[test]
+fn indexed_live_symmetric_early_return_matches_cold_and_offered_commits() {
+    let setup = || {
+        let mut s = indexed_black_white();
+        s.execute("paint.setSymmetry", json!({"mode": "vertical", "center": [32, 24]})).unwrap();
+        s
+    };
+    let all = [[12.0, 20.0, 1.0], [22.0, 28.0, 0.7], [16.0, 36.0, 1.0]];
+    let points = |v: &[[f64; 3]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect::<Vec<_>>();
+    let settings = json!({
+        "size": 9,
+        "hardness": 0.35,
+        "opacity": 0.53,
+        "flow": 0.71,
+        "smoothing": 0.0,
+        "color": "#ff0000",
+        "target": "pixels",
+        "seed": 29
+    });
+    let mut commit = settings.clone();
+    commit["points"] = json!(all);
+
+    let mut cold = setup();
+    let table = cold.active().unwrap().doc.color_table.clone().unwrap();
+    cold.execute("paint.stroke", commit.clone()).unwrap();
+    let expected = layer_bytes(&cold);
+
+    let mut offered = setup();
+    let id = offered.active().unwrap().active_layer.unwrap();
+    let mut first = settings.clone();
+    first["points"] = json!([all[0]]);
+    let mut live = LiveStroke::begin(&offered, &first).unwrap();
+    live.push(&points(&all[1..2])).unwrap();
+    live.push(&points(&all[2..])).unwrap();
+    let preview = live_layer_bytes(&live.doc, id);
+    assert_eq!(preview, expected, "symmetric early-return preview differs from cold bytes");
+    assert_eq!(live.doc.color_table.as_ref(), Some(&table), "symmetric preview changes the table");
+    offered.offer_live_stroke(live).unwrap();
+    let result = offered.execute("paint.stroke", commit).unwrap();
+    assert_eq!(result["fromLive"], true, "symmetric offered live pixels were not used");
+    assert_eq!(layer_bytes(&offered), expected, "symmetric offered commit differs from cold bytes");
+    assert_eq!(offered.active().unwrap().doc.color_table.as_ref(), Some(&table), "symmetric offered commit changes the table");
+}
+
+#[test]
+fn indexed_live_mask_stays_grayscale_instead_of_palette_snapping() {
+    let all = [[12.0, 24.0], [30.0, 24.0], [52.0, 18.0]];
+    let points = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
+    let settings = json!({
+        "size": 13,
+        "hardness": 1.0,
+        "opacity": 0.65,
+        "flow": 0.7,
+        "smoothing": 0.0,
+        "color": "#ff0000",
+        "target": "mask",
+        "seed": 31
+    });
+    let mut commit = settings.clone();
+    commit["points"] = json!(all);
+
+    let mut live_session = indexed_black_white();
+    live_session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let table = live_session.active().unwrap().doc.color_table.clone().unwrap();
+    let id = live_session.active().unwrap().active_layer.unwrap();
+    let original_layer = layer_bytes(&live_session);
+    let mut first = settings.clone();
+    first["points"] = json!([all[0]]);
+    let mut live = LiveStroke::begin(&live_session, &first).unwrap();
+    live.push(&points(&all[1..])).unwrap();
+    let live_mask = &live.doc.layer(id).unwrap().mask.as_ref().unwrap().surface;
+    let live_mask_bytes = live_mask.to_interleaved(live.doc.bounds());
+    let live_mask_center = live_mask.rgba(30, 24)[0];
+
+    let mut cold = indexed_black_white();
+    cold.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let cold_id = cold.active().unwrap().active_layer.unwrap();
+    cold.execute("paint.stroke", commit).unwrap();
+    let cold_mask = &cold.active().unwrap().doc.layer(cold_id).unwrap().mask.as_ref().unwrap().surface;
+    assert_eq!(live_mask_bytes, cold_mask.to_interleaved(cold.active().unwrap().doc.bounds()), "live mask differs from cold mask bytes");
+    assert!(live_mask_center > 0.01 && live_mask_center < 0.99, "mask paint was palette-snapped: {live_mask_center}");
+    assert_eq!(live_layer_bytes(&live.doc, id), original_layer, "mask preview changed layer pixels");
+    assert_eq!(live.doc.color_table.as_ref(), Some(&table), "mask preview changes the table");
 }
 
 /// Pencil latency on a 24 MP document: the time to start a live stroke, per pointer move, and

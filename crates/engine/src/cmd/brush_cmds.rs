@@ -6,7 +6,7 @@
 //! (`{"scattering": {"enabled": true}}`). Strokes are deterministic: the jitter seed is the `seed`
 //! param or a hash of the points, so a journaled command replays to identical pixels.
 
-use photocraft_doc::LayerContent;
+use photocraft_doc::{ColorTable, LayerContent};
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, MixerState};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
@@ -253,6 +253,17 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
 }
 
+/// Capture the indexed palette for a pixel-layer target once when a live publisher starts.
+///
+/// Indexed documents keep expanded RGB surfaces, so previews must explicitly constrain only layer
+/// pixels; masks and channels remain grayscale/alpha targets even when the document is Indexed.
+pub(crate) fn indexed_table_for(doc: &photocraft_doc::Document, p: &Value) -> Result<Option<ColorTable>> {
+    if doc.mode != photocraft_color::ColorMode::Indexed || crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(None);
+    }
+    doc.color_table.clone().map(Some).ok_or_else(|| EngineError::Other("Indexed document has no color table".into()))
+}
+
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
 /// paints the background colour instead (Photoshop).
 fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
@@ -288,7 +299,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 return Ok(l.bounds);
             }
             let sel = doc.selection.clone();
-            let table = crate::mode_cmds::paint_color_table(doc, p);
+            let table = if auto_erase { indexed_table_for(doc, p)? } else { None };
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let mut brush = brush;
             erase_locked(&mut brush, lock, bg);
@@ -297,7 +308,6 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
                 apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
             }
-            let unpainted = table.as_ref().map(|_| surf.clone());
             let damage = if let Some(axis) = &symmetry {
                 let reflected = axis.reflected_passes(&pts);
                 let copies: Vec<_> = reflected
@@ -322,9 +332,6 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             } else {
                 render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
             };
-            if let (Some(table), Some(pre)) = (&table, &unpainted) {
-                crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
-            }
             Ok(damage)
         })
     })?;
@@ -536,6 +543,7 @@ pub struct LiveStroke {
     /// What the symmetric preview drew last, once a mirror differs from the stroke, and how many
     /// passes it merged (a mirror joining redraws every tile).
     union_live: Option<(photocraft_paint::UnionLive, usize)>,
+    indexed_table: Option<ColorTable>,
     pre: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
     sel: Option<Surface>,
@@ -615,12 +623,12 @@ impl LiveStroke {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
         let mut doc = (*st.doc).clone();
+        let indexed_table = indexed_table_for(&doc, p)?;
         let sel = doc.selection.clone();
-        let table = crate::mode_cmds::paint_color_table(&doc, p);
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
         if pencil && flag(p, "autoErase", false) {
-            let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
+            let fg = indexed_table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
@@ -637,6 +645,7 @@ impl LiveStroke {
             mirrors,
             mirror_distinct,
             union_live: None,
+            indexed_table,
             pre,
             colors: crate::color_channels::target(s, p)?,
             sel,
@@ -748,10 +757,10 @@ impl LiveStroke {
             }
             Ok(dmg)
         })?;
-        // The preview shows the pixels the commit keeps (see `stroke_with`).
-        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
+        // The preview uses the same constraint as Session::edit, including mirrored strokes.
+        if let Some(table) = self.indexed_table.as_ref() {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
+            crate::indexed_edit::constrain_surface(surf, Some(&self.pre), table, dmg)?;
         }
         Ok(dmg)
     }

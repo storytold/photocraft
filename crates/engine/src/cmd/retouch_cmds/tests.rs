@@ -252,6 +252,30 @@ fn paint_layer(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     .unwrap();
 }
 
+fn indexed_gray_levels() -> Session {
+    let mut s = session(96, 64, 8, "rgb");
+    paint_layer(&mut s, |x, _| {
+        if x < 32 {
+            [0.25, 0.25, 0.25, 1.0]
+        } else if x < 64 {
+            [0.5, 0.5, 0.5, 1.0]
+        } else {
+            [0.75, 0.75, 0.75, 1.0]
+        }
+    });
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    s
+}
+
+fn layer_bytes(s: &Session) -> Vec<u8> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().to_interleaved(st.doc.bounds())
+}
+
+fn live_layer_bytes(doc: &photocraft_doc::Document, id: photocraft_doc::LayerId) -> Vec<u8> {
+    doc.layer(id).unwrap().surface().unwrap().to_interleaved(doc.bounds())
+}
+
 fn tol(depth: u64) -> f32 {
     if depth == 8 { 1.0 / 255.0 + 1e-4 } else { 1e-3 }
 }
@@ -2225,6 +2249,112 @@ fn live_dab_offers_are_refused_or_dropped_when_they_dont_match() {
     let live = crate::brush_cmds::live_color_replacement(&s, &json!({"points": points, "color": [1.0, 0.0, 0.0, 1.0]})).unwrap();
     assert!(s.offer_live_dab(live).is_err());
     assert!(s.live_commit.is_none());
+}
+
+#[test]
+fn indexed_live_dab_matches_cold_without_work_surface_feedback() {
+    let indexed_blur_levels = || {
+        let mut s = session(96, 64, 8, "rgb");
+        paint_layer(&mut s, |x, _| if (42..54).contains(&x) { [0.25, 0.25, 0.25, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+        s
+    };
+    let all = [[8.0, 32.0], [18.0, 30.0], [30.0, 34.0], [42.0, 28.0], [54.0, 36.0], [68.0, 30.0], [82.0, 34.0]];
+    let points = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
+    let opts = |points: &[[f64; 2]]| {
+        json!({
+            "points": points,
+            "size": 18,
+            "hardness": 35,
+            "opacity": 100,
+            "flow": 100,
+            "spacing": 45,
+            "strength": 100,
+            "target": "pixels"
+        })
+    };
+    let mut cold = indexed_blur_levels();
+    let table = cold.active().unwrap().doc.color_table.clone().unwrap();
+    let before = layer_bytes(&cold);
+    cold.execute("paint.blur", opts(&all)).unwrap();
+    let expected = layer_bytes(&cold);
+    assert_ne!(expected, before, "the indexed blur did not paint");
+    assert_eq!(cold.active().unwrap().doc.color_table.as_ref(), Some(&table), "cold blur changes the table");
+
+    let split = indexed_blur_levels();
+    let id = split.active().unwrap().active_layer.unwrap();
+    let mut first = LiveDab::begin(&split, "paint.blur", &opts(&all[..1])).unwrap();
+    first.push(&points(&all[1..3])).unwrap();
+    first.push(&points(&all[3..])).unwrap();
+    let preview = live_layer_bytes(&first.doc, id);
+    assert_eq!(preview, expected, "split live blur preview differs from cold bytes");
+    assert_eq!(first.doc.color_table.as_ref(), Some(&table), "live blur changes the table");
+
+    let one = indexed_blur_levels();
+    let id = one.active().unwrap().active_layer.unwrap();
+    let mut one_batch = LiveDab::begin(&one, "paint.blur", &opts(&all[..1])).unwrap();
+    one_batch.push(&points(&all[1..])).unwrap();
+    assert_eq!(live_layer_bytes(&one_batch.doc, id), preview, "LiveDab output changes with batch partitioning");
+    assert_eq!(one_batch.doc.color_table.as_ref(), Some(&table), "partitioned live blur changes the table");
+}
+
+#[test]
+fn indexed_live_retouch_clone_matches_cold_and_wrapped_palette() {
+    let points = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
+    let on_palette = |doc: &photocraft_doc::Document, id: photocraft_doc::LayerId, table: &photocraft_doc::ColorTable| {
+        let surf = doc.layer(id).unwrap().surface().unwrap();
+        for y in doc.bounds().y0..doc.bounds().y1 {
+            for x in doc.bounds().x0..doc.bounds().x1 {
+                let c = surf.rgba(x, y);
+                assert!(
+                    table.colors.iter().any(|entry| (0..3).all(|i| (c[i] - f32::from(entry[i]) / 255.0).abs() <= 1.0 / 255.0)),
+                    "off-palette clone pixel at ({x},{y}): {c:?}"
+                );
+            }
+        }
+    };
+    for wrap in [false, true] {
+        let all = if wrap { [[94.0, 32.0], [92.0, 32.0], [90.0, 32.0]] } else { [[16.0, 32.0], [22.0, 32.0], [28.0, 32.0]] };
+        let opts = |p: &[[f64; 2]]| {
+            json!({
+                "points": p,
+                "source": [80, 32],
+                "size": 16,
+                "hardness": 100,
+                "opacity": 50,
+                "flow": 60,
+                "wrap": wrap
+            })
+        };
+        let mut cold = indexed_gray_levels();
+        let table = cold.active().unwrap().doc.color_table.clone().unwrap();
+        let commit = opts(&all);
+        cold.execute("paint.cloneStamp", commit.clone()).unwrap();
+        let expected = layer_bytes(&cold);
+        assert_eq!(cold.active().unwrap().doc.color_table.as_ref(), Some(&table), "cold clone changes the table (wrap={wrap})");
+        let cold_st = cold.active().unwrap();
+        on_palette(&cold_st.doc, cold_st.active_layer.unwrap(), &table);
+
+        let split = indexed_gray_levels();
+        let id = split.active().unwrap().active_layer.unwrap();
+        let first = opts(&all[..1]);
+        let mut live = LiveRetouch::begin(&split, "paint.cloneStamp", &first).unwrap();
+        live.push(&points(&all[1..2])).unwrap();
+        live.push(&points(&all[2..])).unwrap();
+        let preview = live_layer_bytes(&live.doc, id);
+        assert_eq!(preview, expected, "split live clone differs from cold output (wrap={wrap})");
+        assert_eq!(live.doc.color_table.as_ref(), Some(&table), "live clone changes the table (wrap={wrap})");
+        on_palette(&live.doc, id, &table);
+
+        let mut offered = indexed_gray_levels();
+        let live = LiveRetouch::begin(&offered, "paint.cloneStamp", &first).unwrap();
+        offered.offer_live_retouch(live).unwrap();
+        offered.execute("paint.cloneStamp", commit).unwrap();
+        assert_eq!(layer_bytes(&offered), expected, "offered live clone differs from cold output (wrap={wrap})");
+        assert_eq!(offered.active().unwrap().doc.color_table.as_ref(), Some(&table), "offered clone changes the table (wrap={wrap})");
+        let offered_st = offered.active().unwrap();
+        on_palette(&offered_st.doc, offered_st.active_layer.unwrap(), &table);
+    }
 }
 
 #[test]
