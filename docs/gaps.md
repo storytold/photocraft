@@ -55,6 +55,11 @@ what an agent can't finish alone.
   through io on Windows, io tests/it/large_files.rs, 2026-10-13).
   No test opens our exports in a third-party editor (FILE-216-4).
 - **Impact:** PSD is the format professionals exchange. Beta requires it to be reliable.
+- **Fixed (2026-10-21):** a shape layer's dash pattern now round trips through PSD in the
+  right units: PSD keeps the stroke width in pixels and the dash lengths in points, while the
+  model keeps the dash lengths as multiples of the width (as the SVG and Affinity readers do).
+  At 72 dpi, where a point is a pixel, a Photoshop dash of 6 pt on a 5 px stroke renders as 1.2
+  widths, not 6.
 - **Estimate:** 150–250 h. **Human:** opening exports in Photoshop on the owner's Mac (or a
   scripted check there) is the only real oracle.
 
@@ -357,6 +362,7 @@ what an agent can't finish alone.
 | 2026-10-15 | minor | G10: Cineon write landed (10-bit log gray/RGB, Save As `.cin`) |
 | 2026-10-14 | minor | G1: 32-bit Hue/Saturation unclipped (slider on whole levels) and Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass |
 | 2026-10-14 | minor | G1: Lab adjustment layers' results are whole samples (native Lab path); photoshop lab8 curves passes |
+| 2026-10-21 | minor | G1: a shape layer's dash pattern round trips through PSD in the right units: the width in pixels, the dash lengths in points, and the model's multiples of the width; no floor changed |
 | 2026-10-15 | minor | G1 / #5972 A1: render only provably constant-RGB `GdFl` noise fills; variable noise synthesis remains open |
 | 2026-10-18 | minor | G9: with no selection, Copy takes fill and adjustment layers whole and Paste recreates them (#2344); UI-217-23 stays partial (a single pixel layer copies its pixels only); estimate unchanged |
 | 2026-10-17 | minor | G11: `.atn` Apply Layer Comp imports, plays and exports by comp name (#7101); other reference forms remain unsupported |

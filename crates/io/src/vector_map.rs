@@ -231,6 +231,24 @@ fn unit_px(v: Option<&Value>, dpi: f32) -> Option<f64> {
     }
 }
 
+/// A length in points as pixels at `dpi`.
+///
+/// PSD keeps the stroke width in pixels (`#Pxl`) but the dash lengths in points: the dash
+/// offset is tagged `#Pnt` and the dash set carries no tag at all, its values being points by
+/// convention. The two agree only at 72 dpi, where a point is a pixel.
+fn points_px(v: Option<&Value>, dpi: f32) -> Option<f64> {
+    // A document without a resolution is measured in points, where a point is a pixel.
+    let dpi = if dpi > 0.0 { dpi } else { 72.0 };
+    let k = f64::from(dpi) / 72.0;
+    match v? {
+        Value::UnitFloat { unit: [b'#', b'P', b'n', b't'], value } => Some(value * k),
+        Value::UnitFloat { unit: [b'#', b'M', b'l', b'm'], value } => Some(value * f64::from(dpi) / 25.4),
+        // No tag, or a plain number: Photoshop means points.
+        Value::UnitFloat { value, .. } => Some(value * k),
+        other => num(Some(other)).map(|n| n * k),
+    }
+}
+
 pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
     let d = parse_prefix_versioned(data)?;
     let fill_enabled = !matches!(d.get("fillEnabled"), Some(Value::Boolean(false)));
@@ -253,13 +271,22 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         b"strokeStyleAlignOutside" => StrokeAlign::Outside,
         _ => StrokeAlign::Center,
     };
+    // The stroke width is in pixels, the dash lengths in points (see `points_px`). The model
+    // keeps the dash lengths as multiples of the stroke width, as the SVG and Affinity readers
+    // do: at 72 dpi, where a point is a pixel, a Photoshop dash of 6 pt on a 5 px stroke is 1.2
+    // widths, not 6.
+    let width = unit_px(d.get("strokeStyleLineWidth"), dpi).unwrap_or(1.0);
+    // A stroke of no width has no dash length to speak of: the divisor keeps the conversion
+    // finite, and the width itself is kept as the file has it.
+    let divisor = if width > 0.0 { width } else { 1.0 };
+    let multiples = |px: f64| (px / divisor) as f32;
     let dashes = match d.get("strokeStyleLineDashSet") {
-        Some(Value::List(l)) => l.iter().filter_map(|v| num(Some(v))).map(|v| v as f32).collect(),
+        Some(Value::List(l)) => l.iter().filter_map(|v| points_px(Some(v), dpi)).map(multiples).collect(),
         _ => Vec::new(),
     };
     let paint = get_desc(&d, "strokeStyleContent").and_then(content_fill).unwrap_or(Fill::Solid(photocraft_color::Color::BLACK));
     let stroke = ShapeStroke {
-        width: unit_px(d.get("strokeStyleLineWidth"), dpi).unwrap_or(1.0) as f32,
+        width: width as f32,
         paint,
         opacity: num(d.get("strokeStyleOpacity")).map_or(1.0, |v| v as f32 / 100.0),
         align,
@@ -267,7 +294,7 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         join,
         miter_limit: num(d.get("strokeStyleMiterLimit")).unwrap_or(100.0) as f32,
         dashes,
-        dash_offset: num(d.get("strokeStyleLineDashOffset")).unwrap_or(0.0) as f32,
+        dash_offset: points_px(d.get("strokeStyleLineDashOffset"), dpi).map_or(0.0, multiples),
     };
     Some(VstkInfo { stroke: Some(stroke), fill_enabled })
 }
@@ -286,12 +313,21 @@ pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) ->
         Fill::Pattern { .. } => "patternLayer",
     };
     let content = Descriptor { class_id: Id::new(class), ..content };
+    // The model keeps the dash lengths as multiples of the stroke width; PSD stores them as
+    // lengths in points, at the document's resolution. A stroke of no width has no width to
+    // measure against, so the reader and the writer both fall back to 1 px and the dash
+    // pattern survives the round trip.
+    let res = if dpi > 0.0 { f64::from(dpi) } else { 72.0 };
+    let width = f64::from(s.width.max(0.0));
+    let divisor = if width > 0.0 { width } else { 1.0 };
+    let to_points = 72.0 / res;
+    let points = |multiples: f32| f64::from(multiples) * divisor * to_points;
     let d = Descriptor::new("strokeStyle")
         .with("strokeStyleVersion", Value::Integer(2))
         .with("strokeEnabled", Value::Boolean(stroke.is_some()))
         .with("fillEnabled", Value::Boolean(fill_enabled))
         .with("strokeStyleLineWidth", Value::UnitFloat { unit: *b"#Pxl", value: f64::from(s.width) })
-        .with("strokeStyleLineDashOffset", Value::UnitFloat { unit: *b"#Pnt", value: f64::from(s.dash_offset) })
+        .with("strokeStyleLineDashOffset", Value::UnitFloat { unit: *b"#Pnt", value: points(s.dash_offset) })
         .with("strokeStyleMiterLimit", Value::Double(f64::from(s.miter_limit)))
         .with(
             "strokeStyleLineCapType",
@@ -328,7 +364,7 @@ pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) ->
         )
         .with("strokeStyleScaleLock", Value::Boolean(false))
         .with("strokeStyleStrokeAdjust", Value::Boolean(false))
-        .with("strokeStyleLineDashSet", Value::List(s.dashes.iter().map(|v| Value::UnitFloat { unit: *b"#Nne", value: f64::from(*v) }).collect()))
+        .with("strokeStyleLineDashSet", Value::List(s.dashes.iter().map(|v| Value::UnitFloat { unit: *b"#Nne", value: points(*v) }).collect()))
         .with("strokeStyleBlendMode", en("BlnM", "Nrml"))
         .with("strokeStyleOpacity", Value::UnitFloat { unit: *b"#Prc", value: f64::from(s.opacity * 100.0) })
         .with("strokeStyleContent", Value::Descriptor(content))
@@ -630,6 +666,81 @@ mod tests {
         let back = vector_mask_from_block(&b, 64, 64).unwrap();
         assert_eq!(back, m);
         assert!(vector_mask_block_matches(&b, &m, 64, 64));
+    }
+
+    /// A `vstk` block as Photoshop writes it: the stroke width in pixels (`#Pxl`), the dash
+    /// lengths in points (the dash offset tagged `#Pnt`, the dash set with no tag at all).
+    fn photoshop_vstk(width_px: f64, dashes_pt: &[f64], offset_pt: f64) -> Vec<u8> {
+        let (_, content) = fill_to_desc(&Fill::Solid(Color::BLACK));
+        let d = Descriptor::new("strokeStyle")
+            .with("strokeStyleVersion", Value::Integer(2))
+            .with("strokeEnabled", Value::Boolean(true))
+            .with("fillEnabled", Value::Boolean(false))
+            .with("strokeStyleLineWidth", Value::UnitFloat { unit: *b"#Pxl", value: width_px })
+            .with("strokeStyleLineDashOffset", Value::UnitFloat { unit: *b"#Pnt", value: offset_pt })
+            .with("strokeStyleMiterLimit", Value::Double(100.0))
+            .with("strokeStyleLineCapType", en("strokeStyleLineCapType", "strokeStyleButtCap"))
+            .with("strokeStyleLineJoinType", en("strokeStyleLineJoinType", "strokeStyleMiterJoin"))
+            .with("strokeStyleLineAlignment", en("strokeStyleLineAlignment", "strokeStyleAlignCenter"))
+            .with("strokeStyleScaleLock", Value::Boolean(false))
+            .with("strokeStyleStrokeAdjust", Value::Boolean(false))
+            .with("strokeStyleLineDashSet", Value::List(dashes_pt.iter().map(|v| Value::UnitFloat { unit: *b"#Nne", value: *v }).collect()))
+            .with("strokeStyleBlendMode", en("BlnM", "Nrml"))
+            .with("strokeStyleOpacity", Value::UnitFloat { unit: *b"#Prc", value: 100.0 })
+            .with("strokeStyleContent", Value::Descriptor(Descriptor { class_id: Id::new("solidColorLayer"), ..content }))
+            .with("strokeStyleResolution", Value::Double(72.0));
+        VersionedDescriptor::new(d).to_bytes()
+    }
+
+    #[test]
+    fn psd_dash_lengths_are_points_measured_against_the_stroke_width() {
+        // A Photoshop dash of 6 pt on a 5 px stroke is 1.2 widths, not 6: the model keeps the
+        // dash lengths as multiples of the stroke width, as the SVG and Affinity readers do.
+        // (72 dpi, where a point is a pixel.)
+        let s = parse_vstk(&photoshop_vstk(5.0, &[6.0, 3.0], 2.0), 72.0).unwrap().stroke.unwrap();
+        assert_eq!(s.width, 5.0);
+        assert!((s.dashes[0] - 1.2).abs() < 1e-6 && (s.dashes[1] - 0.6).abs() < 1e-6, "{:?}", s.dashes);
+        assert!((s.dash_offset - 0.4).abs() < 1e-6, "{}", s.dash_offset);
+        // A point is 300/72 pixels at 300 dpi.
+        let s = parse_vstk(&photoshop_vstk(5.0, &[6.0], 0.0), 300.0).unwrap().stroke.unwrap();
+        assert!((s.dashes[0] - 25.0 / 5.0).abs() < 1e-6, "{:?}", s.dashes);
+        // A document without a resolution is measured in points, where a point is a pixel.
+        let s = parse_vstk(&photoshop_vstk(5.0, &[6.0], 0.0), 0.0).unwrap().stroke.unwrap();
+        assert!((s.dashes[0] - 1.2).abs() < 1e-6, "{:?}", s.dashes);
+    }
+
+    #[test]
+    fn a_stroke_of_no_width_keeps_its_width() {
+        // A zero-width stroke is not rendered, but the file's width is kept as it is.
+        let s = parse_vstk(&photoshop_vstk(0.0, &[6.0], 0.0), 72.0).unwrap().stroke.unwrap();
+        assert_eq!(s.width, 0.0);
+        assert!((s.dashes[0] - 6.0).abs() < 1e-6, "{:?}", s.dashes);
+    }
+
+    #[test]
+    fn a_stroke_of_no_width_keeps_its_dash_pattern() {
+        // A zero-width stroke has no width to measure its dashes against, so the reader and the
+        // writer both fall back to 1 px: the pattern survives the round trip.
+        let stroke = ShapeStroke { width: 0.0, dashes: vec![4.0, 2.0], dash_offset: 0.5, ..Default::default() };
+        let back = parse_vstk(&vstk_bytes(Some(&stroke), false, 72.0), 72.0).unwrap().stroke.unwrap();
+        assert_eq!(back.width, 0.0);
+        assert_eq!(back.dashes, stroke.dashes);
+        assert_eq!(back.dash_offset, stroke.dash_offset);
+    }
+
+    #[test]
+    fn psd_dash_lengths_are_written_back_in_points() {
+        let stroke = ShapeStroke { width: 5.0, dashes: vec![2.0, 1.0], dash_offset: 0.5, ..Default::default() };
+        let bytes = vstk_bytes(Some(&stroke), false, 72.0);
+        let d = parse_prefix_versioned(&bytes).unwrap();
+        let Value::List(set) = d.get("strokeStyleLineDashSet").unwrap() else { panic!("a dash set") };
+        let lengths: Vec<f64> = set.iter().map(|v| num(Some(v)).unwrap()).collect();
+        assert_eq!(lengths, vec![10.0, 5.0], "2 and 1 widths of 5 px, in points");
+        assert_eq!(num(d.get("strokeStyleLineDashOffset")), Some(2.5));
+        // And the block reads back as the stroke it came from.
+        let back = parse_vstk(&bytes, 72.0).unwrap().stroke.unwrap();
+        assert_eq!(back.dashes, stroke.dashes);
+        assert_eq!(back.dash_offset, stroke.dash_offset);
     }
 
     #[test]

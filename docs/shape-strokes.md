@@ -1,6 +1,8 @@
 # Shape stroke options
 
-Updated 2026-10-15: retain stroke paint and options when width reaches zero (#6191).
+Updated 2026-10-21: the dash lengths round trip through PSD in the right units (the width in
+pixels, the dash lengths in points); stroke paint and options are retained when the width
+reaches zero (#6191).
 
 PhotoCraft's Shape tool options bar has a Stroke Options button beside the existing width
 and colour controls. It sets defaults for new Rectangle, Ellipse, Triangle, Polygon, Line
@@ -67,10 +69,15 @@ but the app does not save and restore these defaults across restarts.
 All fields already exist in `ShapeStroke` and the native manifest/conversion. Old `.pcraft`
 files retain their serde defaults; saves preserve all style fields. PSD import/export maps
 the same fields through `vstk` (line width, dash set/offset, cap, join, alignment, miter limit,
-opacity, and paint); existing unknown layer blocks and original compatible vector records
-remain handled by the existing I/O path. Stroke overprint, non-Normal PSD vector-stroke
-blend modes, corner-fitting dash optimization, and Photoshop's saved stroke preset libraries
-are not implemented. No Photoshop-authored oracle establishes exact stroke UI parity here.
+opacity, and paint), converting the dash lengths: PSD keeps the stroke width in pixels and the
+dash lengths in points (the dash offset tagged `#Pnt`, the dash set untagged), while the model
+keeps them as multiples of the width, as the SVG and Affinity readers do. At 72 dpi, where a
+point is a pixel, a Photoshop dash of 6 pt on a 5 px stroke is therefore 1.2 widths, not 6.
+Existing unknown layer blocks and
+original compatible vector records remain handled by the existing I/O path. Stroke overprint,
+non-Normal PSD vector-stroke blend modes, corner-fitting dash optimization, and Photoshop's
+saved stroke preset libraries are not implemented. No Photoshop-authored oracle establishes
+exact stroke UI parity here.
 
 Automation: `shape.create`, `shape.edit`, and `shape.info` expose document strokes. The
 control channel also supports `ui.set {shapeStroke: {width, align, cap, join, miterLimit,
@@ -99,5 +106,6 @@ fields, colour pickers, and ComboBoxes remain native egui controls.
 - Adobe's [Photoshop shape fill/stroke guide](https://helpx.adobe.com/photoshop/desktop/draw-shapes-paths/create-shapes/fill-and-stroke-shapes.html)
   describes the tool options and Properties entry points, and its
   [cap/join reference](https://helpx.adobe.com/ca/illustrator/desktop/paint-and-fill/apply-and-edit-strokes/change-the-caps-or-joins-of-a-line.html)
-  defines endpoint and corner behavior and the 1–500 miter range. Dash units reuse
-  PhotoCraft's existing documented `ShapeStroke`/`vstk` convention.
+  defines endpoint and corner behavior and the 1–500 miter range. Dash lengths are multiples
+  of the stroke width in PhotoCraft; PSD stores them as lengths in points, which the PSD
+  reader and writer convert.
