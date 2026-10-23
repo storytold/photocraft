@@ -28,31 +28,40 @@ pub fn emit() {
     if top != root {
         return;
     }
+    // Watch before asking for the commit: on an unborn branch `rev-parse HEAD` fails, and the
+    // first commit must still re-run this script.
+    for path in watch_paths(&root) {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
     let Some(sha) = git(&root, &["rev-parse", "HEAD"]) else { return };
-    // Rebuild when HEAD moves: a commit or checkout changes HEAD (detached) or the branch's ref.
-    // Cargo treats a watched path that does not exist as always changed (it re-runs this script
-    // and recompiles the binary on every build), so only existing paths are watched.
-    if let Some(dir) = git(&root, &["rev-parse", "--absolute-git-dir"]) {
-        let head = Path::new(&dir).join("HEAD");
-        rerun_if_changed(watched(&head, &head));
-    }
-    if let (Some(common), Some(head_ref)) =
-        (git(&root, &["rev-parse", "--path-format=absolute", "--git-common-dir"]), git(&root, &["symbolic-ref", "-q", "HEAD"]))
-    {
-        let common = Path::new(&common);
-        // A packed branch has no loose ref file; the first commit on it creates one, which
-        // changes the nearest existing directory above it under `refs/`.
-        rerun_if_changed(watched(&common.join(&head_ref), &common.join("refs")));
-        let packed = common.join("packed-refs");
-        rerun_if_changed(watched(&packed, &packed));
-    }
     println!("cargo:rustc-env=PHOTOCRAFT_CHECKOUT_SHA={sha}");
 }
 
-fn rerun_if_changed(path: Option<PathBuf>) {
-    if let Some(path) = path {
-        println!("cargo:rerun-if-changed={}", path.display());
+/// The git files whose change means HEAD moved: a commit or checkout changes HEAD (detached) or the
+/// branch's ref. Cargo treats a watched path that does not exist as always changed (it re-runs the
+/// build script and recompiles the binary on every build), so only existing paths are returned.
+pub(crate) fn watch_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(dir) = git(root, &["rev-parse", "--absolute-git-dir"]) {
+        let head = Path::new(&dir).join("HEAD");
+        paths.extend(watched(&head, &head));
     }
+    let Some(common) = git(root, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) else { return paths };
+    let common = Path::new(&common);
+    if git(root, &["rev-parse", "--show-ref-format"]).as_deref() == Some("reftable") {
+        // Every ref update in a reftable repository rewrites the table stack.
+        let tables = common.join("reftable").join("tables.list");
+        paths.extend(watched(&tables, &tables));
+        return paths;
+    }
+    if let Some(head_ref) = git(root, &["symbolic-ref", "-q", "HEAD"]) {
+        // A packed or unborn branch has no loose ref file; the first commit on it creates one,
+        // which changes the nearest existing directory above it under `refs/`.
+        paths.extend(watched(&common.join(&head_ref), &common.join("refs")));
+    }
+    let packed = common.join("packed-refs");
+    paths.extend(watched(&packed, &packed));
+    paths
 }
 
 /// The path Cargo should watch for `path`: `path` itself when it exists, else its nearest existing
