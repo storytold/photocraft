@@ -220,6 +220,53 @@ fn the_reduced_picture_of_a_stroked_styled_shape_matches_the_full_one() {
 }
 
 #[test]
+fn the_reduced_document_scales_the_pattern_tiles_of_effects() {
+    // Glow pattern paint, bevel textures and pattern overlay phases are laid out in document
+    // pixels too (#5561 review).
+    use photocraft_doc::effects::{BevelTexture, FxCommon};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).expect("new");
+    s.execute("layer.new.layer", json!({})).expect("layer");
+    s.execute("edit.fill", json!({"color": "#cc8844"})).expect("fill");
+    s.execute("layer.layerStyle.outerGlow", json!({})).expect("glow");
+    s.execute("layer.layerStyle.bevelEmboss", json!({})).expect("bevel");
+    let mut doc = (*s.active().expect("document").doc).clone();
+    let l = doc.layers.last_mut().expect("layer");
+    for e in &mut l.effects.items {
+        match e {
+            Effect::OuterGlow(g) => g.paint = FxPaint::Pattern { name: "p".into(), id: String::new(), scale: 2.0 },
+            Effect::BevelEmboss(b) => {
+                b.texture = Some(BevelTexture { name: "p".into(), id: String::new(), scale: 2.0, depth: 1.0, invert: false, link: true, phase: (8.0, 4.0) })
+            }
+            _ => {}
+        }
+    }
+    l.effects.items.push(Effect::PatternOverlay {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        name: "p".into(),
+        id: String::new(),
+        scale: 2.0,
+        angle: 0.0,
+        link: true,
+        phase: (8.0, 4.0),
+    });
+    let p = preview_document(&doc, 4);
+    let items = &p.layers.last().expect("layer").effects.items;
+    assert_eq!(items.len(), 3);
+    for e in items {
+        match e {
+            Effect::OuterGlow(g) => assert!(matches!(g.paint, FxPaint::Pattern { scale: 0.5, .. }), "{:?}", g.paint),
+            Effect::BevelEmboss(b) => {
+                let t = b.texture.as_ref().expect("texture");
+                assert_eq!((t.scale, t.phase), (0.5, (2.0, 1.0)));
+            }
+            Effect::PatternOverlay { scale, phase, .. } => assert_eq!((*scale, *phase), (0.5, (2.0, 1.0))),
+            e => panic!("{e:?}"),
+        }
+    }
+}
+
+#[test]
 fn the_reduced_picture_of_a_pattern_fill_matches_the_full_one() {
     // A pattern fill renders from its full-size tile (#5561 review): left at full scale, the
     // reduced picture's tiles were four times too large.
@@ -891,6 +938,19 @@ fn a_zoomed_out_redraw_shows_a_reduced_picture_before_its_blocks() {
 
 #[test]
 fn a_finished_block_leaves_the_reduced_picture_of_its_pending_neighbours_alone() {
+    pending_blocks_keep_the_reduced_picture(false);
+}
+
+#[test]
+fn a_redraw_continued_on_the_same_state_keeps_putting_its_reduced_picture_back() {
+    // Started again on the same document (#5561 review): the landed picture went with the old
+    // redraw, so finished blocks' mip rebuilds left seams in their pending neighbours.
+    pending_blocks_keep_the_reduced_picture(true);
+}
+
+/// Each block landing after the reduced picture leaves the picture whole under every pending
+/// block; with `continued`, the redraw is first started again on the same state once it is in.
+fn pending_blocks_keep_the_reduced_picture(continued: bool) {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     // Flat colour: the reduced picture is opaque everywhere, and the texture starts transparent.
@@ -899,11 +959,22 @@ fn a_finished_block_leaves_the_reduced_picture_of_its_pending_neighbours_alone()
     let level = g.harness.state().redraws.get(&doc).and_then(|r| r.preview).expect("a redraw with a reduced first picture");
     let k = 1 << level;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let (mut checked, mut last_left) = (0, usize::MAX);
+    let (mut checked, mut last_left, mut again, mut landed) = (0, usize::MAX, continued, false);
     while let Some(r) = g.harness.state().redraws.get(&doc) {
+        landed |= r.shown.is_some();
+        if again && landed && r.left > 1 {
+            again = false;
+            let ctx = g.harness.ctx.clone();
+            let app = g.harness.state_mut();
+            let d = app.session.active().expect("document").doc.clone();
+            let (display, _) = crate::canvas::canvas_display(app, &d, None);
+            start(app, &ctx, &g.observer, d.clone(), display, d.bounds(), 1.0, d.bounds(), None);
+            assert!(app.redraws.get(&doc).is_some_and(|r| r.shown.is_some()), "the continued redraw keeps the landed picture");
+            continue;
+        }
         // After each of the first blocks to land once the picture is in: every pending block's
         // part of the level is still the opaque reduced picture, edges included.
-        if r.shown.is_some() && r.left < r.blocks.len() && r.left > 0 && r.left != last_left && checked < 4 {
+        if landed && r.left < r.blocks.len() && r.left > 0 && r.left != last_left && checked < 4 {
             last_left = r.left;
             let pending: Vec<Rect> = r.blocks.iter().zip(&r.pending).filter(|(_, p)| **p).map(|(b, _)| reduce(*b, k)).collect();
             let (_, size, texels) = g.observer.read_level(doc.0, level).expect("level");
@@ -921,5 +992,6 @@ fn a_finished_block_leaves_the_reduced_picture_of_its_pending_neighbours_alone()
         g.harness.step();
     }
     assert!(checked > 0, "no frame had both finished and pending blocks");
+    assert!(!again, "the reduced picture never landed");
     assert_matches_synchronous(&mut g, doc);
 }

@@ -193,6 +193,14 @@ pub fn supports_f16_canvas(adapter: &wgpu::Adapter) -> bool {
     f.allowed_usages.contains(usages) && f.flags.contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
 }
 
+/// The texture tile side for a preferred one (default [`DEFAULT_TILE`]) on a device whose
+/// textures are at most `max` texels wide: a power of two, so every tile starts on each mip
+/// level's grid (a reduced first picture is written into those levels).
+fn tile_side(preferred: Option<u32>, max: u32) -> u32 {
+    let floor_pow2 = |v: u32| 1u32 << (u32::BITS - 1 - v.max(1).leading_zeros());
+    floor_pow2(preferred.unwrap_or(DEFAULT_TILE).clamp(64, floor_pow2(max).max(64)))
+}
+
 impl GpuCanvas {
     /// Create pipelines and register resources with the egui renderer.
     pub fn new(rs: &RenderState) -> Self {
@@ -203,7 +211,7 @@ impl GpuCanvas {
     pub fn with_tile(rs: &RenderState, tile: Option<u32>) -> Self {
         let max = rs.device.limits().max_texture_dimension_2d;
         let env_tile = std::env::var("PHOTOCRAFT_GPU_TILE").ok().and_then(|v| v.parse::<u32>().ok());
-        let tile = env_tile.or(tile).unwrap_or(DEFAULT_TILE).clamp(64, max);
+        let tile = tile_side(env_tile.or(tile), max);
         let high = match std::env::var("PHOTOCRAFT_CANVAS_F16").ok().as_deref() {
             _ if !supports_f16_canvas(&rs.adapter) => HighPolicy::Off,
             Some("0") => HighPolicy::Off,

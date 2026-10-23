@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
 
-use photocraft_doc::{DocId, Document, Fill, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Effect, Fill, FxPaint, Layer, LayerContent};
 use photocraft_engine::display_color::CanvasDisplay;
 use photocraft_geom::{Affine, Rect};
 #[cfg(not(target_arch = "wasm32"))]
@@ -295,12 +295,30 @@ fn reduce(r: Rect, k: i32) -> Rect {
 }
 
 /// `doc` scaled down by `k` for a reduced first picture: [`photocraft_compose::proxy::proxy_document`]
-/// with what is measured in document pixels scaled too (layer effects, mask and shape feathers,
-/// vector mask and shape paths, stroke widths, pattern fill tiles), so styled documents look right
+/// with what is measured in document pixels scaled too (layer effects and their pattern tiles,
+/// mask and shape feathers, vector mask and shape paths, stroke widths, pattern fill tiles), so styled documents look right
 /// at the reduced size. Only a stand-in: the full redraw replaces it.
 pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
     fn scale_layer(l: &mut Layer, k: f32) {
         photocraft_engine::image_cmds::scale_effects(&mut l.effects, 1.0 / k);
+        // Pattern tiles and offsets the style scaling leaves alone.
+        for e in &mut l.effects.items {
+            match e {
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
+                    if let FxPaint::Pattern { scale, .. } = &mut g.paint {
+                        *scale /= k;
+                    }
+                }
+                Effect::BevelEmboss(b) => {
+                    if let Some(t) = &mut b.texture {
+                        t.scale /= k;
+                        t.phase = (t.phase.0 / k, t.phase.1 / k);
+                    }
+                }
+                Effect::PatternOverlay { phase, .. } => *phase = (phase.0 / k, phase.1 / k),
+                _ => {}
+            }
+        }
         l.effects.reference = l.effects.reference.map(|(x, y)| (x / f64::from(k), y / f64::from(k)));
         if let Some(m) = &mut l.mask {
             m.feather /= k;
@@ -391,15 +409,25 @@ pub(crate) fn start(
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
-    let (mut pending, since, fallback, mut keep, preview) = match app.redraws.remove(&doc.id) {
+    let (mut pending, since, fallback, mut keep, preview, shown) = match app.redraws.remove(&doc.id) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
             let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
             let (collected, bytes) =
                 if same && old.collected_bytes <= cap { (std::mem::take(&mut old.collected), old.collected_bytes) } else { (vec![None; all.len()], 0) };
-            (std::mem::take(&mut old.pending), (old.started_ms, old.drawn), fallback.or_else(|| old.fallback.take()), (collected, bytes, cap), old.preview)
+            // A landed reduced picture is still put back along finished blocks while it shows
+            // this state; after an edit it would cover what the edit drew.
+            let shown = old.shown.take().filter(|_| same);
+            (
+                std::mem::take(&mut old.pending),
+                (old.started_ms, old.drawn),
+                fallback.or_else(|| old.fallback.take()),
+                (collected, bytes, cap),
+                old.preview,
+                shown,
+            )
         }
-        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap), None),
+        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap), None, None),
     };
     for (p, b) in pending.iter_mut().zip(&all) {
         *p |= !b.intersect(&region).is_empty();
@@ -409,8 +437,8 @@ pub(crate) fn start(
     }
     // A reduced first picture when the redraw covers what the view shows (one still to land is
     // drawn again from `doc`).
-    let shown = visible.intersect(&doc.bounds());
-    let preview = preview_level(scale).filter(|_| !shown.is_empty() && region.contains_rect(&shown)).or(preview);
+    let in_view = visible.intersect(&doc.bounds());
+    let preview = preview_level(scale).filter(|_| !in_view.is_empty() && region.contains_rect(&in_view)).or(preview);
     let Some(format) = gpu.prepare_texture(doc.id.0, &doc) else { return };
     // This exact state was drawn a moment ago: upload its blocks rather than composite them.
     if let Some(k) = app.kept.find(&doc, display_key, gamma, format, &all) {
@@ -430,7 +458,7 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, preview, since, fallback, keep });
+    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, preview, shown, since, fallback, keep });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
@@ -598,6 +626,8 @@ struct Spawn {
     pending: Vec<bool>,
     /// The mip level of a reduced first picture to draw first.
     preview: Option<u32>,
+    /// One that already landed ([`Redraw::shown`]).
+    shown: Option<(u32, Rect, Vec<u8>)>,
     /// When it started and the pixels uploaded so far.
     since: (f64, u64),
     fallback: Option<crate::render_path::CpuReason>,
@@ -616,6 +646,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         blocks,
         pending,
         preview,
+        shown,
         since: (started_ms, drawn),
         fallback,
         keep: (collected, collected_bytes, cap),
@@ -657,7 +688,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             left,
             drawn,
             preview,
-            shown: None,
+            shown,
             rx,
             stop,
             started_ms,
