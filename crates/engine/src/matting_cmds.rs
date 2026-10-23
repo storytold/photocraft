@@ -251,7 +251,9 @@ mod tests {
     }
     /// waiting, the document is locked against edits meanwhile, and cancel
     /// ends the job with the document untouched. `"hr"` keeps this fast even
-    /// where model weights exist: only the general export ships locally.
+    /// where the general weights are installed: weights are never distributed
+    /// (the deploy script only wires up the runtime), so the HR export is
+    /// absent unless the user added it by hand.
     #[test]
     fn runs_as_a_background_job_and_locks_the_document() {
         use crate::jobs::Started;
