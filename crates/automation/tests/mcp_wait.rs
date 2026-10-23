@@ -1,6 +1,7 @@
 //! Calls that wait on a long command: headless (#8129), with progress, other calls served
 //! meanwhile and cancellation that leaves the document unchanged; and over the bridge (#8130),
 //! polling the app's job past the reply timeout. Driven over the real line transport.
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -301,6 +302,78 @@ async fn cancelling_a_bridged_wait_cancels_the_apps_job() {
     }
     assert_eq!(FakeApp::sent(&app, "jobs.cancel"), [json!({"job": 7})]);
     assert_eq!(FakeApp::sent(&app, "engine.execute").len(), 1, "the edit is sent once");
+    wire.finish().await;
+}
+
+/// Reported in review of #8134: a cancel that arrives while a poll is in flight, which then fails
+/// (with its retry), must still reach the app, which answers fresh connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_during_a_failed_poll_still_cancels_the_apps_job() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let polls = Arc::new(AtomicUsize::new(0));
+    // The first poll waits for this, then it and its retry close their connections unanswered.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let (polling, mut first_poll) = tokio::sync::mpsc::unbounded_channel();
+    let (sent, release) = (log.clone(), gate.clone());
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let (log, polls, gate, polling) = (sent.clone(), polls.clone(), release.clone(), polling.clone());
+            tokio::spawn(async move {
+                let (read, mut write) = socket.into_split();
+                let mut lines = BufReader::new(read).lines();
+                let (auth, ok) = authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
+                assert!(ok, "each connection must authenticate");
+                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    log.lock().unwrap().push(request.clone());
+                    let result = match request["method"].as_str().unwrap() {
+                        "engine.execute" => json!({"job": 7, "pending": true}),
+                        "jobs.list" => {
+                            let n = polls.fetch_add(1, Ordering::SeqCst);
+                            if n == 0 {
+                                polling.send(()).unwrap();
+                                gate.notified().await;
+                            }
+                            if n < 2 {
+                                return;
+                            }
+                            json!({"jobs": [{"id": 7, "state": "running", "progress": 0.1, "message": "Blurring"}]})
+                        }
+                        "jobs.cancel" => json!({"cancelled": 1}),
+                        method => panic!("unexpected `{method}`"),
+                    };
+                    let reply = json!({"id": request["id"], "ok": true, "result": result});
+                    if write.write_all(format!("{reply}\n").as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let sent = |method: &str| log.lock().unwrap().iter().filter(|r| r["method"] == method).map(|r| r["params"].clone()).collect::<Vec<_>>();
+
+    // Timeouts long enough that only the closed connections fail the poll.
+    let bridge = BridgeClient::new(&addr, TOKEN).unwrap().with_timeout(Duration::from_secs(10));
+    let mut wire = Wire::start(PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)))).await;
+    wire.call(5, "command_run", BLUR(), Some("blur")).await;
+    tokio::time::timeout(Duration::from_secs(10), first_poll.recv()).await.unwrap().unwrap();
+    wire.cancel(5).await;
+    // The ping is read after the cancellation, so its answer means the server has seen it.
+    wire.send(json!({"jsonrpc": "2.0", "id": 6, "method": "ping"})).await;
+    while wire.next().await["id"] != 6 {}
+    gate.notify_one();
+
+    let t = Instant::now();
+    while sent("jobs.cancel").is_empty() {
+        assert!(t.elapsed() < Duration::from_secs(10), "the job was never cancelled: {:?}", log.lock().unwrap());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(sent("jobs.list").len(), 2, "the poll and its retry both failed");
+    assert_eq!(sent("jobs.cancel"), [json!({"job": 7})]);
+    assert_eq!(sent("engine.execute").len(), 1, "the edit is sent once");
     wire.finish().await;
 }
 

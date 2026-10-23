@@ -200,6 +200,13 @@ impl PhotocraftMcp {
         loop {
             let listed = match client.call_read("jobs.list", json!({})).await {
                 Ok(listed) => listed,
+                // A cancel that arrived during the failed poll still stops the job: the app may
+                // answer a fresh connection.
+                Err(_) if waiter.is_cancelled() => {
+                    let cancel = client.call("jobs.cancel", json!({"job": job})).await;
+                    guard.job = None;
+                    return Err(cancel_answer(job, &id, cancel));
+                }
                 Err(error) => {
                     // The app may be fine and the job still running: leave it, and say how to find it.
                     guard.job = None;
