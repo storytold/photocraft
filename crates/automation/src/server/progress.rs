@@ -198,22 +198,24 @@ impl PhotocraftMcp {
         let mut guard = Abandon { backend: self.backend.clone(), job: Some(JobId(job)) };
         let mut delay = Duration::from_millis(10);
         loop {
-            let listed = match client.call_read("jobs.list", json!({})).await {
-                Ok(listed) => listed,
-                // A cancel that arrived during the failed poll still stops the job: the app may
-                // answer a fresh connection.
-                Err(_) if waiter.is_cancelled() => {
-                    let cancel = client.call("jobs.cancel", json!({"job": job})).await;
-                    guard.job = None;
-                    return Err(cancel_answer(job, &id, cancel));
-                }
-                Err(error) => {
+            // Race the poll against a cancel: an app slow to answer must not hold it until the call times out.
+            let polled = tokio::select! {
+                biased;
+                listed = client.call_read("jobs.list", json!({})) => Some(listed),
+                () = waiter.cancelled() => None,
+            };
+            let listed = match polled {
+                Some(Ok(listed)) => listed,
+                Some(Err(error)) if !waiter.is_cancelled() => {
                     // The app may be fine and the job still running: leave it, and say how to find it.
                     guard.job = None;
                     return Err(AutomationError::Bridge(format!(
                         "lost track of job {job} ({id}): {error}; it may still be running and apply its result: check jobs_list, or stop it with jobs_cancel"
                     )));
                 }
+                // Cancelled during the poll, which may also have failed: the app may answer a
+                // fresh connection.
+                _ => return Err(bridge_cancel(client, &mut guard, job, &id).await),
             };
             let entry = listed.get("jobs").and_then(Value::as_array).and_then(|jobs| jobs.iter().find(|j| j.get("id").and_then(Value::as_u64) == Some(job)));
             let Some(entry) = entry else {
@@ -241,18 +243,21 @@ impl PhotocraftMcp {
             }
             tokio::select! {
                 biased;
-                () = waiter.cancelled() => {
-                    // Cancel before answering, so the next call already sees the document unchanged.
-                    let cancel = client.call("jobs.cancel", json!({"job": job})).await;
-                    // Disarm only now: dropped during the call, the guard still sends the cancel.
-                    guard.job = None;
-                    return Err(cancel_answer(job, &id, cancel));
-                }
+                () = waiter.cancelled() => return Err(bridge_cancel(client, &mut guard, job, &id).await),
                 () = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_millis(200));
         }
     }
+}
+
+/// Cancel bridged `job` (`id`) for a cancelled wait, before answering, so the next call already
+/// sees the document unchanged.
+async fn bridge_cancel(client: &BridgeClient, guard: &mut Abandon, job: u64, id: &str) -> AutomationError {
+    let cancel = client.call("jobs.cancel", json!({"job": job})).await;
+    // Disarm only now: dropped during the call, the guard still sends the cancel.
+    guard.job = None;
+    cancel_answer(job, id, cancel)
 }
 
 /// The answer to a bridged wait that was cancelled, from the app's reply to `jobs.cancel`. The app
