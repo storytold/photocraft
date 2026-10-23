@@ -216,8 +216,12 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
     planar configuration 1 or 2.
   * Supports 1, 2 and 4-bit gray, 8/16/32/64-bit integers (32 and 64-bit are reduced to U16),
     F16, F32 and F64 (converted to F32), WhiteIsZero (#691: the tones are no longer inverted),
-    palette images (opened as RGB), associated alpha (made straight) and extra samples (dropped
-    unless the first is alpha).
+    palette images (opened as RGB) and associated alpha (made straight).
+  * Extra samples: the first alpha sample (ExtraSamples 1 or 2, wherever it sits) is the image's
+    alpha. Every other extra sample, such as a spot colour or a further alpha channel
+    (ExtraSamples 0), comes back in `Metadata::extra_samples`: one plane per sample in the
+    image's sample type, with its ExtraSamples value as `kind`. At most `MAX_EXTRA_SAMPLES` (16)
+    are kept, and they count against `Limits::max_alloc` with the image.
   * Every directory is reachable: `tiff_info` lists the main IFD chain and its SubIFDs (tag 330)
     with each page's size, kind (page, reduced-resolution copy, mask) and storage, walked with a
     seen-set, a depth limit and a 10 000-directory cap; `decode_tiff_page` opens any of them.
@@ -231,7 +235,8 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   * YCbCr, CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
     JPEG-in-TIFF) return `Unsupported`.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
-  the file could pass 4 GiB.
+  the file could pass 4 GiB. `Metadata::extra_samples` (up to 16) are written after the colour
+  and alpha samples, with their `kind` in the ExtraSamples tag; more than 16 is an error.
 * **EXR**
   * Multi-part files (a Maya/Arnold render writes one part per AOV) open the part that
     looks most like a colour image — RGBA beats RGB beats YA beats a single channel, so a
