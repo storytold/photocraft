@@ -460,7 +460,9 @@ pub fn cutout_with_progress(
         logits = owned;
         provider = "CPU".to_owned();
         gpu = None;
-        *guard = Some(Cached { key: (path, opts.variant.resolution(), device_tag(DevicePref::Cpu)), session: cpu, provider: "CPU".to_owned(), gpu: None });
+        // Keep the requested key: the next `Auto` run must hit this CPU session
+        // instead of rebuilding the collapsing GPU session (and re-collapsing).
+        *guard = Some(Cached { key, session: cpu, provider: "CPU".to_owned(), gpu: None });
     }
     report(CutoutStage::Postprocessing, stage)?;
     let alpha = build_alpha(&logits, &padding, width, height);

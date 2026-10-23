@@ -264,7 +264,7 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
 
 /// Whether the HD matting weights are present; cached after the first probe
 /// (installing the file takes a restart, which is fine for a menu).
-fn hr_matting_installed() -> bool {
+pub(crate) fn hr_matting_installed() -> bool {
     static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *INSTALLED.get_or_init(photocraft_engine::matting_cmds::hr_available)
 }

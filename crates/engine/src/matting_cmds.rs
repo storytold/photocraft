@@ -55,18 +55,30 @@ pub fn hr_available() -> bool {
 /// Params: `{"variant":"general"|"hr"="general","device":"auto"|"cpu"="auto"}`.
 /// Returns `{"provider":"OpenVINO"|"DirectML"|"CPU","gpu":name|null,"ms":elapsed}`.
 pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
-    let variant = match p.get("variant").and_then(Value::as_str).unwrap_or("general") {
-        "general" => photocraft_matting::ModelVariant::General,
-        "hr" => photocraft_matting::ModelVariant::Hr,
-        other => {
-            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`variant` must be \"general\" or \"hr\", got {other:?}") });
+    let variant = match p.get("variant") {
+        Some(Value::Null) | None => photocraft_matting::ModelVariant::General,
+        Some(Value::String(s)) => match s.as_str() {
+            "general" => photocraft_matting::ModelVariant::General,
+            "hr" => photocraft_matting::ModelVariant::Hr,
+            other => {
+                return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`variant` must be \"general\" or \"hr\", got {other:?}") });
+            }
+        },
+        Some(other) => {
+            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`variant` must be a string, got {other}") });
         }
     };
-    let device = match p.get("device").and_then(Value::as_str).unwrap_or("auto") {
-        "auto" => photocraft_matting::DevicePref::Auto,
-        "cpu" => photocraft_matting::DevicePref::Cpu,
-        other => {
-            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`device` must be \"auto\" or \"cpu\", got {other:?}") });
+    let device = match p.get("device") {
+        Some(Value::Null) | None => photocraft_matting::DevicePref::Auto,
+        Some(Value::String(s)) => match s.as_str() {
+            "auto" => photocraft_matting::DevicePref::Auto,
+            "cpu" => photocraft_matting::DevicePref::Cpu,
+            other => {
+                return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`device` must be \"auto\" or \"cpu\", got {other:?}") });
+            }
+        },
+        Some(other) => {
+            return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("`device` must be a string, got {other}") });
         }
     };
     // Resolve the target synchronously so "no document / no active layer"
@@ -81,12 +93,25 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
     let hr = matches!(variant, photocraft_matting::ModelVariant::Hr);
     let (cmdname, job_label): (&str, &str) = if hr { (CMD_HD, "Remove Background (AI, HD)") } else { (CMD, "Remove Background (AI)") };
 
+    // Photoshop converts a Background layer to a normal layer before erasing to
+    // transparency, and refuses one whose pixels are locked; mirror both.
+    // The conversion and the lock check run inside the job (on the snapshot that
+    // gets committed) so a converted Background is committed in the same undo step.
     crate::jobs::edit_job(
         s,
         job_label,
         move |doc, _, ctx| {
             ctx.progress(0.0, "Reading layer");
             ctx.check()?;
+            crate::extra_cmds::background_to_layer(doc, id);
+            crate::commands::check_pixels_unlocked(doc, id).map_err(|e| EngineError::Other(format!("{cmdname}: {e}")))?;
+            if doc.effective_locks(id).transparency {
+                let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+                return Err(EngineError::Other(format!(
+                    "Could not complete your request because the transparency of layer \"{}\" is locked",
+                    layer.name
+                )));
+            }
             let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{cmdname} needs a pixel layer")))?;
             let area = surface.content_bounds();
@@ -186,12 +211,47 @@ mod tests {
         assert!(matches!(e, EngineError::BadParams { .. }), "{e:?}");
         let e = remove_background_ai(&mut s, &json!({"device": "nope"})).unwrap_err();
         assert!(matches!(e, EngineError::BadParams { .. }), "{e:?}");
+        // A present-but-wrong-type value is a params error, not a silent default.
+        let e = remove_background_ai(&mut s, &json!({"variant": 42})).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{e:?}");
+        let e = remove_background_ai(&mut s, &json!({"device": false})).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{e:?}");
+        // An explicit JSON null behaves like an omitted field (the default).
+        let e = remove_background_ai(&mut s, &json!({"variant": null, "device": null})).unwrap_err();
+        assert!(matches!(e, EngineError::NoDocument), "{e:?}");
         // With no document the failure is NoDocument, not a panic.
         let e = remove_background_ai(&mut s, &json!({})).unwrap_err();
         assert!(matches!(e, EngineError::NoDocument), "{e:?}");
     }
 
-    /// The command is a job: `start` (what the UI runs) returns without
+    /// The command refuses a layer whose transparency is locked (it multiplies
+    /// the matte into the alpha channel, which transparency locks protect).
+    #[test]
+    fn refuses_locked_transparency() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+        let e = s.execute(CMD, json!({})).unwrap_err();
+        assert!(e.to_string().contains("transparency") && e.to_string().contains("locked"), "refuse transparency lock: {e}");
+    }
+
+    /// The command refuses a layer whose pixels are locked (Photoshop's message).
+    /// (The Background-conversion branch is exercised at the engine level by
+    /// `extra_cmds::background_to_layer`; with no model weights in the test env
+    /// the job cannot run to a successful commit, so here we assert the refusal,
+    /// which is synchronous even when the job would otherwise be spawned.)
+    #[test]
+    fn refuses_locked_pixels() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        // `file.new` starts with a single Background layer (transparency locked,
+        // pixels unlocked) — a normal layer edit proceeds, so the only way the
+        // command refuses here is the explicit pixels lock.
+        s.execute("layer.lockLayers", json!({"pixels": true})).unwrap();
+        let e = s.execute(CMD, json!({})).unwrap_err();
+        assert!(e.to_string().contains("locked"), "refuse locked pixels: {e}");
+    }
     /// waiting, the document is locked against edits meanwhile, and cancel
     /// ends the job with the document untouched. `"hr"` keeps this fast even
     /// where model weights exist: only the general export ships locally.
@@ -215,6 +275,13 @@ mod tests {
                 // "hr" weights are absent here, so nothing was applied.
                 assert!(v.is_null() || v.is_object(), "{v}");
             }
+            #[cfg(target_arch = "wasm32")]
+            Err(_) => {
+                // On wasm the job runs inline and matting is compiled out, so
+                // the command answers UnsupportedOnWasm; that is the expected
+                // outcome rather than a panic.
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Err(e) => panic!("start failed: {e}"),
         }
         let alpha_after = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(0, 0).to_vec();
