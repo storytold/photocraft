@@ -103,7 +103,7 @@ impl Drop for Abandon {
         match &*self.backend {
             Backend::Headless(session) => {
                 let session = session.clone();
-                let abandon = move || session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job);
+                let abandon = move || drop(session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job));
                 match runtime {
                     // A synchronous command can hold the lock for a while: don't block a runtime thread.
                     Ok(runtime) => drop(runtime.spawn_blocking(abandon)),
@@ -164,9 +164,9 @@ impl PhotocraftMcp {
                 biased;
                 () = waiter.cancelled() => {
                     // Cancel before answering, so the next call already sees the document unchanged.
+                    // A job that ended first is answered with its result, not as cancelled.
                     guard.job = None;
-                    let _ = self.headless_op(move |h| { h.job_abandon(job); Ok(()) }).await;
-                    return Some(Err(photocraft_engine::EngineError::Cancelled.into()));
+                    return Some(self.headless_op(move |h| Ok(h.job_abandon(job))).await?.and_then(|result| result));
                 }
                 () = tokio::time::sleep(delay) => {}
             }

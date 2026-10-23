@@ -444,10 +444,21 @@ impl Headless {
     }
 
     /// Stop waiting on `job`: cancel it if it is still running (the document stays unchanged)
-    /// and forget it.
-    pub fn job_abandon(&mut self, job: JobId) {
-        self.session.cancel_job(job);
-        self.waited.remove(&job);
+    /// and forget it. Returns how the job really ended: `Cancelled` only when this call cancelled
+    /// it. A job that ended first (another request applied it) keeps its result, and one that
+    /// cannot be cancelled (printing) is reported as still running.
+    pub fn job_abandon(&mut self, job: JobId) -> Result<Value, AutomationError> {
+        if self.session.cancel_job(job) {
+            self.waited.remove(&job);
+            return Err(photocraft_engine::EngineError::Cancelled.into());
+        }
+        match self.job_poll(job) {
+            JobPoll::Ended(result) => result,
+            JobPoll::Running(..) => {
+                self.waited.remove(&job);
+                Err(AutomationError::Other(format!("job {} cannot be cancelled and is still running; check jobs.list for its outcome", job.0)))
+            }
+        }
     }
 
     /// Default the params, authorize an untrusted command and apply finished jobs. Render Video
