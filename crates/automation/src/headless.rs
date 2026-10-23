@@ -427,6 +427,8 @@ impl Headless {
     /// Where a job from [`Self::command_begin`] is. Once it has ended this returns its result
     /// and forgets the job. Never blocks.
     pub fn job_poll(&mut self, job: JobId) -> JobPoll {
+        // A finished job stays in the running list until it is applied.
+        self.sync_jobs();
         if let Some(info) = self.session.job(job) {
             return JobPoll::Running(info.progress, info.message);
         }
