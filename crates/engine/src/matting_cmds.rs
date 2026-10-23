@@ -107,10 +107,7 @@ pub fn remove_background_ai(s: &mut Session, p: &Value) -> Result<Value> {
             crate::commands::check_pixels_unlocked(doc, id).map_err(|e| EngineError::Other(format!("{cmdname}: {e}")))?;
             if doc.effective_locks(id).transparency {
                 let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-                return Err(EngineError::Other(format!(
-                    "Could not complete your request because the transparency of layer \"{}\" is locked",
-                    layer.name
-                )));
+                return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", layer.name)));
             }
             let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let surface = layer.surface().ok_or_else(|| EngineError::Other(format!("{cmdname} needs a pixel layer")))?;
