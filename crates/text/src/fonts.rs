@@ -985,7 +985,6 @@ fn font_files_of(collection: &mut Collection) -> Vec<std::path::PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
->>>>>>> e038f0237 (Use CoreText for macOS system font discovery)
 pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let home = std::env::var_os("HOME").map(PathBuf::from);
