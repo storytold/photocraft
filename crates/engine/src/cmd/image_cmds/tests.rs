@@ -298,6 +298,37 @@ fn image_size_with_a_new_resolution_scales_type_with_the_pixels_only() {
     }
 }
 
+/// Type in a font that isn't installed keeps its own pixels (a PSD's rendering), resampled,
+/// through Image Size instead of re-rendering in a substitute face (#8860). Export As
+/// previews through Image Size, so its preview showed the wrong font. Type in an installed
+/// font still re-renders.
+#[test]
+fn image_size_keeps_the_pixels_of_type_in_a_missing_font() {
+    for depth in [8, 16, 32] {
+        for (font, kept) in [("No Such Font 8860", true), ("", false)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth})).unwrap();
+            let cache = s
+                .edit("type", |doc, active| {
+                    let mut t = photocraft_doc::TextLayer { text: "Hello!".into(), font_family: font.into(), size_pt: 26.0, ..Default::default() };
+                    t.transform = photocraft_geom::Affine::translate(10.0, 60.0);
+                    // Deliberately not what PhotoCraft would draw, so a re-render shows.
+                    let fmt = doc.pixel_format();
+                    let mut cache = Surface::new(fmt);
+                    cache.fill_rect(Rect::new(10, 20, 90, 60), &photocraft_raster::from_rgba(&fmt, [0.4, 0.2, 0.6, 1.0]));
+                    t.cache = Some(cache.clone());
+                    *active = Some(doc.insert_above(None, Layer::new("Hello!", LayerContent::Text(t))));
+                    Ok(cache)
+                })
+                .unwrap();
+            s.execute("image.imageSize", json!({"width": 50, "height": 50, "resample": "bilinear"})).unwrap();
+            let LayerContent::Text(t) = &doc(&s).layers.last().unwrap().content else { panic!("type layer") };
+            let resampled = resize_surface_in_canvas(&cache, 0.5, 0.5, Resample::Bilinear, Rect::from_xywh(0, 0, 100, 100));
+            assert_eq!(t.cache.as_ref() == Some(&resampled), kept, "font {font:?}, depth {depth}");
+        }
+    }
+}
+
 #[test]
 fn image_size_reports_the_size_it_applied() {
     // #1815: every path reports the document's size afterwards, at every depth.
