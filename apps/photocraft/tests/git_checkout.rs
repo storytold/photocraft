@@ -56,10 +56,26 @@ fn the_search_never_leaves_the_stop_directory() {
     let _ = fs::remove_dir_all(&git);
 }
 
-/// `git init` in a fresh scratch directory with `args`; `None` when this git cannot do it.
+/// `git` with the variables that point it at another repository or pick its ref format removed,
+/// so a fixture is the repository in its own directory whatever the environment says.
+fn git() -> Command {
+    let mut c = Command::new("git");
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DEFAULT_REF_FORMAT"] {
+        c.env_remove(var);
+    }
+    c
+}
+
+/// `git init` in a fresh scratch directory with `args`; `None` when this git cannot do it. The
+/// files ref format unless `args` ask for another, whatever `init.defaultRefFormat` says (older
+/// git ignores the setting).
 fn init(name: &str, args: &[&str]) -> Option<PathBuf> {
     let dir = scratch(name);
-    let ok = Command::new("git").arg("init").arg("-q").args(args).arg(&dir).status().is_ok_and(|s| s.success());
+    let mut cmd = git();
+    if !args.iter().any(|a| a.starts_with("--ref-format")) {
+        cmd.args(["-c", "init.defaultRefFormat=files"]);
+    }
+    let ok = cmd.arg("init").arg("-q").args(args).arg(&dir).status().is_ok_and(|s| s.success());
     if ok {
         dir.canonicalize().ok()
     } else {
@@ -127,7 +143,7 @@ fn outside_a_repository_nothing_is_watched() {
     let dir = scratch("no-repo");
     // GIT_CEILING_DIRECTORIES is not set here, so a scratch dir inside a checkout would find it;
     // the system temp dir is not inside one on CI or on a developer machine.
-    if Command::new("git").arg("-C").arg(&dir).args(["rev-parse", "--git-dir"]).output().is_ok_and(|o| o.status.success()) {
+    if git().arg("-C").arg(&dir).args(["rev-parse", "--git-dir"]).output().is_ok_and(|o| o.status.success()) {
         eprintln!("temp dir is inside a git repository, skipped");
     } else {
         assert!(watched_in(&dir).is_empty());
