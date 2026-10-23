@@ -153,3 +153,27 @@ async fn cancelling_a_batch_cancels_its_waited_step_and_runs_no_later_step() {
     assert_eq!(wire.history(1000).await, before, "neither the blur nor the later step ran");
     wire.finish().await;
 }
+
+#[test]
+fn polling_a_job_directly_returns_its_result_once_it_ends() {
+    use photocraft_automation::headless::JobPoll;
+    use photocraft_engine::jobs::Started;
+
+    let mut h = photocraft_automation::Headless::trusted_local();
+    h.command_run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let Started::Job(job) = h.command_begin("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap() else {
+        panic!("Gaussian Blur runs as a job");
+    };
+    // No `sync_jobs` between polls: `job_poll` must apply the finished job itself.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        match h.job_poll(job) {
+            JobPoll::Running(..) => assert!(std::time::Instant::now() < deadline, "job_poll never saw the job end"),
+            JobPoll::Ended(result) => {
+                result.unwrap();
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
