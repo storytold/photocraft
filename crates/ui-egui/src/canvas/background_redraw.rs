@@ -325,15 +325,17 @@ pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
                 }
             }
             // The tile is kept at full size, so it is drawn smaller. A cached render (already
-            // downsampled) stays in use: its fill changes with the layer's.
+            // downsampled) stays in use: its fill changes with the layer's. A stale one goes, as
+            // the scaled fill could come to equal it.
             LayerContent::Fill(f @ Fill::Pattern { .. }) => {
                 let cached = l.fill_cache.as_ref().is_some_and(|c| c.fill == *f);
                 if let Fill::Pattern { scale, phase, .. } = f {
                     *scale /= k;
                     *phase = (phase.0 / k, phase.1 / k);
                 }
-                if let Some(c) = l.fill_cache.as_mut().filter(|_| cached) {
-                    c.fill = f.clone();
+                match &mut l.fill_cache {
+                    Some(c) if cached => c.fill = f.clone(),
+                    stale => *stale = None,
                 }
             }
             _ => {}
