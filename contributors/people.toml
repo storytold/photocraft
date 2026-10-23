@@ -251,3 +251,6 @@ sync_github_name = true
 
 [people.benandez]
 real_name = "Martin Ball"
+
+[people.albayazid]
+sync_github_name = true
