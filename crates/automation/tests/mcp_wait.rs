@@ -177,3 +177,23 @@ fn polling_a_job_directly_returns_its_result_once_it_ends() {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+
+#[test]
+fn abandoning_a_job_that_already_ended_returns_its_result_not_cancelled() {
+    use photocraft_engine::jobs::Started;
+
+    let mut h = photocraft_automation::Headless::trusted_local();
+    h.command_run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let Started::Job(job) = h.command_begin("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap() else {
+        panic!("Gaussian Blur runs as a job");
+    };
+    // Another request applies the finished job before the waiter's cancel arrives.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while h.session.job(job).is_some() {
+        assert!(std::time::Instant::now() < deadline, "the job never ended");
+        std::thread::sleep(Duration::from_millis(1));
+        h.sync_jobs();
+    }
+    // The blur is in the document, so the waiter must not hear "cancelled".
+    h.job_abandon(job).unwrap();
+}
