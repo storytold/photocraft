@@ -259,6 +259,12 @@ fn a_cached_pattern_fill_keeps_its_cache_in_the_reduced_picture() {
     let LayerContent::Fill(f) = &l.content else { panic!("{:?}", l.content) };
     assert!(matches!(f, Fill::Pattern { scale, phase, .. } if *scale == 0.25 && *phase == (2.0, 1.0)), "{f:?}");
     assert_eq!(l.fill_cache.as_ref().map(|c| &c.fill), Some(f), "the cache still matches");
+    // A stale cache that the scaled fill would match is dropped, not drawn.
+    let stale = Fill::Pattern { name: "gone".into(), scale: 0.25, id: String::new(), angle: 0.0, link: true, phase: (2.0, 1.0) };
+    if let Some(c) = &mut doc.layers[0].fill_cache {
+        c.fill = stale;
+    }
+    assert!(preview_document(&doc, 4).layers[0].fill_cache.is_none());
 }
 
 struct Gpu {
