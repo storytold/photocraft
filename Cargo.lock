@@ -4971,6 +4971,7 @@ dependencies = [
 name = "photocraft-psd"
 version = "0.15.0"
 dependencies = [
+ "encoding_rs",
  "flate2",
  "photocraft-psd",
  "proptest",

@@ -63,6 +63,7 @@ fn sample() -> AtnFile {
             AtnAction { name: UnicodeString::new_nul("Finish"), items: vec![item("Invs", "Inverse", None)], ..Default::default() },
         ],
         warnings: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -878,6 +879,7 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
@@ -942,6 +944,7 @@ fn retouching_set_events_map_to_their_commands() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let steps = &imp.actions[0].steps;
@@ -1234,6 +1237,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let steps = &imp.actions[0].steps;
@@ -1322,6 +1326,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let rest = import(&atn::write(&file).unwrap()).unwrap();
     let rest_steps = &rest.actions[0].steps;
@@ -1360,6 +1365,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let more = import(&atn::write(&file).unwrap()).unwrap();
     let more_steps = &more.actions[0].steps;
@@ -1476,6 +1482,7 @@ fn set_of(name: &str, actions: Vec<(&str, Vec<AtnItem>)>) -> String {
         expanded: false,
         actions: actions.into_iter().map(|(n, items)| AtnAction { name: UnicodeString::new_nul(n), items, ..Default::default() }).collect(),
         warnings: vec![],
+        ..Default::default()
     };
     b64(&atn::write(&file).unwrap())
 }
@@ -2079,6 +2086,7 @@ fn fractional_translation_only_transform_keeps_offset_and_interpolation() {
         expanded: false,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item("transform", "Transform", Some(d))], ..Default::default() }],
         warnings: vec![],
+        ..Default::default()
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     assert!(imp.unsupported.is_empty());
@@ -2358,6 +2366,7 @@ fn adjustment_layer_reset_still_resets() {
             ..Default::default()
         }],
         warnings: vec![],
+        ..Default::default()
     };
     let steps = import(&atn::write(&file).unwrap()).unwrap().actions.remove(0).steps;
     assert_eq!(steps[0], ("layer.setAdjustment".to_string(), json!({})));
@@ -2701,4 +2710,52 @@ fn hue_saturation_uses_photoshops_hue_key() {
     let mut p = back.actions[0].steps[0].1.clone();
     normalise(&mut p);
     assert_eq!(p["hue"], json!(30), "{p}");
+}
+
+/// A set from Chinese Photoshop: UTF-16 set and action names, a step name in GBK (可选颜色,
+/// the bytes from #6743) on an event PhotoCraft has no command for, with no descriptor.
+fn gbk_set() -> Vec<u8> {
+    let step = AtnItem { dictionary: b"\xbf\xc9\xd1\xa1\xd1\xd5\xc9\xab".to_vec(), ..item("syntheticFill", "", None) };
+    let file = AtnFile {
+        name: UnicodeString::new_nul("相馆"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("调白"), items: vec![step], ..Default::default() }],
+        ..Default::default()
+    };
+    atn::write(&file).unwrap()
+}
+
+#[test]
+fn load_decodes_legacy_step_names() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set())})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+    assert_eq!(r["unsupported"][0]["name"], "可选颜色", "{r}");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "调白"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("可选颜色"), "{played}");
+}
+
+#[test]
+fn load_encoding_override() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "shift_jis"})).unwrap();
+    assert_eq!(r["encoding"], "Shift_JIS", "{r}");
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "auto"})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+}
+
+#[test]
+fn load_reports_utf8() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
+    assert_eq!(r["encoding"], "UTF-8", "{r}");
+}
+
+#[test]
+fn load_rejects_bad_encodings() {
+    let mut s = Session::new();
+    for bad in [json!(3), json!(""), json!("nope"), json!("replacement"), json!(["gbk"])] {
+        assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
+    }
+    assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
 }

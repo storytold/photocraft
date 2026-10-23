@@ -47,6 +47,7 @@ pub mod ase;
 pub mod atn;
 pub mod blend;
 pub mod builder;
+mod codepage;
 pub mod compression;
 pub mod descriptor;
 pub mod error;
