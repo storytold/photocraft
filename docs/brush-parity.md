@@ -45,7 +45,7 @@ tablets against Photoshop side by side.
 | Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112 |
 | Global pressure curve in Preferences | done | #2195 |
 | Per-control pressure curves | missing | TOOL-213-11 |
-| Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
+| Quick taps keep their pressure | partial | #1967 fixed one case; a tap paints at its own pressure (#1798, #2757); tap sensitivity still open (#1933) |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
 | Eraser end of the pen switches to Eraser | partial | macOS; flipped Wacom on Windows not (#2285) |
@@ -55,7 +55,7 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | No seams, hard edges stay hard, zero-scatter defaults, ABR tips never black | done | TOOL-213-13 |
-| Smooth line weight along a pressure ramp | partial | stair-steps (#1776) |
+| Smooth line weight along a pressure ramp | partial | stair-steps fixed by per-sample pressure (#1776, #2112); Windows still "jumpy" (#2046) |
 | Interpolation and smoothing match Photoshop | partial | #2138, #2057 |
 | Soft-edge falloff matches Photoshop's curve | partial | #2149, #1619 |
 | Brush preview and cursor crisp, not pixelated | partial | #1433 |
@@ -76,8 +76,8 @@ tablets against Photoshop side by side.
 | ⇧-click draws a straight line from the last point | done | |
 | Hold `~` with the Brush or Pencil to erase with its brush: Clear mode while held (rebindable under Tools › Temporary) | done | `hold_keys.rs`, #3439 |
 | Clear painting mode in the Brush and Pencil Mode menus | done | `paint_mode_dropdown` in `panels.rs`, `"mode": "clear"`, #3439 |
-| Right-click opens the Brush Preset picker | done | [`context-menu-parity.md`](context-menu-parity.md); XP-Pen right-click not (#1980), macOS issue #2360 |
-| Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor requested (#2662, #1057) |
+| Right-click opens the Brush Preset picker | done | [`context-menu-parity.md`](context-menu-parity.md); XP-Pen right-click not (#1980); macOS trackpad taps fixed (#2360, #2772) |
+| Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor done (#2662, #2694), parity request open (#1057) |
 | Brush choice kept per tool (Brush, Eraser, Blur each their own) | partial | #2542 |
 
 ## Symmetry
@@ -86,7 +86,7 @@ tablets against Photoshop side by side.
 |---|---|
 | Vertical, Horizontal, Dual axis, Diagonal | done |
 | From a path (Make Symmetry Path) | done |
-| Wavy, Circle, Spiral, Parallel Lines, Radial, Mandala | missing (#2659) |
+| Wavy, Circle, Spiral, Parallel Lines, Radial, Mandala | missing (#2659 was closed after the existing symmetry control became available in every theme, #2704) |
 
 ## Brush-based tools
 
@@ -97,7 +97,7 @@ tablets against Photoshop side by side.
 | Clone Stamp (opacity, flow, aligned, sample, overlay) | partial | Clone Source W/H link and Alt target cursor (TOOL-213-8) |
 | Pattern Stamp (aligned, impressionist) | done | |
 | History Brush | done | Art History Brush missing |
-| Spot Healing, Healing | partial | grain not matched on flat colour (#2104), "horrible in general" (#1092), stops responding after switching (#1751) |
+| Spot Healing, Healing | partial | grain on flat colour kept by Create Texture (#2104, #2762); "horrible in general" (#1092), stops responding after switching (#1751) |
 | Blur, Sharpen, Smudge (premultiplied, Sample All Layers, spacing) | done | BUG-207-2/3, #2171 |
 | Dodge, Burn, Sponge | done | |
 | Background Eraser, Magic Eraser | done | |
@@ -109,7 +109,7 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | .abr import (v1/v2/v6) and export, persistent presets, folders | done | `psd/src/abr.rs` |
-| Brushes panel: drag a folder into a folder | missing | #2014 |
+| Brushes panel: drag a folder into a folder | done | #2014, #3851 |
 | Dragged brush preset preview | done | Cached, translucent tip thumbnail plus name in panel list/grid and the preset picker; `ui-egui/src/brushes_tab.rs`, real pointer-drag test in `brushes_tab_tests.rs` (#4225, partial) |
 | Tool presets (.tpl) | partial | Tool Presets panel exists; .tpl import not found |
 | Import 500 brushes without blocking the UI | not run | P24 |
@@ -118,15 +118,16 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |
-| 2026-10-13 | minor | Stale "missing tool" row corrected against main: Color Replacement (`paint.colorReplacement`) is a live toolbar tool; no brush-feel estimate changed |
-| 2026-10-11 | minor | Pattern Stamp and Background Eraser draw live (#3754); live retouch row now partial (Mixer Brush left) |
 | 2026-10-10 | major | First version, from a source audit and the open issues |
+| 2026-10-11 | minor | Pattern Stamp and Background Eraser draw live (#3754); live retouch row now partial (Mixer Brush left) |
 | 2026-10-11 | minor | `~` held with the Brush or Pencil erases with that tool's brush, and Clear joins their Mode menus (#3439) |
 | 2026-10-12 | minor | Five Brush Settings switch rows toggle without selecting a properties pane; Smoothing has a default-on switch and retains its settings while disabled (#4283). No brush-feel estimate changed. |
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
+| 2026-10-12 | minor | Rows refreshed against main: quick taps, pressure-ramp stair-steps, macOS right-click, round Pencil cursor, Clone Source W/H link, Spot Healing grain, brush-folder drag; the symmetry row no longer cites #2659 as the tracker |
+| 2026-10-13 | minor | Stale "missing tool" row corrected against main: Color Replacement (`paint.colorReplacement`) is a live toolbar tool; no brush-feel estimate changed |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Transfer Wetness/Mix controls follow the active tool and retain their settings while disabled (#3825, partial). No brush-feel estimate changed. |
-| 2026-10-14 | minor | The 12 existing Brush Settings section locks expose translated names and locked state to AccessKit and show themed keyboard focus (#3477 workflow); icons, hit targets and command behavior retained. No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
+| 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |
+| 2026-10-14 | minor | The 12 existing Brush Settings section locks expose translated names and locked state to AccessKit and show themed keyboard focus (#3477 workflow); icons, hit targets and command behavior retained. No brush-feel estimate changed. |
