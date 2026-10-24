@@ -346,8 +346,9 @@ fn a_live_adjust_drag_damages_only_the_visible_part_of_its_layer() {
     let k2 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.4}));
     assert_ne!(k1, k2, "a different setting is a different key");
     assert_eq!(k1 & LIVE_TAG, LIVE_TAG, "keys carry the live tag");
-    assert_eq!(k1 >> LIVE_SESSION_SHIFT, k2 >> LIVE_SESSION_SHIFT, "the same drag is one session");
-    assert_ne!(k1 >> LIVE_SESSION_SHIFT, TAG >> LIVE_SESSION_SHIFT, "never the dialog's tag");
+    // Keys hold the session above bit 40 (`preview_session`).
+    assert_eq!(k1 >> 40, k2 >> 40, "the same drag is one session");
+    assert_ne!(k1 >> 40, TAG >> 40, "never the dialog's tag");
 
     // Between two of the drag's previews, and between one and the committed document.
     let region = live_switch_region(&app, id, 7, k1, k2).expect("same session");
