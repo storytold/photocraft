@@ -172,3 +172,7 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+[patch.crates-io]
+# Temporary, until tbraun96/heic-rs#7 merges and releases: v0.1.4 + the VUI full-range fix (#5994).
+heic-rs = { git = "https://github.com/woelper/heic-rs", rev = "d946cef4f3917378996ac2bccb85470ab60e67b7" }
+
