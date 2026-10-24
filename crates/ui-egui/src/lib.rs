@@ -730,7 +730,9 @@ pub struct PhotocraftApp {
     trail: Option<stroke_trail::Trail>,
     /// Remove tool strokes waiting to be applied together (Remove after each stroke off), the
     /// document, layer and channel they belong to, and their tint on the canvas (`retouch_ui`).
-    pub(crate) remove_pending: Vec<Vec<[f64; 3]>>,
+    /// Each as a `paint.remove` `strokes` entry: its points and the size, hardness and spacing it
+    /// was drawn with, which its tint shows and its removal uses.
+    pub(crate) remove_pending: Vec<serde_json::Value>,
     pub(crate) remove_pending_target: Option<retouch_ui::RemoveTarget>,
     pub(crate) remove_trail: Option<stroke_trail::Trail>,
     /// The open menus' items, reused between frames (`menus::ItemCache`).

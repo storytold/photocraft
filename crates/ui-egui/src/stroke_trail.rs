@@ -4,7 +4,8 @@
 //! It is a coverage mask in document space, stamped segment by segment as the pointer moves and
 //! drawn as one texture over the document. The Spot Healing Brush's trail is instead the coverage
 //! of the brush's own dabs ([`Trail::feed_dabs`]): hardness, pressure and shape dynamics show as
-//! they heal (#2364). It used to be an egui polyline as wide as the brush:
+//! they heal (#2364). The Remove Tool's is where those dabs reach at all ([`Trail::feed_reach`]),
+//! which is what it removes. It used to be an egui polyline as wide as the brush:
 //! egui tessellates a polyline whose width is much larger than its steps (any zoomed-in drag)
 //! into hard pie wedges fanning out across the canvas (#189), and translucent overlaps doubled up.
 
@@ -31,11 +32,16 @@ pub struct Trail {
     tex: Option<TextureHandle>,
     /// The stroke's dabs, when the trail shows their coverage ([`Self::feed_dabs`]).
     dabs: Option<Dabs>,
+    /// Coverage earlier strokes in the same mask left (the Remove Tool's waiting strokes); empty
+    /// when there are none. A dab stroke's restamp keeps the larger of the two.
+    base: Vec<u8>,
 }
 
 /// The brush stroke behind a [`Trail::feed_dabs`] trail.
 struct Dabs {
     renderer: StrokeRenderer,
+    /// Any coverage counts in full ([`Trail::feed_reach`]).
+    reach: bool,
     /// Document pixels the last "finish now" tail (a lone first dab, smoothing catch-up) covered.
     tail: photocraft_geom::Rect,
 }
@@ -44,7 +50,7 @@ impl Trail {
     pub fn new(doc: [u32; 2]) -> Self {
         let k = doc[0].max(doc[1]).div_ceil(MAX_SIDE).max(1);
         let (w, h) = (doc[0].div_ceil(k).max(1) as usize, doc[1].div_ceil(k).max(1) as usize);
-        Self { doc, k: k as f32, w, h, cov: vec![0; w * h], fed: 0, dirty: None, tex: None, dabs: None }
+        Self { doc, k: k as f32, w, h, cov: vec![0; w * h], fed: 0, dirty: None, tex: None, dabs: None, base: Vec::new() }
     }
 
     /// Coverage at a mask pixel (tests).
@@ -74,22 +80,36 @@ impl Trail {
         self.fed = points.len();
     }
 
-    /// Stamp a whole new drag into the same mask (the Remove tool's waiting strokes, #6555): its
-    /// points are counted from its own start, not from where the previous drag ended.
-    pub fn feed_stroke(&mut self, points: &[[f64; 3]], diameter: f32) {
-        self.fed = 0;
-        self.feed(points, diameter);
-    }
-
     /// Show the coverage the brush's own dabs leave along the drag, as the stroke commit renders
     /// it (`photocraft_paint::retouch::stroke_coverage`): soft edges for a soft brush, the size and
     /// shape each dab takes from pen pressure and dynamics. `brush` is asked for once, on the first
     /// call. What finishing the stroke now would add (the press's lone first dab) shows too.
     pub fn feed_dabs(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.feed_dabs_with(points, brush, false);
+    }
+
+    /// Show where the brush's own dabs reach at all, in full: the Remove Tool removes every pixel a
+    /// dab covers, however faintly (`retouch_cmds::remove`'s hole), so a soft tip's whole reach is
+    /// tinted, not just its nominal radius or its opaque core.
+    pub fn feed_reach(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.feed_dabs_with(points, brush, true);
+    }
+
+    /// [`Self::feed_reach`] for a whole new drag into the same mask (the Remove Tool's waiting
+    /// strokes, #6555): the earlier strokes' tint stays under it.
+    pub fn feed_stroke_reach(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.base.clone_from(&self.cov);
+        self.dabs = None;
+        self.fed = 0;
+        self.feed_reach(points, brush);
+    }
+
+    fn feed_dabs_with(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings, reach: bool) {
         if self.dabs.is_some() && self.fed >= points.len() {
             return;
         }
-        let mut dabs = self.dabs.take().unwrap_or_else(|| Dabs { renderer: StrokeRenderer::new(&brush(), None, 1.0), tail: photocraft_geom::Rect::EMPTY });
+        let mut dabs =
+            self.dabs.take().unwrap_or_else(|| Dabs { renderer: StrokeRenderer::new(&brush(), None, 1.0), reach, tail: photocraft_geom::Rect::EMPTY });
         let new: Vec<StrokePoint> = points
             .get(self.fed..)
             .unwrap_or(&[])
@@ -105,7 +125,8 @@ impl Trail {
         changed = changed.union(&dabs.tail);
         let tail = tail.map(|(_, t)| t);
         let renderer = &dabs.renderer;
-        self.restamp(changed, |x, y| renderer.coverage_at(x, y).max(tail.as_ref().map_or(0.0, |t| t.coverage_at(x, y))));
+        let full = |c: f32| if dabs.reach && c > 0.0 { 1.0 } else { c };
+        self.restamp(changed, |x, y| full(renderer.coverage_at(x, y).max(tail.as_ref().map_or(0.0, |t| t.coverage_at(x, y)))));
         self.dabs = Some(dabs);
     }
 
@@ -129,7 +150,9 @@ impl Trail {
                 let dx = ((x as f64 + 0.5) * k).floor() as i32;
                 let c = cov(dx, dy);
                 let c = if c.is_finite() { (c.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
-                if let Some(v) = self.cov.get_mut(y * self.w + x) {
+                let i = y * self.w + x;
+                let c = c.max(self.base.get(i).copied().unwrap_or(0));
+                if let Some(v) = self.cov.get_mut(i) {
                     *v = c;
                 }
             }
@@ -239,14 +262,54 @@ mod tests {
             &[[50.0, 120.0, 1.0], [120.0, 120.0, 1.0]],
             &[[50.0, 200.0, 1.0], [80.0, 200.0, 1.0], [120.0, 200.0, 1.0], [160.0, 200.0, 1.0], [200.0, 200.0, 1.0], [260.0, 200.0, 1.0]],
         ];
+        let brush = BrushSettings { size: 10.0, ..Default::default() };
         for s in strokes {
-            t.feed_stroke(s, 10.0);
+            t.feed_stroke_reach(s, || brush.clone());
         }
         for (x, y) in [(50, 50), (85, 50), (199, 50), (50, 120), (85, 120), (119, 120), (50, 200), (65, 200), (100, 200), (259, 200)] {
             assert_eq!(t.coverage(x, y), 255, "({x}, {y}) lies on a stroke");
         }
         assert_eq!(t.coverage(50, 85), 0, "no capsule joins one stroke's end to the next one's start");
         assert_eq!(t.coverage(150, 160), 0);
+    }
+
+    /// The Remove Tool removes every pixel a dab touches: its trail is the dabs' whole reach in
+    /// full, a soft tip's well past the nominal radius, and never less than the coverage itself.
+    #[test]
+    fn a_reach_trail_tints_all_a_soft_tip_touches() {
+        let pts = [[50.0, 50.0, 1.0], [150.0, 50.0, 1.0]];
+        let brush = BrushSettings { size: 20.0, hardness: 0.0, ..Default::default() };
+        let mut reach = Trail::new([200, 100]);
+        reach.feed_reach(&pts, || brush.clone());
+        let mut soft = Trail::new([200, 100]);
+        soft.feed_dabs(&pts, || brush.clone());
+        let r = photocraft_paint::tip_reach(10.0, 0.0);
+        assert!(r > 15.0, "a soft tip reaches past its 10 px radius: {r}");
+        assert_eq!(reach.coverage(100, 50 + 14), 255, "4 px past the radius, still removed");
+        assert!(soft.coverage(100, 50 + 14) < 128, "where the soft coverage is faint");
+        assert_eq!(reach.coverage(100, 50 + r.ceil() as usize + 2), 0, "nothing past the reach");
+        // Where the soft trail shows anything the reach is tinted in full (it also takes coverage
+        // too faint to show as a soft trail's 8 bits).
+        for y in 0..100 {
+            for x in 0..200 {
+                assert!(soft.coverage(x, y) == 0 || reach.coverage(x, y) == 255, "({x}, {y})");
+                assert!(matches!(reach.coverage(x, y), 0 | 255), "({x}, {y}): all or nothing");
+            }
+        }
+    }
+
+    /// A waiting Remove stroke keeps its tint where a later one crosses it (each restamps only the
+    /// area it changed, over what was there).
+    #[test]
+    fn a_later_reach_stroke_keeps_the_earlier_ones_tint() {
+        let mut t = Trail::new([200, 200]);
+        let brush = BrushSettings { size: 20.0, ..Default::default() };
+        t.feed_stroke_reach(&[[20.0, 100.0, 1.0], [180.0, 100.0, 1.0]], || brush.clone());
+        t.feed_stroke_reach(&[[100.0, 20.0, 1.0], [100.0, 180.0, 1.0]], || brush.clone());
+        for (x, y) in [(40, 100), (95, 100), (100, 100), (105, 100), (160, 100), (100, 40), (100, 160)] {
+            assert_eq!(t.coverage(x, y), 255, "({x}, {y}) lies on a stroke");
+        }
+        assert_eq!(t.coverage(40, 40), 0);
     }
 
     #[test]

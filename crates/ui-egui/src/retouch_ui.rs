@@ -210,9 +210,13 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
         app.remove_trail = None;
         app.remove_pending_target = Some(target);
     }
-    let diameter = app.session.tools.brush.size;
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke(points, diameter);
-    app.remove_pending.push(points.to_vec());
+    // The brush it was drawn with goes with it: the tint shows it, the removal uses it, however
+    // the brush changes before ↩.
+    let b = &app.session.tools.brush;
+    let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
+    let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
+    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke_reach(points, brush);
+    app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
 }
@@ -1172,6 +1176,35 @@ mod tests {
         assert!(px.iter().zip(bg).all(|(a, b)| (a - b).abs() < 0.02), "{px:?} vs {bg:?}");
     }
 
+    /// A waiting Remove stroke keeps the brush it was drawn with (#8923 review): changing the brush
+    /// before ↩ neither changes its tint nor what its removal takes.
+    #[test]
+    fn waiting_remove_strokes_keep_their_own_brush() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
+        app.ui.tool = Tool::Remove;
+        app.ui.tool_options.remove_after_each_stroke = false;
+        let m = egui::Modifiers::NONE;
+        let stroke = |app: &mut PhotocraftApp, x: f64| {
+            tool_event(app, ToolEvent::Down { x, y: 20.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Move { x, y: 40.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Up { x, y: 40.0 }, m);
+        };
+        app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 0.0}})).unwrap();
+        stroke(&mut app, 25.0);
+        let tint = |app: &PhotocraftApp| app.remove_trail.as_ref().map(|t| (0..100).filter(|&x| t.coverage(x, 30) > 0).count());
+        let first = tint(&app);
+        app.run("tools.setBrush", json!({"brush": {"size": 4, "hardness": 1.0}})).unwrap();
+        stroke(&mut app, 75.0);
+        assert!(tint(&app).unwrap() > first.unwrap(), "the second stroke adds its tint");
+        assert!((0..100).filter(|&x| app.remove_trail.as_ref().unwrap().coverage(x, 30) > 0).any(|x| x < 25 - 10), "the first keeps its soft 20 px reach");
+        assert!(remove_pending_commit(&mut app));
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let (_, p) = app.session.journal.last().cloned().expect("a journaled command");
+        let sizes: Vec<_> = p["strokes"].as_array().unwrap().iter().map(|e| (e["size"].as_f64(), e["hardness"].as_f64())).collect();
+        assert_eq!(sizes, [(Some(20.0), Some(0.0)), (Some(4.0), Some(100.0))], "each stroke is removed with its own brush");
+    }
+
     #[test]
     fn remove_after_each_stroke_off_collects_strokes_until_enter_or_escape() {
         let mut app = app();
@@ -1298,7 +1331,7 @@ mod tests {
         app.run("layer.new.layer", json!({"name": "Other"})).unwrap();
         remove_pending_add(&mut app, &[[40.0, 10.0, 1.0], [44.0, 12.0, 1.0]]);
         assert_eq!(app.remove_pending.len(), 1, "strokes from different layers must not be combined");
-        assert_eq!(app.remove_pending[0][0][0], 40.0);
+        assert_eq!(app.remove_pending[0]["points"][0][0], 40.0);
         assert!(remove_pending_live(&mut app));
     }
 

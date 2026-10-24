@@ -74,17 +74,32 @@ fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>
         reject_huge_stroke(CMD, &stroke)?;
         return Ok((vec![stroke], id));
     };
-    let list = list.as_array().ok_or_else(|| bad(CMD, "`strokes` is a list of point lists"))?;
+    const ENTRY: &str = "each `strokes` entry is a point list or {\"points\", \"size\"?, \"hardness\"?, \"spacing\"?}";
+    let list = list.as_array().ok_or_else(|| bad(CMD, ENTRY))?;
     if list.is_empty() {
         return Err(bad(CMD, "`strokes` is empty"));
     }
     let mut strokes = Vec::with_capacity(list.len());
     let mut id = None;
-    for points in list {
+    for entry in list {
         let mut one = p.clone();
-        if let Some(o) = one.as_object_mut() {
-            o.remove("strokes");
-            o.insert("points".into(), points.clone());
+        let Some(o) = one.as_object_mut() else { return Err(bad(CMD, "params must be an object")) };
+        o.remove("strokes");
+        match entry {
+            // A stroke drawn with another brush than the rest (the waiting strokes of Remove after
+            // each stroke off keep the size, hardness and spacing each was drawn with).
+            Value::Object(e) => {
+                let points = e.get("points").ok_or_else(|| bad(CMD, ENTRY))?;
+                o.insert("points".into(), points.clone());
+                for k in ["size", "hardness", "spacing"] {
+                    if let Some(v) = e.get(k) {
+                        o.insert(k.into(), v.clone());
+                    }
+                }
+            }
+            points => {
+                o.insert("points".into(), points.clone());
+            }
         }
         let (stroke, layer) = parse_brush(s, &one, CMD)?;
         reject_huge_stroke(CMD, &stroke)?;
