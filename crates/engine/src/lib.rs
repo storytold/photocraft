@@ -244,14 +244,29 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
-    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
-    /// session only, as in Photoshop: not history states, and not saved with the document.
+    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
+    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
     /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
     pub(crate) source_snapshot: Option<u64>,
+}
+
+/// `doc` with its type layers among `ids` re-rendered (`Session::refresh_type_layers`), or `None`
+/// when none of them is a type layer of `doc`.
+fn refresh_text_layers(doc: &Arc<photocraft_doc::Document>, ids: &[LayerId]) -> Option<photocraft_doc::Document> {
+    let mut out = (**doc).clone();
+    let mut changed = false;
+    for id in ids {
+        if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = out.layer_mut(*id) {
+            type_cmds::refresh(doc, t);
+            changed = true;
+        }
+    }
+    changed.then_some(out)
 }
 
 impl DocState {
@@ -272,9 +287,14 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        history.set_current_layers(target.clone());
+        let doc = Arc::new(doc);
+        // Photoshop's first snapshot: the document as opened, named after it, so the History
+        // panel's top row can always bring it back (#2966).
+        let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc: Arc::new(doc),
+            doc,
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -294,7 +314,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
-            snapshots: Vec::new(),
+            snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,
         }
@@ -976,30 +996,35 @@ impl Session {
             }
         }
         for doc_id in docs {
-            let mine = layers.iter().filter(|(d, _)| *d == doc_id);
+            let mine: Vec<LayerId> = layers.iter().filter(|(d, _)| *d == doc_id).map(|(_, id)| *id).collect();
             if self.job_on(doc_id).is_some() {
-                busy.extend(mine);
+                busy.extend(mine.iter().map(|id| (doc_id, *id)));
                 continue;
             }
             let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc_id) else { continue };
-            let snapshot = st.doc.clone();
-            let mut doc = (*snapshot).clone();
-            let mut changed = false;
-            for (_, id) in mine {
-                if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = doc.layer_mut(*id) {
-                    type_cmds::refresh(&snapshot, t);
-                    changed = true;
-                }
+            // The first snapshot is the document as opened (#2966, #6087): it was taken before the
+            // font arrived, so its type layers get the same refresh, or returning to it brings the
+            // fallback-font pixels back. While it still is the open document, it shares the
+            // refreshed one.
+            let first_is_doc = st.snapshots.iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
+            if !first_is_doc
+                && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0)
+                && let Some(doc) = refresh_text_layers(&first.doc, &mine)
+            {
+                first.doc = Arc::new(doc);
             }
-            if changed {
-                let clean = st.saved_revision == st.revision;
-                st.doc = Arc::new(doc);
-                st.revision += 1;
-                if clean {
-                    st.saved_revision = st.revision;
-                }
-                st.last_damage = None;
+            let Some(doc) = refresh_text_layers(&st.doc, &mine) else { continue };
+            let doc = Arc::new(doc);
+            if first_is_doc && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0) {
+                first.doc = doc.clone();
             }
+            let clean = st.saved_revision == st.revision;
+            st.doc = doc;
+            st.revision += 1;
+            if clean {
+                st.saved_revision = st.revision;
+            }
+            st.last_damage = None;
         }
         busy
     }

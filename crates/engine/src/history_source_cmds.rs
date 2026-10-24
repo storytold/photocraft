@@ -366,8 +366,9 @@ mod tests {
             json!({"state": 1.5}),
             json!({"state": "1"}),
             json!({"state": [1]}),
-            json!({"snapshot": 0}),
+            // Snapshot 0 is the first snapshot (the document as opened); no others exist.
             json!({"snapshot": 1}),
+            json!({"snapshot": 2}),
             json!({"snapshot": -1}),
             json!({"snapshot": "Open"}),
             json!({"snapshot": "Open", "state": 1}),
