@@ -29,6 +29,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Tiếng Việt | `vi` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
 | हिन्दी | `hi` | one / other |
+| ქართული | `ka` | one form (count-neutral: `შრე: {n}`) |
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:

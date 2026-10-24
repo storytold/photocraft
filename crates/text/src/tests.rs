@@ -2057,12 +2057,13 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     assert!(craft_family_of(&l).is_empty());
 }
 
-/// Chinese, Arabic and Thai set in Inter fall back to the craft font for their script when the
-/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer craft-fonts).
+/// Chinese, Arabic, Thai and Georgian set in Inter fall back to the craft font for their script when
+/// the build has one (Noto Sans CJK SC, Noto Sans Arabic, Noto Sans Thai and Noto Sans Georgian in
+/// newer craft-fonts).
 #[test]
 fn craft_fonts_cover_their_other_scripts_without_system_fonts() {
     let mut e = TextEngine::new();
-    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย")] {
+    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย"), ("Geor", "ქართული შრე")] {
         if !crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&script)) {
             eprintln!("skipping {script}: built without a craft font for it (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
             continue;

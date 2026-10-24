@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 22] = [
+pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -222,6 +222,8 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    // Georgian: nouns stay singular after a numeral (`შრე: 5`, `5 შრე`), so one form serves every count.
+    LangInfo { code: "ka", name: "ქართული", source: catalog!("ka"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -470,6 +472,7 @@ mod tests {
     const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
     const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
     const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
+    const KA: fn() -> Lang = || Lang::from_code("ka").expect("ka registered");
 
     #[test]
     fn hindi_tags_resolve() {
@@ -479,6 +482,20 @@ mod tests {
         assert_eq!(HI().name(), "हिन्दी");
         assert_eq!(Lang::from_pref("hi"), HI());
         assert_eq!(Lang::from_pref("HI"), HI());
+    }
+
+    #[test]
+    fn georgian_tags_resolve() {
+        for tag in ["ka", "ka-GE", "ka_GE", "ka_GE.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(KA()), "{tag}");
+        }
+        assert_eq!(KA().name(), "ქართული");
+        assert_eq!(Lang::from_pref("ka"), KA());
+        assert_eq!(Lang::from_pref("KA"), KA());
+        assert_eq!(tr(KA(), "Layer"), "შრე");
+        assert_eq!(tr(KA(), "File"), "ფაილი");
+        assert_eq!(trn(KA(), 1, "{n} layer", "{n} layers"), "შრე: 1");
+        assert_eq!(trn(KA(), 3, "{n} layer", "{n} layers"), "შრე: 3");
     }
 
     #[test]

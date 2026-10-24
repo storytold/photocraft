@@ -1,10 +1,10 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (Arabic: paragraph direction buttons, #6793; previously minor: Russian dynamic labels) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (Georgian interface catalog; previously minor: Arabic paragraph direction buttons, #6793) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
-[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md), [Russian](localization-ru.md).
+[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md), [Russian](localization-ru.md), [Georgian](localization-ka.md).
 
 **How measured.** `cargo xtask i18n-coverage` (`xtask/src/i18n_coverage.rs`) defines the key
 universe: `tl!("…")` literals and `trn(` plurals in `ui-egui` (tests excluded), menu-catalog
@@ -24,7 +24,7 @@ Vietnamese UI; Arabic and Hebrew users get English "Middle East" builds with the
 composer, and its text engine handles RTL, Devanagari and Indic scripts.
 
 **Summary.** 7 of the 12 key languages at 100% of measured keys (status `partial` because of the
-engine messages), 3 absent (Hindi, Arabic, Vietnamese), plus 8 other languages. Weighted by
+engine messages), 3 absent (Hindi, Arabic, Vietnamese), plus 9 other languages. Weighted by
 speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
@@ -47,11 +47,12 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 
 ## Other shipped languages
 
-8 more, each at 1,608 / 1,608 measured keys, status `partial` for the same reason: Traditional
+9 more, each at 1,608 / 1,608 measured keys, status `partial` for the same reason: Traditional
 Chinese `zh-hant` (2,329 rows), Russian `ru` (4,227 keys; also every dynamic label the
 other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (3,375), Czech `cs` (3,522),
 Polish `pl` (3,366), Greek `el` (3,481), Dutch `nl` (3,568), Italian `it` (4,164; also every dynamic label the
-other catalogs translate; reviewed by a native speaker, [notes](localization-it.md)). Turkish `tr`
+other catalogs translate; reviewed by a native speaker, [notes](localization-it.md)). Georgian `ka` (4,412 rows; every measured key on 2026-10-24;
+Georgian UI fallback font: Noto Sans Georgian, Segoe UI, Sylfaen, SF Georgian, DejaVu Sans; on the web the first served font for `Geor`). Turkish `tr`
 (3,731 rows) also covers every measured key. Serbian `sr` (4,022 rows, Latin script, Ekavian, added 2026-10-12) covers every
 measured key and the union of the other catalogs' dynamic labels; its one/few/many plurals reuse
 the Russian rule.
@@ -92,3 +93,4 @@ engine localization or native review is complete.
 | 2026-10-13 | minor | Italian: the `Screen` blend mode read *Schermo* (the display) and is now *Scherma*; the Dodge/Burn/Sponge tool names were already Adobe's (*Scherma*, *Brucia*, *Spugna*) and stay. Pinned by a test |
 | 2026-10-18 | minor | Russian: 1,229 dynamic labels added (filter and adjustment parameters, Camera Raw, lighting, History/Layers/paths menus, metadata, System Info, status templates, dialogs) with a terminology note ([localization-ru](localization-ru.md)) |
 | 2026-10-22 | minor | Arabic row: paragraph direction has Auto / Left-to-right / Right-to-left buttons in the Paragraph panel and Type options bar (#6793); the visual RTL caret is still missing (TYPE-218-2 partial) |
+| 2026-10-22 | minor | Georgian (`ka`) catalog |
