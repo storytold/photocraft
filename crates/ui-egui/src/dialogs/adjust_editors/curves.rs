@@ -248,10 +248,34 @@ fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, gray: bool) -> E
     e
 }
 
+/// The Curves Preset menu: choosing a preset replaces the curves, as one edit.
+fn curves_preset_row(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let mut e = Edit::default();
+    ui.horizontal(|ui| {
+        label(ui, tl!("Preset:"));
+        let current = crate::curves_presets::matching(v, cx.gray).map_or("custom", |p| p.id);
+        let mut options: Vec<(&str, &str)> = crate::curves_presets::available(cx.gray).map(|p| (p.id, tl!(p.label))).collect();
+        if current == "custom" {
+            options.push(("custom", tl!("Custom")));
+        }
+        let mut picked = current;
+        if widgets::dropdown(ui, "curves-preset", tl!("Preset"), &mut picked, &options, ui.available_width().min(190.0))
+            && picked != current
+            && let Some(preset) = crate::curves_presets::find(picked)
+        {
+            crate::curves_presets::apply(v, preset, cx.gray);
+            e.add(Edit::discrete(true));
+        }
+    });
+    e
+}
+
 pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let space = space_of(v);
     let chans = tone_channels(space, cx.gray);
+    // The Preset menu (#9221): PhotoCraft's own curves for common looks, Custom once edited.
+    let mut e = if space == ToneSpace::Rgb && cx.isolated_curve.is_none() { curves_preset_row(ui, v, cx) } else { Edit::default() };
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();
@@ -269,7 +293,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none() && ch != 0);
     let hist_i = isolated.map_or(ch, |c| c.hist);
     let key = curve_key(&chan);
-    let mut e = curves_mode_row(ui, v, key, cx.gray);
+    e.add(curves_mode_row(ui, v, key, cx.gray));
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);

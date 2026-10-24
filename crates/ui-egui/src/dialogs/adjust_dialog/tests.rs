@@ -405,6 +405,32 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9221: the Curves Preset menu loads a preset's curves into the dialog (one discrete edit
+/// the preview follows) and reads Custom once the curve is edited by hand.
+#[test]
+fn curves_preset_menu_loads_a_preset_and_reads_custom_after_an_edit() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(4);
+    let preset = |h: &Harness<'_, PhotocraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).next().and_then(|n| n.accesskit_node().value().map(|s| s.to_string()))
+    };
+    assert_eq!(preset(&h).as_deref(), Some("Default"), "a new Curves starts at Default");
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Strong Contrast").click();
+    h.run_steps(3);
+    let fields = &h.state().ui.dialogs[0].fields;
+    assert_eq!(fields["points"], json!([[0.0, 0.0], [64.0, 36.0], [192.0, 220.0], [255.0, 255.0]]));
+    assert_eq!(fields["red"], json!([[0.0, 0.0], [255.0, 255.0]]), "a tone preset leaves the channels straight");
+    assert_eq!(preset(&h).as_deref(), Some("Strong Contrast"), "the menu shows the preset");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [64, 30], [192, 220], [255, 255]]));
+    h.run_steps(3);
+    assert_eq!(preset(&h).as_deref(), Some("Custom"), "an edited curve is Custom");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
