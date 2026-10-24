@@ -334,43 +334,16 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
     let (x0, y0) = (bx0.saturating_sub(pad), by0.saturating_sub(pad));
     let (x1, y1) = ((bx1 + 1 + pad).min(w), (by1 + 1 + pad).min(h));
     let bw = x1 - x0;
-    let at = |x: usize, y: usize| marks[y * w + x];
-    let mut mask = vec![0u8; bw * (y1 - y0)];
-    let fill_row = |yy: usize, out: &mut [u8]| {
-        let y = y0 + yy;
-        for (xx, o) in out.iter_mut().enumerate() {
-            let x = x0 + xx;
-            let v = at(x, y);
-            *o = v;
-            if !anti_alias {
-                continue;
-            }
-            // Same rule as `antialias`: edge pixels blend with their 3×3 neighbourhood; neighbours
-            // outside the area count as the pixel itself.
-            let mut sum = 0u32;
-            let mut edge = false;
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                    let n = if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 { v } else { at(nx as usize, ny as usize) };
-                    edge |= n != v;
-                    sum += n as u32;
-                }
-            }
-            if edge {
-                let avg = sum as f32 / (9.0 * 255.0);
-                let f = if v > 127 { 0.5 + 0.5 * avg } else { 0.5 * avg };
-                *o = (f * 255.0).round() as u8;
-            }
-        }
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        mask.par_chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+    let mut mask = Vec::with_capacity(bw * (y1 - y0));
+    for y in y0..y1 {
+        mask.extend_from_slice(&marks[y * w + x0..y * w + x1]);
     }
-    #[cfg(target_arch = "wasm32")]
-    mask.chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+    if anti_alias {
+        // Every mark outside the touched bounds is 0, and the box keeps a pixel of padding on each
+        // side the area doesn't clip, so anti-aliasing the box alone (neighbours outside it count
+        // as the pixel itself) gives what anti-aliasing the whole area would.
+        crate::segment::antialias_u8(&mut mask, bw, y1 - y0);
+    }
     let bbox = Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32);
     Some(Region { bbox, mask })
 }
@@ -1535,6 +1508,27 @@ mod tests {
             }
         }
         assert!(wand_region(&img, area, (0, 0), 10.0, true, true).is_none());
+    }
+
+    #[test]
+    fn wand_region_anti_aliases_its_box_as_the_whole_area_would() {
+        let (w, h) = (37, 29);
+        let area = Rect::new(3, -2, 3 + w, -2 + h);
+        let img = blobs(w, h);
+        // Seeds whose regions stay inside, touch an edge or a corner of the area, and a global match.
+        for (seed, tol, contiguous) in [((10, 5), 10.0, true), ((4, -2), 0.0, true), ((30, 10), 255.0, true), ((20, 20), 40.0, false), ((39, 26), 20.0, true)] {
+            let hard = wand_region(&img, area, seed, tol, contiguous, false).unwrap();
+            let mut full: Vec<u8> =
+                (area.y0..area.y1).flat_map(|y| (area.x0..area.x1).map(move |x| (x, y))).map(|(x, y)| (hard.at(x, y) * 255.0).round() as u8).collect();
+            crate::segment::antialias_u8(&mut full, w as usize, h as usize);
+            let soft = wand_region(&img, area, seed, tol, contiguous, true).unwrap();
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    let want = full[((y - area.y0) * w + x - area.x0) as usize];
+                    assert_eq!((soft.at(x, y) * 255.0).round() as u8, want, "{seed:?} {tol} {contiguous} at {x},{y}");
+                }
+            }
+        }
     }
 
     #[test]
