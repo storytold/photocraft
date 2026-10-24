@@ -578,6 +578,9 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
 #[path = "tests/tiff_tests.rs"]
 mod tiff_tests;
 
+#[path = "tests/bmp_tests.rs"]
+mod bmp_tests;
+
 #[path = "tests/tiff_options_tests.rs"]
 mod tiff_options_tests;
 
