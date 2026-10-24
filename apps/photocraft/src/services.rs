@@ -15,13 +15,13 @@ use std::sync::Arc;
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
-/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
+/// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), patterns (.pat), swatches (.aco, .act, .ase) and
+/// keyboard shortcut sets (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
     "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm",
     "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act",
-    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "ase", "kys", "af", "afdesign", "afphoto", "afpub", "apng", "jpe", "jfif", "dib", "icb", "vda", "vst", "pnm", "srf", "sr2", "pat",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -48,30 +48,31 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
     ("SVG", SVG_EXTS),
-    ("PNG", &["png"]),
-    ("JPEG", &["jpg", "jpeg"]),
+    ("PNG", &["png", "apng"]),
+    ("JPEG", &["jpg", "jpeg", "jpe", "jfif"]),
     ("HEIF", &["heic", "heif", "hif"]),
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
     ("GIF", &["gif"]),
-    ("BMP", &["bmp"]),
-    ("Targa", &["tga"]),
+    ("BMP", &["bmp", "dib"]),
+    ("Targa", &["tga", "icb", "vda", "vst"]),
     ("ICO", &["ico"]),
     ("QOI", &["qoi"]),
     ("PCX", &["pcx"]),
     ("DDS", &["dds"]),
     ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pam", "pfm"]),
+    ("Portable Bitmap", &["pnm", "pbm", "pgm", "ppm", "pam", "pfm"]),
     ("OpenEXR", &["exr"]),
     ("Radiance HDR", &["hdr"]),
     ("FITS", &["fits", "fit", "fts"]),
     ("DPX and Cineon", &["dpx", "cin"]),
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
     ("DICOM", &["dcm", "dicom", "dc3"]),
-    ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
+    ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "pef", "orf", "rw2", "raf"]),
     ("Brushes", &["abr"]),
     ("Gradients", &["grd"]),
     ("Styles", &["asl"]),
+    ("Patterns", &["pat"]),
     ("Swatches", &["aco", "act", "ase"]),
     ("Keyboard Shortcuts", &["kys"]),
 ];
@@ -896,6 +897,19 @@ mod tests {
         let names: Vec<&str> = filters.iter().map(|(name, _)| *name).collect();
         for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
             assert!(names.contains(&name), "{name}");
+        }
+    }
+
+    /// File › Open's All Formats offers every extension of each format `photocraft-codecs` reads in
+    /// this build, every camera raw extension the raw reader recognizes, and every preset file
+    /// extension File › Open imports except `.psp`, which File › Open reads only when the file is
+    /// a keyboard shortcut set (Photoshop's `Keyboard Shortcuts.psp`).
+    #[test]
+    fn all_formats_lists_every_readable_codec_raw_and_preset_extension() {
+        let readable = photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read).flat_map(|f| f.extensions().iter().copied());
+        let presets = photocraft_ui_egui::preset_files_ui::PRESET_EXTS.iter().copied().filter(|ext| *ext != "psp");
+        for ext in readable.chain(photocraft_io::raw::EXTENSIONS.iter().copied()).chain(presets) {
+            assert!(OPEN_EXTS.contains(&ext), ".{ext} is missing from File › Open's All Formats");
         }
     }
 
