@@ -116,21 +116,22 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
     Err(EngineError::Other(format!("cannot list {dir}: no file system on the web")))
 }
 
-/// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, or GIMP's
-/// gzipped `.xcf.gz`, whose last extension alone says nothing.
+/// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, an extension
+/// of a format `photocraft-codecs` reads in this build, a camera raw extension, or GIMP's gzipped
+/// `.xcf.gz`, whose last extension alone says nothing.
 #[cfg(not(target_arch = "wasm32"))]
 fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz") || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext))
+    lower.ends_with(".xcf.gz")
+        || lower.rsplit_once('.').is_some_and(|(_, ext)| {
+            OPENABLE.contains(&ext) || photocraft_io::raw::EXTENSIONS.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
+        })
 }
 
-/// Extensions the batch commands pick up from a folder.
+/// Extensions of the document and vector formats the batch commands pick up from a folder:
+/// those `photocraft_io::import` reads outside `photocraft-codecs` and the camera raw reader.
 #[cfg(not(target_arch = "wasm32"))]
-const OPENABLE: &[&str] = &[
-    "pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi",
-    "ico", "pnm", "ppm", "pgm", "fits", "fit", "fts", "dpx", "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign",
-    "afphoto", "afpub",
-];
+const OPENABLE: &[&str] = &["pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub"];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
 /// Background layer). The UI asks before such a save when the "ask before saving layered TIFF"
@@ -1349,12 +1350,16 @@ pub(crate) fn process_tree(
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
 /// PhotoCraft opens but can't write, camera raws above all (#5799: a folder of ARWs failed on
-/// every file). Those are saved as PSD, the format Photoshop's Save As offers for a raw. An input
-/// whose file name has no extension (a dot in a folder name doesn't count) is saved as PNG.
+/// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates and the
+/// codec formats without a writer in this build. Those are saved as PSD, the format Photoshop's
+/// Save As offers for a raw. An input whose file name has no extension (a dot in a folder name
+/// doesn't count) is saved as PNG.
 fn same_format(path: &str) -> String {
-    const IMPORT_ONLY: &[&str] = &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm"];
+    const IMPORT_ONLY: &[&str] =
+        &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) { "psd".into() } else { ext }
+    let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
+    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
 }
 
 #[cfg(test)]
@@ -1366,6 +1371,17 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/IMG_0001.HEIC"), "psd");
     assert_eq!(same_format("/in/logo.svg"), "psd");
     assert_eq!(same_format("/in/scan.cin"), "psd");
+    // Formats PhotoCraft opens and does not write are saved as PSD.
+    for name in ["/in/scan.dcm", "/in/scan.DICOM", "/in/scan.dc3", "/in/page.xcf", "/in/page.xcf.gz", "/in/page.xcfgz", "/in/card.psdt"] {
+        assert_eq!(same_format(name), "psd", "{name}");
+    }
+    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read && !f.caps().write) {
+        for ext in f.extensions() {
+            assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");
+        }
+    }
+    assert_eq!(same_format("/in/a.pam"), "pam");
+    assert_eq!(same_format("/in/a.dds"), "dds");
     // No extension in the file name: PNG, not the path after a dot in a folder name.
     assert_eq!(same_format("/in/v1.2/scan"), "png");
     assert_eq!(same_format("C:\\in.d\\scan"), "png");
