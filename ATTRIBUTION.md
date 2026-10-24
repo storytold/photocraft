@@ -90,6 +90,7 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
 | `docs/images/gradient-overlay-method-*.png` | Gradient Overlay Method selector, before and after (synthetic gradient) | @oRE-o | Rendered offscreen with the `snapshot` example; no external artwork | MIT OR Apache-2.0 |
 | `docs/images/cpu-pixel-alignment/*.png` | CPU canvas pixel alignment, before and after #8321 | PhotoCraft contributors | Original synthetic noise rendered with the offscreen `snapshot` example; see the adjacent README | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/rendering-regressions/*.png`; generators `crates/io/examples/stroke_repro.rs` and `crates/compose/tests/support/stroke_fixture.rs` | Smart-object group stroke and placement detail, before and after | PhotoCraft contributors | Original procedural bar and stripe artwork; see the adjacent README for generation and pixel display settings | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
 
 Artwork shown in the screenshots (all public domain, via Wikimedia Commons; details in
 [`docs/images/SOURCES.md`](docs/images/SOURCES.md)):

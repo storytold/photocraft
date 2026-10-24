@@ -667,6 +667,32 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 ## Rendering fidelity (PSD oracle)
 
+For shareable layer-style regression artwork, run `cargo run -p photocraft-io --example
+stroke_repro -- /tmp/stroke-repro`. It generates an original blue bar in a smart object inside
+a pass-through group with a white outside stroke and black drop shadow: `master.psd`, native
+`bar.psb`, and PNG previews. Find each PSD's layer ids with `photocraft-cli info`, then use `layer.showOnly` and
+`layer.smartObjects.replaceContents`; resize the master to 588 × 588 before replacing its
+contents to exercise native-content rerendering. `shifted-master.psd` and `shifted.png` also
+exercise a 0.75-scale placement with a quarter-pixel translation, where negative cubic lobes
+can create faint alpha samples that an outside stroke amplifies. `cargo test -p photocraft-compose --test
+stroke_edge` checks the outline against procedural pixel-area coverage at 8, 16 and 32 bits,
+including native placement, circular contours, a resampled cache, rounded corners, translucent
+details, shadows and tiled renders. Smart placement keeps alpha empty when it has no positive
+source-tap support; an authored faint sample remains eligible regardless of its opacity.
+`cargo run --release -p photocraft-compose --example bench_stroke_edge -- 25` measures cold
+composition of the same artwork at 4900 × 4900 (24 MP).
+
+Axis-aligned bicubic reductions sample the original pixel grid with independently widened
+kernels per axis, including the final placement offset. This avoids an intermediate resize
+blurring an unchanged axis or making the result depend on the source's coordinate origin.
+`cargo test -p photocraft-algo --test affine_reduction` checks these invariants, coverage,
+clipping, sparse surfaces and colour depths. Reductions below 1/64 on either axis and
+non-axis-aligned warps retain the existing prefilter path. For a specific display size, direct
+placement at that size avoids an additional export reduction with a different sampling grid.
+The same `stroke_repro` example generates `detail.psb`, `detail-master.psd` and `detail.png`:
+horizontal stripes reduced only in width, so vertical detail should remain unchanged.
+See the [synthetic before/after pictures](rendering-regressions/README.md) for both defects.
+
 `cargo xtask test-corpus -p io -- --nocapture` compares our composite of every corpus PSD with
 Photoshop's own merged image (PASS ≤ 2/255) and checks that export → re-import renders the same,
 per source with its own floors: `corpus/psd`, the psd-tools set (also a truncation/corruption sweep
@@ -690,8 +716,9 @@ effect descriptors. Findings so far: fill-layer gradients are framed by the laye
 Photoshop's gradient Smoothness is a Catmull-Rom blend and "Perceptual" interpolation is Oklab
 (baked into dense stops on import, `crates/io/src/gradient_bake.rs`); a shape layer's vector
 stroke is drawn above its clipped layers; linked effect patterns tile from the layer's `fxrp`
-reference point; stroke distances follow a 5 × 5 chamfer metric (1, √2, √5) seeded at sub-pixel
-edge offsets; interior effects keep the layer's alpha; outside strokes blend onto the backdrop with
+reference point; sharp antialiased group outside strokes use exact distances to subpixel contour segments, while
+hard/soft edges retain alpha-seeded distances (5 × 5 chamfer below 20 px, Euclidean above it);
+interior effects keep the layer's alpha; outside strokes blend onto the backdrop with
 their own modes, an upper stroke covering lower ones.
 
 ## System printing

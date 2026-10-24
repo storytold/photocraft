@@ -987,7 +987,7 @@ impl Compositor {
             .items
             .iter()
             .filter(|e| e.enabled())
-            .map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, (0.0, 0.0)))
+            .map(|e| fx::program_with(e, &doc.global_light, vector_shape, photocraft_compose::effects::stroke_uses_contour(f.layer), &doc.patterns, (0.0, 0.0)))
             .collect();
         let want = field_reaches(&progs);
         // Distance fields are exact one pixel inside the window they are computed from.
@@ -1018,7 +1018,9 @@ impl Compositor {
                 if noisy {
                     return Err(Unsupported(format!("effect noise on `{}` uses the CPU path", f.layer.name)));
                 }
-                for s in fx::program_with(e, &doc.global_light, false, &doc.patterns, (0.0, 0.0)).stages {
+                for s in
+                    fx::program_with(e, &doc.global_light, false, photocraft_compose::effects::stroke_uses_contour(f.layer), &doc.patterns, (0.0, 0.0)).stages
+                {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
                         return Err(Unsupported(format!("effect blur on `{}` too wide for the GPU path", f.layer.name)));
                     }
@@ -2159,8 +2161,13 @@ impl Compositor {
         // Filled shapes stroke their outline (the effect shape); others estimate it.
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(layer).is_none();
         let anchor = layer.effects.reference.unwrap_or((f64::from(f.bounds.x0), f64::from(f.bounds.y0)));
-        let progs: Vec<fx::MapProgram> =
-            layer.effects.items.iter().filter(|e| e.enabled()).map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, anchor)).collect();
+        let progs: Vec<fx::MapProgram> = layer
+            .effects
+            .items
+            .iter()
+            .filter(|e| e.enabled())
+            .map(|e| fx::program_with(e, &doc.global_light, vector_shape, photocraft_compose::effects::stroke_uses_contour(layer), &doc.patterns, anchor))
+            .collect();
         let want = field_reaches(&progs);
         e.fields.retain(|k, _| want.contains_key(k));
         // Each field to recompute: over which rectangle, exact up to which reach.

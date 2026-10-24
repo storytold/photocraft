@@ -18,6 +18,7 @@ photocraft-vector = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+photocraft-algo = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
 photocraft-paint = { workspace = true }

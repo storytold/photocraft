@@ -4,8 +4,8 @@
 //! rotate, skew and flips are affine special cases; Distort and Perspective use the full
 //! homography. Warping is an inverse mapping with premultiplied-alpha sampling (nearest, bilinear
 //! or Photoshop's Keys bicubic), processed per destination tile (in parallel on native) so memory stays
-//! bounded by the tile working set. Large reductions are pre-filtered with a proper resize first,
-//! so shrinking a layer doesn't alias.
+//! bounded by the tile working set. Axis-aligned reductions sample directly with a widened
+//! bicubic kernel; other reductions are pre-filtered with a proper resize first to avoid aliasing.
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
@@ -13,6 +13,8 @@ use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
 use crate::resample::{Resample, resize_surface};
+
+mod axis_aligned;
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,6 +144,9 @@ pub enum Interp {
     Bilinear,
     #[default]
     Bicubic,
+    /// Cubic colour interpolation with alpha confined to positive source support.
+    /// Used by smart placement so negative-lobe products do not invent covered pixels.
+    BicubicCoverage,
 }
 
 impl Interp {
@@ -315,6 +320,9 @@ fn warp(
     if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }
+    if let Some(mapping) = axis_aligned::Mapping::reduction(h, interp) {
+        return axis_aligned::warp(src, src_rect, mapping, interp, clip, ctl);
+    }
     let mut h = *h;
     let mut src_rect = src_rect;
     // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
@@ -329,7 +337,7 @@ fn warp(
     // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
     // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
     // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
-    if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
+    if matches!(interp, Interp::Bicubic | Interp::BicubicCoverage) && scale < 0.999 && scale > 0.0 {
         let f = scale.max(1.0 / 64.0);
         reduced = resize_surface(src, f, f, Resample::Bicubic);
         src = &reduced;
@@ -423,6 +431,7 @@ fn warp(
         }
         // Premultiplied source window.
         let mut px = src_ref.try_read_region(foot)?;
+        let nonnegative_alpha = px.chunks_exact(n).all(|p| p[a].is_finite() && p[a] >= 0.0);
         for p in px.chunks_exact_mut(n) {
             let al = p[a];
             for v in &mut p[..a] {
@@ -465,6 +474,7 @@ fn warp(
                     continue;
                 }
                 acc[..n].fill(0.0);
+                let mut supported = interp != Interp::BicubicCoverage || !nonnegative_alpha;
                 match interp {
                     Interp::Nearest => {
                         let (ix, iy) = ((u + 0.5).floor() as i32, (v + 0.5).floor() as i32);
@@ -483,12 +493,15 @@ fn warp(
                             }
                         }
                     }
-                    Interp::Bicubic => {
+                    Interp::Bicubic | Interp::BicubicCoverage => {
                         let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                         let (wx, wy) = (bicubic(u - ix as f64), bicubic(v - iy as f64));
                         for (j, wyj) in wy.iter().enumerate() {
                             for (i, wxi) in wx.iter().enumerate() {
                                 let k = wxi * wyj;
+                                if interp == Interp::BicubicCoverage && *wxi > 0.0 && *wyj > 0.0 && clamped(ix - 1 + i as i32, iy - 1 + j as i32, a) > 0.0 {
+                                    supported = true;
+                                }
                                 for (c, s) in acc.iter_mut().enumerate().take(n) {
                                     *s += clamped(ix - 1 + i as i32, iy - 1 + j as i32, c) * k;
                                 }
@@ -506,7 +519,7 @@ fn warp(
                     }
                 }
                 let al = acc[a].clamp(0.0, 1.0);
-                if al <= 0.0 {
+                if al <= 0.0 || !supported {
                     continue;
                 }
                 any = true;
