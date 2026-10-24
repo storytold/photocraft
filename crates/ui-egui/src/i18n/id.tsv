@@ -1866,6 +1866,7 @@
 	Allow scripts to connect	Izinkan skrip terhubung
 	Always	Selalu
 	Always create smart objects when placing	Selalu buat smart object saat menempatkan
+	Skip transform when placing	Lewati transformasi saat menempatkan
 	Animated zoom	Zoom beranimasi
 	Apply auto tone	Terapkan auto tone
 	Ask	Tanya

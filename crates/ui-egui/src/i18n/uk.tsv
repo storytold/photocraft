@@ -2279,6 +2279,7 @@
 	Allow scripts to connect	Дозволити підключення скриптів
 	Always	Завжди
 	Always create smart objects when placing	Завжди створювати смартоб'єкти під час розміщення
+	Skip transform when placing	Пропускати трансформацію під час розміщення
 	Animated zoom	Анімоване масштабування
 	Apply auto tone	Застосовувати автоматичну тонову корекцію
 	Ask	Запитувати

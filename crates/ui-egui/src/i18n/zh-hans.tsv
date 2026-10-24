@@ -1925,6 +1925,7 @@
 	Allow scripts to connect	允许脚本连接
 	Always	始终
 	Always create smart objects when placing	置入时始终创建智能对象
+	Skip transform when placing	置入时跳过变换
 	Animated zoom	动画缩放
 	Apply auto tone	应用自动色调
 	Ask	询问

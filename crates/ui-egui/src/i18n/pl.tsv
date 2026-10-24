@@ -1894,6 +1894,7 @@
 	Allow scripts to connect	Zezwalaj skryptom na połączenie
 	Always	Zawsze
 	Always create smart objects when placing	Zawsze twórz obiekty inteligentne podczas umieszczania
+	Skip transform when placing	Pomijaj przekształcanie podczas umieszczania
 	Animated zoom	Animowane powiększanie
 	Apply auto tone	Zastosuj automatyczne tony
 	Ask	Pytaj

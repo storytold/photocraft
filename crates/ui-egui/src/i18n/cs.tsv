@@ -1900,6 +1900,7 @@
 	Allow scripts to connect	Povolit připojení skriptů
 	Always	Vždy
 	Always create smart objects when placing	Při umísťování vždy vytvořit chytré objekty
+	Skip transform when placing	Při umísťování přeskočit transformaci
 	Animated zoom	Animované zvětšování
 	Apply auto tone	Použít automatický tón
 	Ask	Zeptat se

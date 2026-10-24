@@ -1871,6 +1871,7 @@
 	Allow scripts to connect	스크립트 연결 허용
 	Always	항상
 	Always create smart objects when placing	가져올 때 항상 스마트 오브젝트 만들기
+	Skip transform when placing	가져올 때 변형 건너뛰기
 	Animated zoom	확대/축소 애니메이션
 	Apply auto tone	자동 톤 적용
 	Ask	묻기

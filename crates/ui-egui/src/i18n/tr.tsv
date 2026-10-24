@@ -1831,6 +1831,7 @@
 	Allow scripts to connect	Komut dosyalarının bağlanmasına izin ver
 	Always	Her zaman
 	Always create smart objects when placing	Yerleştirirken daima akıllı nesneler yaratın
+	Skip transform when placing	Yerleştirirken dönüştürmeyi atla
 	Animated zoom	Animasyonlu yakınlaştırma
 	Apply auto tone	Otomatik tonu uygula
 	Ask	Sor

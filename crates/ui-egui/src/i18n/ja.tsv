@@ -1884,6 +1884,7 @@
 	Allow scripts to connect	スクリプトからの接続を許可
 	Always	常に
 	Always create smart objects when placing	配置時に常にスマートオブジェクトを作成
+	Skip transform when placing	配置時に変形をスキップ
 	Animated zoom	アニメーションズーム
 	Apply auto tone	自動トーン補正を適用
 	Ask	確認する

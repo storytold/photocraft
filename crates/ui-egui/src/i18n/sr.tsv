@@ -1832,6 +1832,7 @@
 	Allow scripts to connect	Dozvoli skriptama da se povežu
 	Always	Uvek
 	Always create smart objects when placing	Uvek pravi pametne objekte pri postavljanju
+	Skip transform when placing	Preskoči transformaciju pri postavljanju
 	Animated zoom	Animirano zumiranje
 	Apply auto tone	Primeni automatski ton
 	Ask	Pitaj

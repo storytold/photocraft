@@ -2308,6 +2308,7 @@
 	Allow scripts to connect	Разрешить подключение сценариев
 	Always	Всегда
 	Always create smart objects when placing	Всегда создавать смарт-объекты при помещении
+	Skip transform when placing	Пропускать трансформирование при помещении
 	Animated zoom	Анимированное масштабирование
 	Apply auto tone	Применять автотон
 	Ask	Спрашивать

@@ -1850,6 +1850,7 @@
 	Allow scripts to connect	Permitir conexão de scripts
 	Always	Sempre
 	Always create smart objects when placing	Sempre criar objetos inteligentes ao inserir
+	Skip transform when placing	Ignorar transformação ao inserir
 	Animated zoom	Zoom animado
 	Apply auto tone	Aplicar tom automático
 	Ask	Perguntar

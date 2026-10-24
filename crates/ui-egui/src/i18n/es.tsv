@@ -1888,6 +1888,7 @@
 	Allow scripts to connect	Permitir que las secuencias de comandos se conecten
 	Always	Siempre
 	Always create smart objects when placing	Crear siempre objetos inteligentes al colocar
+	Skip transform when placing	Omitir la transformación al colocar
 	Animated zoom	Zoom animado
 	Apply auto tone	Aplicar el tono automático
 	Ask	Preguntar

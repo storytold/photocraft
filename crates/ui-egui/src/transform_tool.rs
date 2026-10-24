@@ -305,7 +305,11 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
 /// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
+/// With Preferences ▸ General ▸ Skip Transform when Placing on, the place stands as it is.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.session.prefs().general.skip_transform_when_placing {
+        return Ok(());
+    }
     begin(app, ctx)?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.made = Some(MadeLayer::Place);
@@ -3785,6 +3789,23 @@ mod tests {
         assert!(parent.is_some_and(|st| st.doc.layer(placed_layer).is_some()), "the placed Smart Object must remain in the parent document");
         assert!(app.ui.transform.is_none(), "the transform session should end");
         assert!(app.transform_preview.is_none(), "the transform preview should end");
+    }
+
+    /// #8492: Preferences ▸ General ▸ Skip Transform when Placing (off by default) places a file
+    /// without opening Free Transform on it, as in the reference app.
+    #[test]
+    fn skip_transform_when_placing_leaves_the_place_without_a_box() {
+        for skip in [false, true] {
+            let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+            app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+            app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+            app.sync_views();
+            let placed = app.session.active().unwrap().active_layer.unwrap();
+            begin_placed(&mut app, &egui::Context::default()).unwrap();
+            assert_eq!(app.ui.transform.is_some(), !skip, "skip {skip}: Free Transform opens only with the preference off");
+            assert!(app.session.active().unwrap().doc.layer(placed).is_some(), "skip {skip}: the placed layer stays");
+        }
     }
 
     /// Polls the app's background jobs until they have all landed.

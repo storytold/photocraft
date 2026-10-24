@@ -2681,6 +2681,7 @@ shape	Appearance	Diện mạo
 	Allow agent control	Cho phép agent điều khiển
 	Allow scripts to connect	Cho phép script kết nối
 	Always create smart objects when placing	Luôn tạo đối tượng thông minh khi đặt
+	Skip transform when placing	Bỏ qua biến đổi khi đặt
 	Animated zoom	Thu phóng có chuyển động
 	Apply auto tone	Áp dụng tự động tông
 	Auto collapse icon panels	Tự động thu gọn các bảng biểu tượng

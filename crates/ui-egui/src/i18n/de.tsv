@@ -1874,6 +1874,7 @@
 	Allow scripts to connect	Skriptverbindungen erlauben
 	Always	Immer
 	Always create smart objects when placing	Beim Platzieren immer Smart-Objekte erstellen
+	Skip transform when placing	Transformieren beim Platzieren überspringen
 	Animated zoom	Animierter Zoom
 	Apply auto tone	Automatische Tonwertkorrektur anwenden
 	Ask	Nachfragen

@@ -1897,6 +1897,7 @@
 	Allow scripts to connect	允許指令碼連線
 	Always	一律
 	Always create smart objects when placing	置入時一律建立智慧型物件
+	Skip transform when placing	置入時略過變形
 	Animated zoom	動畫縮放
 	Apply auto tone	套用自動色調
 	Ask	詢問

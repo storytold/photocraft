@@ -1657,6 +1657,7 @@
 	Allow agent control	Να επιτρέπεται ο έλεγχος από πράκτορες
 	Allow scripts to connect	Να επιτρέπεται η σύνδεση σεναρίων
 	Always create smart objects when placing	Να δημιουργούνται πάντα έξυπνα αντικείμενα κατά την τοποθέτηση
+	Skip transform when placing	Παράλειψη μετασχηματισμού κατά την τοποθέτηση
 	Animated zoom	Κινούμενη μεγέθυνση
 	Apply auto tone	Εφαρμογή αυτόματης τονικής διόρθωσης
 	Ask before saving layered tiff	Ερώτηση πριν από την αποθήκευση TIFF με επίπεδα
