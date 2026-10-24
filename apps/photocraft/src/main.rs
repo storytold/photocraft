@@ -116,6 +116,14 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_titlebar_shown(false)
             .with_title_shown(false),
         centered: true,
+        // For an image editor the cursor has to track the pointer precisely: HIGH_THROUGHPUT
+        // (the eframe default) lets the presentation engine queue two frames in advance, which
+        // adds ~16 ms of cursor lag on top of vsync. LOW_LATENCY keeps vsync for smoothness but
+        // caps the queue at one frame. (#1343)
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            surface: eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY,
+            ..Default::default()
+        },
         // eframe saves native window geometry and egui panel/window sizes on exit.
         // Keep that state beside preferences, including config overrides and portable mode.
         persistence_path: services::config_dir().map(|dir| dir.join("ui.ron")),
@@ -1074,6 +1082,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+<<<<<<< HEAD
     /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
     /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
     #[test]
@@ -1081,5 +1090,15 @@ mod tests {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
         assert_eq!(class, Some(super::APP_ID));
+    }
+
+    /// For an image editor the cursor has to track the pointer precisely. The eframe default
+    /// (`HIGH_THROUGHPUT`) lets the presentation engine queue two frames in advance, which adds
+    /// ~16 ms of cursor lag on top of vsync. We override it to `LOW_LATENCY` here. (#1343)
+    #[test]
+    fn native_options_uses_low_latency_wgpu_surface() {
+        let o = super::native_options(false);
+        assert_eq!(o.wgpu_options.surface.desired_maximum_frame_latency, Some(1));
+        assert_eq!(o.wgpu_options.surface, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY);
     }
 }
