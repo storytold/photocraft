@@ -6145,6 +6145,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     return;
                 }
                 Tool::MagicWand => {
+                    // Replace mode on an already-selected pixel deselects, like a marquee click (#5775).
+                    if selection_mode(app, mods) == "replace" && !mods.command && inside_selection(app, [x, y]) {
+                        if app.session.is_enabled("select.deselect") {
+                            let _ = app.run("select.deselect", json!({}));
+                        }
+                        return;
+                    }
                     let o = app.ui.tool_options.clone();
                     let mode = selection_mode(app, mods);
                     let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
