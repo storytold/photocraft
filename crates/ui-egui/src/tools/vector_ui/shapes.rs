@@ -42,7 +42,8 @@ fn tool_paint_param(app: &PhotocraftApp, stroke: bool) -> Value {
 
 fn tool_paint_source(app: &PhotocraftApp, stroke: bool) -> (&Option<photocraft_doc::Fill>, [f32; 4]) {
     let o = &app.ui.tool_options;
-    if stroke { (&o.shape_stroke_gradient, app.session.tools.background) } else { (&o.shape_fill_gradient, app.session.tools.foreground) }
+    // The tool's own colours (#6695), not the foreground and background, where no gradient is set.
+    if stroke { (&o.shape_stroke_gradient, o.shape_stroke_color) } else { (&o.shape_fill_gradient, o.shape_fill_color) }
 }
 
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
