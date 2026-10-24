@@ -2289,6 +2289,54 @@ fn indic_scripts_fall_back_to_installed_fonts() {
     }
 }
 
+/// Signs no text face has: ⌖ (U+2316, Miscellaneous Technical) and ⤒ (U+2912, Supplemental
+/// Arrows-B). They drew as .notdef boxes because no symbol font was a fallback candidate (#8689).
+const SYMBOLS: [char; 2] = ['\u{2316}', '\u{2912}'];
+
+#[test]
+fn symbols_fall_back_to_installed_symbol_fonts() {
+    let mut e = TextEngine::with_system_fonts();
+    for c in SYMBOLS {
+        // Layer 1: an installed symbol family, asked for by name, draws the sign. A character no
+        // installed symbol family has is skipped, as the script tests skip a missing script font.
+        let sample = c.to_string();
+        let Some(hit) = fonts::SYMBOL_FAMILIES.iter().copied().find(|f| {
+            e.fonts.has_family(f) && {
+                let direct = TextLayer { text: sample.clone(), font_family: (*f).to_string(), size_pt: 24.0, ..Default::default() };
+                let l = e.layout(&direct, 72.0);
+                !l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0)
+            }
+        }) else {
+            eprintln!("skipped U+{:04X}: no installed symbol font has it", c as u32);
+            continue;
+        };
+        // Layer 2, selection: after a Latin letter in a font without the sign, it falls back
+        // instead of drawing a box, and the Latin keeps the chosen face.
+        let l = e.layout(&point(&format!("A {c}"), 24.0), 72.0);
+        assert!(l.glyphs.iter().all(|g| g.id != 0), "U+{:04X} drawn with .notdef although {hit} is installed", c as u32);
+        let latin = l.glyphs.first().map(|g| g.face);
+        assert!(l.glyphs.iter().any(|g| Some(g.face) != latin), "Latin and U+{:04X} drawn with the same face", c as u32);
+    }
+}
+
+#[test]
+fn symbol_fallback_candidates_cover_every_platform() {
+    // Logic-level half of #8689 (runs without these fonts): Windows (Segoe UI Symbol), macOS
+    // (Apple Symbols) and Linux (the Noto symbol and math fonts, under the names fontconfig gives
+    // and the "Symbols2" spelling some packages use) each have a symbol font in the candidates,
+    // after the text faces and the emoji fonts, so a symbol font only draws what they lack.
+    for order in [crate::cjk::script_order(None), crate::cjk::script_order(Some("ja"))] {
+        let fb = fonts::fallback_candidates(&order);
+        let earlier = ["Noto Sans", "Segoe UI", "DejaVu Sans", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"]
+            .map(|f| fb.iter().position(|x| *x == f).unwrap_or_else(|| panic!("{f} missing from {fb:?}")));
+        for fam in ["Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"] {
+            assert!(fonts::SYMBOL_FAMILIES.contains(&fam), "{fam} not a symbol family");
+            let i = fb.iter().position(|f| *f == fam).unwrap_or_else(|| panic!("{fam} missing from {fb:?}"));
+            assert!(earlier.iter().all(|t| *t < i), "{fam} ahead of a text or emoji face in {fb:?}");
+        }
+    }
+}
+
 #[test]
 fn indic_fallback_candidates_cover_every_platform() {
     // Logic-level half (runs without these fonts): every script has a Windows, macOS and Linux
