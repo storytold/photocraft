@@ -9,6 +9,9 @@ on:
   pull_request:
     # `labeled` so that adding `full-ci` to an open PR starts a run with Windows in it.
     types: [opened, synchronize, reopened, labeled]
+  # The merge queue: GitHub tests each group of queued PRs, merged onto main, before merging them.
+  # Without this trigger a queued PR waits for its required check forever.
+  merge_group:
   workflow_dispatch:
     inputs:
       fuzz:
@@ -40,10 +43,11 @@ concurrency:
 
 jobs:
   # Whether the Windows legs and the web build run. main, manual runs and PRs labelled `full-ci`
-  # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
-  # app shell, UI, text and fonts, GPU, pen input, native saves, build scripts or the lockfile.
-  # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
-  # only by release.yml.
+  # get both. Other PRs and merge queue groups get Windows when they touch code whose behaviour
+  # differs by platform: the app shell, UI, text and fonts, GPU, pen input, native saves, build
+  # scripts or the lockfile. Format changes must exercise the Windows-only publication barriers
+  # (#8034). (The queue runs once per queued PR, so a full run each would double the load.) macOS
+  # is tested only by release.yml.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -91,10 +95,10 @@ jobs:
       - id: pick
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
-          if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
+          if { [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; } || [ "$FULL" = true ]; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -402,3 +406,24 @@ jobs:
         with:
           name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
           path: crates/${{ matrix.target.crate }}/fuzz/artifacts
+
+  # The one check to require on main (#5118). Which jobs run depends on the PR (Windows and the web
+  # build only for some paths, fuzz only by hand), and a required check that never starts blocks
+  # the PR forever, so this job always reports: red if any job failed or was cancelled, green if
+  # every job passed or was skipped. Required checks match job names: keep this name.
+  ci-passed:
+    name: ci passed
+    # Skipped, like every other job, in the run that adding a label other than `full-ci` starts.
+    if: always() && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
+    needs: [platforms, gate, windows, test-without-heif, corpus, web, fuzz]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*) exit 1 ;;
+          esac
