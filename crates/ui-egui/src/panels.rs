@@ -4167,6 +4167,12 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (chips, _) = ui.allocate_exact_size(vec2(38.0, h), Sense::hover());
         field_chips(app, ui, chips);
+        // Photoshop's ⚠ under the chips when the colour can't print, as in the slider modes
+        // (#8672); a compact field too short to hold it below the chips leaves it out.
+        if chips.height() >= 38.0 + 15.0 {
+            let rgb = crate::color_panel_ui::active(app);
+            crate::color_panel_ui::alerts(app, ui, chips, rgb, false);
+        }
         // Hue Cube: saturation across and brightness up, hue on the strip. Brightness Cube (the
         // Color Picker's B mode): hue across and saturation up, brightness on the strip.
         let brightness = app.ui.color_panel.mode == crate::state::ColorPanelMode::BrightnessCube;
