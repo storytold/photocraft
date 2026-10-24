@@ -112,6 +112,60 @@ fn matting_commands_fix_dark_fringes() {
 }
 
 #[test]
+fn defringe_command_preserves_soft_alpha_and_history_at_every_depth() {
+    for depth in DEPTHS {
+        for transparent_pixel in [false, true] {
+            let mut s = session(depth, "rgb");
+            paint(&mut s, |x, y| {
+                if transparent_pixel && (x, y) == (39, 29) {
+                    [0.0; 4]
+                } else if x < 2 {
+                    [0.0, 0.0, 1.0, if x == 0 { 0.3 } else { 0.6 }]
+                } else {
+                    [1.0, 0.0, 0.0, 1.0]
+                }
+            });
+            let before = active(&s).surface().unwrap().clone();
+            s.execute("layer.matting.defringe", json!({"width": 1})).unwrap();
+            let after = active(&s).surface().unwrap().clone();
+            for y in 0..30 {
+                for x in 0..40 {
+                    let actual = after.rgba(x, y);
+                    assert_eq!(actual[3], before.rgba(x, y)[3], "alpha: {depth}, {x},{y}");
+                    if actual[3] > 0.0 {
+                        assert_eq!(actual[..3], [1.0, 0.0, 0.0], "colour: {depth}, {x},{y}, transparent={transparent_pixel}");
+                    }
+                }
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(active(&s).surface().unwrap().rgba(0, 15), before.rgba(0, 15));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(active(&s).surface().unwrap().rgba(0, 15), after.rgba(0, 15));
+        }
+    }
+}
+
+#[test]
+fn defringe_corrects_a_soft_edge_without_any_fully_transparent_pixels() {
+    // Cropped content bounds may contain a soft antialiased edge but no alpha == 0.
+    // The old implementation returned early without removing the blue fringe.
+    let mut px = vec![[0.0, 0.0, 1.0, 0.3], [0.0, 0.0, 1.0, 0.6], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+    let alpha: Vec<f32> = px.iter().map(|c| c[3]).collect();
+    defringe(&mut px, 5, 1, 1);
+    assert_eq!(px[0][..3], [1.0, 0.0, 0.0]);
+    assert_eq!(px[1][..3], [1.0, 0.0, 0.0]);
+    assert_eq!(px[2][..3], [1.0, 0.0, 0.0]);
+    assert_eq!(px.iter().map(|c| c[3]).collect::<Vec<_>>(), alpha, "preserve soft alpha");
+    let mut opaque = vec![[0.2, 0.4, 0.7, 1.0]; 4];
+    let before = opaque.clone();
+    defringe(&mut opaque, 4, 1, 2);
+    assert_eq!(opaque, before, "opaque images without fringes are unchanged");
+    // Guard malformed buffer dimensions rather than indexing past the end.
+    defringe(&mut opaque, 400, 1, 2);
+    assert_eq!(opaque, before);
+}
+
+#[test]
 fn defringe_pure_function() {
     // 5×1: transparent, fringe (blue), core red ×3.
     let mut px = vec![[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.5], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
