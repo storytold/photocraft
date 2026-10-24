@@ -23,6 +23,12 @@ pub struct Prompt {
     docs: Vec<DocId>,
     /// The document whose question has already put keyboard focus on its default answer.
     focused: Option<DocId>,
+    /// "Apply to All" is ticked. It is only offered while more than one document is left to ask about.
+    apply_all: bool,
+    /// The answer given to every document still to ask about, once "Apply to All" was used.
+    auto: Option<Answer>,
+    /// The document `auto` answered last: if it is asked about again, its save didn't go through.
+    auto_answered: Option<DocId>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -79,7 +85,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         log::warn!("quitting a window that lost its GPU device before its unsaved work could be saved for recovery");
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None, apply_all: false, auto: None, auto_answered: None };
     match &app.discard {
         None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -180,6 +186,8 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
             show_tab(app, rest.first().copied());
             if let Some(p) = app.discard.as_mut() {
                 p.docs = rest;
+                // Apply to All covered the documents asked about; these are asked about afresh.
+                (p.apply_all, p.auto, p.auto_answered) = (false, None, None);
             }
             return;
         }
@@ -269,11 +277,32 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &app.discard else { return };
     let Some(&doc) = p.docs.first() else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
+    let (focus, offer_all) = (p.focused != Some(doc), p.docs.len() > 1 && !reverts);
     let Some(name) = index_of(app, doc).map(|i| app.session.documents()[i].doc.name.clone()) else {
         // Closed by something else while the prompt was up: nothing left to ask about.
         advance(app, ctx);
         return;
     };
+    // "Apply to All" answers the rest one document per frame, as Photoshop does. A document that
+    // comes back (its save was cancelled or failed) is asked about normally again, so a save that
+    // can't succeed never repeats on its own.
+    match app.discard.as_ref().and_then(|p| p.auto.map(|a| (a, p.auto_answered == Some(doc)))) {
+        Some((answer, false)) => {
+            if let Some(p) = app.discard.as_mut() {
+                p.auto_answered = Some(doc);
+            }
+            apply(app, ctx, doc, answer);
+            ctx.request_repaint();
+            return;
+        }
+        Some((_, true)) => {
+            if let Some(p) = app.discard.as_mut() {
+                p.auto = None;
+                p.apply_all = false;
+            }
+        }
+        None => {}
+    }
     let (title, message) = if reverts {
         ("Revert", crate::i18n::fmt(tl!("Revert “{name}” to the last saved version? Your changes will be lost."), &[("name", &name)]))
     } else {
@@ -286,7 +315,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     // Each question comes up with its default answer focused, as in Photoshop: the arrow keys then
     // move between the answers and Enter presses the focused one (#6441).
-    let focus = p.focused != Some(doc);
+    let mut apply_all = app.discard.as_ref().is_some_and(|p| p.apply_all);
     if let Some(p) = app.discard.as_mut() {
         p.focused = Some(doc);
     }
@@ -319,6 +348,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
         ui.label(message);
+        ui.add_space(8.0);
+        if offer_all {
+            crate::widgets::checkbox(ui, &mut apply_all, tl!("Apply to All"));
+        }
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -334,8 +367,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
+    if let Some(p) = app.discard.as_mut() {
+        p.apply_all = apply_all;
+    }
     if let Some(answer) = answer {
+        if apply_all && offer_all {
+            apply_to_rest(app, doc, answer);
+        }
         apply(app, ctx, doc, answer);
+    }
+}
+
+/// Makes a Save or Don't Save answer about `doc` the answer for every document still to ask about.
+fn apply_to_rest(app: &mut PhotocraftApp, doc: DocId, answer: Answer) {
+    if !matches!(answer, Answer::Save | Answer::Discard) {
+        return;
+    }
+    if let Some(p) = app.discard.as_mut() {
+        p.auto = Some(answer);
+        p.auto_answered = Some(doc);
     }
 }
 
@@ -360,7 +410,8 @@ pub fn inspect(app: &PhotocraftApp) -> Option<Value> {
     let doc = *p.docs.first()?;
     let name = index_of(app, doc).and_then(|i| app.session.documents().get(i)).map(|d| d.doc.name.clone())?;
     let reverts = p.id == "file.revert";
-    let (choices, default): (&[&str], _) = if reverts { (&["dontSave", "cancel"], "dontSave") } else { (&["save", "dontSave", "cancel"], "save") };
+    let choices = choices(reverts, p.docs.len() > 1);
+    let default = if reverts { "dontSave" } else { "save" };
     Some(json!({
         "id": CONTROL_ID,
         "kind": "unsavedChanges",
@@ -375,8 +426,19 @@ pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {
     app.discard.as_ref().map(|p| (p.id.clone(), p.params.clone()))
 }
 
+/// The answers a control client can give: `save`, `dontSave` and `cancel`, plus `saveAll` and
+/// `dontSaveAll` (the "Apply to All" box) while more than one document is left to ask about.
+/// Revert takes `dontSave` or `cancel` only.
+fn choices(reverts: bool, several: bool) -> Vec<&'static str> {
+    match (reverts, several) {
+        (true, _) => vec!["dontSave", "cancel"],
+        (false, false) => vec!["save", "dontSave", "cancel"],
+        (false, true) => vec!["save", "saveAll", "dontSave", "dontSaveAll", "cancel"],
+    }
+}
+
 /// Answers the prompt for a control client: `save`, `dontSave` or `cancel` (Revert takes
-/// `dontSave` or `cancel`). Like the buttons, Save may first ask for a path in the save dialog.
+/// `dontSave` or `cancel`); `saveAll` and `dontSaveAll` answer for every document still to ask about. Like the buttons, Save may first ask for a path in the save dialog.
 pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str) -> Result<Value, String> {
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
@@ -385,15 +447,26 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
         return Err("the unsaved-changes prompt is waiting for a save to finish".into());
     }
     let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");
-    let answer = match choice {
-        "save" if !reverts => Answer::Save,
-        "dontSave" => Answer::Discard,
-        "cancel" => Answer::Cancel,
+    let several = app.discard.as_ref().is_some_and(|p| p.docs.len() > 1);
+    let (answer, all) = match choice {
+        "save" if !reverts => (Answer::Save, false),
+        "saveAll" if !reverts && several => (Answer::Save, true),
+        "dontSave" => (Answer::Discard, false),
+        "dontSaveAll" if !reverts && several => (Answer::Discard, true),
+        "cancel" => (Answer::Cancel, false),
         other => {
-            let choices = if reverts { "dontSave or cancel" } else { "save, dontSave or cancel" };
-            return Err(format!("unknown choice `{other}`: {choices}"));
+            let choices = choices(reverts, several);
+            let (last, rest) = choices.split_last().unwrap_or((&"cancel", &[]));
+            return Err(format!("unknown choice `{other}`: {} or {last}", rest.join(", ")));
         }
     };
+    // The client's answer replaces one Apply to All left behind (a save that failed at once).
+    if let Some(p) = app.discard.as_mut() {
+        (p.apply_all, p.auto, p.auto_answered) = (false, None, None);
+    }
+    if all {
+        apply_to_rest(app, doc, answer);
+    }
     apply(app, ctx, doc, answer);
     Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
@@ -660,17 +733,24 @@ mod tests {
     }
 
     /// Tab walks `labels` left to right from the focused default answer, `labels[default]`, and
-    /// wraps; Shift+Tab steps back.
+    /// wraps; Shift+Tab steps back. When the prompt offers "Apply to All", that box is one more
+    /// stop, in front of the answers.
     fn tab_walks(h: &mut Prompted, labels: [&str; 3], default: usize) {
-        assert_eq!(focused(h, &labels), Some(labels[default]));
-        for step in 1..=3 {
+        use egui_kittest::kittest::Queryable;
+        let mut stops = labels.to_vec();
+        if h.query_by_label("Apply to All").is_some() {
+            stops.insert(0, "Apply to All");
+        }
+        let (n, at) = (stops.len(), default + stops.len() - 3);
+        assert_eq!(focused(h, &stops), Some(stops[at]));
+        for step in 1..=n {
             h.key_press(Key::Tab);
             h.run_steps(2);
-            assert_eq!(focused(h, &labels), Some(labels[(default + step) % 3]));
+            assert_eq!(focused(h, &stops), Some(stops[(at + step) % n]));
         }
         h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Tab);
         h.run_steps(2);
-        assert_eq!(focused(h, &labels), Some(labels[(default + 2) % 3]));
+        assert_eq!(focused(h, &stops), Some(stops[(at + n - 1) % n]));
     }
 
     fn docs_left(h: &Prompted) -> Option<usize> {
@@ -721,6 +801,111 @@ mod tests {
             assert!(h.state().discard.is_none());
             assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
         }
+    }
+
+    /// "Apply to All" (a checkbox, as in Photoshop) gives the answer to every document still to ask about.
+    #[test]
+    fn apply_to_all_discards_the_rest_without_asking_again() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = prompt_on(egui::os::OperatingSystem::Windows);
+        h.get_by_label("Apply to All").click();
+        h.run_steps(2);
+        h.key_press(Key::N);
+        h.run_steps(8);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty(), "No was applied to both unsaved documents");
+    }
+
+    #[test]
+    fn apply_to_all_is_only_offered_while_several_documents_are_left() {
+        use egui_kittest::kittest::Queryable;
+        let mut one_dirty = app_with_docs(2);
+        make_dirty(&mut one_dirty, 0);
+        let h = prompt_for(one_dirty, "file.closeAll", egui::os::OperatingSystem::Windows);
+        assert!(h.query_by_label("Apply to All").is_none(), "only one document is unsaved");
+        let h = prompt_on(egui::os::OperatingSystem::Windows);
+        assert!(h.query_by_label("Apply to All").is_some());
+    }
+
+    /// A save that was cancelled or failed brings its document back: asking again beats retrying forever.
+    #[test]
+    fn a_document_that_comes_back_after_apply_to_all_is_asked_about_again() {
+        let mut h = prompt_on(egui::os::OperatingSystem::Windows);
+        let first = doc_id(h.state(), 0);
+        if let Some(p) = h.state_mut().discard.as_mut() {
+            (p.apply_all, p.auto, p.auto_answered) = (true, Some(Answer::Save), Some(first));
+        }
+        h.run_steps(3);
+        let prompt = h.state().discard.as_ref().unwrap();
+        assert!(prompt.auto.is_none() && !prompt.apply_all);
+        assert_eq!(docs_left(&h), Some(2), "both documents are still waiting for an answer");
+    }
+
+    /// Apply to All answers for the documents the prompt opened with, not for ones dirtied since.
+    #[test]
+    fn a_document_dirtied_after_apply_to_all_is_asked_about() {
+        let mut app = app_with_docs(3);
+        make_dirty(&mut app, 0);
+        make_dirty(&mut app, 1);
+        let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Windows);
+        let late = doc_id(h.state(), 2);
+        make_dirty(h.state_mut(), 2);
+        if let Some(p) = h.state_mut().discard.as_mut() {
+            (p.apply_all, p.auto) = (true, Some(Answer::Discard));
+        }
+        h.run_steps(8);
+        let prompt = h.state().discard.as_ref().unwrap();
+        assert_eq!(prompt.docs, vec![late], "the two unsaved documents were discarded, the late one is asked about");
+        assert!(prompt.auto.is_none() && !prompt.apply_all);
+        assert_eq!(h.state().session.documents().len(), 1);
+    }
+
+    #[test]
+    fn control_clients_can_answer_for_all() {
+        let mut app = app_with_docs(3);
+        for i in 0..3 {
+            make_dirty(&mut app, i);
+        }
+        let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Windows);
+        let choices = inspect(h.state()).unwrap()["fields"]["choices"].clone();
+        assert_eq!(choices, json!(["save", "saveAll", "dontSave", "dontSaveAll", "cancel"]));
+        let ctx = h.ctx.clone();
+        answer_control(h.state_mut(), &ctx, "dontSaveAll").unwrap();
+        h.run_steps(8);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty());
+    }
+
+    /// A client answering one document isn't overruled by an Apply to All whose save just failed.
+    #[test]
+    fn a_control_answer_clears_a_stale_apply_to_all() {
+        let mut app = app_with_docs(3);
+        for i in 0..3 {
+            make_dirty(&mut app, i);
+        }
+        let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Windows);
+        let (first, last) = (doc_id(h.state(), 0), doc_id(h.state(), 2));
+        if let Some(p) = h.state_mut().discard.as_mut() {
+            (p.apply_all, p.auto, p.auto_answered) = (true, Some(Answer::Discard), Some(first));
+        }
+        let ctx = h.ctx.clone();
+        answer_control(h.state_mut(), &ctx, "dontSave").unwrap();
+        h.run_steps(8);
+        let prompt = h.state().discard.as_ref().unwrap();
+        assert_eq!(prompt.docs.len(), 2, "only the answered document was closed");
+        assert!(prompt.docs.contains(&last) && prompt.auto.is_none());
+    }
+
+    #[test]
+    fn the_all_answers_need_more_than_one_document_left() {
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert_eq!(inspect(&app).unwrap()["fields"]["choices"], json!(["save", "dontSave", "cancel"]));
+        let err = answer_control(&mut app, &ctx, "saveAll").unwrap_err();
+        assert!(err.contains("unknown choice `saveAll`") && err.ends_with("save, dontSave or cancel"), "{err}");
+        assert!(app.discard.is_some(), "a refused answer leaves the prompt up");
     }
 
     /// Whether the prompt is asking about the document called `name`.
