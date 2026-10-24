@@ -27,7 +27,14 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Option<u64> {
     let layer = st.active_layer?;
     let LayerContent::Fill(Fill::Solid(color)) = st.doc.layer(layer)?.content else { return None };
     let params = json!({"layer": layer.0, "document": st.doc.id.0});
-    Some(color_picker_ui::open_for_command(app, "Color Picker (Solid Color)", color.to_rgb(), cmds::SET, params))
+    let id = color_picker_ui::open_for_command(app, "Color Picker (Solid Color)", color.to_rgb(), cmds::SET, params);
+    // A CMYK fill reopens showing its own inks, not ones recomputed from its sRGB stand-in (#8568).
+    if color.mode == photocraft_color::ColorMode::Cmyk
+        && let Some(d) = app.ui.dialog_mut(id)
+    {
+        d.fields.insert("__cmyk".into(), json!(color.c));
+    }
+    Some(id)
 }
 
 /// Creating a Solid Color fill is transactional: the document is unchanged until OK.
@@ -57,7 +64,8 @@ pub(crate) fn confirm_new(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         return Err("the target document is no longer active".into());
     }
     let color = f.get("color").and_then(Value::as_str).ok_or("missing Solid Color colour")?;
-    app.run("layer.newFillLayer.solidColor", json!({"color": color}))
+    // CMYK typed into the picker stays those inks in a CMYK document (#8568).
+    app.run("layer.newFillLayer.solidColor", json!({"color": color, "cmyk": color_picker_ui::picked_cmyk(f)}))
 }
 
 pub(crate) fn owns(f: &Map<String, Value>) -> bool {
@@ -89,15 +97,22 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result
         return Err("the target document is no longer active".into());
     }
     let layer = LayerId(params.get("layer").and_then(Value::as_u64).ok_or("missing Solid Color layer")?);
-    if !st.doc.layer(layer).is_some_and(|l| matches!(l.content, LayerContent::Fill(Fill::Solid(_)))) {
+    let Some(LayerContent::Fill(Fill::Solid(original))) = st.doc.layer(layer).map(|l| &l.content) else {
         return Err("the target Solid Color Fill layer no longer exists".into());
-    }
-    if f.get("color") == f.get("__orig") {
+    };
+    // Different inks can share a display colour (CMYK 0/0/0/100 and 50/50/50/100 are both black):
+    // only a colour whose inks are unchanged too is no edit (#8568).
+    let inks = color_picker_ui::picked_cmyk(f);
+    let same_inks = inks.is_none_or(|k| original.mode != photocraft_color::ColorMode::Cmyk || original.c == k);
+    if f.get("color") == f.get("__orig") && same_inks {
         return Ok(json!({"layer": layer.0, "unchanged": true}));
     }
     let color = f.get("color").cloned().ok_or("missing color")?;
     let object = params.as_object_mut().ok_or("invalid Solid Color target")?;
     object.insert("color".into(), color);
+    if let Some(inks) = inks {
+        object.insert("cmyk".into(), json!(inks));
+    }
     app.run(cmds::SET, params)
 }
 

@@ -269,3 +269,57 @@ fn cmyk_lab_preview_thumbnail_cancel_and_ok_are_consistent() {
         assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(preview)));
     }
 }
+
+/// #8568: CMYK 50/50/50/100 typed into the Solid Color picker of a CMYK document is the fill's
+/// colour after OK, for a new fill and for an edited one, not what its sRGB stand-in converts back
+/// to through the document profile.
+#[test]
+fn cmyk_typed_into_the_picker_is_the_fills_colour_in_a_cmyk_document() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("image.mode.cmyk", json!({})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let typed = |f: &mut serde_json::Map<String, serde_json::Value>, inks: [f32; 4]| {
+        let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(inks).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        f.insert("color".into(), json!(format!("#{r:02x}{g:02x}{b:02x}")));
+        f.insert("__cmyk".into(), json!(inks));
+    };
+    let fill = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        match st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            LayerContent::Fill(Fill::Solid(c)) => c,
+            _ => panic!("not a solid fill"),
+        }
+    };
+    let inks = [0.5, 0.5, 0.5, 1.0];
+    let id = open_new(&mut app).unwrap();
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    typed(&mut f, inks);
+    confirm_new(&mut app, &f).unwrap();
+    assert_eq!(fill(&app), Color { mode: ColorMode::Cmyk, c: inks, alpha: 1.0 });
+
+    let edit = [0.25, 0.75, 0.0, 0.1];
+    let id = open(&mut app).unwrap();
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    typed(&mut f, edit);
+    confirm(&mut app, &f).unwrap();
+    assert_eq!(fill(&app).c, edit);
+    // Reopening the picker shows the stored inks.
+    let id = open(&mut app).unwrap();
+    let shown = color_picker_ui::current(&app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields);
+    assert_eq!(shown.cmyk, edit);
+
+    // Other inks with the same display colour are still an edit.
+    let near = [0.5, 0.5, 0.499, 1.0];
+    let id = open(&mut app).unwrap();
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    typed(&mut f, near);
+    confirm(&mut app, &f).unwrap();
+    let rich = [0.5, 0.5, 0.5, 1.0];
+    let id = open(&mut app).unwrap();
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    typed(&mut f, rich);
+    assert_eq!(f.get("color"), f.get("__orig"), "both inks show as the same colour");
+    confirm(&mut app, &f).unwrap();
+    assert_eq!(fill(&app).c, rich);
+}

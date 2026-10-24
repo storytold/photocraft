@@ -267,6 +267,19 @@ pub(crate) fn check_f32_values(cmd: &str, value: &Value) -> Result<()> {
     check(cmd, value, 0)
 }
 
+/// `p[key]` as CMYK inks 0..1 (`[c, m, y, k]`), the values a colour was picked as, or `None`
+/// when absent or null. A CMYK document stores exactly these instead of what the colour's sRGB
+/// stand-in converts back to (#4196, #8568).
+pub(crate) fn cmyk_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f32; 4]>> {
+    let Some(v) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
+    let inks: Option<Vec<f32>> =
+        v.as_array().filter(|a| a.len() == 4).and_then(|a| a.iter().map(|x| x.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0) as f32)).collect());
+    match inks.as_deref() {
+        Some(&[c, m, y, k]) => Ok(Some([c, m, y, k])),
+        _ => Err(bad(cmd, format!("`{key}` must be [c, m, y, k] numbers 0..1"))),
+    }
+}
+
 pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
     Ok(match p.get(key) {
         Some(Value::Array(a)) if a.len() >= 3 => {
@@ -1056,13 +1069,22 @@ fn build() -> Vec<CommandSpec> {
             "Solid Color…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"color":"#rrggbb"=foreground,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
+            r##"{"color":"#rrggbb"=foreground,"cmyk":[c,m,y,k]? (inks 0..1 the colour was picked as: a CMYK document's fill holds exactly these; default the foreground's CMYK pick),"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
                 let c = color_param("layer.newFillLayer.solidColor", p, "color", s.tools.foreground)?;
+                // The inks the colour was picked as, so CMYK 50/50/50/100 stays 50/50/50/100 instead
+                // of what its sRGB stand-in converts back to through the document profile (#8568).
+                let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
+                    Some(k) => Some(k),
+                    None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
+                };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
-                    let fill = Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode);
+                    let fill = match inks {
+                        Some(k) if doc.mode == ColorMode::Cmyk => Fill::Solid(Color { mode: ColorMode::Cmyk, c: k, alpha: c[3] }),
+                        _ => Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode),
+                    };
                     let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
                     let id = doc.insert_above(*active, l);
@@ -1201,17 +1223,7 @@ fn build() -> Vec<CommandSpec> {
             r##"{"foreground":"#rrggbb"|[r,g,b,a?]?,"background":same?,"foregroundCmyk":[c,m,y,k]? (inks 0..1 the foreground was picked as: a CMYK document is filled with exactly these),"backgroundCmyk":same?}"##,
             always,
             |s, p| {
-                let cmyk = |key: &str| -> Result<Option<[f32; 4]>> {
-                    let Some(v) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
-                    let inks: Option<Vec<f32>> = v
-                        .as_array()
-                        .filter(|a| a.len() == 4)
-                        .and_then(|a| a.iter().map(|x| x.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0) as f32)).collect());
-                    match inks.as_deref() {
-                        Some(&[c, m, y, k]) => Ok(Some([c, m, y, k])),
-                        _ => Err(bad("tools.setColors", format!("`{key}` must be [c, m, y, k] numbers 0..1"))),
-                    }
-                };
+                let cmyk = |key: &str| cmyk_param("tools.setColors", p, key);
                 let (fg_cmyk, bg_cmyk) = (cmyk("foregroundCmyk")?, cmyk("backgroundCmyk")?);
                 let foreground = color_param("tools.setColors", p, "foreground", s.tools.foreground)?;
                 let background = color_param("tools.setColors", p, "background", s.tools.background)?;
