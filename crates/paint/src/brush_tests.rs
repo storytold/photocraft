@@ -278,6 +278,58 @@ fn stroke_has_no_seams() {
     }
 }
 
+#[test]
+fn hard_round_presets_have_smooth_large_stroke_outlines() {
+    // #8842: the centre can be solid while widely spaced discs scallop the outline.
+    // Measure the rendered 50% edge of a 150 px stroke, including its sub-pixel position.
+    for preset in crate::presets::builtin().into_iter().filter(|p| p.name.starts_with("Hard Round")) {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for smoothing in [0.0, 0.49] {
+                let mut b = preset.brush.clone();
+                b.size = 150.0;
+                b.smoothing.amount = smoothing;
+                let mut s = Surface::new(fmt);
+                render_stroke(&mut s, &b, &line(100.0, 800.0, 120.0), None, false, 1.0);
+                let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+                for x in 220..680 {
+                    let edge = (0..120)
+                        .find_map(|y| {
+                            let (a, next) = (s.rgba(x, y)[3], s.rgba(x, y + 1)[3]);
+                            (a <= 0.5 && next > 0.5).then(|| y as f32 + (0.5 - a) / (next - a))
+                        })
+                        .expect("a full-pressure stroke has a half-coverage edge");
+                    min = min.min(edge);
+                    max = max.max(edge);
+                }
+                assert!(max - min < 0.25, "{} {fmt:?} smoothing {smoothing}: scalloped edge spans {} px", preset.name, max - min);
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_round_presets_have_continuous_pressure_opacity_tapers() {
+    // #8842 also shows nested disc boundaries when pressure controls opacity and size.
+    // A smooth input ramp must not turn into several-percent steps between adjacent pixels.
+    let points: Vec<_> =
+        (0..=100).map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(100.0 + i as f64 * 7.0, 120.0, 0.95 - i as f32 * 0.009) }).collect();
+    for preset in crate::presets::builtin().into_iter().filter(|p| p.name.starts_with("Hard Round")) {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for smoothing in [0.0, 0.49] {
+                let mut b = preset.brush.clone();
+                b.size = 150.0;
+                b.pressure_opacity = true;
+                b.smoothing.amount = smoothing;
+                let mut s = Surface::new(fmt);
+                render_stroke(&mut s, &b, &points, None, false, 1.0);
+                assert!(s.rgba(200, 120)[3] > 0.7 && s.rgba(699, 120)[3] < 0.3, "{}: the stroke must still taper", preset.name);
+                let max_jump = (200..699).map(|x| (s.rgba(x + 1, 120)[3] - s.rgba(x, 120)[3]).abs()).fold(0.0f32, f32::max);
+                assert!(max_jump < 0.02, "{} {fmt:?} smoothing {smoothing}: opacity jumps by {max_jump}", preset.name);
+            }
+        }
+    }
+}
+
 // ---------- dynamics ----------
 
 #[test]
