@@ -40,6 +40,7 @@
 pub mod bounds;
 mod fx;
 pub mod health;
+pub mod operator;
 pub mod plan;
 mod prefix;
 pub mod timing;
@@ -55,6 +56,10 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
+pub use operator::{
+    Combine, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams, SeparableBlur,
+    Undefined,
+};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -143,6 +148,8 @@ pub struct Stats {
     pub layers_batched: usize,
     /// Batched passes drawn with Normal's code alone (`fs_layerbatch_normal`), summed over chunks.
     pub normal_batches: usize,
+    /// Page cells whose layer-operator output was (re)computed.
+    pub operator_cells: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +166,8 @@ enum TexKind {
     R16F,
     /// 32-bit masks as R32F.
     R32F,
+    /// Layer operator windows and outputs (`operator.rs`): straight RGBA in floats.
+    Rgba32F,
 }
 
 impl TexKind {
@@ -170,6 +179,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap => TexKind::Rgba32F,
         }
     }
     fn format(self) -> wgpu::TextureFormat {
@@ -179,6 +189,7 @@ impl TexKind {
             TexKind::R8Direct => wgpu::TextureFormat::R8Unorm,
             TexKind::R16F => wgpu::TextureFormat::R16Float,
             TexKind::R32F => wgpu::TextureFormat::R32Float,
+            TexKind::Rgba32F => wgpu::TextureFormat::Rgba32Float,
         }
     }
     fn bytes_per_pixel(self) -> usize {
@@ -188,6 +199,7 @@ impl TexKind {
             TexKind::R8Direct => 1,
             TexKind::R16F => 2,
             TexKind::R32F => 4,
+            TexKind::Rgba32F => 16,
         }
     }
 }
@@ -196,6 +208,9 @@ impl TexKind {
 type ResidentRef = (usize, [i32; 4]);
 /// A page cell: the square `[x·page, (x+1)·page) × [y·page, (y+1)·page)` of document pixels.
 type Cell = (i32, i32);
+
+/// The cell key of an operator page shared by every cell (a whole-extent window, a map).
+const WHOLE: Cell = (i32::MIN, i32::MIN);
 /// A resident layer page.
 type ResKey = (LayerId, Role, Cell);
 /// Effect maps of a layer: over its whole effect region (`None`), or one page cell of a region
@@ -499,6 +514,32 @@ pub struct Compositor {
     /// Timestamp queries measuring how long the GPU spends on a refresh (see
     /// [`Compositor::measure_gpu_time`]); `None` = not measured.
     timer: Option<timing::GpuTimer>,
+    /// Layer operators per document ([`Compositor::set_operators`]).
+    operators: HashMap<DocId, Vec<LayerOperator>>,
+    /// The operators' compute pipelines: `None` until first needed, `Some(None)` when the device
+    /// can't run them.
+    op_kit: Option<Option<operator::OpKit>>,
+    /// What each operator page (`Role::Operator*`) was made from: a fingerprint of the program,
+    /// its window and the source tiles it read. A page with another fingerprint is redrawn.
+    op_made: HashMap<ResKey, u64>,
+    /// The selection each operator mask page was made from: held while the page is, so no other
+    /// selection can take its address (which the page's fingerprint hashes).
+    op_pins: HashMap<ResKey, Arc<Surface>>,
+    /// The maps operator pages were made from: held so no other map can take the address the
+    /// page's fingerprint hashes.
+    op_maps: HashMap<ResKey, Arc<Vec<[f32; 4]>>>,
+    /// The operators of the document the current refresh draws.
+    frame_ops: Vec<LayerOperator>,
+    /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell
+    /// and step to step (made anew each time, they cost their allocation and clearing on every
+    /// slider step).
+    op_scratch: Option<([u32; 2], Vec<wgpu::Texture>)>,
+    /// Bytes of a scratch set being made (the textures made so far): counted against the
+    /// resident budget with `op_scratch` until the set is complete.
+    scratch_making: u64,
+    /// The part of the canvas the current refresh draws (tile aligned): operators compute only
+    /// their output there.
+    frame_region: Rect,
 }
 
 fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -599,6 +640,37 @@ fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
     want
 }
 
+/// How deeply `layers` nest groups, counted up to one past [`photocraft_doc::MAX_GROUP_DEPTH`].
+fn group_depth(layers: &[photocraft_doc::Layer], depth: usize) -> usize {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return depth;
+    }
+    layers.iter().filter_map(|l| l.children()).map(|c| group_depth(c, depth + 1)).max().unwrap_or(depth)
+}
+
+/// One fingerprint per root layer of `doc` for the layer operators on it or inside it (0: none),
+/// for the stack-prefix cache (`Prefix::prepare`).
+fn operator_fingerprints(doc: &Document, ops: &[LayerOperator]) -> Vec<u64> {
+    if ops.is_empty() {
+        return Vec::new();
+    }
+    fn holds(l: &photocraft_doc::Layer, id: LayerId, depth: usize) -> bool {
+        l.id == id || (depth < 256 && l.children().is_some_and(|c| c.iter().any(|c| holds(c, id, depth + 1))))
+    }
+    doc.layers
+        .iter()
+        .map(|root| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let mut any = false;
+            for o in ops.iter().filter(|o| holds(root, o.layer, 0)) {
+                std::hash::Hash::hash(&(o.layer.0, o.target, o.program.key()), &mut h);
+                any = true;
+            }
+            if any { std::hash::Hasher::finish(&h) | 1 } else { 0 }
+        })
+        .collect()
+}
+
 /// Why a refresh whose layer pages don't fit GPU memory is drawn on the CPU.
 pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
 
@@ -621,7 +693,7 @@ fn lru_victims<K>(mut pages: Vec<(u64, K, u64)>, total: u64, incoming: u64, budg
 /// Runs `f` inside GPU error scopes and returns the first error raised.
 /// Native wgpu reports validation/internal/OOM errors synchronously; where they only arrive
 /// asynchronously (WebGPU) none is reported.
-fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
+pub(crate) fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -807,6 +879,15 @@ impl Compositor {
             cmyk: 0,
             health: None,
             timer: None,
+            operators: HashMap::new(),
+            op_kit: None,
+            op_made: HashMap::new(),
+            op_pins: HashMap::new(),
+            op_maps: HashMap::new(),
+            frame_ops: Vec::new(),
+            op_scratch: None,
+            scratch_making: 0,
+            frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device.limits().max_texture_dimension_2d);
         (comp, error)
@@ -834,6 +915,10 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.temps.clear();
+        self.op_scratch = None;
+        self.op_made.clear();
+        self.op_pins.clear();
+        self.op_maps.clear();
         self.prefix.clear();
     }
 
@@ -954,6 +1039,11 @@ impl Compositor {
         self.residents.values().map(Resident::bytes).sum()
     }
 
+    /// GPU memory held by the layer operators' scratch textures (bytes).
+    pub fn operator_scratch_bytes(&self) -> u64 {
+        self.op_scratch.as_ref().map_or(0, |(s, t)| u64::from(s[0]) * u64::from(s[1]) * 16 * t.len() as u64)
+    }
+
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
@@ -1035,9 +1125,45 @@ impl Compositor {
         Ok(())
     }
 
+    /// Layer operators for `doc` (`operator.rs`): from the next render on, each listed layer's
+    /// content is its operator's output. Replaces any set before; an empty list clears them.
+    /// Renders of `doc` return [`Unsupported`] (so the caller draws the CPU preview, never the
+    /// layer unfiltered) when the device can't run them or their pages don't fit.
+    pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
+        if operators.is_empty() {
+            self.clear_operators(doc);
+        } else {
+            self.operators.insert(doc, operators);
+        }
+    }
+
+    /// [`Self::set_operators`] with none: the layers show their own pixels again. With no
+    /// operator left anywhere, their scratch textures go too.
+    pub fn clear_operators(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
+    }
+
+    /// Whether `device` can run layer operators (compute passes into float storage textures).
+    /// Builds their pipelines the first time, so a dialog can warm them as it opens.
+    pub fn operators_supported(&mut self, device: &wgpu::Device) -> bool {
+        self.op_kit.get_or_insert_with(|| operator::OpKit::new(device)).is_some()
+    }
+
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
+        // The last document with operators: their scratch textures go too.
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
         self.residents.retain(|_, r| r.doc != doc);
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -1053,6 +1179,7 @@ impl Compositor {
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
             .chain(self.prefix.doc())
+            .chain(self.operators.keys().copied())
             .filter(|d| !keep(*d))
             .collect();
         gone.sort_by_key(|d| d.0);
@@ -1216,6 +1343,10 @@ impl Compositor {
         // texture uploads or effect maps, so none of those cached pixels can be trusted.
         self.prefix.clear();
         self.residents.clear();
+        self.op_made.clear();
+        self.op_pins.clear();
+        self.op_maps.clear();
+        self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
         self.temps.clear();
@@ -1255,7 +1386,37 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        self.frame_region = tile_grid(region);
+        let ops: Vec<LayerOperator> = self.operators.get(&doc.id).cloned().unwrap_or_default();
+        if !ops.is_empty() && !self.operators_supported(device) {
+            return Err(Unsupported("GPU layer operators are unavailable on this device".into()));
+        }
+        // Operators run on the page texels (RGB); the CPU filters CMYK, Lab and the other modes'
+        // own channels.
+        // Operator lookups walk groups to a bounded depth: deeper documents (past the model's own
+        // limit) can't have one missed.
+        if !ops.is_empty() && group_depth(&doc.layers, 0) > photocraft_doc::MAX_GROUP_DEPTH {
+            return Err(Unsupported("layer operators in a document nested too deeply".into()));
+        }
+        if !ops.is_empty() && !matches!(doc.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
+            return Err(Unsupported("layer operators need an RGB or Grayscale document (previewed on the CPU)".into()));
+        }
+        // A mask operator replaces the layer's own pixel mask, bound where the plan samples it: an
+        // enabled mask that isn't combined with vector masks first.
+        for o in ops.iter().filter(|o| o.target == OperatorTarget::Mask) {
+            let layer = doc.layer(o.layer).ok_or_else(|| Unsupported("a mask operator on a missing layer".into()))?;
+            if !layer.mask.as_ref().is_some_and(|m| m.enabled) || photocraft_compose::masks::combined_mask(layer, doc.bounds()).is_some() {
+                return Err(Unsupported("a mask operator on a disabled or vector-combined mask (previewed on the CPU)".into()));
+            }
+        }
+        // An operator's pages are keyed by its layer: a second one on the same layer (its content
+        // and its mask, say) would take the first one's output.
+        let mut layers = std::collections::HashSet::new();
+        if ops.iter().any(|o| !layers.insert(o.layer)) {
+            return Err(Unsupported("two layer operators on one layer (previewed on the CPU)".into()));
+        }
+        let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
+        self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;
@@ -1292,7 +1453,7 @@ impl Compositor {
         let checkpoint = if flush {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
-            self.prefix.prepare(doc, &resumable)
+            self.prefix.prepare(doc, &resumable, &operator_fingerprints(doc, &ops))
         } else {
             None
         };
@@ -1306,7 +1467,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan);
+        let fr = self.frame_res(device, queue, canvas, &plan, &ops);
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -1403,6 +1564,11 @@ impl Compositor {
         let frame = self.frame;
         let live: std::collections::HashSet<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
         self.residents.retain(|(id, _, _), r| r.doc != doc.id || r.last_used == frame || live.contains(id));
+        // Fingerprints of operator pages that were evicted or dropped.
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
@@ -1470,7 +1636,9 @@ impl Compositor {
         let pages: Vec<(u64, ResKey, u64)> =
             self.residents.iter().filter(|(k, r)| r.stamp != stamp && Some(**k) != keep).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
         let (mut n, mut freed) = (0, 0u64);
-        for k in lru_victims(pages, self.resident_bytes(), incoming, budget) {
+        // The operators' scratch textures (held, or being made) share the budget with the pages.
+        let held = self.resident_bytes().saturating_add(self.operator_scratch_bytes()).saturating_add(self.scratch_making);
+        for k in lru_victims(pages, held, incoming, budget) {
             if let Some(r) = self.residents.remove(&k) {
                 n += 1;
                 freed += r.bytes();
@@ -1493,7 +1661,22 @@ impl Compositor {
         stats: &mut Stats,
     ) -> Option<wgpu::Texture> {
         let replaced = self.residents.get(&key).map_or(0, Resident::bytes);
-        let (n, dropped) = self.evict_residents(self.resident_budget, bytes.saturating_sub(replaced), Some(key));
+        self.create_budgeted(device, desc, bytes.saturating_sub(replaced), Some(key), stats)
+    }
+
+    /// A texture of `bytes` within the resident budget: pages not used this refresh are evicted to
+    /// make room (never `keep`), and once more after an out-of-memory error. A failure sets
+    /// `layer_alloc` (the refresh falls back to the CPU) rather than reaching the device's
+    /// uncaptured-error handler.
+    fn create_budgeted(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::TextureDescriptor<'_>,
+        bytes: u64,
+        keep: Option<ResKey>,
+        stats: &mut Stats,
+    ) -> Option<wgpu::Texture> {
+        let (n, dropped) = self.evict_residents(self.resident_budget, bytes, keep);
         stats.evicted += n;
         self.admit_freed = self.admit_freed.saturating_add(dropped);
         // WebGPU reports errors asynchronously: its failures reach the health callbacks.
@@ -1505,7 +1688,7 @@ impl Compositor {
             match error {
                 None => return Some(texture),
                 Some(wgpu::Error::OutOfMemory { .. }) if !retry => {
-                    let (n, dropped) = self.evict_residents(0, 0, Some(key));
+                    let (n, dropped) = self.evict_residents(0, 0, keep);
                     stats.evicted += n;
                     self.admit_freed = self.admit_freed.saturating_add(dropped);
                 }
@@ -1524,14 +1707,18 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> FrameRes {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, ops: &[LayerOperator]) -> FrameRes {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
-        let areas = plan
-            .passes
-            .iter()
-            .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, |t| area(t.surface.get())), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
-            .collect();
+        // An operator's output covers the layer's tiles and whatever it changes beyond them.
+        let op_on = |layer: LayerId, target: OperatorTarget| ops.iter().find(|o| o.layer == layer && o.target == target);
+        let grown = |s: &Surface, o: Option<&LayerOperator>| match o {
+            Some(o) => tile_grid(s.tile_bounds().union(&o.program.changed_area())).intersect(&grid),
+            None => area(s),
+        };
+        let tex_area = |t: &plan::TexUse<'_>| grown(t.surface.get(), op_on(t.layer, OperatorTarget::Content).filter(|_| t.role == Role::Content));
+        let mask_area = |m: &plan::MaskUse<'_>| grown(m.surface.get(), op_on(m.layer, OperatorTarget::Mask));
+        let areas = plan.passes.iter().map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, tex_area), p.mask.as_ref().map_or(Rect::EMPTY, mask_area))).collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
         FrameRes { areas, luts, patterns }
@@ -1552,6 +1739,8 @@ impl Compositor {
         first_pass: usize,
         stats: &mut Stats,
     ) -> Bound {
+        // The operators of the document being drawn (Arc clones: `sync_operator` needs `self`).
+        let ops = self.frame_ops.clone();
         let cr = cell_rect(cell, self.page);
         let mut views: Vec<(Option<ResidentRef>, Option<ResidentRef>)> = Vec::with_capacity(plan.passes.len());
         let mut keys: Vec<ResKey> = Vec::new();
@@ -1563,17 +1752,26 @@ impl Compositor {
                 continue;
             }
             let (ta, ma) = fr.areas.get(i).copied().unwrap_or((Rect::EMPTY, Rect::EMPTY));
-            let tex =
-                p.tex.as_ref().and_then(|t| self.sync(device, queue, encoder, doc, (t.layer, t.role, cell), t.surface.get(), ta.intersect(&cr), stats)).map(
-                    |(k, r)| {
-                        keys.push(k);
-                        (keys.len() - 1, r)
-                    },
-                );
+            let op =
+                p.tex.as_ref().filter(|t| t.role == Role::Content).and_then(|t| ops.iter().find(|o| o.layer == t.layer && o.target == OperatorTarget::Content));
+            let tex = p
+                .tex
+                .as_ref()
+                .and_then(|t| match op {
+                    Some(o) => self.sync_operator(device, queue, encoder, doc, o, t.surface.get(), cell, ta.intersect(&cr), stats),
+                    None => self.sync(device, queue, encoder, doc, (t.layer, t.role, cell), t.surface.get(), ta.intersect(&cr), stats),
+                })
+                .map(|(k, r)| {
+                    keys.push(k);
+                    (keys.len() - 1, r)
+                });
             let mask = p
                 .mask
                 .as_ref()
-                .and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats))
+                .and_then(|m| match ops.iter().find(|o| o.layer == m.layer && o.target == OperatorTarget::Mask) {
+                    Some(o) => self.sync_operator(device, queue, encoder, doc, o, m.surface.get(), cell, ma.intersect(&cr), stats),
+                    None => self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats),
+                })
                 .map(|(k, r)| {
                     keys.push(k);
                     (keys.len() - 1, r)
@@ -1827,6 +2025,291 @@ impl Compositor {
             }
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
+        }
+    }
+
+    /// The page of `cell` that layer operator `op` outputs over `region` (the cell's part of the
+    /// layer's pixels and what the operator changes), brought up to date: the window of the
+    /// layer's `surface` it reads is uploaded when its tiles changed, and the passes run when the
+    /// window or the program did. Bound in place of the layer's own page. `None` (with
+    /// `layer_alloc` set, so the refresh goes to the CPU rather than show the layer unfiltered)
+    /// when a texture can't be had.
+    #[allow(clippy::too_many_arguments)]
+    fn sync_operator(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        doc: DocId,
+        op: &LayerOperator,
+        surface: &Surface,
+        cell: Cell,
+        region: Rect,
+        stats: &mut Stats,
+    ) -> Option<(ResKey, [i32; 4])> {
+        if region.is_empty() || self.layer_alloc.is_some() {
+            return None;
+        }
+        let operator::Program::Separable(blur) = op.program.program();
+        // A program that reads the whole extent has one window for every cell (uploaded once).
+        let whole = blur.blur.whole();
+        let source_cell = if whole { WHOLE } else { cell };
+        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, source_cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
+        // The cell's source window stays the same while the view moves (uploaded once) and while
+        // a slider drag's reach still fits it; when it outgrows it, the new one has headroom, so
+        // a drag doesn't upload every window again at each step. The blur and its output cover
+        // only the part this refresh draws.
+        let needed = region.inflate(blur.reach());
+        // A whole-extent program has one window for every cell (they share its key): the extent
+        // rounded out to whole tiles holds every cell's part of it (cells are tile-aligned, and
+        // the last ones reach past an extent that doesn't end on a tile), and a held window that
+        // covers it is kept. Per cell, the window changed at the canvas's edge, so each such cell
+        // uploaded the whole layer again.
+        let whole_window = tile_grid(blur.extent).union(&region);
+        let window = match self.residents.get(&wk).map(|r| r.region) {
+            Some(held) if whole && held.contains_rect(&whole_window) => held,
+            _ if whole => whole_window,
+            Some(held) if held.contains_rect(&needed) => held,
+            _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
+        };
+        let region = region.intersect(&self.frame_region);
+        if region.is_empty() {
+            return None;
+        }
+        let sub = if whole { region } else { region.inflate(operator::apron(blur.reach())).intersect(&window) };
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
+        let desc = |label, r: Rect| wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: r.width().max(1), height: r.height().max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage,
+            view_formats: &[],
+        };
+        let bytes = |r: Rect| u64::from(r.width()) * u64::from(r.height()) * 16;
+        // The source window: what the passes read. Its tiles fingerprint it (the edge repeats from
+        // inside the extent, so those are the tiles read).
+        let read = window.intersect(&blur.extent);
+        let read = if read.is_empty() { window } else { read };
+        let tiles: Vec<(TileCoord, Arc<Tile>)> = read.tiles().filter_map(|c| surface.tile(c).map(|t| (c, t.clone()))).collect();
+        let source_print = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            // The depth picks the source texels' format (RGBA8 or floats).
+            std::hash::Hash::hash(&(window, blur.extent, blur.depth as u8), &mut h);
+            for (c, t) in &tiles {
+                std::hash::Hash::hash(&(c.tx, c.ty, Arc::as_ptr(t) as usize), &mut h);
+            }
+            std::hash::Hash::hash(&surface.default_pixel().iter().map(|v| v.to_bits()).collect::<Vec<_>>(), &mut h);
+            std::hash::Hasher::finish(&h)
+        };
+        let fresh = |s: &Self, k: &ResKey, r: Rect, print: u64| s.residents.get(k).is_some_and(|x| x.region == r) && s.op_made.get(k) == Some(&print);
+        // A page reused in this call is marked used now, so making the next one can't evict it.
+        let touch = |s: &mut Self, k: &ResKey| {
+            let (frame, stamp) = (s.frame, s.stamp);
+            if let Some(r) = s.residents.get_mut(k) {
+                r.last_used = frame;
+                r.stamp = stamp;
+            }
+        };
+        let mut changed = false;
+        if fresh(self, &wk, window, source_print) {
+            touch(self, &wk);
+        } else {
+            // 8-bit sources as 8-bit texels: exact, and a quarter of the upload.
+            let eight = operator::source_is_8bit(blur.depth);
+            let (format, kind, bpp) =
+                if eight { (wgpu::TextureFormat::Rgba8Unorm, TexKind::Rgba8, 4) } else { (wgpu::TextureFormat::Rgba32Float, TexKind::Rgba32F, 16) };
+            let source_desc = wgpu::TextureDescriptor {
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                ..desc("pc_operator_source", window)
+            };
+            let size = u64::from(window.width()) * u64::from(window.height()) * bpp;
+            let texture = self.create_layer_texture(device, &source_desc, wk, size, stats)?;
+            let texels = operator::read_window(surface, window, blur.extent);
+            operator::write_bytes(queue, &texture, window.width(), window.height(), bpp as u32, &operator::source_bytes(blur.depth, &texels));
+            self.staged += size;
+            stats.bytes_uploaded += size as usize;
+            let mut resident = self.operator_resident(texture, window, surface, doc);
+            resident.kind = kind;
+            // The fingerprint hashes the tiles' addresses: holding them keeps another tile from
+            // taking one of those addresses while the page is kept.
+            resident.tiles = tiles.iter().cloned().collect();
+            self.residents.insert(wk, resident);
+            self.op_made.insert(wk, source_print);
+            changed = true;
+        }
+        // The selection over the output, once per selection.
+        // The whole output: an inverted selection's default pixel is selected.
+        let selection = blur.selection.as_ref().map(|s| (s, region));
+        if let Some((sel, sr)) = &selection {
+            let print = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&(Arc::as_ptr(sel) as usize, *sr), &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            if fresh(self, &mk, *sr, print) {
+                touch(self, &mk);
+            } else if !sr.is_empty() {
+                let texture = self.create_layer_texture(device, &desc("pc_operator_selection", *sr), mk, bytes(*sr), stats)?;
+                let k: Vec<[f32; 4]> = operator::read_selection(sel, *sr).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
+                operator::write_texels(queue, &texture, sr.width(), sr.height(), &k);
+                self.staged += bytes(*sr);
+                let resident = self.operator_resident(texture, *sr, surface, doc);
+                self.residents.insert(mk, resident);
+                self.op_made.insert(mk, print);
+                self.op_pins.insert(mk, Arc::clone(sel));
+                changed = true;
+            }
+        }
+        // Displace's map, once per map (shared by every cell).
+        let map_key = (op.layer, Role::OperatorMap, WHOLE);
+        // (Another remap binds a 1×1 stand-in.)
+        let map_input = match &blur.blur {
+            SeparableBlur::Remap(r) => match &r.mapping {
+                operator::Mapping::Displace { map, map_size, .. } => Some((Arc::clone(map), *map_size)),
+                // One stand-in for all of them: its identity is part of the map's fingerprint, so a
+                // new one per call uploaded it and ran the passes again on every refresh.
+                _ => Some((Arc::clone(&MAP_STAND_IN), [1, 1])),
+            },
+            _ => None,
+        };
+        if let Some((map, map_size)) = &map_input {
+            let print = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&(Arc::as_ptr(map) as usize, *map_size), &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            let r = Rect::from_xywh(0, 0, map_size[0], map_size[1]);
+            if fresh(self, &map_key, r, print) {
+                touch(self, &map_key);
+            } else {
+                let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
+                operator::write_texels(queue, &texture, r.width(), r.height(), map);
+                self.staged += bytes(r);
+                stats.bytes_uploaded += bytes(r) as usize;
+                let resident = self.operator_resident(texture, r, surface, doc);
+                self.residents.insert(map_key, resident);
+                self.op_made.insert(map_key, print);
+                self.op_maps.insert(map_key, Arc::clone(map));
+                changed = true;
+            }
+        }
+        // The output: redrawn when the program, the window or the selection changed.
+        let print = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&(op.program.key(), source_print, region, self.op_made.get(&mk).copied()), &mut h);
+            std::hash::Hasher::finish(&h)
+        };
+        if changed || !fresh(self, &ok, region, print) {
+            if !self.operators_supported(device) {
+                self.layer_alloc = Some("GPU layer operators are unavailable on this device".into());
+                return None;
+            }
+            // The output page of an unchanged region is written again in place.
+            let out = match self.residents.get(&ok).filter(|r| r.region == region && r.kind == TexKind::Rgba32F) {
+                Some(r) => r.texture.clone(),
+                None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
+            };
+            let size = [sub.width(), sub.height()];
+            let count = operator::scratch_count(&blur.blur);
+            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
+                let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
+                // Within the budget and its fallback, as layer pages are: the old set goes first,
+                // room is made for the whole new set, and each texture counts once made.
+                self.op_scratch = None;
+                let each = bytes(Rect::from_xywh(0, 0, grown[0], grown[1]));
+                let (n, dropped) = self.evict_residents(self.resident_budget, each.saturating_mul(count as u64), Some(ok));
+                stats.evicted += n;
+                self.admit_freed = self.admit_freed.saturating_add(dropped);
+                let mut made = Vec::with_capacity(count);
+                for i in 0..count {
+                    let label = format!("pc_operator_scratch{i}");
+                    let desc = operator::float_desc(&label, grown[0], grown[1]);
+                    let Some(texture) = self.create_budgeted(device, &desc, each, Some(ok), stats) else {
+                        self.scratch_making = 0;
+                        return None;
+                    };
+                    self.scratch_making = self.scratch_making.saturating_add(each);
+                    made.push(texture);
+                }
+                self.scratch_making = 0;
+                self.op_scratch = Some((grown, made));
+            }
+            let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
+                // Evicted making room for the output: the refresh goes to the CPU.
+                self.layer_alloc = Some(OVER_BUDGET.into());
+                return None;
+            };
+            let sel = selection.as_ref().and_then(|(_, sr)| {
+                let r = self.residents.get(&mk)?;
+                Some((sr.translate(-region.x0, -region.y0), r.texture.create_view(&Default::default())))
+            });
+            let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
+            let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
+            let blurred = match &blur.blur {
+                SeparableBlur::Remap(d) => {
+                    let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
+                    operator::record_remap(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                }
+                other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
+            };
+            let fmt = surface.format();
+            operator::record_finish(
+                device,
+                encoder,
+                kit,
+                &source.create_view(&Default::default()),
+                &blurred.create_view(&Default::default()),
+                &out.create_view(&Default::default()),
+                operator::FinishParams {
+                    size: [region.width(), region.height()],
+                    offset: [(region.x0 - window.x0) as u32, (region.y0 - window.y0) as u32],
+                    blur_offset: [(region.x0 - sub.x0) as u32, (region.y0 - sub.y0) as u32],
+                    area: blur.area.intersect(&blur.extent).intersect(&region).translate(-region.x0, -region.y0),
+                    selection: sel,
+                    keep_alpha: blur.keep_alpha,
+                    levels: operator::levels(blur.depth),
+                    has_alpha: fmt.alpha,
+                    combine: blur.combine,
+                },
+            );
+            self.recorded += 1;
+            let resident = self.operator_resident(out, region, surface, doc);
+            self.residents.insert(ok, resident);
+            self.op_made.insert(ok, print);
+            stats.operator_cells += 1;
+        }
+        for k in [wk, ok, mk, map_key] {
+            if let Some(r) = self.residents.get_mut(&k) {
+                r.last_used = self.frame;
+                r.stamp = self.stamp;
+            }
+        }
+        let r = self.residents.get(&ok)?;
+        Some((ok, [r.region.x0, r.region.y0, r.region.width() as i32, r.region.height() as i32]))
+    }
+
+    /// A resident holding an operator's float texture over `region`.
+    fn operator_resident(&self, texture: wgpu::Texture, region: Rect, surface: &Surface, doc: DocId) -> Resident {
+        let view = texture.create_view(&Default::default());
+        Resident {
+            texture,
+            view,
+            region,
+            kind: TexKind::Rgba32F,
+            format: surface.format(),
+            tiles: HashMap::new(),
+            default_nonzero: false,
+            default_bits: Vec::new(),
+            doc,
+            last_used: self.frame,
+            stamp: self.stamp,
+            cmyk: 0,
+            // Written by the encoder's passes: later writes must go through it too.
+            ordered: true,
         }
     }
 
@@ -2470,6 +2953,9 @@ fn batch_kernel(run: &[plan::Pass<'_>]) -> Kernel {
     if run.iter().all(normal) { Kernel::LayerBatchNormal } else { Kernel::LayerBatch }
 }
 
+/// The 1×1 map a remap other than Displace binds.
+static MAP_STAND_IN: std::sync::LazyLock<Arc<Vec<[f32; 4]>>> = std::sync::LazyLock::new(|| Arc::new(vec![[0.0; 4]]));
+
 /// Canvas rounded out to whole tiles.
 fn tile_grid(canvas: Rect) -> Rect {
     let t = TILE_SIZE;
@@ -2724,6 +3210,12 @@ fn convert_rows(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, rect
             TexKind::R8Direct => out.push((px[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
             TexKind::R16F => out.extend(f32_to_f16(px[0]).to_le_bytes()),
             TexKind::R32F => out.extend(px[0].to_le_bytes()),
+            // Operator pages are written by their passes, never from tiles.
+            TexKind::Rgba32F => {
+                for x in rgba() {
+                    out.extend(x.to_le_bytes());
+                }
+            }
         }
     }
     out

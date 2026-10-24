@@ -13,6 +13,8 @@
 //! opacity. Effect passes are clipped to the layer's effect region and the result is copied
 //! back into the backdrop in place, so a small text layer costs only its own pixels.
 
+use std::collections::HashSet;
+
 use photocraft_color::BlendMode;
 use photocraft_compose::adjust::{self, Transfer};
 use photocraft_compose::effects::has_effects;
@@ -157,6 +159,14 @@ pub enum Role {
     Mask,
     /// A stroked shape's stroke alone (its fill uses `Content`).
     Stroke,
+    /// A layer operator's output, bound in place of the layer's `Content` (`operator.rs`).
+    Operator,
+    /// The window of a layer's pixels an operator runs over.
+    OperatorSource,
+    /// The selection an operator mixes its result by.
+    OperatorMask,
+    /// An operator's other input (Displace's map).
+    OperatorMap,
 }
 
 /// A surface the pass needs on the GPU.
@@ -342,10 +352,18 @@ impl<'a> DocCtx<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    plan_with(doc, HashSet::new())
+}
+
+/// [`plan`] with layer operators on the layers in `ops` (`operator.rs`): their content is the
+/// operator's output, which can reach past their own pixels, so neither they nor a group holding
+/// one is composited over its own bounds only.
+pub fn plan_with(doc: &Document, ops: HashSet<LayerId>) -> Result<Plan<'_>, Unsupported> {
     if doc.mode == photocraft_color::ColorMode::Multichannel {
         return Err(Unsupported("Multichannel inks (printed on the CPU)".into()));
     }
     let mut p = Planner::new(DocCtx::of(doc));
+    p.ops = ops;
     let root = p.clear();
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
@@ -361,6 +379,8 @@ struct Planner<'a> {
     cx: DocCtx<'a>,
     fx: Vec<FxLayer<'a>>,
     checkpoints: Vec<Checkpoint>,
+    /// Layers whose content is a layer operator's output.
+    ops: HashSet<LayerId>,
     /// Layers planned so far, counting a layer each time it is planned (a clipped pass-through
     /// group is planned twice).
     visits: usize,
@@ -462,7 +482,7 @@ pub const SHAPE_MAP: usize = usize::MAX;
 
 impl<'a> Planner<'a> {
     fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new(), visits: 0 }
+        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new(), ops: HashSet::new(), visits: 0 }
     }
 
     fn finish(self, root: Slot) -> Plan<'a> {
@@ -835,6 +855,10 @@ impl<'a> Planner<'a> {
     /// The rect a plain layer composites over: its composite bounds when they cover at most half
     /// the canvas (beyond that, compositing everywhere costs less than the copy back).
     fn local_clip(&self, layer: &Layer) -> Option<Rect> {
+        // An operator's output reaches past the layer's own pixels (a blur's halo).
+        if !self.ops.is_empty() && self.holds_op(layer, 0) {
+            return None;
+        }
         let canvas = self.cx.canvas;
         let b = bounds::composite_bounds(layer, canvas)?;
         (b.width() as u64 * b.height() as u64 * 2 <= canvas.width() as u64 * canvas.height() as u64).then_some(b)
@@ -935,10 +959,16 @@ impl<'a> Planner<'a> {
         Ok(p)
     }
 
+    /// Whether `layer` is, or (within a bounded depth) holds, a layer with an operator.
+    fn holds_op(&self, layer: &Layer, depth: usize) -> bool {
+        self.ops.contains(&layer.id) || (depth < 256 && layer.children().is_some_and(|c| c.iter().any(|l| self.holds_op(l, depth + 1))))
+    }
+
     fn surface_tex(&self, p: &mut Pass<'a>, id: LayerId, s: &'a Surface) {
         let dp = s.default_pixel();
         p.color = photocraft_raster::to_rgba(&s.format(), &dp);
-        if s.tile_count() > 0 {
+        // An operator's output can cover pixels the layer doesn't store (a blur of a dot).
+        if s.tile_count() > 0 || self.ops.contains(&id) {
             p.tex = Some(TexUse { layer: id, role: Role::Content, surface: SurfaceRef::Doc(s) });
         }
     }
@@ -1038,6 +1068,10 @@ impl<'a> Planner<'a> {
     /// (atop = true: effects over the base treated as opaque, keeping the base's alpha).
     /// Consumes `backdrop`.
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
+        // Effect shapes and regions come from the layers' own pixels, not an operator's output.
+        if !self.ops.is_empty() && self.holds_op(layer, 0) {
+            return Err(Unsupported(format!("a layer operator under the effects of `{}` (previewed on the CPU)", layer.name)));
+        }
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
