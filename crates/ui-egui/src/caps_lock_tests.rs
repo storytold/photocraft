@@ -142,7 +142,12 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         h.run_steps(2);
         other(&mut h, "standard");
         let standard = fp(&h);
-        assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
+        if tool == Tool::PaintBucket && cfg!(not(target_arch = "wasm32")) {
+            assert_eq!(standard.icon, CursorIcon::Crosshair, "PaintBucket: the OS bitmap has a visible fallback");
+            assert!(standard.image.is_some(), "PaintBucket: the standard cursor is the unified OS bitmap");
+        } else {
+            assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
+        }
         other(&mut h, "precise");
         let precise = fp(&h);
         assert_ne!(standard, precise, "{tool:?}: Standard and Precise differ");

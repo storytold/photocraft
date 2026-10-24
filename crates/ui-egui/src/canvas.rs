@@ -745,7 +745,7 @@ fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter, p: Pos2, d
     if !draw || icon != egui::CursorIcon::Crosshair {
         return icon;
     }
-    crate::tool_cursor::crosshair(painter, p, 8.0, 2.0)
+    crate::tool_cursor::standard_crosshair(painter, p)
 }
 
 /// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
@@ -4758,7 +4758,26 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     if precise_other_cursor(app) {
                         egui::CursorIcon::Crosshair
                     } else {
-                        paint_bucket_cursor(ui.ctx(), p)
+                        match crate::tool_cursor::bucket(&painter, p) {
+                            Ok(icon) => icon,
+                            Err(error) => {
+                                let id = egui::Id::new("photocraft-bucket-cursor-error");
+                                if ui.ctx().data(|data| data.get_temp::<String>(id)).as_ref() != Some(&error) {
+                                    if !app.ui.dialogs.iter().any(|dialog| {
+                                        dialog.kind == crate::state::DialogKind::Error
+                                            && dialog.fields.get("message").and_then(serde_json::Value::as_str) == Some(&error)
+                                    }) {
+                                        let mut fields = serde_json::Map::new();
+                                        fields.insert("message".into(), json!(error));
+                                        app.ui.open_dialog(crate::state::DialogKind::Error, fields);
+                                    }
+                                    ui.ctx().data_mut(|data| data.insert_temp(id, error.clone()));
+                                }
+                                app.ui.status = error;
+                                app.ui.status_error = true;
+                                egui::CursorIcon::Default
+                            }
+                        }
                     }
                 }
                 // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
@@ -5727,14 +5746,6 @@ pub(crate) fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::Curs
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
-}
-
-/// The Paint Bucket's cursor: a bucket whose pouring corner is the filled pixel. Draws it at `p`
-/// and returns the OS cursor to set (hidden).
-pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The left corner of the icon's bucket is at (2, 12) of its 24-unit box.
-    crate::icons::cursor(ctx, "paint-bucket", p, vec2(2.0, 12.0) / 24.0, 22.0);
     egui::CursorIcon::None
 }
 
