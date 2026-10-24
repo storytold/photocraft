@@ -3247,6 +3247,13 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+
+# Custom shape set import
+	Import Shapes…	Importer des formes…
+	Choose a custom shape file (.csh).	Choisissez un fichier de formes personnalisées (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Nombre de formes importées depuis {file} : {n}|Nombre de formes importées depuis {file} : {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Nombre de formes importées depuis {group} : {n}|Nombre de formes importées depuis {group} : {n}
+
 # PhotoCraft release checks.
 	Check for Updates…	Rechercher des mises à jour…
 	PhotoCraft Updates	Mises à jour de PhotoCraft

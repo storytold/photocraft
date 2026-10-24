@@ -3702,6 +3702,13 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+
+# Custom shape set import
+	Import Shapes…	Nhập hình dạng…
+	Choose a custom shape file (.csh).	Chọn tệp hình dạng tùy chỉnh (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Số hình dạng đã nhập từ {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Số hình dạng đã nhập từ {group}: {n}
+
 	Check for Updates…	Kiểm tra bản cập nhật…
 	PhotoCraft Updates	Bản cập nhật PhotoCraft
 	Checking for updates…	Đang kiểm tra bản cập nhật…

@@ -4203,6 +4203,13 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Inviato a {printer}
 	set in Print Settings…	impostato nelle impostazioni di stampa…
 	ICO is limited to 256 × 256 pixels	ICO è limitato a 256 × 256 pixel
+
+# Custom shape set import
+	Import Shapes…	Importa forme…
+	Choose a custom shape file (.csh).	Scegli un file di forme personalizzate (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Numero di forme importate da {file}: {n}|Numero di forme importate da {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Numero di forme importate da {group}: {n}|Numero di forme importate da {group}: {n}
+
 # PhotoCraft release checks.
 	Check for Updates…	Cerca aggiornamenti…
 	PhotoCraft Updates	Aggiornamenti di PhotoCraft

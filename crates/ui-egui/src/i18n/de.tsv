@@ -3254,6 +3254,13 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+
+# Custom shape set import
+	Import Shapes…	Formen importieren…
+	Choose a custom shape file (.csh).	Wählen Sie eine Datei mit eigenen Formen (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Anzahl der aus {file} importierten Formen: {n}|Anzahl der aus {file} importierten Formen: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Anzahl der aus {group} importierten Formen: {n}|Anzahl der aus {group} importierten Formen: {n}
+
 # PhotoCraft release checks.
 	Check for Updates…	Nach Updates suchen…
 	PhotoCraft Updates	PhotoCraft-Updates

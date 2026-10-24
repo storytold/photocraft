@@ -2888,6 +2888,13 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+
+# Custom shape set import
+	Import Shapes…	导入形状…
+	Choose a custom shape file (.csh).	请选择自定义形状文件 (.csh)。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	从 {file} 导入的形状数量：{n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	从 {group} 导入的形状数量：{n}
+
 # PhotoCraft release checks.
 	Check for Updates…	检查更新…
 	PhotoCraft Updates	PhotoCraft 更新

@@ -4269,6 +4269,12 @@ shape	Appearance	Izgled
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
 
+# Custom shape set import
+	Import Shapes…	Uvezi oblike…
+	Choose a custom shape file (.csh).	Izaberite datoteku prilagođenih oblika (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}
+
 # Bevel & Emboss shading controls.
 	Highlight Mode	Режим осветљења
 	Highlight Color	Боја осветљења
