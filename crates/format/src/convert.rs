@@ -258,6 +258,15 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
         file_encoding: d.file_encoding,
+        responsive: {
+            // Saves never dangle: whatever the in-memory layout still references after a
+            // deletion path missed `remove_layers` is dropped here, the mirror of load-side
+            // `remap_ids` pruning.
+            let mut r = d.responsive.clone();
+            let present = d.walk().iter().map(|(_, _, l)| l.id).collect();
+            r.prune_absent(&present);
+            r
+        },
         layer_comps: d.layer_comps.iter().map(|c| comp_m(c, sink)).collect(),
         last_applied_comp: d.last_applied_comp,
         last_document_state: d.last_document_state.as_ref().map(|c| comp_m(c, sink)),
@@ -612,6 +621,9 @@ impl Loader<'_> {
         }
         let layer_comps = m.layer_comps.iter().map(|c| self.comp(c)).collect::<Result<Vec<_>>>()?;
         let last_document_state = m.last_document_state.as_ref().map(|c| self.comp(c)).transpose()?;
+        let mut responsive = m.responsive.clone();
+        let layer_id_map = self.id_map.iter().map(|(raw, mapped)| (LayerId(*raw), *mapped)).collect();
+        responsive.remap_ids(&layer_id_map);
         // Layer-based slices follow their layer through id remapping; a dangling one becomes a
         // user slice (its rect stays where it was).
         let mut slices = m.slices.clone();
@@ -659,6 +671,7 @@ impl Loader<'_> {
             variables,
             timeline: m.timeline.clone(),
             file_encoding: m.file_encoding,
+            responsive,
             layer_comps,
             last_applied_comp: m.last_applied_comp,
             last_document_state,

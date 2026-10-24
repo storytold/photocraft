@@ -222,6 +222,192 @@ fn empty_document_roundtrips() {
     assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
 }
 
+/// The manifest JSON as written in the bundle (its persisted `format_version`, before
+/// load-side migration normalizes it to the current version).
+fn manifest_json(bytes: &[u8]) -> String {
+    let r = zip::ZipReader::new(bytes).unwrap();
+    String::from_utf8(r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap()
+}
+
+/// Compatibility policy: a document with no responsive data saves at version 1 without the
+/// responsive key, so v1-only readers keep opening everything PhotoCraft writes unless the
+/// feature is used; re-saving a v1 file produces a v1 file again (#7970's review).
+#[test]
+fn plain_documents_stay_at_format_version_1() {
+    let mut doc = Document::new("plain", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::raster("px", photocraft_color::PixelFormat::RGBA8));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let text = manifest_json(&bytes);
+    assert!(text.contains("\"format_version\": 1"), "a plain document writes version 1");
+    assert!(!text.contains("responsive"), "the v1 manifest carries no responsive key");
+    // Load and re-save: still version 1, document unchanged.
+    let back = load_from_bytes(&bytes).unwrap();
+    assert!(back.responsive.is_empty(), "loading v1 leaves the layout empty");
+    let again = save_to_bytes(&back, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&again).contains("\"format_version\": 1"), "re-saving stays at version 1");
+    assert_eq!(load_from_bytes(&again).unwrap(), doc);
+}
+
+/// A document that uses the responsive layout saves at version 2 with the key, and the
+/// round trip carries every rule and variant back; dropping the data returns the file to
+/// version 1.
+#[test]
+fn responsive_documents_save_at_format_version_2() {
+    let mut doc = Document::new("responsive", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(40),
+        name: "Square".into(),
+        layers: vec![],
+    });
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&bytes).contains("\"format_version\": 2"), "using the feature marks the file v2");
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back.responsive, doc.responsive);
+    let mut emptied = back;
+    emptied.responsive = Default::default();
+    let plain = save_to_bytes(&emptied, &SaveOptions::default()).unwrap();
+    assert!(manifest_json(&plain).contains("\"format_version\": 1"), "dropping the layout returns the file to v1");
+}
+
+/// A layer that is removed only to be re-inserted (Reorder Layers, drag into a group,
+/// Group Layers, New Frame, Background from Layer all detach this way) must not lose its
+/// responsive rules, variant memberships or overrides — #7970's review found the pruning
+/// in `Document::remove` deleting a file's whole responsive setup on the first drag.
+#[test]
+fn remove_and_reinsert_keeps_the_responsive_layout() {
+    let mut doc = Document::new("reorder", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(40),
+        name: "Square".into(),
+        layers: vec![],
+    });
+    let before = doc.responsive.clone();
+    // The detach step of a reorder: take the layer out, put it straight back.
+    let taken = doc.remove(LayerId(41)).unwrap();
+    doc.layers.push(taken);
+    assert_eq!(doc.responsive, before, "a rearrangement keeps the responsive setup");
+    // A save in that state round-trips it unchanged, too.
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.responsive, before);
+}
+
+/// The save path validates what it saves: deleting rule and variant layers through a path
+/// that misses `remove_layers` (every deletion in this PR — `remove` no longer prunes)
+/// must still save cleanly, with the stale rules and variants dropped, not fail the
+/// bounds check with "rule count exceeds layer count" (#7970's review).
+#[test]
+fn saving_after_removals_without_pruning_validates_the_pruned_layout() {
+    let mut doc = Document::new("deleted", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.layers.push(Layer::group("Wide", vec![]));
+    doc.layers[2].id = LayerId(42);
+    doc.responsive.master = Some(LayerId(40));
+    for (artboard, name) in [(LayerId(41), "Square"), (LayerId(42), "Wide")] {
+        doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant { artboard, master: LayerId(40), name: name.into(), layers: vec![] });
+    }
+    // Three rules on three layers; then two layers go the unpruned deletion path.
+    for id in [LayerId(40), LayerId(41), LayerId(42)] {
+        doc.responsive.rules.push(photocraft_doc::responsive::LayerLayoutRule {
+            layer: id,
+            anchor: Default::default(),
+            mode: photocraft_doc::responsive::ResizeMode::Fixed,
+            min_size: None,
+            max_size: None,
+            text_flow: Default::default(),
+            min_font_size_pt: None,
+            stack: None,
+        });
+    }
+    doc.remove(LayerId(41)).unwrap();
+    doc.remove(LayerId(42)).unwrap();
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.responsive.rules.len(), 1, "the stale rules are dropped, the save does not fail");
+    assert!(back.responsive.variants.is_empty());
+    assert_eq!(back.responsive.master, Some(LayerId(40)));
+}
+
+/// Whatever still dangles after a deletion path missed `remove_layers` is dropped at save,
+/// never written into a file: the mirror of load-side `remap_ids` pruning.
+#[test]
+fn saving_drops_dangling_responsive_references() {
+    let mut doc = Document::new("dangling", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(99),
+        master: LayerId(40),
+        name: "Ghost".into(),
+        layers: vec![],
+    });
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert!(back.responsive.variants.is_empty(), "the variant whose artboard is gone is not saved");
+    assert_eq!(back.responsive.master, Some(LayerId(40)), "live references stay");
+}
+
+#[test]
+fn responsive_layout_roundtrips_in_native_manifest() {
+    let mut doc = Document::new("responsive", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let master = LayerId(40);
+    let variant = LayerId(41);
+    let text = LayerId(42);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = master;
+    doc.layers.push(Layer::group("Square", vec![]));
+    doc.layers[1].id = variant;
+    doc.responsive.master = Some(master);
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant { artboard: variant, master, name: "Square".into(), layers: vec![] });
+    doc.responsive.rules.push(photocraft_doc::responsive::LayerLayoutRule {
+        layer: text,
+        anchor: photocraft_doc::responsive::Anchor {
+            horizontal: photocraft_doc::responsive::HorizontalAnchor::Center,
+            vertical: photocraft_doc::responsive::VerticalAnchor::Bottom,
+        },
+        mode: photocraft_doc::responsive::ResizeMode::Fit,
+        min_size: Some(photocraft_doc::responsive::Dimensions { width: 16, height: 12 }),
+        max_size: None,
+        text_flow: photocraft_doc::responsive::TextFlow::Rewrap,
+        min_font_size_pt: None,
+        stack: None,
+    });
+    // The layer rule points at a live layer so it survives loader ID remapping.
+    doc.layers[0].children_mut().unwrap().push(Layer::new("Text", LayerContent::Text(TextLayer::default())));
+    doc.layers[0].children_mut().unwrap()[0].id = text;
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap().responsive, doc.responsive);
+    let remapped = load_from_bytes_with(&bytes, &LoadOptions { preserve_ids: false, ..Default::default() }).unwrap();
+    let loaded_master = remapped.layers.iter().find(|layer| layer.name == "Master").unwrap().id;
+    let loaded_variant = remapped.layers.iter().find(|layer| layer.name == "Square").unwrap().id;
+    let loaded_text = remapped.layers[0].children().unwrap()[0].id;
+    assert_eq!(remapped.responsive.master, Some(loaded_master));
+    assert_eq!(remapped.responsive.variants[0].artboard, loaded_variant);
+    assert_eq!(remapped.responsive.variants[0].master, loaded_master);
+    assert_eq!(remapped.responsive.rules[0].layer, loaded_text);
+    assert_eq!(photocraft_format::FORMAT_VERSION, 2);
+}
+
+#[test]
+fn invalid_responsive_layout_is_rejected_before_native_save() {
+    let mut doc = Document::new("invalid layout", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.responsive.schema_version = u32::MAX;
+    assert!(save_to_bytes(&doc, &SaveOptions::default()).is_err());
+}
+
 #[test]
 fn exhausted_document_ids_and_maximal_text_runs_roundtrip() {
     let mut doc = Document::new("exhausted", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
@@ -507,7 +693,7 @@ fn manifest_is_human_readable_json() {
     let r = zip::ZipReader::new(&bytes).unwrap();
     assert_eq!(r.entries[0].name, "manifest.json");
     let text = String::from_utf8(r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
-    assert!(text.contains("\"format_version\": 1"));
+    assert!(text.contains("\"format_version\": 1"), "a rich document without responsive data stays v1");
     assert!(text.contains("\"Hue/Sat\""));
     assert!(text.contains("filter.blur.gaussian"));
     assert!(r.entries.iter().any(|e| e.name.starts_with("tiles/") && e.name.ends_with(".zst")));

@@ -15,7 +15,7 @@ use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
 /// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Hex-encoded BLAKE3 hash (64 chars).
 pub type Hash = String;
@@ -90,6 +90,11 @@ pub struct DocM {
     /// The JPEG quality / WebP encoding File › Save reuses.
     #[serde(default, skip_serializing_if = "photocraft_doc::FileEncoding::is_empty")]
     pub file_encoding: photocraft_doc::FileEncoding,
+    /// Responsive layout program. Added in manifest v2; a document with no responsive
+    /// data serializes without the key and the file stays at version 1, so v1-only
+    /// readers keep opening everything PhotoCraft saves unless the feature is used.
+    #[serde(default, skip_serializing_if = "photocraft_doc::responsive::ResponsiveLayout::is_empty")]
+    pub responsive: photocraft_doc::responsive::ResponsiveLayout,
     /// Image › Analysis: measurement scale, count groups, ruler.
     #[serde(default)]
     pub measurement: photocraft_doc::Measurement,

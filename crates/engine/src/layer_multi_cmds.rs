@@ -815,6 +815,9 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         variables: _,
         timeline: _,
         file_encoding: _,
+        // Layout rules and variant groupings steer editor interactions; the compositor
+        // never reads them, so they cannot change pixels.
+        responsive: _,
     } = a;
     *size == b.size
         && resolution_dpi.to_bits() == b.resolution_dpi.to_bits()
@@ -917,6 +920,9 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         variables,
         timeline,
         file_encoding,
+        // Layout rules and variant groupings are editor state, not pixels: a change to
+        // them marks the document modified, unlike a selection step.
+        responsive,
     } = a;
     // The ignored fields above are the pixel ones `pixels_equal_with` already compares.
     pixels_equal_with(a, b, video_frames_equal)
@@ -926,6 +932,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         && *guides == b.guides
         && *ruler_origin == b.ruler_origin
         && *metadata == b.metadata
+        && *responsive == b.responsive
         && *paths == b.paths
         && *work_path == b.work_path
         && *clipping_path == b.clipping_path
