@@ -10,10 +10,16 @@
 # this group caps them at 4.
 [test-groups]
 gpu = { max-threads = 4 }
+# The Windows resize stress tests (`#[ignore]`d; docs/development.md) share one real mouse and one desktop.
+real-input = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(photocraft-gpu) | (package(photocraft-ui-egui) & (kind(test) | test(/canvas|gpu|mip|type_tool|background_redraw::|floating_group_titles|swap_arrow::tests::rendered_glyph/)))'
 test-group = 'gpu'
+
+[[profile.default.overrides]]
+filter = 'binary(windows_resize_stress)'
+test-group = 'real-input'
 
 # CI (`--profile ci`, .github/workflows/ci.yml). Stops at the first failure so a red PR frees its
 # runner, fails a test that hangs instead of letting it hold the runner, and repeats every failure

@@ -360,6 +360,47 @@ can't run.
 - **Real-file corpora** in `corpus/` (gitignored, fetched at pinned commits, sha256-verified): opt-in locally through the `corpus` cargo feature, always run in CI. See [Test corpora](#test-corpora).
 - **Composite oracle:** a PSD's embedded merged image is compared with our compositor's output. The pass rate is tracked in the roadmap.
 - **UI:** unit tests for widgets and state, plus screenshot checks through the control channel.
+- **Window resizing on Windows:** an opt-in stress test that drags the real window's borders; see [Windows resize stress test](#windows-resize-stress-test).
+
+## Windows resize stress test
+
+`apps/photocraft/tests/windows_resize_stress` resizes the real Windows app hard and checks that it survives (context: #7252). It launches its own PhotoCraft (a throwaway settings folder under `target/tmp`, `--new-instance`, a free control port; the window is found by process id, so a PhotoCraft you have open is never touched), drives the window, and judges what it saw:
+
+- **Alive and answering.** A second thread asks `ui.inspect` four times a second while the window is resized. An answer proves the UI thread ran a frame, so a frozen window shows as a gap in the answers (limit 3 s).
+- **Drawing at the window's size.** Afterwards the size of the frame the app rendered (`ui.screenshot` captures the surface it drew to) and the size it laid its UI out at must match the window's client area. A stale swap chain, the black strip in the #7252 screenshot, fails here.
+- **Recovered.** The app still takes a new document and a fill, and its private memory has not grown by more than 200 MB. A run that cannot read the app's memory fails, saying so, instead of skipping that check.
+
+There is one test per scenario: the right border of an empty window (as reported), the left border, a corner with a 6000 × 4000 document, a border swept through the minimum size and back, maximize/restore cycles, a `SetWindowPos` storm (the same `WM_SIZE` handling without the OS's modal loop and without the mouse) and a seeded randomized soak (speeds, borders, corners, quick re-grabs, maximizing). The drags use the real mouse (`SendInput`), and the test checks that the OS entered its modal sizing loop, the path a person's drag takes.
+
+They take over the mouse and open a window, so they are `#[ignore]`d and also need `PHOTOCRAFT_RESIZE_STRESS=1`, exactly: `0`, `false`, `true` or an empty value leave them off. CI never runs them, and a `cargo test -- --ignored` over the workspace gets a failure naming the variable instead of a taken mouse. Leave the mouse alone while they run. The test only presses when its window is under the cursor and the cursor is where it put it, so a click can never land on another window, and during a drag it stops (releasing the button) and fails, saying why, if something else moves the mouse.
+
+```powershell
+$env:PHOTOCRAFT_RESIZE_STRESS = "1"
+cargo test --release -p photocraft --test windows_resize_stress -- --ignored --test-threads=1 --nocapture
+```
+
+`--release` (the first build takes about 10 minutes) is closest to a shipped build, and `--nocapture` prints each scenario's JSON report: GPU adapter, backend and present mode, probe latencies, the final sizes. Name a scenario to run just that one (`… --test windows_resize_stress soak -- --ignored …`). The tests are one process per scenario under `cargo nextest` too; its `real-input` group (`.config/nextest.toml`) keeps them one at a time.
+
+To try another GPU or backend, set what you would for the app: `WGPU_BACKEND=vulkan|dx12|gl`, `PHOTOCRAFT_PRESENT_MODE`, `PHOTOCRAFT_FRAME_LATENCY`, or `PHOTOCRAFT_STRESS_ARGS="--safe-gpu"` for the software adapter. `PHOTOCRAFT_STRESS_EXE` tests an installed or portable build instead of the one cargo built (v0.10.0 or later: older builds do not know `--new-instance`). `Auto` picks Vulkan on every GPU except Intel's, which gets DX12, so cover both on an Intel machine.
+
+On a small display the windows and sweeps are fitted to it, so the OS never pins the pointer at the screen's edge (which would look like someone else moving the mouse). Each drag's sweep is cut down to the room its real window leaves (the OS may have made the window bigger than planned, as at a display scale above 100 %), and its period shrinks with it, so the border still moves as fast. Anything cut is listed in the report's `details.notes`. A display with less than 60 px to spare fails the run with the numbers, rather than running a token sweep and passing. A 1366 × 768 display, for example, runs the corner sweep at 240 px instead of 250, while a display 800 px tall or more runs it as asked. `PHOTOCRAFT_STRESS_SCREEN=1366x768` plans for a smaller display than the real one (the windows and sweeps stay in that corner of it), to check those plans on a big screen.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PHOTOCRAFT_RESIZE_STRESS` | unset | exactly `1` lets the tests take the mouse; any other value (`0`, `false`, `true`, empty) leaves them off |
+| `PHOTOCRAFT_STRESS_EXE` | the binary cargo built | the `photocraft.exe` to test |
+| `PHOTOCRAFT_STRESS_ARGS` | none | extra arguments, split on spaces |
+| `PHOTOCRAFT_STRESS_SECONDS` | `15` | how long each drag lasts |
+| `PHOTOCRAFT_STRESS_SOAK_SECONDS` | `60` | how long the soak lasts |
+| `PHOTOCRAFT_STRESS_SEED` | `7252` | seed of the soak plan and the storm's sizes |
+| `PHOTOCRAFT_STRESS_SCREEN` | the real display | `WxH` (at least `640x480`, at most the real size): plan for a smaller display |
+| `PHOTOCRAFT_STRESS_MAX_STALL_MS` | `3000` | the longest the UI thread may go without answering |
+| `PHOTOCRAFT_STRESS_MEMORY_GROWTH_MB` | `200` | the memory growth that fails a run |
+| `PHOTOCRAFT_STRESS_OUT` | none | a directory for each scenario's `summary.json` and the app's log |
+
+A failing run keeps its settings folder, with the app's own `logs/photocraft.log`, under `target/tmp/resize-stress-*`, and prints that path and the end of the log. That includes an app that never came up (it exits, or does not answer within 180 s); only a passing run deletes its folder. What decides what to do and what counts as a failure (`plan.rs`) is plain data with its own tests, and so is the control client (`control.rs`): a plain `cargo test -p photocraft --test windows_resize_stress` runs them, `plan.rs`' on every platform.
+
+**Baseline (2026-10-18).** On Windows 11 (build 26200) with an NVIDIA GeForce RTX 3060 Ti (driver 32.0.16.1060) and two 1920 × 1080 displays at 100 % and 60 Hz, all seven scenarios passed at their default lengths on the default Vulkan backend, on DX12, on the WARP software adapter (`--safe-gpu`) and against the official v0.10.0 portable build: 28 runs. The UI thread was never silent for more than 0.31 s on a GPU (0.37 s on WARP, which draws about 14 frames a second), the rendered frame and the laid-out UI matched the window after every run and every soak segment, and memory grew by at most 12 MB. **This does not reproduce #7252, which is still open,** and says nothing about hardware it did not run on: Intel and AMD GPUs, hybrid-graphics laptops, other display scales and refresh rates, overlay software. A failure on such a machine is what the test is for. A press that does not start a resize is tried again, up to three times, and counted as `missed_grabs` in the report: it happened once in 40 quick re-grabs on WARP, and not at all on the GPU backends in these runs.
 
 ## Performance notes
 

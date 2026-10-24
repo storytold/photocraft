@@ -95,6 +95,11 @@ winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
 
+# tests/windows_resize_stress: sends real mouse input and reads the window and the app's memory back
+# (`psapi`, on top of the `user` feature above; test builds only, same pinned crate).
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+winsafe = { version = "=0.0.29", default-features = false, features = ["user", "psapi"] }
+
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
