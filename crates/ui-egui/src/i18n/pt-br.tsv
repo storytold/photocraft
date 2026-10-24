@@ -4350,3 +4350,8 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# DPX Options (#1049)
+	DPX Options	Opções de DPX
+	10 Bits/Channel	10 bits/canal
+	12 Bits/Channel	12 bits/canal

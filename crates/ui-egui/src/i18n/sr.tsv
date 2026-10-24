@@ -4493,3 +4493,8 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+
+# DPX Options (#1049)
+	DPX Options	DPX opcije
+	10 Bits/Channel	10 bita/kanal
+	12 Bits/Channel	12 bita/kanal

@@ -4149,3 +4149,8 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+
+# DPX Options (#1049)
+	DPX Options	DPX Seçenekleri
+	10 Bits/Channel	10 Bit/Kanal
+	12 Bits/Channel	12 Bit/Kanal

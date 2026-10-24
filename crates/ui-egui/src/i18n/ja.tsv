@@ -4099,3 +4099,8 @@ curves	Smooth	スムーズ
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+
+# DPX Options (#1049)
+	DPX Options	DPX オプション
+	10 Bits/Channel	10 ビット/チャンネル
+	12 Bits/Channel	12 ビット/チャンネル

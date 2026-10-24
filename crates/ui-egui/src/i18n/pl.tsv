@@ -4037,3 +4037,8 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+
+# DPX Options (#1049)
+	DPX Options	Opcje DPX
+	10 Bits/Channel	10 bitów/kanał
+	12 Bits/Channel	12 bitów/kanał

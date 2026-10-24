@@ -4335,3 +4335,8 @@ cameraRaw	Yellow	Sárga
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+
+# DPX Options (#1049)
+	DPX Options	DPX-beállítások
+	10 Bits/Channel	10 bit/csatorna
+	12 Bits/Channel	12 bit/csatorna

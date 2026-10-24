@@ -2526,6 +2526,41 @@ mod tests {
         assert_eq!(written.borrow().len(), 3, "a bad tgaBits writes nothing");
     }
 
+    /// `app.save` takes the DPX bits per sample (`dpxBits`) and never stops at DPX Options.
+    #[test]
+    fn automation_save_passes_dpx_bits_without_asking() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        // The bits each export was asked for, and each path written.
+        let asked: Rc<RefCell<Vec<Option<u8>>>> = Rc::default();
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (a, w) = (asked.clone(), written.clone());
+        let services = crate::Services {
+            export: Some(Box::new(move |_d: &photocraft_doc::Document, _p: &str, s: &crate::ExportSettings| {
+                a.borrow_mut().push(s.dpx_bits.map(photocraft_io::DpxBits::bits));
+                Ok((b"out".to_vec(), Vec::new()))
+            })),
+            automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+                w.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        for params in [json!({"path": "a.dpx"}), json!({"path": "b.dpx", "dpxBits": 10}), json!({"path": "c.dpx", "dpxBits": 16})] {
+            let r = call(&mut app, &ctx, "app.save", params.clone());
+            assert_eq!(r["result"]["path"], params["path"], "{r}");
+            assert!(app.dpx_options.is_none(), "automation saves never prompt");
+        }
+        assert_eq!(*asked.borrow(), [None, Some(10), Some(16)]);
+        assert_eq!(*written.borrow(), ["a.dpx", "b.dpx", "c.dpx"]);
+        let r = call(&mut app, &ctx, "app.save", json!({"path": "d.dpx", "dpxBits": 24}));
+        assert!(r["error"].as_str().unwrap().contains("dpxBits"), "{r}");
+        assert_eq!(written.borrow().len(), 3, "a bad dpxBits writes nothing");
+    }
+
     /// `app.save` takes JPEG Options (`quality` 0–12, `jpegFormat`) and never stops at the prompt;
     /// a value it can't read is an error that writes nothing.
     #[test]

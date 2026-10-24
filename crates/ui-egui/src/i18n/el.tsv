@@ -4120,3 +4120,8 @@ curves	Smooth	Εξομάλυνση
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+
+# DPX Options (#1049)
+	DPX Options	Επιλογές DPX
+	10 Bits/Channel	10 bit/κανάλι
+	12 Bits/Channel	12 bit/κανάλι

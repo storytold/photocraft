@@ -1020,6 +1020,9 @@ mod tests {
     #[path = "dds_tests.rs"]
     mod dds_tests;
 
+    #[path = "dpx_tests.rs"]
+    mod dpx_tests;
+
     #[path = "jpeg_tests.rs"]
     mod jpeg_tests;
 

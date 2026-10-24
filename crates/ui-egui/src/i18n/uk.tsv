@@ -4130,3 +4130,8 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+
+# DPX Options (#1049)
+	DPX Options	Параметри DPX
+	10 Bits/Channel	10 біт/канал
+	12 Bits/Channel	12 біт/канал

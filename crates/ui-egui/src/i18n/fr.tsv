@@ -4462,3 +4462,8 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+
+# DPX Options (#1049)
+	DPX Options	Options DPX
+	10 Bits/Channel	10 bits/canal
+	12 Bits/Channel	12 bits/canal

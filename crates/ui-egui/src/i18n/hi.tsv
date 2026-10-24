@@ -535,3 +535,8 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
+
+# DPX Options (#1049)
+	DPX Options	DPX विकल्प
+	10 Bits/Channel	10 बिट्स/चैनल
+	12 Bits/Channel	12 बिट्स/चैनल

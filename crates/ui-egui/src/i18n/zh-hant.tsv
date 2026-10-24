@@ -3045,3 +3045,8 @@ curves	Smooth	平滑
 	Grayscale Ramp	灰階色帶
 	Current Colors	目前色彩
 	Make Ramp Web Safe	讓色帶成為網頁安全色
+
+# DPX Options (#1049)
+	DPX Options	DPX 選項
+	10 Bits/Channel	10 位元/色版
+	12 Bits/Channel	12 位元/色版

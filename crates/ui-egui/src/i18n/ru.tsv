@@ -4623,3 +4623,8 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+
+# DPX Options (#1049)
+	DPX Options	Параметры DPX
+	10 Bits/Channel	10 бит/канал
+	12 Bits/Channel	12 бит/канал

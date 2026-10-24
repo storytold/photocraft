@@ -3913,3 +3913,8 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# DPX Options (#1049)
+	DPX Options	Tùy chọn DPX
+	10 Bits/Channel	10 bit/kênh
+	12 Bits/Channel	12 bit/kênh

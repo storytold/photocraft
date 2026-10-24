@@ -1552,8 +1552,9 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let suggested = format!("{stem}{}.psd", app.session.prefs().file_handling.copy_suffix());
     // The copy is of the document as it was when asked.
     app.pick_save(&suggested, move |app, path| {
-        // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, and
-        // a JPEG for its JPEG Options; the copy is written from the prompt.
+        // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
+        // DPX frame for its bits per sample, and a JPEG for its JPEG Options; the copy is written
+        // from the prompt.
         let parked = app.with_document(doc.id, |app| {
             if crate::targa_options_ui::wants_prompt(app, &path) {
                 crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
@@ -1561,6 +1562,10 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
             }
             if crate::dds_options_ui::wants_prompt(&path) {
                 crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                return Ok(true);
+            }
+            if crate::dpx_options_ui::wants_prompt(&path) {
+                crate::dpx_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
                 return Ok(true);
             }
             if crate::jpeg_options_ui::wants_prompt(app, &path) {
