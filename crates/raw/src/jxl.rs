@@ -3,7 +3,7 @@
 //! Each strip or tile holds one JPEG XL codestream (bare or in the ISO/IEC 18181-2 container)
 //! whose image is the segment's samples: one channel for CFA data, three for LinearRaw. Samsung
 //! Expert RAW writes LinearRaw this way. Decoding is done by `jxl-oxide`, a pure-Rust decoder;
-//! like heic-rs in `photocraft-heif`, every call into it runs under `catch_unwind` so a decoder
+//! like heic-decoder in `photocraft-heif`, every call into it runs under `catch_unwind` so a decoder
 //! panic on a malformed file becomes [`RawError::Malformed`].
 //!
 //! The browser build (wasm32) leaves the decoder out: jxl-oxide added 0.88 MB to a wasm that

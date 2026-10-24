@@ -39,7 +39,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("raster", Class::Layer(0)),
     ("psd", Class::Standalone),
     ("codecs", Class::Standalone),
-    // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
+    // Optional HEIF/HEIC decoder (heic-decoder), used only by `codecs` behind its `heif` feature.
     ("heif", Class::Standalone),
     // IPP client for CUPS printing (pure Rust, no dependencies), used by `engine` on Unix.
     ("ipp", Class::Standalone),

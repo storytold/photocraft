@@ -32,7 +32,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP; Save keeps an opened file lossy (at its quality) or lossless (#2399). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
 | AVIF | R/W | no (#463) | optional feature, off by default | |
 | JPEG XL | R/W | inside DNG only | no | |
-| HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-rs, `heif` feature, on in releases) | no | 8/16-bit |
+| HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-decoder, `heif` feature, on in releases) | no | 8/16-bit |
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |
 | Radiance HDR | R/W | yes | yes | f32 |
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |

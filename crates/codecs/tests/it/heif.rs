@@ -4,7 +4,8 @@
 //! Most come from heic-rs (`heic-rs/`, MIT OR Apache-2.0): encoded by macOS `sips` from synthetic
 //! PNGs, each `.ref.png` being Apple's decode of the `.heic` next to it, the ground truth we
 //! compare with. The 10-bit one is pillow-heif's (`pillow-heif/`, BSD-3-Clause), with the source
-//! it was encoded from.
+//! it was encoded from. heic-decoder's (`heic-decoder/`, MIT OR Apache-2.0) are HM-encoded; each
+//! `-rgb8.bin` is RGB8 computed in float64 from HM's decoded samples with the signalled colour.
 
 #![cfg(all(feature = "corpus", feature = "heif"))]
 
@@ -155,9 +156,10 @@ fn limits_are_checked_before_decoding() {
 
 #[test]
 fn unsupported_and_broken_files_are_clear_errors() {
-    // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
+    // An ftyp and nothing else: no still image (`meta`) and no image sequence track (`moov`, whose
+    // first sync frame would open).
     let r = decode(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc");
-    assert!(matches!(&r, Err(CodecError::Unsupported { format: Format::Heif, reason }) if reason.contains("sequence")), "{r:?}");
+    assert!(matches!(&r, Err(CodecError::Malformed { format: Format::Heif, message }) if message.contains("meta")), "{r:?}");
     assert!(decode_as(Format::Heif, b"").is_err());
     assert!(decode_as(Format::Heif, &checker_grid()[..checker_grid().len() / 2]).is_err(), "half a file");
 }
@@ -191,4 +193,35 @@ fn ten_bit_with_alpha_decodes_to_16_bit_rgba() {
     // decoder); a decoder bug (range, matrix, bit shift) lands far below.
     let rgb = |i: &Image| i.convert(ChannelLayout::Rgb, SampleType::U16);
     assert!(psnr(&rgb(&img), &rgb(&src)) > 24.0, "{}", psnr(&rgb(&img), &rgb(&src)));
+}
+
+#[test]
+fn colour_signalled_in_the_hevc_stream_or_the_container_is_honoured() {
+    // vui2020 has no `colr` box: its matrix and range (BT.2020, full) are only in the HEVC VUI, the
+    // way iPhone photos carry theirs (BT.601, full). nclx601's `colr/nclx` (BT.601, limited)
+    // overrides a different VUI. Assuming BT.709 limited range instead is off by up to ~120/255.
+    for name in ["vui2020", "nclx601"] {
+        let img = decode(&corpus(&format!("heic-decoder/rgb/{name}.heic"))).unwrap();
+        let want = corpus(&format!("heic-decoder/rgb/{name}-rgb8.bin"));
+        let (w, h) = img.dimensions();
+        assert_eq!((w, h), (58, 54), "{name}");
+        assert_eq!(want.len(), (w * h * 3) as usize);
+        let got = img.convert(ChannelLayout::Rgb, SampleType::U8);
+        let mut max = 0f32;
+        for (i, &r) in want.iter().enumerate() {
+            let (p, c) = (i as u32 / 3, i % 3);
+            max = max.max((got.get(p % w, p / w, c) - f32::from(r) / 255.0).abs());
+        }
+        assert!(max <= 1.0 / 255.0 + 1e-6, "{name}: max diff {}/255", max * 255.0);
+    }
+}
+
+#[test]
+fn twelve_bit_4_2_2_and_4_4_4_decode_to_16_bit() {
+    for (name, dims) in [("heic-decoder/422/pattern12.heic", (64, 64)), ("heic-decoder/crop/crop444.heic", (60, 56))] {
+        let img = decode(&corpus(name)).unwrap();
+        assert_eq!((img.dimensions(), img.layout(), img.sample_type()), (dims, ChannelLayout::Rgb, SampleType::U16), "{name}");
+        let samples = img.to_u16_samples().unwrap();
+        assert!(samples.iter().filter(|v| *v % 257 != 0).count() > samples.len() / 2, "{name}: depth kept, not 8 bits stretched");
+    }
 }
