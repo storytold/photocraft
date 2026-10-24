@@ -1131,6 +1131,29 @@ mod tests {
         assert_eq!(ctx.zoom_factor(), 1.0);
     }
 
+    // Regression test for #4630: the stock thin scroll bar fades its handle to the same opacity
+    // as its track while the pointer is on it, so the thumb disappeared when it was grabbed.
+    #[test]
+    fn scrollbar_thumb_stays_more_visible_than_its_track_in_every_theme() {
+        for kind in ThemeKind::ALL {
+            let ctx = egui::Context::default();
+            apply(&ctx, kind);
+            for theme in [egui::Theme::Dark, egui::Theme::Light] {
+                let scroll = ctx.style_of(theme).spacing.scroll;
+                if !scroll.floating {
+                    continue;
+                }
+                assert!(
+                    scroll.interact_handle_opacity > scroll.interact_background_opacity,
+                    "{kind:?}/{theme:?}: handle {} vs track {} under the pointer",
+                    scroll.interact_handle_opacity,
+                    scroll.interact_background_opacity
+                );
+                assert_eq!(scroll.interact_handle_opacity, 1.0, "{kind:?}/{theme:?}: the thumb is opaque under the pointer");
+            }
+        }
+    }
+
     /// The desktop app installs fonts and loads the saved UI Font Size in its first frame, while
     /// egui's default fonts are still active. Any size but Small then panicked on the next pass
     /// ("FontFamily::Name("medium") is not bound to any fonts") because the plugin rescaled a

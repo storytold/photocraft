@@ -6509,6 +6509,38 @@ mod toolbar_tests {
         }
     }
 
+    // Regression test for #2241: Quick Mask and Screen Mode ignored the two-column toolbar and
+    // stayed stacked in one column; in two columns they sit side by side.
+    #[test]
+    fn quick_mask_and_screen_mode_follow_the_toolbar_columns() {
+        for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::Classic] {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        toolbar(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, theme);
+            h.run_steps(2);
+            let modes = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+                (h.get_by_label("Edit in Quick Mask Mode  (Q)").rect(), h.get_by_label("Change Screen Mode  (F)").rect())
+            };
+            let (quick, screen) = modes(&h);
+            assert_eq!(quick.left(), screen.left(), "{theme:?}: one column stacks them");
+            assert!(screen.top() >= quick.bottom(), "{theme:?}: Screen Mode below Quick Mask: {quick:?} {screen:?}");
+
+            h.get_by_label("Toolbar").click();
+            h.run_steps(2);
+            assert!(h.state().ui.panels.toolbar_double, "{theme:?}");
+            let (quick, screen) = modes(&h);
+            assert_eq!(quick.top(), screen.top(), "{theme:?}: two columns put them on one row: {quick:?} {screen:?}");
+            assert!(screen.left() >= quick.right(), "{theme:?}: Screen Mode beside Quick Mask: {quick:?} {screen:?}");
+        }
+    }
+
     fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
         h.hover_at(p);
         h.run_steps(1);

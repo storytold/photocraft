@@ -4864,6 +4864,56 @@ mod tests {
         assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 32.0]), None);
     }
 
+    // Regression test for #4139: the rotate zone hides the OS pointer (`CursorIcon::None`), so the
+    // canvas has to draw the curved turn arrow itself where the box has no preview to draw it
+    // (the preview's overlay draws it otherwise); the pointer vanished over the zone.
+    #[test]
+    fn the_rotate_zone_draws_the_turn_arrow_where_the_pointer_is_hidden() {
+        let mut app = app_with_square(256, photocraft_geom::Rect::new(32, 32, 160, 160));
+        app.ui.tool = Tool::Move;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(3);
+        let tol = handle_tolerance(h.state());
+        let xf = ViewXform::active(h.state()).unwrap();
+        let accent = crate::theme::Tokens::get(&h.ctx).accent_text;
+        // The arrow's bright stroke: a 17-point arc in the accent colour around the pointer.
+        let arrows = |h: &egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2| {
+            h.output()
+                .shapes
+                .iter()
+                .filter(|c| match &c.shape {
+                    egui::Shape::Path(p) => {
+                        p.points.len() == 17
+                            && p.stroke.width == 1.5
+                            && p.stroke.color == egui::epaint::ColorMode::Solid(accent)
+                            && p.points.iter().all(|q| q.distance(at) < 40.0)
+                    }
+                    _ => false,
+                })
+                .count()
+        };
+        let outside = xf.to_screen((32.0 - tol * 1.5) as f32, (32.0 - tol * 1.5) as f32);
+
+        // A box with no preview (its overlay is what draws the arrow otherwise).
+        h.state_mut().transform_preview = None;
+        h.hover_at(outside);
+        h.run_steps(3);
+        assert!(h.state().ui.transform.is_some() && h.state().transform_preview.is_none());
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::None, "the OS pointer is hidden in the rotate zone");
+        assert_eq!(arrows(&h, outside), 1, "and the curved arrow is drawn in its place");
+
+        let inside = xf.to_screen(96.0, 96.0);
+        h.hover_at(inside);
+        h.run_steps(3);
+        assert_eq!(arrows(&h, inside), 0, "no arrow over the box");
+    }
+
     /// The resize arrows follow the box's turn and the view's rotation and flip: each handle
     /// shows the arrow it resizes along on screen, not the one it had on the upright box.
     #[test]

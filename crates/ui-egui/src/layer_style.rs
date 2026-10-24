@@ -1555,6 +1555,39 @@ mod tests {
         assert_eq!(rows, KINDS.len(), "one empty checkbox per effect row");
     }
 
+    // Regression test for #2209: Make Default and Reset to Default sat in a non-wrapping row, so
+    // translated labels wider than the page column (Russian) pushed one button over the other
+    // and out of the column instead of wrapping to a second row.
+    #[test]
+    fn default_buttons_wrap_inside_the_page_column_with_long_labels() {
+        use egui_kittest::kittest::Queryable;
+        let ru = crate::i18n::Lang::from_code("ru").unwrap();
+        crate::i18n::with_language(ru, || {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            let l = Layer::raster("x", photocraft_doc::PixelFormat::RGBA8);
+            let fields = initial_fields(&l, Some("dropShadow"), 120.0);
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    let mut f = fields.clone();
+                    body(app, ui, &mut f);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+            let reset = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Reset to Default")).rect();
+            let make = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Make Default")).rect();
+            // Together they are wider than the page column: the second wraps to a row below
+            // instead of sharing the row and running left over the effect list.
+            assert!(make.top() >= reset.bottom(), "the buttons share one row: {make:?} {reset:?}");
+            assert_eq!(make.right(), reset.right(), "the wrapped row stays right-aligned");
+        });
+    }
+
     /// Double-clicking an effect row of a layer that isn't active selects that layer first, so
     /// the dialog holds its effects (and OK edits it), not the active layer's.
     #[test]
