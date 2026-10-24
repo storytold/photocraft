@@ -213,6 +213,8 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "el", name: "Ελληνικά", source: catalog!("el"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
     LangInfo { code: "nl", name: "Nederlands", source: catalog!("nl"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Danish; every `da-*` locale (`da-DK`, `da_DK.UTF-8`) resolves here.
+    LangInfo { code: "da", name: "Dansk", source: catalog!("da"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "it", name: "Italiano", source: catalog!("it"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Hungarian: a count takes the singular noun ("3 réteg"), so one plural form.
     LangInfo { code: "hu", name: "Magyar", source: catalog!("hu"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
