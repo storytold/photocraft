@@ -62,6 +62,7 @@ mod rasterize_psd_reopen;
 mod rasterize_selected_layers;
 mod rendering_preferences;
 mod save_keeps_encoding;
+mod saved_history;
 mod selection_layer_commands;
 mod shortcut_sets;
 mod shortcuts_headless;

@@ -13,4 +13,5 @@ mod missing_font_warnings;
 mod native_save_name;
 mod openraster;
 mod raw_defaults;
+mod saved_history;
 mod smart_filter_authorization;

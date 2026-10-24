@@ -1544,7 +1544,7 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
 /// and saved state are untouched. An action being recorded keeps it as a `file.saveACopy` step
 /// with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let doc = copy_to_save(app)?;
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
     // "<name> copy.psd", or with Preferences › File Handling › Do not append "copy" to filename
     // when saving a copy the document's own name (only the extension may change), as in
@@ -1576,6 +1576,13 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
         Ok(r)
     })
+}
+
+/// The active document as Save a Copy writes it: as every save writes it, so with Save History
+/// in Document on a `.pcraft` copy keeps the undo history (#6053).
+pub(crate) fn copy_to_save(app: &PhotocraftApp) -> Result<std::sync::Arc<photocraft_doc::Document>, String> {
+    let st = app.session.active().ok_or("no document")?;
+    Ok(app.session.active_index().and_then(|i| app.session.document_to_save(i)).unwrap_or_else(|| st.doc.clone()))
 }
 
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's

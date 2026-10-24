@@ -1899,7 +1899,7 @@ impl PhotocraftApp {
         let choices = FormatChoices::from_step(params, id)?;
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
-            let doc = self.session.active().ok_or("no document")?.doc.clone();
+            let doc = crate::view_cmds::copy_to_save(self)?;
             return crate::view_cmds::write_copy(self, &doc, path, choices);
         }
         self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), choices)
@@ -1968,8 +1968,9 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
+        let to_save = self.session.active_index().and_then(|i| self.session.document_to_save(i)).unwrap_or_else(|| st.doc.clone());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&st.doc, &path, settings)?;
+        let (bytes, warnings) = export(&to_save, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
@@ -2172,8 +2173,9 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
+        let to_save = self.session.active_index().and_then(|i| self.session.document_to_save(i)).unwrap_or_else(|| state.doc.clone());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&state.doc, &target, &settings)?;
+        let (bytes, warnings) = export(&to_save, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         self.saved_automation(doc, revision, &target, &warnings, false);
@@ -3271,6 +3273,8 @@ mod transform_type_tests;
 mod psd_open_tests;
 #[cfg(test)]
 mod save_identity_tests;
+#[cfg(test)]
+mod saved_history_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;

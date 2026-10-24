@@ -54,7 +54,7 @@ fn decompress(data: &[u8], expected: usize, what: &str) -> Result<Vec<u8>> {
     decompress_bounded(data, expected, Some(expected), what)
 }
 
-fn hash_bytes(b: &[u8]) -> Hash {
+pub(crate) fn hash_bytes(b: &[u8]) -> Hash {
     blake3::hash(b).to_hex().to_string()
 }
 
@@ -124,11 +124,17 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 /// Deepest JSON nesting a manifest may have: each group level adds three (the layer object, its
 /// content object and the `children` array), with headroom for the document and leaf layer fields.
 /// The saver checks the same bound, so every bundle it writes loads again.
-const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
+pub(crate) const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
 
 /// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] with a linear scan (no recursion), so
 /// parsing with serde_json's recursion limit disabled can't exhaust the stack on hostile input.
 fn check_manifest_depth(json: &[u8]) -> Result<()> {
+    check_json_depth(json, MAX_MANIFEST_DEPTH)
+}
+
+/// [`check_manifest_depth`] with another bound (the history section nests documents two levels
+/// deeper than the manifest does).
+pub(crate) fn check_json_depth(json: &[u8], max_depth: usize) -> Result<()> {
     let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
     for &b in json {
         if in_str {
@@ -144,8 +150,8 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
             b'"' => in_str = true,
             b'[' | b'{' => {
                 depth += 1;
-                if depth > MAX_MANIFEST_DEPTH {
-                    return Err(FormatError::LimitExceeded(format!("manifest JSON nested deeper than {MAX_MANIFEST_DEPTH} levels")));
+                if depth > max_depth {
+                    return Err(FormatError::LimitExceeded(format!("manifest JSON nested deeper than {max_depth} levels")));
                 }
             }
             b']' | b'}' => depth = depth.saturating_sub(1),
@@ -156,7 +162,14 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
+    read_manifest_hashed(src, opts).map(|(m, _)| m)
+}
+
+/// [`read_manifest`] and the BLAKE3 hash of the manifest's bytes (what a history section names
+/// as its `base`).
+fn read_manifest_hashed(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Manifest, Hash)> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
+    let base = hash_bytes(&raw);
     // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
     check_manifest_depth(&raw)?;
     let mut de = serde_json::Deserializer::from_slice(&raw);
@@ -168,10 +181,25 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     let mut m: Manifest = serde_json::from_value(v)?;
     m.document.layers = layers_from_json(layers)?;
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
-    if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
+    reject_non_finite(&m)?;
+    Ok((m, base))
+}
+
+/// A manifest document tree from its (migrated) JSON, layers decoded as [`read_manifest`] does.
+pub(crate) fn doc_m_from_json(mut v: serde_json::Value) -> Result<crate::manifest::DocM> {
+    let layers = take_array(&mut v, "/layers");
+    let mut m: crate::manifest::DocM = serde_json::from_value(v)?;
+    m.layers = layers_from_json(layers)?;
+    reject_non_finite(&m)?;
+    Ok(m)
+}
+
+/// A corrupt-file error when a decoded number is past f32's range (#6862).
+fn reject_non_finite<T: serde::Serialize + ?Sized>(m: &T) -> Result<()> {
+    if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
     }
-    Ok(m)
+    Ok(())
 }
 
 /// Decodes layers one at a time, group children first. Decoding the whole tree in one go costs
@@ -258,7 +286,7 @@ impl Fetch for LoadFetch<'_> {
 }
 
 /// Refuses a declared canvas outside `opts`' budget before anything is decoded for it (#2935).
-fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
+pub(crate) fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     let (w, h) = (size.width, size.height);
     if w == 0 || h == 0 {
         return Err(FormatError::corrupt(format!("canvas size {w}x{h} is empty")));
@@ -273,7 +301,7 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
 }
 
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
-    let m = read_manifest(src, opts)?;
+    let (m, base) = read_manifest_hashed(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {
@@ -284,7 +312,14 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    loader.document(&m.document)
+    let mut doc = loader.document(&m.document)?;
+    // The undo history is optional: whatever is wrong with it (absent, stale, damaged, over the
+    // byte budget), the document opens without it.
+    let raw = src.get(crate::saved_history::HISTORY, opts.max_manifest_bytes).ok();
+    if let Ok(Some(history)) = crate::saved_history::load(raw, &base, &doc, &mut loader, opts) {
+        doc.saved_history = Some(Arc::new(history));
+    }
+    Ok(doc)
 }
 
 // ---------------------------------------------------------------------------
@@ -308,15 +343,15 @@ pub struct SaveStats {
     pub manifest_bytes: usize,
 }
 
-type BlobHashCache = HashMap<usize, (Weak<Vec<u8>>, Hash)>;
-type TileHashCache = HashMap<(usize, SampleType), (Weak<Tile>, Hash)>;
+pub(crate) type BlobHashCache = HashMap<usize, (Weak<Vec<u8>>, Hash)>;
+pub(crate) type TileHashCache = HashMap<(usize, SampleType), (Weak<Tile>, Hash)>;
 
 #[derive(Default)]
-struct Collect<'c> {
-    tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
-    blobs: BTreeMap<Hash, Arc<Vec<u8>>>,
-    hash_cache: Option<&'c mut TileHashCache>,
-    blob_hash_cache: Option<&'c mut BlobHashCache>,
+pub(crate) struct Collect<'c> {
+    pub tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
+    pub blobs: BTreeMap<Hash, Arc<Vec<u8>>>,
+    pub hash_cache: Option<&'c mut TileHashCache>,
+    pub blob_hash_cache: Option<&'c mut BlobHashCache>,
 }
 
 impl Sink for Collect<'_> {
@@ -396,6 +431,7 @@ pub struct PcraftWriter {
     reverify_budget: u64,
     /// How long [`Self::save_dir`] waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
     lock_wait: std::time::Duration,
+    history_load_budget: u64,
 }
 
 impl Default for PcraftWriter {
@@ -408,6 +444,7 @@ impl Default for PcraftWriter {
             verified_directory: None,
             reverify_budget: DEFAULT_REVERIFY_BUDGET,
             lock_wait: SAVE_LOCK_WAIT,
+            history_load_budget: crate::LoadOptions::default().max_total_bytes,
         }
     }
 }
@@ -467,6 +504,8 @@ struct FileSignature {
 
 struct Prepared {
     manifest: Vec<u8>,
+    /// The undo history section, when the document carries one that fits.
+    history: Option<Vec<u8>>,
     objects: BTreeMap<String, Object>,
     previews: Vec<(&'static str, Vec<u8>)>,
     stats: SaveStats,
@@ -478,6 +517,14 @@ enum Object {
 }
 
 impl Object {
+    /// What loading this object charges to [`crate::LoadOptions::max_total_bytes`].
+    fn loaded_len(&self) -> u64 {
+        match self {
+            Object::Tile(tile, _) => tile.bytes().len() as u64,
+            Object::Blob(blob) => blob.len() as u64,
+        }
+    }
+
     fn compressed(&self) -> Vec<u8> {
         compress(&self.content())
     }
@@ -744,6 +791,7 @@ impl BundleGc {
         let relative = relative.to_str().ok_or_else(|| unsafe_bundle_entry(relative))?;
         let (handle, name) = match relative {
             THUMB => (&self.root, THUMB),
+            crate::saved_history::HISTORY => (&self.root, crate::saved_history::HISTORY),
             COMPOSITE => (&self.composite, "preview.png"),
             _ => match relative.split_once('/') {
                 Some(("tiles", name)) if name.strip_suffix(".zst").is_some_and(is_valid_hash) => (&self.tiles, name),
@@ -863,6 +911,19 @@ impl PcraftWriter {
         self.lock_wait = wait;
     }
 
+    /// The load budget ([`crate::LoadOptions::max_total_bytes`]) a saved undo history must fit in
+    /// beside the document's own pixels, so a loader with that budget reopens the file with its
+    /// history: states that would push past it are left out, oldest first. Defaults to the
+    /// default loader's budget.
+    pub fn set_history_load_budget(&mut self, bytes: u64) {
+        self.history_load_budget = bytes;
+    }
+
+    /// See [`Self::set_history_load_budget`].
+    pub fn history_load_budget(&self) -> u64 {
+        self.history_load_budget
+    }
+
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
@@ -899,7 +960,23 @@ impl PcraftWriter {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h), Object::Blob(b));
         }
-        Ok(Prepared { manifest, objects, previews, stats })
+        let history = doc.saved_history.as_deref().and_then(|h| {
+            let has_tile = |hash: &str| objects.contains_key(&tile_path(hash));
+            let has_blob = |hash: &str| objects.contains_key(&blob_path(hash));
+            // The loader charges the document's objects and the history's to one budget.
+            let room = self.history_load_budget.saturating_sub(objects.values().map(Object::loaded_len).fold(0u64, u64::saturating_add));
+            crate::saved_history::prepare(h, &manifest, room, Some(&mut self.hash_cache), &has_tile, &has_blob)
+        });
+        let history = history.map(|h| {
+            for (hash, (t, s)) in h.tiles {
+                objects.insert(tile_path(&hash), Object::Tile(t, s));
+            }
+            for (hash, b) in h.blobs {
+                objects.insert(blob_path(&hash), Object::Blob(b));
+            }
+            h.json
+        });
+        Ok(Prepared { manifest, history, objects, previews, stats })
     }
 
     /// Save as a ZIP bundle in memory.
@@ -910,6 +987,9 @@ impl PcraftWriter {
         z.add(MANIFEST, &p.manifest)?;
         for (name, data) in &p.previews {
             z.add(name, data)?;
+        }
+        if let Some(history) = &p.history {
+            z.add(crate::saved_history::HISTORY, history)?;
         }
         let mut next = HashMap::with_capacity(p.objects.len());
         let mut cached_bytes = 0usize;
@@ -959,7 +1039,7 @@ impl PcraftWriter {
         let existing = list_objects(dir)?;
         // Reject a hostile existing entry before writing any object or manifest. This also
         // covers entries that this save would otherwise leave untouched or garbage-collect.
-        for path in [MANIFEST, THUMB, COMPOSITE] {
+        for path in [MANIFEST, THUMB, COMPOSITE, crate::saved_history::HISTORY] {
             validate_bundle_file(dir, &dir.join(path))?;
         }
         let p = self.prepare(doc, opts)?;
@@ -1044,6 +1124,16 @@ impl PcraftWriter {
             if folder.is_dir() {
                 confirm_flushed(&folder, &folder)?;
             }
+        }
+        // The history names the manifest it belongs to, so writing it first is safe: until the
+        // new manifest lands, a reader finds an old manifest it doesn't match and ignores it.
+        let history_path = dir.join(crate::saved_history::HISTORY);
+        match &p.history {
+            Some(history) => write_bundle_file(dir, &history_path, history, fs)?,
+            None => match remove_bundle_file(dir, &history_path, &gc) {
+                Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                other => other?,
+            },
         }
         write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest, fs)?;
         // Omitted previews belong to the previous manifest until the new one commits.

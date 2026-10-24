@@ -335,6 +335,10 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
+    // A saved undo history (#6053) belongs to a document opened in its own tab, not to one
+    // placed, reverted to or processed: don't carry it along.
+    let mut r = r;
+    r.document.saved_history = None;
     Ok(r)
 }
 
@@ -644,12 +648,17 @@ fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
             msg: "`path` is the document's own file, so the copy would replace it: choose another path, or pass \"overwrite\": true".into(),
         });
     }
-    let mut doc = (*d.doc).clone();
+    // The copy is written as a save writes the document: with Save History in Document on, a
+    // `.pcraft` copy keeps the undo history (#6053).
+    let i = s.active_index().ok_or(EngineError::NoDocument)?;
+    let mut doc = (*s.document_to_save(i).unwrap_or_else(|| d.doc.clone())).clone();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
-        // "Layers" unchecked in Save a Copy: write the flattened image.
+        // "Layers" unchecked in Save a Copy: write the flattened image, which the saved history
+        // does not lead to.
         let fmt = doc.pixel_format();
         let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
+        doc.saved_history = None;
     }
     let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
     Ok(json!({"path": path, "warnings": warnings}))
@@ -741,7 +750,20 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    let src = imported.document;
+    let mut src = imported.document;
+    // The placed contents are not opened for editing: a saved undo history (#6053) stays behind,
+    // in the layer as in the embedded file, which would otherwise carry the earlier pixel states
+    // into every file this document is saved to. Other files are embedded as they are.
+    // A linked place stores only the path, so its bytes are not re-encoded.
+    let had_history = src.saved_history.take().is_some();
+    let bytes = if had_history && linked.is_none() && photocraft_format::is_pcraft(&bytes) {
+        // Written as a `.pcraft` save writes it, with its thumbnail and composite previews.
+        photocraft_io::export(&src, photocraft_format::EXTENSION, &photocraft_io::ExportOptions::default())
+            .map(|r| r.bytes)
+            .map_err(|e| EngineError::Other(format!("{name}: cannot embed the .pcraft file without its saved history: {e}")))?
+    } else {
+        bytes
+    };
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);

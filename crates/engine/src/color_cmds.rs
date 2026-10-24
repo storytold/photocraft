@@ -354,6 +354,10 @@ impl ColorState {
     /// `preserve` (keep the embedded profile, or leave an untagged file as is), `convert` to the
     /// working space, `discard` the embedded profile, or `assignWorking` (untagged files).
     pub fn resolve_open(&self, doc: &mut Document, action: &str) -> Result<()> {
+        drop_history_on_colour_change(doc, |doc| self.resolve_open_colour(doc, action))
+    }
+
+    fn resolve_open_colour(&self, doc: &mut Document, action: &str) -> Result<()> {
         match action {
             "preserve" | "useEmbedded" => Ok(()),
             "convert" | "convertToWorking" => convert_document(doc, &self.working(doc.mode), self.settings.intent(), self.settings.bpc),
@@ -1133,12 +1137,26 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// Runs `step`, a colour step on a document being opened (the Color Settings policy or the
+/// answer to the profile prompt). A saved history (#6053) leads to the document as it was saved:
+/// one converted or stripped of its profile on the way in no longer follows from those states, so
+/// the history is dropped.
+fn drop_history_on_colour_change<R>(doc: &mut Document, step: impl FnOnce(&mut Document) -> R) -> R {
+    let colour = doc.saved_history.is_some().then(|| (doc.icc_profile.clone(), doc.mode, doc.depth));
+    let r = step(doc);
+    if colour.is_some_and(|c| c != (doc.icc_profile.clone(), doc.mode, doc.depth)) {
+        doc.saved_history = None;
+    }
+    r
+}
+
 impl Session {
     /// Add a document read from a file, applying the Color Settings policy first (preserve,
     /// convert to the working space, or discard the embedded profile). Returns the document
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
     pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
-        let report = self.color.open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
+        let ignore_exif = self.prefs().file_handling.ignore_exif_profile_tag;
+        let report = drop_history_on_colour_change(&mut doc, |doc| self.color.open_policy(doc, ignore_exif));
         (self.add_document(doc, path), report)
     }
 }
@@ -1538,6 +1556,33 @@ mod settings_tests {
         s.color.resolve_open(&mut d, "assignWorking").unwrap();
         assert_eq!(desc(&d).as_deref(), Some("sRGB IEC61966-2.1"));
         assert!(s.color.resolve_open(&mut d, "explode").is_err());
+    }
+
+    #[test]
+    fn a_profile_prompt_answer_that_changes_the_colour_drops_the_saved_history() {
+        // #6053: the prompt path applies its answer before add_document restores the history,
+        // so the answer must drop a history it no longer follows from, as the policy path does.
+        let s = Session::new();
+        let with_history = || {
+            let mut d = tagged("adobe-rgb-compat");
+            d.saved_history = Some(std::sync::Arc::new(photocraft_doc::SavedHistory {
+                states: Vec::new(),
+                current_label: "Open".into(),
+                current_active: None,
+                current_selected: Vec::new(),
+                max_bytes: 0,
+            }));
+            d
+        };
+        for (action, kept) in [("preserve", true), ("useEmbedded", true), ("convert", false), ("discard", false), ("assignWorking", false)] {
+            let mut d = with_history();
+            s.color.resolve_open(&mut d, action).unwrap();
+            assert_eq!(d.saved_history.is_some(), kept, "{action}");
+        }
+        // A refused answer changes nothing, the history included.
+        let mut d = with_history();
+        assert!(s.color.resolve_open(&mut d, "explode").is_err());
+        assert!(d.saved_history.is_some());
     }
 
     #[test]

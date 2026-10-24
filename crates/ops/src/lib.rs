@@ -261,6 +261,39 @@ impl History {
         self.undo.len()
     }
 
+    /// The past states, oldest first (what a save with history writes, #6053).
+    pub fn past_states(&self) -> impl DoubleEndedIterator<Item = &HistoryState> + ExactSizeIterator {
+        self.undo.iter()
+    }
+
+    /// Label and layers of the current state.
+    pub fn current(&self) -> (&str, &LayerTarget) {
+        (&self.current_label, &self.current_layers)
+    }
+
+    /// Replace the history with `past` (oldest first) leading up to a current document made by
+    /// step `label` with `layers` targeted, as when a document opens with its saved history.
+    /// There is nothing to redo. Only the newest [`History::max_states`] states are kept; the
+    /// caller trims to the byte budget. Every state, the current one included, gets a fresh id
+    /// ([`HistoryState::id`] in `past` is ignored), so no id names an earlier state.
+    pub fn restore(&mut self, past: Vec<HistoryState>, label: impl Into<String>, layers: LayerTarget) {
+        self.clear();
+        let skip = past.len().saturating_sub(self.max_states);
+        self.undo = past
+            .into_iter()
+            .skip(skip)
+            .map(|mut s| {
+                s.id = self.next_id;
+                self.next_id = self.next_id.wrapping_add(1);
+                s
+            })
+            .collect();
+        self.current_id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        self.current_label = label.into();
+        self.current_layers = layers;
+    }
+
     /// Rename the current step (e.g. after folding several steps into one with [`Self::purge_last`]).
     pub fn set_current_label(&mut self, label: impl Into<String>) {
         self.current_label = label.into();
@@ -498,6 +531,28 @@ mod tests {
         f(&mut d);
         *cur = Arc::new(d);
         h.record(label, before, LayerTarget::default());
+    }
+
+    #[test]
+    fn restore_keeps_the_newest_states_and_undoes_into_them() {
+        let mut h = History::new(2);
+        let docs: Vec<Arc<Document>> = (0..3).map(|_| Arc::new(base())).collect();
+        let state = |i: usize| HistoryState { label: format!("s{i}"), doc: docs[i].clone(), layers: LayerTarget::default(), id: 0 };
+        let target = LayerTarget { active: Some(LayerId(7)), selected: vec![LayerId(7)] };
+        let before = h.row_id(0);
+        h.restore((0..3).map(state).collect(), "now", target.clone());
+        assert_eq!(h.entries(), ["s1", "s2", "now"]);
+        // Fresh, distinct ids for every row, none reusing the id the history had before.
+        let ids: Vec<u64> = (0..3).filter_map(|i| h.row_id(i)).collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|id| Some(*id) != before) && ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2], "{ids:?}");
+        assert_eq!(ids.iter().map(|id| h.row_of(*id)).collect::<Vec<_>>(), [Some(0), Some(1), Some(2)]);
+        assert_eq!(h.current(), ("now", &target));
+        assert_eq!(h.past_states().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["s1", "s2"]);
+        assert!(!h.can_redo());
+        let (back, _) = h.undo(Arc::new(base())).unwrap();
+        assert!(Arc::ptr_eq(&back, &docs[2]));
+        assert_eq!(h.redo_label(), Some("now"));
     }
 
     #[test]
