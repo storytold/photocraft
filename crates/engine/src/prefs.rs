@@ -293,7 +293,8 @@ pub struct Interface {
     pub show_bounding_box_when_dragging_layer: bool,
     /// Windows and Linux: use the system's title bar and window buttons instead of PhotoCraft's
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
-    /// #1271, #1316). Read when the app starts. macOS always uses the system's.
+    /// #1271, #1316). Enabled by default on Linux, where GNOME/Wayland needs the client frame.
+    /// Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
     /// Show the active document's file name in the title bar and the OS window title. The tabs
     /// already name the file, so this can be turned off for a plain "PhotoCraft" title (#5037).
@@ -329,7 +330,7 @@ impl Default for Interface {
             show_tooltips: true,
             enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
-            system_title_bar: false,
+            system_title_bar: cfg!(target_os = "linux"),
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,

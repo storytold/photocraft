@@ -815,8 +815,9 @@ mod title_tests {
 
     #[test]
     fn without_the_preference_the_mark_stays() {
-        // The default (e.g. the web build or the snapshot example): no custom bar, no preference.
-        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // An explicit choice to keep the app's title, independent of the platform default.
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.edit_prefs(|p| p.interface.system_title_bar = false);
         assert!(!system_title_bar(&app));
     }
 

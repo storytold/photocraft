@@ -36,6 +36,8 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
+On Linux, **System Title Bar** is enabled by default. GNOME/Wayland uses winit's font-free Adwaita controls; X11 uses the window manager's frame. Saved choices still override the default, and other platforms keep their existing defaults. Changes in Preferences apply at the next launch.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
